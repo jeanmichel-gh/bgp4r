@@ -1,0 +1,266 @@
+= BGP4R
+
+== Description
+
+BGP4R is a ruby library which enables the creation and manipulation of BGP messages.
+In BGP4R, all well-known BGP constructs are defined in classes.
+
+Using BGP4R, the process of building BGP messages becomes a simple matter of adding objects 
+to their respective containers; i.e. an attribute is added to a Path_attribute container, 
+while a Path_attribute object or Nlri object is added to an Update object.
+
+
+A Neighbor class is used to describe a BGP peering adjacency.
+
+A Neighbor instance can be started, stopped, and programmed to send BGP messages
+
+  Neighbor#start
+  Neighbor#stop
+  Neighbor#snd
+
+Neighbor capabilities such as MBGP or 4-byte AS can be set using Neighbor#capability
+  
+  e.g.: 
+
+   neighbor = Neighbor.new \
+      :version=> 4, 
+      :my_as=> 100, 
+      :remote_addr => '192.168.1.200', 
+      :local_addr => '192.168.1.5', 
+      :id=> '1.1.1.1', 
+      :holdtime=> 20
+
+   neighbor.capability :as4_byte
+   neighbor.capability :route_refresh
+   neighbor.capability :route_refresh, 128
+   neighbor.capability :mbgp, :ipv4, :unicast
+   neighbor.capability :mbgp, :ipv4, :multicast
+
+
+=== The following classes representing BGP messages, attributes, and nlri are defined:
+
+==== Messages:
+
+  Open
+  Update
+  Notification
+  Keepalive
+  Route_refresh
+
+==== Attributes:
+
+  Origin
+  As_path
+  Next_hop
+  Local_pref
+  Multi_exit_disc
+  Communities
+  Atomic_aggregate
+  Aggregator
+  Communities
+  Originator_id
+  Cluster_list
+  Mp_reach
+  Mp_unreach
+  As4_path
+  As4_aggregator
+  Extended_communities
+
+=== Update components:
+
+  Nlri
+  Path_attribute
+  Withdrawn
+
+== Getting started
+
+Here is an example illustrating how to use this API:
+
+  require 'bgp4r'
+  include BGP
+
+Create a Neighbor:
+
+  neighbor = Neighbor.new \
+    :version=> 4, 
+    :my_as=> 100, 
+    :remote_addr => '192.168.1.200', 
+    :local_addr => '192.168.1.5', 
+    :id=> '1.1.1.1', :holdtime=> 20
+
+Set its capabilities:
+
+  neighbor.capability :as4_byte
+  neighbor.capability :route_refresh
+  neighbor.capability :route_refresh, 128
+  neighbor.capability :mbgp, :ipv4, :unicast
+  neighbor.capability :mbgp, :ipv4, :multicast
+
+
+Start peering:
+
+  neighbor.start :auto_retry
+
+Build an BGP Update object made up of a Path_attribute and a Nlri objects:
+  an_update = Update.new(
+    Path_attribute.new(
+      Origin.new(2),
+      Next_hop.new('192.168.1.5'),
+      Multi_exit_disc.new(100),
+      Local_pref.new(100),
+      As_path.new(400,300,200),
+      Communities.new('1311:1 311:59 2805:64')
+    ),
+    Nlri.new('77.0.0.0/17', '78.0.0.0/18', '79.0.0.0/19')
+  )
+
+Ship it!
+
+  neighbor.send_message an_update
+
+
+Produces:
+    
+    Jean-Michel-Esnaults-MacBook-Pro-17:bgp4r jme$ ruby bin/bgp
+    I, [56:08#28463]  INFO -- : Open Socket old state Idle new state Active
+    I, [56:08#28463]  INFO -- : SendOpen
+    D, [56:08#28463] DEBUG -- : Send Open Message (1), length: 61
+      Version 4, my AS 100, Holdtime 20s, ID 1.1.1.1
+      Capability(65): 4-octet AS number: 100
+      Option Capabilities Advertisement (2): [02020200]
+        Route Refresh (2), length: 2
+      Option Capabilities Advertisement (2): [02028000]
+        Route Refresh (Cisco) (128), length: 2
+      Option Capabilities Advertisement (2): [0206010400010001]
+        Multiprotocol Extensions (1), length: 4
+          AFI IPv4 (1), SAFI Unicast (1)
+      Option Capabilities Advertisement (2): [0206010400010002]
+        Multiprotocol Extensions (1), length: 4
+          AFI IPv4 (1), SAFI Multicast (2)
+      
+    0x0000: ffff ffff ffff ffff ffff ffff ffff ffff
+    0x0001: 003d 0104 0064 0014 0101 0101 2002 0641
+    0x0002: 0400 0000 6402 0202 0002 0280 0002 0601
+    0x0003: 0400 0100 0102 0601 0400 0100
+    
+    
+    D, [56:08#28463] DEBUG -- : #<BGP::IO::Input:0x40ab50> #<Thread:0x40a7b8> started
+    D, [56:08#28463] DEBUG -- : #<BGP::IO::Output:0x40ab14> #<Thread:0x40a754> started
+    I, [56:08#28463]  INFO -- : ev_send_open old state Active new state OpenSent
+    I, [56:08#28463]  INFO -- : RecvOpen
+    D, [56:08#28463] DEBUG -- : Recv Open Message (1), length: 61
+      Version 4, my AS 100, Holdtime 180s, ID 2.2.2.2
+      Option Capabilities Advertisement (2): [0206010400010001]
+        Multiprotocol Extensions (1), length: 4
+          AFI IPv4 (1), SAFI Unicast (1)
+      Option Capabilities Advertisement (2): [0206010400010002]
+        Multiprotocol Extensions (1), length: 4
+          AFI IPv4 (1), SAFI Multicast (2)
+      Option Capabilities Advertisement (2): [02028000]
+        Route Refresh (Cisco) (128), length: 2
+      Option Capabilities Advertisement (2): [02020200]
+        Route Refresh (2), length: 2
+      Capability(65): 4-octet AS number: 100
+      
+    0x0000: ffff ffff ffff ffff ffff ffff ffff ffff
+    0x0001: 003d 0104 0064 00b4 0202 0202 2002 0601
+    0x0002: 0400 0100 0102 0601 0400 0100 0202 0280
+    0x0003: 0002 0202 0002 0641 0400 0000
+    
+    
+    I, [56:08#28463]  INFO -- : RecvOpen old state OpenSent new state OpenConfirm
+    I, [56:08#28463]  INFO -- : RecvKeepalive
+    D, [56:08#28463] DEBUG -- : Recv Keepalive Message (4), length: 19, [001304]
+    
+    I, [56:08#28463]  INFO -- : SendKeepalive
+    D, [56:08#28463] DEBUG -- : Send Keepalive Message (4), length: 19, [001304]
+    
+    D, [56:08#28463] DEBUG -- : SendKeepAlive
+    I, [56:08#28463]  INFO -- : RecvKeepAlive old state OpenConfirm new state Established
+    I, [56:08#28463]  INFO -- : RecvKeepalive
+    D, [56:08#28463] DEBUG -- : Recv Keepalive Message (4), length: 19, [001304]
+    
+    I, [56:08#28463]  INFO -- : version: 4, id: 1.1.1.1, as: 100, holdtime: 20, peer addr: 192.168.1.200, local addr: 192.168.1.5 started
+    I, [56:08#28463]  INFO -- : SendUpdate
+    D, [56:08#28463] DEBUG -- : Send Update Message (2), 4 bytes AS, length: 92
+      Path Attributes:
+      Origin (1), length: 1, Flags [T]: incomplete
+       0x0000: 
+      Next Hop (3), length: 4, Flags [T]: 192.168.1.5
+       0x0000: c0a8 0105
+      Multi Exit Disc (4), length: 4, Flags [O]: (0x0064) 100
+       0x0000: 0000 0064
+      Local Pref (5), length: 4, Flags [T]: (0x0064) 100
+       0x0000: 0000 0064
+      As Path (2), length: 14, Flags [T]: 400 300 200
+       0x0000: 0203 0000 0190 0000 012c 0000 00c8
+      Communities (8), length: 12, Flags [OT]: 1311:1 311:59 2805:64
+       0x0000: 051f 0001 0137 003b 0af5 0040
+    77.0.0.0/17
+    78.0.0.0/18
+    79.0.0.0/19
+    
+    0x0000: ffff ffff ffff ffff ffff ffff ffff ffff
+    0x0001: 005c 0200 0000 3940 0101 0240 0304 c0a8
+    0x0002: 0105 8004 0400 0000 6440 0504 0000 0064
+    0x0003: 4002 0e02 0300 0001 9000 0001 2c00 0000
+    0x0004: c8c0 080c 051f 0001 0137 003b 0af5 0040
+    0x0005: 114d 0000 124e 0000 134f 0000
+    
+    
+    I, [56:13#28463]  INFO -- : RecvKeepalive
+    D, [56:13#28463] DEBUG -- : Recv Keepalive Message (4), length: 19, [001304]
+    
+    I, [56:14#28463]  INFO -- : SendKeepalive
+    D, [56:14#28463] DEBUG -- : Send Keepalive Message (4), length: 19, [001304]
+
+
+== Source Code
+
+Source code is hosted on github.
+
+== Installation
+
+Build and install a bgp4r gem using Rakefile.
+
+ $ rake -T
+ (in /Users/jme/bgp4r)
+ rake check_syntax      # Check syntax of all Ruby files.
+ rake clean             # Remove any temporary products.
+ rake clobber           # Remove any generated file.
+ rake clobber_package   # Remove package products
+ rake clobber_rdoc      # Remove rdoc products
+ rake gem               # Build the gem file bgp4r-0.0.1.gem
+ rake gem:install       # Run :package and install the .gem locally
+ rake gem:install_fast  # Like gem:install but without ri or rdocs
+ rake gem:uninstall     # Run :clean and uninstall the .gem
+ rake package           # Build all the packages
+ rake rdoc              # Build the rdoc HTML Files
+ rake repackage         # Force a rebuild of the package files
+ rake rerdoc            # Force a rebuild of the RDOC files
+ rake test              # Run tests
+
+
+Or set RUBYLIB env variable:
+
+(assuming you have cloned copy of bgp4r at /home/user/bgp4r)
+
+  export RUBYLIB=/home/user/bgp4r
+
+== Requirements
+
+
+== License
+
+BGP4R is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+BGP4R is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with BGP4R.  If not, see <http://www.gnu.org/licenses/>.
