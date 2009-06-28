@@ -41,11 +41,22 @@ class Common_Test < Test::Unit::TestCase
     assert_equal(7, IPAddr.new('10.0.0.0/7').mlen)
     assert_equal(128, IPAddr.new('0::0').mlen)
     assert_equal(96, IPAddr.new('2004::0001:3/96').mlen)
-    #assert_equal('255.255.255.255', IPAddr.new('1.1.1.1').netmask)
+    assert_equal('255.255.255.255', IPAddr.new('1.1.1.1').netmask)
     assert_equal('255.255.255.255', IPAddr.new('1.1.1.1/32').netmask)
     assert_equal('255.255.255.254', IPAddr.new('1.1.1.1/31').netmask)
     assert_equal('255.255.255.252', IPAddr.new('1.1.1.1/30').netmask)
     assert_equal('255.255.255.248', IPAddr.new('1.1.1.1/29').netmask)
+  end
+  def test_ipaddr_4
+    ip1 = IPAddr.new('10.0.0.1/28')
+    ip2 = IPAddr.new('10.0.0.1/24')
+    ip3 = IPAddr.new('10.0.0.1/12')
+    assert_equal('10.0.0.16/28', ip1 ^ 1)
+    assert_equal('10.0.0.32/28', ip1 ^ 2)
+    assert_equal('10.0.1.0/24', ip2 ^ 1)
+    assert_equal('10.0.2.0/24', ip2 ^ 2)
+    assert_equal('10.16.0.0/12', ip3 ^ 1)
+    assert_equal('10.32.0.0/12', ip3 ^ 2)
   end
   def test_string_1      
     sbin = ['0a000001'].pack('H*')
@@ -54,5 +65,4 @@ class Common_Test < Test::Unit::TestCase
   def test_nlri
     assert_equal('14000000', IPAddr.new_nlri4(['101400'].pack('H*')).to_shex)
   end
-
 end

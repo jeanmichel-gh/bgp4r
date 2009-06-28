@@ -22,7 +22,7 @@ class IPAddr
   def self.create(arg)
     if arg.is_a?(String) and arg.is_packed?
       IPAddr.new_ntoh(arg)
-    elsif arg.is_a?(Bignum) or arg.is_a?(Fixnum)
+    elsif arg.is_a?(Integer)
       IPAddr.new_ntoh([arg].pack('N'))
     elsif arg.is_a?(Array) and arg[0].is_a?(Fixnum)
       IPAddr.new_ntoh([arg].pack('C*'))
@@ -57,6 +57,19 @@ class IPAddr
   def mlen
     @_jme_mlen_ ||= _mlen_
   end
+
+  def _generate_network_inc_
+    max_len =  ipv4? ? 32 : 128
+    Proc.new { |n| n*(2**(max_len - mlen)) }
+  end
+  def +(i)
+    [IPAddr.create(to_i + i).to_s, mlen].join("/")
+  end
+  def ^(i)
+    @increment ||= _generate_network_inc_
+    [IPAddr.create(to_i + @increment.call(i)).to_s, mlen].join("/")
+  end
+  private :_generate_network_inc_
 
   def netmask
     if ipv4?
