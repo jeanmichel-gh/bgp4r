@@ -183,6 +183,7 @@ module BGP
     alias stop disable
 
     def send_message(m)
+      return unless @out
       unless m.is_a?(String)
         Log.info "Send#{m.class.to_s.split('::')[-1]}"
         Log.debug "Send #{m.is_a?(Update) ? m.to_s(@as4byte) : m }\n"
@@ -253,8 +254,9 @@ module BGP
         new_state :OpenConfirm, "RecvOpen"
       else
         Log.warn "#{self.class}: received open message while in state #{@state}"
-      end    
-      @as4byte = @open.has?(As4_cap) and o.has?(As4_cap)
+      end
+      
+      @as4byte = (@open.has?(As4_cap) and o.has?(As4_cap))
     end
     
     def rcv_keepalive
