@@ -17,9 +17,9 @@ Log.level=Logger::DEBUG
 neighbor = Neighbor.new \
   :version=> 4, 
   :my_as=> 100, 
-  :remote_addr => '192.168.1.200', 
+  :remote_addr => '192.168.1.199', 
   :local_addr => '192.168.1.5', 
-  :id=> '1.1.1.1', :holdtime=> 20
+  :id=> '1.1.1.1', :holdtime=> 180
 
 neighbor.capability :as4_byte
 neighbor.capability :route_refresh
@@ -35,7 +35,8 @@ def self.update(msg)
   # Ignore uninterested ones.
   # when /Open/
   # when /Keepalive/
-  # when /Update/
+  when /Update/
+    Log.info "RecvUpdate\n#{m}"
   end
 end
 
