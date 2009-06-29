@@ -1,0 +1,85 @@
+#--
+#
+# Copyright 2008, 2009 Jean-Michel Esnault.
+# All rights reserved.
+# See LICENSE.txt for permissions.
+#
+#++
+
+require 'rubygems'
+require 'bgp4r'
+require 'yaml'
+include BGP
+
+require 'pp'
+config_file = ARGV[0] ||= File.basename($0) + ".yml"
+
+Log.create
+Log.level=Logger::DEBUG
+config = YAML::load_file(config_file)
+
+p config
+
+config.keys.each do |k|
+  case k
+  when 'neighbor'
+    neighbor = config['neighbor']
+    neighbor.keys.each do |k|
+      case k
+      when /router\s+id/        ; @router_id = neighbor[k]
+      when /my\s+as/            ; @my_as = neighbor[k]
+      when 'holdtime'           ; @holdtime = neighbor[k]
+      when /neighbor\s+address/ ; @neighbor_addr = neighbor[k]
+      when /local\s+address/    ; @local_addr = neighbor[k]
+      when 'capabilities'
+      end
+    end
+  when 'routes'
+    routes = config['routes']
+    routes.keys.each do |k|
+      case k
+      when /nlri(|s)/
+        _pfx, _npfx, _pack = routes[k].split(',')
+        @nlri = IPAddr.new _pfx
+        @times = _npfx.to_i ||=1
+        @pack = _pack.to_i  ||=1 
+      when /next\s*hop/     ; @nexthop= routes[k]
+      when /local\s*pref/   ; @local_pref= routes[k]
+      when /med/          ; @med = routes[k]
+      when /origin/       ; @origin = routes[k]
+      when /communities/  ; @communities = routes[k]
+      when /as\s*path/      ; @as_path= routes[k]
+      end
+    end
+  end
+end
+
+neighbor = Neighbor.new \
+  :version => 4,
+  :my_as=> @my_as,
+  :remote_addr => @neighbor_addr,
+  :local_addr => @local_addr,
+  :id=> @router_id,
+  :holdtime=> @holdtime
+
+# neighbor.capability :as4_byte
+
+pa = Path_attribute.new(
+  Origin.new(@origin),
+  Next_hop.new(@nexthop),
+  Local_pref.new(@local_pref),
+  Communities.new(*(@communities.split.map { |com| com.to_i})),
+  As_path.new(*(@as_path.split.map { |as| as.to_i}))
+)
+
+neighbor.start
+
+nlris = Nlri.new
+(1..@times.to_i).each do |n|
+  nlris << (@nlri ^ n)
+  next unless (n % @pack) == 0 or (n == @times)
+  neighbor.send_message Update.new(pa, nlris)
+  nlris = Nlri.new
+end
+
+Thread.stop

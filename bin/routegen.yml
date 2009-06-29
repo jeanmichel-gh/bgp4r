@@ -1,0 +1,50 @@
+# YAML config file for routegen demo.
+# $ ruby routegen routegen.yaml
+--- 
+neighbor: 
+  router id: 1.1.1.1
+  my as: 100
+  holdtime: 180
+  local address: 192.168.1.6
+  neighbor address: 192.168.1.199
+  capabilities: 
+  - four byte as
+routes: 
+  nlris: 11.0.0.0/28, 1999, 127
+  next hop: 192.168.1.6
+  local pref: 100
+  med: 100
+  origin: 1
+  communities: 100:1 200:1 300:1
+  as path: 200 300 400 500
+
+...
+
+produces:
+
+ios#show ip route summary | inc bgp
+bgp 100         0           1999        107946      287856
+ios#
+
+ios#show ip bgp ipv4 unicast 
+BGP table version is 13995, local router ID is 172.21.2.1
+Status codes: s suppressed, d damped, h history, * valid, > best, i - internal,
+              r RIB-failure
+Origin codes: i - IGP, e - EGP, ? - incomplete
+
+   Network          Next Hop            Metric LocPrf Weight Path
+*>i11.0.0.16/28     192.168.1.6                   100      0 200 300 400 500 e
+*>i11.0.0.32/28     192.168.1.6                   100      0 200 300 400 500 e
+*>i11.0.0.48/28     192.168.1.6                   100      0 200 300 400 500 e
+*>i11.0.0.64/28     192.168.1.6                   100      0 200 300 400 500 e
+*>i11.0.0.80/28     192.168.1.6                   100      0 200 300 400 500 e
+*>i11.0.0.96/28     192.168.1.6                   100      0 200 300 400 500 e
+*>i11.0.0.112/28    192.168.1.6                   100      0 200 300 400 500 e
+*>i11.0.0.128/28    192.168.1.6                   100      0 200 300 400 500 e
+*>i11.0.0.144/28    192.168.1.6                   100      0 200 300 400 500 e
+*>i11.0.0.160/28    192.168.1.6                   100      0 200 300 400 500 e
+*>i11.0.0.176/28    192.168.1.6                   100      0 200 300 400 500 e
+
+...
+  
+  
