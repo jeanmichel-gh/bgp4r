@@ -127,7 +127,7 @@ while a Path_attribute object or Nlri object is added to an Update object.
 
 === Produces:
     
-    Jean-Michel-Esnaults-MacBook-Pro-17:bgp4r jme$ ruby bin/bgp
+    Jean-Michel-Esnaults-MacBook-Pro-17:bgp4r jme$ ruby bgp
     I, [56:08#28463]  INFO -- : Open Socket old state Idle new state Active
     I, [56:08#28463]  INFO -- : SendOpen
     D, [56:08#28463] DEBUG -- : Send Open Message (1), length: 61
@@ -227,30 +227,17 @@ Source code is hosted on github.
 
 == Installation
 
-=== Build and install a bgp4r gem using Rakefile.
+==== Run the following if you haven't already: 
 
- $ rake -T
- (in /Users/jme/bgp4r)
- rake check_syntax      # Check syntax of all Ruby files.
- rake clean             # Remove any temporary products.
- rake clobber           # Remove any generated file.
- rake clobber_package   # Remove package products
- rake clobber_rdoc      # Remove rdoc products
- rake gem               # Build the gem file bgp4r-0.0.1.gem
- rake gem:install       # Run :package and install the .gem locally
- rake gem:install_fast  # Like gem:install but without ri or rdocs
- rake gem:uninstall     # Run :clean and uninstall the .gem
- rake package           # Build all the packages
- rake rdoc              # Build the rdoc HTML Files
- rake repackage         # Force a rebuild of the package files
- rake rerdoc            # Force a rebuild of the RDOC files
- rake test              # Run tests
+  gem sources -a http://gems.github.com
 
+==== Install the gem
 
-=== Or set RUBYLIB env variable:
+  sudo gem install jesnault-bgp4r
 
-(assuming you have cloned copy of bgp4r at /home/user/bgp4r)
+=== Or clone bgp4r tree and set RUBYLIB env variable accordingly:
 
+  git clone git://github.com/jesnault/bgp4r.git
   export RUBYLIB=/home/user/bgp4r
 
 == Requirements
