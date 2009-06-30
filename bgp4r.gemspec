@@ -6,7 +6,7 @@ Gem::Specification.new do |s|
 
   s.required_rubygems_version = Gem::Requirement.new(">= 0") if s.respond_to? :required_rubygems_version=
   s.authors = ["Jean-Michel Esnault"]
-  s.date = %q{2009-06-29}
+  s.date = %q{2009-06-30}
   s.description = %q{BGP4R is a BGP-4 ruby library to create,  send, and receive  BGP messages in an  object oriented manner}
   s.email = %q{jesnault@gmail.com}
   s.extra_rdoc_files = [
@@ -43,6 +43,8 @@ Gem::Specification.new do |s|
      "bgp/path_attribute.rb",
      "bgp/prefix_orf.rb",
      "bgp/rd.rb",
+     "bgp4r.gemspec",
+     "bgp4r.rb",
      "examples/bgp",
      "examples/routegen",
      "examples/routegen.yml",

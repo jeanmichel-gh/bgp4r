@@ -17,7 +17,7 @@ begin
     s.description = "BGP4R is a BGP-4 ruby library to create,  send, and receive  BGP messages in an  object oriented manner"
     s.platform = Gem::Platform::RUBY
     s.executables = []
-    s.files = %w( README.rdoc LICENSE.txt COPYING ) + Dir["bgp/**/*"] + Dir["test/**/*"] + ["examples/**/*"]
+    s.files = %w( README.rdoc LICENSE.txt COPYING bgp4r.rb bgp4r.gemspec ) + Dir["bgp/**/*"] + Dir["test/**/*"] + ["examples/**/*"]
     s.test_files = Dir["test/**/*"]
     s.has_rdoc = true
     s.rdoc_options = ["--quiet", "--title", "A BGP-4 Ruby Library", "--line-numbers"]
