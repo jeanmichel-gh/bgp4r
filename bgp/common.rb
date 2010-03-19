@@ -121,15 +121,16 @@ class String
   alias packed? :is_packed?
   
   def hexlify
-    return self unless is_packed?
-    s=self.dup
-    ls=[""]
-    n=0
+    return self unless is_packed? or self.size==0
+    l,n,ls,s=0,0,[''],self.dup
     while s.size>0
       l = s.slice!(0,16)
-      ls << format("0x%4.4x: %s", n,
-          l.unpack("n#{l.size/2}").collect { |x| format("%4.4x",x) }.join(' '))
+      ls << format("0x%4.4x:  %s", n, l.unpack("n#{l.size/2}").collect { |x| format("%4.4x",x) }.join(' '))
       n+=1
+    end
+    if l.size%2 >0
+      ns = if l.size>1 then 1 else 0 end
+      ls.last << format("%s%2.2x",' '*ns,l[-1])
     end
     ls
   end

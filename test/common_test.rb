@@ -59,8 +59,18 @@ class Common_Test < Test::Unit::TestCase
     assert_equal('10.32.0.0/12', ip3 ^ 2)
   end
   def test_string_1      
-    sbin = ['0a000001'].pack('H*')
-    assert_equal('0x0000: 0a00 0001',sbin.hexlify.join)
+    sbin = ['00'].pack('H*')
+    assert_equal '0x0000:  00', sbin.hexlify.join
+    sbin = ['0001'].pack('H*')
+    assert_equal '0x0000:  0001', sbin.hexlify.join
+    sbin = ['000102'].pack('H*')
+    assert_equal '0x0000:  0001 02', sbin.hexlify.join
+    sbin = ['000102030405060708090a0b0c0d0e0f'].pack('H*')
+    assert_equal '0x0000:  0001 0203 0405 0607 0809 0a0b 0c0d 0e0f', sbin.hexlify.join
+    sbin = ['000102030405060708090a0b0c0d0e0f10'].pack('H*')
+    sbin = ['000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20'].pack('H*')
+    assert_equal '0x0001:  1011 1213 1415 1617 1819 1a1b 1c1d 1e1f', sbin.hexlify[2]
+    assert_equal '0x0002:  20', sbin.hexlify[3]
   end
   def test_nlri
     assert_equal('14000000', IPAddr.new_nlri4(['101400'].pack('H*')).to_shex)

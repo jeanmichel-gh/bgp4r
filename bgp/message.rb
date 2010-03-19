@@ -24,10 +24,13 @@ require 'bgp/path_attribute'
 require 'bgp/nlri'
 require 'timeout'
 
-class UnknownBGPCapability < RuntimeError
-end
-
 module BGP
+
+  class UnknownBgpCapability < RuntimeError
+  end
+
+  class UnknownBgpMessage < RuntimeError
+  end
 
   module OPT_PARM
 
@@ -111,7 +114,7 @@ module BGP
       when CAP_ORF,CAP_ORF_CISCO
         Orf_cap.new(s)
       else
-        raise UnknownBGPCapability, "Capability (#{code}), length: #{s.size} not implemented: [#{s.unpack('H*')[0]}]" 
+        raise UnknownBgpCapability, "Capability (#{code}), length: #{s.size} not implemented: [#{s.unpack('H*')[0]}]" 
       end
     end
     def to_hash(h={})

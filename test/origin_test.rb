@@ -52,6 +52,6 @@ class Origin_Test < Test::Unit::TestCase
   def test_6
     assert_equal("[wTcr]  (1)     Origin: [40010100] 'igp'", Origin.new.to_s)
     assert_equal("[wTcr]  (1)     Origin: [40010100] 'igp'", Origin.new(:igp).to_s)
-    assert_equal("Origin (1), length: 1, Flags [T]: igp\n   0x0000: ", Origin.new.to_s(:tcpdump))
+    assert_equal("Origin (1), length: 1, Flags [T]: igp\n   0x0000:  00", Origin.new.to_s(:tcpdump))
   end
 end
