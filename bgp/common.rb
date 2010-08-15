@@ -130,7 +130,7 @@ class String
     end
     if l.size%2 >0
       ns = if l.size>1 then 1 else 0 end
-      ls.last << format("%s%2.2x",' '*ns,l[-1])
+      ls.last << format("%s%2.2x",' '*ns,l[-1].unpack('C')[0])
     end
     ls
   end

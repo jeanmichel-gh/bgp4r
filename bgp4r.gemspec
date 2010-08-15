@@ -2,11 +2,11 @@
 
 Gem::Specification.new do |s|
   s.name = %q{bgp4r}
-  s.version = "0.0.4"
+  s.version = "0.0.5"
 
   s.required_rubygems_version = Gem::Requirement.new(">= 0") if s.respond_to? :required_rubygems_version=
   s.authors = ["Jean-Michel Esnault"]
-  s.date = %q{2009-06-30}
+  s.date = %q{2010-08-14}
   s.description = %q{BGP4R is a BGP-4 ruby library to create,  send, and receive  BGP messages in an  object oriented manner}
   s.email = %q{jesnault@gmail.com}
   s.extra_rdoc_files = [
@@ -76,7 +76,7 @@ Gem::Specification.new do |s|
   s.require_paths = ["."]
   s.required_ruby_version = Gem::Requirement.new(">= 1.8.6")
   s.rubyforge_project = %q{bgp4r}
-  s.rubygems_version = %q{1.3.4}
+  s.rubygems_version = %q{1.3.7}
   s.summary = %q{A BGP-4 Ruby Library}
   s.test_files = [
     "test/aggregator_test.rb",
@@ -106,7 +106,6 @@ Gem::Specification.new do |s|
   if s.respond_to? :specification_version then
     current_version = Gem::Specification::CURRENT_SPECIFICATION_VERSION
     s.specification_version = 3
-
     if Gem::Version.new(Gem::RubyGemsVersion) >= Gem::Version.new('1.2.0') then
     else
     end
