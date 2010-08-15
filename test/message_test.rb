@@ -107,6 +107,16 @@ class Update_Test < Test::Unit::TestCase
     # Ship it!
     assert_equal(3*2, an_update.encode4.size - an_update.encode.size)
   end
+  
+  def test_5
+    an_update = Update.new( Path_attribute.new( Origin.new(1),
+                                                Next_hop.new('10.0.0.1'),
+                                                Multi_exit_disc.new(100)
+                                                ),Nlri.new('69.0.0.0/28'))
+    assert ! an_update.path_attribute.has?(Local_pref), "Should not contain a Local Pref attr."
+    an_update << Local_pref.new(113)
+    assert an_update.path_attribute.has?(Local_pref), "Should contain a Local Pref attr."
+  end
 
 end
 

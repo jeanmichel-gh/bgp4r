@@ -479,7 +479,11 @@ module BGP
     end
     
     def <<(val)
-      #TODO add attr or nlri
+      if val.is_a?(Attr)
+        @path_attribute ||= Path_attribute.new
+        @path_attribute << val
+      end
+      #TODO add nlri
     end
 
     def to_s(as4byte=false, fmt=:tcpdump)
