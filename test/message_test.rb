@@ -112,10 +112,16 @@ class Update_Test < Test::Unit::TestCase
     an_update = Update.new( Path_attribute.new( Origin.new(1),
                                                 Next_hop.new('10.0.0.1'),
                                                 Multi_exit_disc.new(100)
-                                                ),Nlri.new('69.0.0.0/28'))
+                                                ))
     assert ! an_update.path_attribute.has?(Local_pref), "Should not contain a Local Pref attr."
     an_update << Local_pref.new(113)
     assert an_update.path_attribute.has?(Local_pref), "Should contain a Local Pref attr."
+    assert_nil  an_update.nlri
+    an_update << '77.0.0.0/17'
+    assert_equal Nlri, an_update.nlri.class
+    assert_equal 1, an_update.nlri.size
+    an_update << '88.0.0.0/18'
+    assert_equal 2, an_update.nlri.size
   end
 
 end
