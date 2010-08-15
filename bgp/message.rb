@@ -482,9 +482,15 @@ module BGP
       if val.is_a?(Attr)
         @path_attribute ||= Path_attribute.new
         @path_attribute << val
-      else
-        @nlri ||= Nlri.new
-        @nlri << val
+      elsif val.is_a?(String)
+        begin 
+          Nlri.new(val)
+          @nlri ||=Nlri.new
+          @nlri << val
+        rescue => e
+        end
+      elsif val.is_a?(Nlri)
+        val.to_s.split.each { |n| self << n }
       end
     end
 

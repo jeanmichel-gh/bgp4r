@@ -122,6 +122,8 @@ class Update_Test < Test::Unit::TestCase
     assert_equal 1, an_update.nlri.size
     an_update << '88.0.0.0/18'
     assert_equal 2, an_update.nlri.size
+    an_update << Nlri.new('21.0.0.0/11', '22.0.0.0/22')
+    assert_equal 4, an_update.nlri.size
   end
 
 end
