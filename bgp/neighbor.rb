@@ -57,6 +57,12 @@ module BGP
       event_dispatch
     end
     
+    [:Idle, :Established, :OpenRecv, :OpenConfirm, :Active, :OpenSent].each do |state|
+      define_method("is_#{state.to_s.downcase}?") do
+        @state == state
+      end
+    end
+    
     #  neighbor.capability :as4_byte | :as4 | :as4byte
     #  neighbor.capability :route_refresh, :rr
     #  neighbor.capability :route_refresh, 128
@@ -82,7 +88,7 @@ module BGP
     end
 
     def state
-      @state.to_s
+      "#{@state}"
     end
 
     def retry_thread(action=:start)
@@ -111,8 +117,7 @@ module BGP
           when :ev_msg
             msg = BGP::Message.factory(m, @as4byte)
             log_info "Recv#{msg.class.to_s.split('::').last}"
-            log_debug "Recv #{msg}\n"
-            changed and notify_observers(msg)
+            log_debug "Recv **** #{msg}\n****\n"
             if msg.is_a?(Update)
               rcv_update(msg)
             elsif msg.is_a?(Notification)
@@ -128,6 +133,7 @@ module BGP
             else
               Log.error "unexpected message type #{type}"
             end
+            changed and notify_observers(msg)
           when :ev_conn_reset
             Log.warn "#{type}"
             disable
@@ -147,11 +153,19 @@ module BGP
         log_info "#{x['name']}: stopped at #{Time.now.strftime("%I:%M:%S%P")}"
       }
     end
-
+    
     def open
-      @open ||= BGP::Open.new(@version, @my_as, @holdtime, @id, *@opt_parms)
+      @open ||= BGP::Open.new(version, @my_as, holdtime, @id, *@opt_parms)
     end
-
+    
+    def version
+      @version ||= 4
+    end
+    
+    def holdtime
+      @holdtime ||= 180
+    end
+    
     def enable(auto_retry=:no_auto_retry, wait= :wait)
       return if @state == :Established
       disable unless @state == :Idle
