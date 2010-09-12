@@ -28,6 +28,14 @@ module BGP
 
   class Neighbor
     include Observable
+    
+    def log_info(txt)
+      Log.info "#{self.class} #{txt}"
+    end
+
+    def log_debug(txt)
+      Log.debug "#{self.class} #{txt}"
+    end
 
     def initialize(*args)
       @opt_parms = []
@@ -49,19 +57,24 @@ module BGP
       event_dispatch
     end
     
-    #  neighbor.capability :as4_byte
-    #  neighbor.capability :route_refresh
+    #  neighbor.capability :as4_byte | :as4 | :as4byte
+    #  neighbor.capability :route_refresh, :rr
     #  neighbor.capability :route_refresh, 128
     #  neighbor.capability :mbgp, :ipv4, :unicast
     #  neighbor.capability :mbgp, :ipv4, :multicast
     def capability(*args)
       @opt_parms << if args[0].is_a?(Symbol)
         case args[0]
-        when :route_refresh ; Route_refresh_cap.new(*args[1..-1])
-        when :mbgp          ; Mbgp_cap.new(*args[1..-1])
-        when :as4_byte      ; As4_cap.new(@my_as)
+        when :route_refresh, :rr
+          Route_refresh_cap.new(*args[1..-1])
+        when :mbgp
+          Mbgp_cap.new(*args[1..-1])
+        when :as4_byte, :as4byte, :as4
+          As4_cap.new(@my_as)
+        else
+          raise ArgumentError, "Invalid argument #{args.inspect}", caller
         end        
-      elsif args[0].is_a?(Capability) and args.size==1
+      elsif args[0].is_a?(Capability)
         args[0]
       else
         raise ArgumentError, "Invalid argument"
@@ -96,9 +109,9 @@ module BGP
           ev, type, m = eventQ.deq
           case ev
           when :ev_msg
-            msg = BGP::Message.factory(m)
-            Log.info "Recv#{msg.class.to_s.split('::')[-1]}"
-            Log.debug "Recv #{msg}\n"            
+            msg = BGP::Message.factory(m, @as4byte)
+            log_info "Recv#{msg.class.to_s.split('::').last}"
+            log_debug "Recv #{msg}\n"
             changed and notify_observers(msg)
             if msg.is_a?(Update)
               rcv_update(msg)
@@ -131,15 +144,13 @@ module BGP
     def clean
       @threads.list.each { |x| 
         x.exit; x.join
-        Log.info "#{x['name']}: stopped at #{Time.now.strftime("%I:%M:%S%P")}"
+        log_info "#{x['name']}: stopped at #{Time.now.strftime("%I:%M:%S%P")}"
       }
     end
 
-
-    def _open_msg_
-      @open = BGP::Open.new(@version, @my_as, @holdtime, @id, *@opt_parms)
+    def open
+      @open ||= BGP::Open.new(@version, @my_as, @holdtime, @id, *@opt_parms)
     end
-    private :_open_msg_
 
     def enable(auto_retry=:no_auto_retry, wait= :wait)
       return if @state == :Established
@@ -147,7 +158,6 @@ module BGP
       
       init_socket
       init_io
-      @open = _open_msg_
             
       [@in, @out].each { |io| 
         io.start 
@@ -166,7 +176,7 @@ module BGP
           sleep(0.3)
           break if @state == :Established
         end
-        Log.info "#{self} started"
+        log_info "#{self} started"
       end
       
     rescue => e
@@ -183,10 +193,11 @@ module BGP
     alias stop disable
 
     def send_message(m)
+      raise if m.nil?
       return unless @out
       unless m.is_a?(String)
-        Log.info "Send#{m.class.to_s.split('::')[-1]}"
-        Log.debug "Send #{m.is_a?(Update) ? m.to_s(@as4byte) : m }\n"
+        log_info "Send#{m.class.to_s.split('::')[-1]}"
+        log_debug "Send #{m.is_a?(Update) ? m.to_s(@as4byte) : m }\n"
       end
       if m.is_a?(Update)
         @out.enq m.encode(@as4byte)
@@ -216,21 +227,16 @@ module BGP
     end
     
     def new_state(state, txt='')
-      Log.info "#{txt} old state #{@state} new state #{state}"
+      log_info "#{txt} old state #{@state} new state #{state}"
       @state = state
     end
-
-    def _send_open_(open)
-      send_message open
-    end
-    private :_send_open_
 
     def send_open(ev)
       case @state
       when :OpenRecv
-        _send_open_ @open ; new_state :OpenConfirm, ev
+        send_message open  ; new_state :OpenConfirm, ev
       when :Active
-        _send_open_ @open     ; new_state :OpenSent, ev
+        send_message open  ; new_state :OpenSent, ev
       else
         Log.warn "#{self.class}: attempt to send OPEN msg while in #{@state}"
       end    
@@ -255,14 +261,13 @@ module BGP
       else
         Log.warn "#{self.class}: received open message while in state #{@state}"
       end
-      
-      @as4byte = (@open.has?(As4_cap) and o.has?(As4_cap))
+      @as4byte = (open.has?(As4_cap) && o.has?(As4_cap))
     end
     
     def rcv_keepalive
       if @state == :OpenConfirm
         send_message(BGP::Keepalive.new)
-        Log.debug "SendKeepAlive"
+        log_debug "SendKeepAlive state is #{@state}"
         new_state(:Established, 'RecvKeepAlive')
         @keepalive_thread = Thread.new(@holdtime/3) do |h|
           Thread.current['name'] = "BGP Keepalive interval:(#{h})"
@@ -276,8 +281,14 @@ module BGP
     end
 
     def rcv_notification(m)
-      Log.info "#{m}"
+      log_info "#{m}"
       disable
+    end
+    
+    def rcv_route_refresh(m)
+    end
+
+    def rcv_update(m)
     end
     
     def to_s

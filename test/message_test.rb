@@ -125,6 +125,14 @@ class Update_Test < Test::Unit::TestCase
     an_update << Nlri.new('21.0.0.0/11', '22.0.0.0/22')
     assert_equal 4, an_update.nlri.size
   end
+  
+  def test_6
+    s = 'ffffffffffffffffffffffffffffffff004a02000000274001010040020a0202000000c80000006440030428000101c0080c0137003b051f00010af50040114d0000124e0000134f0000'
+    m = Message.factory([s].pack('H*'), true)
+    assert_not_nil m
+    assert_instance_of(Update, m)
+    assert m.as4byte?
+  end
 
 end
 

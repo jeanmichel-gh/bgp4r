@@ -5,16 +5,16 @@ neighbor:
   router id: 1.1.1.1
   my as: 100
   holdtime: 180
-  local address: 192.168.1.6
-  neighbor address: 192.168.1.199
+  local address: 199.0.0.5
+  neighbor address: 199.0.0.6
   capabilities: 
   - four byte as
 routes: 
   nlris: 11.0.0.0/28, 1999, 127
-  next hop: 192.168.1.6
+  next hop: 199.0.0.5
   local pref: 100
   med: 100
-  origin: 1
+  origin: 0
   communities: 100:1 200:1 300:1
   as path: 200 300 400 500
 

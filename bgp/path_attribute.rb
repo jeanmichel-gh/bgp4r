@@ -32,7 +32,7 @@ module BGP
         s = args[0]
         @attributes=[]
         while s.size>0
-          @attributes << Attr.factory(s)
+          @attributes << Attr.factory(*args)
         end
       else
         add(*args)
@@ -160,13 +160,13 @@ module BGP
 
   class Attr
     include BGP::ATTR
-    def self.factory(s)
+    def self.factory(s, as4byte=false)
       flags, type = s.unpack('CC')
       case type
       when ORIGIN
         Origin.new(s)
       when AS_PATH
-        As_path.new(s)
+        As_path.new(s,as4byte)
       when NEXT_HOP
         Next_hop.new(s)
       when MULTI_EXIT_DISC

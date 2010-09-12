@@ -419,8 +419,12 @@ module BGP
 
 
   class Update < Message
+    def as4byte?
+      @as4byte ||= false
+    end
     def initialize(*args)
       if args[0].is_a?(String) and args[0].is_packed?
+        @as4byte=false
         parse(*args)
       elsif args[0].is_a?(self.class)
         parse(args[0].encode, *args[1..-1])
@@ -454,7 +458,8 @@ module BGP
       @path_attribute=val if val.is_a?(Path_attribute)
     end
     
-    def encode(as4byte=false)
+    #TODO refactor out passing an argument to encode...
+    def encode(as4byte=@as4byte)
       withdrawn, path_attribute, nlri = '', '', ''
       withdrawn = @withdrawn.encode(false) if defined? @withdrawn and @withdrawn
       path_attribute = @path_attribute.encode(as4byte) if defined?(@path_attribute) and @path_attribute
@@ -468,7 +473,9 @@ module BGP
     
     attr_reader :path_attribute, :nlri, :withdrawn
     
+    # CHANGED ME: NO DEFAULT HERE, the factory calling us has to tell what it is giving us.
     def parse(s, as4byte=false)
+      @as4byte=as4byte
       update = super(s)
       len = update.slice!(0,2).unpack('n')[0]
       self.withdrawn=Withdrawn.new(update.slice!(0,len).is_packed) if len>0
@@ -494,12 +501,13 @@ module BGP
       end
     end
 
-    def to_s(as4byte=false, fmt=:tcpdump)
-      if as4byte
-        msg = self.encode(true)
-      else
-        msg = self.encode
-      end
+    def to_s(as4byte=@as4byte, fmt=:tcpdump)
+      msg = encode(as4byte)
+      # if as4byte
+      #   msg = self.encode(true)
+      # else
+      #   msg = self.encode
+      # end
       s = []
       s << @withdrawn.to_s if defined?(@withdrawn) and @withdrawn
       s << @path_attribute.to_s(fmt, as4byte) if defined?(@path_attribute) and @path_attribute
