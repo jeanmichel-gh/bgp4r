@@ -894,6 +894,10 @@ module BGP
       {:code=> @code, :subcode=> @subcode, :data=>@data}
     end
 
+    def to_string
+      Notification.code_to_s(@code, @subcode)
+    end
+
     def to_s
       msg = self.encode
       s = "Notification (#{MESSAGE::NOTIFICATION}), length: #{msg.size}: "

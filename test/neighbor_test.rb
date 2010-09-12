@@ -40,11 +40,24 @@ class TestBgpNeighbor < Test::Unit::TestCase
     neighbor.capability Route_refresh_cap.new
     neighbor.capability Route_refresh_cap.new 128
     neighbor.capability As4_cap.new(100)
-    open_msg = neighbor.instance_eval { _open_msg_ }
+    open_msg = neighbor.open
     assert_equal(5,open_msg.opt_parms.size)
     assert_equal(4,open_msg.version)
     assert_equal(20,open_msg.holdtime)
     assert_equal(100,open_msg.local_as)
     # puts neighbor
+  end
+  def test_states
+    neighbor = Neighbor.new \
+      :version=> 4, 
+      :my_as=> 100, 
+      :remote_addr => '192.168.1.200', 
+      :local_addr => '192.168.1.5', 
+      :id=> '1.1.1.1', 
+      :holdtime=> 20
+      assert neighbor.is_idle?
+      assert ! neighbor.is_established?
+      assert ! neighbor.is_openrecv?
+      assert ! neighbor.is_openconfirm?  
   end
 end
