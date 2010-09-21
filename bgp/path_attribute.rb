@@ -62,12 +62,19 @@ module BGP
     def find(klass)
       @attributes.find { |a| a.is_a?(klass) }
     end
-    
+
+    def find_by_type(type)
+      @attributes.find { |a| a.type == type }
+    end
+   
     def size
       @attributes.size
     end
     
     def [](type)
+      if type.is_a?(Fixnum)
+        return find_by_type(type)
+      end
       case type
       when  ORIGIN, :origin
         find(Origin)
@@ -97,14 +104,18 @@ module BGP
         find(Extended_communities)
       when AS4_PATH, :as4_path
         find(As4_path)
-      when AS4_AGGREGATOR, :as4_aggregator
-        find(As4_aggregator)
+      when AS4_AGGREGATOR, :as4_aggregator        
       end
     end
     
-    def has?(klass=nil)
-      if klass
-        @attributes.find { |a| a.is_a?(klass) }.nil? ? false : true
+    def has?(arg=nil)
+      if arg
+        case arg
+        when Class
+          @attributes.find { |a| a.is_a?(arg) }.nil? ? false : true
+        when Fixnum
+          @attributes.find { |a| a.type == arg }.nil? ? false : true
+        end
       else
         @attributes.collect { |attr| attr.class }
       end
@@ -159,6 +170,23 @@ end
 module BGP
 
   class Attr
+    UnknownAttr = Class.new(Attr) do
+      attr_reader :type, :flags, :value
+      def initialize(*args)
+        if args.size>1
+          @flags, @type, len, @value=args
+        else
+          parse(*args)
+        end
+      end
+      def encode
+        super(@value)
+      end
+      def parse(s)
+        @flags, @type, len, @value = super
+      end
+    end
+    
     include BGP::ATTR
     def self.factory(s, as4byte=false)
       flags, type = s.unpack('CC')
@@ -192,14 +220,8 @@ module BGP
       when EXTENDED_COMMUNITY
         Extended_communities.new(s)
       else
-        if flags & 0x10==1
-          len = s.slice!(0,2).unpack("n")[0]
-        else 
-          len = s.slice!(0,1).unpack('C')[0]
-        end
-        s.slice!(0,len)
-        raise RuntimeError, "factory for #{type} to be implemented soon"
-        nil
+        # return  a generic unknown attr.
+        UnknownAttr.new(s)
       end
     end
 

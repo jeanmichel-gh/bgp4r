@@ -168,6 +168,8 @@ module BGP
     include ATTR
     include Comparable
     
+    attr_reader :type
+    
     def method_missing(name, *args, &block)
       if name == :encode4
         send :encode, *args, &block

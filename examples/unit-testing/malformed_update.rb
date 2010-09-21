@@ -9,8 +9,8 @@ class TestBgp < Test::Unit::TestCase
   
   include BGP
 
-  # Log.create
-  # Log.level=Logger::DEBUG
+  Log.create
+  Log.level=Logger::DEBUG
   
   N100 = Class.new(BGP::Neighbor)
 
@@ -68,7 +68,7 @@ class TestBgp < Test::Unit::TestCase
          Origin.new(0),
          Multi_exit_disc.new(100),
          Local_pref.new(100),
-         As_path.new(100),
+         As_path.new(100)
        ),
        Nlri.new('77.0.0.0/17', '78.0.0.0/18', '79.0.0.0/19')
      )

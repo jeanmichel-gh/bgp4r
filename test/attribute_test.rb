@@ -26,20 +26,34 @@ require 'test/unit'
 
 class ATTR_Test < Test::Unit::TestCase
   include BGP
-  class Attr_test < Attr
-    def initialize
-      @type, @flags = 0, 0
-    end
-    def encode
-      @type=0xee
-      @flags=0xf
-      super()
-    end
-  end
   def test_1
-   assert_equal('f0ee00',Attr_test.new.to_shex)
-   attr = Attr_test.new
-   assert_equal(attr.encode4, attr.encode)
+    my_attr = Class.new(Attr)
+    my_attr.class_eval do
+      attr_reader :type, :flags, :value
+      attr_writer :value
+      def initialize(*args)
+        if args.size>1
+          @flags, @type,	@value = args
+        else
+          arr = parse(*args)
+        end
+      end
+      def parse(s)
+        @flags, @type, len, @value = super
+      end
+      def encode
+        super(value)
+      end
+    end
+    assert_equal('40010101',my_attr.new(['40010101'].pack('H*')).to_shex)
+    assert_equal('40010101',my_attr.new(BGP::ATTR::WELL_KNOWN_MANDATORY, 1, [1].pack('C')).to_shex)
+    
+    bogus_0 = my_attr.new(ATTR::OPTIONAL_TRANSITIVE, 0, 'A BOGUS OPTIONAL TRANSITIVE ATTR WITH TYPE 0')
+    bogus_999 = my_attr.new(ATTR::OPTIONAL_TRANSITIVE, 999, 'AN OPTIONAL TRANSITIVE ATTR WITH TYPE 999')
+    assert_equal bogus_0.to_shex, my_attr.new(bogus_0.encode).to_shex
+    assert_equal bogus_999.to_shex, my_attr.new(bogus_999.encode).to_shex
+    assert_equal 'A BOGUS OPTIONAL TRANSITIVE ATTR WITH TYPE 0', bogus_0.value
+    assert_equal 'AN OPTIONAL TRANSITIVE ATTR WITH TYPE 999', bogus_999.value
   end
 end
 class Attr_factory_Test < Test::Unit::TestCase
