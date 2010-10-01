@@ -39,7 +39,7 @@ class TestBgp < Test::Unit::TestCase
     assert msg, "Did not receive expected BGP update message."
     assert msg.path_attribute.has?(255), "The path attribute was expected to contain an attribute type 255"
     assert_not_nil msg.path_attribute[255]
-    assert_equal 'AN OPTIONAL TRANSITIVE ATTR WITH TYPE 999', msg.path_attribute[255].value
+    assert_equal 'AN OPTIONAL TRANSITIVE ATTR WITH TYPE 255', msg.path_attribute[255].value
   end
 
   def teardown
@@ -92,7 +92,7 @@ class TestBgp < Test::Unit::TestCase
       Multi_exit_disc.new(100),
       Local_pref.new(100),
       As_path.new(100),
-      my_attr.new(ATTR::OPTIONAL_TRANSITIVE, 255, 'AN OPTIONAL TRANSITIVE ATTR WITH TYPE 999'),
+      my_attr.new(ATTR::OPTIONAL_TRANSITIVE, 255, 'AN OPTIONAL TRANSITIVE ATTR WITH TYPE 255'),
       my_attr.new(ATTR::OPTIONAL_TRANSITIVE, 0, 'AN OPTIONAL TRANSITIVE ATTR WITH TYPE 0')
     ),
     Nlri.new('77.0.0.0/17', '78.0.0.0/18', '79.0.0.0/19')
