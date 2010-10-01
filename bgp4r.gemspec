@@ -5,11 +5,11 @@
 
 Gem::Specification.new do |s|
   s.name = %q{bgp4r}
-  s.version = "0.0.7"
+  s.version = "0.0.8"
 
   s.required_rubygems_version = Gem::Requirement.new(">= 0") if s.respond_to? :required_rubygems_version=
   s.authors = ["Jean-Michel Esnault"]
-  s.date = %q{2010-09-12}
+  s.date = %q{2010-09-30}
   s.description = %q{BGP4R is a BGP-4 ruby library to create,  send, and receive  BGP messages in an  object oriented manner}
   s.email = %q{jesnault@gmail.com}
   s.extra_rdoc_files = [
@@ -52,8 +52,10 @@ Gem::Specification.new do |s|
      "examples/routegen",
      "examples/routegen.yml",
      "examples/simple.rb",
+     "examples/unit-testing/keepalive_set_to_zeo.rb",
      "examples/unit-testing/malformed_update.rb",
      "examples/unit-testing/prepend_aspath.rb",
+     "examples/unit-testing/unknown_transitive_attr.rb",
      "test/aggregator_test.rb",
      "test/as_path_test.rb",
      "test/atomic_aggregate_test.rb",

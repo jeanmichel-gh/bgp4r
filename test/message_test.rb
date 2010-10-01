@@ -134,6 +134,33 @@ class Update_Test < Test::Unit::TestCase
     assert m.as4byte?
   end
 
+  def test_5
+    # build an update from a yaml description
+    # advertised 172.18.179.192/27 
+    # origin igp
+    # nexthop 193.251.127.210
+    # metric 0
+    # locpref 310000
+    # community 3215:102 3215:210 3215:522 3215:588 3215:903 3215:7553 3215:8000 3215:8003
+    # originatorid 193.252.102.210
+    # cluster 0.0.17.49 0.0.29.76 0.0.29.79
+    require 'yaml'
+    require 'pp'
+    s = "
+    ---
+    prefixes:202.44.2.0/24 202.44.3.0/24 202.44.5.0/24 202.44.6.0/24 202.44.7.0/24 
+    origin: incomplete
+    nexthop: 10.0.0.1
+    metric: 0
+    localpref: 13000
+    community: 3230:10 3230:110 3230:411 3230:912 3230:1010 3230:5911 
+    originator-id: 10.0.0.2
+    cluster: 0.0.0.1
+    "
+    
+    
+  end
+
 end
 
 class Open_Test < Test::Unit::TestCase
