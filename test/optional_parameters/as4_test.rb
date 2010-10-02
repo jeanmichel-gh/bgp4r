@@ -23,21 +23,12 @@
 require 'test/unit'
 require 'bgp4r'
 
-class Message_Test < Test::Unit::TestCase
+class As4_cap_Test < Test::Unit::TestCase
   include BGP
-  class MyMessage < Message
-    attr_reader :data
-    def initialize(s=nil)
-      @data= parse(s) if s
-    end
-    def encode
-      @msg_type=0xee
-      super('abcdefghihjklmopqrstuvwxyz')
-    end
-  end
   def test_1
-    msg1 = MyMessage.new
-    msg2 = MyMessage.new(msg1.encode)
-    assert_equal('abcdefghihjklmopqrstuvwxyz',msg2.data)
+    cap1 = As4_cap.new(100)
+    cap2 = As4_cap.new(['0206410400000064'].pack('H*'))
+    cap3 = As4_cap.new(cap1.encode)
+    assert_equal(cap2.encode, cap3.encode)
   end
 end

@@ -23,21 +23,21 @@
 require 'test/unit'
 require 'bgp4r'
 
-class Message_Test < Test::Unit::TestCase
+class Orf_cap_Test < Test::Unit::TestCase
   include BGP
-  class MyMessage < Message
-    attr_reader :data
-    def initialize(s=nil)
-      @data= parse(s) if s
-    end
-    def encode
-      @msg_type=0xee
-      super('abcdefghihjklmopqrstuvwxyz')
-    end
-  end
   def test_1
-    msg1 = MyMessage.new
-    msg2 = MyMessage.new(msg1.encode)
-    assert_equal('abcdefghihjklmopqrstuvwxyz',msg2.data)
+    ent1 =  Orf_cap::Entry.new(1,1,[1,1],[2,1],[3,1])
+    assert_equal('0001000103010102010301', ent1.to_shex)
+    ent2 =  Orf_cap::Entry.new(1,2,[1,1],[2,1],[3,1])
+    assert_equal('0001000203010102010301', ent2.to_shex)
+    ent3 = Orf_cap::Entry.new(ent1.encode)
+    assert_equal(ent1.encode, ent3.encode)
+    orf = Orf_cap.new
+    orf.add(ent1)
+    orf.add(ent2)
+    assert_equal('0218031600010001030101020103010001000203010102010301', orf.to_shex)
+    orf2 = Orf_cap.new(orf.encode)
+    assert_equal(orf.encode, orf2.encode)
   end
+
 end

@@ -1,5 +1,5 @@
 #--
-# Copyright 2008, 2009 Jean-Michel Esnault.
+# Copyright 2008, 2009, 2010 Jean-Michel Esnault.
 # All rights reserved.
 # See LICENSE.txt for permissions.
 #
@@ -23,21 +23,10 @@
 require 'test/unit'
 require 'bgp4r'
 
-class Message_Test < Test::Unit::TestCase
+class Route_refresh_cap_Test < Test::Unit::TestCase
   include BGP
-  class MyMessage < Message
-    attr_reader :data
-    def initialize(s=nil)
-      @data= parse(s) if s
-    end
-    def encode
-      @msg_type=0xee
-      super('abcdefghihjklmopqrstuvwxyz')
-    end
-  end
   def test_1
-    msg1 = MyMessage.new
-    msg2 = MyMessage.new(msg1.encode)
-    assert_equal('abcdefghihjklmopqrstuvwxyz',msg2.data)
+    assert_equal('02020200',Route_refresh_cap.new.to_shex)
+    assert_equal('02028000',Route_refresh_cap.new(128).to_shex)
   end
 end

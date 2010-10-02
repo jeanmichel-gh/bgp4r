@@ -23,21 +23,13 @@
 require 'test/unit'
 require 'bgp4r'
 
-class Message_Test < Test::Unit::TestCase
+class Mbgp_cap_Test < Test::Unit::TestCase
   include BGP
-  class MyMessage < Message
-    attr_reader :data
-    def initialize(s=nil)
-      @data= parse(s) if s
-    end
-    def encode
-      @msg_type=0xee
-      super('abcdefghihjklmopqrstuvwxyz')
-    end
-  end
   def test_1
-    msg1 = MyMessage.new
-    msg2 = MyMessage.new(msg1.encode)
-    assert_equal('abcdefghihjklmopqrstuvwxyz',msg2.data)
+    mbgp1 = Mbgp_cap.new(1,1)
+    mbgp2 = Mbgp_cap.new(['0206010400010001'].pack('H*'))
+    mbgp3 = Mbgp_cap.new(mbgp1.encode)
+    assert_equal(mbgp2.encode, mbgp3.encode)
+    assert_equal "Option Capabilities Advertisement (2): [0206010400010001]\n    Multiprotocol Extensions (1), length: 4\n      AFI IPv4 (1), SAFI Unicast (1)", mbgp2.to_s
   end
 end
