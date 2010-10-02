@@ -20,7 +20,7 @@
 # along with BGP4R.  If not, see <http://www.gnu.org/licenses/>.
 #++
 
-require 'bgp/attribute'
+require 'bgp/path_attributes/attribute'
 
 module BGP
 
@@ -101,4 +101,4 @@ module BGP
 
 end
 
-load "../test/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0
+load "../../test/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0

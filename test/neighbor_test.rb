@@ -21,9 +21,7 @@
 #++
 
 require "test/unit"
-
-require "bgp/neighbor"
-require 'bgp/message'
+require 'bgp4r'
 
 class TestBgpNeighbor < Test::Unit::TestCase
   include BGP
@@ -31,7 +29,7 @@ class TestBgpNeighbor < Test::Unit::TestCase
     neighbor = Neighbor.new \
       :version=> 4, 
       :my_as=> 100, 
-      :remote_addr => '192.168.1.200', 
+      :remote_addr => '192.168.1.200',
       :local_addr => '192.168.1.5', 
       :id=> '1.1.1.1', 
       :holdtime=> 20

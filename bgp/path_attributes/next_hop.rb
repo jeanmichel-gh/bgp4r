@@ -21,22 +21,43 @@
 #++
 
 
-require 'bgp/attribute'
+require 'bgp/path_attributes/attribute'
 
 module BGP
 
-  class Atomic_aggregate < Attr
-    def initialize(arg=nil)
-      @flags, @type=OPTIONAL, ATOMIC_AGGREGATE
-      if arg.is_a?(String) and arg.is_packed?
-        parse(arg)
-      elsif arg.nil?
+  class Next_hop < Attr
+
+    def initialize(*args)
+      @flags, @type = WELL_KNOWN_MANDATORY, NEXT_HOP
+      if args[0].is_a?(String) and args[0].is_packed?
+        parse(args[0])
+      elsif args[0].is_a?(self.class)
+        parse(args[0].encode, *args[1..-1])
       else
-        raise ArgumentError, "invalid argument, #{arg.class} #{arg}"
+        @next_hop = IPAddr.create(*args)
       end
     end
+
+    def next_hop
+      @next_hop.to_s
+    end
+    def to_s(method=:default)
+      super(next_hop, method)
+    end
+
+    def to_i
+      @next_hop.to_i
+    end
+    def parse(s)
+      @flags, @type, len, value = super(s)
+      @next_hop = IPAddr.new_ntoh(value[0,4])
+    end
+
+    def encode
+      super(@next_hop.encode)
+    end
+
   end
 
 end
-
-load "../test/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0
+load "../../test/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0

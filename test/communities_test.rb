@@ -20,7 +20,7 @@
 # along with BGP4R.  If not, see <http://www.gnu.org/licenses/>.
 #++
 
-require 'bgp/communities'
+require 'bgp/path_attributes/communities'
 
 require 'test/unit'  
 class Community_Test < Test::Unit::TestCase

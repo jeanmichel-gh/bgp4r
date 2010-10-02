@@ -20,44 +20,12 @@
 # along with BGP4R.  If not, see <http://www.gnu.org/licenses/>.
 #++
 
-
-require 'bgp/attribute'
-
 module BGP
-
-  class Next_hop < Attr
-
-    def initialize(*args)
-      @flags, @type = WELL_KNOWN_MANDATORY, NEXT_HOP
-      if args[0].is_a?(String) and args[0].is_packed?
-        parse(args[0])
-      elsif args[0].is_a?(self.class)
-        parse(args[0].encode, *args[1..-1])
-      else
-        @next_hop = IPAddr.create(*args)
-      end
-    end
-
-    def next_hop
-      @next_hop.to_s
-    end
-    def to_s(method=:default)
-      super(next_hop, method)
-    end
-
-    def to_i
-      @next_hop.to_i
-    end
-    def parse(s)
-      @flags, @type, len, value = super(s)
-      @next_hop = IPAddr.new_ntoh(value[0,4])
-    end
-
-    def encode
-      super(@next_hop.encode)
-    end
-
-  end
-
 end
-load "../test/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0
+
+%w{ origin next_hop local_pref multi_exit_disc as_path 
+  communities aggregator atomic_aggregate originator_id 
+  cluster_list mp_reach mp_reach extended_communities 
+  path_attribute}.each do |attr|
+    BGP.autoload  attr.capitalize.to_sym,"bgp/path_attributes/#{attr}"
+end

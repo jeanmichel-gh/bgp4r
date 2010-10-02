@@ -21,7 +21,7 @@
 #++
 
 require 'test/unit'
-require 'bgp/path_attribute'
+require 'bgp/path_attributes/path_attribute'
 
 class Path_attribute_Test < Test::Unit::TestCase # :nodoc:
   include BGP

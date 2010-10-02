@@ -20,7 +20,7 @@
 # along with BGP4R.  If not, see <http://www.gnu.org/licenses/>.
 #++
 
-require 'bgp/label'
+require 'bgp/nlris/label'
 require 'test/unit'
 
 class Label_Test < Test::Unit::TestCase

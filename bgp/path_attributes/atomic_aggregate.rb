@@ -20,15 +20,23 @@
 # along with BGP4R.  If not, see <http://www.gnu.org/licenses/>.
 #++
 
-require 'bgp/origin'
-require 'bgp/next_hop'
-require 'bgp/local_pref'
-require 'bgp/multi_exit_disc'
-require 'bgp/as_path'
-require 'bgp/communities'
-require 'bgp/aggregator'
-require 'bgp/atomic_aggregate'
-require 'bgp/originator_id'
-require 'bgp/cluster_list'
-require 'bgp/mp_reach'
-require 'bgp/extended_communities'
+
+require 'bgp/path_attributes/attribute'
+
+module BGP
+
+  class Atomic_aggregate < Attr
+    def initialize(arg=nil)
+      @flags, @type=OPTIONAL, ATOMIC_AGGREGATE
+      if arg.is_a?(String) and arg.is_packed?
+        parse(arg)
+      elsif arg.nil?
+      else
+        raise ArgumentError, "invalid argument, #{arg.class} #{arg}"
+      end
+    end
+  end
+
+end
+
+load "../../test/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0

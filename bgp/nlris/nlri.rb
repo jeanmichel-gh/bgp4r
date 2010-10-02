@@ -262,7 +262,7 @@ module BGP
   end
 end
 
-require 'bgp/label'
+require 'bgp/nlris/label'
 module BGP
   class Labeled
     def initialize(*args)

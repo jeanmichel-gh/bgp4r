@@ -21,8 +21,8 @@
 #++
 
 
-require 'bgp/nlri'
-require 'bgp/orf'
+require 'bgp/nlris/nlri'
+require 'bgp/orfs/orf'
 
 module BGP
   
@@ -184,7 +184,7 @@ class BGP::Prefix_orf < BGP::Orf
 
 end
 
-load "../test/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0
+load "../../test/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0
 
 __END__
 

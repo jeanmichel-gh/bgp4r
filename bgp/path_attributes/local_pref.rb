@@ -21,68 +21,55 @@
 #++
 
 
-require 'bgp/attribute'
+require 'bgp/path_attributes/attribute'
 
 module BGP
-  
-  class Origin < Attr
 
-    def initialize(arg=0)
-      @type=ORIGIN
-      @flags=WELL_KNOWN_MANDATORY
-      if arg.is_a?(String) and arg.packed?
+  class Local_pref < Attr
+
+    def initialize(arg=100)
+      @flags, @type = WELL_KNOWN_MANDATORY, LOCAL_PREF
+      if arg.is_a?(String) and arg.is_packed?
         parse(arg)
       elsif arg.is_a?(self.class)
         parse(arg.encode)
-      elsif arg.is_a?(Hash) and arg[:origin]
-        @origin = arg[:origin]
-      elsif arg.is_a?(Fixnum) and (0..2)===arg
-        @origin=arg
-      elsif arg.is_a?(Symbol)
-        case arg
-        when :igp
-          @origin=0
-        when :egp
-          @origin=1
-        when :incomplete
-          @origin=2
-        end
+      elsif arg.is_a?(Fixnum) or arg.is_a?(Bignum)
+        self.local_pref = arg
+      elsif arg.is_a?(Hash) and arg[:local_pref]
+        self.local_pref = arg[:local_pref]
       else
-        raise ArgumentError, "invalid argument, #{arg.class} (#{arg})"
+        raise ArgumentError, "invalid argument, #{arg.inspect}"
       end
     end
 
-    def encode
-      super([@origin].pack('C'))
+    def local_pref=(val)
+      raise ArgumentError, "invalid argument" unless val.is_a?(Integer)
+      @local_pref=val
     end
 
     def to_i
-      @origin
+      @local_pref
     end
 
-    def origin
-      case to_i
-      when 0 ; 'igp'
-      when 1 ; 'egp'
-      when 2 ; 'incomplete'
-      else
-        'bogus'
-      end
+    def encode
+      super([to_i].pack('N'))
+    end
+
+    def local_pref
+      format("(0x%4.4x) %d", to_i, to_i)
     end
 
     def to_s(method=:default)
-      super(origin, method)
+      super(local_pref, method)
     end
 
     private
 
     def parse(s)
-      @flags, @type, len, @origin=super(s, 'C')
+      @flags, @type, len, @local_pref = super(s,'N')
     end
 
   end
 
 end
-
-load "../test/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0
-
+load "../../test/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0

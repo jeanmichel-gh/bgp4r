@@ -20,7 +20,7 @@
 # along with BGP4R.  If not, see <http://www.gnu.org/licenses/>.
 #++
 
-require "bgp/atomic_aggregate"
+require "bgp/path_attributes/atomic_aggregate"
 
 require 'test/unit'
 class Atomic_aggregate_Test < Test::Unit::TestCase

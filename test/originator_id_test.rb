@@ -20,7 +20,7 @@
 # along with BGP4R.  If not, see <http://www.gnu.org/licenses/>.
 #++
 
-require 'bgp/originator_id'
+require 'bgp/path_attributes/originator_id'
 require 'test/unit'  
 class Originator_id_Test < Test::Unit::TestCase
   include BGP

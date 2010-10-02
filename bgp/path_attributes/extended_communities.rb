@@ -21,8 +21,8 @@
 #++
 
 
-require 'bgp/attribute'
-require 'bgp/extended_community'
+require 'bgp/path_attributes/attribute'
+require 'bgp/path_attributes/extended_community'
 
 module BGP
 
@@ -104,4 +104,4 @@ module BGP
 
 end
 
-load "../test/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0
+load "../../test/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0

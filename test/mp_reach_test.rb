@@ -20,7 +20,7 @@
 # along with BGP4R.  If not, see <http://www.gnu.org/licenses/>.
 #++
 
-require 'bgp/mp_reach'
+require 'bgp/path_attributes/mp_reach'
 require 'test/unit'
 
 class Mp_reach_Test < Test::Unit::TestCase

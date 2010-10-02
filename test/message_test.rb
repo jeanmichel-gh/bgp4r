@@ -21,9 +21,7 @@
 #++
 
 require 'test/unit'
-require 'bgp/common'
-require 'bgp/message'
-require 'bgp/prefix_orf'
+require 'bgp4r'
 
 class Message_Test < Test::Unit::TestCase
   include BGP

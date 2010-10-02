@@ -21,8 +21,8 @@
 #++
 
 
-require 'bgp/attribute'
-require 'bgp/nlri'
+require 'bgp/path_attributes/attribute'
+require 'bgp/nlris/nlri'
 
 module BGP
 
@@ -205,4 +205,4 @@ module BGP
       
 end
 
-load "../test/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0
+load "../../test/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0

@@ -5,11 +5,11 @@
 
 Gem::Specification.new do |s|
   s.name = %q{bgp4r}
-  s.version = "0.0.8"
+  s.version = "0.0.7"
 
   s.required_rubygems_version = Gem::Requirement.new(">= 0") if s.respond_to? :required_rubygems_version=
   s.authors = ["Jean-Michel Esnault"]
-  s.date = %q{2010-09-30}
+  s.date = %q{2010-09-21}
   s.description = %q{BGP4R is a BGP-4 ruby library to create,  send, and receive  BGP messages in an  object oriented manner}
   s.email = %q{jesnault@gmail.com}
   s.extra_rdoc_files = [
@@ -32,14 +32,14 @@ Gem::Specification.new do |s|
      "bgp/extended_community.rb",
      "bgp/iana.rb",
      "bgp/io.rb",
-     "bgp/label.rb",
+     "bgp/nlris/label.rb",
      "bgp/local_pref.rb",
      "bgp/message.rb",
      "bgp/mp_reach.rb",
      "bgp/multi_exit_disc.rb",
      "bgp/neighbor.rb",
      "bgp/next_hop.rb",
-     "bgp/nlri.rb",
+     "bgp/nlris/nlri.rb",
      "bgp/orf.rb",
      "bgp/origin.rb",
      "bgp/originator_id.rb",

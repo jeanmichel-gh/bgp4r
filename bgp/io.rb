@@ -24,7 +24,7 @@
 require 'observer'
 require 'thread'
 require 'bgp/common'
-require 'bgp/message'
+require 'bgp/messages/message'
 
 module BGP
   module IO

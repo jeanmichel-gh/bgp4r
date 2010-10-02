@@ -20,7 +20,8 @@
 # along with BGP4R.  If not, see <http://www.gnu.org/licenses/>.
 #++
 
-require 'bgp/origin'
+require 'bgp4r'
+# require 'bgp/path_attributes/origin'
 require 'test/unit'  
 class Origin_Test < Test::Unit::TestCase
   include BGP

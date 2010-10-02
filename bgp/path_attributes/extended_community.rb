@@ -22,7 +22,7 @@
 
 
 require 'bgp/common'
-require 'bgp/attribute'
+require 'bgp/path_attributes/attribute'
 
 module BGP
 

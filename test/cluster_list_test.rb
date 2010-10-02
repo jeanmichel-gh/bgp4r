@@ -20,7 +20,7 @@
 # along with BGP4R.  If not, see <http://www.gnu.org/licenses/>.
 #++
 
-require 'bgp/cluster_list'
+require 'bgp/path_attributes/cluster_list'
 require 'test/unit'  
 class Cluster_list_Test < Test::Unit::TestCase
   include BGP

@@ -20,8 +20,7 @@
 # along with BGP4R.  If not, see <http://www.gnu.org/licenses/>.
 #++
 
-
-require 'bgp/attributes'
+require 'bgp4r'
 
 module BGP
 
@@ -104,7 +103,7 @@ module BGP
         find(Extended_communities)
       when AS4_PATH, :as4_path
         find(As4_path)
-      when AS4_AGGREGATOR, :as4_aggregator        
+      when AS4_AGGREGATOR, :as4_aggregator
       end
     end
     
@@ -229,4 +228,4 @@ module BGP
   
 end
 
-load "../test/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0
+load "../../test/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0

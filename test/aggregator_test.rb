@@ -21,7 +21,7 @@
 #++
 
 
-require 'bgp/aggregator'
+require 'bgp/path_attributes/aggregator'
 require 'test/unit'
 class Aggregator_Test < Test::Unit::TestCase
   include BGP

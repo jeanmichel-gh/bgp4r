@@ -20,7 +20,7 @@
 # along with BGP4R.  If not, see <http://www.gnu.org/licenses/>.
 #++
 
-require 'bgp/extended_community'
+require 'bgp/path_attributes/extended_community'
 require 'test/unit'
 class Extended_community_Test < Test::Unit::TestCase
   include BGP

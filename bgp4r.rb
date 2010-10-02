@@ -23,5 +23,18 @@
 require 'bgp/common'
 require 'bgp/io'
 require 'bgp/neighbor'
-require 'bgp/message'
+require 'bgp/messages/message'
 require 'bgp/version'
+require 'bgp/path_attributes/attributes'
+require 'bgp/path_attributes/attribute'
+
+#TODO move in messages/messages.rb file ... same as attributes
+
+BGP.autoload :Update,            'bgp/messages/update'
+BGP.autoload :Keepalive,         'bgp/messages/keepalive'
+BGP.autoload :Open,              'bgp/messages/open'
+BGP.autoload :Notification,      'bgp/messages/notification'
+BGP.autoload :Route_refresh,     'bgp/messages/route_refresh'
+BGP.autoload :Orf_route_refresh, 'bgp/messages/route_refresh'
+BGP.autoload :Prefix_orf,        'bgp/orfs/prefix_orf'
+

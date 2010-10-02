@@ -20,7 +20,7 @@
 # along with BGP4R.  If not, see <http://www.gnu.org/licenses/>.
 #++
 
-require 'bgp/nlri'
+require 'bgp/nlris/nlri'
 require 'test/unit'  
 class NLRI_Ip4_Test < Test::Unit::TestCase
   include BGP

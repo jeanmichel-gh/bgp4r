@@ -20,7 +20,7 @@
 # along with BGP4R.  If not, see <http://www.gnu.org/licenses/>.
 #++
 
-require 'bgp/next_hop'
+require 'bgp/path_attributes/next_hop'
 require 'test/unit'  
 class Next_hop_Test < Test::Unit::TestCase
   include BGP

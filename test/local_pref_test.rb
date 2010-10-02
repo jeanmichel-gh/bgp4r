@@ -20,7 +20,7 @@
 # along with BGP4R.  If not, see <http://www.gnu.org/licenses/>.
 #++
 
-require 'bgp/local_pref'
+require 'bgp/path_attributes/local_pref'
 require 'test/unit'  
 class Local_pref_Test < Test::Unit::TestCase
   include BGP

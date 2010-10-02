@@ -20,7 +20,7 @@
 # along with BGP4R.  If not, see <http://www.gnu.org/licenses/>.
 #++
 
-require "bgp/multi_exit_disc"
+require "bgp/path_attributes/multi_exit_disc"
 require 'test/unit'
 class Multi_exit_disc_Test < Test::Unit::TestCase
   include BGP
