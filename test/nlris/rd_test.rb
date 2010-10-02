@@ -20,7 +20,7 @@
 # along with BGP4R.  If not, see <http://www.gnu.org/licenses/>.
 #++
 
-require 'bgp/rd'
+require 'bgp/nlris/rd'
 
 require 'test/unit'
 class Rd_Test < Test::Unit::TestCase
@@ -40,5 +40,4 @@ class Rd_Test < Test::Unit::TestCase
     assert_equal('0001010101010001', Rd.new(['0001010101010001'].pack('H*')).to_shex)
     assert_equal('0002000000010101', Rd.new(['0002000000010101'].pack('H*')).to_shex)
   end
-  
 end

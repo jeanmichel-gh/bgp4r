@@ -1,4 +1,3 @@
-require 'bgp/rd'
 
 module BGP
   class Vpn

@@ -20,12 +20,24 @@
 # along with BGP4R.  If not, see <http://www.gnu.org/licenses/>.
 #++
 
-module BGP
-end
+require 'bgp/nlris/nlris'
+require 'test/unit'
 
-%w{ prefix labeled vpn rd }.each do |n|
-    BGP.autoload  n.capitalize.to_sym,"bgp/nlris/#{n}"
+class Inet_unicast_Test < Test::Unit::TestCase
+  include BGP
+  def test_1
+    assert_equal(1,Inet_unicast.new('192.168.0.0/16').afi)
+    assert_equal(1,Inet_unicast.new('192.168.0.0/16').safi)
+    assert_equal(2,Inet_unicast.new('2009:4:4::/64').afi)
+    assert_equal(1,Inet_unicast.new('2009:4:4::/64').safi)
+  end
 end
-
-BGP.autoload :Inet_unicast,   "bgp/nlris/inet"
-BGP.autoload :Inet_multicast, "bgp/nlris/inet"
+class Inet_multicast_Test < Test::Unit::TestCase
+  include BGP
+  def test_1
+    assert_equal(1,Inet_multicast.new('192.168.0.0/16').afi)
+    assert_equal(2,Inet_multicast.new('192.168.0.0/16').safi)
+    assert_equal(2,Inet_multicast.new('2009:4:4::/64').afi)
+    assert_equal(2,Inet_multicast.new('2009:4:4::/64').safi)
+  end
+end

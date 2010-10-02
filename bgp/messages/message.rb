@@ -23,8 +23,8 @@
 require 'bgp4r'
 # require 'bgp/path_attributes/path_attribute'
 require 'bgp/capabilities/capabilities'
-require 'bgp/nlris/nlri'
-require 'timeout'
+#require 'bgp/nlris/nlri'
+#require 'timeout'
 
 module BGP
 
@@ -85,6 +85,6 @@ module BGP
 
 end
 
-load "../../test/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0
+load "../../test/messages/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0
 
 

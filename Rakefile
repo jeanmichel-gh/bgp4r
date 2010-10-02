@@ -60,7 +60,7 @@ end
 
 Rake::TestTask.new do |t|
   t.libs = ['.']
-  t.pattern = "test/*test.rb"
+  t.pattern = "test/**/*test.rb"
   t.warning = true
 end
 
