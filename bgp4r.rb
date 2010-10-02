@@ -27,6 +27,7 @@ require 'bgp/messages/message'
 require 'bgp/version'
 require 'bgp/path_attributes/attributes'
 require 'bgp/path_attributes/attribute'
+require 'bgp/nlris/nlris'
 
 #TODO move in messages/messages.rb file ... same as attributes
 

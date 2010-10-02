@@ -20,9 +20,8 @@
 # along with BGP4R.  If not, see <http://www.gnu.org/licenses/>.
 #++
 
-
 require 'bgp/path_attributes/attribute'
-require 'bgp/nlris/nlri'
+require 'bgp/nlris/nlris'
 
 module BGP
 
