@@ -163,7 +163,6 @@ end
 
 class Open_Test < Test::Unit::TestCase
   include BGP
-  include BGP::OPT_PARM
   def test_1
     s = "ffffffffffffffffffffffffffffffff001d0104006400c80a00000100"
     sbin = [s].pack('H*')

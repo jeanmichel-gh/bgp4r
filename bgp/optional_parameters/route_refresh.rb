@@ -20,23 +20,26 @@
 # along with BGP4R.  If not, see <http://www.gnu.org/licenses/>.
 #++
 
-require 'bgp/common'
-require 'bgp/io'
-require 'bgp/neighbor'
-require 'bgp/messages/message'
-require 'bgp/version'
-require 'bgp/path_attributes/attributes'
-require 'bgp/path_attributes/attribute'
-require 'bgp/nlris/nlris'
-require 'bgp/optional_parameters/capabilities'
+require 'bgp4r'
 
-#TODO move in messages/messages.rb file ... same as attributes
+module BGP
 
-BGP.autoload :Update,            'bgp/messages/update'
-BGP.autoload :Keepalive,         'bgp/messages/keepalive'
-BGP.autoload :Open,              'bgp/messages/open'
-BGP.autoload :Notification,      'bgp/messages/notification'
-BGP.autoload :Route_refresh,     'bgp/messages/route_refresh'
-BGP.autoload :Orf_route_refresh, 'bgp/messages/route_refresh'
-BGP.autoload :Prefix_orf,        'bgp/orfs/prefix_orf'
+class Route_refresh_cap < Capability 
+  def initialize(code=OPT_PARM::CAP_ROUTE_REFRESH)
+    super(code)
+  end
 
+  def encode
+    super()
+  end
+
+  def to_s
+    super + "\n    Route Refresh #{@code==128 ? "(Cisco) " : ""}(#{@code}), length: 2"
+  end
+
+  def to_hash
+    super()
+  end
+end
+
+end

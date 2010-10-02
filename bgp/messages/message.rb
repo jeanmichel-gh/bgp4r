@@ -21,22 +21,24 @@
 #++
 
 require 'bgp4r'
-# require 'bgp/path_attributes/path_attribute'
-require 'bgp/capabilities/capabilities'
-#require 'bgp/nlris/nlri'
-#require 'timeout'
+require 'bgp/optional_parameters/capabilities'
 
 module BGP
 
-   # http://www.iana.org/assignments/bgp-parameters/bgp-parameters.xhtml#bgp-parameters-1
+  # http://www.iana.org/assignments/bgp-parameters/bgp-parameters.xhtml#bgp-parameters-1
+
+  class UnknownBgpMessage < RuntimeError
+  end
 
   class Message
 
-    OPEN          = 1
-    UPDATE        = 2
-    NOTIFICATION  = 3
-    KEEPALIVE     = 4
-    ROUTE_REFRESH = 5
+    unless const_defined? :OPEN
+      OPEN          = 1
+      UPDATE        = 2
+      NOTIFICATION  = 3
+      KEEPALIVE     = 4
+      ROUTE_REFRESH = 5
+    end
 
     def encode(message='')
       len = message.size+19
@@ -77,14 +79,7 @@ module BGP
     end
   end
 
- #  s = 'ffffffffffffffffffffffffffffffff0050020000002f40010101400304c0a80105800404000000644005040000006440020402010064c0080c051f00010137003b0af50040200a0a0a0a2020202020'
- #  m = Message.factory([s].pack('H*'))
- #  puts m.to_s(true, :tcpdump)
- #  puts m.to_s(true, :default)
- #  puts m.to_s(false, :default)
-
 end
 
 load "../../test/messages/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0
-
 

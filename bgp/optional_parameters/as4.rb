@@ -20,23 +20,36 @@
 # along with BGP4R.  If not, see <http://www.gnu.org/licenses/>.
 #++
 
-require 'bgp/common'
-require 'bgp/io'
-require 'bgp/neighbor'
-require 'bgp/messages/message'
-require 'bgp/version'
-require 'bgp/path_attributes/attributes'
-require 'bgp/path_attributes/attribute'
-require 'bgp/nlris/nlris'
-require 'bgp/optional_parameters/capabilities'
+require 'bgp4r'
+require 'bgp/optional_parameters/capability'
 
-#TODO move in messages/messages.rb file ... same as attributes
+module BGP
 
-BGP.autoload :Update,            'bgp/messages/update'
-BGP.autoload :Keepalive,         'bgp/messages/keepalive'
-BGP.autoload :Open,              'bgp/messages/open'
-BGP.autoload :Notification,      'bgp/messages/notification'
-BGP.autoload :Route_refresh,     'bgp/messages/route_refresh'
-BGP.autoload :Orf_route_refresh, 'bgp/messages/route_refresh'
-BGP.autoload :Prefix_orf,        'bgp/orfs/prefix_orf'
+class As4_cap < Capability
+  def initialize(s)
+    if s.is_a?(String) and s.is_packed?
+      parse(s)
+    else
+      super(OPT_PARM::CAP_AS4)
+      @as=s
+    end
+  end
+  
+  def encode
+    super([@as].pack('N'))
+  end
 
+  def parse(s)
+    @as = super(s).unpack('N')[0]
+  end
+
+  def to_s
+    "Capability(#{CAP_AS4}): 4-octet AS number: " + @as.to_s
+  end
+
+  def to_hash
+    super({:as => @as})
+  end
+end
+
+end

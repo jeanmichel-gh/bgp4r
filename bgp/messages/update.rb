@@ -126,11 +126,6 @@ class Update < Message
 
   def to_s(as4byte=@as4byte, fmt=:tcpdump)
     msg = encode(as4byte)
-    # if as4byte
-    #   msg = self.encode(true)
-    # else
-    #   msg = self.encode
-    # end
     s = []
     s << @withdrawn.to_s if defined?(@withdrawn) and @withdrawn
     s << @path_attribute.to_s(fmt, as4byte) if defined?(@path_attribute) and @path_attribute

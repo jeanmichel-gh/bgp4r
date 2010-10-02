@@ -20,23 +20,8 @@
 # along with BGP4R.  If not, see <http://www.gnu.org/licenses/>.
 #++
 
-require 'bgp/common'
-require 'bgp/io'
-require 'bgp/neighbor'
-require 'bgp/messages/message'
-require 'bgp/version'
-require 'bgp/path_attributes/attributes'
-require 'bgp/path_attributes/attribute'
-require 'bgp/nlris/nlris'
-require 'bgp/optional_parameters/capabilities'
+require 'bgp/optional_parameters/capability'
 
-#TODO move in messages/messages.rb file ... same as attributes
-
-BGP.autoload :Update,            'bgp/messages/update'
-BGP.autoload :Keepalive,         'bgp/messages/keepalive'
-BGP.autoload :Open,              'bgp/messages/open'
-BGP.autoload :Notification,      'bgp/messages/notification'
-BGP.autoload :Route_refresh,     'bgp/messages/route_refresh'
-BGP.autoload :Orf_route_refresh, 'bgp/messages/route_refresh'
-BGP.autoload :Prefix_orf,        'bgp/orfs/prefix_orf'
-
+%w{ mbgp orf route_refresh as4 }.each do |c|
+    BGP.autoload  "#{c}_cap".capitalize.to_sym,"bgp/optional_parameters/#{c}"
+end
