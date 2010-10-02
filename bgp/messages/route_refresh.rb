@@ -61,7 +61,7 @@ class Route_refresh < Message
   
   def to_s
     msg = self.encode
-    "Route Refresh (#{MESSAGE::ROUTE_REFRESH}), length: #{msg.size}\n" +   "AFI #{IANA.afi(@afi)} (#{@afi}), SAFI #{IANA.safi(@safi)} (#{@safi})"
+    "Route Refresh (#{ROUTE_REFRESH}), length: #{msg.size}\n" +   "AFI #{IANA.afi(@afi)} (#{@afi}), SAFI #{IANA.safi(@safi)} (#{@safi})"
   end
 end
 

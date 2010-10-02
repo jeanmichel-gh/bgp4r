@@ -49,7 +49,7 @@ class TestBgp < Test::Unit::TestCase
   
   def start_peering
     @n100.capability :as4_byte
-    @n100.start 
+    @n100.start
   end
   
   def recv(q, timeout=5)

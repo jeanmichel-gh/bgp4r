@@ -78,7 +78,7 @@ class Open < Message
   
   def to_s
     msg = self.encode
-    "Open Message (#{MESSAGE::OPEN}), length: #{msg.size}\n" +
+    "Open Message (#{OPEN}), length: #{msg.size}\n" +
     "  Version #{@version}, my AS #{@local_as}, Holdtime #{@holdtime}s, ID #{@bgp_id}" + 
     ([""] + @opt_parms.compact.collect { |cap| cap.to_s } + [""]).join("\n  ") +
     msg.hexlify.join("\n") + "\n"

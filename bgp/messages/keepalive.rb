@@ -24,7 +24,7 @@ module BGP
       @msg_type=KEEPALIVE
     end
     def to_s
-      "Keepalive Message (#{MESSAGE::KEEPALIVE}), length: 19" + ", [#{self.to_shex[32..-1]}]"
+      "Keepalive Message (#{KEEPALIVE}), length: 19" + ", [#{self.to_shex[32..-1]}]"
     end
   end
 end

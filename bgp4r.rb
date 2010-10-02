@@ -21,6 +21,7 @@
 #++
 
 require 'bgp/common'
+require 'bgp/iana'
 require 'bgp/io'
 require 'bgp/neighbor'
 require 'bgp/messages/message'

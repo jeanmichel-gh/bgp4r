@@ -20,12 +20,15 @@
 # along with BGP4R.  If not, see <http://www.gnu.org/licenses/>.
 #++
 
-module BGP
-end
+require 'test/unit'
+require 'bgp4r'
 
-%w{ nlri prefix labeled vpn rd }.each do |n|
-    BGP.autoload  n.capitalize.to_sym,"bgp/nlris/#{n}"
+class Keepalive_Test < Test::Unit::TestCase
+  include BGP
+  def test_1
+    Keepalive.new
+    assert_equal('ffffffffffffffffffffffffffffffff001304',Keepalive.new.to_shex)
+    assert_equal('ffffffffffffffffffffffffffffffff001304',Message.keepalive.unpack('H*')[0])
+    assert_equal(Keepalive, Message.factory(Keepalive.new.encode).class)
+  end
 end
-
-BGP.autoload :Inet_unicast,   "bgp/nlris/inet"
-BGP.autoload :Inet_multicast, "bgp/nlris/inet"

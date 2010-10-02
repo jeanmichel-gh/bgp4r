@@ -130,7 +130,7 @@ class Update < Message
     s << @withdrawn.to_s if defined?(@withdrawn) and @withdrawn
     s << @path_attribute.to_s(fmt, as4byte) if defined?(@path_attribute) and @path_attribute
     s << @nlri.to_s if defined?(@nlri) and @nlri
-    "Update Message (#{MESSAGE::UPDATE}), #{as4byte ? "4 bytes AS, " : ''}length: #{msg.size}\n  " + s.join("\n") + "\n" + msg.hexlify.join("\n") + "\n"
+    "Update Message (#{UPDATE}), #{as4byte ? "4 bytes AS, " : ''}length: #{msg.size}\n  " + s.join("\n") + "\n" + msg.hexlify.join("\n") + "\n"
   end
   
   def self.withdrawn(u)

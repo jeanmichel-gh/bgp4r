@@ -22,7 +22,7 @@
 
 
 require 'bgp/common'
-require 'bgp/nlris/iana'
+require 'bgp/iana'
 
 module BGP
 
