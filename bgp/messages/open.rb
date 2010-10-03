@@ -102,3 +102,5 @@ class Open < Message
 end
 
 end
+
+load "../../test/messages/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0

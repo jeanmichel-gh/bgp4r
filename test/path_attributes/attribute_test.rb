@@ -21,8 +21,7 @@
 #++
 
 require 'bgp4r'
-# require 'bgp/common'
-# require 'bgp/path_attributes/path_attribute'
+require 'bgp/path_attributes/path_attribute'
 require 'test/unit'
 
 class ATTR_Test < Test::Unit::TestCase

@@ -124,7 +124,7 @@ class Path_attribute_Test < Test::Unit::TestCase # :nodoc:
     
   end
   
-  def test_4
+  def test_5
     s =   '4001010040020a0202000000c80000006440030428000101c0080c0137003b051f00010af50040'
     sbin = [s].pack('H*')
     assert_instance_of(Origin, attr = Attr.factory(sbin))

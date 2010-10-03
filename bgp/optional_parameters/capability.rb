@@ -25,10 +25,27 @@ require 'bgp4r'
 
 module BGP
 
-class UnknownBgpCapability < RuntimeError
+class UnknownBgpCapabilityError < RuntimeError
 end
 
 class Capability < OPT_PARM::Optional_parameter
+  
+    Unknown = Class.new(self) do
+      def initialize(s)
+        if s.is_a?(String) and s.is_packed?
+          parse(s)
+        else
+          raise ArgumentError
+        end
+      end
+      def encode
+        super @value
+      end
+      def parse(s)
+        @value = super(s)
+      end
+    end
+  
   include OPT_PARM
   def initialize(code)
     super(OPT_PARM::CAPABILITY)
@@ -56,8 +73,11 @@ class Capability < OPT_PARM::Optional_parameter
       Route_refresh_cap.new(code)
     when CAP_ORF,CAP_ORF_CISCO
       Orf_cap.new(s)
+    when CAP_GR
+      Graceful_restart_cap.new(s)
     else
-      raise UnknownBgpCapability, "Capability (#{code}), length: #{s.size} not implemented: [#{s.unpack('H*')[0]}]" 
+      Unknown.new(s)
+      # raise UnknownBgpCapabilityError, "Capability (#{code}), length: #{s.size} not implemented: [#{s.unpack('H*')[0]}]" 
     end
   end
   def to_hash(h={})

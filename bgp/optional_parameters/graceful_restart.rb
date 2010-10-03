@@ -1,5 +1,5 @@
 #--
-# Copyright 2008, 2009 Jean-Michel Esnault.
+# Copyright 2010 Jean-Michel Esnault.
 # All rights reserved.
 # See LICENSE.txt for permissions.
 #
@@ -21,34 +21,44 @@
 #++
 
 require 'bgp4r'
-require 'bgp/optional_parameters/capability'
 
 module BGP
 
-class As4_cap < Capability
-  def initialize(s)
-    if s.is_a?(String) and s.is_packed?
-      parse(s)
+class Graceful_restart_cap < Capability
+  
+  def initialize(*args)
+    if args.size>1
+      @restart_state, @restart_time = args
+      @address_families = []
+      super(OPT_PARM::CAP_GR)
     else
-      super(OPT_PARM::CAP_AS4)
-      @as=s
+      parse(*args)
     end
   end
   
-  def encode
-    super([@as].pack('N'))
+  def add(afi,safi,flags)
+    @address_families << [afi, safi, flags]
   end
 
   def parse(s)
-    @as = super(s).unpack('N')[0]
+    @address_families = []
+    o1, families = super(s).unpack('na*')
+    @restart_state = o1 >> 12
+    @restart_time = o1 & 0xfff
+    while families.size>0
+      @address_families << families.slice!(0,4).unpack('nCC')
+    end
   end
 
+  def encode
+    s = []
+    s << [(@restart_state << 12) + @restart_time].pack('n')
+    s << @address_families.collect { |af| af.pack('nCC') }
+    super s.join
+  end
   def to_s
-    "Capability(#{CAP_AS4}): 4-octet AS number: " + @as.to_s
+    super + "\n    Graceful Restart Extension (#{CAP_GR}), length: 4"
   end
-
-  def to_hash
-    super({:as => @as})
-  end
+  
 end
 end

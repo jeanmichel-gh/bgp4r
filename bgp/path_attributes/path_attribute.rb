@@ -169,7 +169,7 @@ end
 module BGP
 
   class Attr
-    UnknownAttr = Class.new(Attr) do
+    Unknown = Class.new(Attr) do
       attr_reader :type, :flags, :value
       def initialize(*args)
         if args.size>1
@@ -219,8 +219,7 @@ module BGP
       when EXTENDED_COMMUNITY
         Extended_communities.new(s)
       else
-        # return  a generic unknown attr.
-        UnknownAttr.new(s)
+        Unknown.new(s)
       end
     end
 

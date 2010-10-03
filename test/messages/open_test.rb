@@ -81,4 +81,27 @@ class Open_Test < Test::Unit::TestCase
     assert_equal(65, open.to_hash[:capabilities][4][:code])
     assert_equal(100,open.to_hash[:capabilities][4 ][:capability][:as])
   end
+  def test_3
+    s = "
+    ffff ffff ffff ffff ffff ffff ffff ffff
+    003f 0104 00c8 005a c0a8 7f01 2202 0601
+    0400 0100 0102 0280 0002 0202 0002 0840
+    0600 7800 0101 8002 0641 0400 0000 c8
+    ".split.join
+    open = BGP::Message.factory([s].pack('H*'))
+    assert_equal s, open.to_shex
+  end
 end
+
+__END__
+
+ffff ffff ffff ffff ffff ffff ffff ffff
+003f 0104 00c8 005a c0a8 7f01 22
+
+0206010400010001
+02028000
+02020200
+02084006007800010180
+02064104000000c8
+
+

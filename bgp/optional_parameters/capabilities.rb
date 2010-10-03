@@ -1,5 +1,5 @@
 #--
-# Copyright 2008, 2009 Jean-Michel Esnault.
+# Copyright 2010 Jean-Michel Esnault.
 # All rights reserved.
 # See LICENSE.txt for permissions.
 #
@@ -22,6 +22,12 @@
 
 require 'bgp/optional_parameters/capability'
 
-%w{ mbgp orf route_refresh as4 }.each do |c|
-    BGP.autoload  "#{c}_cap".capitalize.to_sym,"bgp/optional_parameters/#{c}"
+%w{ 
+  mbgp 
+  orf 
+  route_refresh 
+  as4 
+  graceful_restart
+}.each do |c|
+  BGP.autoload  "#{c}_cap".capitalize.to_sym,"bgp/optional_parameters/#{c}"
 end

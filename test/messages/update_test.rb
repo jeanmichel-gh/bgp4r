@@ -103,7 +103,7 @@ class Update_Test < Test::Unit::TestCase
     assert m.as4byte?
   end
 
-  def test_5
+  def test_7
     # build an update from a yaml description
     # advertised 172.18.179.192/27 
     # origin igp

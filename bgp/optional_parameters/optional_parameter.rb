@@ -33,6 +33,7 @@ module OPT_PARM
     CAP_MBGP = 1
     CAP_ROUTE_REFRESH = 2
     CAP_ORF = 3
+    CAP_GR  = 64
     CAP_AS4 = 65
     CAP_ROUTE_REFRESH_CISCO = 128
     CAP_ORF_CISCO = 130
@@ -71,6 +72,4 @@ module OPT_PARM
 
   end
 end
-
-
 end
