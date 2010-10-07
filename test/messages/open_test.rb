@@ -91,17 +91,8 @@ class Open_Test < Test::Unit::TestCase
     open = BGP::Message.factory([s].pack('H*'))
     assert_equal s, open.to_shex
   end
+  def test_4
+  end
+  
+  
 end
-
-__END__
-
-ffff ffff ffff ffff ffff ffff ffff ffff
-003f 0104 00c8 005a c0a8 7f01 22
-
-0206010400010001
-02028000
-02020200
-02084006007800010180
-02064104000000c8
-
-

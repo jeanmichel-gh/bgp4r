@@ -28,18 +28,18 @@
 # 
 # 
 require 'bgp/messages/message'
-
+require 'bgp/optional_parameters/capability'
 module BGP
 
 class Open < Message
-
+  
   include OPT_PARM
   
   attr_reader :version, :local_as, :holdtime, :opt_parms
-
+  
   def initialize(*args)
+    @opt_parms=[]
     if args.size==1 and args[0].is_a?(String) and args[0].is_packed?
-      @opt_parms=[] # FIMXE: should not have ot init here
       parse(args[0])
     elsif args[0].is_a?(self.class)
       parse(args[0].encode, *args[1..-1])
@@ -57,19 +57,13 @@ class Open < Message
 
   def encode
     opt_parms = @opt_parms.flatten.compact.collect { |cap| cap.encode }.join
-    super([@version, @local_as, @holdtime, @bgp_id.hton, opt_parms.size, opt_parms].pack('Cnna4Ca*'))
-  end
-
-  def parse(s)
-    @version, @local_as, @holdtime, bgp_id, opt_parm_len, opt_parms = super(s).unpack('Cnna4Ca*')
-    while opt_parms.size>0
-      begin
-        @opt_parms << Optional_parameter.factory(opt_parms)
-      rescue UnknownBGPCapability => e
-        puts "#{e}"
-      end
+    s  = [@version, @local_as, @holdtime, @bgp_id.hton].pack("Cnna4")
+    s += if opt_parms.size>255
+      [0xffff, opt_parms.size, opt_parms].pack("nna*")
+    else
+      [opt_parms.size, opt_parms].pack("Ca*")
     end
-    @bgp_id = IPAddr.new_ntoh(bgp_id)
+    super s
   end
   
   def bgp_id
@@ -99,6 +93,33 @@ class Open < Message
     end
     h
   end
+  
+  private
+
+  def parse(s)
+    
+    @version, @local_as, @holdtime, bgp_id, opt_parm_len, opt_parms = super(s).unpack('Cnna4Ca*')
+    while opt_parms.size>0
+      begin
+        @opt_parms << Optional_parameter.factory(opt_parms)
+      end
+    end
+    @bgp_id = IPAddr.new_ntoh(bgp_id)
+  end
+  
+  def parse(_s)
+     s = super(_s)
+     if s[9,2].unpack('CC') == [255,255]
+       @version, @local_as, @holdtime, bgp_id, _, opt_parm_len, opt_parms = s.unpack('Cnna4nna*')
+     else
+       @version, @local_as, @holdtime, bgp_id, opt_parm_len, opt_parms = s.unpack('Cnna4Ca*')
+     end
+     while opt_parms.size>0
+         @opt_parms << Optional_parameter.factory(opt_parms)
+     end
+     @bgp_id = IPAddr.new_ntoh(bgp_id)
+   end
+   
 end
 
 end
