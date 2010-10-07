@@ -227,18 +227,9 @@ Source code is hosted on github.
 
 == Installation
 
-==== Run the following if you haven't already: 
-
-  gem sources -a http://gems.github.com
-
 ==== Install the gem
 
-  sudo gem install jesnault-bgp4r
-
-=== Or clone bgp4r tree and set RUBYLIB env variable accordingly:
-
-  git clone git://github.com/jesnault/bgp4r.git
-  export RUBYLIB=/home/user/bgp4r
+  sudo gem install bgp4r
 
 == Requirements
 

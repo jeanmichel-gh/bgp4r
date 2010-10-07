@@ -77,6 +77,8 @@ module BGP
           Mbgp_cap.new(*args[1..-1])
         when :as4_byte, :as4byte, :as4
           As4_cap.new(@my_as)
+        when :gr, :graceful_restart
+          Graceful_restart.new(*args[1..-1])
         else
           raise ArgumentError, "Invalid argument #{args.inspect}", caller
         end        

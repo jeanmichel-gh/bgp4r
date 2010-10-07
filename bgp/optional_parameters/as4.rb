@@ -44,7 +44,7 @@ class As4_cap < Capability
   end
 
   def to_s
-    "Capability(#{CAP_AS4}): 4-octet AS number: " + @as.to_s
+    super + "\n    Capability(#{CAP_AS4}): 4-octet AS number: " + @as.to_s
   end
 
   def to_hash

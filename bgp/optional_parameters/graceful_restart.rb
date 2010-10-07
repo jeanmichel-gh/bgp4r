@@ -37,7 +37,7 @@ class Graceful_restart_cap < Capability
   end
   
   def add(afi,safi,flags)
-    @address_families << [afi, safi, flags]
+    @address_families << [_afi(afi), _safi(safi), flags]
   end
 
   def parse(s)
@@ -50,6 +50,7 @@ class Graceful_restart_cap < Capability
     end
   end
 
+
   def encode
     s = []
     s << [(@restart_state << 12) + @restart_time].pack('n')
@@ -57,8 +58,55 @@ class Graceful_restart_cap < Capability
     super s.join
   end
   def to_s
-    super + "\n    Graceful Restart Extension (#{CAP_GR}), length: 4"
+    s = []
+    s <<  "\n    Graceful Restart Extension (#{CAP_GR}), length: 4"
+    s <<  "    Restart Flags: #{restart_flag}, Restart Time #{@restart_time}s"
+    s = s.join("\n  ")
+    super + (s + (['']+@address_families.collect { |af| address_family(*af)}).join("\n        "))
   end
+  
+  private
+  
+  def address_family(afi, safi, flags)
+    "AFI #{IANA.afi(afi)} (#{afi}), SAFI #{IANA.safi(safi)} (#{safi}), #{address_family_flags(flags)}"
+  end
+  
+  def restart_flag
+    if @restart_state == 0
+      '[none]'
+    else
+      "0x#{@restart_state}"
+    end
+  end
+  
+  def address_family_flags(flags)
+    if flags & 1 == 0
+      "Forwarding state not preserved (0x#{flags.to_s(16)})"
+    elsif flags & 1 == 1
+      "Forwarding state preserved (0x#{flags.to_s(16)})"
+    end
+  end
+  
+  def _afi(val)
+    if val.is_a?(Fixnum)
+      val
+    elsif val == :ipv4
+      1
+    elsif val == :ipv6
+      2
+    end
+  end
+  
+  def _safi(val)
+    if val.is_a?(Fixnum)
+      val
+    elsif val == :unicast
+      1
+    elsif val == :multicast
+      2
+    end
+  end
+  
   
 end
 end
