@@ -29,3 +29,5 @@ module BGP
 
   end
 end
+
+load "../../test/nlris/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0

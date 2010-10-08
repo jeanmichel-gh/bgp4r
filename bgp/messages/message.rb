@@ -21,7 +21,6 @@
 #++
 
 require 'bgp4r'
-require 'bgp/optional_parameters/capabilities'
 
 module BGP
 

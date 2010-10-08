@@ -22,13 +22,12 @@
 
 require 'test/unit'
 require 'bgp4r'
-
-class Keepalive_Test < Test::Unit::TestCase
+require 'bgp/messages/markers'
+class End_of_rib_markers_Test < Test::Unit::TestCase
   include BGP
-  def test_1
-    Keepalive.new
-    assert_match(/^(ff){16}001304$/, Keepalive.new.to_shex)
-    assert_match(/^(ff){16}001304$/, Message.keepalive.unpack('H*')[0])
-    assert_equal(Keepalive, Message.factory(Keepalive.new.encode).class)
+  def test_end_of_rib_maker_messages
+    assert_match /(ff){16}00170200000000/, Update.end_of_rib_marker.to_shex
+    assert_match /(ff){16}001d0200000006800f03000104/, Update.end_of_rib_marker(:afi=>1, :safi=>4).to_shex
+    assert_match /(ff){16}001d0200000006800f03000180/, Update.end_of_rib_marker(:afi=>1, :safi=>128).to_shex
   end
 end

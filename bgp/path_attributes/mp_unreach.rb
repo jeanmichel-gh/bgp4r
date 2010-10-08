@@ -49,6 +49,9 @@ module BGP
 
     def set(h)
       @safi = h[:safi]
+      h[:nlri]   ||=[]
+      h[:prefix] ||=[]
+      @afi = h[:afi] if h[:afi]
       case @safi
       when 1,2
         @nlris = [h[:prefix]].flatten.collect { |p| p.is_a?(Prefix) ? p : Prefix.new(p) }

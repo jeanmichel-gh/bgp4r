@@ -26,28 +26,26 @@ require 'bgp4r'
 class Optional_parameter_Test < Test::Unit::TestCase
   include BGP
   def test_draft_ietf_idr_ext_opt_param_01_encoding
-    s = 'a'
-    def s.encode
+    octet = ''
+    def octet.encode
       [0xab].pack('C')
     end
-    assert_match /^ffffffffffffffffffffffffffffffff011b01040064007801010101fe(ab){254}$/, 
-            Open.new(4, 100, 120, '1.1.1.1', [s]*254).to_shex
-    assert_match /^ffffffffffffffffffffffffffffffff011c01040064007801010101ff(ab){255}$/, 
-            Open.new(4, 100, 120, '1.1.1.1', [s]*255).to_shex
-    assert_match /^ffffffffffffffffffffffffffffffff012001040064007801010101ffff0100(ab){256}$/, 
-            Open.new(4, 100, 120, '1.1.1.1', [s]*256).to_shex
-    assert_match /^ffffffffffffffffffffffffffffffff012101040064007801010101ffff0101(ab){257}$/, 
-            Open.new(4, 100, 120, '1.1.1.1', [s]*257).to_shex
+    assert_match /^(ff){16}011b01040064007801010101fe(ab){254}$/, 
+            Open.new(4, 100, 120, '1.1.1.1', [octet]*254).to_shex
+    assert_match /^(ff){16}011c01040064007801010101ff(ab){255}$/, 
+            Open.new(4, 100, 120, '1.1.1.1', [octet]*255).to_shex
+    assert_match /^(ff){16}012001040064007801010101ffff0100(ab){256}$/, 
+            Open.new(4, 100, 120, '1.1.1.1', [octet]*256).to_shex
+    assert_match /^(ff){16}012101040064007801010101ffff0101(ab){257}$/, 
+            Open.new(4, 100, 120, '1.1.1.1', [octet]*257).to_shex
   end
-
   def test_draft_ietf_idr_ext_opt_param_01_parsing
     mbgp = Mbgp_cap.new(1,1)
     open1 = Open.new(4, 100, 120, '1.1.1.1', *[mbgp]*100)
     open2 = Open.new(4, 100, 120, '1.1.1.1', *[mbgp]*10)
-    assert_match /ffffffffffff034001040064007801010101\s*ffff0320\s*0206010400010001/, open1.to_shex
-    assert_match /ffffffffffff006d01040064007801010101\s*50\s*0206010400010001/, open2.to_shex
+    assert_match /^(ff){16}034001040064007801010101\s*ffff0320\s*0206010400010001/, open1.to_shex
+    assert_match /^(ff){16}006d01040064007801010101\s*50\s*0206010400010001/, open2.to_shex
     assert_equal Open.new(open1).to_shex, open1.to_shex
     assert_equal Open.new(open2).to_shex, open2.to_shex
   end
-
 end

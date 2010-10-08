@@ -33,10 +33,10 @@ class Notification_Test < Test::Unit::TestCase
     assert_equal('Connection Not Synchronized', Notification.code_to_s(1,1))
     assert_equal('Unrecognized Well-known Attribute', Notification.code_to_s(3,2))
     notif = BGP::Notification.new(1,1)
-    assert_equal('ffffffffffffffffffffffffffffffff0015030101', notif.to_shex)
+    assert_match /^(ff){16}0015030101$/, notif.to_shex
     assert_equal(notif.encode, Notification.new(notif).encode)
     notif = BGP::Notification.new(2,2,'some data')
-    assert_equal('ffffffffffffffffffffffffffffffff001e030202736f6d652064617461', notif.to_shex)
+    assert_match /(ff){16}001e030202736f6d652064617461/, notif.to_shex
     assert_equal(notif.encode, Notification.new(notif).encode)
     s = 'ffffffffffffffffffffffffffffffff001e030202736f6d652064617461'
     m = Message.factory([s].pack('H*'))

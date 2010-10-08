@@ -27,5 +27,6 @@ end
     BGP.autoload  n.capitalize.to_sym,"bgp/nlris/#{n}"
 end
 
-BGP.autoload :Inet_unicast,   "bgp/nlris/inet"
-BGP.autoload :Inet_multicast, "bgp/nlris/inet"
+BGP.autoload :Inet_unicast,    "bgp/nlris/inet"
+BGP.autoload :Inet_multicast,  "bgp/nlris/inet"
+BGP.autoload :Withdrawn,       "bgp/nlris/nlri"

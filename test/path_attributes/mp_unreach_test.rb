@@ -57,4 +57,11 @@ class Mp_unreach_Test < Test::Unit::TestCase
     assert_equal("700006610000006400000064c0a802",mpur.nlris[1].to_shex)
 
   end
+  
+  def test_3
+    assert_equal '800f03000104', Mp_unreach.new(:afi=>1, :safi=>4).to_shex
+    assert_equal '800f03000180', Mp_unreach.new(:afi=>1, :safi=>128).to_shex
+    assert_equal '800f03000102', Mp_unreach.new(:afi=>1, :safi=>2).to_shex
+  end
+  
 end
