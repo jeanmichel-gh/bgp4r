@@ -24,22 +24,22 @@ require 'bgp4r'
 
 module BGP
 
-class Mbgp_cap < Capability
+class Mbgp_capability < Capability
 
   def self.ipv4_unicast
-    Mbgp_cap.new(1,1)
+    Mbgp_capability.new(1,1)
   end
   
   def self.ipv4_multicast
-    Mbgp_cap.new(1,2)
+    Mbgp_capability.new(1,2)
   end
   
   def self.ipv6_unicast
-    Mbgp_cap.new(2,2)
+    Mbgp_capability.new(2,2)
   end
   
   def self.ipv6_multicast
-    Mbgp_cap.new(2,2)
+    Mbgp_capability.new(2,2)
   end
 
   def initialize(afi,safi=nil)

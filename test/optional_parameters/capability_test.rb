@@ -35,30 +35,30 @@ class Capability_Test < Test::Unit::TestCase
   def test_factory_graceful_restart
     s = '020c400a00780001010100010201'
     cap = Capability.factory([s].pack('H*'))
-    assert_instance_of(Graceful_restart_cap, cap)
+    assert_instance_of(Graceful_restart_capability, cap)
   end
   def test_factory_as4
     s = '0206410400000064'
     cap = Capability.factory([s].pack('H*'))
-    assert_instance_of(As4_cap, cap)
+    assert_instance_of(As4_capability, cap)
   end
   def test_factory_route_refresh
     s = '02020200'
     cap = Capability.factory([s].pack('H*'))
-    assert_instance_of(Route_refresh_cap, cap)
+    assert_instance_of(Route_refresh_capability, cap)
     s = '02028000'
     cap = Capability.factory([s].pack('H*'))
-    assert_instance_of(Route_refresh_cap, cap)
+    assert_instance_of(Route_refresh_capability, cap)
   end
   def test_factory_mbgp
     s = '0206010400010001'
     cap = Capability.factory([s].pack('H*'))
-    assert_instance_of(Mbgp_cap, cap)
+    assert_instance_of(Mbgp_capability, cap)
   end
   def test_factory_orf
     s = '0218031600010001030101020103010001000203010102010301'
     cap = Capability.factory([s].pack('H*'))
-    assert_equal(Orf_cap, cap.class)
+    assert_equal(Orf_capability, cap.class)
   end
   def test_factory_unknown
     s = '0207640576616c7565'

@@ -20,6 +20,7 @@
 # along with BGP4R.  If not, see <http://www.gnu.org/licenses/>.
 #++
 
+require 'bgp4r'
 require 'bgp/orfs/prefix_orf'
 require 'test/unit'
 class Prefix_orf_Test < Test::Unit::TestCase

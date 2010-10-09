@@ -26,7 +26,7 @@ require 'bgp4r'
 class Route_refresh_cap_Test < Test::Unit::TestCase
   include BGP
   def test_1
-    assert_equal('02020200',Route_refresh_cap.new.to_shex)
-    assert_equal('02028000',Route_refresh_cap.new(128).to_shex)
+    assert_equal('02020200',Route_refresh_capability.new.to_shex)
+    assert_equal('02028000',Route_refresh_capability.new(128).to_shex)
   end
 end

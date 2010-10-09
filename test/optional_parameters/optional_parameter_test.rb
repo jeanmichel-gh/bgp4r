@@ -40,7 +40,7 @@ class Optional_parameter_Test < Test::Unit::TestCase
             Open.new(4, 100, 120, '1.1.1.1', [octet]*257).to_shex
   end
   def test_draft_ietf_idr_ext_opt_param_01_parsing
-    mbgp = Mbgp_cap.new(1,1)
+    mbgp = Mbgp_capability.new(1,1)
     open1 = Open.new(4, 100, 120, '1.1.1.1', *[mbgp]*100)
     open2 = Open.new(4, 100, 120, '1.1.1.1', *[mbgp]*10)
     assert_match /^(ff){16}034001040064007801010101\s*ffff0320\s*0206010400010001/, open1.to_shex

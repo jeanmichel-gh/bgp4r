@@ -25,7 +25,7 @@ require 'bgp/optional_parameters/capability'
 
 module BGP
 
-class As4_cap < Capability
+class As4_capability < Capability
   def initialize(s)
     if s.is_a?(String) and s.is_packed?
       parse(s)

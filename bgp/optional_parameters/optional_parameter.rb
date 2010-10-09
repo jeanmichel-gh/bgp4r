@@ -35,6 +35,7 @@ module OPT_PARM
     CAP_ORF = 3
     CAP_GR  = 64
     CAP_AS4 = 65
+    CAP_DYNAMIC = 67
     CAP_ROUTE_REFRESH_CISCO = 128
     CAP_ORF_CISCO = 130
 

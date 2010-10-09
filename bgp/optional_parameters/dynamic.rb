@@ -1,5 +1,5 @@
 #--
-# Copyright 2008, 2009 Jean-Michel Esnault.
+# Copyright 2010 Jean-Michel Esnault.
 # All rights reserved.
 # See LICENSE.txt for permissions.
 #
@@ -24,8 +24,8 @@ require 'bgp4r'
 
 module BGP
 
-class Route_refresh_capability < Capability 
-  def initialize(code=OPT_PARM::CAP_ROUTE_REFRESH)
+class Dynamic_capability < Capability 
+  def initialize(code=OPT_PARM::CAP_DYNAMIC)
     super(code)
   end
 
@@ -34,7 +34,7 @@ class Route_refresh_capability < Capability
   end
 
   def to_s
-    super + "\n    Route Refresh #{@code==128 ? "(Cisco) " : ""}(#{@code}), length: 2"
+    super + "\n    Dynamic Capability #{@code}, length: 2"
   end
 
   def to_hash

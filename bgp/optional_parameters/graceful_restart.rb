@@ -24,7 +24,7 @@ require 'bgp4r'
 
 module BGP
 
-class Graceful_restart_cap < Capability
+class Graceful_restart_capability < Capability
   
   def initialize(*args)
     if args.size>1

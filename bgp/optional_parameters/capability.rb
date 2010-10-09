@@ -66,15 +66,17 @@ class Capability < OPT_PARM::Optional_parameter
     code = s.slice(2,1).unpack('C')[0]
     case code
     when CAP_AS4
-      As4_cap.new(s)
+      As4_capability.new(s)
     when CAP_MBGP
-      Mbgp_cap.new(s)
+      Mbgp_capability.new(s)
     when CAP_ROUTE_REFRESH, CAP_ROUTE_REFRESH_CISCO
-      Route_refresh_cap.new(code)
+      Route_refresh_capability.new(code)
     when CAP_ORF,CAP_ORF_CISCO
-      Orf_cap.new(s)
+      Orf_capability.new(s)
     when CAP_GR
-      Graceful_restart_cap.new(s)
+      Graceful_restart_capability.new(s)
+    when CAP_DYNAMIC
+      Dynamic_capability.new(s)
     else
       Unknown.new(s)
       # raise UnknownBgpCapabilityError, "Capability (#{code}), length: #{s.size} not implemented: [#{s.unpack('H*')[0]}]" 

@@ -28,6 +28,7 @@ require 'bgp/optional_parameters/capability'
   route_refresh 
   as4 
   graceful_restart
+  dynamic
 }.each do |c|
-  BGP.autoload  "#{c}_cap".capitalize.to_sym,"bgp/optional_parameters/#{c}"
+  BGP.autoload  "#{c}_capability".capitalize.to_sym,"bgp/optional_parameters/#{c}"
 end

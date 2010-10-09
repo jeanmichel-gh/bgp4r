@@ -1,5 +1,5 @@
 #--
-# Copyright 2008, 2009 Jean-Michel Esnault.
+# Copyright 2010 Jean-Michel Esnault.
 # All rights reserved.
 # See LICENSE.txt for permissions.
 #
@@ -20,26 +20,12 @@
 # along with BGP4R.  If not, see <http://www.gnu.org/licenses/>.
 #++
 
+require 'test/unit'
 require 'bgp4r'
 
-module BGP
-
-class Route_refresh_capability < Capability 
-  def initialize(code=OPT_PARM::CAP_ROUTE_REFRESH)
-    super(code)
+class Dynamic_capability_Test < Test::Unit::TestCase
+  include BGP
+  def test_1
+    assert_equal('02024300',Dynamic_capability.new.to_shex)
   end
-
-  def encode
-    super()
-  end
-
-  def to_s
-    super + "\n    Route Refresh #{@code==128 ? "(Cisco) " : ""}(#{@code}), length: 2"
-  end
-
-  def to_hash
-    super()
-  end
-end
-
 end
