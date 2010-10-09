@@ -25,6 +25,7 @@ require 'bgp4r'
 
 class Capability_Test < Test::Unit::TestCase
   include BGP
+  include OPT_PARM
   def test_1
     cap = Capability.new(100)
     assert_equal '02026400', cap.to_shex

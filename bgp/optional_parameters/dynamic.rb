@@ -24,7 +24,7 @@ require 'bgp4r'
 
 module BGP
 
-class Dynamic_capability < Capability 
+class Dynamic_capability < OPT_PARM::Capability 
   def initialize(code=OPT_PARM::CAP_DYNAMIC)
     super(code)
   end

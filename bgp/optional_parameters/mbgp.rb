@@ -24,7 +24,7 @@ require 'bgp4r'
 
 module BGP
 
-class Mbgp_capability < Capability
+class Mbgp_capability < OPT_PARM::Capability
 
   def self.ipv4_unicast
     Mbgp_capability.new(1,1)

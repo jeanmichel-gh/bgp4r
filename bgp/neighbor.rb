@@ -82,7 +82,7 @@ module BGP
         else
           raise ArgumentError, "Invalid argument #{args.inspect}", caller
         end        
-      elsif args[0].is_a?(Capability)
+      elsif args[0].is_a?(OPT_PARM::Capability)
         args[0]
       else
         raise ArgumentError, "Invalid argument"

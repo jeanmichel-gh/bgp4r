@@ -24,7 +24,7 @@ require 'bgp4r'
 
 module BGP
 
-class Orf_capability < Capability
+class Orf_capability < OPT_PARM::Capability
 
   class Entry
     

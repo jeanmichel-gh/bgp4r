@@ -24,7 +24,7 @@ require 'bgp4r'
 
 module BGP
 
-class Route_refresh_capability < Capability 
+class Route_refresh_capability < OPT_PARM::Capability 
   def initialize(code=OPT_PARM::CAP_ROUTE_REFRESH)
     super(code)
   end

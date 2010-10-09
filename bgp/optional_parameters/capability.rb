@@ -25,70 +25,68 @@ require 'bgp4r'
 
 module BGP
 
-class UnknownBgpCapabilityError < RuntimeError
-end
+  module OPT_PARM
 
-class Capability < OPT_PARM::Optional_parameter
-  
-    Unknown = Class.new(self) do
-      def initialize(s)
-        if s.is_a?(String) and s.is_packed?
-          parse(s)
-        else
-          raise ArgumentError
+    class Capability < Optional_parameter
+
+      Unknown = Class.new(self) do
+        def initialize(s)
+          if s.is_a?(String) and s.is_packed?
+            parse(s)
+          else
+            raise ArgumentError
+          end
+        end
+        def encode
+          super @value
+        end
+        def parse(s)
+          @value = super(s)
         end
       end
-      def encode
-        super @value
-      end
-      def parse(s)
-        @value = super(s)
-      end
-    end
-  
-  include OPT_PARM
-  def initialize(code)
-    super(OPT_PARM::CAPABILITY)
-    @code=code
-  end
-  def encode(value='')
-    super([@code,value.size, value].pack('CCa*'))
-  end
-  def parse(_s)
-    s = super(_s)
-    @code, len = s.slice!(0,2).unpack('CC')
-    s.slice!(0,len).is_packed
-  end
-  def to_s
-    "Option Capabilities Advertisement (#{@parm_type}): [#{to_shex}]"
-  end
-  def self.factory(s)
-    code = s.slice(2,1).unpack('C')[0]
-    case code
-    when CAP_AS4
-      As4_capability.new(s)
-    when CAP_MBGP
-      Mbgp_capability.new(s)
-    when CAP_ROUTE_REFRESH, CAP_ROUTE_REFRESH_CISCO
-      Route_refresh_capability.new(code)
-    when CAP_ORF,CAP_ORF_CISCO
-      Orf_capability.new(s)
-    when CAP_GR
-      Graceful_restart_capability.new(s)
-    when CAP_DYNAMIC
-      Dynamic_capability.new(s)
-    else
-      Unknown.new(s)
-      # raise UnknownBgpCapabilityError, "Capability (#{code}), length: #{s.size} not implemented: [#{s.unpack('H*')[0]}]" 
-    end
-  end
-  def to_hash(h={})
-    if h.empty?
-      {:code=> @code}
-    else
-      {:code=> @code, :capability=> h}
-    end
-  end
-end
 
+      include OPT_PARM
+      def initialize(code)
+        super(OPT_PARM::CAPABILITY)
+        @code=code
+      end
+      def encode(value='')
+        super([@code,value.size, value].pack('CCa*'))
+      end
+      def parse(_s)
+        s = super(_s)
+        @code, len = s.slice!(0,2).unpack('CC')
+        s.slice!(0,len).is_packed
+      end
+      def to_s
+        "Option Capabilities Advertisement (#{@parm_type}): [#{to_shex}]"
+      end
+      def self.factory(s)
+        code = s.slice(2,1).unpack('C')[0]
+        case code
+        when CAP_AS4
+          As4_capability.new(s)
+        when CAP_MBGP
+          Mbgp_capability.new(s)
+        when CAP_ROUTE_REFRESH, CAP_ROUTE_REFRESH_CISCO
+          Route_refresh_capability.new(code)
+        when CAP_ORF,CAP_ORF_CISCO
+          Orf_capability.new(s)
+        when CAP_GR
+          Graceful_restart_capability.new(s)
+        when CAP_DYNAMIC
+          Dynamic_capability.new(s)
+        else
+          Unknown.new(s)
+        end
+      end
+      def to_hash(h={})
+        if h.empty?
+          {:code=> @code}
+        else
+          {:code=> @code, :capability=> h}
+        end
+      end
+    end
+  end
 end
