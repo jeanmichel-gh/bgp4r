@@ -1,5 +1,5 @@
 #--
-# Copyright 2008, 2009 Jean-Michel Esnault.
+# Copyright 2008, 2009, 2010 Jean-Michel Esnault.
 # All rights reserved.
 # See LICENSE.txt for permissions.
 #
@@ -30,8 +30,11 @@ class Notification_Test < Test::Unit::TestCase
     assert_equal('Header Error', Notification.code_to_s(1))
     assert_equal('OPEN msg error', Notification.code_to_s(2))
     assert_equal('UPDATE msg error', Notification.code_to_s(3))
+    assert_equal('CAPABILITY Message Error', Notification.code_to_s(7))
     assert_equal('Connection Not Synchronized', Notification.code_to_s(1,1))
     assert_equal('Unrecognized Well-known Attribute', Notification.code_to_s(3,2))
+    assert_equal('Invalid Capability Length', Notification.code_to_s(7,2))
+    assert_equal('Malformed Capability Value', Notification.code_to_s(7,3))
     notif = BGP::Notification.new(1,1)
     assert_match /^(ff){16}0015030101$/, notif.to_shex
     assert_equal(notif.encode, Notification.new(notif).encode)

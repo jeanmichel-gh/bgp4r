@@ -39,6 +39,7 @@ class Notification < Message
   @code_to_s[[4]]    = "Hold Timer Expired"
   @code_to_s[[5]]    = "Finite State Machine Error"
   @code_to_s[[6]]    = "Cease"
+  @code_to_s[[7]]    = "CAPABILITY Message Error"
   @code_to_s[[1,1]]  = "Connection Not Synchronized"
   @code_to_s[[1,2]]  = "Bad Message Length"
   @code_to_s[[1,3]]  = "Bad Message Type"    
@@ -68,7 +69,11 @@ class Notification < Message
   @code_to_s[[6,6]]  = "Other Configuration Change"
   @code_to_s[[6,7]]  = "Connection Collision Resolution"
   @code_to_s[[6,8]]  = "Out of Resources"
-      
+  @code_to_s[[7,1]]  = "Unknown Sequence Number"
+  @code_to_s[[7,2]]  = "Invalid Capability Length"
+  @code_to_s[[7,3]]  = "Malformed Capability Value"
+  @code_to_s[[7,4]]  = "Unsupported Capability Code"
+  
   def initialize(*args)
     @msg_type=NOTIFICATION
     if args.size==1  and args[0].is_a?(String) and args[0].is_packed?
