@@ -22,71 +22,76 @@
 
 require 'bgp4r'
 
-module BGP
-
-class Mbgp_capability < OPT_PARM::Capability
-
-  def self.ipv4_unicast
-    Mbgp_capability.new(1,1)
-  end
+module BGP::OPT_PARM::CAP
   
-  def self.ipv4_multicast
-    Mbgp_capability.new(1,2)
-  end
-  
-  def self.ipv6_unicast
-    Mbgp_capability.new(2,2)
-  end
-  
-  def self.ipv6_multicast
-    Mbgp_capability.new(2,2)
-  end
+  class Mbgp < BGP::OPT_PARM::Capability 
 
-  def initialize(afi,safi=nil)
-    if safi.nil? and afi.is_a?(String) and afi.is_packed?
-      parse(afi)
-    else
-      super(OPT_PARM::CAP_MBGP)
-      self.safi, self.afi = safi, afi
+    def self.ipv4_unicast
+      Mbgp.new(1,1)
     end
-  end
-  
-  def afi=(val)
-    @afi = if val.is_a?(Fixnum)
-      val
-    elsif val == :ipv4
-      1
-    elsif val == :ipv6
-      2
+
+    def self.ipv4_multicast
+      Mbgp.new(1,2)
     end
-  end
-  
-  def safi=(val)
-    @safi = if val.is_a?(Fixnum)
-      val
-    elsif val == :unicast
-      1
-    elsif val == :multicast
-      2
+
+    def self.ipv6_unicast
+      Mbgp.new(2,2)
     end
-  end
 
-  def encode
-    super([@afi,0,@safi].pack('nCC'))
-  end
+    def self.ipv6_multicast
+      Mbgp.new(2,2)
+    end
 
-  def parse(s)
-    @afi, ignore, @safi = super(s).unpack('nCC')
-  end
+    def initialize(afi,safi=nil)
+      if safi.nil? and afi.is_a?(String) and afi.is_packed?
+        parse(afi)
+      else
+        super(OPT_PARM::CAP_MBGP)
+        self.safi, self.afi = safi, afi
+      end
+    end
 
-  def to_s
-    super + "\n    Multiprotocol Extensions (#{CAP_MBGP}), length: 4" +
-    "\n      AFI #{IANA.afi(@afi)} (#{@afi}), SAFI #{IANA.safi(@safi)} (#{@safi})"
-  end
+    def afi=(val)
+      @afi = if val.is_a?(Fixnum)
+        val
+      elsif val == :ipv4
+        1
+      elsif val == :ipv6
+        2
+      end
+    end
 
-  def to_hash
-    super({:afi => @afi, :safi => @safi, })
+    def safi=(val)
+      @safi = if val.is_a?(Fixnum)
+        val
+      elsif val == :unicast
+        1
+      elsif val == :multicast
+        2
+      end
+    end
+
+    def encode
+      super([@afi,0,@safi].pack('nCC'))
+    end
+
+    def parse(s)
+      @afi, ignore, @safi = super(s).unpack('nCC')
+    end
+
+    def to_s
+      super + "\n    Multiprotocol Extensions (#{CAP_MBGP}), length: 4" +
+      "\n      AFI #{IANA.afi(@afi)} (#{@afi}), SAFI #{IANA.safi(@safi)} (#{@safi})"
+    end
+    
+    def to_s_brief
+      "MBGP #{IANA.afi(@afi)}, #{IANA.safi(@safi)}"
+    end
+
+    def to_hash
+      super({:afi => @afi, :safi => @safi, })
+    end
   end
 end
 
-end
+load "../../test/optional_parameters/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0

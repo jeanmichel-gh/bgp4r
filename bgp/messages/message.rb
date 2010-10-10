@@ -37,6 +37,7 @@ module BGP
       NOTIFICATION  = 3
       KEEPALIVE     = 4
       ROUTE_REFRESH = 5
+      CAPABILITY    = 6
     end
 
     def encode(message='')
@@ -66,6 +67,8 @@ module BGP
         else
           Route_refresh.new(s)
         end
+      when CAPABILITY
+        Capability.new(s)
       else
         puts "don't know what kind of bgp messgage this is #{s.slice(18,1).unpack('C')}"
       end

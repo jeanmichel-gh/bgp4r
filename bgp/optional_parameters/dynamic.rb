@@ -22,24 +22,16 @@
 
 require 'bgp4r'
 
-module BGP
+module BGP::OPT_PARM::CAP
 
-class Dynamic_capability < OPT_PARM::Capability 
-  def initialize(code=OPT_PARM::CAP_DYNAMIC)
+class Dynamic < BGP::OPT_PARM::Capability 
+  def initialize(code=BGP::OPT_PARM::CAP_DYNAMIC)
     super(code)
   end
-
-  def encode
-    super()
-  end
-
   def to_s
     super + "\n    Dynamic Capability #{@code}, length: 2"
   end
-
-  def to_hash
-    super()
-  end
+end
 end
 
-end
+load "../../test/optional_parameters/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0

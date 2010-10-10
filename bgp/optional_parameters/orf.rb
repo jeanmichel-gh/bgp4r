@@ -22,9 +22,9 @@
 
 require 'bgp4r'
 
-module BGP
+module BGP::OPT_PARM::CAP
 
-class Orf_capability < OPT_PARM::Capability
+class Orf < BGP::OPT_PARM::Capability
 
   class Entry
     
@@ -85,5 +85,6 @@ class Orf_capability < OPT_PARM::Capability
   end
 
 end
-
 end
+
+load "../../test/optional_parameters/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0

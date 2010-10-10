@@ -24,11 +24,11 @@ require 'test/unit'
 require 'bgp4r'
 
 class As4_capability_Test < Test::Unit::TestCase
-  include BGP
+  include BGP::OPT_PARM::CAP
   def test_1
-    cap1 = As4_capability.new(100)
-    cap2 = As4_capability.new(['0206410400000064'].pack('H*'))
-    cap3 = As4_capability.new(cap1.encode)
+    cap1 = As4.new(100)
+    cap2 = As4.new(['0206410400000064'].pack('H*'))
+    cap3 = As4.new(cap1.encode)
     assert_equal(cap2.encode, cap3.encode)
   end
 end

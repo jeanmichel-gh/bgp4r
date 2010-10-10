@@ -22,9 +22,9 @@
 
 require 'bgp4r'
 
-module BGP
-
-class Graceful_restart_capability < OPT_PARM::Capability
+module BGP::OPT_PARM::CAP
+  
+class Graceful_restart < BGP::OPT_PARM::Capability 
   
   def initialize(*args)
     if args.size>1
@@ -110,3 +110,7 @@ class Graceful_restart_capability < OPT_PARM::Capability
   
 end
 end
+
+load "../../test/optional_parameters/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0
+
+

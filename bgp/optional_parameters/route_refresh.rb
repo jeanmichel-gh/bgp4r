@@ -22,24 +22,15 @@
 
 require 'bgp4r'
 
-module BGP
-
-class Route_refresh_capability < OPT_PARM::Capability 
-  def initialize(code=OPT_PARM::CAP_ROUTE_REFRESH)
-    super(code)
-  end
-
-  def encode
-    super()
-  end
-
-  def to_s
-    super + "\n    Route Refresh #{@code==128 ? "(Cisco) " : ""}(#{@code}), length: 2"
-  end
-
-  def to_hash
-    super()
+module BGP::OPT_PARM::CAP
+  class Route_refresh < BGP::OPT_PARM::Capability 
+    def initialize(code=OPT_PARM::CAP_ROUTE_REFRESH)
+      super(code)
+    end
+    def to_s
+      super + "\n    Route Refresh #{@code==128 ? "(Cisco) " : ""}(#{@code}), length: 2"
+    end
   end
 end
 
-end
+load "../../test/optional_parameters/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0

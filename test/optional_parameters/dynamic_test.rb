@@ -24,8 +24,11 @@ require 'test/unit'
 require 'bgp4r'
 
 class Dynamic_capability_Test < Test::Unit::TestCase
-  include BGP
+  include BGP::OPT_PARM::CAP
   def test_1
-    assert_equal('02024300',Dynamic_capability.new.to_shex)
+    assert_equal('02024300',Dynamic.new.to_shex)
+  end
+  def test_2
+    assert_equal '02024300', Dynamic.new.to_shex
   end
 end

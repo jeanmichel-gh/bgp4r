@@ -25,6 +25,7 @@ require 'bgp4r'
 
 class TestBgpNeighbor < Test::Unit::TestCase
   include BGP
+  include BGP::OPT_PARM::CAP
   def test_open_msg
     neighbor = Neighbor.new \
       :version=> 4, 
@@ -33,11 +34,11 @@ class TestBgpNeighbor < Test::Unit::TestCase
       :local_addr => '192.168.1.5', 
       :id=> '1.1.1.1', 
       :holdtime=> 20
-    neighbor.capability Mbgp_capability.ipv4_unicast
-    neighbor.capability Mbgp_capability.ipv4_multicast
-    neighbor.capability Route_refresh_capability.new
-    neighbor.capability Route_refresh_capability.new 128
-    neighbor.capability As4_capability.new(100)
+    neighbor.capability Mbgp.ipv4_unicast
+    neighbor.capability Mbgp.ipv4_multicast
+    neighbor.capability Route_refresh.new
+    neighbor.capability Route_refresh.new 128
+    neighbor.capability As4.new(100)
     open_msg = neighbor.open
     assert_equal(5,open_msg.opt_parms.size)
     assert_equal(4,open_msg.version)

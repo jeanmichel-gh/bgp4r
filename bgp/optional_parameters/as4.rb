@@ -24,8 +24,10 @@ require 'bgp4r'
 require 'bgp/optional_parameters/capability'
 
 module BGP
-
-class As4_capability < OPT_PARM::Capability
+module OPT_PARM
+module CAP
+  
+class As4 < OPT_PARM::Capability
   def initialize(s)
     if s.is_a?(String) and s.is_packed?
       parse(s)
@@ -35,7 +37,7 @@ class As4_capability < OPT_PARM::Capability
     end
   end
   
-  def encode
+  def encode()
     super([@as].pack('N'))
   end
 
@@ -52,3 +54,7 @@ class As4_capability < OPT_PARM::Capability
   end
 end
 end
+end
+end
+
+load "../../test/optional_parameters/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0

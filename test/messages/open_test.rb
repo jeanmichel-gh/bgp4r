@@ -25,6 +25,7 @@ require 'bgp4r'
 
 class Open_Test < Test::Unit::TestCase
   include BGP
+  include BGP::OPT_PARM::CAP
   def test_1
     s = "ffffffffffffffffffffffffffffffff001d0104006400c80a00000100"
     sbin = [s].pack('H*')
@@ -33,13 +34,13 @@ class Open_Test < Test::Unit::TestCase
     assert_equal(s, open.to_shex)
     assert_equal(s, Open.new(4,100, 200, '10.0.0.1').to_shex)
     assert_equal(s, Open.new(4,100, 200, '10.0.0.1', []).to_shex)
-    assert_equal('00290104006400c80a0000010c020641040000006402020200', Open.new(4,100, 200, '10.0.0.1', As4_capability.new(100), Route_refresh_capability.new).to_shex[32..-1])
-    open1 = Open.new(4,100, 200, '10.0.0.1', As4_capability.new(100), Route_refresh_capability.new)
+    assert_equal('00290104006400c80a0000010c020641040000006402020200', Open.new(4,100, 200, '10.0.0.1', OPT_PARM::CAP::As4.new(100), OPT_PARM::CAP::Route_refresh.new).to_shex[32..-1])
+    open1 = Open.new(4,100, 200, '10.0.0.1', OPT_PARM::CAP::As4.new(100), OPT_PARM::CAP::Route_refresh.new)
     open2 = Open.new(open1.encode)
     assert_equal('00290104006400c80a0000010c020641040000006402020200', open2.to_shex[32..-1])
     open = Open.new(4,100, 200, '10.0.0.1')
-    open << As4_capability.new(100)
-    open << Route_refresh_capability.new
+    open << OPT_PARM::CAP::As4.new(100)
+    open << OPT_PARM::CAP::Route_refresh.new
     assert_equal('00290104006400c80a0000010c020641040000006402020200', open.to_shex[32..-1])
     s = 'ffffffffffffffffffffffffffffffff002d0104626200b4513411091002060104000100800202800002020200'
     open =  BGP::Message.factory([s].pack('H*'))
@@ -59,10 +60,10 @@ class Open_Test < Test::Unit::TestCase
     assert_equal('2.2.2.2', open.bgp_id)
     assert_equal(180, open.holdtime)
     assert_equal(5, open.opt_parms.size)
-    assert_equal(Mbgp_capability, open.opt_parms[1].class)
-    assert_equal(Route_refresh_capability, open.opt_parms[2].class)
-    assert_equal(Route_refresh_capability, open.opt_parms[3].class)
-    assert_equal(As4_capability, open.opt_parms[4].class)
+    assert_equal(Mbgp, open.opt_parms[1].class)
+    assert_equal(Route_refresh, open.opt_parms[2].class)
+    assert_equal(Route_refresh, open.opt_parms[3].class)
+    assert_equal(As4, open.opt_parms[4].class)
     
   end
   def test_2

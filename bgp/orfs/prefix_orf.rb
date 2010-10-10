@@ -27,13 +27,7 @@ require 'bgp/orfs/orf'
 module BGP
   
   class Prefix_entry < Orf::Entry
-  
-    @_seqn_ = -10
-    class << self
-      attr_accessor :_seqn_ 
-      def seqn ; Address_prefix_orf_entry._seqn_ +=10 ;end
-    end
-
+    
     def initialize(*args)
       if args[0].is_a?(String) and args[0].is_packed?
         _parse_(*args)
@@ -184,7 +178,7 @@ class BGP::Prefix_orf < BGP::Orf
 
 end
 
-load "../../test/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0
+load "../../test/orfs/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0
 
 __END__
 

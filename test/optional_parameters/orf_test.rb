@@ -24,20 +24,19 @@ require 'test/unit'
 require 'bgp4r'
 
 class Orf_cap_Test < Test::Unit::TestCase
-  include BGP
+  include BGP::OPT_PARM::CAP
   def test_1
-    ent1 =  Orf_capability::Entry.new(1,1,[1,1],[2,1],[3,1])
+    ent1 =  Orf::Entry.new(1,1,[1,1],[2,1],[3,1])
     assert_equal('0001000103010102010301', ent1.to_shex)
-    ent2 =  Orf_capability::Entry.new(1,2,[1,1],[2,1],[3,1])
+    ent2 =  Orf::Entry.new(1,2,[1,1],[2,1],[3,1])
     assert_equal('0001000203010102010301', ent2.to_shex)
-    ent3 = Orf_capability::Entry.new(ent1.encode)
+    ent3 = Orf::Entry.new(ent1.encode)
     assert_equal(ent1.encode, ent3.encode)
-    orf = Orf_capability.new
+    orf = Orf.new
     orf.add(ent1)
     orf.add(ent2)
     assert_equal('0218031600010001030101020103010001000203010102010301', orf.to_shex)
-    orf2 = Orf_capability.new(orf.encode)
+    orf2 = Orf.new(orf.encode)
     assert_equal(orf.encode, orf2.encode)
   end
-
 end
