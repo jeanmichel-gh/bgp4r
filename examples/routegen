@@ -82,4 +82,4 @@ nlris = Nlri.new
   nlris = Nlri.new
 end
 
-Thread.stop
+sleep(200)

@@ -23,8 +23,10 @@
 
 require 'observer'
 require 'thread'
+require 'timeout'
 require 'bgp/common'
 require 'bgp/messages/message'
+
 
 module BGP
   module IO

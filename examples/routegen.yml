@@ -5,22 +5,38 @@ neighbor:
   router id: 1.1.1.1
   my as: 100
   holdtime: 180
-  local address: 199.0.0.5
-  neighbor address: 199.0.0.6
+  local address: 40.0.0.1
+  neighbor address: 40.0.0.2
   capabilities: 
   - four byte as
 routes: 
-  nlris: 11.0.0.0/28, 1999, 127
-  next hop: 199.0.0.5
+  nlris: 11.0.0.0/28, 199999, 127
+  next hop: 40.0.0.1
   local pref: 100
   med: 100
   origin: 0
   communities: 100:1 200:1 300:1
-  as path: 200 300 400 500
+  as path: 100 90 80
 
 ...
 
 produces:
+
+
+junos> show route logical-router Paris terse 
+
+  inet.0: 200004 destinations, 200004 routes (200004 active, 0 holddown, 0 hidden)
+  Restart Complete
+  + = Active Route, - = Last Active, * = Both
+
+  A Destination        P Prf   Metric 1   Metric 2  Next hop        AS path
+  * 11.0.0.16/28       B 170        100            >40.0.0.1        100 90 80 I
+  * 11.0.0.32/28       B 170        100            >40.0.0.1        100 90 80 I
+  * 11.0.0.48/28       B 170        100            >40.0.0.1        100 90 80 I
+  * 11.0.0.64/28       B 170        100            >40.0.0.1        100 90 80 I
+  * 11.0.0.80/28       B 170        100            >40.0.0.1        100 90 80 I
+  ...
+
 
 ios#show ip route summary | inc bgp
 bgp 100         0           1999        107946      287856

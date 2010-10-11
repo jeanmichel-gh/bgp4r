@@ -17,8 +17,8 @@ Log.level=Logger::DEBUG
 neighbor = Neighbor.new \
   :version=> 4, 
   :my_as=> 100, 
-  :remote_addr => '192.168.1.199', 
-  :local_addr => '192.168.1.5', 
+  :remote_addr => '40.0.0.2', 
+  :local_addr => '40.0.0.1', 
   :id=> '1.1.1.1', :holdtime=> 180
 
 neighbor.capability :as4_byte
@@ -49,10 +49,10 @@ neighbor.start :auto_retry
 an_update = Update.new(
   Path_attribute.new(
     Origin.new(2),
-    Next_hop.new('192.168.1.5'),
+    Next_hop.new('40.0.0.1'),
     Multi_exit_disc.new(100),
     Local_pref.new(100),
-    As_path.new(400,300,200),
+    As_path.new(100, 80, 60),
     Communities.new('1311:1 311:59 2805:64')
   ),
   Nlri.new('77.0.0.0/17', '78.0.0.0/18', '79.0.0.0/19')
