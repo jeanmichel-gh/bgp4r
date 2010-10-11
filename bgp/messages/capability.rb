@@ -20,8 +20,7 @@
 # along with BGP4R.  If not, see <http://www.gnu.org/licenses/>.
 #++
 
-require 'bgp4r'
-require 'bgp/optional_parameters/capability'
+require 'bgp/messages/message'
 
 module BGP::OPT_PARM
   module CAP
@@ -173,3 +172,5 @@ module BGP
     
   end
 end
+
+load "../../test/messages/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0

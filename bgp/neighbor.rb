@@ -68,17 +68,18 @@ module BGP
     #  neighbor.capability :route_refresh, 128
     #  neighbor.capability :mbgp, :ipv4, :unicast
     #  neighbor.capability :mbgp, :ipv4, :multicast
+        
     def capability(*args)
       @opt_parms << if args[0].is_a?(Symbol)
         case args[0]
         when :route_refresh, :rr
-          Route_refresh_cap.new(*args[1..-1])
+          OPT_PARM::CAP::Route_refresh.new(*args[1..-1])
         when :mbgp
-          Mbgp_cap.new(*args[1..-1])
+          OPT_PARM::CAP::Mbgp.new(*args[1..-1])
         when :as4_byte, :as4byte, :as4
-          As4_cap.new(@my_as)
+          OPT_PARM::CAP::As4.new(@my_as)
         when :gr, :graceful_restart
-          Graceful_restart.new(*args[1..-1])
+          OPT_PARM::CAP::Graceful_restart.new(*args[1..-1])
         else
           raise ArgumentError, "Invalid argument #{args.inspect}", caller
         end        
@@ -179,10 +180,7 @@ module BGP
         io.start 
         @threads.add io.thread
       }
-      
-      def in  ; @in.thread  ; end
-      def out ; @out.thread ; end
-      
+            
       send_open :ev_send_open
       
       retry_thread if auto_retry == :auto_retry
@@ -207,6 +205,14 @@ module BGP
       new_state :Idle, "Disable"
     end
     alias stop disable
+
+    define_method(:in) do
+      @in.thread
+    end
+    define_method(:out) do
+      @out.thread
+    end
+
 
     def send_message(m)
       raise if m.nil?
@@ -233,7 +239,7 @@ module BGP
     end
       
     def init_io
-      @in = BGP::IO::Input.new(@socket, @holdtime, self)
+      @in = BGP::IO::Input.new(@socket, holdtime, self)
       @out = BGP::IO::Output.new(@socket, @holdtime, self)
       new_state(:Active, "Open Socket")
     end
@@ -277,7 +283,7 @@ module BGP
       else
         Log.warn "#{self.class}: received open message while in state #{@state}"
       end
-      @as4byte = (open.has?(As4_cap) && o.has?(As4_cap))
+      @as4byte = (open.has?(OPT_PARM::CAP::As4) && o.has?(OPT_PARM::CAP::As4))
     end
     
     def rcv_keepalive
@@ -308,7 +314,7 @@ module BGP
     end
     
     def to_s
-      "version: #{@version}, id: #{@id}, as: #{@my_as}, holdtime: #{@holdtime}, peer addr: #{@remote_addr}, local addr: #{@local_addr}"
+      "version: #{version}, id: #{@id}, as: #{@my_as}, holdtime: #{@holdtime}, peer addr: #{@remote_addr}, local addr: #{@local_addr}"
     end
 
   end

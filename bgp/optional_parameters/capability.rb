@@ -45,7 +45,7 @@ module BGP::OPT_PARM
         end
       end
     end
-
+    
     include BGP::OPT_PARM
     def initialize(code)
       super(OPT_PARM::CAPABILITY)
@@ -58,6 +58,7 @@ module BGP::OPT_PARM
         super([@code,value.size, value].pack("CCa*"))
       end
     end
+    
     def parse(_s)
       s = _s
       if self.class.to_s =~ /BGP::OPT_PARM::DYN_CAP/
@@ -96,7 +97,8 @@ module BGP
     end
   end
 end
-require 'bgp4r'
+
+# require 'bgp4r'
 
 module BGP::OPT_PARM
   def Capability.factory(s)

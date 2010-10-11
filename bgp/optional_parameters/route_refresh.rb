@@ -20,7 +20,7 @@
 # along with BGP4R.  If not, see <http://www.gnu.org/licenses/>.
 #++
 
-require 'bgp4r'
+require 'bgp/optional_parameters/capability'
 
 module BGP::OPT_PARM::CAP
   class Route_refresh < BGP::OPT_PARM::Capability 

@@ -1,0 +1,8 @@
+BGP.autoload :Update,            'bgp/messages/update'
+BGP.autoload :Keepalive,         'bgp/messages/keepalive'
+BGP.autoload :Open,              'bgp/messages/open'
+BGP.autoload :Notification,      'bgp/messages/notification'
+BGP.autoload :Route_refresh,     'bgp/messages/route_refresh'
+BGP.autoload :Orf_route_refresh, 'bgp/messages/route_refresh'
+BGP.autoload :Prefix_orf,        'bgp/orfs/prefix_orf'
+BGP.autoload :Capability,        'bgp/messages/capability'

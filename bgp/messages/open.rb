@@ -29,6 +29,7 @@
 # 
 require 'bgp/messages/message'
 require 'bgp/optional_parameters/capability'
+
 module BGP
 
 class Open < Message
@@ -56,7 +57,7 @@ class Open < Message
   end
 
   def encode
-    opt_parms = @opt_parms.flatten.compact.collect { |cap| cap.encode }.join
+    opt_parms = @opt_parms.compact.collect { |cap| cap.encode }.join
     s  = [@version, @local_as, @holdtime, @bgp_id.hton].pack("Cnna4")
     s += if opt_parms.size>255
       [0xffff, opt_parms.size, opt_parms].pack("nna*")
@@ -95,30 +96,19 @@ class Open < Message
   end
   
   private
-
-  def parse(s)
-    
-    @version, @local_as, @holdtime, bgp_id, opt_parm_len, opt_parms = super(s).unpack('Cnna4Ca*')
+  
+  def parse(_s)
+    s = super(_s)
+    if s[9,2].unpack('CC') == [255,255]
+      @version, @local_as, @holdtime, bgp_id, _, opt_parm_len, opt_parms = s.unpack('Cnna4nna*')
+    else
+      @version, @local_as, @holdtime, bgp_id, opt_parm_len, opt_parms = s.unpack('Cnna4Ca*')
+    end
     while opt_parms.size>0
-      begin
-        @opt_parms << Optional_parameter.factory(opt_parms)
-      end
+      @opt_parms << Optional_parameter.factory(opt_parms)
     end
     @bgp_id = IPAddr.new_ntoh(bgp_id)
   end
-  
-  def parse(_s)
-     s = super(_s)
-     if s[9,2].unpack('CC') == [255,255]
-       @version, @local_as, @holdtime, bgp_id, _, opt_parm_len, opt_parms = s.unpack('Cnna4nna*')
-     else
-       @version, @local_as, @holdtime, bgp_id, opt_parm_len, opt_parms = s.unpack('Cnna4Ca*')
-     end
-     while opt_parms.size>0
-         @opt_parms << Optional_parameter.factory(opt_parms)
-     end
-     @bgp_id = IPAddr.new_ntoh(bgp_id)
-   end
    
 end
 

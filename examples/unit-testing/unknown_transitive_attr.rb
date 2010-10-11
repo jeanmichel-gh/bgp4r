@@ -2,14 +2,15 @@ require "test/unit"
 require 'bgp4r'
 require 'timeout'
 
+
 Thread.abort_on_exception=true
 
 class TestBgp < Test::Unit::TestCase
   
   include BGP
 
-  Log.create
-  Log.level=Logger::DEBUG
+  # Log.create
+  # Log.level=Logger::DEBUG
   
   N100 = Class.new(BGP::Neighbor)
   N300 = Class.new(BGP::Neighbor)
@@ -27,7 +28,7 @@ class TestBgp < Test::Unit::TestCase
     @n100 = N100.new(:my_as=> 100, :remote_addr => '40.0.0.2', :local_addr => '40.0.0.1', :id=> '13.11.19.59')
     @n300 = N300.new(:my_as=> 300, :remote_addr => '40.0.1.1', :local_addr => '40.0.1.2', :id=> '13.11.19.57')
     @n100.capability :mbgp, :ipv4, :unicast
-    gr = Graceful_restart_cap.new 3, 120
+    gr = OPT_PARM::CAP::Graceful_restart.new 3, 120
     gr.add :ipv4, :unicast, 1
     gr.add :ipv4, :multicast, 1
     gr.add :ipv6, :unicast, 1
@@ -65,12 +66,12 @@ class TestBgp < Test::Unit::TestCase
   
   def recv(q, timeout=5)
     begin
-       Timeout::timeout(timeout) do |t| 
-         msg = q.deq
-       end
-     rescue Timeout::Error => e
-       nil
-     end
+      Timeout::timeout(timeout) do |t| 
+        msg = q.deq
+      end
+    rescue Timeout::Error => e
+      nil
+    end
   end
   
   def update_with_unknown_transitive_attribute

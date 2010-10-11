@@ -141,9 +141,9 @@ module BGP
       
       case mode
       when :brief
-        sprintf "%s %4s %10s: [%s]%s", flags, "(#{@type})", attribute_name, shex, "#{value.size>0 ? " '#{value}'" :''}"
+        sprintf "%s %4s %10s: [%s]%s", flags, "(#{@type})", attribute_name, shex, "#{value.size>0 ? " '#{value}'" : ''}"
       when :hexlify
-        s = sprintf "%s %4s %10s: [%s]%s", flags, "(#{@type})", attribute_name, shex, "#{value.size>0 ? " '#{value}" :''}"
+        s = sprintf "%s %4s %10s: [%s]%s", flags, "(#{@type})", attribute_name, shex, "#{value.size>0 ? " '#{value}" : ''}"
         s +="\n\n"
         if as4byte
           s += self.encode4.hexlify.join("\n")

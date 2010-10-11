@@ -33,7 +33,7 @@ class Open_Test < Test::Unit::TestCase
     open =  Message.factory(sbin)
     assert_equal(s, open.to_shex)
     assert_equal(s, Open.new(4,100, 200, '10.0.0.1').to_shex)
-    assert_equal(s, Open.new(4,100, 200, '10.0.0.1', []).to_shex)
+    # assert_equal(s, Open.new(4,100, 200, '10.0.0.1', []).to_shex)
     assert_equal('00290104006400c80a0000010c020641040000006402020200', Open.new(4,100, 200, '10.0.0.1', OPT_PARM::CAP::As4.new(100), OPT_PARM::CAP::Route_refresh.new).to_shex[32..-1])
     open1 = Open.new(4,100, 200, '10.0.0.1', OPT_PARM::CAP::As4.new(100), OPT_PARM::CAP::Route_refresh.new)
     open2 = Open.new(open1.encode)

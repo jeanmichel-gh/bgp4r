@@ -31,13 +31,13 @@ class Optional_parameter_Test < Test::Unit::TestCase
       [0xab].pack('C')
     end
     assert_match /^(ff){16}011b01040064007801010101fe(ab){254}$/, 
-            Open.new(4, 100, 120, '1.1.1.1', [octet]*254).to_shex
+            Open.new(4, 100, 120, '1.1.1.1', *([octet]*254)).to_shex
     assert_match /^(ff){16}011c01040064007801010101ff(ab){255}$/, 
-            Open.new(4, 100, 120, '1.1.1.1', [octet]*255).to_shex
+            Open.new(4, 100, 120, '1.1.1.1', *([octet]*255)).to_shex
     assert_match /^(ff){16}012001040064007801010101ffff0100(ab){256}$/, 
-            Open.new(4, 100, 120, '1.1.1.1', [octet]*256).to_shex
+            Open.new(4, 100, 120, '1.1.1.1', *([octet]*256)).to_shex
     assert_match /^(ff){16}012101040064007801010101ffff0101(ab){257}$/, 
-            Open.new(4, 100, 120, '1.1.1.1', [octet]*257).to_shex
+            Open.new(4, 100, 120, '1.1.1.1', *([octet]*257)).to_shex
   end
   def test_draft_ietf_idr_ext_opt_param_01_parsing
     mbgp = OPT_PARM::CAP::Mbgp.new(1,1)

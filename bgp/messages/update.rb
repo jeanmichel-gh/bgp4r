@@ -81,8 +81,8 @@ class Update < Message
     @path_attribute=val if val.is_a?(Path_attribute)
   end
   
-  #TODO refactor out passing an argument to encode...
-  def encode(as4byte=@as4byte)
+  def encode(as4byte=false)
+    @as4byte=as4byte
     withdrawn, path_attribute, nlri = '', '', ''
     withdrawn = @withdrawn.encode(false) if defined? @withdrawn and @withdrawn
     path_attribute = @path_attribute.encode(as4byte) if defined?(@path_attribute) and @path_attribute

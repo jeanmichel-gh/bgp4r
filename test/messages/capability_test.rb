@@ -23,6 +23,7 @@
 
 require "test/unit"
 require "bgp/messages/capability"
+require 'bgp4r'
 
 class TestOptParmCapabilityEncode < Test::Unit::TestCase
   include BGP::OPT_PARM
