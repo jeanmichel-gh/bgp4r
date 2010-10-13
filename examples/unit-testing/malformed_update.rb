@@ -73,9 +73,5 @@ class TestBgp < Test::Unit::TestCase
        Nlri.new('77.0.0.0/17', '78.0.0.0/18', '79.0.0.0/19')
      )
    end
-  
-  def send_update_to(n)
-    n.send_message update1
-  end
-  
+    
 end
