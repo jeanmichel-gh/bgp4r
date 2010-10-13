@@ -38,6 +38,7 @@
 #  
 
 require 'bgp/messages/message'
+require 'bgp/path_attributes/path_attribute'
 
 module BGP
 

@@ -23,6 +23,7 @@
 require 'socket'
 require 'thread'
 require 'observer'
+require 'bgp/io'
 
 module BGP
 

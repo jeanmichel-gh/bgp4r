@@ -1,8 +1,19 @@
-BGP.autoload :Update,            'bgp/messages/update'
-BGP.autoload :Keepalive,         'bgp/messages/keepalive'
-BGP.autoload :Open,              'bgp/messages/open'
-BGP.autoload :Notification,      'bgp/messages/notification'
-BGP.autoload :Route_refresh,     'bgp/messages/route_refresh'
-BGP.autoload :Orf_route_refresh, 'bgp/messages/route_refresh'
-BGP.autoload :Prefix_orf,        'bgp/orfs/prefix_orf'
-BGP.autoload :Capability,        'bgp/messages/capability'
+module BGP
+
+  begin
+    unless const_defined? :VERSION
+      BGP.const_set('VERSION', Gem.loaded_specs['bgp4r'].version.to_s)
+    end
+  rescue
+  end
+  
+  %w{ update keepalive open notification capablity}.each do |m|
+    autoload "#{m}".capitalize.to_sym, "bgp/messages/#{m}"
+  end
+  autoload :Route_refresh,     'bgp/messages/route_refresh'
+  autoload :Orf_route_refresh, 'bgp/messages/route_refresh'
+  autoload :Prefix_orf,        'bgp/orfs/prefix_orf'
+  
+end
+
+require 'bgp/messages/markers'

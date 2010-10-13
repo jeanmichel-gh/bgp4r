@@ -21,6 +21,7 @@
 #++
 
 require 'bgp4r'
+require 'bgp/path_attributes/attribute'
 
 module BGP
 
