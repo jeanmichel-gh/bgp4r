@@ -105,6 +105,8 @@ module BGP
       when AS4_PATH, :as4_path
         find(As4_path)
       when AS4_AGGREGATOR, :as4_aggregator
+      else
+        find(type)
       end
     end
     

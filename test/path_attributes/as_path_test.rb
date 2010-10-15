@@ -85,6 +85,10 @@ class As_path_Test < Test::Unit::TestCase
     assert_equal('400218020300010002000301030001000200030303000100020003', path.to_shex)
     assert_equal('40021802030...', path.to_shex_len(10))
     assert_equal("[wTcr]  (2)    As Path: [400218020300010002000...] '1 2 3 {1, 2, 3} (1 2 3)'", path.to_s)
+    path.find_set.prepend(100)
+    assert_equal '1 2 3 {100, 1, 2, 3} (1 2 3)', path.as_path
+    path.find_sequence.prepend(100)
+    assert_equal '100 1 2 3 {100, 1, 2, 3} (1 2 3)', path.as_path
   end
   def test_3
     path = As_path.new(1,2,3)
@@ -105,7 +109,7 @@ class As_path_Test < Test::Unit::TestCase
     assert_equal("{1, 2, 3}", As_path.new(As_path::Set.new(1,2,3)).as_path)
     assert_equal("(1 2 3)", As_path.new(As_path::Segment.new(:confed_sequence,1,2,3)).as_path)
     assert_equal("[1, 2, 3]", As_path.new(As_path::Segment.new(:confed_set,1,2,3)).as_path)
-    assert_equal("[wTcr]  (2)    As Path: [400208040300010002000...] '[1, 2, 3]'", As_path.new(As_path::Segment.new(:confed_set,1,2,3)).to_s)
+    assert_equal("[wTcr]  (2)    As Path: [400208040300010002000...] '[1, 2, 3]'", As_path.new(As_path::Segment.new(:confed_set,1,2,3)).to_s)    
   end
   def test_5
     two_byte_as = '4002080203000100020003'

@@ -126,8 +126,18 @@ class Update_Test < Test::Unit::TestCase
     originator-id: 10.0.0.2
     cluster: 0.0.0.1
     "
-    
-    
+  end
+  
+  def test_7
+    s = 'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF0072020000001F4001010040020A0204212C051319351AFE400304557200D9C00804212C045C175D76D6175D76DE1659299C175929981659235C16592D6417592D6417592D6617592D6217C3D228185D73241859284417C3FE84165C727015592190'
+    m = Update.new([s].pack('H*'), true)
+    pa = m.path_attribute
+    assert_equal '556533011 422910718', pa[As_path].as_path
+    assert_equal '85.114.0.217', pa[Next_hop].next_hop
+    pa.replace Next_hop.new('10.0.0.1')
+    assert_equal '10.0.0.1', pa[Next_hop].next_hop
+    pa[:as_path].find_sequence.prepend(100)
+    assert_equal '100 556533011 422910718', pa[As_path].as_path
   end
 
 end

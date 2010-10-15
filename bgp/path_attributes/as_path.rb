@@ -62,6 +62,10 @@ module BGP
           @seg_type
         end
         
+        def prepend(as)
+          @as.insert(0,as)
+        end
+        
         def seg_type=(val)
           case val
           when :set             ; @seg_type = SET
@@ -194,6 +198,14 @@ module BGP
       
       def to_s(method=:default, as4byte=false)
         super(as_path, method, as4byte)
+      end
+      
+      def find_set
+        @segments.find { |s| s.seg_type == SET }
+      end
+
+      def find_sequence
+        @segments.find { |s| s.seg_type == SEQUENCE }
       end
       
       private
