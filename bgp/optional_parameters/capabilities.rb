@@ -7,6 +7,7 @@ require 'bgp/optional_parameters/optional_parameter'
 require 'bgp/optional_parameters/orf'
 require 'bgp/optional_parameters/route_refresh'
 require 'bgp/optional_parameters/as4'
+require 'bgp/optional_parameters/add_path'
 
 module BGP::OPT_PARM
   module DYN_CAP

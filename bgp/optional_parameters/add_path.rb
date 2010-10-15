@@ -24,66 +24,67 @@ require 'bgp/optional_parameters/capability'
 
 module BGP::OPT_PARM::CAP
   
-class Graceful_restart < BGP::OPT_PARM::Capability 
+class Add_path < BGP::OPT_PARM::Capability 
   
   def initialize(*args)
+    @tuples = []
     if args.size>1
-      @restart_state, @restart_time = args
-      @tuples = []
-      super(OPT_PARM::CAP_GR)
-    else
+      super(OPT_PARM::CAP_ADD_PATH)
+    elsif args.size==1 and args[0].is_a?(String)
       parse(*args)
+    else
+      super(OPT_PARM::CAP_ADD_PATH)
     end
   end
   
-  def add(afi,safi,flags)
-    @tuples << [_afi(afi), _safi(safi), flags]
+  def add(sr, afi,safi)
+    @tuples << [ _afi(afi), _safi(safi), _send_recv(sr)]
   end
 
   def parse(s)
     @tuples = []
-    o1, families = super(s).unpack('na*')
-    @restart_state = o1 >> 12
-    @restart_time = o1 & 0xfff
+    families = super(s)
     while families.size>0
       @tuples << families.slice!(0,4).unpack('nCC')
     end
   end
 
-
   def encode
     s = []
-    s << [(@restart_state << 12) + @restart_time].pack('n')
     s << @tuples.collect { |af| af.pack('nCC') }
     super s.join
   end
+
   def to_s
     s = []
-    s <<  "\n    Graceful Restart Extension (#{CAP_GR}), length: 4"
-    s <<  "    Restart Flags: #{restart_flag}, Restart Time #{@restart_time}s"
+    s <<  "\n    Add-path Extension (#{CAP_ADD_PATH}), length: 4"
     s = s.join("\n  ")
-    super + (s + (['']+@tuples.collect { |af| address_family(*af)}).join("\n        "))
+    super + (s + (['']+@tuples.collect { |af| address_family_to_s(*af)}).join("\n        "))
   end
   
   private
   
-  def address_family(afi, safi, flags)
-    "AFI #{IANA.afi(afi)} (#{afi}), SAFI #{IANA.safi(safi)} (#{safi}), #{address_family_flags(flags)}"
+  def address_family_to_s(afi, safi, sr)
+    "AFI #{IANA.afi(afi)} (#{afi}), SAFI #{IANA.safi(safi)} (#{safi}), #{send_recv_to_s(sr)}"
   end
-  
-  def restart_flag
-    if @restart_state == 0
-      '[none]'
+    
+  def _send_recv(val)
+    case val
+    when :send, 1                                          ; 1
+    when :recv, :receive, 2                                ; 2
+    when :send_and_recv, :send_recv, :send_and_receive, 3  ; 3
     else
-      "0x#{@restart_state}"
+      val
     end
   end
   
-  def address_family_flags(flags)
-    if flags & 1 == 0
-      "Forwarding state not preserved (0x#{flags.to_s(16)})"
-    elsif flags & 1 == 1
-      "Forwarding state preserved (0x#{flags.to_s(16)})"
+  def send_recv_to_s(val)
+    case val
+    when 1 : 'SEND (1)'
+    when 2 : 'RECV (2)'
+    when 3 ; 'SEND_AND_RECV (3)'
+    else
+      'bogus'
     end
   end
   
@@ -106,7 +107,6 @@ class Graceful_restart < BGP::OPT_PARM::Capability
       2
     end
   end
-  
   
 end
 end

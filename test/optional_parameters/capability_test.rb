@@ -38,6 +38,11 @@ class Capability_Test < Test::Unit::TestCase
     cap = Capability.factory([s].pack('H*'))
     assert_instance_of(Graceful_restart, cap)
   end
+  def test_factory_add_path
+    s = '020e450c000101010002800200020103'
+    cap = Capability.factory([s].pack('H*'))
+    assert_instance_of(Add_path, cap)
+  end
   def test_factory_as4
     s = '0206410400000064'
     cap = Capability.factory([s].pack('H*'))
