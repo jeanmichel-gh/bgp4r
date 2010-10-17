@@ -27,6 +27,8 @@ module BGP
 
   class Path_attribute
     include BGP::ATTR
+    attr_reader :attributes
+
     def initialize(*args)
       if args.size <= 2 and args[0].is_a?(String) and args[0].is_packed?
         s = args[0]
@@ -44,10 +46,6 @@ module BGP
       self
     end
     alias << add
-    
-    def to_ary
-      @attributes
-    end
     
     def to_s(method=:default,as4byte=false)
       "Path Attributes:" + ([""] + @attributes.collect { |a|
@@ -90,7 +88,7 @@ module BGP
         find(Atomic_aggregate)
       when  AGGREGATOR, :aggregator
         find(Aggregator)
-      when  COMMUNITIES, :communities
+      when  COMMUNITIES, :communities, :community
         find(Communities)
       when ORIGINATOR_ID, :originator_id
         find(Originator_id)
@@ -123,6 +121,10 @@ module BGP
       end
     end
     
+    def has_no?(arg)
+      ! has?(arg)
+    end
+    
     def encode(as4byte=false)
       [@attributes.compact.collect { |x| as4byte ? x.encode4 : x.encode }.join].pack('a*')
     end
@@ -130,7 +132,7 @@ module BGP
     def insert(*args)
       for arg in args
         next unless arg.is_a?(Attr)
-        to_ary.insert(0,arg)
+        attributes.insert(0,arg)
       end
       self
     end
@@ -138,7 +140,7 @@ module BGP
     def append(*args)
       for arg in args
         next unless arg.is_a?(Attr)
-        to_ary << (arg)
+        attributes << (arg)
       end
       self
     end
@@ -146,12 +148,11 @@ module BGP
     def replace(*args)
       for arg in args
         next unless arg.is_a?(Attr)
-        attr = to_ary.find { |x| x.class == arg.class }
-        if attr.nil?
-          append(arg)
+        ind = attributes.find_index { |x| x.class == arg.class }
+        if ind
+          attributes[ind] = arg
         else
-          index = to_ary.index(attr)
-          to_ary[index] = arg
+          append(arg)
         end
       end
       self
@@ -160,11 +161,19 @@ module BGP
     def delete(*klasses)
       for klass in klasses
         next unless klass.is_a?(Class)
-        to_ary.delete_if { |x| x.class == klass }
+        attributes.delete_if { |x| x.class == klass }
       end
       self
     end
     
+  end
+  
+  private
+  
+  def att_sym_to_klass(sym)
+    case sym
+    when :communities, :community ; Communities
+    end
   end
   
 end

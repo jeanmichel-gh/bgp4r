@@ -101,9 +101,9 @@ class Path_attribute_Test < Test::Unit::TestCase # :nodoc:
     )
     
     path_attr.replace(
-      Origin.new(2),
       As_path.new(100,200),
       Local_pref.new(11),
+      Origin.new(2),
       Multi_exit_disc.new(21)
     )
     

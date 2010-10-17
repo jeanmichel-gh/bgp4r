@@ -26,8 +26,6 @@ module BGP
     
     class As_path < Attr
       
-      ##############################
-      
       class Segment
         include ATTR
         
@@ -150,8 +148,6 @@ module BGP
           end
         end
       end
-      
-      ##############################
       
       def integer?(arg)
         arg.is_a?(Fixnum) or arg.is_a?(Bignum)

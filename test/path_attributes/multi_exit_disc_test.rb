@@ -43,4 +43,12 @@ class Multi_exit_disc_Test < Test::Unit::TestCase
     mp1 = Multi_exit_disc.new(mp)
     assert_equal(mp.encode, mp.encode)
   end
+  def test_3
+    med =  Multi_exit_disc.new(200)
+    assert_equal 200, med.to_i
+    med + 13
+    assert_equal 213, med.to_i
+    med + -13
+    assert_equal 200, med.to_i
+  end
 end

@@ -46,6 +46,8 @@ class Update < Message
   def as4byte?
     @as4byte ||= false
   end
+  alias as4byte as4byte?
+    
   def initialize(*args)
     if args[0].is_a?(String) and args[0].is_packed?
       @as4byte=false
@@ -125,8 +127,10 @@ class Update < Message
     end
   end
 
-  def to_s(as4byte=@as4byte, fmt=:tcpdump)
+  def to_s(as4byte=@as4byte)
+    # def to_s(fmt=:tcpdump)
     msg = encode(as4byte)
+    fmt=:tcpdump
     s = []
     s << @withdrawn.to_s if defined?(@withdrawn) and @withdrawn
     s << @path_attribute.to_s(fmt, as4byte) if defined?(@path_attribute) and @path_attribute

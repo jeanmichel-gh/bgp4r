@@ -170,6 +170,10 @@ module BGP
     
     attr_reader :type
     
+    def <=>(o)
+      0
+    end
+    
     def method_missing(name, *args, &block)
       if name == :encode4
         send :encode, *args, &block

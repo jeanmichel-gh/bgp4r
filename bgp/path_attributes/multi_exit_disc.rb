@@ -52,6 +52,10 @@ module BGP
       @med
     end
 
+    def +(val)
+      @med +=val
+    end
+
     def encode
       super([to_i].pack('N'))
     end

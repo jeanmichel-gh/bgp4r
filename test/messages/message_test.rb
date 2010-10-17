@@ -40,4 +40,11 @@ class Message_Test < Test::Unit::TestCase
     msg2 = MyMessage.new(msg1.encode)
     assert_equal('abcdefghihjklmopqrstuvwxyz',msg2.data)
   end
+  def test_2
+    msg = MyMessage.new
+    assert msg.respond_to? :is_an_update?
+    assert msg.respond_to? :is_an_open?
+    assert msg.respond_to? :is_a_notification?
+    assert msg.respond_to? :is_a_route_refresh?
+  end
 end

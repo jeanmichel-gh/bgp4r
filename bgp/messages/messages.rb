@@ -7,13 +7,15 @@ module BGP
   rescue
   end
   
-  %w{ update keepalive open notification capablity}.each do |m|
-    autoload "#{m}".capitalize.to_sym, "bgp/messages/#{m}"
+  %w{ update keepalive open notification capabity}.each do |m|
+    autoload "#{m}".capitalize.to_sym, "bgp/messages/#{m}"    
   end
   autoload :Route_refresh,     'bgp/messages/route_refresh'
   autoload :Orf_route_refresh, 'bgp/messages/route_refresh'
   autoload :Prefix_orf,        'bgp/orfs/prefix_orf'
   
 end
+
+
 
 require 'bgp/messages/markers'

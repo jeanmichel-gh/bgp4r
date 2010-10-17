@@ -46,6 +46,10 @@ module BGP
       raise ArgumentError, "invalid argument" unless val.is_a?(Integer)
       @local_pref=val
     end
+    
+    def +(val)
+      @local_pref +=val
+    end
 
     def to_i
       @local_pref

@@ -76,9 +76,20 @@ module BGP
     end
     def self.route_refresh(afi,safi)
       Route_refresh.new(afi,safi).encode
+    end    
+    %w{update keepalive open notification capabity route_refresh }.each do |m|
+      define_method("is_a_#{m}?") do
+        is_a?(BGP.const_get(m.capitalize))
+      end      
+      eval "alias :is_an_#{m}? :is_a_#{m}?" if (m =~ /^[aeiou]/)
+    end
+    def has_no_path_attribute?
+      path_attribute.nil?
+    end
+    def has_a_path_attribute?
+      ! has_no_path_attribute?
     end
   end
-
 end
 
 load "../../test/messages/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0

@@ -30,8 +30,21 @@ module BGP
   class Neighbor
     include Observable
     
+    # def self.deprecate(old_method, new_method) 
+    #   define_method(old_method) do |*args, &block|
+    #     log_warn "#{old_method}() is deprecated. Use #{new_method}()."
+    #     __send__(new_method, *args, &block)
+    #   end 
+    # end
+    # 
+    # deprecate :send_message, :send
+
     def log_info(txt)
       Log.info "#{self.class} #{txt}"
+    end
+
+    def log_warn(txt)
+      Log.warn "#{self.class} #{txt}"
     end
 
     def log_debug(txt)
@@ -214,16 +227,18 @@ module BGP
       @out.thread
     end
 
+    attr_reader :as4byte
 
     def send_message(m)
       raise if m.nil?
       return unless @out
       unless m.is_a?(String)
         log_info "Send#{m.class.to_s.split('::')[-1]}"
-        log_debug "Send #{m.is_a?(Update) ? m.to_s(@as4byte) : m }\n"
+        log_debug "Send #{m.is_a?(Update) ? m.to_s : m }\n"
       end
+      #FIXME: enqueue [m, as4byte]
       if m.is_a?(Update)
-        @out.enq m.encode(@as4byte)
+        @out.enq m.encode(as4byte)
       else
         @out.enq m
       end
@@ -305,6 +320,7 @@ module BGP
 
     def rcv_notification(m)
       log_info "#{m}"
+      changed and notify_observers(msg)
       disable
     end
     

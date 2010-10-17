@@ -1,0 +1,77 @@
+
+require 'bgp4r'
+require 'bgp/misc/live_feed'
+
+include BGP
+
+Log.create
+Log.level=Logger::DEBUG
+
+def start_peering
+  [@n100].each { |n| n.start }
+end
+
+class RecvMsgHandler
+  def initialize(q)
+    @q = q
+  end
+  def update(bgp_msg)
+    @q.enq bgp_msg if bgp_msg.is_a_notification?
+  end
+end
+
+N100 = Class.new(Neighbor)
+@n100 = N100.new(:my_as=> 100, 
+                 :remote_addr => '40.0.0.2', 
+                 :local_addr => '40.0.0.1', 
+                 :id=> '13.11.19.59')
+
+queue = Queue.new
+@n100.add_observer RecvMsgHandler.new(queue)
+
+start_peering
+
+feed = LiveFeed.new
+feed.open
+
+(1..20000).each do |_n|
+  
+  msg = Message.factory(feed.msg)
+  
+  if msg.is_an_update? and msg.has_a_path_attribute?
+    
+    path_attr = msg.path_attribute
+    
+    # pick and choose the update we want 
+    next if path_attr.has?(Mp_reach) || 
+          path_attr.has?(Mp_unreach) || 
+          path_attr.has?(Atomic_aggregate)
+    
+    # and set the path attribute.
+    path_attr.replace Next_hop.new('40.0.0.1')
+    path_attr[:as_path].find_sequence.prepend(100)
+    path_attr.has?(Communities) ? path_attr[Communities].add('13:11') : path_attr.insert(Communities.new'13:11')
+    
+    if queue.size > 1
+      puts $prev_msg
+      puts queue.deq
+      p queue.deq
+      exit
+    end
+    
+    # ship it!
+    @n100.send_message msg
+    $prev_msg = msg
+    
+  elsif msg.is_an_update? and msg.has_no_path_attribute?
+    
+    # it's a withdrawn, 
+    @n100.send_message msg
+    
+  end
+
+end
+
+sleep(200)
+
+__END__
