@@ -31,6 +31,7 @@ class Community_Test < Test::Unit::TestCase
     assert_equal(0xFFFFFF03,Communities::Community.new(:no_export_sub_confed).to_i)
     assert_equal(0xFFFFFF04,Communities::Community.new(:no_peer).to_i)
     assert_equal(0xdeadbeef,Communities::Community.new(0xdeadbeef).to_i)
+    assert_equal '5:1234', Communities::Community.new(Communities::Community.new('5:1234')).to_s
   end
 end
 class Communities_Test < Test::Unit::TestCase
@@ -51,7 +52,6 @@ class Communities_Test < Test::Unit::TestCase
     com1 = Communities.new("145:30", "145:40", "145:50", "145:60")
     com2 = Communities.new("145:30,145:40,145:50,145:60")
     assert_equal(com1.to_shex, com2.to_shex)
-    assert_equal(["0x91001e", "0x910028", "0x910032", "0x91003c"], com2.to_ary.collect { |c| "0x#{c.to_s(16)}" })
     assert_equal('c008100091001e00910028009100320091003c',com1.to_shex)
     com3 = Communities.new(0x91001E, 0x910028, 0x910032, 0x91003c)
     assert_equal('c008100091001e00910028009100320091003c',com3.to_shex)
@@ -69,6 +69,22 @@ class Communities_Test < Test::Unit::TestCase
     assert_equal('145:10 145:20 145:30 145:60', com1.communities)
     com3 = Communities.new(com1)
     assert_equal(com1.encode, com3.encode)
+  end
+  def test_3
+    assert   Communities.new("145:60 145:10 145:30 145:20").has_no? '1:1'
+    assert ! Communities.new("145:60 145:10 145:30 145:20").has?(0xff)
+    assert   Communities.new("145:60 145:10 145:30 145:20").has?(Communities::Community.new('145:60'))
+    assert ! Communities.new("145:60 145:10 145:30 145:20").has?(Communities::Community.new(0xff))
+    assert ! Communities.new("145:60 145:10 145:30 145:20").has_no?('145:60')
+    assert   Communities.new("145:60 145:10 145:30 145:20").has?('145:60')
+  end
+  def test_4
+    assert   Communities.new("145:60 145:10").has_no_export?
+    assert   Communities.new("145:60 145:10").has_no_advertise?
+    assert   Communities.new("145:60 145:10").has_no_export_sub_confed?
+    assert ! Communities.new("145:60 145:10").add(:no_export_sub_confed).has_no_export_sub_confed?
+    assert ! Communities.new("145:60 145:10").add(:no_export).has_no_export?
+    assert ! Communities.new("145:60 145:10").add(:no_advertise).has_no_advertise?
   end
 end
 

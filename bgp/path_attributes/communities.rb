@@ -20,9 +20,7 @@
 # along with BGP4R.  If not, see <http://www.gnu.org/licenses/>.
 #++
 
-
 require 'bgp/path_attributes/attribute'
-
 
 module BGP
 
@@ -30,25 +28,34 @@ module BGP
 
     class Community
       
+      unless const_defined? :NO_EXPORT
+        NO_EXPORT             = 0xFFFFFF01
+        NO_ADVERTISE          = 0xFFFFFF02
+        NO_EXPORT_SUB_CONFED  = 0xFFFFFF03
+        NO_PEER               = 0xFFFFFF04
+      end
+      
       def initialize(arg)
         if arg.is_a?(Symbol)
           case arg
-          when :no_export      ; @value=0xFFFFFF01
-          when :no_advertise   ; @value=0xFFFFFF02
-          when :no_export_sub_confed ; @value=0xFFFFFF03
-          when :no_peer        ; @value=0xFFFFFF04
+          when :no_export            ; @value=NO_EXPORT
+          when :no_advertise         ; @value=NO_ADVERTISE
+          when :no_export_sub_confed ; @value=NO_EXPORT_SUB_CONFED
+          when :no_peer              ; @value=NO_PEER
           else
-            raise ArgumentError, "invalid argument #{val}"
+            raise ArgumentError, "invalid argument #{arg.inspect}"
           end
         elsif arg.is_a?(String) and arg.split(':').size==2
           self.value=arg.split(':').collect { |n| n.to_i }.pack('n2').unpack('N')[0]
+        elsif arg.respond_to?(:to_i)
+          self.value= arg.to_i
         else
           self.value=arg
         end
       end
 
       def value=(val)
-        raise ArgumentError, "invalid argument #{val}" unless val.is_a?(Fixnum) or val.is_a?(Bignum)
+        raise ArgumentError, "invalid argument #{val.inspect}" unless val.is_a?(Integer)
         @value=val
       end
 
@@ -96,6 +103,7 @@ module BGP
           @communities << Community.new(arg)
         end
       end
+      self
     end
     alias << add
 
@@ -105,10 +113,6 @@ module BGP
 
     def to_s(method=:default)
       super(communities, method)
-    end
-
-    def to_ary
-      @communities.collect { |c| c.to_i }
     end
 
     def encode
@@ -121,7 +125,7 @@ module BGP
     end
 
     def sort
-      Communities.new(to_ary.sort)
+      Communities.new(to_a.sort)
     end
 
     def sort!
@@ -132,8 +136,33 @@ module BGP
     def <=>(other)
       self.sort.to_shex <=> other.sort.to_shex
     end
+    
+    def has?(arg)
+      ! has_no?(arg)
+    end
+
+    def has_no?(arg)
+      @communities.find { |c| c.to_i == arg_comm_to_i(arg) }.nil? 
+    end
+    
+    %w{ no_export no_advertise no_export_sub_confed no_peer }.each do |wkc| 
+      define_method("has_#{wkc}?") do
+        ! has? Community.const_get(wkc.upcase)
+      end
+    end
+
+    private
+    
+    def arg_comm_to_i(arg)
+      return arg if arg.is_a?(Integer)
+      Community.new(arg).to_i
+    end
+
+    def to_a
+      @communities.collect { |c| c.to_i }
+    end
 
   end
-
+  
 end
 load "../../test/path_attributes/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0
