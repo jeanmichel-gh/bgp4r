@@ -165,39 +165,59 @@ module BGP
       end
       self
     end
-    
-  end
-  
-  private
-  
-  def att_sym_to_klass(sym)
-    case sym
-    when :communities, :community ; Communities
+
+    %w{ 
+      origin 
+      next_hop 
+      local_pref 
+      multi_exit_disc 
+      as_path 
+      communities 
+      aggregator 
+      atomic_aggregate 
+      originator_id 
+      cluster_list 
+      mp_reach 
+      mp_unreach 
+      extended_communities 
+    }.each do |attr| 
+      define_method("has_a_#{attr}?") do
+        has? BGP.const_get(attr.capitalize)
+      end
+      eval "alias :has_an_#{attr}? :has_a_#{attr}?" if (attr =~ /^[aeiou]/)
+    end
+
+    private
+
+    def att_sym_to_klass(sym)
+      case sym
+      when :communities, :community ; Communities
+      end
     end
   end
-  
 end
 
 module BGP
 
   class Attr
-    Unknown = Class.new(Attr) do
-      attr_reader :type, :flags, :value
-      def initialize(*args)
-        if args.size>1
-          @flags, @type, len, @value=args
-        else
-          parse(*args)
+    unless const_defined? :Unknown
+      Unknown = Class.new(Attr) do
+        attr_reader :type, :flags, :value
+        def initialize(*args)
+          if args.size>1
+            @flags, @type, len, @value=args
+          else
+            parse(*args)
+          end
+        end
+        def encode
+          super(@value)
+        end
+        def parse(s)
+          @flags, @type, len, @value = super
         end
       end
-      def encode
-        super(@value)
-      end
-      def parse(s)
-        @flags, @type, len, @value = super
-      end
     end
-    
     include BGP::ATTR
     def self.factory(s, as4byte=false)
       flags, type = s.unpack('CC')
@@ -234,9 +254,8 @@ module BGP
         Unknown.new(s)
       end
     end
-
+    
   end
-  
 end
 
 load "../../test/path_attributes/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0

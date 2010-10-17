@@ -135,4 +135,11 @@ class Path_attribute_Test < Test::Unit::TestCase # :nodoc:
     assert_equal 0, sbin.size
   end
   
+  def test_6
+    assert @pa.has_a_origin?
+    assert @pa.has_a_next_hop?
+    assert @pa.has_a_local_pref?
+    assert ! @pa.has_a_aggregator?
+    assert ! @pa.has_a_mp_unreach?
+  end  
 end
