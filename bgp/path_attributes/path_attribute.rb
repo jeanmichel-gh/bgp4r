@@ -181,10 +181,10 @@ module BGP
       mp_unreach 
       extended_communities 
     }.each do |attr| 
-      define_method("has_a_#{attr}?") do
+      define_method("has_a_#{attr}_attr?") do
         has? BGP.const_get(attr.capitalize)
       end
-      eval "alias :has_an_#{attr}? :has_a_#{attr}?" if (attr =~ /^[aeiou]/)
+      eval "alias :has_an_#{attr}? :has_a_#{attr}_attr?" if (attr =~ /^[aeiou]/)
     end
 
     private

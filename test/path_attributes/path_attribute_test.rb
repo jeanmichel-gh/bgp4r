@@ -136,10 +136,10 @@ class Path_attribute_Test < Test::Unit::TestCase # :nodoc:
   end
   
   def test_6
-    assert @pa.has_a_origin?
-    assert @pa.has_a_next_hop?
-    assert @pa.has_a_local_pref?
-    assert ! @pa.has_a_aggregator?
-    assert ! @pa.has_a_mp_unreach?
+    assert @pa.has_a_origin_attr?
+    assert @pa.has_a_next_hop_attr?
+    assert @pa.has_a_local_pref_attr?
+    assert ! @pa.has_a_aggregator_attr?
+    assert ! @pa.has_a_mp_unreach_attr?
   end  
 end

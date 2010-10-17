@@ -320,7 +320,7 @@ module BGP
 
     def rcv_notification(m)
       log_info "#{m}"
-      changed and notify_observers(msg)
+      changed and notify_observers(m)
       disable
     end
     
