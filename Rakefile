@@ -19,8 +19,6 @@ begin
     s.executables = []
     s.files = %w( README.rdoc LICENSE.txt COPYING bgp4r.rb bgp4r.gemspec ) + Dir["bgp/**/*"] + Dir["test/**/*"] + ["examples/**/*"]
     s.test_files = Dir["test/**/*"]
-    s.has_rdoc = true
-    s.rdoc_options = ["--quiet", "--title", "A BGP-4 Ruby Library", "--line-numbers"]
     s.require_path = '.'
     s.required_ruby_version = ">= 1.8.6"
     s.homepage = "http://github.com/jesnault/bgp4r/tree/master"
@@ -57,18 +55,21 @@ rescue LoadError
   puts "Rake SshDirPublisher is unavailable or your rubyforge environment is not configured."
 end
 
-
 Rake::TestTask.new do |t|
   t.libs = ['.']
   t.pattern = "test/**/*test.rb"
   t.warning = true
 end
 
-Rake::RDocTask.new do |t|
-  t.rdoc_dir = 'rdoc'
-  t.rdoc_files.include("bgp/*.rb")
-  t.options =  ["--quiet", "--title", "A BGP-4 Ruby Library", "--line-numbers"] 
-  t.options << '--fileboxes'
+Rake::RDocTask.new do |rdoc|
+  files = ['README.rdoc', 'LICENSE.txt', 'COPYING', 'bgp/**/*.rb', 'doc/**/*.rdoc', 'test/*.rb']
+  rdoc.rdoc_files.add(files)
+  rdoc.main = 'README.rdoc'
+  rdoc.title = 'Bgp4r'
+  rdoc.rdoc_dir = 'rdoc'
+  rdoc.options << '--line-numbers' << '--inline-source' 
+  rdoc.options << '--quiet' << "--title" << "A BGP-4 Ruby Library"
+  rdoc.options << '--fileboxes'
 end
 
 require 'rake/gempackagetask'

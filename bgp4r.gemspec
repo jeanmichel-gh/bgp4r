@@ -5,11 +5,11 @@
 
 Gem::Specification.new do |s|
   s.name = %q{bgp4r}
-  s.version = "0.0.9"
+  s.version = "0.0.10"
 
   s.required_rubygems_version = Gem::Requirement.new(">= 0") if s.respond_to? :required_rubygems_version=
   s.authors = ["Jean-Michel Esnault"]
-  s.date = %q{2010-10-12}
+  s.date = %q{2010-10-30}
   s.description = %q{BGP4R is a BGP-4 ruby library to create,  send, and receive  BGP messages in an  object oriented manner}
   s.email = %q{jesnault@gmail.com}
   s.extra_rdoc_files = [
@@ -32,6 +32,7 @@ Gem::Specification.new do |s|
      "bgp/messages/open.rb",
      "bgp/messages/route_refresh.rb",
      "bgp/messages/update.rb",
+     "bgp/misc/live_feed.rb",
      "bgp/neighbor.rb",
      "bgp/nlris/inet.rb",
      "bgp/nlris/label.rb",
@@ -71,10 +72,12 @@ Gem::Specification.new do |s|
      "bgp/path_attributes/path_attribute.rb",
      "bgp4r.gemspec",
      "bgp4r.rb",
+     "examples/a_live_feed",
      "examples/routegen",
      "examples/routegen.yml",
      "examples/simple.rb",
      "examples/unit-testing/malformed_update.rb",
+     "examples/unit-testing/no_export.rb",
      "examples/unit-testing/prepend_aspath.rb",
      "examples/unit-testing/unknown_transitive_attr.rb",
      "test/common_test.rb",
@@ -87,6 +90,7 @@ Gem::Specification.new do |s|
      "test/messages/route_refresh_test.rb",
      "test/messages/update_test.rb",
      "test/neighbor_test.rb",
+     "test/nlris/ext_nlri_test.rb",
      "test/nlris/inet_test.rb",
      "test/nlris/labeled_test.rb",
      "test/nlris/nlri_test.rb",
@@ -118,7 +122,7 @@ Gem::Specification.new do |s|
      "test/path_attributes/path_attribute_test.rb"
   ]
   s.homepage = %q{http://github.com/jesnault/bgp4r/tree/master}
-  s.rdoc_options = ["--quiet", "--title", "A BGP-4 Ruby Library", "--line-numbers"]
+  s.rdoc_options = ["--charset=UTF-8"]
   s.require_paths = ["."]
   s.required_ruby_version = Gem::Requirement.new(">= 1.8.6")
   s.rubyforge_project = %q{bgp4r}
@@ -137,6 +141,7 @@ Gem::Specification.new do |s|
      "test/messages/update_test.rb",
      "test/neighbor_test.rb",
      "test/nlris",
+     "test/nlris/ext_nlri_test.rb",
      "test/nlris/inet_test.rb",
      "test/nlris/labeled_test.rb",
      "test/nlris/nlri_test.rb",
