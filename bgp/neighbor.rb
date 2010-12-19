@@ -63,7 +63,8 @@ module BGP
       else
         @version, @my_as, @holdtime, @id, @remote_addr, @local_addr  = args
       end
-      @as4byte=false
+      @cap = Hash.new
+      # @as4byte=false
       @state = :Idle
       @threads=ThreadGroup.new
       @mutex = Mutex.new
@@ -132,7 +133,7 @@ module BGP
           ev, type, m = eventQ.deq
           case ev
           when :ev_msg
-            msg = BGP::Message.factory(m, @as4byte)
+            msg = BGP::Message.factory(m, @cap)
             log_info "Recv#{msg.class.to_s.split('::').last}"
             log_debug "Recv #{msg}\n"
             if msg.is_a?(Update)
@@ -227,7 +228,7 @@ module BGP
       @out.thread
     end
 
-    attr_reader :as4byte
+    attr_reader :as4byte, :path_id
 
     def send_message(m)
       raise if m.nil?
@@ -243,7 +244,7 @@ module BGP
         @out.enq m
       end
     end
-
+    
     def init_socket
       @socket = Socket.new(Socket::PF_INET, Socket::SOCK_STREAM, Socket::IPPROTO_TCP)
       remote = Socket.pack_sockaddr_in(179, @remote_addr) 
@@ -284,11 +285,11 @@ module BGP
       @rmt_version = o.version
       @rmt_as = o.local_as
       @rmt_bgp_id = o.bgp_id
-
+      
       if @holdtime > o.holdtime
         @out.holdtime = @in.holdtime = o.holdtime
       end
-
+      
       case @state
       when :OpenSent
         send_message(BGP::Message.keepalive)
@@ -299,7 +300,8 @@ module BGP
       else
         Log.warn "#{self.class}: received open message while in state #{@state}"
       end
-      @as4byte = (open.has?(OPT_PARM::CAP::As4) && o.has?(OPT_PARM::CAP::As4))
+      @cap[:as4byte]= (open.has?(OPT_PARM::CAP::As4) && o.has?(OPT_PARM::CAP::As4))
+      @cap[:path_id]= { :speaker=> open.find(OPT_PARM::CAP::Add_path), :peer=> o.find(OPT_PARM::CAP::Add_path) }
     end
     
     def rcv_keepalive
@@ -317,7 +319,7 @@ module BGP
         @threads.add(@keepalive_thread)
       end
     end
-
+    
     def rcv_notification(m)
       log_info "#{m}"
       changed and notify_observers(m)
@@ -326,14 +328,14 @@ module BGP
     
     def rcv_route_refresh(m)
     end
-
+    
     def rcv_update(m)
     end
     
     def to_s
       "version: #{version}, id: #{@id}, as: #{@my_as}, holdtime: #{@holdtime}, peer addr: #{@remote_addr}, local addr: #{@local_addr}"
     end
-
+    
   end
 
 end

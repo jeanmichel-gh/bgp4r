@@ -142,4 +142,11 @@ class Path_attribute_Test < Test::Unit::TestCase # :nodoc:
     assert ! @pa.has_a_aggregator_attr?
     assert ! @pa.has_a_mp_unreach_attr?
   end  
+
+  def test_7
+    assert ! @pa.has_path_id?, "no path_id should be set!"
+    @pa.path_id='1.1.1.1'
+    assert @pa.has_path_id?, "should have a path_id set!"
+    assert_nothing_raised() {  @pa.path_id = 0 }
+  end  
 end

@@ -29,6 +29,7 @@ module BGP
     attr_reader :attributes
 
     def initialize(*args)
+      @path_id=nil
       if args.size <= 2 and args[0].is_a?(String) and args[0].is_packed?
         s = args[0]
         @attributes=[]
@@ -38,6 +39,22 @@ module BGP
       else
         add(*args)
       end
+    end
+    def has_path_id?
+      ! @path_id.nil?
+    end
+    def path_id
+      @path_id
+    end
+    def path_id=(val)
+      if val.is_a?(Integer)
+        raise unless (0..0xffffffff) === val
+        @path_id = val
+      else 
+        @path_id = IPAddr.new(val).to_i
+      end
+    rescue => ex
+      raise ArgumentError, "Invalid argument #{val.inspect}."
     end
     def add(*args)
       @attributes ||=[]

@@ -82,30 +82,39 @@ class BGP::Update < BGP::Message
   def path_attribute=(val)
     @path_attribute=val if val.is_a?(Path_attribute)
   end
-
-  def encode(as4byte=false)
-    @as4byte=as4byte
+  
+  # when encoding the neighbor sets cap and call us
+  def encode(cap={})
+    @cap=cap
+    @as4byte=cap[:as4byte]
     withdrawn, path_attribute, nlri = '', '', ''
     withdrawn = @withdrawn.encode(false) if defined? @withdrawn and @withdrawn
-    path_attribute = @path_attribute.encode(as4byte) if defined?(@path_attribute) and @path_attribute
-    nlri = @nlri.encode if defined? @nlri and @nlri
-    super([withdrawn.size, withdrawn, path_attribute.size, path_attribute, nlri].pack('na*na*a*'))
+    #FIXME: use cap...
+    path_attribute = @path_attribute.encode(@cap[:as4byte]) if defined?(@path_attribute) and @path_attribute
+    super([withdrawn.size, withdrawn, path_attribute.size, path_attribute, encode_nlri(cap)].pack('na*na*a*'))
   end
-
-  def encode4
-    encode(true)
+  
+  def encode4(cap={})
+    arg = {:as4byte=>true}.merge(cap)
+    encode(arg)
   end
 
   attr_reader :path_attribute, :nlri, :withdrawn
 
   # CHANGED ME: NO DEFAULT HERE, the factory calling us has to tell what it is giving us.
-  def parse(s, as4byte=false)
-    @as4byte=as4byte
+  # when parsing, the factory passes cap
+  def parse(s, cap={})
+    @cap=cap
+    @as4byte=cap[:as4byte]
+    @path_id=cap[:path_id]
     update = super(s)
     len = update.slice!(0,2).unpack('n')[0]
     self.withdrawn=Withdrawn.new(update.slice!(0,len).is_packed) if len>0
     len = update.slice!(0,2).unpack('n')[0]
     enc_path_attribute = update.slice!(0,len).is_packed
+    #FIXME: path hash instead....
+    #passing cap with path_id should cause path_attr to decode path_id ....
+    #no need to change Nlri decoding...
     self.path_attribute=Path_attribute.new(enc_path_attribute, as4byte) if len>0
     self.nlri = Nlri.new(update) if update.size>0
   end
@@ -121,20 +130,23 @@ class BGP::Update < BGP::Message
         @nlri << val
       rescue => e
       end
+    elsif val.is_a?(Path_Nlri)
+      @nlri = val
     elsif val.is_a?(Nlri)
       val.to_s.split.each { |n| self << n }
     end
   end
 
-  def to_s(as4byte=@as4byte)
-    # def to_s(fmt=:tcpdump)
-    msg = encode(as4byte)
+  def to_s(cap=@cap)
+    msg = encode(cap)
     fmt=:tcpdump
     s = []
     s << @withdrawn.to_s if defined?(@withdrawn) and @withdrawn
+    #FIXME: cap instead of as4byte
     s << @path_attribute.to_s(fmt, as4byte) if defined?(@path_attribute) and @path_attribute
-    s << @nlri.to_s if defined?(@nlri) and @nlri
-    "Update Message (#{UPDATE}), #{as4byte ? "4 bytes AS, " : ''}length: #{msg.size}\n  " + s.join("\n") + "\n" + msg.hexlify.join("\n") + "\n"
+    s << @nlri.to_s(2) if @nlri
+    "Update Message (#{UPDATE}), #{as4byte ? "4 bytes AS, " : ''}length: #{msg.size}\n  " +
+      s.join("\n") + "\n" + msg.hexlify.join("\n") + "\n"
   end
 
   def self.withdrawn(u)
@@ -146,6 +158,16 @@ class BGP::Update < BGP::Message
       Update.new(pa)
     end
   end
+  
+  def encode_nlri(cap)
+    return unless @nlri
+    nlri=''
+    nlri += [path_attribute.path_id].pack('N') if path_attribute.has_path_id?
+    nlri +=  @nlri.encode
+    nlri
+  end
+  
+end
 end
 
 load "../../test/messages/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0

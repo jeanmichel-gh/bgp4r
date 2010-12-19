@@ -87,7 +87,6 @@ module BGP
       def to_hash
       end
       
-      
       def parse(s)
         @flags, @type, len, value = super(s)
         @afi, @safi, nh_len = value.slice!(0,4).unpack('nCC')
@@ -98,7 +97,6 @@ module BGP
           @nlris << Nlri.factory(value.slice!(0,(blen+7)/8+1), @afi, @safi)
         end
         raise RuntimeError, "leftover afer parsing: #{value.unpack('H*')}" if value.size>0
-        
       end
       
       def parse_next_hops(s)

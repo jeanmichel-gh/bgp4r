@@ -74,6 +74,9 @@ class Update_Test < Test::Unit::TestCase
       Nlri.new('77.0.0.0/17', '78.0.0.0/18', '79.0.0.0/19')
     )
     # Ship it!
+    
+    p an_update.to_shex
+    
     assert_equal(3*2, an_update.encode4.size - an_update.encode.size)
   end
   
@@ -97,7 +100,7 @@ class Update_Test < Test::Unit::TestCase
   
   def test_6
     s = 'ffffffffffffffffffffffffffffffff004a02000000274001010040020a0202000000c80000006440030428000101c0080c0137003b051f00010af50040114d0000124e0000134f0000'
-    m = Message.factory([s].pack('H*'), true)
+    m = Message.factory([s].pack('H*'), :as4byte=>true)
     assert_not_nil m
     assert_instance_of(Update, m)
     assert m.as4byte?
@@ -130,7 +133,7 @@ class Update_Test < Test::Unit::TestCase
   
   def test_8
     s = 'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF0072020000001F4001010040020A0204212C051319351AFE400304557200D9C00804212C045C175D76D6175D76DE1659299C175929981659235C16592D6417592D6417592D6617592D6217C3D228185D73241859284417C3FE84165C727015592190'
-    m = Update.new([s].pack('H*'), true)
+    m = Update.new([s].pack('H*'), :as4byte=>true)
     pa = m.path_attribute
     assert_equal '556533011 422910718', pa[As_path].as_path
     assert_equal '85.114.0.217', pa[Next_hop].next_hop
@@ -145,6 +148,14 @@ class Update_Test < Test::Unit::TestCase
     m = Update.new([s].pack('H*'))
     assert m.withdrawn, "Should contain withdrawn routes."
     assert_equal 3,m.withdrawn.nlris.size
+  end
+  
+  def test_888
+    an_update = Update.new( Path_attribute.new( Origin.new(1) ))
+    assert_nil  an_update.nlri
+    an_update << Path_Nlri.new(100, '21.0.0.0/11', '22.0.0.0/22')
+    assert_match /(ff){16}00#{22+4}\s*02\s*0000\s*0004\s*40010101\s*000000640b150016160000/, an_update.to_shex
+    puts an_update
   end
   
   #--

@@ -47,14 +47,14 @@ module ::BGP
       len, @msg_type, message = s[16..-1].unpack('nCa*')
       message.is_packed
     end
-    def self.factory(_s, as4byte=false)
+    def self.factory(_s, cap={})
       s = [_s].pack('a*')
       s.slice(18,1).unpack('C')[0]
       case s.slice(18,1).unpack('C')[0]
       when OPEN
         Open.new(s)
       when UPDATE
-        Update.new(s, as4byte)
+        Update.new(s, cap)
       when KEEPALIVE
         Keepalive.new
       when NOTIFICATION

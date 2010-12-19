@@ -55,9 +55,9 @@ class NLRI_Ip4_Test < Test::Unit::TestCase
     assert_equal('11140000', s.unpack('H*')[0])
     ip4 = Nlri::Ip4.new(s)
     assert_equal('', s.unpack('H*')[0])
-
   end
 end
+
 class NLRI_Ip6_Test < Test::Unit::TestCase
   include BGP
   def test_1
@@ -95,6 +95,8 @@ end
 class Prefix_Test < Test::Unit::TestCase
   include BGP
   def test_1
+    assert_equal('080a',Prefix.new('10.0.0.0/8').to_shex)
+    
     assert_equal('::/128',Prefix.new.to_s)
     assert_equal(2,Prefix.new.afi)
     assert_equal('192.168.0.0/16',Prefix.new('192.168.0.0/16').to_s)
@@ -139,6 +141,7 @@ class Labeled_Test < Test::Unit::TestCase
   include BGP
   def test_1
     assert_equal('Label Stack=1,2,3 (bottom) 10.0.0.0/24', Labeled.new(Prefix.new('10.0.0.1/24'),1,2,3).to_s)
+    puts Labeled.new(Prefix.new('10.0.0.1/24'),1,2,3).to_shex
     assert_equal(3*24+24, Labeled.new(Prefix.new('10.0.0.1/24'),1,2,3).bit_length)
     assert_equal('600000100000200000310a0000', Labeled.new(Prefix.new('10.0.0.1/24'),1,2,3).to_shex)
     assert_equal('6b0006510000006400000064c0a800',Labeled.new(Vpn.new('192.168.0.0/19', Rd.new(100,100)),101).to_shex)
@@ -150,3 +153,28 @@ class Labeled_Test < Test::Unit::TestCase
     assert_equal('9800065100000064000000642009000400050000',Labeled.new(['9800065100000064000000642009000400050000'].pack('H*'),2).to_shex)
   end
 end
+
+class Path_Nlri_Test < Test::Unit::TestCase
+  include BGP
+  def test_10
+    #FIME: Path_Nlri or Nlri_Path ? 
+    assert_equal '080a', Nlri.new('10.0.0.0/8').to_shex
+    assert_equal '00000000080a', Path_Nlri.new('10.0.0.0/8').to_shex
+    assert_equal "Path ID: 0  '0.0.0.0': [0x00000000]\n10.0.0.0/8", Path_Nlri.new(0,'10.0.0.0/8').to_s
+    assert_equal "Path ID: 100  '0.0.0.100': [0x00000064]\n10.0.0.0/8\n20.0.0.0/16", Path_Nlri.new(100,'10.0.0.0/8','20.0.0.0/16').to_s
+    assert_equal '00000000080a', Path_Nlri.new(0,'10.0.0.0/8').to_shex
+    assert_equal '00000000080a', Path_Nlri.new(Path_Nlri.new(0,'10.0.0.0/8').encode).to_shex
+    assert_equal '00000000080a', Path_Nlri.new(Path_Nlri.new(0,'10.0.0.0/8')).to_shex
+  end
+  def test_11 
+    nlri = Path_Nlri.new('10.0.0.0/8')
+    nlri << '20.0.0.0/16'
+    assert_equal '00000000080a101400', nlri.to_shex
+    nlri.path_id=0xabcdefed
+    assert_equal 'abcdefed080a101400', nlri.to_shex
+  end
+  
+end
+
+__END__
+
