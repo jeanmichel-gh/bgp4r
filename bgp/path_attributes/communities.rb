@@ -147,6 +147,12 @@ module BGP
     
     %w{ no_export no_advertise no_export_sub_confed no_peer }.each do |wkc| 
       define_method("has_#{wkc}?") do
+        has? Community.const_get(wkc.upcase)
+      end
+    end
+
+    %w{ no_export no_advertise no_export_sub_confed no_peer }.each do |wkc| 
+      define_method("does_not_have_#{wkc}?") do
         ! has? Community.const_get(wkc.upcase)
       end
     end

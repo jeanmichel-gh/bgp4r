@@ -79,12 +79,13 @@ class Communities_Test < Test::Unit::TestCase
     assert   Communities.new("145:60 145:10 145:30 145:20").has?('145:60')
   end
   def test_4
-    assert   Communities.new("145:60 145:10").has_no_export?
-    assert   Communities.new("145:60 145:10").has_no_advertise?
-    assert   Communities.new("145:60 145:10").has_no_export_sub_confed?
-    assert ! Communities.new("145:60 145:10").add(:no_export_sub_confed).has_no_export_sub_confed?
-    assert ! Communities.new("145:60 145:10").add(:no_export).has_no_export?
-    assert ! Communities.new("145:60 145:10").add(:no_advertise).has_no_advertise?
+    assert ! Communities.new("145:60 145:10").has_no_export?, "Not expexted to contain [no_export] community"
+    assert   Communities.new("145:60 145:10").does_not_have_no_export?, "Not expexted to contain [no_export] community"
+    assert ! Communities.new("145:60 145:10").has_no_advertise? , 'Not expected to contain [no_advertise] community'
+    assert ! Communities.new("145:60 145:10").has_no_export_sub_confed?, 'Not expected to contain [no_export_sub_confed] community'
+    assert   Communities.new("145:60 145:10").add(:no_export_sub_confed).has_no_export_sub_confed?, 'expected to contain [no_export_sub_confed]'
+    assert   Communities.new("145:60 145:10").add(:no_export).has_no_export?, 'expected to contain [no_export]'
+    assert   Communities.new("145:60 145:10").add(:no_advertise).has_no_advertise?, 'expected to contain [no_advertise]'
   end
 end
 
