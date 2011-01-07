@@ -113,8 +113,8 @@ module BGP::OPT_PARM::CAP
 
     def send_recv_to_s(val)
       case val
-      when 1 : 'SEND (1)'
-      when 2 : 'RECV (2)'
+      when 1 ; 'SEND (1)'
+      when 2 ; 'RECV (2)'
       when 3 ; 'SEND_AND_RECV (3)'
       else
         'bogus'
