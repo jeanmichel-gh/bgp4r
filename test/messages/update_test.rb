@@ -128,7 +128,7 @@ class Update_Test < Test::Unit::TestCase
     "
   end
   
-  def test_7
+  def test_8
     s = 'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF0072020000001F4001010040020A0204212C051319351AFE400304557200D9C00804212C045C175D76D6175D76DE1659299C175929981659235C16592D6417592D6417592D6617592D6217C3D228185D73241859284417C3FE84165C727015592190'
     m = Update.new([s].pack('H*'), true)
     pa = m.path_attribute
@@ -140,12 +140,15 @@ class Update_Test < Test::Unit::TestCase
     assert_equal '100 556533011 422910718', pa[As_path].as_path
   end
   
-  # def test_8
-  #   s = 'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF002302000C16D403741755C68816D408300000'
-  #   m = Update.new([s].pack('H*'))
-  # end
-  # 
-  # def test_9
+  def test_9
+    s = 'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF002302000C16D403741755C68816D408300000'
+    m = Update.new([s].pack('H*'))
+    assert m.withdrawn, "Should contain withdrawn routes."
+    assert_equal 3,m.withdrawn.nlris.size
+  end
+  
+  #--
+  # def test_10
   #   s = 'ffff ffff ffff ffff ffff ffff ffff ffff
   #   005f 0200 0000 4440 0101 0040 020e 0206
   #   0064 212c 232a 0ddd 53f9 5ba0 4003 0428
@@ -154,8 +157,9 @@ class Update_Test < Test::Unit::TestCase
   #   000d dd00 0053 f900 0302 9e18 5bd9 c5
   #   '.split.join
   #   m = Update.new([s].pack('H*'))
-  #   p m
+  #   p m.path_attribute[:next_hop]
+  #   p m.path_attribute[:as_path]
   # end
-    
+  #++
 
 end

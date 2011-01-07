@@ -91,8 +91,6 @@ module ::BGP
     end
   end
 
-  puts "DONE1"
-
 end
 
 load "../../test/messages/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0

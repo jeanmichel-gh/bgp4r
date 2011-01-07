@@ -69,11 +69,11 @@ module BGP
           @seqn = seqn
           @cap = cap
         elsif args.size==1 && args.is_a?(String)
-      else
-        parse args[0]
+        else
+          parse args[0]
+        end
       end
-      end
-      
+
       def encode
         [@o1,@seqn, @cap.encode].pack('CNa*')
       end
@@ -142,7 +142,7 @@ module BGP
         parse args[0]
       else
         @msg_type=CAPABILITY
-        add *args
+        add(*args)
       end
     end
 

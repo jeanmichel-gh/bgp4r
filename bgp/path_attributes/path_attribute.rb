@@ -20,7 +20,6 @@
 # along with BGP4R.  If not, see <http://www.gnu.org/licenses/>.
 #++
 
-require 'bgp4r'
 require 'bgp/path_attributes/attribute'
 
 module BGP

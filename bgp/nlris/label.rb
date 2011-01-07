@@ -37,7 +37,7 @@ module BGP
       end
     end
     def encode(bottom=1)
-      n = (@label <<4) | (@exp & 0x7)<<1 |(bottom &0x1)
+      n = (@label << 4) | ((@exp & 0x7)<< 1) |(bottom & 0x1)
       o1 = (n & 0xff0000) >> 16
       o2 = (n & 0x00ff00) >> 8
       o3 = (n & 0x0000ff)

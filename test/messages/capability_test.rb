@@ -70,18 +70,18 @@ class TestBgpMessagesCapability < Test::Unit::TestCase
   include BGP::OPT_PARM
   def test_capability_1
     cap_msg = BGP::Capability.new
-    assert_equal 'ffffffffffffffffffffffffffffffff001306', cap_msg.to_shex
+    assert_equal('ffffffffffffffffffffffffffffffff001306', cap_msg.to_shex)
     cap_msg <<  BGP::Capability::Revision.advertise( 10, DYN_CAP::Mbgp.new(1,1))
-    assert_match /^(ff){16}001f06000000000a01000400010001/, cap_msg.to_shex
+    assert_match(/^(ff){16}001f06000000000a01000400010001/, cap_msg.to_shex)
     cap_msg <<  BGP::Capability::Revision.advertise( 20, DYN_CAP::Mbgp.new(1,2))
-    assert_match /^(ff){16}002b06\s*000000000a01000400010001\s*000000001401000400010002/, cap_msg.to_shex
+    assert_match(/^(ff){16}002b06\s*000000000a01000400010001\s*000000001401000400010002/, cap_msg.to_shex)
   end
   def test_capability_2
     cap_msg = BGP::Capability.new(
       BGP::Capability::Revision.advertise( 10, DYN_CAP::Mbgp.new(1,1)),
       BGP::Capability::Revision.advertise( 20, DYN_CAP::Mbgp.new(1,2))
     )
-    assert_match /^(ff){16}002b06\s*000000000a01000400010001\s*000000001401000400010002/, cap_msg.to_shex
+    assert_match(/^(ff){16}002b06\s*000000000a01000400010001\s*000000001401000400010002/, cap_msg.to_shex)
   end
   def test_capability_3
 

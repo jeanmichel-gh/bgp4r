@@ -92,34 +92,6 @@ class Withdrawn_Test < Test::Unit::TestCase
   end
 end
 
-class Nlri_Test < Test::Unit::TestCase
-  include BGP
-  def test_1
-    nlri1 = Nlri.new
-    nlri1 << Nlri::Ip4.new('20.0.0.0/15')
-    nlri1 << '20.0.0.0/17'
-    nlri1 << '20.0.0.0/24'
-    s = '0f140010140011140000'
-    nlri2 = Nlri.new([s].pack('H*'))
-    assert_equal('0f140010140011140000', nlri2.to_shex)
-    assert_raise(ArgumentError)  { nlri2.to_shex(true) }
-    assert_equal(3,nlri2.nlris.size)
-         
-  end
-
-  def test_2
-    nlri1 = Nlri.new
-    nlri1 << Nlri::Ip4.new('20.0.0.0/15')
-    nlri1 << '20.0.0.0/17'
-    nlri1 << '20.0.0.0/24'
-    s = '0f140010140011140000'
-    nlri2 = Nlri.new([s].pack('H*'))
-    assert_equal('0f140010140011140000', nlri2.to_shex)
-    assert_raise(ArgumentError)  { nlri2.to_shex(true) }
-    assert_equal(3,nlri2.nlris.size)      
-  end
-end
-
 class Prefix_Test < Test::Unit::TestCase
   include BGP
   def test_1
@@ -132,19 +104,6 @@ class Prefix_Test < Test::Unit::TestCase
     assert_equal('402009000400040000',Prefix.new('2009:4:4::/64').to_shex)
     assert Prefix.new('2009:4:4::/64').ipv6?
     assert_equal('2009:4:4::/64',Prefix.new('2009:4:4::/64').to_s)
-  end
-end
-class Inet_unicast_Test < Test::Unit::TestCase
-  include BGP
-  def test_1
-    assert_equal(1,Inet_unicast.new('192.168.0.0/16').afi)
-    assert_equal(1,Inet_unicast.new('192.168.0.0/16').safi)
-    assert_equal(2,Inet_unicast.new('2009:4:4::/64').afi)
-    assert_equal(1,Inet_unicast.new('2009:4:4::/64').safi)
-    assert_equal(1,Inet_multicast.new('192.168.0.0/16').afi)
-    assert_equal(2,Inet_multicast.new('192.168.0.0/16').safi)
-    assert_equal(2,Inet_multicast.new('2009:4:4::/64').afi)
-    assert_equal(2,Inet_multicast.new('2009:4:4::/64').safi)
   end
 end
 

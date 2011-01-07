@@ -40,12 +40,4 @@ class Local_pref_Test < Test::Unit::TestCase
     lp1 = Local_pref.new(lp)
     assert_equal(lp.encode, lp1.encode)
   end
-  def test_3
-    lp =  Local_pref.new(200)
-    assert_equal 200, lp.to_i
-    lp + 13
-    assert_equal 213, lp.to_i
-    lp + -13
-    assert_equal 200, lp.to_i
-  end
 end

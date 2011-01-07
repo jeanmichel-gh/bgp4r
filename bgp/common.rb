@@ -82,25 +82,6 @@ class IPAddr
 
 end
 
-module Kernel
-  alias_method :old_require, :require
-  def require(file)
-    puts "require #{file}"
-    old_require file
-  rescue => e
-    p e
-    p e
-    p e
-    p e
-  end
-end
-
-class Module
-  def included(mod)
-    puts "#{self} include #{mod} #{caller[0,2].inspect}"
-  end
-end
-
 class Object
   def to_shex(*args)
     self.respond_to?(:encode) ? self.encode(*args).unpack('H*')[0] : ""
