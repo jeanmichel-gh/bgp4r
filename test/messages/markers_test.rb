@@ -23,6 +23,7 @@
 require 'test/unit'
 require 'bgp4r'
 require 'bgp/messages/markers'
+require 'bgp/nlris/nlris'
 class End_of_rib_markers_Test < Test::Unit::TestCase
   include BGP
   def test_end_of_rib_maker_messages

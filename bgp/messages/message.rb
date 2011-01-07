@@ -20,7 +20,7 @@
 # along with BGP4R.  If not, see <http://www.gnu.org/licenses/>.
 #++
 
-module BGP
+module ::BGP
 
   # http://www.iana.org/assignments/bgp-parameters/bgp-parameters.xhtml#bgp-parameters-1
 
@@ -90,6 +90,9 @@ module BGP
       ! has_no_path_attribute?
     end
   end
+
+  puts "DONE1"
+
 end
 
 load "../../test/messages/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0

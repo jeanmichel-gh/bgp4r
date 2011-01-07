@@ -40,14 +40,13 @@
 require 'bgp/messages/message'
 require 'bgp/path_attributes/path_attribute'
 
-module BGP
-
-class Update < Message
+class BGP::Update < BGP::Message
+  include BGP
   def as4byte?
     @as4byte ||= false
   end
   alias as4byte as4byte?
-    
+
   def initialize(*args)
     if args[0].is_a?(String) and args[0].is_packed?
       @as4byte=false
@@ -59,7 +58,7 @@ class Update < Message
       set(*args)
     end
   end
-  
+
   def set(*args)
     args.each { |arg|
       if arg.is_a?(Withdrawn)
@@ -71,19 +70,19 @@ class Update < Message
       end
     }
   end
-  
+
   def withdrawn=(val)
     @withdrawn=val if val.is_a?(Withdrawn)
   end
-  
+
   def nlri=(val)
     @nlri=val if val.is_a?(Nlri)
   end
-  
+
   def path_attribute=(val)
     @path_attribute=val if val.is_a?(Path_attribute)
   end
-  
+
   def encode(as4byte=false)
     @as4byte=as4byte
     withdrawn, path_attribute, nlri = '', '', ''
@@ -92,13 +91,13 @@ class Update < Message
     nlri = @nlri.encode if defined? @nlri and @nlri
     super([withdrawn.size, withdrawn, path_attribute.size, path_attribute, nlri].pack('na*na*a*'))
   end
-  
+
   def encode4
     encode(true)
   end
-  
+
   attr_reader :path_attribute, :nlri, :withdrawn
-  
+
   # CHANGED ME: NO DEFAULT HERE, the factory calling us has to tell what it is giving us.
   def parse(s, as4byte=false)
     @as4byte=as4byte
@@ -110,7 +109,7 @@ class Update < Message
     self.path_attribute=Path_attribute.new(enc_path_attribute, as4byte) if len>0
     self.nlri = Nlri.new(update) if update.size>0
   end
-  
+
   def <<(val)
     if val.is_a?(Attr)
       @path_attribute ||= Path_attribute.new
@@ -137,7 +136,7 @@ class Update < Message
     s << @nlri.to_s if defined?(@nlri) and @nlri
     "Update Message (#{UPDATE}), #{as4byte ? "4 bytes AS, " : ''}length: #{msg.size}\n  " + s.join("\n") + "\n" + msg.hexlify.join("\n") + "\n"
   end
-  
+
   def self.withdrawn(u)
     if u.nlri and u.nlri.size>0
       Update.new(Withdrawn.new(*(u.nlri.nlris.collect { |n| n.to_s})))
@@ -149,4 +148,4 @@ class Update < Message
   end
 end
 
-end
+load "../../test/messages/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0

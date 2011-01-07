@@ -130,7 +130,7 @@ class Prefix_Test < Test::Unit::TestCase
     assert(Prefix.new('192.168.0.0/16').ipv4?)
     assert_equal('10c0a8',Prefix.new('192.168.0.0/16').to_shex)
     assert_equal('402009000400040000',Prefix.new('2009:4:4::/64').to_shex)
-    assert('402009000400040000',Prefix.new('2009:4:4::/64').ipv6?)
+    assert Prefix.new('2009:4:4::/64').ipv6?
     assert_equal('2009:4:4::/64',Prefix.new('2009:4:4::/64').to_s)
   end
 end

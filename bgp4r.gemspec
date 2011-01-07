@@ -9,7 +9,7 @@ Gem::Specification.new do |s|
 
   s.required_rubygems_version = Gem::Requirement.new(">= 0") if s.respond_to? :required_rubygems_version=
   s.authors = ["Jean-Michel Esnault"]
-  s.date = %q{2010-10-30}
+  s.date = %q{2011-01-07}
   s.description = %q{BGP4R is a BGP-4 ruby library to create,  send, and receive  BGP messages in an  object oriented manner}
   s.email = %q{jesnault@gmail.com}
   s.extra_rdoc_files = [

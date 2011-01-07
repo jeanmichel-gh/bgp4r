@@ -108,7 +108,7 @@ class Notification < Message
     msg = self.encode
     s = "Notification (#{NOTIFICATION}), length: #{msg.size}: "
     s += "#{Notification.code_to_s(@code)} (#{@code}), #{Notification.code_to_s(@code, @subcode)} (#{@subcode}) " 
-    s += "\ndata: [#{@data}]" if @data.size>0
+    s += "\ndata: [#{@data}]" if @data and @data.size>0
     s
   end
 
