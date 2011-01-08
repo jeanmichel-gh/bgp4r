@@ -114,6 +114,8 @@ module BGP::OPT_PARM
       CAP::Orf.new(s)
     when CAP_GR
       CAP::Graceful_restart.new(s)
+    when CAP_ADD_PATH
+      CAP::Add_path.new(s)
     when CAP_DYNAMIC
       CAP::Dynamic.new(s)
     else
@@ -134,6 +136,8 @@ module BGP::OPT_PARM
         DYN_CAP::Route_refresh.new(code)
       when CAP_ORF,CAP_ORF_CISCO
         DYN_CAP::Orf.new(s)
+      when CAP_ADD_PATH
+        DYN_CAP::Add_path.new(s)
       when CAP_GR
         DYN_CAP::Graceful_restart.new(s)
       else
