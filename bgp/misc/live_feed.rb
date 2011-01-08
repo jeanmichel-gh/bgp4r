@@ -1,29 +1,23 @@
-require 'net/telnet'
+#require 'net/telnet'
 require 'bgp4r'
 
-
 class LiveFeed
-  def initialize
+  def self.open
+    new.open
+  end
+  def open
     @host = '129.82.138.6'
     @port = '50001'
-    @timeout = 10
-  end
-
-  def open
-
     @buf = ''
     @queue = Queue.new
 
     th = Thread.new do 
-      feed = Net::Telnet.new('Host'=> @host, 
-                             'Port' => @port, 
-                             'Timeout'=> 5, 
-                             'Telnetmode' => false)
+      @feed = TCPSocket.new @host, @port
       loop do
-        @buf += feed.recv(2000)
+        @buf += @feed.recv(5000)
       end
     end
-    Thread.new do
+    @th=Thread.new do
       loop do
         pos = (@buf =~ /<OCTETS length=.*>([^<]*)<\/OCTETS>/)
         if pos
@@ -33,17 +27,18 @@ class LiveFeed
         end
       end
     end
+    self
   end
-  
+  def close
+    @th.kill
+    @feed.close
+  end
   def read
     @queue.deq
   end
-
   alias msg read
   alias readmessage read
-    
+
 end
-
-
-
+# 
 
