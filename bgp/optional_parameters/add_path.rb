@@ -40,7 +40,7 @@ module BGP::OPT_PARM::CAP
     class << self
       def new_array(arg)
         o = new
-        arg.each { |t| o.add *t }
+        arg.each { |t| o.add(*t) }
         o
       end
     end
@@ -49,7 +49,7 @@ module BGP::OPT_PARM::CAP
       @af={}
       if args.size>1
         super(OPT_PARM::CAP_ADD_PATH)
-        add *args
+        add(*args)
       elsif args.size==1 and args[0].is_a?(String)
         parse(*args)
       elsif args.empty?

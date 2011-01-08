@@ -63,28 +63,23 @@ class Update_Test < Test::Unit::TestCase
   end
   def test_4
     an_update = Update.new(
-      Path_attribute.new(
-        Origin.new(1),
-        Next_hop.new('192.168.1.5'),
-        Multi_exit_disc.new(100),
-        Local_pref.new(100),
-        As_path.new(100,200,300),
-        Communities.new('1311:1 311:59 2805:64')
-      ),
-      Nlri.new('77.0.0.0/17', '78.0.0.0/18', '79.0.0.0/19')
+    Path_attribute.new(
+    Origin.new(1),
+    Next_hop.new('192.168.1.5'),
+    Multi_exit_disc.new(100),
+    Local_pref.new(100),
+    As_path.new(100,200,300),
+    Communities.new('1311:1 311:59 2805:64')
+    ),
+    Nlri.new('77.0.0.0/17', '78.0.0.0/18', '79.0.0.0/19')
     )
-    # Ship it!
-    
-    p an_update.to_shex
-    
     assert_equal(3*2, an_update.encode4.size - an_update.encode.size)
   end
-  
   def test_5
     an_update = Update.new( Path_attribute.new( Origin.new(1),
-                                                Next_hop.new('10.0.0.1'),
-                                                Multi_exit_disc.new(100)
-                                                ))
+    Next_hop.new('10.0.0.1'),
+    Multi_exit_disc.new(100)
+    ))
     assert ! an_update.path_attribute.has?(Local_pref), "Should not contain a Local Pref attr."
     an_update << Local_pref.new(113)
     assert an_update.path_attribute.has?(Local_pref), "Should contain a Local Pref attr."
@@ -97,7 +92,7 @@ class Update_Test < Test::Unit::TestCase
     an_update << Nlri.new('21.0.0.0/11', '22.0.0.0/22')
     assert_equal 4, an_update.nlri.size
   end
-  
+
   def test_6
     s = 'ffffffffffffffffffffffffffffffff004a02000000274001010040020a0202000000c80000006440030428000101c0080c0137003b051f00010af50040114d0000124e0000134f0000'
     m = Message.factory([s].pack('H*'), :as4byte=>true)
@@ -130,7 +125,7 @@ class Update_Test < Test::Unit::TestCase
     cluster: 0.0.0.1
     "
   end
-  
+
   def test_8
     s = 'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF0072020000001F4001010040020A0204212C051319351AFE400304557200D9C00804212C045C175D76D6175D76DE1659299C175929981659235C16592D6417592D6417592D6617592D6217C3D228185D73241859284417C3FE84165C727015592190'
     m = Update.new([s].pack('H*'), :as4byte=>true)
@@ -142,35 +137,71 @@ class Update_Test < Test::Unit::TestCase
     pa[:as_path].find_sequence.prepend(100)
     assert_equal '100 556533011 422910718', pa[As_path].as_path
   end
-  
+
   def test_9
     s = 'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF002302000C16D403741755C68816D408300000'
     m = Update.new([s].pack('H*'))
     assert m.withdrawn, "Should contain withdrawn routes."
     assert_equal 3,m.withdrawn.nlris.size
   end
-  
+
   def test_888
     an_update = Update.new( Path_attribute.new( Origin.new(1) ))
     assert_nil  an_update.nlri
     an_update << Path_Nlri.new(100, '21.0.0.0/11', '22.0.0.0/22')
-    assert_match /(ff){16}00#{22+4}\s*02\s*0000\s*0004\s*40010101\s*000000640b150016160000/, an_update.to_shex
-    puts an_update
+    assert_match(/(ff){16}00#{22+4}\s*02\s*0000\s*0004\s*40010101\s*000000640b150016160000/, an_update.to_shex)
+    #puts an_update
+  end
+
+
+  def test_10
+    an_update = Update.new(
+      Path_attribute.new(
+       Origin.new(1),
+       Next_hop.new('192.168.1.5'),
+       Multi_exit_disc.new(100),
+       Local_pref.new(100),
+       As_path.new(100,200,300),
+       Communities.new('1311:1 311:59 2805:64')
+      ),
+      Ext_Nlri.new(100, Nlri.new('77.0.0.0/17', '78.0.0.0/18', '79.0.0.0/19'))
+    )
   end
   
-  #--
-  # def test_10
-  #   s = 'ffff ffff ffff ffff ffff ffff ffff ffff
-  #   005f 0200 0000 4440 0101 0040 020e 0206
-  #   0064 212c 232a 0ddd 53f9 5ba0 4003 0428
-  #   0000 01c0 0810 212c 044d 232a 232a 232a
-  #   fc9d 000d 000b f011 1202 0400 0023 2a00
-  #   000d dd00 0053 f900 0302 9e18 5bd9 c5
-  #   '.split.join
-  #   m = Update.new([s].pack('H*'))
-  #   p m.path_attribute[:next_hop]
-  #   p m.path_attribute[:as_path]
-  # end
-  #++
+  def test_11
+    upd1 = Update.new(
+      Path_attribute.new(
+       Origin.new(1),
+       Next_hop.new('192.168.1.5'),
+       Multi_exit_disc.new(100),
+       Local_pref.new(100),
+       As_path.new(100,200,300),
+       Communities.new('1311:1 311:59 2805:64')
+      ),
+      Ext_Nlri.new(100, Nlri.new('77.0.0.0/17', '78.0.0.0/18', '79.0.0.0/19'))
+    )
+    p upd1
+    
+    # sbin = upd1.encode
+    # upd2 = Message.factory(sbin, :path_id=>true)
+    # assert_equal upd1.to_shex, upd2.to_shex
+    # assert_equal 100, upd2.nlri.path_id
+    # assert_equal 3, upd2.nlri.nlri.nlris.size
+    # assert_equal '77.0.0.0/17,78.0.0.0/18,79.0.0.0/19', upd2.nlri.nlri.nlris.join(',')
+  end
 
+  def __test_12
+    upd1 = Update.new(
+      Path_attribute.new(
+       Origin.new(1),
+       Next_hop.new('192.168.1.5'),
+       Multi_exit_disc.new(100),
+       Local_pref.new(100),
+       As_path.new(100,200,300),
+       Communities.new('1311:1 311:59 2805:64')
+       #TODO: add MP_Reach .... and verify labeled ext ... 
+      )
+    )
+  end
 end
+

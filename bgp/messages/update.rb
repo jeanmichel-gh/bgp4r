@@ -48,7 +48,10 @@ class BGP::Update < BGP::Message
   alias as4byte as4byte?
 
   def initialize(*args)
+    @nlri, @path_attribute, @withdrawn=nil,nil,nil
+    @cap={}
     if args[0].is_a?(String) and args[0].is_packed?
+      #FIXME: @as4byte 
       @as4byte=false
       parse(*args)
     elsif args[0].is_a?(self.class)
@@ -67,6 +70,8 @@ class BGP::Update < BGP::Message
         self.path_attribute = arg
       elsif arg.is_a?(Nlri)
         self.nlri = arg
+      elsif arg.is_a?(Ext_Nlri)
+        self.nlri = arg
       end
     }
   end
@@ -76,7 +81,7 @@ class BGP::Update < BGP::Message
   end
 
   def nlri=(val)
-    @nlri=val if val.is_a?(Nlri)
+    @nlri=val if val.is_a?(Nlri) or val.is_a?(Ext_Nlri)
   end
 
   def path_attribute=(val)
@@ -103,6 +108,17 @@ class BGP::Update < BGP::Message
 
   # CHANGED ME: NO DEFAULT HERE, the factory calling us has to tell what it is giving us.
   # when parsing, the factory passes cap
+  
+  def as4byte
+    @cap[:as4byte]
+  end
+  
+  def path_id
+    @cap[:path_id]
+  end
+  
+  #FIXME:  don't use ivar but reader accessor
+  
   def parse(s, cap={})
     @cap=cap
     @as4byte=cap[:as4byte]
@@ -115,8 +131,14 @@ class BGP::Update < BGP::Message
     #FIXME: path hash instead....
     #passing cap with path_id should cause path_attr to decode path_id ....
     #no need to change Nlri decoding...
-    self.path_attribute=Path_attribute.new(enc_path_attribute, as4byte) if len>0
-    self.nlri = Nlri.new(update) if update.size>0
+    self.path_attribute=Path_attribute.new(enc_path_attribute, cap) if len>0
+    if update.size>0
+      if cap[:path_id]
+        self.nlri = Ext_Nlri.new_ntop(update, 1, 1) # ipv4, unicast
+      else
+        self.nlri = Nlri.new(update)
+      end
+    end
   end
 
   def <<(val)
@@ -132,19 +154,23 @@ class BGP::Update < BGP::Message
       end
     elsif val.is_a?(Path_Nlri)
       @nlri = val
+    elsif val.is_a?(Ext_Nlri)
+      @nlri = val
     elsif val.is_a?(Nlri)
       val.to_s.split.each { |n| self << n }
+    else
+      raise ArgmentError, "Invalid arg: #{val.inspect}"
     end
   end
 
-  def to_s(cap=@cap)
-    msg = encode(cap)
+  def to_s(arg={})
+    msg = encode(arg)
     fmt=:tcpdump
     s = []
     s << @withdrawn.to_s if defined?(@withdrawn) and @withdrawn
     #FIXME: cap instead of as4byte
     s << @path_attribute.to_s(fmt, as4byte) if defined?(@path_attribute) and @path_attribute
-    s << @nlri.to_s(2) if @nlri
+    s << @nlri.to_s if @nlri
     "Update Message (#{UPDATE}), #{as4byte ? "4 bytes AS, " : ''}length: #{msg.size}\n  " +
       s.join("\n") + "\n" + msg.hexlify.join("\n") + "\n"
   end
@@ -162,7 +188,6 @@ class BGP::Update < BGP::Message
   def encode_nlri(cap)
     return unless @nlri
     nlri=''
-    nlri += [path_attribute.path_id].pack('N') if path_attribute.has_path_id?
     nlri +=  @nlri.encode
     nlri
   end

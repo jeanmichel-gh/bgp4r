@@ -22,6 +22,7 @@
 
 require 'test/unit'
 require 'bgp/path_attributes/path_attribute'
+require 'bgp/path_attributes/attributes'
 
 class Path_attribute_Test < Test::Unit::TestCase # :nodoc:
   include BGP
@@ -141,12 +142,14 @@ class Path_attribute_Test < Test::Unit::TestCase # :nodoc:
     assert @pa.has_a_local_pref_attr?
     assert ! @pa.has_a_aggregator_attr?
     assert ! @pa.has_a_mp_unreach_attr?
-  end  
+  end
 
   def test_7
-    assert ! @pa.has_path_id?, "no path_id should be set!"
-    @pa.path_id='1.1.1.1'
-    assert @pa.has_path_id?, "should have a path_id set!"
-    assert_nothing_raised() {  @pa.path_id = 0 }
-  end  
+    s =   '800e1000010404ffffffff0030000651c0a800'
+    sbin = [s].pack('H*')
+    assert_equal(BGP::Mp_reach, Attr.factory(sbin, :path_id=>false).class)
+    s = '800e1400010404ffffffff000000006430000651c0a800'
+    sbin = [s].pack('H*')
+    assert_equal(BGP::Mp_reach, Attr.factory(sbin, :path_id=>true).class)
+  end
 end

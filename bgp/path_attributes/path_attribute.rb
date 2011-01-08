@@ -29,7 +29,6 @@ module BGP
     attr_reader :attributes
 
     def initialize(*args)
-      @path_id=nil
       if args.size <= 2 and args[0].is_a?(String) and args[0].is_packed?
         s = args[0]
         @attributes=[]
@@ -40,22 +39,11 @@ module BGP
         add(*args)
       end
     end
-    def has_path_id?
-      ! @path_id.nil?
-    end
-    def path_id
-      @path_id
-    end
-    def path_id=(val)
-      if val.is_a?(Integer)
-        raise unless (0..0xffffffff) === val
-        @path_id = val
-      else 
-        @path_id = IPAddr.new(val).to_i
-      end
-    rescue => ex
-      raise ArgumentError, "Invalid argument #{val.inspect}."
-    end
+
+    # def has_path_id?
+    #   ! @path_id.nil?
+    # end
+
     def add(*args)
       @attributes ||=[]
       args.each { |arg| @attributes << arg if arg.is_a?(BGP::Attr) }
@@ -235,7 +223,17 @@ module BGP
       end
     end
     include BGP::ATTR
-    def self.factory(s, as4byte=false)
+    def self.factory(s, arg=false)
+      if arg.is_a?(Hash)
+        # don't break anything for now....
+        #FIXME: rename as4byte 2 as4byte_flag
+        #FIXME: rename path_id 2 path_id_flag
+        as4byte=arg[:as4byte]
+        path_id=arg[:path_id]
+      else
+        as4byte=arg
+      end
+      
       flags, type = s.unpack('CC')
       case type
       when ORIGIN
@@ -261,12 +259,13 @@ module BGP
       when CLUSTER_LIST
         Cluster_list.new(s)
       when MP_REACH
-        Mp_reach.new(s)
+        Mp_reach.new(s,path_id)
       when MP_UNREACH
-        Mp_unreach.new(s)
+        Mp_unreach.new(s,path_id)
       when EXTENDED_COMMUNITY
         Extended_communities.new(s)
       else
+        p s
         Unknown.new(s)
       end
     end

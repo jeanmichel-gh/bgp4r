@@ -72,36 +72,101 @@ class Mp_reach_Test < Test::Unit::TestCase
     #puts mpr
   end
   def test_6
-    mpr =  Mp_reach.new(:safi=>2, :nexthop=> ['2009:9:19::1/128'], :prefix=> ['2009:1::/64', '2009:2::/64', '2009:3::/64'])
+    mpr =  Mp_reach.new(:safi=>2, :nexthop=> ['2009:9:19::1/128'], :nlris=> ['2009:1::/64', '2009:2::/64', '2009:3::/64'])
     assert_equal("\n    AFI IPv6 (2), SAFI Multicast (2)\n    nexthop: 2009:9:19::1\n      2009:1::/64\n      2009:2::/64\n      2009:3::/64", mpr.mp_reach)
     assert_equal(mpr.to_shex, Mp_reach.new(mpr.encode).to_shex)
-    mpr =  Mp_reach.new(:safi=>1, :nexthop=> ['10.0.0.1','10.0.0.2'], :prefix=> '192.168.0.0/24')
+    mpr =  Mp_reach.new(:safi=>1, :nexthop=> ['10.0.0.1','10.0.0.2'], :nlris=> '192.168.0.0/24')
     assert_equal("\n    AFI IPv4 (1), SAFI Unicast (1)\n    nexthop: 10.0.0.1, 10.0.0.2\n      192.168.0.0/24", mpr.mp_reach)
     assert_equal(mpr.to_shex, Mp_reach.new(mpr.encode).to_shex)
-    mpr =  Mp_reach.new(:safi=>4, :nexthop=> ['10.0.0.1','10.0.0.2'], :nlri=> {:prefix=> '192.168.0.0/24', :label=>101} )
+    mpr =  Mp_reach.new(:safi=>4, :nexthop=> ['10.0.0.1','10.0.0.2'], :nlris=> {:prefix=> '192.168.0.0/24', :label=>101} )
     assert_equal("\n    AFI IPv4 (1), SAFI Labeled NLRI (4)\n    nexthop: 10.0.0.1, 10.0.0.2\n      Label Stack=101 (bottom) 192.168.0.0/24", mpr.mp_reach)
     assert_equal(mpr.to_shex, Mp_reach.new(mpr.encode).to_shex)
-    mpr = Mp_reach.new(:safi=>128, :nexthop=> ['10.0.0.1','10.0.0.2'], :nlri=> {:rd=> [100,100], :prefix=> '192.168.0.0/24', :label=>101})
+    mpr = Mp_reach.new(:safi=>128, :nexthop=> ['10.0.0.1','10.0.0.2'], :nlris=> {:rd=> [100,100], :prefix=> '192.168.0.0/24', :label=>101})
     assert_equal("\n    AFI IPv4 (1), SAFI Labeled VPN Unicast (128)\n    nexthop: 10.0.0.1, 10.0.0.2\n      Label Stack=101 (bottom) RD=100:100, IPv4=192.168.0.0/24", mpr.mp_reach)
     assert_equal(mpr.to_shex, Mp_reach.new(mpr.encode).to_shex)
-    mpr = Mp_reach.new(:safi=>128, :nexthop=> ['10.0.0.1','10.0.0.2'], :nlri=> {:rd=> Rd.new(100,100), :prefix=> Prefix.new('192.168.0.0/24'), :label=>101})
+    mpr = Mp_reach.new(:safi=>128, :nexthop=> ['10.0.0.1','10.0.0.2'], :nlris=> {:rd=> Rd.new(100,100), :prefix=> Prefix.new('192.168.0.0/24'), :label=>101})
     assert_equal("\n    AFI IPv4 (1), SAFI Labeled VPN Unicast (128)\n    nexthop: 10.0.0.1, 10.0.0.2\n      Label Stack=101 (bottom) RD=100:100, IPv4=192.168.0.0/24", mpr.mp_reach)
     assert_equal(mpr.to_shex, Mp_reach.new(mpr.encode).to_shex)
   end
   def test_7
-    mpr =  Mp_reach.new(:safi=>2, :nexthop=> '2009:9:19::1/128', :prefix=> [
+    mpr =  Mp_reach.new(:safi=>2, :nexthop=> '2009:9:19::1/128', :nlris=> [
       '2009:1::/64', '2009:2::/64', '2009:3::/64', '2009:4::/64', '2009:5::/64', '2009:6::/64'])
     assert_equal("\n    AFI IPv6 (2), SAFI Multicast (2)\n    nexthop: 2009:9:19::1\n      2009:1::/64\n      2009:2::/64\n      2009:3::/64\n      2009:4::/64\n      2009:5::/64\n      2009:6::/64", mpr.mp_reach)
-    mpr =  Mp_reach.new(:safi=>1, :nexthop=> '10.0.0.1', :prefix=> [
+    mpr =  Mp_reach.new(:safi=>1, :nexthop=> '10.0.0.1', :nlris=> [
       '192.168.0.0/24', '192.168.1.0/24', '192.168.2.0/24', '192.168.3.0/24', '192.168.4.0/24', '192.168.5.0/24'])
     assert_equal("\n    AFI IPv4 (1), SAFI Unicast (1)\n    nexthop: 10.0.0.1\n      192.168.0.0/24\n      192.168.1.0/24\n      192.168.2.0/24\n      192.168.3.0/24\n      192.168.4.0/24\n      192.168.5.0/24", mpr.mp_reach)
   end
   def test_8
-    mpr =  Mp_reach.new(:safi=>1, :nexthop=> '10.0.0.1', :prefix=> [
+    mpr =  Mp_reach.new(:safi=>1, :nexthop=> '10.0.0.1', :nlris=> [
       '192.168.0.0/24', '192.168.1.0/24', '192.168.2.0/24', '192.168.3.0/24', '192.168.4.0/24', '192.168.5.0/24'])
     assert_equal(Mp_unreach,mpr.new_unreach.class)
     mpr2 = Mp_reach.new(mpr)
     assert_equal(mpr.encode, mpr2.encode)
     assert_equal(Mp_unreach, Mp_unreach.new(mpr.new_unreach).class)
   end
+  
+  def test_afi_1
+    mpr =  Mp_reach.new(:safi=>1, :nexthop=> ['10.0.0.1'], :nlris=> '192.168.1.0/24')
+    mpr =  Mp_reach.new(:safi=>1, :nexthop=> ['10.0.0.1'], :nlris=> '192.168.1.0/24', :path_id=>100)
+    mpr =  Mp_reach.new(:safi=>2, :nexthop=> ['10.0.0.1'], :nlris=> ['192.168.1.0/24','192.168.2.0/24'])
+    mpr =  Mp_reach.new(:safi=>2, :nexthop=> ['10.0.0.1'], :nlris=> ['192.168.1.0/24','192.168.2.0/24'], :path_id=>100)
+    mpr =  Mp_reach.new(:safi=>1, :nexthop=> ['10.0.0.1'], :nlris=> [
+      {:prefix=> '192.168.1.0/24', :path_id=> 100},
+      {:prefix=> '192.168.2.0/24', :path_id=> 101},
+      {:prefix=> '192.168.2.0/24', :path_id=> 102},
+    ])
+  end
+
+  def test_afi_2
+    mpr =  Mp_reach.new(:safi=>1, :nexthop=> ['2011:1:7::1'], :nlris=>  '2011:1::/32')
+    mpr =  Mp_reach.new(:safi=>1, :nexthop=> ['2011:1:7::1'], :nlris=>  '2011:1::/32', :path_id=>100)
+    mpr =  Mp_reach.new(:safi=>2, :nexthop=> ['2011:1:7::1'], :nlris=> ['2011:1::/32','2011:2::/32'])
+    mpr =  Mp_reach.new(:safi=>2, :nexthop=> ['2011:1:7::1'], :nlris=> ['2011:1::/32','2011:2::/32'], :path_id=>100)
+    mpr =  Mp_reach.new(:safi=>1, :nexthop=> ['2011:1:7::1'], :nlris=> [
+      {:prefix=> '2011:1::/32', :path_id=> 100},
+      {:prefix=> '2011:2::/32', :path_id=> 101},
+      {:prefix=> '2011:3::/32', :path_id=> 102},
+    ])
+  end
+
+  def test_safi_4
+    mpr =  Mp_reach.new(:safi=>4, :nexthop=> ['10.0.0.1'], :nlris=> {:prefix=> '192.168.0.0/24', :label=>101} )
+    mpr =  Mp_reach.new(:safi=>4, :nexthop=> ['10.0.0.1'], :nlris=> {:prefix=> '192.168.0.0/24', :label=>101, :path_id=>100} )
+    mpr =  Mp_reach.new(:safi=>4, :nexthop=> ['10.0.0.1'], :nlris=> [
+      {:prefix=> '192.168.0.0/24', :label=>101,},
+      {:prefix=> '192.168.1.0/24', :label=>102,},
+      {:prefix=> '192.168.1.0/24', :label=>103,}
+    ])
+    mpr =  Mp_reach.new(:safi=>4, :nexthop=> ['10.0.0.1'], :path_id=> 100, :nlris=> [
+      {:prefix=> '192.168.0.0/24', :label=>101,},
+      {:prefix=> '192.168.1.0/24', :label=>102,},
+      {:prefix=> '192.168.1.0/24', :label=>103,}
+    ])
+    mpr =  Mp_reach.new(:safi=>4, :nexthop=> ['10.0.0.1'], :nlris=> [
+      {:prefix=> '192.168.0.0/24', :label=>101, :path_id=>100},
+      {:prefix=> '192.168.1.0/24', :label=>102, :path_id=>101},
+      {:prefix=> '192.168.1.0/24', :label=>103, :path_id=>103},
+    ])
+  end
+  
+  def test_safi_128
+    mpr = Mp_reach.new :safi=>128, :nexthop=> ['10.0.0.1'], :nlris=> {:rd=> [100,100], :prefix=> '192.168.0.0/24', :label=>101}
+    mpr = Mp_reach.new :safi=>128, :nexthop=> ['10.0.0.1'], :nlris=> {:rd=> [100,100], :prefix=> '192.168.0.0/24', :label=>101, :path_id=>100}
+    mpr = Mp_reach.new :safi=>128, :nexthop=> ['10.0.0.1'], :nlris=> [
+      {:rd=> [100,100], :prefix=> '192.168.0.0/24', :label=>101},
+      {:rd=> [100,100], :prefix=> '192.168.1.0/24', :label=>102},
+      {:rd=> [100,100], :prefix=> '192.168.2.0/24', :label=>103},
+    ]
+    mpr = Mp_reach.new :safi=>128, :nexthop=> ['10.0.0.1'], :path_id=> 100, :nlris=> [
+      {:rd=> [100,100], :prefix=> '192.168.0.0/24', :label=>101},
+      {:rd=> [100,100], :prefix=> '192.168.1.0/24', :label=>102},
+      {:rd=> [100,100], :prefix=> '192.168.2.0/24', :label=>103},
+    ]
+    mpr = Mp_reach.new :safi=>128, :nexthop=> ['10.0.0.1'], :nlris=> [
+      {:rd=> [100,100], :prefix=> '192.168.0.0/24', :label=>101, :path_id=>101},
+      {:rd=> [100,100], :prefix=> '192.168.1.0/24', :label=>102, :path_id=>102},
+      {:rd=> [100,100], :prefix=> '192.168.2.0/24', :label=>103, :path_id=>103},
+    ]
+  end
+  
 end

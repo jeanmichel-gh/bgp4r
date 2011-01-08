@@ -1,67 +1,26 @@
-#--
-# Copyright 2008, 2009 Jean-Michel Esnault.
-# All rights reserved.
-# See LICENSE.txt for permissions.
-#
-#
-# This file is part of BGP4R.
-# 
-# BGP4R is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-# 
-# BGP4R is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with BGP4R.  If not, see <http://www.gnu.org/licenses/>.
-#++
+require "test/unit"
 
-require 'test/unit'  
-require 'bgp/nlris/nlris'
+require "bgp/nlris/nlri"
+require "bgp/nlris/inet"
+require "bgp/nlris/vpn"
+require "bgp/nlris/labeled"
+require "bgp/nlris/rd"
 
 class TestExtNlri < Test::Unit::TestCase
   include BGP
-  def test_1
-    nlri1 = Nlri.new 
-    nlri1 << Nlri::Ip4.new('20.0.0.0/15')
-    nlri1 << '20.0.0.0/17'
-    nlri1 << '20.0.0.0/24'
-    s = '0f140010140011140000'
-    nlri2 = Nlri.new([s].pack('H*'))
-    assert_equal('0f140010140011140000', nlri2.to_shex)
-    assert_raise(ArgumentError)  { nlri2.to_shex(true) }
-    assert_equal(3,nlri2.nlris.size)    
+  def test_ext_nlri
+    ext_nlri = Ext_Nlri.new(100, Nlri.new('10.0.0.0/8'))
+    assert_equal '00000064080a', ext_nlri.to_shex
+    assert_equal '00000064080a', Ext_Nlri.new_ntop(ext_nlri.encode).to_shex
   end
-end
-
-class Nlri_Test < Test::Unit::TestCase
-  include BGP
-  def test_1
-    nlri1 = Nlri.new
-    nlri1 << Nlri::Ip4.new('20.0.0.0/15')
-    nlri1 << '20.0.0.0/17'
-    nlri1 << '20.0.0.0/24'
-    s = '0f140010140011140000'
-    nlri2 = Nlri.new([s].pack('H*'))
-    assert_equal('0f140010140011140000', nlri2.to_shex)
-    assert_raise(ArgumentError)  { nlri2.to_shex(true) }
-    assert_equal(3,nlri2.nlris.size)
-         
+  def test_ext_inet
+    assert_equal '0000006410c0a8', Ext_Nlri.new(100, Inet_multicast.new('192.168.0.0/16')).to_shex
+    assert_equal '00000064402011131100000000', Ext_Nlri.new(100, Inet_multicast.new('2011:1311::/64')).to_shex
   end
-
-  def test_2
-    nlri1 = Nlri.new
-    nlri1 << Nlri::Ip4.new('20.0.0.0/15')
-    nlri1 << '20.0.0.0/17'
-    nlri1 << '20.0.0.0/24'
-    s = '0f140010140011140000'
-    nlri2 = Nlri.new([s].pack('H*'))
-    assert_equal('0f140010140011140000', nlri2.to_shex)
-    assert_raise(ArgumentError)  { nlri2.to_shex(true) }
-    assert_equal(3,nlri2.nlris.size)      
+  def test_ext_labeled
+    assert_equal '00000064600000100000200000310a0000', Ext_Nlri.new(100, Labeled.new(Prefix.new('10.0.0.1/24'),1,2,3)).to_shex
+    assert_equal '00000064800006500006610000006400000064c0a8', Ext_Nlri.new(100, Labeled.new(Vpn.new('192.168.0.0/16', Rd.new(100,100)),101,102)).to_shex
+    assert_equal '00000064b80006500006600006710000006400000064200900040005', Ext_Nlri.new(100, Labeled.new(Vpn.new('2009:4:5::1/48', Rd.new(100,100)),101,102,103)).to_shex
+    puts  Ext_Nlri.new(100, Labeled.new(Vpn.new('2009:4:5::1/48', Rd.new(100,100)),101,102,103)).to_s
   end
 end

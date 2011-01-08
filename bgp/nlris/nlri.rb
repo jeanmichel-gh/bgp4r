@@ -120,7 +120,7 @@ module BGP
     end
 
     def to_s(indent=0)
-      @nlris.join("\n#{[' ']*indent}")
+      @nlris.join("\n#{([' ']*indent).join}")
     end
     
     def size
@@ -142,11 +142,17 @@ module BGP
 
   class Nlri
     def self.factory(s, afi, safi)
-      case safi
-      when 1,2
-        Prefix.new(s.is_packed, afi)
-      when 4,128,129
-        Labeled.new(s.is_packed, afi, safi)
+      if afi== 1 and safi==1
+        Nlri.new s.is_packed
+      else
+        case safi
+        when 1,2
+          Prefix.new(s.is_packed, afi)
+        when 4,128,129
+          Labeled.new(s.is_packed, afi, safi)
+        else
+          raise RuntimeError, "Afi #{afi} Safi #{safi} not supported!"
+        end
       end
     end
   end
@@ -178,7 +184,7 @@ module BGP
     end
     def to_s(indent=0)
       sindent = [' ']*indent
-      format "#{sindent}Path ID: %d  '%s': [0x%8.8x]\n#{sindent}%s",  path_id, path_id2ip, path_id, super
+      format "#{sindent.join}Path ID: %d  '%s': [0x%8.8x]\n#{sindent.join}%s",  path_id, path_id2ip, path_id, super
     end
     def encode
       [@path,super].pack('Na*')
@@ -188,6 +194,32 @@ module BGP
       super(s)
     end
   end
+
+  class Ext_Nlri
+    def self.factory(s, afi, safi)
+      new_ntop s, afi, safi
+    end
+    def self.new_ntop(s, afi=1, safi=1)
+      path_id = s.slice!(0,4).unpack('N')[0]
+      nlri = Nlri.factory(s, afi, safi)
+      new path_id, nlri
+    end
+    attr :path_id, :nlri
+    def initialize(path_id, nlri)
+      @path_id=path_id
+      @nlri = nlri
+    end
+    def to_s
+      s = []
+      s << "ID=#{@path_id}"
+      s << @nlri.to_s
+      s.join(", ")
+    end
+    def encode
+      [@path_id, @nlri.encode].pack('Na*')
+    end
+  end
+  
 end
 
 load "../../test/nlris/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0
