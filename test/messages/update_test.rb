@@ -98,7 +98,7 @@ class Update_Test < Test::Unit::TestCase
     m = Message.factory([s].pack('H*'), :as4byte=>true)
     assert_not_nil m
     assert_instance_of(Update, m)
-    assert m.as4byte?
+    assert m.as4byte
   end
 
   def test_7
@@ -150,25 +150,9 @@ class Update_Test < Test::Unit::TestCase
     assert_nil  an_update.nlri
     an_update << Path_Nlri.new(100, '21.0.0.0/11', '22.0.0.0/22')
     assert_match(/(ff){16}00#{22+4}\s*02\s*0000\s*0004\s*40010101\s*000000640b150016160000/, an_update.to_shex)
-    #puts an_update
-  end
-
-
-  def test_10
-    an_update = Update.new(
-      Path_attribute.new(
-       Origin.new(1),
-       Next_hop.new('192.168.1.5'),
-       Multi_exit_disc.new(100),
-       Local_pref.new(100),
-       As_path.new(100,200,300),
-       Communities.new('1311:1 311:59 2805:64')
-      ),
-      Ext_Nlri.new(100, Nlri.new('77.0.0.0/17', '78.0.0.0/18', '79.0.0.0/19'))
-    )
   end
   
-  def test_11
+  def test_10
     upd1 = Update.new(
       Path_attribute.new(
        Origin.new(1),
@@ -180,28 +164,37 @@ class Update_Test < Test::Unit::TestCase
       ),
       Ext_Nlri.new(100, Nlri.new('77.0.0.0/17', '78.0.0.0/18', '79.0.0.0/19'))
     )
-    p upd1
+    assert_match(/ff{16}....020000.+00000064114d0000124e0000134f0000/, upd1.to_shex)
+    # Need to tell the factory we are dealing with a ext nlri
+    upd2 = Update.factory(upd1.encode, :path_id=>true)
+    assert_equal(upd1.to_shex, upd2.to_shex)
+  end
+  
+  def test_path_id_and_as4byte
+    upd1 = Update.new(
+     Path_attribute.new(
+      Origin.new,
+      As_path.new(100),
+      Local_pref.new(10),
+      Multi_exit_disc.new(20),
+      Mp_reach.new( :safi=>128, :nexthop=> ['10.0.0.1'], :path_id=> 100, :nlris=> [
+       {:rd=> [100,100], :prefix=> '192.168.0.0/24', :label=>101},
+       {:rd=> [100,100], :prefix=> '192.168.1.0/24', :label=>102},
+       {:rd=> [100,100], :prefix=> '192.168.2.0/24', :label=>103},
+      ]))
+    )
+    assert_match(/ff{16}....020000/, upd1.to_shex)
+    assert upd1.path_attribute.has_a_mp_reach_attr?, "Expecting a MP_REACH Attr."
+    assert_match(/ID=100, Label Stack=102/,upd1.path_attribute[:mp_reach].to_s)
     
-    # sbin = upd1.encode
-    # upd2 = Message.factory(sbin, :path_id=>true)
-    # assert_equal upd1.to_shex, upd2.to_shex
-    # assert_equal 100, upd2.nlri.path_id
-    # assert_equal 3, upd2.nlri.nlri.nlris.size
-    # assert_equal '77.0.0.0/17,78.0.0.0/18,79.0.0.0/19', upd2.nlri.nlri.nlris.join(',')
+    # received as2byte encode aspath attr
+    upd2 = Update.factory upd1.encode, :as4byte=> false, :path_id=>true
+    # received as4byte encode aspath attr
+    upd3 = Update.factory upd1.encode(:as4byte=>true), :as4byte=> true, :path_id=>true
+    assert_equal upd1.to_shex, upd2.to_shex
+    assert_equal upd2.to_shex, upd3.to_shex
+    
   end
 
-  def __test_12
-    upd1 = Update.new(
-      Path_attribute.new(
-       Origin.new(1),
-       Next_hop.new('192.168.1.5'),
-       Multi_exit_disc.new(100),
-       Local_pref.new(100),
-       As_path.new(100,200,300),
-       Communities.new('1311:1 311:59 2805:64')
-       #TODO: add MP_Reach .... and verify labeled ext ... 
-      )
-    )
-  end
 end
 

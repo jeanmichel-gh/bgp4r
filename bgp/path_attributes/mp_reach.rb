@@ -1,4 +1,4 @@
-#--
+ #--
 # Copyright 2008, 2009 Jean-Michel Esnault.
 # All rights reserved.
 # See LICENSE.txt for permissions.
@@ -50,7 +50,7 @@ module BGP
 
     def set(h)
       @safi = h[:safi]
-      @path_id = h[:path_id]
+      @path_id = path_id = h[:path_id]
       case @safi
       when 1,2,4   ; @nexthops = [h[:nexthop]].flatten.collect { |nh| Prefix.new(nh) }
       when 128,129 ; @nexthops = [h[:nexthop]].flatten.collect { |nh| Vpn.new(nh) }
@@ -59,12 +59,12 @@ module BGP
       case @safi
       when 1
         @nlris = [h[:nlris]].flatten.collect do |n|
-          path_id = n[:path_id] || @path_id
           case n
           when String
             nlri = Inet_unicast.new(n)
             path_id ? Ext_Nlri.new(path_id, nlri) : nlri
           when Hash
+            path_id = n[:path_id] if n[:path_id]
             nlri = Inet_unicast.new(n[:prefix])
             path_id ? Ext_Nlri.new(path_id, nlri) : nlri
           else
@@ -73,12 +73,12 @@ module BGP
         end
       when 2
         @nlris = [h[:nlris]].flatten.collect do |n|
-          path_id = n[:path_id] || @path_id
           case n
           when String
             nlri = Inet_multicast.new(n)
             path_id ? Ext_Nlri.new(path_id, nlri) : nlri
           when Hash
+            path_id = n[:path_id] if n[:path_id]
             nlri = Inet_multicast.new(n[:prefix])
             path_id ? Ext_Nlri.new(path_id, nlri) : nlri
           else
@@ -126,8 +126,8 @@ module BGP
       @afi, @safi, nh_len = value.slice!(0,4).unpack('nCC')
       parse_next_hops value.slice!(0,nh_len).is_packed
       value.slice!(0,1)
-      path_id = value.slice!(0,4).unpack('N')[0]  if path_id_flag
       while value.size>0
+        path_id = value.slice!(0,4).unpack('N')[0]  if path_id_flag
         blen = value.slice(0,1).unpack('C')[0]
         nlri = Nlri.factory(value.slice!(0,(blen+7)/8+1), @afi, @safi)
         if path_id_flag
@@ -161,9 +161,9 @@ module BGP
       case what
       when :mp_reach
         nexthops = @nexthops.collect { |nh| nh.encode(false) }.join
-        super([afi, @safi, nexthops.size, nexthops, 0, encoded_path_id, @nlris.collect { |n| n.encode }.join].pack('nCCa*Ca*a*'))
+        super([afi, @safi, nexthops.size, nexthops, 0, @nlris.collect { |n| n.encode }.join].pack('nCCa*Ca*'))
       when :mp_unreach
-        super([afi, @safi, encoded_path_id, @nlris.collect { |n| n.encode }.join].pack('nCa*a*'))
+        super([afi, @safi, @nlris.collect { |n| n.encode }.join].pack('nCa*'))
       end
     end
 

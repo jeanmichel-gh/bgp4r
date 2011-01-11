@@ -64,7 +64,6 @@ module BGP
         @version, @my_as, @holdtime, @id, @remote_addr, @local_addr  = args
       end
       @cap = Hash.new
-      # @as4byte=false
       @state = :Idle
       @threads=ThreadGroup.new
       @mutex = Mutex.new
@@ -301,6 +300,7 @@ module BGP
         Log.warn "#{self.class}: received open message while in state #{@state}"
       end
       @cap[:as4byte]= (open.has?(OPT_PARM::CAP::As4) && o.has?(OPT_PARM::CAP::As4))
+      #TODO: test
       @cap[:path_id]= { :speaker=> open.find(OPT_PARM::CAP::Add_path), :peer=> o.find(OPT_PARM::CAP::Add_path) }
     end
     
