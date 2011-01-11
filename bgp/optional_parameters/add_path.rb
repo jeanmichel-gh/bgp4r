@@ -24,7 +24,8 @@ require 'bgp/optional_parameters/capability'
 
 module BGP::OPT_PARM::CAP
 
-  def include_path_id?(speeker, peer, sr, afi, safi)
+  def has_path_id?(speeker, peer, sr, afi, safi)
+    return false if speeker.nil? or peer.nil?
     # when sending afi, safi, speaker agrees to send and peer to receive
     # when receiving afi, safi, speaker agrees to recv and peer agress to send
     case sr

@@ -157,6 +157,7 @@ module BGP
     end
   end
 
+  #FIXME: Should go...
   class Path_Nlri < Nlri
     def initialize(*args)
       if args.size>1 and args[0].is_a?(Integer)

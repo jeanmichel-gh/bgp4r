@@ -21,6 +21,6 @@ class TestExtNlri < Test::Unit::TestCase
     assert_equal '00000064600000100000200000310a0000', Ext_Nlri.new(100, Labeled.new(Prefix.new('10.0.0.1/24'),1,2,3)).to_shex
     assert_equal '00000064800006500006610000006400000064c0a8', Ext_Nlri.new(100, Labeled.new(Vpn.new('192.168.0.0/16', Rd.new(100,100)),101,102)).to_shex
     assert_equal '00000064b80006500006600006710000006400000064200900040005', Ext_Nlri.new(100, Labeled.new(Vpn.new('2009:4:5::1/48', Rd.new(100,100)),101,102,103)).to_shex
-    puts  Ext_Nlri.new(100, Labeled.new(Vpn.new('2009:4:5::1/48', Rd.new(100,100)),101,102,103)).to_s
+    assert_match(/ID=100, Label Stack=101/, Ext_Nlri.new(100, Labeled.new(Vpn.new('2009:4:5::1/48', Rd.new(100,100)),101,102,103)).to_s)
   end
 end

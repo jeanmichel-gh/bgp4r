@@ -40,10 +40,6 @@ module BGP
       end
     end
 
-    # def has_path_id?
-    #   ! @path_id.nil?
-    # end
-
     def add(*args)
       @attributes ||=[]
       args.each { |arg| @attributes << arg if arg.is_a?(BGP::Attr) }
@@ -225,13 +221,11 @@ module BGP
     include BGP::ATTR
     def self.factory(s, arg=false)
       if arg.is_a?(Hash)
-        # don't break anything for now....
-        #FIXME: rename as4byte 2 as4byte_flag
-        #FIXME: rename path_id 2 path_id_flag
-        as4byte=arg[:as4byte]
-        path_id=arg[:path_id]
+        as4byte_flag=arg[:as4byte]
+        path_id_flag=arg[:path_id]
       else
-        as4byte=arg
+        # FIXLE: raise ArgumentError, "USE HASH instead of boolean...."
+        as4byte_flag=arg
       end
       
       flags, type = s.unpack('CC')
@@ -239,7 +233,7 @@ module BGP
       when ORIGIN
         Origin.new(s)
       when AS_PATH
-        As_path.new(s,as4byte)
+        As_path.new(s,as4byte_flag)
       when NEXT_HOP
         Next_hop.new(s)
       when MULTI_EXIT_DISC
@@ -259,12 +253,17 @@ module BGP
       when CLUSTER_LIST
         Cluster_list.new(s)
       when MP_REACH
-        Mp_reach.new(s,path_id)
+        # puts "calling Mp_reach.new with #{path_id_flag}"
+        # puts s.unpack('H*')
+        # p path_id_flag
+        # p "--"
+        Mp_reach.new(s,path_id_flag)
       when MP_UNREACH
-        Mp_unreach.new(s,path_id)
+        Mp_unreach.new(s,path_id_flag)
       when EXTENDED_COMMUNITY
         Extended_communities.new(s)
       else
+        #FIXME: raise UnknownPathAttributeError() ....
         p s
         Unknown.new(s)
       end

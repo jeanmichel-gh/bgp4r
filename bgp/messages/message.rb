@@ -47,14 +47,14 @@ module ::BGP
       len, @msg_type, message = s[16..-1].unpack('nCa*')
       message.is_packed
     end
-    def self.factory(_s, cap={})
+    def self.factory(_s, cap_flags={})
       s = [_s].pack('a*')
       s.slice(18,1).unpack('C')[0]
       case s.slice(18,1).unpack('C')[0]
       when OPEN
         Open.new(s)
       when UPDATE
-        Update.new(s, cap)
+        Update.new(s, cap_flags)
       when KEEPALIVE
         Keepalive.new
       when NOTIFICATION
@@ -68,6 +68,7 @@ module ::BGP
       when CAPABILITY
         Capability.new(s)
       else
+        #FIXME: raise UnknownMessageTypeError() ...
         puts "don't know what kind of bgp messgage this is #{s.slice(18,1).unpack('C')}"
       end
     end

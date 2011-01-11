@@ -30,20 +30,28 @@ class TestBgpOptionalParametersAddPath < Test::Unit::TestCase
     assert ! speaker.agrees_to?(:recv, 1, 1), "speaker should not agree to recv afi 1 safi 1"
     peer = Add_path.new :recv, 1, 1
     assert peer.agrees_to?(:recv, 1, 1), "peer should agree to recv afi 1 safi 1"
-    assert include_path_id?(speaker, peer, :send, 1, 1), "route should include path id for afi 1 safi 1!"
-    assert ! include_path_id?(speaker, peer, :send, 1, 2), "route should include path id for afi 1 safi 2 !"
+    assert has_path_id?(speaker, peer, :send, 1, 1), "route should include path id for afi 1 safi 1!"
+    assert ! has_path_id?(speaker, peer, :send, 1, 2), "route should include path id for afi 1 safi 2 !"
     peer.add :recv, 1, 2
-    assert ! include_path_id?(speaker, peer, :send, 1, 2), "route should include path id for afi 1 safi 2 !"
+    assert ! has_path_id?(speaker, peer, :send, 1, 2), "route should include path id for afi 1 safi 2 !"
     assert ! speaker.agrees_to?(:send, 1, 2)
     speaker.add :send, 1,2
     assert speaker.agrees_to?(:send, 1, 2)
-    assert include_path_id?(speaker, peer, :send, 1, 2), "route should include path id for afi 1 safi 2 !"
+    assert has_path_id?(speaker, peer, :send, 1, 2), "route should include path id for afi 1 safi 2 !"
+  end
+  def test_5
+    assert ! has_path_id?(nil, nil, :send, 1, 1), "route should not include path id for afi 1 safi   "
+    speaker = Add_path.new :send, 1, 1
+    speaker = Add_path.new :send, 1, 1
+    assert ! has_path_id?(speaker, nil, :send, 1, 1), "route should not include path id for afi 1 safi 1"
+    peer = Add_path.new :send, 1, 1
+    assert ! has_path_id?(speaker, peer, :send, 1, 1), "route should not include path id for afi 1 safi 1"
+    peer = Add_path.new :recv, 1, 1
+    assert has_path_id?(speaker, peer, :send, 1, 1), "route should include path id for afi 1 safi 1"
   end
 end
 
-
 __END__
-
 
 Option Capabilities Advertisement (2): [020a45080001010100028001]
     Add-path Extension (69), length: 4
