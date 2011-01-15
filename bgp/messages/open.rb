@@ -29,6 +29,7 @@
 # 
 require 'bgp/messages/message'
 require 'bgp/optional_parameters/capability'
+require 'ipaddr'
 
 module BGP
 

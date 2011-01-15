@@ -82,7 +82,7 @@ module BGP
     #  neighbor.capability :route_refresh, 128
     #  neighbor.capability :mbgp, :ipv4, :unicast
     #  neighbor.capability :mbgp, :ipv4, :multicast
-        
+    
     def capability(*args)
       @opt_parms << if args[0].is_a?(Symbol)
         case args[0]
@@ -228,6 +228,10 @@ module BGP
     end
 
     attr_reader :as4byte, :path_id
+    
+    def as4byte
+      as4byte?
+    end
 
     def send_message(m)
       raise if m.nil?
@@ -238,7 +242,7 @@ module BGP
       end
       #FIXME: enqueue [m, as4byte]
       if m.is_a?(Update)
-        @out.enq m.encode(as4byte)
+        @out.enq m.encode(@cap)
       else
         @out.enq m
       end
@@ -277,7 +281,7 @@ module BGP
         send_message open  ; new_state :OpenSent, ev
       else
         Log.warn "#{self.class}: attempt to send OPEN msg while in #{@state}"
-      end    
+      end
     end
   
     def rcv_open(o)
@@ -299,9 +303,14 @@ module BGP
       else
         Log.warn "#{self.class}: received open message while in state #{@state}"
       end
-      @cap[:as4byte]= (open.has?(OPT_PARM::CAP::As4) && o.has?(OPT_PARM::CAP::As4))
+      @cap[:as4byte]= as4byte?(open, o)
       #TODO: test
-      @cap[:path_id]= { :speaker=> open.find(OPT_PARM::CAP::Add_path), :peer=> o.find(OPT_PARM::CAP::Add_path) }
+      @cap[:path_id] = false
+      # @cap[:path_id]= { :speaker=> open.find(OPT_PARM::CAP::Add_path), :peer=> o.find(OPT_PARM::CAP::Add_path) }
+    end
+    
+    def as4byte?(open_speeker, open_peer)
+      ! open_speeker.has?(OPT_PARM::CAP::As4).nil? and  ! open_peer.has?(OPT_PARM::CAP::As4).nil?
     end
     
     def rcv_keepalive
