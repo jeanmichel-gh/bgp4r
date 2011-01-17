@@ -219,13 +219,20 @@ module BGP
       end
     end
     include BGP::ATTR
-    def self.factory(s, arg=false)
+    def self.factory(s, arg=nil)
+      #FIXME:
       if arg.is_a?(Hash)
         as4byte_flag=arg[:as4byte]
         path_id_flag=arg[:path_id]
+      elsif arg.respond_to? :as4byte?
+        as4byte_flag = arg.as4byte?
+        path_id_flag = arg
+      elsif arg.is_a?(TrueClass)
+        as4byte_flag=true
+        path_id_flag=nil
       else
-        # FIXLE: raise ArgumentError, "USE HASH instead of boolean...."
-        as4byte_flag=arg
+        as4byte_flag=nil
+        path_id_flag=nil
       end
       
       flags, type = s.unpack('CC')
@@ -253,7 +260,7 @@ module BGP
       when CLUSTER_LIST
         Cluster_list.new(s)
       when MP_REACH
-        # puts "calling Mp_reach.new with #{path_id_flag}"
+        # puts "calling Mp_reach.new with #{path_id_flag.inspect}"
         # puts s.unpack('H*')
         # p path_id_flag
         # p "--"

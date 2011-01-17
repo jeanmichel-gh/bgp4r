@@ -24,21 +24,13 @@ require 'socket'
 require 'thread'
 require 'observer'
 require 'bgp/io'
+require 'bgp/neighbor/add_path_cap'
 
 module BGP
 
   class Neighbor
     include Observable
     
-    # def self.deprecate(old_method, new_method) 
-    #   define_method(old_method) do |*args, &block|
-    #     log_warn "#{old_method}() is deprecated. Use #{new_method}()."
-    #     __send__(new_method, *args, &block)
-    #   end 
-    # end
-    # 
-    # deprecate :send_message, :send
-
     def log_info(txt)
       Log.info "#{self.class} #{txt}"
     end
@@ -63,7 +55,7 @@ module BGP
       else
         @version, @my_as, @holdtime, @id, @remote_addr, @local_addr  = args
       end
-      @cap = Hash.new
+      # @cap = Hash.new
       @state = :Idle
       @threads=ThreadGroup.new
       @mutex = Mutex.new
@@ -77,6 +69,9 @@ module BGP
       end
     end
     
+    # FIXME:
+    #  neighbor.add_capability 
+    #  neighbor.remove_capability 
     #  neighbor.capability :as4_byte | :as4 | :as4byte
     #  neighbor.capability :route_refresh, :rr
     #  neighbor.capability :route_refresh, 128
@@ -132,7 +127,7 @@ module BGP
           ev, type, m = eventQ.deq
           case ev
           when :ev_msg
-            msg = BGP::Message.factory(m, @cap)
+            msg = BGP::Message.factory(m, @session_info)
             log_info "Recv#{msg.class.to_s.split('::').last}"
             log_debug "Recv #{msg}\n"
             if msg.is_a?(Update)
@@ -229,8 +224,8 @@ module BGP
 
     attr_reader :as4byte, :path_id
     
-    def as4byte
-      as4byte?
+    def as4byte?
+      @session_info.as4byte?
     end
 
     def send_message(m)
@@ -240,9 +235,9 @@ module BGP
         log_info "Send#{m.class.to_s.split('::')[-1]}"
         log_debug "Send #{m.is_a?(Update) ? m.to_s : m }\n"
       end
-      #FIXME: enqueue [m, as4byte]
+      #FIXME: enqueue [m, @session_info]
       if m.is_a?(Update)
-        @out.enq m.encode(@cap)
+        @out.enq m.encode(@session_info)
       else
         @out.enq m
       end
@@ -284,13 +279,18 @@ module BGP
       end
     end
   
-    def rcv_open(o)
-      @rmt_version = o.version
-      @rmt_as = o.local_as
-      @rmt_bgp_id = o.bgp_id
+    def rcv_open(peer_open)
+      @session_info = Neighbor::Capabilities.new open, peer_open
       
-      if @holdtime > o.holdtime
-        @out.holdtime = @in.holdtime = o.holdtime
+      #FIXME: methods to session_info.rmt_version .remote_as, .remote_bgp_id ...
+      @rmt_version = peer_open.version
+      @rmt_as = peer_open.local_as
+      @rmt_bgp_id = peer_open.bgp_id
+
+      #FIXME: mv holdtime to session_info ?
+      # session_info.holdtime
+      if @holdtime > peer_open.holdtime
+        @out.holdtime = @in.holdtime = peer_open.holdtime
       end
       
       case @state
@@ -303,14 +303,7 @@ module BGP
       else
         Log.warn "#{self.class}: received open message while in state #{@state}"
       end
-      @cap[:as4byte]= as4byte?(open, o)
-      #TODO: test
-      @cap[:path_id] = false
-      # @cap[:path_id]= { :speaker=> open.find(OPT_PARM::CAP::Add_path), :peer=> o.find(OPT_PARM::CAP::Add_path) }
-    end
-    
-    def as4byte?(open_speeker, open_peer)
-      ! open_speeker.has?(OPT_PARM::CAP::As4).nil? and  ! open_peer.has?(OPT_PARM::CAP::As4).nil?
+      
     end
     
     def rcv_keepalive
@@ -349,4 +342,4 @@ module BGP
 
 end
 
-load "../test/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0
+load "../../test/neighbor/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0

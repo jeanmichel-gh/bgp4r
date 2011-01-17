@@ -24,16 +24,18 @@ require 'bgp/optional_parameters/capability'
 
 module BGP::OPT_PARM::CAP
 
-  def include_path_id?(speeker, peer, sr, afi, safi)
-    # when sending afi, safi, speaker agrees to send and peer to receive
-    # when receiving afi, safi, speaker agrees to recv and peer agress to send
-    case sr
-    when :recv
-      speeker.agrees_to?(:recv, afi, safi) && peer.agrees_to?(:send, afi, safi)
-    when :send
-      speeker.agrees_to?(:send, afi, safi) && peer.agrees_to?(:recv, afi, safi)
-    end
-  end
+  #
+  # Belongs to Neighbor this is a session attribute....
+  # def include_path_id?(speeker, peer, sr, afi, safi)
+  #   # when sending afi, safi, speaker agrees to send and peer to receive
+  #   # when receiving afi, safi, speaker agrees to recv and peer agress to send
+  #   case sr
+  #   when :recv
+  #     speeker.has?(:recv, afi, safi) && peer.has?(:send, afi, safi)
+  #   when :send
+  #     speeker.has?(:send, afi, safi) && peer.has?(:recv, afi, safi)
+  #   end
+  # end
 
   class Add_path < BGP::OPT_PARM::Capability 
 
@@ -70,9 +72,20 @@ module BGP::OPT_PARM::CAP
         @af[[afi,safi]]=sr
       end
     end
-    # 0001 01 01 0002 80 02 0002 01 03
     
-    def agrees_to?(sr, afi, safi)
+    # 0001 01 01
+    # 0002 80 02
+    # 0002 01 03
+
+    def send? afi, safi
+      has? :send, afi, safi
+    end
+
+    def recv? afi, safi
+      has? :recv, afi, safi
+    end
+
+    def has?(sr, afi, safi)
       case sr
       when :recv
         @af.has_key?([afi,safi]) && (2..3) ===  @af[[afi,safi]]
@@ -89,7 +102,7 @@ module BGP::OPT_PARM::CAP
 
     def to_s
       s = []
-      s <<  "\n    Add-path Extension (#{CAP_ADD_PATH}), length: 4"
+      s <<  "\n    Add-path Extension (#{CAP_ADD_PATH}), length: #{encode.size}"
       s = s.join("\n  ")
       super + (s + (['']+@af.to_a.collect { |e| address_family_to_s(*e)}).join("\n        "))
     end

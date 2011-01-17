@@ -59,7 +59,7 @@ class Update_Test < Test::Unit::TestCase
     m = Message.factory([s].pack('H*'))
     w = Update.withdrawn(m)
     assert_equal(Update,w.class)
-    assert_equal('000a200a0a0a0a2020202020', w.withdrawn.to_shex)
+    assert_equal('200a0a0a0a2020202020', w.withdrawn.to_shex)
   end
   def test_4
     an_update = Update.new(
@@ -73,12 +73,13 @@ class Update_Test < Test::Unit::TestCase
     ),
     Nlri.new('77.0.0.0/17', '78.0.0.0/18', '79.0.0.0/19')
     )
+    
     assert_equal(3*2, an_update.encode4.size - an_update.encode.size)
   end
   def test_5
     an_update = Update.new( Path_attribute.new( Origin.new(1),
-    Next_hop.new('10.0.0.1'),
-    Multi_exit_disc.new(100)
+     Next_hop.new('10.0.0.1'),
+     Multi_exit_disc.new(100)
     ))
     assert ! an_update.path_attribute.has?(Local_pref), "Should not contain a Local Pref attr."
     an_update << Local_pref.new(113)
@@ -95,10 +96,10 @@ class Update_Test < Test::Unit::TestCase
 
   def test_6
     s = 'ffffffffffffffffffffffffffffffff004a02000000274001010040020a0202000000c80000006440030428000101c0080c0137003b051f00010af50040114d0000124e0000134f0000'
-    m = Message.factory([s].pack('H*'), :as4byte=>true)
+    m = Message.factory([s].pack('H*'), Update::Info.new(true))
     assert_not_nil m
     assert_instance_of(Update, m)
-    assert m.as4byte
+    assert_equal(s, m.to_shex(Update::Info.new(true)))
   end
 
   def test_7
@@ -127,8 +128,10 @@ class Update_Test < Test::Unit::TestCase
   end
 
   def test_8
+    o = Update::Info.new(true)
+    def o.recv_inet_unicast? ; false ; end
     s = 'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF0072020000001F4001010040020A0204212C051319351AFE400304557200D9C00804212C045C175D76D6175D76DE1659299C175929981659235C16592D6417592D6417592D6617592D6217C3D228185D73241859284417C3FE84165C727015592190'
-    m = Update.new([s].pack('H*'), :as4byte=>true)
+    m = Update.new([s].pack('H*'), o)
     pa = m.path_attribute
     assert_equal '556533011 422910718', pa[As_path].as_path
     assert_equal '85.114.0.217', pa[Next_hop].next_hop
@@ -139,38 +142,34 @@ class Update_Test < Test::Unit::TestCase
   end
 
   def test_9
+    # FFFFFFFFFF
+    # 0023 02 000C 16D40374 1755C688 16D40830 0000
     s = 'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF002302000C16D403741755C68816D408300000'
     m = Update.new([s].pack('H*'))
     assert m.withdrawn, "Should contain withdrawn routes."
     assert_equal 3,m.withdrawn.nlris.size
   end
-
-  def test_888
-    an_update = Update.new( Path_attribute.new( Origin.new(1) ))
-    assert_nil  an_update.nlri
-    an_update << Path_Nlri.new(100, '21.0.0.0/11', '22.0.0.0/22')
-    assert_match(/(ff){16}00#{22+4}\s*02\s*0000\s*0004\s*40010101\s*000000640b150016160000/, an_update.to_shex)
-  end
-  
+ 
   def test_10
+    o = Update::Info.new(true)
+    def o.recv_inet_unicast? ; true ; end
+    def o.send_inet_unicast? ; true ; end
     upd1 = Update.new(
       Path_attribute.new(
-       Origin.new(1),
-       Next_hop.new('192.168.1.5'),
-       Multi_exit_disc.new(100),
-       Local_pref.new(100),
-       As_path.new(100,200,300),
-       Communities.new('1311:1 311:59 2805:64')
+       As_path.new(100)
       ),
-      Ext_Nlri.new(100, Nlri.new('77.0.0.0/17', '78.0.0.0/18', '79.0.0.0/19'))
+      Ext_Nlri.new(100, Nlri.new('77.0.0.0/17'))
     )
-    assert_match(/ff{16}....020000.+00000064114d0000124e0000134f0000/, upd1.to_shex)
-    # Need to tell the factory we are dealing with a ext nlri
-    upd2 = Update.factory(upd1.encode, :path_id=>true)
-    assert_equal(upd1.to_shex, upd2.to_shex)
+    assert_equal('ffffffffffffffffffffffffffffffff0028020000000940020602010000006400000064114d0000', upd1.to_shex(o))
+    # Need to tell the factory we are dealing with a ext nlri.
+    upd2 = Update.factory(upd1.encode(o), o)
+    assert_equal(upd1.to_shex(o), upd2.to_shex(o))
   end
   
   def test_path_id_and_as4byte
+    o = Update::Info.new(true)
+    def o.recv_inet_unicast? ; true ; end
+    def o.send_inet_unicast? ; true ; end
     upd1 = Update.new(
      Path_attribute.new(
       Origin.new,
@@ -190,7 +189,7 @@ class Update_Test < Test::Unit::TestCase
     # received as2byte encode aspath attr
     upd2 = Update.factory upd1.encode, :as4byte=> false, :path_id=>true
     # received as4byte encode aspath attr
-    upd3 = Update.factory upd1.encode(:as4byte=>true), :as4byte=> true, :path_id=>true
+    upd3 = Update.factory upd1.encode(o), :as4byte=> true, :path_id=>true
     assert_equal upd1.to_shex, upd2.to_shex
     assert_equal upd2.to_shex, upd3.to_shex
     

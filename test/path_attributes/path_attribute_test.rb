@@ -153,24 +153,19 @@ class Path_attribute_Test < Test::Unit::TestCase # :nodoc:
     assert_equal(BGP::Mp_reach, Attr.factory(sbin, :path_id=>true).class)
   end
   
-  def test_8
-  end
-  
   def test_path_attribute_path_id_true_and_as4byte_false
     path_attr = Path_attribute.new
     path_attr.insert(
     Origin.new,
-    As_path.new,
-    # Local_pref.new(10),
-    # Multi_exit_disc.new(20),
+    As_path.new(100),
     Mp_reach.new( :safi=>128, :nexthop=> ['10.0.0.1'], :path_id=> 100, :nlris=> [
       {:rd=> [100,100], :prefix=> '192.168.0.0/24', :label=>101},
       {:rd=> [100,100], :prefix=> '192.168.1.0/24', :label=>102},
       {:rd=> [100,100], :prefix=> '192.168.2.0/24', :label=>103},
     ])
     )
-    assert_match(/ID=100, Label Stack=101/, path_attr.to_s)    
-    path_attr_new = Path_attribute.new(path_attr.encode(true), :path_id=>true)
+    assert_match(/ID=100, Label Stack=101/, path_attr.to_s)
+    path_attr_new = Path_attribute.new(path_attr.encode(true), :as4byte=> true, :path_id=>true)
     assert_equal(path_attr.to_shex, path_attr_new.to_shex)
     
     # TODO: UT: a path attr with mp_reach w path_id and ! as4
