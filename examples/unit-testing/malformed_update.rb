@@ -36,6 +36,7 @@ class TestBgp < Test::Unit::TestCase
     msg = recv(queue)
     assert msg, "Did not receive expected BGP update message."
     assert_instance_of(Notification, msg)
+    sleep 0.3
     assert_equal 'Missing Well-known Attribute', msg.to_string
     assert @n100.is_idle?
   end
@@ -61,7 +62,7 @@ class TestBgp < Test::Unit::TestCase
        nil
      end
   end
-    
+  
   def malformed_update
      update = Update.new(
        Path_attribute.new(

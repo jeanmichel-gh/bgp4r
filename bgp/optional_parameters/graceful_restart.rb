@@ -29,7 +29,7 @@ class Graceful_restart < BGP::OPT_PARM::Capability
   def initialize(*args)
     if args.size>1
       @restart_state, @restart_time = args
-      @address_families = []
+      @tuples = []
       super(OPT_PARM::CAP_GR)
     else
       parse(*args)
@@ -37,16 +37,16 @@ class Graceful_restart < BGP::OPT_PARM::Capability
   end
   
   def add(afi,safi,flags)
-    @address_families << [_afi(afi), _safi(safi), flags]
+    @tuples << [_afi(afi), _safi(safi), flags]
   end
 
   def parse(s)
-    @address_families = []
+    @tuples = []
     o1, families = super(s).unpack('na*')
     @restart_state = o1 >> 12
     @restart_time = o1 & 0xfff
     while families.size>0
-      @address_families << families.slice!(0,4).unpack('nCC')
+      @tuples << families.slice!(0,4).unpack('nCC')
     end
   end
 
@@ -54,7 +54,7 @@ class Graceful_restart < BGP::OPT_PARM::Capability
   def encode
     s = []
     s << [(@restart_state << 12) + @restart_time].pack('n')
-    s << @address_families.collect { |af| af.pack('nCC') }
+    s << @tuples.collect { |af| af.pack('nCC') }
     super s.join
   end
   def to_s
@@ -62,7 +62,7 @@ class Graceful_restart < BGP::OPT_PARM::Capability
     s <<  "\n    Graceful Restart Extension (#{CAP_GR}), length: 4"
     s <<  "    Restart Flags: #{restart_flag}, Restart Time #{@restart_time}s"
     s = s.join("\n  ")
-    super + (s + (['']+@address_families.collect { |af| address_family(*af)}).join("\n        "))
+    super + (s + (['']+@tuples.collect { |af| address_family(*af)}).join("\n        "))
   end
   
   private

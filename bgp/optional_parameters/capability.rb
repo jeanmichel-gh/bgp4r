@@ -140,6 +140,8 @@ module BGP::OPT_PARM
         DYN_CAP::Add_path.new(s)
       when CAP_GR
         DYN_CAP::Graceful_restart.new(s)
+      when CAP_ADD_PATH
+        CAP::Add_path.new(s)
       else
         Capability::Unknown.new(s)
       end

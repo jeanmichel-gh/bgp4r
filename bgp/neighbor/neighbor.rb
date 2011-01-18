@@ -24,21 +24,13 @@ require 'socket'
 require 'thread'
 require 'observer'
 require 'bgp/io'
+require 'bgp/neighbor/add_path_cap'
 
 module BGP
 
   class Neighbor
     include Observable
     
-    # def self.deprecate(old_method, new_method) 
-    #   define_method(old_method) do |*args, &block|
-    #     log_warn "#{old_method}() is deprecated. Use #{new_method}()."
-    #     __send__(new_method, *args, &block)
-    #   end 
-    # end
-    # 
-    # deprecate :send_message, :send
-
     def log_info(txt)
       Log.info "#{self.class} #{txt}"
     end
@@ -63,7 +55,7 @@ module BGP
       else
         @version, @my_as, @holdtime, @id, @remote_addr, @local_addr  = args
       end
-      @as4byte=false
+      # @cap = Hash.new
       @state = :Idle
       @threads=ThreadGroup.new
       @mutex = Mutex.new
@@ -77,12 +69,15 @@ module BGP
       end
     end
     
+    # FIXME:
+    #  neighbor.add_capability 
+    #  neighbor.remove_capability 
     #  neighbor.capability :as4_byte | :as4 | :as4byte
     #  neighbor.capability :route_refresh, :rr
     #  neighbor.capability :route_refresh, 128
     #  neighbor.capability :mbgp, :ipv4, :unicast
     #  neighbor.capability :mbgp, :ipv4, :multicast
-        
+    
     def capability(*args)
       @opt_parms << if args[0].is_a?(Symbol)
         case args[0]
@@ -132,7 +127,7 @@ module BGP
           ev, type, m = eventQ.deq
           case ev
           when :ev_msg
-            msg = BGP::Message.factory(m, @as4byte)
+            msg = BGP::Message.factory(m, @session_info)
             log_info "Recv#{msg.class.to_s.split('::').last}"
             log_debug "Recv #{msg}\n"
             if msg.is_a?(Update)
@@ -227,7 +222,11 @@ module BGP
       @out.thread
     end
 
-    attr_reader :as4byte
+    attr_reader :as4byte, :path_id
+    
+    def as4byte?
+      @session_info.as4byte?
+    end
 
     def send_message(m)
       raise if m.nil?
@@ -236,14 +235,14 @@ module BGP
         log_info "Send#{m.class.to_s.split('::')[-1]}"
         log_debug "Send #{m.is_a?(Update) ? m.to_s : m }\n"
       end
-      #FIXME: enqueue [m, as4byte]
+      #FIXME: enqueue [m, @session_info]
       if m.is_a?(Update)
-        @out.enq m.encode(as4byte)
+        @out.enq m.encode(@session_info)
       else
         @out.enq m
       end
     end
-
+    
     def init_socket
       @socket = Socket.new(Socket::PF_INET, Socket::SOCK_STREAM, Socket::IPPROTO_TCP)
       remote = Socket.pack_sockaddr_in(179, @remote_addr) 
@@ -277,18 +276,23 @@ module BGP
         send_message open  ; new_state :OpenSent, ev
       else
         Log.warn "#{self.class}: attempt to send OPEN msg while in #{@state}"
-      end    
+      end
     end
   
-    def rcv_open(o)
-      @rmt_version = o.version
-      @rmt_as = o.local_as
-      @rmt_bgp_id = o.bgp_id
+    def rcv_open(peer_open)
+      @session_info = Neighbor::Capabilities.new open, peer_open
+      
+      #FIXME: methods to session_info.rmt_version .remote_as, .remote_bgp_id ...
+      @rmt_version = peer_open.version
+      @rmt_as = peer_open.local_as
+      @rmt_bgp_id = peer_open.bgp_id
 
-      if @holdtime > o.holdtime
-        @out.holdtime = @in.holdtime = o.holdtime
+      #FIXME: mv holdtime to session_info ?
+      # session_info.holdtime
+      if @holdtime > peer_open.holdtime
+        @out.holdtime = @in.holdtime = peer_open.holdtime
       end
-
+      
       case @state
       when :OpenSent
         send_message(BGP::Message.keepalive)
@@ -299,7 +303,7 @@ module BGP
       else
         Log.warn "#{self.class}: received open message while in state #{@state}"
       end
-      @as4byte = (open.has?(OPT_PARM::CAP::As4) && o.has?(OPT_PARM::CAP::As4))
+      
     end
     
     def rcv_keepalive
@@ -317,7 +321,7 @@ module BGP
         @threads.add(@keepalive_thread)
       end
     end
-
+    
     def rcv_notification(m)
       log_info "#{m}"
       changed and notify_observers(m)
@@ -326,16 +330,16 @@ module BGP
     
     def rcv_route_refresh(m)
     end
-
+    
     def rcv_update(m)
     end
     
     def to_s
       "version: #{version}, id: #{@id}, as: #{@my_as}, holdtime: #{@holdtime}, peer addr: #{@remote_addr}, local addr: #{@local_addr}"
     end
-
+    
   end
 
 end
 
-load "../test/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0
+load "../../test/neighbor/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0

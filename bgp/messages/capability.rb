@@ -68,9 +68,10 @@ module BGP
           @o1 &= ~1    if action_bit      == :advertise
           @seqn = seqn
           @cap = cap
-        elsif args.size==1 && args.is_a?(String)
-        else
+        elsif args.size==1 && args[0].is_a?(String)
           parse args[0]
+        else
+          raise ArgumentError, "Invalid argument #{args.inspect}"
         end
       end
 

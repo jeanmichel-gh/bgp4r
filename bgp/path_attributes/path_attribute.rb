@@ -39,6 +39,7 @@ module BGP
         add(*args)
       end
     end
+
     def add(*args)
       @attributes ||=[]
       args.each { |arg| @attributes << arg if arg.is_a?(BGP::Attr) }
@@ -218,13 +219,28 @@ module BGP
       end
     end
     include BGP::ATTR
-    def self.factory(s, as4byte=false)
+    def self.factory(s, arg=nil)
+      #FIXME:
+      if arg.is_a?(Hash)
+        as4byte_flag=arg[:as4byte]
+        path_id_flag=arg[:path_id]
+      elsif arg.respond_to? :as4byte?
+        as4byte_flag = arg.as4byte?
+        path_id_flag = arg
+      elsif arg.is_a?(TrueClass)
+        as4byte_flag=true
+        path_id_flag=nil
+      else
+        as4byte_flag=nil
+        path_id_flag=nil
+      end
+      
       flags, type = s.unpack('CC')
       case type
       when ORIGIN
         Origin.new(s)
       when AS_PATH
-        As_path.new(s,as4byte)
+        As_path.new(s,as4byte_flag)
       when NEXT_HOP
         Next_hop.new(s)
       when MULTI_EXIT_DISC
@@ -244,12 +260,18 @@ module BGP
       when CLUSTER_LIST
         Cluster_list.new(s)
       when MP_REACH
-        Mp_reach.new(s)
+        # puts "calling Mp_reach.new with #{path_id_flag.inspect}"
+        # puts s.unpack('H*')
+        # p path_id_flag
+        # p "--"
+        Mp_reach.new(s,path_id_flag)
       when MP_UNREACH
-        Mp_unreach.new(s)
+        Mp_unreach.new(s,path_id_flag)
       when EXTENDED_COMMUNITY
         Extended_communities.new(s)
       else
+        #FIXME: raise UnknownPathAttributeError() ....
+        p s
         Unknown.new(s)
       end
     end

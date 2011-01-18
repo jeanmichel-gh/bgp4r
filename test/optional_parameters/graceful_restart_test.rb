@@ -1,5 +1,6 @@
 require "test/unit"
 require "bgp/optional_parameters/graceful_restart"
+require 'bgp/common'
 
 class TestBgpOptionalParametersGracefulCapRestart < Test::Unit::TestCase
   include BGP::OPT_PARM::CAP

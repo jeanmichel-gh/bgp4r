@@ -92,7 +92,12 @@ class Open_Test < Test::Unit::TestCase
     assert_equal s, open.to_shex
   end
   def test_4
+    open = Open.new(4,100, 200, '10.0.0.1')
+    open << OPT_PARM::CAP::As4.new(100)
+    open << OPT_PARM::CAP::Route_refresh.new
+    open << OPT_PARM::CAP::Add_path.new(:recv, 1, 1)
+    assert open.find(As4)
+    assert open.find(Route_refresh)
+    assert open.find(Add_path)
   end
-  
-  
 end

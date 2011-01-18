@@ -29,6 +29,7 @@
 # 
 require 'bgp/messages/message'
 require 'bgp/optional_parameters/capability'
+require 'ipaddr'
 
 module BGP
 
@@ -84,7 +85,7 @@ class Open < Message
   end
   
   def has?(klass)
-     @opt_parms.find { |a| a.is_a?(klass) }.nil? ? false : true
+     @opt_parms.find { |a| a.is_a?(klass) }
   end
   
   def to_hash
