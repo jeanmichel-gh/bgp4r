@@ -29,6 +29,7 @@ module BGP
   class Base_nlri
 
     class Nlri_element < IPAddr
+
       def to_s
         [super, mlen].join('/')
       end
@@ -36,7 +37,7 @@ module BGP
         hton
       end
       def nbyte
-         (mlen+7)/8
+        (mlen+7)/8
       end
       def encode(len_included=true)
         nbyte = (mlen+7)/8
@@ -46,13 +47,14 @@ module BGP
           [hton].pack("a#{nbyte}")
         end
       end
-      def parse4(arg)
+      def parse(arg)
         s = arg.dup
         s +=([0]*3).pack('C*')
         plen, *nlri = s.unpack('CC4')
         arg.slice!(0,1+(plen+7)/8) # trim arg accordingly
         ipaddr = nlri.collect { |n| n.to_s }.join('.') + "/" + plen .to_s
       end
+      alias :parse4 :parse
       def parse6(arg)
         s = arg.dup
         s +=([0]*16).pack('C*')
@@ -69,9 +71,12 @@ module BGP
         elsif arg.is_a?(Ip4)
           super(arg.to_s)
         else
-          # p arg.class
           super(arg)
         end
+      rescue => e
+        p e
+        p arg
+        raise
       end
     end
 
@@ -87,19 +92,90 @@ module BGP
       end
     end
 
+    class Ext_Nlri_element < Nlri_element
+      def initialize(*args)
+        if args.size>1
+          @path_id = args.shift
+          super
+        elsif args.size==1 and args[0].is_a?(String)
+          super parse(*args)
+        elsif args.size==1 and args[0].is_a?(Hash)
+          @path_id=args[0][:path_id]
+          super args[0][:nlri_element]
+        else
+          raise
+        end
+      rescue => e
+        p e
+        p args
+        raise
+      end
+      attr_reader :path_id
+      def encode
+        [path_id, super].pack('Na*')
+      end
+      def to_s
+        "ID: #{path_id}, #{super}"
+      end
+      def parse(s)
+        @path_id = s.slice!(0,4).unpack('N')[0]
+        super s
+      end
+    end
+
     attr_reader :nlris
+    
+    class << self
+      def new_ntop(s, extended=false)
+        if extended
+          nlri = new
+          while s.size>0
+            nlri.add Base_nlri::Ext_Nlri_element.new(s)
+          end
+          nlri
+        else
+          new(s.is_packed)
+        end
+      end
+    end
 
     def initialize(*args)
       if args[0].is_a?(String) and args[0].is_packed?
-        parse(args[0])
+        parse(*args)
       else
         add(*args)
       end
     end
     def add(*args)
       @nlris ||=[]
-      # p args
-      args.flatten.each { |arg| @nlris << Ip4.new(arg) }
+      args.each { |arg|
+        case arg
+        when Hash
+          if arg.has_key? :path_id
+            @nlris << Ext_Nlri_element.new(arg)
+          else
+            raise
+          end
+        when String
+          # p "JME: IN ADD/ STRING:"
+          # p arg
+          # p arg.is_packed?
+          # p "---"
+          o = Ip4.new(arg)
+          # p o
+          @nlris << o
+        when Array
+          if arg[0].is_a?(Integer)
+            @nlris << Ext_Nlri_element.new(*arg)
+          else
+            raise
+          end
+        when Ext_Nlri_element, Ip4
+          @nlris << arg
+        else
+          raise ArgumentError, "Invalid argument #{arg.class} #{arg.inspect}"
+        end
+      }
     end
     alias << add
 
@@ -122,7 +198,7 @@ module BGP
     def to_s(indent=0)
       @nlris.join("\n#{([' ']*indent).join}")
     end
-    
+
     def size
       @nlris.size
     end
@@ -134,16 +210,35 @@ module BGP
       super
     end
   end
+
   class Withdrawn < Base_nlri
-    def encode(len_included=true)
-      super(len_included)
+    class << self
+      def new_top(*args)
+        super
+      end
+    end
+    class << self
+      def new_ntop(s, extended=false)
+        if extended
+          nlri = new
+          while s.size>0
+            nlri.add Base_nlri::Ext_Nlri_element.new(s)
+          end
+          nlri
+        end
+      else
+        new(s.is_packed)
+      end
+    end
+    def encode
+      super
     end
   end
 
   class Nlri
-    def self.factory(s, afi, safi)
+    def self.factory(s, afi, safi, extended=false)
       if afi== 1 and safi==1
-        Nlri.new s.is_packed
+        Nlri.new_ntop(s.is_packed, extended)
       else
         case safi
         when 1,2
@@ -154,45 +249,6 @@ module BGP
           raise RuntimeError, "Afi #{afi} Safi #{safi} not supported!"
         end
       end
-    end
-  end
-
-  #FIXME: Should go...
-  class Path_Nlri < Nlri
-    def initialize(*args)
-      if args.size>1 and args[0].is_a?(Integer)
-        @path=args.shift
-        super(*args)
-      elsif args[0].is_a?(self.class)
-        # p 'HERE'
-        # p args[0].to_shex
-        parse args[0].encode
-      else
-        @path=0
-        super
-      end
-    rescue => e
-      p e
-    end
-    def path_id=(val)
-      @path=(val)
-    end
-    def path_id
-      @path
-    end
-    def path_id2ip
-      IPAddr.new_ntoh([@path].pack('N')).to_s
-    end
-    def to_s(indent=0)
-      sindent = [' ']*indent
-      format "#{sindent.join}Path ID: %d  '%s': [0x%8.8x]\n#{sindent.join}%s",  path_id, path_id2ip, path_id, super
-    end
-    def encode
-      [@path,super].pack('Na*')
-    end
-    def parse(s)
-      @path = s.slice!(0,4).unpack('N')[0]
-      super(s)
     end
   end
 
@@ -220,7 +276,7 @@ module BGP
       [@path_id, @nlri.encode].pack('Na*')
     end
   end
-  
+
 end
 
 load "../../test/nlris/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0
@@ -234,32 +290,32 @@ Nlri is a collection of Nlri_elements or a collection of Path_nlri_elements
 
 Path_nlri_element
 
-  - path_id
-  - Nlri_element
+- path_id
+- Nlri_element
 
 
 
 3. Extended NLRI Encodings
 
-   In order to carry the Path Identifier in an UPDATE message, the
-   existing NLRI encodings are extended by prepending the Path
-   Identifier field, which is of four-octets.
+In order to carry the Path Identifier in an UPDATE message, the
+existing NLRI encodings are extended by prepending the Path
+Identifier field, which is of four-octets.
 
-   For example, the NLRI encodings specified in [RFC4271, RFC4760] are
-   extended as the following:
-
-
-               +--------------------------------+
-               | Path Identifier (4 octets)     |
-               +--------------------------------+
-               | Length (1 octet)               |
-               +--------------------------------+
-               | Prefix (variable)              |
-               +--------------------------------+
+For example, the NLRI encodings specified in [RFC4271, RFC4760] are
+extended as the following:
 
 
-   and the NLRI encoding specified in [RFC3107] is extended as the
-   following:
++--------------------------------+
+| Path Identifier (4 octets)     |
++--------------------------------+
+| Length (1 octet)               |
++--------------------------------+
+| Prefix (variable)              |
++--------------------------------+
+
+
+and the NLRI encoding specified in [RFC3107] is extended as the
+following:
 
 
 
@@ -274,96 +330,96 @@ Walton, et al        Expiration Date February 2011              [Page 3]
 INTERNET DRAFT      draft-ietf-idr-add-paths-04.txt          August 2010
 
 
-               +--------------------------------+
-               | Path Identifier (4 octets)     |
-               +--------------------------------+
-               | Length (1 octet)               |
-               +--------------------------------+
-               | Label (3 octets)               |
-               +--------------------------------+
-               | ...                            |
-               +--------------------------------+
-               | Prefix (variable)              |
-               +--------------------------------+
++--------------------------------+
+| Path Identifier (4 octets)     |
++--------------------------------+
+| Length (1 octet)               |
++--------------------------------+
+| Label (3 octets)               |
++--------------------------------+
+| ...                            |
++--------------------------------+
+| Prefix (variable)              |
++--------------------------------+
 
 
-   The usage of the extended NLRI encodings is specified in the
-   Operation section.
-   
-  
-   
-  =======
-  
-  RFC 3107          Carrying Label Information in BGP-4           May 2001
-  
-  
-  3. Carrying Label Mapping Information
-
-     Label mapping information is carried as part of the Network Layer
-     Reachability Information (NLRI) in the Multiprotocol Extensions
-     attributes.  The AFI indicates, as usual, the address family of the
-     associated route.  The fact that the NLRI contains a label is
-     indicated by using SAFI value 4.
-
-     The Network Layer Reachability information is encoded as one or more
-     triples of the form <length, label, prefix>, whose fields are
-     described below:
-
-        +---------------------------+
-        |   Length (1 octet)        |
-        +---------------------------+
-        |   Label (3 octets)        |
-        +---------------------------+
-        .............................
-        +---------------------------+
-        |   Prefix (variable)       |
-        +---------------------------+
-
-     The use and the meaning of these fields are as follows:
-
-        a) Length:
-
-           The Length field indicates the length in bits of the address
-           prefix plus the label(s).
-
-        b) Label:
-
-           The Label field carries one or more labels (that corresponds to
-           the stack of labels [MPLS-ENCAPS]).  Each label is encoded as 3
-           octets, where the high-order 20 bits contain the label value,
-           and the low order bit contains "Bottom of Stack" (as defined in
-           [MPLS-ENCAPS]).
-
-        c) Prefix:
-
-           The Prefix field contains address prefixes followed by enough
-           trailing bits to make the end of the field fall on an octet
-           boundary.  Note that the value of trailing bits is irrelevant.
+The usage of the extended NLRI encodings is specified in the
+Operation section.
 
 
 
-  Rekhter & Rosen             Standards Track                     [Page 3]
+=======
 
-  RFC 3107          Carrying Label Information in BGP-4           May 2001
+RFC 3107          Carrying Label Information in BGP-4           May 2001
 
 
-     The label(s) specified for a particular route (and associated with
-     its address prefix) must be assigned by the LSR which is identified
-     by the value of the Next Hop attribute of the route.
+3. Carrying Label Mapping Information
 
-     When a BGP speaker redistributes a route, the label(s) assigned to
-     that route must not be changed (except by omission), unless the
-     speaker changes the value of the Next Hop attribute of the route.
+Label mapping information is carried as part of the Network Layer
+Reachability Information (NLRI) in the Multiprotocol Extensions
+attributes.  The AFI indicates, as usual, the address family of the
+associated route.  The fact that the NLRI contains a label is
+indicated by using SAFI value 4.
 
-     A BGP speaker can withdraw a previously advertised route (as well as
-     the binding between this route and a label) by either (a) advertising
-     a new route (and a label) with the same NLRI as the previously
-     advertised route, or (b) listing the NLRI of the previously
-     advertised route in the Withdrawn Routes field of an Update message.
-     The label information carried (as part of NLRI) in the Withdrawn
-     Routes field should be set to 0x800000.  (Of course, terminating the
-     BGP session also withdraws all the previously advertised routes.)
-  
-  
-   
+The Network Layer Reachability information is encoded as one or more
+triples of the form <length, label, prefix>, whose fields are
+described below:
+
++---------------------------+
+|   Length (1 octet)        |
++---------------------------+
+|   Label (3 octets)        |
++---------------------------+
+.............................
++---------------------------+
+|   Prefix (variable)       |
++---------------------------+
+
+The use and the meaning of these fields are as follows:
+
+a) Length:
+
+The Length field indicates the length in bits of the address
+prefix plus the label(s).
+
+b) Label:
+
+The Label field carries one or more labels (that corresponds to
+the stack of labels [MPLS-ENCAPS]).  Each label is encoded as 3
+octets, where the high-order 20 bits contain the label value,
+and the low order bit contains "Bottom of Stack" (as defined in
+[MPLS-ENCAPS]).
+
+c) Prefix:
+
+The Prefix field contains address prefixes followed by enough
+trailing bits to make the end of the field fall on an octet
+boundary.  Note that the value of trailing bits is irrelevant.
+
+
+
+Rekhter & Rosen             Standards Track                     [Page 3]
+
+RFC 3107          Carrying Label Information in BGP-4           May 2001
+
+
+The label(s) specified for a particular route (and associated with
+its address prefix) must be assigned by the LSR which is identified
+by the value of the Next Hop attribute of the route.
+
+When a BGP speaker redistributes a route, the label(s) assigned to
+that route must not be changed (except by omission), unless the
+speaker changes the value of the Next Hop attribute of the route.
+
+A BGP speaker can withdraw a previously advertised route (as well as
+the binding between this route and a label) by either (a) advertising
+a new route (and a label) with the same NLRI as the previously
+advertised route, or (b) listing the NLRI of the previously
+advertised route in the Withdrawn Routes field of an Update message.
+The label information carried (as part of NLRI) in the Withdrawn
+Routes field should be set to 0x800000.  (Of course, terminating the
+BGP session also withdraws all the previously advertised routes.)
+
+
+
 

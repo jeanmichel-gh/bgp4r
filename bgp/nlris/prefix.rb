@@ -1,6 +1,6 @@
 require 'bgp/nlris/nlri'
 module BGP
-  class Prefix < Nlri::Nlri_element
+  class Prefix < Base_nlri::Nlri_element
     def initialize(*args)
       if args[0].is_a?(String) and args[0].packed?
         afi = args[1] ||=1
@@ -30,4 +30,5 @@ module BGP
   end
 end
 
-load "../../test/nlris/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0
+# FIXME:
+# load "../../test/nlris/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0

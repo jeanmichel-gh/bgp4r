@@ -156,7 +156,7 @@ module BGP
       attr_accessor :as4byte
       
       def initialize(*args)
-
+        
         @flags, @type, @segments, @as4byte = WELL_KNOWN_MANDATORY, AS_PATH, [], false
         
         if args[0].is_a?(String) and args[0].is_packed?

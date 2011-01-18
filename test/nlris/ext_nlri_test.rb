@@ -13,6 +13,11 @@ class TestExtNlri < Test::Unit::TestCase
     assert_equal '00000064080a', ext_nlri.to_shex
     assert_equal '00000064080a', Ext_Nlri.new_ntop(ext_nlri.encode).to_shex
   end
+  def _test_ext_nlris
+    ext_nlri = Ext_Nlri.new(100, Nlri.new('10.0.0.0/8','20.0.0.0/8'))
+    assert_equal '00000064080a', ext_nlri.to_shex
+    assert_equal '00000064080a', Ext_Nlri.new_ntop(ext_nlri.encode).to_shex
+  end
   def test_ext_inet
     assert_equal '0000006410c0a8', Ext_Nlri.new(100, Inet_multicast.new('192.168.0.0/16')).to_shex
     assert_equal '00000064402011131100000000', Ext_Nlri.new(100, Inet_multicast.new('2011:1311::/64')).to_shex
