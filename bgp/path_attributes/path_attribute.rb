@@ -1,5 +1,5 @@
 #--
-# Copyright 2008, 2009 Jean-Michel Esnault.
+# Copyright 2008-2009, 2011 Jean-Michel Esnault.
 # All rights reserved.
 # See LICENSE.txt for permissions.
 #
@@ -21,6 +21,7 @@
 #++
 
 require 'bgp/path_attributes/attribute'
+require 'bgp/neighbor/add_path_cap'
 
 module BGP
 
@@ -221,15 +222,19 @@ module BGP
     include BGP::ATTR
     def self.factory(s, arg=nil)
       #FIXME:
-      if arg.is_a?(Hash)
-        as4byte_flag=arg[:as4byte]
-        path_id_flag=arg[:path_id]
-      elsif arg.respond_to? :as4byte?
+      
+      if arg.is_a?(Neighbor::Capabilities)
         as4byte_flag = arg.as4byte?
         path_id_flag = arg
+      elsif arg.is_a?(Hash)
+        as4byte_flag=arg[:as4byte]
+        path_id_flag=arg[:path_id]
       elsif arg.is_a?(TrueClass)
         as4byte_flag=true
         path_id_flag=nil
+      elsif arg.respond_to? :as4byte?
+        as4byte_flag = arg.as4byte?
+        path_id_flag = arg
       else
         as4byte_flag=nil
         path_id_flag=nil
@@ -260,10 +265,6 @@ module BGP
       when CLUSTER_LIST
         Cluster_list.new(s)
       when MP_REACH
-        # puts "calling Mp_reach.new with #{path_id_flag.inspect}"
-        # puts s.unpack('H*')
-        # p path_id_flag
-        # p "--"
         Mp_reach.new(s,path_id_flag)
       when MP_UNREACH
         Mp_unreach.new(s,path_id_flag)

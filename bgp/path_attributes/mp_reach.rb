@@ -121,11 +121,19 @@ module BGP
     def to_hash
     end
 
-    def parse(s,path_id_flag=false)
+    def parse(s,arg=false)
+      
       @flags, @type, len, value = super(s)
       @afi, @safi, nh_len = value.slice!(0,4).unpack('nCC')
       parse_next_hops value.slice!(0,nh_len).is_packed
       value.slice!(0,1)
+      
+      if arg.is_a?(Neighbor::Capabilities)
+        path_id_flag = arg.path_id? :recv, @afi, @safi
+      else
+        path_id_flag = arg
+      end
+      
       while value.size>0
         path_id = value.slice!(0,4).unpack('N')[0]  if path_id_flag
         blen = value.slice(0,1).unpack('C')[0]
@@ -171,14 +179,6 @@ module BGP
       s = encode(:mp_unreach)
       s[1]= [MP_UNREACH].pack('C')
       Mp_unreach.new(s)
-    end
-
-    private
-
-    def encoded_path_id
-      path_id = ''
-      path_id = [@path_id].pack('N') if @path_id
-      path_id
     end
 
   end

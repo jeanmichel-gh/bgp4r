@@ -56,6 +56,7 @@ module BGP
         @version, @my_as, @holdtime, @id, @remote_addr, @local_addr  = args
       end
       @state = :Idle
+      @session_info=nil
       @threads=ThreadGroup.new
       @mutex = Mutex.new
       @eventQ = Queue.new
@@ -186,21 +187,22 @@ module BGP
     end
     
     def start(arg={})
-      options = {:auto_retry=> false, :blocking=>true, :waitfor=> :Established}.merge(arg)
+      options = {:port=> 179, :auto_retry=> false, :no_blocking=>false, :waitfor=> :Established}.merge(arg)
       return if @state == :Established
       stop unless @state == :Idle
       if options[:session]
         @socket = session
       else
-        @socket = TCPSocket.new(@remote_addr, 179)
+        @socket = TCPSocket.new(@remote_addr, options[:port])
       end
       init_io
       send_open :ev_send_open
       retry_thread if options[:auto_retry] == true
-      if options[:blocking] == true
+      unless options[:no_blocking] == true
         loop do
           sleep(0.3)
           break if @state == options[:waitfor]
+          p @state
         end
         log_info "#{self} started"
       end
@@ -222,7 +224,7 @@ module BGP
       @out.thread
     end
 
-    attr_reader :as4byte, :path_id
+    attr_reader :as4byte, :session_info
     
     def as4byte?
       @session_info.as4byte?
@@ -236,7 +238,7 @@ module BGP
         log_debug "Send #{m.is_a?(Update) ? m.to_s : m }\n"
       end
       if m.is_a?(Update)
-        @out.enq m.encode(@session_info)
+         send_update m
       else
         @out.enq m
       end
@@ -251,7 +253,7 @@ module BGP
         @threads.add io.thread
       }
     end
-        
+    
     def update(*args)
       @eventQ.enq(args)
     end
@@ -260,7 +262,11 @@ module BGP
       log_info "#{txt} old state #{@state} new state #{state}"
       @state = state
     end
-
+    
+    def send_update(u)
+      @out.enq m.encode(@session_info)
+    end
+    
     def send_open(ev)
       case @state
       when :OpenRecv
