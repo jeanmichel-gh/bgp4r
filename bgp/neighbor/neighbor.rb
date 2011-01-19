@@ -55,7 +55,6 @@ module BGP
       else
         @version, @my_as, @holdtime, @id, @remote_addr, @local_addr  = args
       end
-      # @cap = Hash.new
       @state = :Idle
       @threads=ThreadGroup.new
       @mutex = Mutex.new
@@ -98,6 +97,7 @@ module BGP
         raise ArgumentError, "Invalid argument"
       end
     end
+    alias :add_cap :capability
 
     def state
       "#{@state}"
@@ -110,7 +110,7 @@ module BGP
           Thread.current['name']='restart'
           loop do
             enable if @state == :Idle
-            sleep(5)
+            sleep(4)
           end
         end
 
@@ -148,17 +148,17 @@ module BGP
             changed and notify_observers(msg)
           when :ev_conn_reset
             Log.warn "#{type}"
-            disable
+            stop
           when :ev_holdtime_expire
             Log.warn "Holdtime expire: #{type}"
-            disable
+            stop
           else
             Log.error "unexpected event #{ev}"
           end
         end
       end
     end
-
+    
     def clean
       @threads.list.each { |x| 
         x.exit; x.join
@@ -178,42 +178,42 @@ module BGP
       @holdtime ||= 180
     end
     
-    def enable(auto_retry=:no_auto_retry, wait= :wait)
-      return if @state == :Established
-      disable unless @state == :Idle
-      
-      init_socket
+    def start_session(session)
+      @socket=session
+      return unless  @state == :Idle
       init_io
-            
-      [@in, @out].each { |io| 
-        io.start 
-        @threads.add io.thread
-      }
-            
       send_open :ev_send_open
-      
-      retry_thread if auto_retry == :auto_retry
-      
-      if wait == :wait
+    end
+    
+    def start(arg={})
+      options = {:auto_retry=> false, :blocking=>true, :waitfor=> :Established}.merge(arg)
+      return if @state == :Established
+      stop unless @state == :Idle
+      if options[:session]
+        @socket = session
+      else
+        @socket = TCPSocket.new(@remote_addr, 179)
+      end
+      init_io
+      send_open :ev_send_open
+      retry_thread if options[:auto_retry] == true
+      if options[:blocking] == true
         loop do
           sleep(0.3)
-          break if @state == :Established
+          break if @state == options[:waitfor]
         end
         log_info "#{self} started"
       end
-      
     rescue => e
       Log.error "#{e}"
-      disable
+      stop
     end
-    alias start enable
         
-    def disable
+    def stop
       @socket.close  if defined?(@socket) and not @socket.closed?
       clean
       new_state :Idle, "Disable"
     end
-    alias stop disable
 
     define_method(:in) do
       @in.thread
@@ -235,7 +235,6 @@ module BGP
         log_info "Send#{m.class.to_s.split('::')[-1]}"
         log_debug "Send #{m.is_a?(Update) ? m.to_s : m }\n"
       end
-      #FIXME: enqueue [m, @session_info]
       if m.is_a?(Update)
         @out.enq m.encode(@session_info)
       else
@@ -243,20 +242,14 @@ module BGP
       end
     end
     
-    def init_socket
-      @socket = Socket.new(Socket::PF_INET, Socket::SOCK_STREAM, Socket::IPPROTO_TCP)
-      remote = Socket.pack_sockaddr_in(179, @remote_addr) 
-      local = Socket.pack_sockaddr_in(0, @local_addr) unless @local_addr.nil?
-      remote_sock_addr = Socket.pack_sockaddr_in(179, @remote_addr) 
-      local_sock_addr = Socket.pack_sockaddr_in(0, @local_addr) unless @local_addr.nil? 
-      @socket.bind(local_sock_addr) unless @local_addr.nil?
-      @socket.connect(remote_sock_addr)
-    end
-      
     def init_io
       @in = BGP::IO::Input.new(@socket, holdtime, self)
       @out = BGP::IO::Output.new(@socket, @holdtime, self)
       new_state(:Active, "Open Socket")
+      [@in, @out].each { |io| 
+        io.start 
+        @threads.add io.thread
+      }
     end
         
     def update(*args)
@@ -282,16 +275,10 @@ module BGP
     def rcv_open(peer_open)
       @session_info = Neighbor::Capabilities.new open, peer_open
       
-      #FIXME: methods to session_info.rmt_version .remote_as, .remote_bgp_id ...
-      @rmt_version = peer_open.version
-      @rmt_as = peer_open.local_as
-      @rmt_bgp_id = peer_open.bgp_id
-
-      #FIXME: mv holdtime to session_info ?
-      # session_info.holdtime
-      if @holdtime > peer_open.holdtime
-        @out.holdtime = @in.holdtime = peer_open.holdtime
-      end
+      @rmt_version  = peer_open.version
+      @rmt_as       = peer_open.local_as
+      @rmt_bgp_id   = peer_open.bgp_id
+      @out.holdtime = @in.holdtime = peer_open.holdtime if @holdtime > peer_open.holdtime
       
       case @state
       when :OpenSent
@@ -325,7 +312,7 @@ module BGP
     def rcv_notification(m)
       log_info "#{m}"
       changed and notify_observers(m)
-      disable
+      stop
     end
     
     def rcv_route_refresh(m)

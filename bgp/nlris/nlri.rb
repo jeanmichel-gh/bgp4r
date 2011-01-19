@@ -225,9 +225,9 @@ module BGP
             nlri.add Base_nlri::Ext_Nlri_element.new(s)
           end
           nlri
+        else
+          new(s.is_packed)
         end
-      else
-        new(s.is_packed)
       end
     end
     def encode
