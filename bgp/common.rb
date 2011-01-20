@@ -42,17 +42,6 @@ class IPAddr
       IPAddr.new(arg)
     end
   end
-
-  def _mlen_
-    m = @mask_addr
-    len =  ipv6? ? 128 : 32
-    loop do
-      break if m & 1 > 0
-      m = m >> 1
-      len += -1
-    end
-    len
-  end
   
   def mlen
     @_jme_mlen_ ||= _mlen_
@@ -75,9 +64,21 @@ class IPAddr
     if ipv4?
       [@mask_addr].pack('N').unpack('C4').collect { |x| x.to_s}.join('.')
     else
-      #TODO netmask ipv6
-      @mask_addr
+      @mask_addr.to_s(16).scan(/..../).collect { |x| x }.join(':')
     end
+  end
+  
+  private 
+  
+  def _mlen_
+    m = @mask_addr
+    len =  ipv6? ? 128 : 32
+    loop do
+      break if m & 1 > 0
+      m = m >> 1
+      len += -1
+    end
+    len
   end
 
 end

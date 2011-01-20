@@ -202,7 +202,6 @@ module BGP
         loop do
           sleep(0.3)
           break if @state == options[:waitfor]
-          p @state
         end
         log_info "#{self} started"
       end

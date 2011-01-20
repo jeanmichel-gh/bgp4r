@@ -46,6 +46,13 @@ class Common_Test < Test::Unit::TestCase
     assert_equal('255.255.255.254', IPAddr.new('1.1.1.1/31').netmask)
     assert_equal('255.255.255.252', IPAddr.new('1.1.1.1/30').netmask)
     assert_equal('255.255.255.248', IPAddr.new('1.1.1.1/29').netmask)
+    assert_equal('ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff',IPAddr.new('2011:1:18::1').netmask)
+    assert_equal('ffff:ffff:ffff:ffff:ffff:ffff:ffff:fffe',IPAddr.new('2011:1:18::1/127').netmask)
+    assert_equal('ffff:ffff:ffff:ffff:8000:0000:0000:0000',IPAddr.new('2011:1:18::1/65').netmask)
+    assert_equal('ffff:ffff:ffff:ffff:0000:0000:0000:0000',IPAddr.new('2011:1:18::1/64').netmask)
+    assert_equal('ffff:ffff:ffff:fffe:0000:0000:0000:0000',IPAddr.new('2011:1:18::1/63').netmask)
+    assert_equal('ffff:ffff:ffff:0000:0000:0000:0000:0000',IPAddr.new('2011:1:18::1/48').netmask)
+    assert_equal('ffff:ffff:0000:0000:0000:0000:0000:0000',IPAddr.new('2011:1:18::1/32').netmask)
   end
   def test_ipaddr_4
     ip1 = IPAddr.new('10.0.0.1/28')

@@ -30,7 +30,6 @@ class Update_Test < Test::Unit::TestCase
     sbin = [s].pack('H*')
     u = Update.new(sbin)
     assert_equal(Update, Message.factory(sbin).class)
-    #TODO: more tests with nrli, with withdrawns....
   end
   def test_2
     s = "

@@ -63,11 +63,10 @@ module BGP
         @peer.find(OPT_PARM::CAP::Add_path)
       end
       
-      #FIXME: all afi, and sym shout be supported...
       def afi_to_i(afi)
         case afi.to_sym
-        when :ipv4,  :inet   ; 1
-        when :ipv6,  :inet6  ; 2
+        when :ipv4,  :inet   ; IANA::AFI::IP
+        when :ipv6,  :inet6  ; IANA::AFI::IP6
         else
           raise
         end
@@ -75,8 +74,12 @@ module BGP
       
       def safi_to_i(safi)
         case safi.to_sym
-        when :unicast   ; 1
-        when :multicast ; 2
+        when :unicast            ; IANA::SAFI::UNICAST_NLRI
+        when :multicast          ; IANA::SAFI::MULTICAST_NLRI
+        when :labeled            ; IANA::SAFI::LABEL_NLRI
+        when :mcast_vpn          ; IANA::SAFI::MCAST_VPN
+        when :mpls_vpn_unicast   ; IANA::MPLS_VPN_UNICAST
+        when :mpls_vpn_multicast ; IANA::MPLS_VPN_Multicast
         else
           raise
         end
@@ -113,38 +116,4 @@ module BGP
     end
   end
   
-end
-
-if __FILE__ == $0
-  
-  require "test/unit"
-  require 'bgp4r'
-  
-  class TestBgpNeighborAddPathCap < Test::Unit::TestCase
-    include BGP
-    def setup
-    end
-    def test_as4_cap
-      speaker = Open.new(4,100, 200, '10.0.0.1', OPT_PARM::CAP::As4.new(100))
-      peer    = Open.new(4,100, 200, '10.0.0.1')
-      assert ! Neighbor::Capabilities.new(speaker, peer).as4byte?, "AS 2-Octet encoding expected!"
-      peer = Open.new(4,100, 200, '10.0.0.1', OPT_PARM::CAP::As4.new(100))
-      speaker    = Open.new(4,100, 200, '10.0.0.1')
-      assert ! Neighbor::Capabilities.new(speaker, peer).as4byte?, "AS 2-Octet encoding expected!"
-      peer     = Open.new(4,100, 200, '10.0.0.1', OPT_PARM::CAP::As4.new(100))
-      speaker  = Open.new(4,100, 200, '10.0.0.1', OPT_PARM::CAP::As4.new(100))
-      assert Neighbor::Capabilities.new(speaker, peer).as4byte?, "AS 4-Octet encoding expected!"
-    end
-    def test_add_path_inet_unicast
-      peer    = Open.new(4,100, 200, '10.0.0.1', OPT_PARM::CAP::Add_path.new( :send_and_receive, 1, 1))
-      speaker = Open.new(4,100, 200, '10.0.0.1', OPT_PARM::CAP::Add_path.new( :send_and_receive, 1, 1))
-      session_cap = Neighbor::Capabilities.new(speaker, peer)
-      session_cap.path_id? :recv, 1, 1
-      session_cap.path_id? :send, 1, 2
-      assert   session_cap.send_inet_unicast?
-      assert   session_cap.path_id_recv?(1,1)
-      assert   session_cap.path_id_send?(1,1)
-      assert ! session_cap.send_inet_multicast?
-    end
-  end
 end
