@@ -30,12 +30,13 @@ module BGP
     attr_reader :safi, :nlris
 
     def initialize(*args)
-      @safi, @nlris= 1, []
+      @safi, @nexthops, @nlris, @path_id= 1, [], [], nil # default is ipv4/unicast
       @flags, @type = OPTIONAL, MP_UNREACH
       if args[0].is_a?(String) and args[0].is_packed?
-        parse(args[0])
+        parse(*args)
       elsif args[0].is_a?(self.class)
-        parse(args[0].encode, *args[1..-1])
+        s = args.shift.encode
+        parse(s, *args)
       elsif args[0].is_a?(Hash) and args.size==1
         set(*args)
       else
@@ -43,27 +44,60 @@ module BGP
       end
     end
 
-    def afi
+   def afi
       @afi ||= @nlris[0].afi
     end
 
+    # FIXME: refactor with mp_reach ....
     def set(h)
-      @safi = h[:safi]
-      h[:nlri]   ||=[]
-      h[:prefix] ||=[]
+      h[:nlris] ||=[]
       @afi = h[:afi] if h[:afi]
+      @safi = h[:safi]
+      @path_id = path_id = h[:path_id]
       case @safi
-      when 1,2
-        @nlris = [h[:prefix]].flatten.collect { |p| p.is_a?(Prefix) ? p : Prefix.new(p) }
+      when 1
+        @nlris = [h[:nlris]].flatten.collect do |n|
+          case n
+          when String
+            nlri = Inet_unicast.new(n)
+            path_id ? Ext_Nlri.new(path_id, nlri) : nlri
+          when Hash
+            path_id = n[:path_id] if n[:path_id]
+            nlri = Inet_unicast.new(n[:prefix])
+            path_id ? Ext_Nlri.new(path_id, nlri) : nlri
+          else
+            raise ArgumentError, "Invalid: #{n.inspect}"
+          end
+        end
+      when 2
+        @nlris = [h[:nlris]].flatten.collect do |n|
+          case n
+          when String
+            nlri = Inet_multicast.new(n)
+            path_id ? Ext_Nlri.new(path_id, nlri) : nlri
+          when Hash
+            path_id = n[:path_id] if n[:path_id]
+            nlri = Inet_multicast.new(n[:prefix])
+            path_id ? Ext_Nlri.new(path_id, nlri) : nlri
+          else
+            raise ArgumentError, "Invalid: #{n.inspect}"
+          end
+        end
       when 4
-        @nlris = [h[:nlri]].flatten.collect { |n|
+        @nlris = [h[:nlris]].flatten.collect do |n|
+          path_id = n[:path_id] || @path_id
           prefix = n[:prefix].is_a?(String) ? Prefix.new(n[:prefix]) : n[:prefix]
-          Labeled.new(prefix, *n[:label]) 
-        }
-      when 128,129 ; @nlris = [h[:nlri]].flatten.collect { |n| 
-        prefix = n[:prefix].is_a?(Prefix) ? n[:prefix] :  Prefix.new(n[:prefix]) 
-        rd = n[:rd].is_a?(Rd) ?  n[:rd] : Rd.new(*n[:rd])
-        Labeled.new(Vpn.new(prefix,rd), *n[:label]) }
+          nlri = Labeled.new(prefix, *n[:label]) 
+          path_id ? Ext_Nlri.new(path_id, nlri) : nlri
+        end
+      when 128,129
+        @nlris = [h[:nlris]].flatten.collect do |n|
+          path_id = n[:path_id] || @path_id
+          prefix = n[:prefix].is_a?(Prefix) ? n[:prefix] :  Prefix.new(n[:prefix]) 
+          rd = n[:rd].is_a?(Rd) ?  n[:rd] : Rd.new(*n[:rd])
+          nlri = Labeled.new(Vpn.new(prefix,rd), *n[:label]) 
+          path_id ? Ext_Nlri.new(path_id, nlri) : nlri
+        end
       else
       end
     end
@@ -76,22 +110,41 @@ module BGP
     def to_s(method=:default)
       super(mp_unreach, method)
     end
-
-    def parse(s)
+    
+    def parse(s,arg=false)
+      
       @flags, @type, len, value = super(s)
       @afi, @safi = value.slice!(0,3).unpack('nC')
+      
+      if arg.respond_to?(:path_id?)
+        path_id_flag = arg.path_id? :recv, @afi, @safi
+      else
+        path_id_flag = arg
+      end
+      
       while value.size>0
+        path_id = value.slice!(0,4).unpack('N')[0]  if path_id_flag
         blen = value.slice(0,1).unpack('C')[0]
-        @nlris << Nlri.factory(value.slice!(0,(blen+7)/8+1), @afi, @safi)
+        nlri = Nlri.factory(value.slice!(0,(blen+7)/8+1), @afi, @safi)
+        if path_id_flag
+          @nlris << Ext_Nlri.new(path_id, nlri)
+        else
+          @nlris << nlri
+        end
       end
       raise RuntimeError, "leftover afer parsing: #{value.unpack('H*')}" if value.size>0
     end
+    
 
     def encode
       super([afi, @safi, @nlris.collect { |n| n.encode }.join].pack('nCa*'))
+    rescue => e 
+      p nlris[0].prefix
+      raise
     end
 
   end
+  
 end
 
 load "../../test/path_attributes/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0

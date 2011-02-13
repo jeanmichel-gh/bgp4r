@@ -61,16 +61,23 @@ module BGP
     OPTIONAL_TRANSITIVE      = OPTIONAL | TRANSITIVE
     OPTIONAL_NON_TRANSITIVE  = OPTIONAL
     
-    def encode(value='',value_fmt=nil)
-      len, len_fmt = value.size, 'C'
+    def len_fmt(len)
       if len>255
         @flags |= EXTENDED_LENGTH
-        len_fmt='n'
-      end
-      if value_fmt
-        [@flags<<4, @type, len, *value].pack("CC#{len_fmt}#{value_fmt}")
+        @_len_fmt='n'
       else
-        ([@flags<<4, @type, len].pack("CC#{len_fmt}") + value).is_packed
+        @_len_fmt = 'C'
+        @flags &= ~EXTENDED_LENGTH
+      end
+    end
+    
+    def encode(value='',value_fmt=nil)
+      len = value.size
+      len_fmt(len)
+      if value_fmt
+        [@flags<<4, @type, len, *value].pack("CC#{@_len_fmt}#{value_fmt}")
+      else
+        ([@flags<<4, @type, len].pack("CC#{@_len_fmt}") + value).is_packed
       end
     end
     

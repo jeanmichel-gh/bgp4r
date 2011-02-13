@@ -63,35 +63,39 @@ module BGP
         @peer.find(OPT_PARM::CAP::Add_path)
       end
       
-      def afi_to_i(afi)
-        case afi.to_sym
-        when :ipv4,  :inet   ; IANA::AFI::IP
-        when :ipv6,  :inet6  ; IANA::AFI::IP6
-        else
-          raise
-        end
-      end
-      
-      def safi_to_i(safi)
-        case safi.to_sym
-        when :unicast            ; IANA::SAFI::UNICAST_NLRI
-        when :multicast          ; IANA::SAFI::MULTICAST_NLRI
-        when :labeled            ; IANA::SAFI::LABEL_NLRI
-        when :mcast_vpn          ; IANA::SAFI::MCAST_VPN
-        when :mpls_vpn_unicast   ; IANA::MPLS_VPN_UNICAST
-        when :mpls_vpn_multicast ; IANA::MPLS_VPN_Multicast
-        else
-          raise
-        end
-      end
-      
       def method_missing(name, *args, &block)
-        if (/^(send|recv)_(inet|inet6|labeled)_(unicast|multicast)/ =~ name.to_s)
-          path_id? $1, afi_to_i($2), safi_to_i($3)
+        if (/^(send|recv)_(ipv4|ipv6|inet|inet6)_(.+)\?$/ =~ name.to_s)
+          case $2
+          when 'ipv4', 'inet'   ; afi = IANA.afi?(:ip)
+          when 'ipv6', 'inet6'  ; afi = IANA.afi?(:ip6)
+          else
+            super
+          end
+          case $3
+          when 'unicast'            ; safi = IANA.safi?(:unicast_nlri)
+          when 'multicast'          ; safi = IANA.safi?(:multicast_nlri)
+          when 'mpls_vpn_unicast'   ; safi = IANA.safi?(:mpls_vpn_unicast)
+          when 'mpls_vpn_multicast' ; safi = IANA.safi?(:mpls_vpn_multicast)
+          else
+            super
+          end
+          def_method(name,$1, afi,safi)
         else
           super
         end
-      end 
+      end
+
+    private
+
+    def def_method(name, action, afi, safi)
+      self.class.instance_eval do
+        define_method("#{name}") do
+          path_id? action, afi, safi
+        end
+      end
+      __send__ name
+    end
+
     end
     
     class Capabilities < Base_Capabilities
@@ -117,3 +121,5 @@ module BGP
   end
   
 end
+
+load "../../test/neighbor/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0

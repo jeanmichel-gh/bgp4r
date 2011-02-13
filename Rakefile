@@ -12,7 +12,7 @@ begin
   Jeweler::Tasks.new do |s|
     s.name = 'bgp4r'
     s.authors = ['Jean-Michel Esnault']
-    s.email = "jesnault@gmail.com"
+    s.email = "bgp4r@esnault.org"
     s.summary = "A BGP-4 Ruby Library"
     s.description = "BGP4R is a BGP-4 ruby library to create,  send, and receive  BGP messages in an  object oriented manner"
     s.platform = Gem::Platform::RUBY

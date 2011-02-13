@@ -193,6 +193,70 @@ class Update_Test < Test::Unit::TestCase
     assert_equal upd2.to_shex, upd3.to_shex
     
   end
+  
+  # updates with path_id
+  
+  def ext_update(s)
+    sbin = [s.split.join].pack('H*')
+    o = Update::Info.new(true)
+    def o.path_id?(*args) ; true ; end
+    def o.recv_inet_unicast? ; true ; end
+    def o.send_inet_unicast? ; true ; end
+    Update.factory(sbin,o)
+  end
+  
+  def test_path_id_inet_unicast
+    upd = ext_update "
+    ffff ffff ffff ffff ffff ffff ffff ffff
+    003c 0200 0000 1c40 0101 0040 0200 4003
+    040a 0000 0180 0404 0000 0066 4005 0400
+    0000 6500 0000 6419 1400 0000"
+    assert_equal(BGP::Update, upd.class)
+    assert_equal 'ID: 100, 20.0.0.0/25', upd.nlri.nlris[0].to_s
+    
+  end
+  
+  def test_path_id_inet_mpls_vpn_unicast
+    s = "
+    ffff ffff ffff ffff ffff ffff ffff ffff
+    005f 0200 0000 4840 0101 0140 0200 8004
+    0400 0000 0040 0504 0000 0001 c010 0800
+    0200 0400 0000 0190 0e00 2400 0180 0c00
+    0000 0000 0000 0001 0101 0100 0000 0001
+    7003 e801 0000 0013 0000 0011 0a01 01"
+    upd = ext_update(s)
+
+    s2 = "
+    ffffffffffffffffffffffffffffffff
+    005e
+    02
+    0000
+    0047
+    40010101
+    400200
+    80040400000000
+    40050400000001
+    c010080002000400000001
+    800e240001800c00000000000000000101010100000000017003e80100000013000000110a0101
+    "
+    assert_equal(BGP::Update, upd.class)
+    assert upd.path_attribute.has_a_mp_reach_attr?
+    assert_equal s2.split.join, upd.to_shex
+    assert_equal s2.split.join, ext_update(upd.to_shex).to_shex
+    
+  end
+  
+  def test_path_id_inet_mpls_vpn_unicast_withdrawn
+    upd = ext_update "
+    ffff ffff ffff ffff ffff ffff ffff ffff
+    0031 0200 0000 1a90 0f00 1600 0180 0000
+    0001 7080 0001 0000 0001 0000 0001 0a01
+    01"
+    assert upd.has_a_path_attribute?
+    assert upd.path_attribute.has_a_mp_unreach_attr?
+    mp_unreach = upd.path_attribute[:mp_unreach]
+    assert_equal 1, mp_unreach.nlris[0].path_id
+    assert_equal 'ID=1, Label Stack=524288 (bottom) RD=1:1, IPv4=10.1.1.0/24', mp_unreach.nlris[0].to_s
+  end
 
 end
-

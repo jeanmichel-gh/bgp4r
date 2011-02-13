@@ -266,6 +266,9 @@ module BGP
       @path_id=path_id
       @nlri = nlri
     end
+    def afi
+      @nlri.afi
+    end
     def to_s
       s = []
       s << "ID=#{@path_id}"

@@ -74,9 +74,9 @@ class TestBgpNeighbor < Test::Unit::TestCase
     stop_server
   end
   def test_start_no_blocking
-    start_server(3456)
+    start_server(3333)
     @c = Neighbor.new(4, 100, 180, '0.0.0.2', '127.0.0.1', '127.0.0.1')
-    @c.start :port=> 3456, :no_blocking=>true
+    @c.start :port=> 3333, :no_blocking=>true
     assert_equal('OpenSent', @c.state)
     assert_match(/(Active|OpenSent)/, @s.state)
     stop_server

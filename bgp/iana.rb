@@ -30,6 +30,14 @@ module IANA
       ''
     end
   end
+  def self.afi?(arg)
+    @h_afis ||= AFI.set_h_afis
+    @h_afis[arg]
+  end
+  def self.safi?(arg)
+    @h_safis ||= SAFI.set_h_safis
+    @h_safis[arg]
+  end
   def self.safi(safi)
     case safi
     when SAFI::UNICAST_NLRI       ; 'Unicast'
@@ -68,8 +76,25 @@ module IANA
     FCWWNN = 23
     GWID = 24
     L2VPN = 25
-  end  
+    def self.set_h_afis
+      h_afis = Hash.new
+      constants.each do |c|
+        h_afis.store(c.downcase.to_sym, const_get(c))
+        h_afis.store(const_get(c), c.split('_').collect { |w| w }.join(' '))
+        # h_afis.store(const_get(c), c.downcase.to_sym)
+      end
+      h_afis
+    end
+  end
   module SAFI
+    def self.set_h_safis
+      h_safis = Hash.new
+      constants.each do |c|
+        h_safis.store(c.downcase.to_sym, const_get(c))
+        h_safis.store(const_get(c), c.split('_').collect { |w| w }.join(' '))
+      end
+      h_safis
+    end
     UNICAST_NLRI = 1
     MULTICAST_NLRI = 2
     LABEL_NLRI = 4

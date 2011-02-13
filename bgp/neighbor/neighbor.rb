@@ -263,7 +263,7 @@ module BGP
     end
     
     def send_update(u)
-      @out.enq m.encode(@session_info)
+      @out.enq u.encode(@session_info)
     end
     
     def send_open(ev)

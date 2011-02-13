@@ -12,6 +12,7 @@ class TestExtNlri < Test::Unit::TestCase
     ext_nlri = Ext_Nlri.new(100, Nlri.new('10.0.0.0/8'))
     assert_equal '00000064080a', ext_nlri.to_shex
     assert_equal '00000064080a', Ext_Nlri.new_ntop(ext_nlri.encode).to_shex
+    assert_equal '00000001200a0a0a0a', Ext_Nlri.new_ntop(['00000001200a0a0a0a'].pack('H*')).to_shex
   end
   def _test_ext_nlris
     ext_nlri = Ext_Nlri.new(100, Nlri.new('10.0.0.0/8','20.0.0.0/8'))

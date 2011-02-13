@@ -128,7 +128,7 @@ module BGP
       parse_next_hops value.slice!(0,nh_len).is_packed
       value.slice!(0,1)
       
-      if arg.is_a?(Neighbor::Capabilities)
+      if arg.respond_to?(:path_id?)
         path_id_flag = arg.path_id? :recv, @afi, @safi
       else
         path_id_flag = arg
@@ -164,7 +164,7 @@ module BGP
         end
       end
     end
-
+    
     def encode(what=:mp_reach)
       case what
       when :mp_reach
@@ -174,7 +174,7 @@ module BGP
         super([afi, @safi, @nlris.collect { |n| n.encode }.join].pack('nCa*'))
       end
     end
-
+    
     def new_unreach
       s = encode(:mp_unreach)
       s[1]= [MP_UNREACH].pack('C')
