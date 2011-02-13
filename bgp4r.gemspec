@@ -5,13 +5,13 @@
 
 Gem::Specification.new do |s|
   s.name = %q{bgp4r}
-  s.version = "0.0.11"
+  s.version = "0.0.12"
 
   s.required_rubygems_version = Gem::Requirement.new(">= 0") if s.respond_to? :required_rubygems_version=
   s.authors = ["Jean-Michel Esnault"]
-  s.date = %q{2011-01-08}
+  s.date = %q{2011-02-13}
   s.description = %q{BGP4R is a BGP-4 ruby library to create,  send, and receive  BGP messages in an  object oriented manner}
-  s.email = %q{jesnault@gmail.com}
+  s.email = %q{bgp4r@esnault.org}
   s.extra_rdoc_files = [
     "LICENSE.txt",
      "README.rdoc"
@@ -33,8 +33,8 @@ Gem::Specification.new do |s|
      "bgp/messages/route_refresh.rb",
      "bgp/messages/update.rb",
      "bgp/misc/live_feed.rb",
-     "bgp/misc/pcap.rb",
-     "bgp/neighbor.rb",
+     "bgp/neighbor/add_path_cap.rb",
+     "bgp/neighbor/neighbor.rb",
      "bgp/nlris/inet.rb",
      "bgp/nlris/label.rb",
      "bgp/nlris/labeled.rb",
@@ -81,8 +81,13 @@ Gem::Specification.new do |s|
      "examples/unit-testing/malformed_update.rb",
      "examples/unit-testing/no_export.rb",
      "examples/unit-testing/prepend_aspath.rb",
+     "examples/unit-testing/test.rb",
+     "examples/unit-testing/test1.rb",
+     "examples/unit-testing/test2.rb",
      "examples/unit-testing/unknown_transitive_attr.rb",
      "test/common_test.rb",
+     "test/helpers/server.rb",
+     "test/iana_test.rb",
      "test/messages/capability_test.rb",
      "test/messages/keepalive_test.rb",
      "test/messages/markers_test.rb",
@@ -93,13 +98,12 @@ Gem::Specification.new do |s|
      "test/messages/update_test.rb",
      "test/misc/live_feed_test.rb",
      "test/misc/misc.rb",
-     "test/neighbor_test.rb",
+     "test/neighbor/add_path_cap_test.rb",
+     "test/neighbor/neighbor_test.rb",
      "test/nlris/ext_nlri_test.rb",
      "test/nlris/inet_test.rb",
      "test/nlris/labeled_test.rb",
      "test/nlris/nlri_test.rb",
-     "test/nlris/nlris_test.rb",
-     "test/nlris/path_nlri_test.rb",
      "test/nlris/rd_test.rb",
      "test/optional_parameters/add_path_test.rb",
      "test/optional_parameters/as4_test.rb",
@@ -137,6 +141,9 @@ Gem::Specification.new do |s|
   s.summary = %q{A BGP-4 Ruby Library}
   s.test_files = [
     "test/common_test.rb",
+     "test/helpers",
+     "test/helpers/server.rb",
+     "test/iana_test.rb",
      "test/messages",
      "test/messages/capability_test.rb",
      "test/messages/keepalive_test.rb",
@@ -149,14 +156,14 @@ Gem::Specification.new do |s|
      "test/misc",
      "test/misc/live_feed_test.rb",
      "test/misc/misc.rb",
-     "test/neighbor_test.rb",
+     "test/neighbor",
+     "test/neighbor/add_path_cap_test.rb",
+     "test/neighbor/neighbor_test.rb",
      "test/nlris",
      "test/nlris/ext_nlri_test.rb",
      "test/nlris/inet_test.rb",
      "test/nlris/labeled_test.rb",
      "test/nlris/nlri_test.rb",
-     "test/nlris/nlris_test.rb",
-     "test/nlris/path_nlri_test.rb",
      "test/nlris/rd_test.rb",
      "test/optional_parameters",
      "test/optional_parameters/add_path_test.rb",
