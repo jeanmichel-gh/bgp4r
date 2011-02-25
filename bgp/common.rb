@@ -13,6 +13,19 @@
 #    You should have received a copy of the GNU General Public License
 #    along with Foobar.  If not, see <http://www.gnu.org/licenses/>.
 
+module Kernel
+  alias :require_orig :require
+  
+  def my_caller(caller)
+    caller.split('/')
+  end
+  
+  def require(*args)
+    puts format("%-20s : %s", "require '#{args}'", caller[0])
+    require_orig *args
+  end
+end
+
 require 'ipaddr'
 require 'logger'
 

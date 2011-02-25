@@ -61,6 +61,12 @@ Rake::TestTask.new do |t|
   t.warning = true
 end
 
+# Rake::TestTask.new do |t|
+#   t.libs = ['.']
+#   t.pattern = "test/**/route_refresh_test.rb"
+#   t.warning = true
+# end
+
 Rake::RDocTask.new do |rdoc|
   files = ['README.rdoc', 'LICENSE.txt', 'COPYING', 'bgp/**/*.rb', 'doc/**/*.rdoc', 'test/*.rb']
   rdoc.rdoc_files.add(files)

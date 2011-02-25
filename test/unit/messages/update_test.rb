@@ -25,13 +25,13 @@ require 'bgp4r'
 
 class Update_Test < Test::Unit::TestCase
   include BGP
-  def test_1
+  def test_factory_to_create_an_update_message
     s = "ffffffffffffffffffffffffffffffff006b0200000054400101024002009004040000000040050400000064c0100800020c8f04127ee8800a0800000001000000048009045134134d800e1f0001800c00000000000000005134134d00680114d100000c8f041291480a39"
     sbin = [s].pack('H*')
     u = Update.new(sbin)
     assert_equal(Update, Message.factory(sbin).class)
   end
-  def test_2
+  def test_factory_to_create_an_update_message_with_multiple_nlris
     s = "
     ffff ffff ffff ffff
     ffff ffff ffff ffff 0070 0200 0000 5940
@@ -53,14 +53,14 @@ class Update_Test < Test::Unit::TestCase
     assert_equal(2,m.nlri.size)
     assert_equal("10.10.10.10/32\n32.32.32.32/32", m.nlri.to_s)
   end
-  def test_3
+  def test_factory_to_create_a_widthdrawn_message
     s = 'ffffffffffffffffffffffffffffffff0050020000002f40010101400304c0a80105800404000000644005040000006440020402010064c0080c051f00010137003b0af50040200a0a0a0a2020202020'
     m = Message.factory([s].pack('H*'))
     w = Update.withdrawn(m)
     assert_equal(Update,w.class)
     assert_equal('200a0a0a0a2020202020', w.withdrawn.to_shex)
   end
-  def test_4
+  def test_verify_as4_byte_encoding
     an_update = Update.new(
     Path_attribute.new(
     Origin.new(1),
@@ -75,7 +75,7 @@ class Update_Test < Test::Unit::TestCase
     
     assert_equal(3*2, an_update.encode4.size - an_update.encode.size)
   end
-  def test_5
+  def test_verify_access_to_update_info
     an_update = Update.new( Path_attribute.new( Origin.new(1),
      Next_hop.new('10.0.0.1'),
      Multi_exit_disc.new(100)
@@ -93,7 +93,7 @@ class Update_Test < Test::Unit::TestCase
     assert_equal 4, an_update.nlri.size
   end
 
-  def test_6
+  def test_factory_to_build_update_with_session_info
     s = 'ffffffffffffffffffffffffffffffff004a02000000274001010040020a0202000000c80000006440030428000101c0080c0137003b051f00010af50040114d0000124e0000134f0000'
     m = Message.factory([s].pack('H*'), Update::Info.new(true))
     assert_not_nil m
@@ -101,7 +101,7 @@ class Update_Test < Test::Unit::TestCase
     assert_equal(s, m.to_shex(Update::Info.new(true)))
   end
 
-  def test_7
+  def _test_7
     # build an update from a yaml description
     # advertised 172.18.179.192/27 
     # origin igp
@@ -126,7 +126,7 @@ class Update_Test < Test::Unit::TestCase
     "
   end
 
-  def test_8
+  def test_verify_one_can_modify_update_info
     o = Update::Info.new(true)
     def o.recv_inet_unicast? ; false ; end
     s = 'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF0072020000001F4001010040020A0204212C051319351AFE400304557200D9C00804212C045C175D76D6175D76DE1659299C175929981659235C16592D6417592D6417592D6617592D6217C3D228185D73241859284417C3FE84165C727015592190'
@@ -140,7 +140,7 @@ class Update_Test < Test::Unit::TestCase
     assert_equal '100 556533011 422910718', pa[As_path].as_path
   end
 
-  def test_9
+  def test_crate_a_withdrawn_update_message
     # FFFFFFFFFF
     # 0023 02 000C 16D40374 1755C688 16D40830 0000
     s = 'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF002302000C16D403741755C68816D408300000'
@@ -149,7 +149,7 @@ class Update_Test < Test::Unit::TestCase
     assert_equal 3,m.withdrawn.nlris.size
   end
  
-  def test_10
+  def test_factory_to_create_an_update_message_witth_ext_inet_unicast_nlris
     o = Update::Info.new(true)
     def o.recv_inet_unicast? ; true ; end
     def o.send_inet_unicast? ; true ; end
@@ -205,7 +205,7 @@ class Update_Test < Test::Unit::TestCase
     Update.factory(sbin,o)
   end
   
-  def test_path_id_inet_unicast
+  def test_factory_to_build_and_update_for_inet_unicast_with_path_id
     upd = ext_update "
     ffff ffff ffff ffff ffff ffff ffff ffff
     003c 0200 0000 1c40 0101 0040 0200 4003
@@ -216,7 +216,7 @@ class Update_Test < Test::Unit::TestCase
     
   end
   
-  def test_path_id_inet_mpls_vpn_unicast
+  def test_factory_to_build_and_update_for_inet_mpls_vpn_unicast_with_path_id
     s = "
     ffff ffff ffff ffff ffff ffff ffff ffff
     005f 0200 0000 4840 0101 0140 0200 8004
@@ -246,7 +246,7 @@ class Update_Test < Test::Unit::TestCase
     
   end
   
-  def test_path_id_inet_mpls_vpn_unicast_withdrawn
+  def test_factory_to_build_a_withdrawn_update_for_inet_mpls_vpn_unicast_with_path_id
     upd = ext_update "
     ffff ffff ffff ffff ffff ffff ffff ffff
     0031 0200 0000 1a90 0f00 1600 0180 0000

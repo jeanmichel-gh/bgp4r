@@ -178,7 +178,7 @@ class BGP::Prefix_orf < BGP::Orf
 
 end
 
-load "../../test/orfs/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0
+load "../../test/unit/orfs/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0
 
 __END__
 
