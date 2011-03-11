@@ -25,6 +25,120 @@ require 'test/unit'
 
 class Mp_reach_Test < Test::Unit::TestCase
   include BGP
+  
+  def test_nsap 
+    nsap = Nsap.new('49.0000.0000')
+    assert_equal('49.0000.0000', nsap.to_s)
+    assert_equal('284900000000', nsap.to_shex)
+  end
+    
+  def test_iso_mapped_ip_addr
+    mapped_addr = Iso_ip_mapped.new('10.0.0.1')
+    assert_equal('47000601200a000001', mapped_addr.to_shex)
+    mapped_addr = Iso_ip_mapped.new('2011::1')
+    assert_equal('3500008020110000000000000000000000000001', mapped_addr.to_shex)
+  end
+  
+  def test_afi_3_safi_1_ipv4_mapped_nexthops
+    mpr1 =  Mp_reach.new(:afi=>3, :safi=>1, :nexthop=> ['10.0.0.1',], :nlris=> '49.0001.0002.0003.0004.0005.0006' )
+    
+    s = '80 0e 1b 0003 01 08 470006010a000001 00 68 49000100020003000400050006'
+    assert_equal(s.split.join, mpr1.to_shex)
+    
+    mpr2 = Mp_reach.new(:afi=>3, 
+                        :safi=>1, 
+                        :nexthop=> ['1.1.1.1','2.2.2.2'], 
+                        :nlris => '49.0001.0002.0003.0004.0005.0006')
+    
+    s = "80 0e 23 0003 01 10 4700060101010101 4700060102020202 00 68 49000100020003000400050006"
+    
+    assert_equal(s.split.join, mpr2.to_shex)
+
+    mpr2 = Mp_reach.new( :afi=>3, 
+                         :safi=>1, 
+                         :nexthop=> ['1.1.1.1','2.2.2.2'], 
+                         :nlris => ['49.0001.0002.0003.0004.0005.0006','49.0011.0012.0013.0014.0015.0016'] 
+                        )
+    
+    s = "
+    80 0e 31
+    0003 01 
+    10 
+      47000601 01010101
+      47000601 02020202 00
+    
+    68 49000100020003000400050006
+    68 49001100120013001400150016
+    ".split.join
+
+    assert_equal(s, mpr2.to_shex)
+
+  end
+  
+  def test_afi_3_safi_1_ipv6_mapped_nexthops
+    mpr1 =  Mp_reach.new(:afi=>3, :safi=>1, :nexthop=> ['2011::1'], :nlris=> '49.0001.0002.0003.0004.0005.0006' )
+
+    s = '80 0e 26 0003 01 13 35000020110000000000000000000000000001 00 6849000100020003000400050006'
+    assert_equal(s.split.join, mpr1.to_shex)
+
+    mpr2 =  Mp_reach.new(:afi=>3, :safi=>1, :nexthop=> ['2011::1', '2011::2'], :nlris=> '49.0001.0002.0003.0004.0005.0006' )
+
+    s = '
+    80 0e 39 0003 01 
+    26 
+      350000 20110000000000000000000000000001
+      350000 20110000000000000000000000000002
+    00
+    68 49000100020003000400050006'
+    assert_equal(s.split.join, mpr2.to_shex)
+
+  end
+  
+  def test_afi_3_safi_1_ipv4_mapped_nexthops_ntoh
+    
+    # Mp Reach (14), length: 27, Flags [O]: 
+    #     AFI  (3), SAFI Unicast (1)
+    #     nexthop: 10.0.0.1
+    #       49.0001.0002.0003.0004.0005.0006
+    #    0x0000:  0003 0108 4700 0601 0a00 0001 0068 4900
+    #    0x0001:  0100 0200 0300 0400 0500 06
+
+    s = '80 0e 1b 0003 01 08 470006010a000001 00 68 49000100020003000400050006'
+    sbin = [s.split.join].pack('H*') 
+    mpr = Mp_reach.new(sbin)
+    assert_equal(s.split.join, mpr.to_shex)
+    assert_equal("[Oncr] (14)   Mp Reach: [800e1b000301084700060...] '\n    AFI  (3), SAFI Unicast (1)\n    nexthop: 10.0.0.1\n      49.0001.0002.0003.0004.0005.0006'", mpr.to_s)
+    
+    puts mpr.to_s(:tcpdump).gsub(/::/,'_')
+    
+  end
+
+  def test_afi_3_safi_1_ipv6_mapped_nexthops_ntoh
+
+    # Mp Reach (14), length: 57, Flags [O]: 
+    #     AFI  (3), SAFI Unicast (1)
+    #     nexthop: 2011::1, 2011::2
+    #       49.0001.0002.0003.0004.0005.0006
+    #    0x0000:  0003 0126 3500 0020 1100 0000 0000 0000
+    #    0x0001:  0000 0000 0000 0135 0000 2011 0000 0000
+    #    0x0002:  0000 0000 0000 0000 0002 0068 4900 0100
+    #    0x0003:  0200 0300 0400 0500 06
+
+    s = '
+    80 0e 39 0003 01 
+    26 
+      350000 20110000000000000000000000000001
+      350000 20110000000000000000000000000002
+    00
+    68 49000100020003000400050006'
+    sbin = [s.split.join].pack('H*') 
+    
+    mpr = Mp_reach.new(sbin)
+    
+    assert_equal(s.split.join, mpr.to_shex)
+    assert_equal("[Oncr] (14)   Mp Reach: [800e39000301263500002...] '\n    AFI  (3), SAFI Unicast (1)\n    nexthop: 2011::1, 2011::2\n      49.0001.0002.0003.0004.0005.0006'", mpr.to_s)
+  end
+  
   def test_1
     s = '800e30000202102009000900190000000000000000000100402009000100000000402009000200000000402009000300000000'
     sbin = [s].pack('H*') 

@@ -21,7 +21,7 @@ module Kernel
   end
   
   def require(*args)
-    puts format("%-20s : %s", "require '#{args}'", caller[0])
+    # puts format("%-20s : %s", "require '#{args}'", caller[0])
     require_orig *args
   end
 end
