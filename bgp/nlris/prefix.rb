@@ -7,6 +7,7 @@ module BGP
         case afi
         when :ip4,1 ; super(parse4(args[0]))
         when :ip6,2 ; super(parse6(args[0]))
+        when :nsap,3 ; super(parse_nsap(args[0]))
         end
       elsif args[0].is_a?(Nlri::Ip4) or args[0].is_a?(Nlri::Ip6) or args[0].is_a?(Prefix)
         super(args[0].to_s)
@@ -30,5 +31,22 @@ module BGP
   end
 end
 
-# FIXME:
+
+__END__
+
+
+
+require "test/unit"
+
+# require "prefix"
+
+class TestPrefix < Test::Unit::TestCase
+  def test_new
+    Prefix.new('49.0001.0002.0003', :nsap')
+    
+    
+  end
+end
+
+
 # load "../../test/unit/nlris/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0
