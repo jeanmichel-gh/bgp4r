@@ -134,7 +134,6 @@ class TestBgpNeighbor < Test::Unit::TestCase
     assert  @c.session_info.send_inet_unicast?, 
            "Should have the capability to send inet unicast reachability path info."
   end
-
   def test_nor_recv_nor_send_path_id_afi_1_safi_1
     server_add_path_cap = BGP::OPT_PARM::CAP::Add_path.new
     server_add_path_cap.add(:recv, 1, 1)

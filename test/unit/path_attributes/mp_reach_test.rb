@@ -109,12 +109,8 @@ class Mp_reach_Test < Test::Unit::TestCase
     sbin = [s.split.join].pack('H*') 
     mpr = Mp_reach.new(sbin)
 
-    p mpr
-
     assert_equal(s.split.join, mpr.to_shex)
     assert_equal("[Oncr] (14)   Mp Reach: [800e1b000301084700060...] '\n    AFI NSAP (3), SAFI Unicast (1)\n    nexthop: 10.0.0.1\n      49.0001.0002.0003.0004.0005.0006.0000.0000.0000.00/104'", mpr.to_s)
-    
-    puts mpr.to_s(:tcpdump).gsub(/::/,'_')
     
   end
 
@@ -220,8 +216,6 @@ class Mp_reach_Test < Test::Unit::TestCase
       '192.168.0.0/24', '192.168.1.0/24', '192.168.2.0/24', '192.168.3.0/24', '192.168.4.0/24', '192.168.5.0/24'])
     assert_equal(Mp_unreach,mpr.new_unreach.class)
     mpr2 = Mp_reach.new(mpr)
-    p mpr2
-    
     assert_equal(mpr.encode, mpr2.encode)
     assert_equal(Mp_unreach, Mp_unreach.new(mpr.new_unreach).class)
   end

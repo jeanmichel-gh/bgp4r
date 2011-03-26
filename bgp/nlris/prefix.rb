@@ -11,8 +11,7 @@ class Prefix
   
   def self.new_ntop_extended(arg, afi=1)
     path_id = arg.slice!(0,4).unpack('N')[0]
-    case afi
-    when 1
+    if afi == 1
       new_ntop(arg,afi,path_id)
     else
       # AFI 2 and 3 are handled elsewhere
@@ -93,9 +92,6 @@ class Prefix
     end
   end
   
-  # attr_reader :mlen
-  # alias bit_length mlen
-  
   def to_s
     if extended?
       ["ID=#{@path_id}", pfx_to_s].join(', ')
@@ -147,9 +143,6 @@ class Prefix
   
   private 
   
-  # 
-  #  all labeled safi need not include path_id
-  #  
   def __encode__(len=true, include_path_id=true)
     s = if len
       [mlen, @pfx.hton].pack("Ca#{nbytes}")

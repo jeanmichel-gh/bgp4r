@@ -49,7 +49,6 @@ module BGP
       when 128,129
         @prefix = Vpn.new(prefix)
       else
-        p prefix.unpack('H*')
         @prefix = Prefix.new_ntop(prefix, afi)
       end
     end
