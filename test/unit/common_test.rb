@@ -79,7 +79,8 @@ class Common_Test < Test::Unit::TestCase
     assert_equal '0x0001:  1011 1213 1415 1617 1819 1a1b 1c1d 1e1f', sbin.hexlify[2]
     assert_equal '0x0002:  20', sbin.hexlify[3]
   end
-  def test_nlri
-    assert_equal('14000000', IPAddr.new_nlri4(['101400'].pack('H*')).to_shex)
-  end
+  # FIXME: remove...
+  # def test_nlri
+  #   assert_equal('14000000', IPAddr.new_nlri4(['101400'].pack('H*')).to_shex)
+  # end
 end

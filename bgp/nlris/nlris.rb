@@ -1,6 +1,6 @@
 %w{ 
   nlri 
-  prefix 
+  prefix2 
   inet 
   labeled 
   vpn 

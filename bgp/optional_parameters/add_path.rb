@@ -111,7 +111,7 @@ module BGP::OPT_PARM::CAP
 
     def address_family_to_s(af, sr)
       afi, safi = af
-      "AFI #{IANA.afi(afi)} (#{afi}), SAFI #{IANA.safi(safi)} (#{safi}), #{send_recv_to_s(sr)}"
+      "AFI #{IANA.afi?(afi)} (#{afi}), SAFI #{IANA.safi?(safi)} (#{safi}), #{send_recv_to_s(sr)}"
     end
 
     def _send_recv(val)
@@ -134,6 +134,7 @@ module BGP::OPT_PARM::CAP
       end
     end
 
+    #FIXME
     def _afi(val)
       if val.is_a?(Fixnum)
         val
@@ -144,6 +145,7 @@ module BGP::OPT_PARM::CAP
       end
     end
 
+    #FIXME
     def _safi(val)
       if val.is_a?(Fixnum)
         val

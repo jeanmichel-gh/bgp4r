@@ -1,3 +1,5 @@
+__END__
+
 
 require 'bgp4r'
 require 'test/helpers/server'

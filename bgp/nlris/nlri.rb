@@ -23,122 +23,31 @@
 
 require 'bgp/common'
 require 'bgp/iana'
-
+require 'bgp/nlris/prefix2'
 module BGP
 
+
+  #
+  # Container for prefix(1,1) 
+  #
   class Base_nlri
-
-    class Nlri_element < IPAddr
-
-      def to_s
-        [super, mlen].join('/')
-      end
-      def encode_next_hop
-        hton
-      end
-      def nbyte
-        (mlen+7)/8
-      end
-      def encode(len_included=true)
-        nbyte = (mlen+7)/8
-        if len_included
-          [mlen, hton].pack("Ca#{nbyte}")
-        else
-          [hton].pack("a#{nbyte}")
-        end
-      end
-      def parse(arg)
-        s = arg.dup
-        s +=([0]*3).pack('C*')
-        plen, *nlri = s.unpack('CC4')
-        arg.slice!(0,1+(plen+7)/8) # trim arg accordingly
-        ipaddr = nlri.collect { |n| n.to_s }.join('.') + "/" + plen .to_s
-      end
-      alias :parse4 :parse
-      def parse6(arg)
-        s = arg.dup
-        s +=([0]*16).pack('C*')
-        plen, *nlri = s.unpack('Cn8')
-        arg.slice!(0,1+(plen+7)/8) # trim arg accordingly
-        ipaddr = nlri.collect { |n| n.to_s(16) }.join(':') + "/" + plen .to_s
-      end
-    end
-
-    class Ip4 < Nlri_element
-      def initialize(arg)
-        if arg.is_a?(String) and arg.packed?
-          super(parse4(arg))
-        elsif arg.is_a?(Ip4)
-          super(arg.to_s)
-        else
-          super(arg)
-        end
-      rescue => e
-        p e
-        p arg
-        raise
-      end
-    end
-
-    class Ip6 < Nlri_element
-      def initialize(arg)
-        if arg.is_a?(String) and arg.packed?
-          super(parse6(arg))
-        elsif arg.is_a?(Ip6)
-          super(arg.to_s)
-        else
-          super(arg)
-        end
-      end
-    end
-
-    class Ext_Nlri_element < Nlri_element
-      def initialize(*args)
-        if args.size>1
-          @path_id = args.shift
-          super
-        elsif args.size==1 and args[0].is_a?(String)
-          super parse(*args)
-        elsif args.size==1 and args[0].is_a?(Hash)
-          @path_id=args[0][:path_id]
-          super args[0][:nlri_element]
-        else
-          raise
-        end
-      rescue => e
-        p e
-        p args
-        raise
-      end
-      attr_reader :path_id
-      def encode
-        [path_id, super].pack('Na*')
-      end
-      def to_s
-        "ID: #{path_id}, #{super}"
-      end
-      def parse(s)
-        @path_id = s.slice!(0,4).unpack('N')[0]
-        super s
-      end
-    end
-
+    
     attr_reader :nlris
     
     class << self
-      def new_ntop(s, extended=false)
-        if extended
-          nlri = new
-          while s.size>0
-            nlri.add Base_nlri::Ext_Nlri_element.new(s)
-          end
-          nlri
-        else
-          new(s.is_packed)
+      def new_ntop(s, path_id=nil)
+        nlri = new
+        while s.size>0
+          #TODO if only used for afi 1, this parameter is not needed
+          #TODO wait until other afi are coded....
+          nlri.add Prefix.new_ntop_extended(s,1) if path_id
+          nlri.add Prefix.new_ntop(s,1)          unless path_id
         end
+        nlri
       end
+      
     end
-
+    
     def initialize(*args)
       if args[0].is_a?(String) and args[0].is_packed?
         parse(*args)
@@ -152,25 +61,20 @@ module BGP
         case arg
         when Hash
           if arg.has_key? :path_id
-            @nlris << Ext_Nlri_element.new(arg)
+            @nlris << Prefix.new(arg[:path_id], arg[:nlri])
           else
             raise
           end
         when String
-          # p "JME: IN ADD/ STRING:"
-          # p arg
-          # p arg.is_packed?
-          # p "---"
-          o = Ip4.new(arg)
-          # p o
+          o = Prefix.new(arg)
           @nlris << o
         when Array
           if arg[0].is_a?(Integer)
-            @nlris << Ext_Nlri_element.new(*arg)
+            @nlris << Prefix.new(*arg)
           else
             raise
           end
-        when Ext_Nlri_element, Ip4
+        when Prefix
           @nlris << arg
         else
           raise ArgumentError, "Invalid argument #{arg.class} #{arg.inspect}"
@@ -205,81 +109,35 @@ module BGP
 
   end
 
-  class Nlri < Base_nlri
-    def encode
-      super
-    end
-  end
-
-  class Withdrawn < Base_nlri
-    class << self
-      def new_top(*args)
-        super
-      end
-    end
-    class << self
-      def new_ntop(s, extended=false)
-        if extended
-          nlri = new
-          while s.size>0
-            nlri.add Base_nlri::Ext_Nlri_element.new(s)
-          end
-          nlri
-        else
-          new(s.is_packed)
-        end
-      end
-    end
-    def encode
-      super
-    end
-  end
+  Nlri      = Class.new(Base_nlri)
+  Withdrawn = Class.new(Base_nlri)
+  
+  
+  # TODO: Nlri.factory() is about build nlri_elements ... 
+  # 
 
   class Nlri
-    def self.factory(s, afi, safi, extended=false)
+    def self.factory(s, afi, safi, path_id=nil)
+      
       if afi== 1 and safi==1
-        Nlri.new_ntop(s.is_packed, extended)
+        Nlri.new_ntop(s.is_packed, path_id)
       else
         case safi
         when 1,2
-          Prefix.new(s.is_packed, afi)
+          # FIXME: add a path_id arg ... same as Labeld.new_ntop ... to be consistent.
+          p = Prefix.new_ntop(s.is_packed, afi)
+          p.path_id=path_id if path_id
+          p
         when 4,128,129
-          Labeled.new(s.is_packed, afi, safi)
+          # The prefix will contain the path_id if any.
+          Labeled.new_ntop(s.is_packed, afi, safi, path_id)
         else
           raise RuntimeError, "Afi #{afi} Safi #{safi} not supported!"
         end
       end
     end
   end
-
-  class Ext_Nlri
-    def self.factory(s, afi, safi)
-      new_ntop s, afi, safi
-    end
-    def self.new_ntop(s, afi=1, safi=1)
-      path_id = s.slice!(0,4).unpack('N')[0]
-      nlri = Nlri.factory(s, afi, safi)
-      new path_id, nlri
-    end
-    attr :path_id, :nlri
-    def initialize(path_id, nlri)
-      @path_id=path_id
-      @nlri = nlri
-    end
-    def afi
-      @nlri.afi
-    end
-    def to_s
-      s = []
-      s << "ID=#{@path_id}"
-      s << @nlri.to_s
-      s.join(", ")
-    end
-    def encode
-      [@path_id, @nlri.encode].pack('Na*')
-    end
-  end
-
+  
 end
 
 load "../../test/unit/nlris/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0
@@ -425,4 +283,101 @@ BGP session also withdraws all the previously advertised routes.)
 
 
 
+===
+
+# class Nlri_element < IPAddr
+# 
+#   def to_s
+#     [super, mlen].join('/')
+#   end
+#   def encode_next_hop
+#     hton
+#   end
+#   def nbyte
+#     (mlen+7)/8
+#   end
+#   def encode(len_included=true)
+#     nbyte = (mlen+7)/8
+#     if len_included
+#       [mlen, hton].pack("Ca#{nbyte}")
+#     else
+#       [hton].pack("a#{nbyte}")
+#     end
+#   end
+#   def parse(arg)
+#     s = arg.dup
+#     s +=([0]*3).pack('C*')
+#     plen, *nlri = s.unpack('CC4')
+#     arg.slice!(0,1+(plen+7)/8) # trim arg accordingly
+#     ipaddr = nlri.collect { |n| n.to_s }.join('.') + "/" + plen .to_s
+#   end
+#   alias :parse4 :parse
+#   def parse6(arg)
+#     s = arg.dup
+#     s +=([0]*16).pack('C*')
+#     plen, *nlri = s.unpack('Cn8')
+#     arg.slice!(0,1+(plen+7)/8) # trim arg accordingly
+#     ipaddr = nlri.collect { |n| n.to_s(16) }.join(':') + "/" + plen .to_s
+#   end
+# end
+# 
+# class Ip4 < Nlri_element
+#   def initialize(arg)
+#     if arg.is_a?(String) and arg.packed?
+#       super(parse4(arg))
+#     elsif arg.is_a?(Ip4)
+#       super(arg.to_s)
+#     else
+#       super(arg)
+#     end
+#   rescue => e
+#     p e
+#     p arg
+#     raise
+#   end
+# end
+# 
+# class Ip6 < Nlri_element
+#   def initialize(arg)
+#     if arg.is_a?(String) and arg.packed?
+#       super(parse6(arg))
+#     elsif arg.is_a?(Ip6)
+#       super(arg.to_s)
+#     else
+#       super(arg)
+#     end
+#   end
+# end
+# 
+# class Ext_Nlri_element < Nlri_element
+#   def initialize(*args)
+#     if args.size>1
+#       @path_id = args.shift
+#       super
+#     elsif args.size==1 and args[0].is_a?(String)
+#       super parse(*args)
+#     elsif args.size==1 and args[0].is_a?(Hash)
+#       @path_id=args[0][:path_id]
+#       super args[0][:nlri_element]
+#     else
+#       raise
+#     end
+#   rescue => e
+#     p e
+#     p args
+#     raise
+#   end
+#   attr_reader :path_id
+#   def encode
+#     [path_id, super].pack('Na*')
+#   end
+#   def to_s
+#     "ID: #{path_id}, #{super}"
+#   end
+#   def parse(s)
+#     @path_id = s.slice!(0,4).unpack('N')[0]
+#     super s
+#   end
+# end
+# 
 

@@ -1,4 +1,4 @@
-require 'bgp/nlris/prefix'
+require 'bgp/nlris/prefix2'
 
 module BGP
   class Inet_unicast < Prefix

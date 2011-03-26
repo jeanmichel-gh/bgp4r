@@ -25,41 +25,6 @@ require 'bgp/nlris/nlris'
 
 module BGP
 
-  class Nsap
-    def self.new_ntoh(s)
-      puts "in new_ntoh: #{s.unpack('H*')}"
-      sbin = s.dup
-      _, o1, r = s.unpack('CH2H*')
-      new [o1, r.scan(/..../).collect { |x| r.slice!(0,4)}, r].flatten.join('.').chomp('.')
-    end
-    def initialize(arg)
-      # '49.0001.0002.0003.0004.0005.0006.0007.0008 0009'
-      @nsap = arg
-    end
-    def to_s
-      @nsap
-    end
-    def encode
-      nsap = '49.0001.0002.0003.0004.0005.0006.0007.0008 0009'
-      nsap = [@nsap.gsub(/\./,'')].pack('H*')
-      len = nsap.size*8
-      s = [len, nsap].pack('Ca*')
-      # p " encode nsap:  #{s.unpack('H*')}"
-      s
-    end
-  end
-  
-  class Iso_ip_mapped < Prefix
-    def encode(*args)
-      case afi
-      when 1
-        ['47000601'].pack('H*')+super
-      when 2
-        ['350000'].pack('H*')+super
-      end
-    end
-  end
-
   class Mp_reach < Attr
 
     attr_reader :safi, :nlris, :path_id
@@ -91,22 +56,40 @@ module BGP
       @safi = h[:safi]
       @path_id = path_id = h[:path_id]
 
-
-      if h[:afi]==3
-          @afi = 3
-          # mpr1 =  Mp_reach.new(:afi=>3, :safi=>1, :nexthop=> ['10.0.0.1'], :nlris=> '49.0001.0002.0003.0004.0005.0006' )
-          @nlris = [h[:nlris]].flatten.collect do |n|
-            nlri = Nsap.new(n)
+      case h[:afi]
+      when 3, :nsap
+        @afi = 3
+        # mpr1 =  Mp_reach.new(:afi=>3, :safi=>1, :nexthop=> ['10.0.0.1'], :nlris=> '49.0001.0002.0003.0004.0005.0006' )
+        # nlris
+        @nlris = [h[:nlris]].flatten.collect do |n|
+          case n
+          when String
+            path_id ? Prefix.new(path_id, n) : Prefix.new(n)
+          when Hash
+            nlri = Prefix.new(n[:prefix])
+            nlri.path_id=n[:path_id] if n.has_key?(:path_id)
+            nlri
+          else
+            raise ArgumentError, "Invalid: #{n.inspect}"
           end
+        end
+
+        # Nexthop
         case @safi
         when 1
           @nexthops = [h[:nexthop]].flatten.collect { |nh| Iso_ip_mapped.new(nh) }
+        when 2
+          raise "TO BE IMPLEMTED!!!!"
+        when 4
+          raise "TO BE IMPLEMTED!!!!"
+        when 128, 129
+          raise "TO BE IMPLEMTED!!!!"
         else
           raise
         end
 
       else
-
+        
         case @safi
         when 1,2,4   ; @nexthops = [h[:nexthop]].flatten.collect { |nh| Prefix.new(nh) }
         when 128,129 ; @nexthops = [h[:nexthop]].flatten.collect { |nh| Vpn.new(nh) }
@@ -118,12 +101,11 @@ module BGP
           @nlris = [h[:nlris]].flatten.collect do |n|
             case n
             when String
-              nlri = Inet_unicast.new(n)
-              path_id ? Ext_Nlri.new(path_id, nlri) : nlri
+              path_id ? Inet_unicast.new(path_id, n) : Inet_unicast.new(n)
             when Hash
               path_id = n[:path_id] if n[:path_id]
-              nlri = Inet_unicast.new(n[:prefix])
-              path_id ? Ext_Nlri.new(path_id, nlri) : nlri
+              pfx = n[:prefix]
+              path_id ? Inet_unicast.new(path_id, pfx) : Inet_unicast.new(pfx)
             else
               raise ArgumentError, "Invalid: #{n.inspect}"
             end
@@ -132,12 +114,11 @@ module BGP
           @nlris = [h[:nlris]].flatten.collect do |n|
             case n
             when String
-              nlri = Inet_multicast.new(n)
-              path_id ? Ext_Nlri.new(path_id, nlri) : nlri
+              path_id ? Inet_multicast.new(path_id, n) : Inet_multicast.new(n)
             when Hash
-              path_id = n[:path_id] if n[:path_id]
               nlri = Inet_multicast.new(n[:prefix])
-              path_id ? Ext_Nlri.new(path_id, nlri) : nlri
+              nlri.path_id=n[:path_id] if n.has_key?(:path_id)
+              nlri
             else
               raise ArgumentError, "Invalid: #{n.inspect}"
             end
@@ -146,8 +127,9 @@ module BGP
           @nlris = [h[:nlris]].flatten.collect do |n|
             path_id = n[:path_id] || @path_id
             prefix = n[:prefix].is_a?(String) ? Prefix.new(n[:prefix]) : n[:prefix]
-            nlri = Labeled.new(prefix, *n[:label]) 
-            path_id ? Ext_Nlri.new(path_id, nlri) : nlri
+            nlri = Labeled.new(prefix, *n[:label])
+            nlri.path_id=path_id
+            nlri
           end
         when 128,129
           @nlris = [h[:nlris]].flatten.collect do |n|
@@ -155,9 +137,11 @@ module BGP
             prefix = n[:prefix].is_a?(Prefix) ? n[:prefix] :  Prefix.new(n[:prefix]) 
             rd = n[:rd].is_a?(Rd) ?  n[:rd] : Rd.new(*n[:rd])
             nlri = Labeled.new(Vpn.new(prefix,rd), *n[:label]) 
-            path_id ? Ext_Nlri.new(path_id, nlri) : nlri
+            nlri.path_id=path_id
+            nlri
           end
         else
+          raise "SAFI #{safi} not implemented!!!"
         end
       end
     end
@@ -167,7 +151,7 @@ module BGP
     end
 
     def mp_reach
-      "\n    AFI #{IANA.afi(afi)} (#{afi}), SAFI #{IANA.safi(safi)} (#{safi})" +
+      "\n    AFI #{IANA.afi?(afi)} (#{afi}), SAFI #{IANA.safi?(safi)} (#{safi})" +
       "\n    nexthop: " + nexthops +
       (['']+ @nlris.collect { |nlri| nlri.to_s }).join("\n      ")
     end
@@ -199,7 +183,8 @@ module BGP
         while value.size>0
           path_id = value.slice!(0,4).unpack('N')[0]  if path_id_flag
           blen = value.slice(0,1).unpack('C')[0]
-          nlri = Nsap.new_ntoh(value.slice!(0,(blen+7)/8+1))
+          nlri = Nlri.factory(value.slice!(0,(blen+7)/8+1), @afi, @safi, path_id)
+          # nlri = Nsap.new_ntoh(value.slice!(0,(blen+7)/8+1))
           @nlris << nlri
         end
 
@@ -214,15 +199,11 @@ module BGP
           path_id_flag = arg
         end
 
-        while value.size>0
-          path_id = value.slice!(0,4).unpack('N')[0]  if path_id_flag
+        while value.size>0          
+          path_id = path_id_flag ? value.slice!(0,4).unpack('N')[0] : nil
           blen = value.slice(0,1).unpack('C')[0]
-          nlri = Nlri.factory(value.slice!(0,(blen+7)/8+1), @afi, @safi)
-          if path_id_flag
-            @nlris << Ext_Nlri.new(path_id, nlri)
-          else
-            @nlris << nlri
-          end
+          nlri = Nlri.factory(value.slice!(0,(blen+7)/8+1), @afi, @safi, path_id)
+          @nlris << nlri
         end
       end
       raise RuntimeError, "leftover afer parsing: #{value.unpack('H*')}" if value.size>0
@@ -233,25 +214,29 @@ module BGP
         case s.slice(0,1).unpack('C')[0]
         when 0x47
           s.slice!(0,4)
-          @nexthops << Iso_ip_mapped.new(Prefix.new([32,s.slice!(0,4)].pack('Ca*'),1).to_s)
+          @nexthops << Iso_ip_mapped.new(Prefix.new_ntop([32,s.slice!(0,4)].pack('Ca*'),1).to_s)
         when 0x35
           s.slice!(0,3)
-          @nexthops << Iso_ip_mapped.new(Prefix.new([128,s.slice!(0,16)].pack('Ca*'),2).to_s)
+          @nexthops << Iso_ip_mapped.new(Prefix.new_ntop([128,s.slice!(0,16)].pack('Ca*'),2).to_s)
         else
           raise
         end
       end
     end
-
+    
     def parse_next_hops(s)
       while s.size>0
         case @safi
         when 1,2,4
           case @afi
           when 1
-            @nexthops << Prefix.new([32,s.slice!(0,4)].pack('Ca*'),1)
+            @nexthops << Prefix.new_ntop([32,s.slice!(0,4)].pack('Ca*'),1)
           when 2
-            @nexthops << Prefix.new([128,s.slice!(0,16)].pack('Ca*'),2)
+            @nexthops << Prefix.new_ntop([128,s.slice!(0,16)].pack('Ca*'),2)
+          when 3
+            raise "TBD"
+          else 
+            raise "SHOULD NOT BE HERE ...."
           end
         when 128,129
           @nexthops << Vpn.new([64+32,s.slice!(0,12)].pack('Ca*'))
@@ -281,5 +266,187 @@ module BGP
   end
 
 end
+# 
+include BGP
+
+
+# Mp Reach (14), length: 27, Flags [O]: 
+ #     AFI  (3), SAFI UNICAST NLRI (1)
+ #     nexthop: 10.0.0.1
+ #       49.0001.0002.0003.0004.0005.0006
+ #    0x0000:  0003 0108 4700 0601 0a00 0001 0068 4900
+ #    0x0001:  0100 0200 0300 0400 0500 06
+
+ # s = '80 0e 1b 0003 01 08 470006010a000001 00 68 49000100020003000400050006'
+ # sbin = [s.split.join].pack('H*') 
+ # mpr = Mp_reach.new(sbin)
+ # puts mpr.to_shex
+ 
+ # 
+ # s = '
+ # 80 0e 39 0003 01 
+ # 26 
+ #   350000 20110000000000000000000000000001
+ #   350000 20110000000000000000000000000002
+ # 00
+ # 68 49000100020003000400050006'
+ # sbin = [s.split.join].pack('H*') 
+ # 
+ # mpr = Mp_reach.new(sbin)
+ # 
+ # puts mpr.to_s(:tcpdump)
+ 
+ 
+  # mpr2 =  Mp_reach.new(:safi=>4, :nexthop=> ['10.0.0.1'], :nlris=> {:prefix=> '192.168.0.0/24', :label=>101, :path_id=>100} )
+  # puts mpr2.to_shex
+  # 
+
+
+__END__
+
+
+
+
+
+
+
+# mpr1 =  Mp_reach.new( :afi=>3, 
+#                       :safi=>1, 
+#                       :nexthop=> ['10.0.0.1',], 
+#                       :nlris=> '49.0001.0002.0003.0004.0005.0006/64' )
+# 
+# require 'pp'
+# 
+# pp mpr1
+# puts mpr1
+# p mpr1.to_shex
+
 
 load "../../test/unit/path_attributes/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0
+
+# JME
+# include BGP
+# 
+# s = '800e1e000104040a0000010030000651c0a80030000661c0a80130000671c0a801'
+# sbin = [s].pack('H*') 
+# mpr = Mp_reach.new(sbin, false)
+# assert_match(/^\s+Label Stack=101 /, mpr.to_s)
+# assert_match(/^\s+Label Stack=102 /, mpr.to_s)
+# assert_match(/^\s+Label Stack=103 /, mpr.to_s)
+# 
+# s = '800e2a000104040a000001000000006430000651c0a8000000006430000661c0a8010000006430000671c0a801'
+# sbin = [s].pack('H*') 
+# mpr = Mp_reach.new(sbin, true)
+# 
+# __END__
+# 
+
+
+# include BGP
+# s = '80 0e 4a 0001 80 0c 00000000000000000a000001 00 00000065 700006510000006400000064c0a800
+#                                                      00000066 700006610000006400000064c0a801
+#                                                      00000067 700006710000006400000064c0a802'
+# sbin = [s.split.join].pack('H*') 
+# mpr = Mp_reach.new(sbin, true)
+# require 'pp'
+# pp mpr
+# puts mpr
+# 
+# puts mpr.to_shex
+
+
+__END__
+
+80 0e 4a 0001 80 0c 00000000000000000a000001 00 
+           70 000651 0000006400000064 00000065 c0a800
+           70 000661 0000006400000064 00000066 c0a801
+           70 000671 0000006400000064 00000067 c0a802
+
+
+80 0e 4a 0001 80 0c 00000000000000000a000001 00 
+  00000065 70 000651 0000006400000064 c0a800
+  00000066 70 000661 0000006400000064 c0a801
+  00000067 70 000671 0000006400000064 c0a802
+
+80 0e 56 0001 80 0c 00000000000000000a000001 00 00000065 70000651000000640000006400000065c0a8000000006670000661000000640000006400000066c0a8010000006770000671000000640000006400000067c0a802
+80 0e 56 0001 80 0c 00000000000000000a000001 00 00000065 70000651000000640000006400000065c0a8000000006670000661000000640000006400000066c0a8010000006770000671000000640000006400000067c0a802
+
+
+  #   
+  # s = '80 0e 3e 0001 80 0c 0000000000000000 0a000001 00 700006510000006400000064c0a800
+  #                                                       700006610000006400000064c0a801
+  #                                                       700006710000006400000064c0a802'
+  # sbin = [s.split.join].pack('H*') 
+  # mpr = Mp_reach.new(sbin, false)
+  # assert_match(/^\s+Label Stack=101 /, mpr.to_s)
+  # assert_match(/^\s+Label Stack=102 /, mpr.to_s)
+  # assert_match(/^\s+Label Stack=103 /, mpr.to_s)
+  #  
+  #   s = '80 0e 4a 0001 80 0c 00000000000000000a000001 00 00000065 700006510000006400000064c0a800
+  #                                                         00000066 700006610000006400000064c0a801
+  #                                                         00000067 700006710000006400000064c0a802'
+  #    sbin = [s.split.join].pack('H*') 
+  #    mpr = Mp_reach.new(sbin, true)
+  # 
+  # puts mpr
+     # 
+     # 
+     # s = '800e1f00020210201100010007000000000000000000010020201100012020110002'
+     # sbin = [s].pack('H*') 
+     # mpr = Mp_reach.new(sbin, false)
+     # 
+     # s = '800e27000202102011000100070000000000000000000100000000642020110001000000642020110002'
+     # sbin = [s].pack('H*') 
+     # mpr = Mp_reach.new(sbin, true)
+     # puts mpr
+     # 
+     # 
+     #  mpr2 = Mp_reach.new :safi=>128, :nexthop=> ['10.0.0.1'], 
+     #                      :nlris=> {:rd=> [100,100], :prefix=> '192.168.0.0/24', :label=>101, :path_id=>100}
+     # 
+     #  require 'pp'
+     # pp mpr2
+     # puts mpr2.to_shex
+ 
+ load "../../test/unit/path_attributes/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0
+
+__END__
+
+
+80 0e 24 0001 80 0c 00000000000000000a000001 00 70 000651 0000006400000064c0a800
+
+
+# class Nsap
+#   def self.new_ntoh(s)
+#     puts "in new_ntoh: #{s.unpack('H*')}"
+#     sbin = s.dup
+#     _, o1, r = s.unpack('CH2H*')
+#     new [o1, r.scan(/..../).collect { |x| r.slice!(0,4)}, r].flatten.join('.').chomp('.')
+#   end
+#   def initialize(arg)
+#     # '49.0001.0002.0003.0004.0005.0006.0007.0008 0009'
+#     @nsap = arg
+#   end
+#   def to_s
+#     @nsap
+#   end
+#   def encode
+#     nsap = '49.0001.0002.0003.0004.0005.0006.0007.0008 0009'
+#     nsap = [@nsap.gsub(/\./,'')].pack('H*')
+#     len = nsap.size*8
+#     s = [len, nsap].pack('Ca*')
+#     # p " encode nsap:  #{s.unpack('H*')}"
+#     s
+#   end
+# end
+# 
+# class Iso_ip_mapped < Prefix
+#   def encode(*args)
+#     case afi
+#     when 1
+#       ['47000601'].pack('H*')+super
+#     when 2
+#       ['350000'].pack('H*')+super
+#     end
+#   end
+# end

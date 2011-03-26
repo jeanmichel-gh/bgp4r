@@ -157,7 +157,7 @@ class Update_Test < Test::Unit::TestCase
       Path_attribute.new(
        As_path.new(100)
       ),
-      Ext_Nlri.new(100, Nlri.new('77.0.0.0/17'))
+      Nlri.new([100,'77.0.0.0/17'])
     )
     assert_equal('ffffffffffffffffffffffffffffffff0028020000000940020602010000006400000064114d0000', upd1.to_shex(o))
     # Need to tell the factory we are dealing with a ext nlri.
@@ -183,7 +183,7 @@ class Update_Test < Test::Unit::TestCase
     )
     assert_match(/ff{16}....020000/, upd1.to_shex)
     assert upd1.path_attribute.has_a_mp_reach_attr?, "Expecting a MP_REACH Attr."
-    assert_match(/ID=100, Label Stack=102/,upd1.path_attribute[:mp_reach].to_s)
+    assert_match(/ID=100, IPv4/,upd1.path_attribute[:mp_reach].to_s)
     
     # received as2byte encode aspath attr
     upd2 = Update.factory upd1.encode, :as4byte=> false, :path_id=>true
@@ -212,7 +212,7 @@ class Update_Test < Test::Unit::TestCase
     040a 0000 0180 0404 0000 0066 4005 0400
     0000 6500 0000 6419 1400 0000"
     assert_equal(BGP::Update, upd.class)
-    assert_equal 'ID: 100, 20.0.0.0/25', upd.nlri.nlris[0].to_s
+    assert_equal 'ID=100, 20.0.0.0/25', upd.nlri.nlris[0].to_s
     
   end
   
@@ -256,7 +256,7 @@ class Update_Test < Test::Unit::TestCase
     assert upd.path_attribute.has_a_mp_unreach_attr?
     mp_unreach = upd.path_attribute[:mp_unreach]
     assert_equal 1, mp_unreach.nlris[0].path_id
-    assert_equal 'ID=1, Label Stack=524288 (bottom) RD=1:1, IPv4=10.1.1.0/24', mp_unreach.nlris[0].to_s
+    assert_equal 'Label Stack=524288 (bottom) RD=1:1, ID=1, IPv4=10.1.1.0/24', mp_unreach.nlris[0].to_s
   end
 
 end

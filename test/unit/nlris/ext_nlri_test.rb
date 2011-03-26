@@ -1,3 +1,7 @@
+
+#TODO: obselete ...
+__END__
+
 require "test/unit"
 
 require "bgp/nlris/nlri"

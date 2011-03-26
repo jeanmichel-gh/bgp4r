@@ -1,5 +1,5 @@
 #--
-# Copyright 2008, 2009 Jean-Michel Esnault.
+# Copyright 2008-2009, 2011 Jean-Michel Esnault.
 # All rights reserved.
 # See LICENSE.txt for permissions.
 #
@@ -22,15 +22,7 @@
 
 
 module IANA
-  def self.afi(afi)
-    case afi
-    when AFI::IP   ; 'IPv4'
-    when AFI::IP6  ; 'IPv6'
-    else
-      ''
-    end
-  end
-  def self.afi?(arg)
+    def self.afi?(arg)
     @h_afis ||= AFI.set_h_afis
     @h_afis[arg]
   end
@@ -51,8 +43,8 @@ module IANA
     end
   end
   module AFI
-    IP = 1
-    IP6 = 2 
+    IPv4 = 1
+    IPv6 = 2
     NSAP = 3
     HDLC = 4
     BBN = 5
