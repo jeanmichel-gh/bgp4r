@@ -27,11 +27,7 @@ module IANA
     @h_afis[arg]
   end
   def self.safi?(arg)
-    @h_safis ||= SAFI.set_h_safis
-    @h_safis[arg]
-  end
-  def self.safi(safi)
-    case safi
+    case arg
     when SAFI::UNICAST_NLRI       ; 'Unicast'
     when SAFI::MULTICAST_NLRI     ; 'Multicast'
     when SAFI::LABEL_NLRI         ; 'Labeled NLRI'
@@ -39,7 +35,8 @@ module IANA
     when SAFI::MPLS_VPN_UNICAST   ; 'Labeled VPN Unicast'
     when SAFI::MPLS_VPN_Multicast ; 'Labeled VPN Multicast'
     else
-      ''
+      @h_safis ||= SAFI.set_h_safis
+      @h_safis[arg]
     end
   end
   module AFI
@@ -236,7 +233,7 @@ Value    Description                                     Reference
 
 References
 ----------
-[RFC2547]  E. Rosen and Y. Rekhter, "BGP/MPLS VPNs", RFC 2547, March 1999.
+[RFC2547]  E. Rosen and Y. Rekhter, "BGP/Labeled VPNs", RFC 2547, March 1999.
 
 [RFC3107]  Y. Rekhter and E. Rosen, "Carrying Label Information in 
            BGP-4", RFC 3107, May 2001.

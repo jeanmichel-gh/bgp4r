@@ -27,8 +27,6 @@ class Mp_reach_Test < Test::Unit::TestCase
   include BGP
   
   def test_iso_mapped_ip_addr
-    # 47000601200a000001
-    #FIXME: pfx len is missing
     mapped_addr = Iso_ip_mapped.new('10.0.0.1')
     assert_equal('470006010a000001', mapped_addr.to_shex)
     mapped_addr = Iso_ip_mapped.new('2011::1')
@@ -42,7 +40,6 @@ class Mp_reach_Test < Test::Unit::TestCase
                           :nlris=> '49.0001.0002.0003.0004.0005.0006/64' )
     
     s = '80 0e 16 0003 01 08 470006010a000001 00 40 4900010002000300'
-        #80 0e 16 0003 01 08 470006010a000001 00 40 4900010002000300
 
     assert_equal(s.split.join, mpr1.to_shex)
     
@@ -102,21 +99,20 @@ class Mp_reach_Test < Test::Unit::TestCase
   def test_afi_3_safi_1_ipv4_mapped_nexthops_ntoh
     
     # Mp Reach (14), length: 27, Flags [O]: 
-    #     AFI  (3), SAFI UNICAST NLRI (1)
+    #     AFI  (3), SAFI Unicast (1)
     #     nexthop: 10.0.0.1
     #       49.0001.0002.0003.0004.0005.0006
     #    0x0000:  0003 0108 4700 0601 0a00 0001 0068 4900
     #    0x0001:  0100 0200 0300 0400 0500 06
 
     s = '80 0e 1b 0003 01 08 470006010a000001 00 68 49000100020003000400050006'
-         # 80 0e 1a 0003 01 08 470006010a000001 00    49000100020003000400050006
     sbin = [s.split.join].pack('H*') 
     mpr = Mp_reach.new(sbin)
 
     p mpr
 
     assert_equal(s.split.join, mpr.to_shex)
-    assert_equal("[Oncr] (14)   Mp Reach: [800e1b000301084700060...] '\n    AFI NSAP (3), SAFI UNICAST NLRI (1)\n    nexthop: 10.0.0.1\n      49.0001.0002.0003.0004.0005.0006.0000.0000.0000.00/104'", mpr.to_s)
+    assert_equal("[Oncr] (14)   Mp Reach: [800e1b000301084700060...] '\n    AFI NSAP (3), SAFI Unicast (1)\n    nexthop: 10.0.0.1\n      49.0001.0002.0003.0004.0005.0006.0000.0000.0000.00/104'", mpr.to_s)
     
     puts mpr.to_s(:tcpdump).gsub(/::/,'_')
     
@@ -145,14 +141,14 @@ class Mp_reach_Test < Test::Unit::TestCase
     mpr = Mp_reach.new(sbin)
     
     assert_equal(s.split.join, mpr.to_shex)
-    assert_equal("[Oncr] (14)   Mp Reach: [800e39000301263500002...] '\n    AFI NSAP (3), SAFI UNICAST NLRI (1)\n    nexthop: 2011::1, 2011::2\n      49.0001.0002.0003.0004.0005.0006.0000.0000.0000.00/104'", mpr.to_s())
+    assert_equal("[Oncr] (14)   Mp Reach: [800e39000301263500002...] '\n    AFI NSAP (3), SAFI Unicast (1)\n    nexthop: 2011::1, 2011::2\n      49.0001.0002.0003.0004.0005.0006.0000.0000.0000.00/104'", mpr.to_s())
   end
   
   def test_afi_2_safi_2
     s = '800e30000202102009000900190000000000000000000100402009000100000000402009000200000000402009000300000000'
     sbin = [s].pack('H*') 
     mpr = Mp_reach.new(sbin)
-    assert_equal("\n    AFI IPv6 (2), SAFI MULTICAST NLRI (2)\n    nexthop: 2009:9:19::1\n      2009:1::/64\n      2009:2::/64\n      2009:3::/64", mpr.mp_reach)
+    assert_equal("\n    AFI IPv6 (2), SAFI Multicast (2)\n    nexthop: 2009:9:19::1\n      2009:1::/64\n      2009:2::/64\n      2009:3::/64", mpr.mp_reach)
     assert_equal(2, mpr.afi)
     assert_equal(2, mpr.safi)
     assert_equal(s, mpr.to_shex)
@@ -161,7 +157,7 @@ class Mp_reach_Test < Test::Unit::TestCase
     s = "800e2500020120200900090019000000000000000000012009000900190000000000000000000200"
     sbin = [s].pack('H*') 
     mpr = Mp_reach.new(sbin)
-    assert_equal("\n    AFI IPv6 (2), SAFI UNICAST NLRI (1)\n    nexthop: 2009:9:19::1, 2009:9:19::2", mpr.mp_reach)
+    assert_equal("\n    AFI IPv6 (2), SAFI Unicast (1)\n    nexthop: 2009:9:19::1, 2009:9:19::2", mpr.mp_reach)
     assert_equal(2, mpr.afi)
     assert_equal(1, mpr.safi)
     assert_equal(s, mpr.to_shex)
@@ -170,7 +166,7 @@ class Mp_reach_Test < Test::Unit::TestCase
     s = "800e0d000102080a0000010a00000200"
     sbin = [s].pack('H*') 
     mpr = Mp_reach.new(sbin)
-    assert_equal("\n    AFI IPv4 (1), SAFI MULTICAST NLRI (2)\n    nexthop: 10.0.0.1, 10.0.0.2", mpr.mp_reach)
+    assert_equal("\n    AFI IPv4 (1), SAFI Multicast (2)\n    nexthop: 10.0.0.1, 10.0.0.2", mpr.mp_reach)
     assert_equal(1, mpr.afi)
     assert_equal(2, mpr.safi)
     assert_equal(s, mpr.to_shex)
@@ -179,7 +175,7 @@ class Mp_reach_Test < Test::Unit::TestCase
     s = "800e11000102040a0000010018c0a80118c0a802"
     sbin = [s].pack('H*') 
     mpr = Mp_reach.new(sbin)
-    assert_equal("\n    AFI IPv4 (1), SAFI MULTICAST NLRI (2)\n    nexthop: 10.0.0.1\n      192.168.1.0/24\n      192.168.2.0/24", mpr.mp_reach)
+    assert_equal("\n    AFI IPv4 (1), SAFI Multicast (2)\n    nexthop: 10.0.0.1\n      192.168.1.0/24\n      192.168.2.0/24", mpr.mp_reach)
     assert_equal(1, mpr.afi)
     assert_equal(2, mpr.safi)
     assert_equal(s, mpr.to_shex)
@@ -188,7 +184,7 @@ class Mp_reach_Test < Test::Unit::TestCase
     s = "800e39000204102009000900190000000000000000000100580006512009000100000000580006612009000200000000580006712009000300000000"
     sbin = [s].pack('H*') 
     mpr = Mp_reach.new(sbin)
-    assert_equal("\n    AFI IPv6 (2), SAFI LABEL NLRI (4)\n    nexthop: 2009:9:19::1\n      Label Stack=101 (bottom) 2009:1::/64\n      Label Stack=102 (bottom) 2009:2::/64\n      Label Stack=103 (bottom) 2009:3::/64", mpr.mp_reach)
+    assert_equal("\n    AFI IPv6 (2), SAFI Labeled NLRI (4)\n    nexthop: 2009:9:19::1\n      Label Stack=101 (bottom) 2009:1::/64\n      Label Stack=102 (bottom) 2009:2::/64\n      Label Stack=103 (bottom) 2009:3::/64", mpr.mp_reach)
     assert_equal(2, mpr.afi)
     assert_equal(4, mpr.safi)
     assert_equal(s, mpr.to_shex)
@@ -196,28 +192,28 @@ class Mp_reach_Test < Test::Unit::TestCase
   end
   def test_afi_1_2_safi_1_2_4_128_hash
     mpr =  Mp_reach.new(:safi=>2, :nexthop=> ['2009:9:19::1/128'], :nlris=> ['2009:1::/64', '2009:2::/64', '2009:3::/64'])
-    assert_equal("\n    AFI IPv6 (2), SAFI MULTICAST NLRI (2)\n    nexthop: 2009:9:19::1\n      2009:1::/64\n      2009:2::/64\n      2009:3::/64", mpr.mp_reach)
+    assert_equal("\n    AFI IPv6 (2), SAFI Multicast (2)\n    nexthop: 2009:9:19::1\n      2009:1::/64\n      2009:2::/64\n      2009:3::/64", mpr.mp_reach)
     assert_equal(mpr.to_shex, Mp_reach.new(mpr.encode).to_shex)
     mpr =  Mp_reach.new(:safi=>1, :nexthop=> ['10.0.0.1','10.0.0.2'], :nlris=> '192.168.0.0/24')
-    assert_equal("\n    AFI IPv4 (1), SAFI UNICAST NLRI (1)\n    nexthop: 10.0.0.1, 10.0.0.2\n      192.168.0.0/24", mpr.mp_reach)
+    assert_equal("\n    AFI IPv4 (1), SAFI Unicast (1)\n    nexthop: 10.0.0.1, 10.0.0.2\n      192.168.0.0/24", mpr.mp_reach)
     assert_equal(mpr.to_shex, Mp_reach.new(mpr.encode).to_shex)
     mpr =  Mp_reach.new(:safi=>4, :nexthop=> ['10.0.0.1','10.0.0.2'], :nlris=> {:prefix=> '192.168.0.0/24', :label=>101} )
-    assert_equal("\n    AFI IPv4 (1), SAFI LABEL NLRI (4)\n    nexthop: 10.0.0.1, 10.0.0.2\n      Label Stack=101 (bottom) 192.168.0.0/24", mpr.mp_reach)
+    assert_equal("\n    AFI IPv4 (1), SAFI Labeled NLRI (4)\n    nexthop: 10.0.0.1, 10.0.0.2\n      Label Stack=101 (bottom) 192.168.0.0/24", mpr.mp_reach)
     assert_equal(mpr.to_shex, Mp_reach.new(mpr.encode).to_shex)
     mpr = Mp_reach.new(:safi=>128, :nexthop=> ['10.0.0.1','10.0.0.2'], :nlris=> {:rd=> [100,100], :prefix=> '192.168.0.0/24', :label=>101})
-    assert_equal("\n    AFI IPv4 (1), SAFI MPLS VPN UNICAST (128)\n    nexthop: 10.0.0.1, 10.0.0.2\n      Label Stack=101 (bottom) RD=100:100, IPv4=192.168.0.0/24", mpr.mp_reach)
+    assert_equal("\n    AFI IPv4 (1), SAFI Labeled VPN Unicast (128)\n    nexthop: 10.0.0.1, 10.0.0.2\n      Label Stack=101 (bottom) RD=100:100, IPv4=192.168.0.0/24", mpr.mp_reach)
     assert_equal(mpr.to_shex, Mp_reach.new(mpr.encode).to_shex)
     mpr = Mp_reach.new(:safi=>128, :nexthop=> ['10.0.0.1','10.0.0.2'], :nlris=> {:rd=> Rd.new(100,100), :prefix=> Prefix.new('192.168.0.0/24'), :label=>101})
-    assert_equal("\n    AFI IPv4 (1), SAFI MPLS VPN UNICAST (128)\n    nexthop: 10.0.0.1, 10.0.0.2\n      Label Stack=101 (bottom) RD=100:100, IPv4=192.168.0.0/24", mpr.mp_reach)
+    assert_equal("\n    AFI IPv4 (1), SAFI Labeled VPN Unicast (128)\n    nexthop: 10.0.0.1, 10.0.0.2\n      Label Stack=101 (bottom) RD=100:100, IPv4=192.168.0.0/24", mpr.mp_reach)
     assert_equal(mpr.to_shex, Mp_reach.new(mpr.encode).to_shex)
   end
   def test_afi_1_2_safi_1_2_hash_multiple_prefix
     mpr =  Mp_reach.new(:safi=>2, :nexthop=> '2009:9:19::1/128', :nlris=> [
       '2009:1::/64', '2009:2::/64', '2009:3::/64', '2009:4::/64', '2009:5::/64', '2009:6::/64'])
-    assert_equal("\n    AFI IPv6 (2), SAFI MULTICAST NLRI (2)\n    nexthop: 2009:9:19::1\n      2009:1::/64\n      2009:2::/64\n      2009:3::/64\n      2009:4::/64\n      2009:5::/64\n      2009:6::/64", mpr.mp_reach)
+    assert_equal("\n    AFI IPv6 (2), SAFI Multicast (2)\n    nexthop: 2009:9:19::1\n      2009:1::/64\n      2009:2::/64\n      2009:3::/64\n      2009:4::/64\n      2009:5::/64\n      2009:6::/64", mpr.mp_reach)
     mpr =  Mp_reach.new(:safi=>1, :nexthop=> '10.0.0.1', :nlris=> [
       '192.168.0.0/24', '192.168.1.0/24', '192.168.2.0/24', '192.168.3.0/24', '192.168.4.0/24', '192.168.5.0/24'])
-    assert_equal("\n    AFI IPv4 (1), SAFI UNICAST NLRI (1)\n    nexthop: 10.0.0.1\n      192.168.0.0/24\n      192.168.1.0/24\n      192.168.2.0/24\n      192.168.3.0/24\n      192.168.4.0/24\n      192.168.5.0/24", mpr.mp_reach)
+    assert_equal("\n    AFI IPv4 (1), SAFI Unicast (1)\n    nexthop: 10.0.0.1\n      192.168.0.0/24\n      192.168.1.0/24\n      192.168.2.0/24\n      192.168.3.0/24\n      192.168.4.0/24\n      192.168.5.0/24", mpr.mp_reach)
   end
   def test_8
     mpr =  Mp_reach.new(:safi=>1, :nexthop=> '10.0.0.1', :nlris=> [
@@ -381,23 +377,6 @@ class Mp_reach_Test < Test::Unit::TestCase
     assert_equal(smpr4.split.join, mpr4.to_shex)
     assert_equal attr_len(mpr3)+12, attr_len(mpr4)
     assert_equal(smpr5.split.join, mpr5.to_shex)
-
-    # 800e3e 0001 80 0c 00000000000000000a000001 00
-    #             700006510000006400000064c0a800
-    #             700006610000006400000064c0a801
-    #             700006710000006400000064c0a802
-    # 
-    # 
-    # 800e4a0001800c00000000000000000a000001 00
-    #    00000064 700006510000006400000064c0a800
-    #    00000064 700006610000006400000064c0a801
-    #    00000064 700006710000006400000064c0a802
-    # 
-    # 
-    # 800e4a 0001 80 0c 00000000000000000a000001 00 
-    #    00000065 700006510000006400000064c0a800
-    #    00000066 700006610000006400000064c0a801
-    #    00000067 700006710000006400000064c0a802
 
   end
   

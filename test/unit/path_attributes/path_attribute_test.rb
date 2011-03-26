@@ -164,7 +164,7 @@ class Path_attribute_Test < Test::Unit::TestCase # :nodoc:
       {:rd=> [100,100], :prefix=> '192.168.2.0/24', :label=>103},
     ])
     )
-    assert_match(/ID=100, Label Stack=101/, path_attr.to_s)
+    assert_match(/ID=100, IPv4=192.168.0.0/, path_attr.to_s)
     path_attr_new = Path_attribute.new(path_attr.encode(true), :as4byte=> true, :path_id=>true)
     assert_equal(path_attr.to_shex, path_attr_new.to_shex)
     

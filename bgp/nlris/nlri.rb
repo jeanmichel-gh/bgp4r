@@ -23,13 +23,9 @@
 
 require 'bgp/common'
 require 'bgp/iana'
-require 'bgp/nlris/prefix2'
+require 'bgp/nlris/prefix'
 module BGP
 
-
-  #
-  # Container for prefix(1,1) 
-  #
   class Base_nlri
     
     attr_reader :nlris
@@ -38,14 +34,10 @@ module BGP
       def new_ntop(s, path_id=nil)
         nlri = new
         while s.size>0
-          #TODO if only used for afi 1, this parameter is not needed
-          #TODO wait until other afi are coded....
-          nlri.add Prefix.new_ntop_extended(s,1) if path_id
-          nlri.add Prefix.new_ntop(s,1)          unless path_id
+          nlri.add Prefix.send((path_id ? :new_ntop_extended : :new_ntop ), s, 1)
         end
         nlri
       end
-      
     end
     
     def initialize(*args)
@@ -109,29 +101,23 @@ module BGP
 
   end
 
-  Nlri      = Class.new(Base_nlri)
-  Withdrawn = Class.new(Base_nlri)
+  unless const_defined?(:Nlri)
+    Nlri      = Class.new(Base_nlri)
+    Withdrawn = Class.new(Base_nlri)
+  end
   
-  
-  # TODO: Nlri.factory() is about build nlri_elements ... 
-  # 
-
   class Nlri
     def self.factory(s, afi, safi, path_id=nil)
-      
       if afi== 1 and safi==1
         Nlri.new_ntop(s.is_packed, path_id)
       else
         case safi
         when 1,2
-          # FIXME: add a path_id arg ... same as Labeld.new_ntop ... to be consistent.
-          p = Prefix.new_ntop(s.is_packed, afi)
-          p.path_id=path_id if path_id
-          p
+          Prefix.new_ntop(s.is_packed, afi, path_id)
         when 4,128,129
-          # The prefix will contain the path_id if any.
           Labeled.new_ntop(s.is_packed, afi, safi, path_id)
         else
+          #TODO class Error.....
           raise RuntimeError, "Afi #{afi} Safi #{safi} not supported!"
         end
       end

@@ -6,12 +6,9 @@ module BGP
 
 class Nsap
   
-  # FIXME: an Iso class    Nsap < Iso with limiting len to 156
-  
   def self.new_nsap(s)
     pfx,len = s.split('/')
     len ||= 152
-    # puts [pfx, (len.to_i > 152 ? 152 : len)].join('/')
     new [pfx, (len.to_i > 152 ? 152 : len)].join('/')
   end
   def self.new_ntoh(s)

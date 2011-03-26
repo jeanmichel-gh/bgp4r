@@ -30,6 +30,6 @@ class Mbgp_cap_Test < Test::Unit::TestCase
     mbgp2 = Mbgp.new(['0206010400010001'].pack('H*'))
     mbgp3 = Mbgp.new(mbgp1.encode)
     assert_equal(mbgp2.encode, mbgp3.encode)
-    assert_equal "Option Capabilities Advertisement (2): [0206010400010001]\n    Multiprotocol Extensions (1), length: 4\n      AFI IPv4 (1), SAFI UNICAST NLRI (1)", mbgp2.to_s
+    assert_equal "Option Capabilities Advertisement (2): [0206010400010001]\n    Multiprotocol Extensions (1), length: 4\n      AFI IPv4 (1), SAFI Unicast (1)", mbgp2.to_s
   end
 end

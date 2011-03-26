@@ -40,7 +40,7 @@ class TestBgpMessagesCapabilityRevision < Test::Unit::TestCase
     assert_equal '0206010400010001',  CAP::Mbgp.new(1,1).to_shex
     revision = BGP::Capability::Revision.new :unset, :set, :advertise, 10, DYN_CAP::Mbgp.new(1,1)
     assert_equal '400000000a01000400010001', revision.to_shex
-    assert_equal '0x00000010  Advertise  Req (0x40)  MBGP IPv4, UNICAST NLRI',revision.to_s
+    assert_equal '0x00000010  Advertise  Req (0x40)  MBGP IPv4, Unicast',revision.to_s
     rev = BGP::Capability::Revision.advertise( 10, DYN_CAP::Mbgp.new(1,1))
     assert_equal '000000000a01000400010001', rev.to_shex
     rev = BGP::Capability::Revision.advertise_ack_request( 10, DYN_CAP::Mbgp.new(1,1))
@@ -87,12 +87,12 @@ class TestBgpMessagesCapability < Test::Unit::TestCase
 
     s = 'Capability (6), length: 91
   Seqn        Action     Ack bits    Capability
-  0x00000010  Advertise      (0x00)  MBGP IPv4, UNICAST NLRI
-  0x00000020  Advertise  Req (0x40)  MBGP IPv4, UNICAST NLRI
-  0x00000020  Advertise  Rsp (0x80)  MBGP IPv4, UNICAST NLRI
-  0x00000010  Withdraw       (0x01)  MBGP IPv4, UNICAST NLRI
-  0x00000020  Withdraw   Req (0x41)  MBGP IPv4, UNICAST NLRI
-  0x00000020  Withdraw   Rsp (0x81)  MBGP IPv4, UNICAST NLRI'
+  0x00000010  Advertise      (0x00)  MBGP IPv4, Unicast
+  0x00000020  Advertise  Req (0x40)  MBGP IPv4, Unicast
+  0x00000020  Advertise  Rsp (0x80)  MBGP IPv4, Unicast
+  0x00000010  Withdraw       (0x01)  MBGP IPv4, Unicast
+  0x00000020  Withdraw   Req (0x41)  MBGP IPv4, Unicast
+  0x00000020  Withdraw   Rsp (0x81)  MBGP IPv4, Unicast'
 
     cap_msg = BGP::Capability.new(
     BGP::Capability::Revision.advertise( 10, DYN_CAP::Mbgp.new(1,1)),

@@ -1,7 +1,7 @@
 require "test/unit"
 
 require "bgp/nlris/labeled"
-require 'bgp/nlris/prefix2'
+require 'bgp/nlris/prefix'
 
 class TestBgpNlrisLabeled < Test::Unit::TestCase
   include BGP

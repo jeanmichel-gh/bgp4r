@@ -24,18 +24,18 @@ require "bgp/common"
 
 require 'test/unit'
 class Common_Test < Test::Unit::TestCase
-  def test_ipaddr_1
+  def test_array_pack_returns_a_packed_string
     s = [1,2,3].pack('C*')
     assert(s.is_packed?)
     assert( ! "1234".is_packed?)
   end
-  def test_ipaddr_2
+  def test_ipaddr_create
     ip = IPAddr.new('10.0.0.1')
     assert_equal('0a000001', ip.to_shex)
     assert_equal('0a000001', IPAddr.create(ip.encode).to_shex)
     assert_equal('0a000001', IPAddr.create(ip.to_i).to_shex)
   end
-  def test_ipaddr_3
+  def test_ipaddr_netmask
     assert_equal(32, IPAddr.new('10.0.0.1').mlen)
     assert_equal(16, IPAddr.new('10.0.0.1/16').mlen)
     assert_equal(7, IPAddr.new('10.0.0.0/7').mlen)
@@ -54,18 +54,18 @@ class Common_Test < Test::Unit::TestCase
     assert_equal('ffff:ffff:ffff:0000:0000:0000:0000:0000',IPAddr.new('2011:1:18::1/48').netmask)
     assert_equal('ffff:ffff:0000:0000:0000:0000:0000:0000',IPAddr.new('2011:1:18::1/32').netmask)
   end
-  def test_ipaddr_4
+  def test_ipaddr_arithmetic
     ip1 = IPAddr.new('10.0.0.1/28')
     ip2 = IPAddr.new('10.0.0.1/24')
     ip3 = IPAddr.new('10.0.0.1/12')
     assert_equal('10.0.0.16/28', ip1 ^ 1)
     assert_equal('10.0.0.32/28', ip1 ^ 2)
-    assert_equal('10.0.1.0/24', ip2 ^ 1)
-    assert_equal('10.0.2.0/24', ip2 ^ 2)
+    assert_equal('10.0.1.0/24',  ip2 ^ 1)
+    assert_equal('10.0.2.0/24',  ip2 ^ 2)
     assert_equal('10.16.0.0/12', ip3 ^ 1)
     assert_equal('10.32.0.0/12', ip3 ^ 2)
   end
-  def test_string_1      
+  def test_string_pack
     sbin = ['00'].pack('H*')
     assert_equal '0x0000:  00', sbin.hexlify.join
     sbin = ['0001'].pack('H*')
@@ -79,8 +79,4 @@ class Common_Test < Test::Unit::TestCase
     assert_equal '0x0001:  1011 1213 1415 1617 1819 1a1b 1c1d 1e1f', sbin.hexlify[2]
     assert_equal '0x0002:  20', sbin.hexlify[3]
   end
-  # FIXME: remove...
-  # def test_nlri
-  #   assert_equal('14000000', IPAddr.new_nlri4(['101400'].pack('H*')).to_shex)
-  # end
 end

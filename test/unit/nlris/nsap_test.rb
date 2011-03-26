@@ -20,8 +20,6 @@
 # along with BGP4R.  If not, see <http://www.gnu.org/licenses/>.
 #++
 
-#TODO: maybe renamed as Iso ???????
-
 require 'bgp/nlris/nsap'
 
 require 'test/unit'
@@ -79,7 +77,6 @@ class Nsap_Test < Test::Unit::TestCase
     assert_equal('35000020110013001100000000000000000064', addr.to_shex)
     assert_equal('2011:13:11::64', addr.to_s)
   end
-  
   
   private
   

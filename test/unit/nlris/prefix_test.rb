@@ -21,7 +21,7 @@
 #++
 
 require 'test/unit'  
-require 'bgp/nlris/prefix2'
+require 'bgp/nlris/prefix'
 
 class Prefix_Test < Test::Unit::TestCase
   include BGP
@@ -72,8 +72,6 @@ class Prefix_Test < Test::Unit::TestCase
     assert_equal('IPv6=2011:13:11::/128', pfx.to_s_with_afi)
   end
   def test_nsap
-
-    #FIXME: 9849000100020003f15200000000000000000000 ??? what this 3f152 ....
     pfx =  Prefix.new('49.0001.0002.0003')
     assert_equal('9849000100020003000000000000000000000000', pfx.to_shex )
     assert_equal('49.0001.0002.0003.0000.0000.0000.0000.0000.0000.00/152', pfx.to_s)

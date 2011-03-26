@@ -23,14 +23,18 @@
 require "test/unit"
 require 'bgp4r'
 require 'test/helpers/server'
+include BGP
+include BGP
+include BGP::OPT_PARM::CAP
+include BGP::TestHelpers
+
 
 class TestBgpNeighbor < Test::Unit::TestCase
   include BGP
   include BGP::OPT_PARM::CAP
   include BGP::TestHelpers
-  def setup
-  end
   def teardown
+    stop_server
   end
   def test_open_msg
     neighbor = Neighbor.new \
@@ -50,7 +54,6 @@ class TestBgpNeighbor < Test::Unit::TestCase
     assert_equal(4,open_msg.version)
     assert_equal(20,open_msg.holdtime)
     assert_equal(100,open_msg.local_as)
-    # puts neighbor
   end
   def test_neighbor_state_methods
     neighbor = Neighbor.new \
@@ -71,7 +74,6 @@ class TestBgpNeighbor < Test::Unit::TestCase
     @c.start :port=> 3456
     assert_equal('Established', @c.state)
     assert_equal('Established', @s.state)
-    stop_server
   end
   def test_start_no_blocking
     start_server(3333)
@@ -79,7 +81,6 @@ class TestBgpNeighbor < Test::Unit::TestCase
     @c.start :port=> 3333, :no_blocking=>true
     assert_equal('OpenSent', @c.state)
     assert_match(/(Active|OpenSent)/, @s.state)
-    stop_server
   end
   def test_send_and_receive_path_id_afi_1_safi_1
     server_add_path_cap = BGP::OPT_PARM::CAP::Add_path.new
@@ -96,7 +97,6 @@ class TestBgpNeighbor < Test::Unit::TestCase
             "Should have the capability to recv inet unicast reachability path info."
     assert @c.session_info.send_inet_unicast?, 
            "Should have the capability to send inet unicast reachability path info."
-    stop_server
   end
   def test_send_path_id_afi_1_safi_1
     server_add_path_cap = BGP::OPT_PARM::CAP::Add_path.new
@@ -115,7 +115,6 @@ class TestBgpNeighbor < Test::Unit::TestCase
             "Should have the capability to recv inet unicast reachability path info."
     assert ! @c.session_info.send_inet_unicast?, 
            "Should NOT have the capability to send inet unicast reachability path info."
-    stop_server
   end
   def test_recv_path_id_afi_1_safi_1
     server_add_path_cap = BGP::OPT_PARM::CAP::Add_path.new
@@ -134,7 +133,6 @@ class TestBgpNeighbor < Test::Unit::TestCase
             "Should NOT have the capability to recv inet unicast reachability path info."
     assert  @c.session_info.send_inet_unicast?, 
            "Should have the capability to send inet unicast reachability path info."
-    stop_server
   end
 
   def test_nor_recv_nor_send_path_id_afi_1_safi_1
@@ -154,7 +152,6 @@ class TestBgpNeighbor < Test::Unit::TestCase
             "Should NOT have the capability to recv inet unicast reachability path info."
     assert ! @c.session_info.send_inet_unicast?, 
            "Should have the capability to send inet unicast reachability path info."
-    stop_server
   end
 
 

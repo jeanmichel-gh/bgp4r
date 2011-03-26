@@ -271,7 +271,7 @@ include BGP
 
 
 # Mp Reach (14), length: 27, Flags [O]: 
- #     AFI  (3), SAFI UNICAST NLRI (1)
+ #     AFI  (3), SAFI Unicast (1)
  #     nexthop: 10.0.0.1
  #       49.0001.0002.0003.0004.0005.0006
  #    0x0000:  0003 0108 4700 0601 0a00 0001 0068 4900
