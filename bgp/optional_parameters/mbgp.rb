@@ -51,16 +51,15 @@ module BGP::OPT_PARM::CAP
       end
     end
 
-    def afi=(val)
-      @afi = if val.is_a?(Fixnum)
-        val
-      elsif val == :ipv4
-        1
-      elsif val == :ipv6
-        2
+    def afi=(arg)
+      @afi = case arg
+      when Fixnum ; arg
+      when Symbol ; IANA.afi?(arg)
+      else
+        raise ArgumentError, "Invalid afi #{arg}"
       end
     end
-
+    
     def safi=(val)
       @safi = if val.is_a?(Fixnum)
         val
