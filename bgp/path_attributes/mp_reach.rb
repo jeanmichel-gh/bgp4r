@@ -61,32 +61,33 @@ module BGP
         @afi = 3
         # mpr1 =  Mp_reach.new(:afi=>3, :safi=>1, :nexthop=> ['10.0.0.1'], :nlris=> '49.0001.0002.0003.0004.0005.0006' )
         # nlris
-        @nlris = [h[:nlris]].flatten.collect do |n|
-          case n
-          when String
-            path_id ? Prefix.new(path_id, n) : Prefix.new(n)
-          when Hash
-            nlri = Prefix.new(n[:prefix])
-            nlri.path_id=n[:path_id] if n.has_key?(:path_id)
+        case @safi
+        when 1,2
+          @nlris = [h[:nlris]].flatten.collect do |n|
+            case n
+            when String
+              path_id ? Prefix.new(path_id, n) : Prefix.new(n)
+            when Hash
+              nlri = Prefix.new(n[:prefix])
+              nlri.path_id=n[:path_id] if n.has_key?(:path_id)
+              nlri
+            else
+              raise ArgumentError, "Invalid: #{n.inspect}"
+            end
+          end
+        when 128
+          @nlris = [h[:nlris]].flatten.collect do |n|
+            path_id = n[:path_id] || @path_id
+            prefix = n[:prefix].is_a?(Prefix) ? n[:prefix] :  Prefix.new(n[:prefix]) 
+            rd = n[:rd].is_a?(Rd) ?  n[:rd] : Rd.new(*n[:rd])
+            nlri = Labeled.new(Vpn.new(prefix,rd), *n[:label]) 
+            nlri.path_id=path_id
             nlri
-          else
-            raise ArgumentError, "Invalid: #{n.inspect}"
           end
         end
 
         # Nexthop
-        case @safi
-        when 1
-          @nexthops = [h[:nexthop]].flatten.collect { |nh| Iso_ip_mapped.new(nh) }
-        when 2
-          raise "TO BE IMPLEMTED!!!!"
-        when 4
-          raise "TO BE IMPLEMTED!!!!"
-        when 128, 129
-          raise "TO BE IMPLEMTED!!!!"
-        else
-          raise
-        end
+        @nexthops = [h[:nexthop]].flatten.collect { |nh| Iso_ip_mapped.new(nh) }
 
       else
         
@@ -132,7 +133,7 @@ module BGP
             nlri
           end
         when 128,129
-          @nlris = [h[:nlris]].flatten.collect do |n|
+            @nlris = [h[:nlris]].flatten.collect do |n|
             path_id = n[:path_id] || @path_id
             prefix = n[:prefix].is_a?(Prefix) ? n[:prefix] :  Prefix.new(n[:prefix]) 
             rd = n[:rd].is_a?(Rd) ?  n[:rd] : Rd.new(*n[:rd])
@@ -210,7 +211,9 @@ module BGP
     end
 
     def parse_iso_mapped_next_hops(s)
+      raise unless @afi == 3
       while s.size>0
+        s.slice!(0,8) if (128..129)===@safi
         case s.slice(0,1).unpack('C')[0]
         when 0x47
           s.slice!(0,4)
@@ -219,8 +222,12 @@ module BGP
           s.slice!(0,3)
           @nexthops << Iso_ip_mapped.new(Prefix.new_ntop([128,s.slice!(0,16)].pack('Ca*'),2).to_s)
         else
-          raise
+          p @safi
+          p s.unpack('H*')
+          raise 
         end
+        # skip magic
+        s.slice!(0,1)
       end
     end
     
@@ -249,7 +256,7 @@ module BGP
     def encode(what=:mp_reach)
       case what
       when :mp_reach
-        nexthops = @nexthops.collect { |nh| nh.encode(false) }.join
+        nexthops = @nexthops.collect { |nh| nh.encode_next_hop(safi) }.join
         nlris =  @nlris.collect { |n| n.encode }.join
         super([afi, @safi, nexthops.size, nexthops, 0, nlris ].pack('nCCa*Ca*'))
       when :mp_unreach
@@ -265,6 +272,13 @@ module BGP
 
   end
 
+  # s = '80 0e 33 0003 80 
+  # 1c 0000000000000000 350000 2011000300260000000000000000000100 00 88 000641 0000006400000064 49ababcdcdef'
+  # sbin = [s.split.join].pack('H*') 
+  # mpr = Mp_reach.new(sbin)
+  # puts mpr
+
 end
+
 
 load "../../test/unit/path_attributes/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0

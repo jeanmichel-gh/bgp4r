@@ -47,7 +47,8 @@ module BGP
       prefix = [mlen,s.slice!(0,(mlen+7)/8)].pack("Ca*")
       case safi
       when 128,129
-        @prefix = Vpn.new(prefix)
+        #FIXME: implement Vpn.new_ntop
+        @prefix = Vpn.new(prefix, afi)
       else
         @prefix = Prefix.new_ntop(prefix, afi)
       end

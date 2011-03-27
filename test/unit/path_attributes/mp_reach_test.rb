@@ -28,9 +28,9 @@ class Mp_reach_Test < Test::Unit::TestCase
   
   def test_iso_mapped_ip_addr
     mapped_addr = Iso_ip_mapped.new('10.0.0.1')
-    assert_equal('470006010a000001', mapped_addr.to_shex)
+    assert_equal('470006010a00000100', mapped_addr.to_shex)
     mapped_addr = Iso_ip_mapped.new('2011::1')
-    assert_equal('35000020110000000000000000000000000001', mapped_addr.to_shex)
+    assert_equal('3500002011000000000000000000000000000100', mapped_addr.to_shex)
   end
   
   def test_afi_3_safi_1_ipv4_mapped_nexthops
@@ -39,7 +39,7 @@ class Mp_reach_Test < Test::Unit::TestCase
                           :nexthop=> ['10.0.0.1',], 
                           :nlris=> '49.0001.0002.0003.0004.0005.0006/64' )
     
-    s = '80 0e 16 0003 01 08 470006010a000001 00 40 4900010002000300'
+    s = '80 0e 17 0003 01 09 470006010a00000100 00 40 4900010002000300'
 
     assert_equal(s.split.join, mpr1.to_shex)
     
@@ -48,8 +48,8 @@ class Mp_reach_Test < Test::Unit::TestCase
                         :nexthop=> ['1.1.1.1','2.2.2.2'], 
                         :nlris => '49.0001.0002.0003.0004.0005.0006')
     
-    s = '80 0e 29 0003 01 10 4700060101010101 4700060102020202 00 98 49000100020003000400050006000000000000'
-    
+    s = '80 0e 29 0003 01 10 4700060101010101   4700060102020202   00 98 49000100020003000400050006000000000000'
+    s = '80 0e 2b 0003 01 12 470006010101010100 470006010202020200 00 98 49000100020003000400050006000000000000'    
     assert_equal(s.split.join, mpr2.to_shex)
 
     mpr2 = Mp_reach.new( :afi=>3, 
@@ -61,6 +61,9 @@ class Mp_reach_Test < Test::Unit::TestCase
     s = "80 0e 3d 0003 01 10 4700060101010101 4700060102020202 00 
               98 49000100020003000400050006000000000000
               98 49001100120013001400150016000000000000"
+    s = '80 0e 3f 0003 01 12 470006010101010100 470006010202020200 00 
+              98 49000100020003000400050006000000000000
+              9849001100120013001400150016000000000000'
 
     assert_equal(s.split.join, mpr2.to_shex)
 
@@ -70,9 +73,7 @@ class Mp_reach_Test < Test::Unit::TestCase
                          :nlris => ['49.0001.0002.0003.0004.0005.0006/48','49.0011.0012.0013.0014.0015.0016/72'] 
                         )
     
-    s = "80 0e 1e 0003 01 08 4700060101010101 00 
-            30 490001000200
-            48 490011001200130014"
+    s = "80 0e 1f 0003 01 09 470006010101010100 00 3049000100020048490011001200130014"
 
     assert_equal(s.split.join, mpr3.to_shex)
 
@@ -81,17 +82,16 @@ class Mp_reach_Test < Test::Unit::TestCase
   def test_afi_3_safi_1_ipv6_mapped_nexthops
     mpr1 =  Mp_reach.new(:afi=>3, :safi=>1, :nexthop=> ['2011::1'], :nlris=> '49.0001.0002.0003.0004.0005.0006/72' )
 
-    s = '80 0e 22 0003 01 13 350000 20110000000000000000000000000001 00 48 490001000200030004'
+    s = '80 0e 23 000301143500002011000000000000000000000000000100 00 48490001000200030004'
     assert_equal(s.split.join, mpr1.to_shex)
 
     mpr2 =  Mp_reach.new(:afi=>3, :safi=>1, :nexthop=> ['2011::1', '2011::2'], :nlris=> '49.0001.0002.0003.0004.0005.0006/103' )
 
     s = '
-    80 0e 39 0003 01 26 
-        350000 20110000000000000000000000000001
-        350000 20110000000000000000000000000002 00
-        67 49000100020003000400050006'
-    
+    80 0e 3b 0003 01 28
+        350000 2011000000000000000000000000000100
+        350000 2011000000000000000000000000000200 00
+        6749000100020003000400050006'
     assert_equal(s.split.join, mpr2.to_shex)
 
   end
@@ -105,14 +105,57 @@ class Mp_reach_Test < Test::Unit::TestCase
     #    0x0000:  0003 0108 4700 0601 0a00 0001 0068 4900
     #    0x0001:  0100 0200 0300 0400 0500 06
 
-    s = '80 0e 1b 0003 01 08 470006010a000001 00 68 49000100020003000400050006'
+    s = '800e1c00030109470006010a00000100006849000100020003000400050006'
     sbin = [s.split.join].pack('H*') 
     mpr = Mp_reach.new(sbin)
 
     assert_equal(s.split.join, mpr.to_shex)
-    assert_equal("[Oncr] (14)   Mp Reach: [800e1b000301084700060...] '\n    AFI NSAP (3), SAFI Unicast (1)\n    nexthop: 10.0.0.1\n      49.0001.0002.0003.0004.0005.0006.0000.0000.0000.00/104'", mpr.to_s)
+    assert_equal("[Oncr] (14)   Mp Reach: [800e1c000301094700060...] '\n    AFI NSAP (3), SAFI Unicast (1)\n    nexthop: 10.0.0.1\n      49.0001.0002.0003.0004.0005.0006.0000.0000.0000.00/104'", mpr.to_s)
     
   end
+
+  def test_afi_3_safi_128_ipv4_mapped_nexthops
+    mpr =   Mp_reach.new(:afi=>3, :safi=>128, :nexthop=> '1.1.1.1', :nlris=> [
+      {:rd=> [100,100], :prefix=> '49.abab.cdcd.efef/48', :label=>100},
+      ]
+    )
+    smpr = '800e280003801100000000000000004700060101010101000088000641000000640000006449ababcdcdef'
+    assert_equal(smpr, mpr.to_shex)
+
+  end
+
+  def test_afi_3_safi_128_ipv6_mapped_nexthops
+    mpr =   Mp_reach.new(:afi=>3, :safi=>128, :nexthop=> '2011:03:26::1', :nlris=> [
+      {:rd=> [100,100], :prefix=> '49.abab.cdcd.efef/48', :label=>100},
+      ]
+    )
+    smpr = '80 0e 33 0003 80 
+      1c 0000000000000000 350000 2011000300260000000000000000000100 00 88 000641 0000006400000064 49ababcdcdef'
+    assert_equal(smpr.split.join, mpr.to_shex)
+  end
+  
+  def test_afi_3_safi_128_ipv6_mapped_nexthops_ntoh
+    s = '80 0e 33 0003 80 
+    1c 0000000000000000 350000 2011000300260000000000000000000100 00 88 000641 0000006400000064 49ababcdcdef'
+    sbin = [s.split.join].pack('H*') 
+    mpr = Mp_reach.new(sbin)
+
+    assert_equal(s.split.join, mpr.to_shex)
+    assert_match(/nexthop: 2011:3:26::1/, mpr.to_s())
+    assert_match(/Label Stack=100 \(bottom\) RD=100:100/, mpr.to_s())
+    assert_match(/NSAP=49.abab.cdcd.ef00.0000.0000.0000.0000.0000.0000.00\/48/, mpr.to_s())
+
+    mpr =   Mp_reach.new(:afi=>3, :safi=>128, :nexthop=> '2011:03:26::1', :nlris=> [
+      {:rd=> [100,100], :prefix=> '49.abab.cdcd.efef/48', :label=>100},
+    ]
+    )
+    smpr = '80 0e 33 0003 80 
+    1c 0000000000000000 350000 2011000300260000000000000000000100 00 88 000641 0000006400000064 49ababcdcdef'
+    assert_equal(smpr.split.join, mpr.to_shex)
+  end
+  
+  
+
 
   def test_afi_3_safi_1_ipv6_mapped_nexthops_ntoh
 
@@ -126,10 +169,10 @@ class Mp_reach_Test < Test::Unit::TestCase
     #    0x0003:  0200 0300 0400 0500 06
 
     s = '
-    80 0e 39 0003 01 
-    26 
-      350000 20110000000000000000000000000001
-      350000 20110000000000000000000000000002
+    80 0e 3b 0003 01 
+    28 
+      350000 2011000000000000000000000000000100
+      350000 2011000000000000000000000000000200
     00
     68 49000100020003000400050006'
     sbin = [s.split.join].pack('H*') 
@@ -137,7 +180,7 @@ class Mp_reach_Test < Test::Unit::TestCase
     mpr = Mp_reach.new(sbin)
     
     assert_equal(s.split.join, mpr.to_shex)
-    assert_equal("[Oncr] (14)   Mp Reach: [800e39000301263500002...] '\n    AFI NSAP (3), SAFI Unicast (1)\n    nexthop: 2011::1, 2011::2\n      49.0001.0002.0003.0004.0005.0006.0000.0000.0000.00/104'", mpr.to_s())
+    assert_equal("[Oncr] (14)   Mp Reach: [800e3b000301283500002...] '\n    AFI NSAP (3), SAFI Unicast (1)\n    nexthop: 2011::1, 2011::2\n      49.0001.0002.0003.0004.0005.0006.0000.0000.0000.00/104'", mpr.to_s())
   end
   
   def test_afi_2_safi_2
@@ -200,6 +243,11 @@ class Mp_reach_Test < Test::Unit::TestCase
     assert_equal("\n    AFI IPv4 (1), SAFI Labeled VPN Unicast (128)\n    nexthop: 10.0.0.1, 10.0.0.2\n      Label Stack=101 (bottom) RD=100:100, IPv4=192.168.0.0/24", mpr.mp_reach)
     assert_equal(mpr.to_shex, Mp_reach.new(mpr.encode).to_shex)
     mpr = Mp_reach.new(:safi=>128, :nexthop=> ['10.0.0.1','10.0.0.2'], :nlris=> {:rd=> Rd.new(100,100), :prefix=> Prefix.new('192.168.0.0/24'), :label=>101})
+    assert_equal("\n    AFI IPv4 (1), SAFI Labeled VPN Unicast (128)\n    nexthop: 10.0.0.1, 10.0.0.2\n      Label Stack=101 (bottom) RD=100:100, IPv4=192.168.0.0/24", mpr.mp_reach)
+    assert_equal(mpr.to_shex, Mp_reach.new(mpr.encode).to_shex)
+  end
+  def ___test_afi_1_2_safi_1_2_4_128_hash
+    mpr = Mp_reach.new(:safi=>128, :nexthop=> ['10.0.0.1','10.0.0.2'], :nlris=> {:rd=> [100,100], :prefix=> '192.168.0.0/24', :label=>101})
     assert_equal("\n    AFI IPv4 (1), SAFI Labeled VPN Unicast (128)\n    nexthop: 10.0.0.1, 10.0.0.2\n      Label Stack=101 (bottom) RD=100:100, IPv4=192.168.0.0/24", mpr.mp_reach)
     assert_equal(mpr.to_shex, Mp_reach.new(mpr.encode).to_shex)
   end

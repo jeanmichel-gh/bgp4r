@@ -29,7 +29,7 @@ module BGP
       end
     end
     # len_included arg is used by labeled encode()
-    def encode_next_hop
+    def encode_next_hop(*args)
       Rd.new.encode + @prefix.encode(false)
     end
     def encode(len_included=true)

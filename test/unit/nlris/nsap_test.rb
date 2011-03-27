@@ -71,10 +71,10 @@ class Nsap_Test < Test::Unit::TestCase
   
   def test_iso_ip_mapped
     addr = Iso_ip_mapped.new('10.0.0.1')
-    assert_equal('470006010a000001', addr.to_shex)
+    assert_equal('470006010a00000100', addr.to_shex)
     assert_equal('10.0.0.1', addr.to_s)
     addr = Iso_ip_mapped.new('2011:13:11::64')
-    assert_equal('35000020110013001100000000000000000064', addr.to_shex)
+    assert_equal('3500002011001300110000000000000000006400', addr.to_shex)
     assert_equal('2011:13:11::64', addr.to_s)
   end
   

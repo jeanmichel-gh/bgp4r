@@ -116,6 +116,10 @@ class Prefix
     __encode__(*args)
   end
   
+  def encode_next_hop(*args)
+    __encode__(false,false)
+  end
+  
   def encode_without_len_without_path_id
     __encode__(false,false)
   end

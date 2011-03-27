@@ -63,15 +63,17 @@ class Iso_ip_mapped < IPAddr
   def nexthop
     to_s
   end
-  def hton(*args)
-    case afi
+  def encode_next_hop(safi=nil)
+    s = case afi
     when 1
-      ['47000601',super()].pack('H8a*')
+      ['47000601',hton,0].pack('H8a*C')
     when 2
-      ['350000',super()].pack('H6a*')
+      ['350000',hton,0].pack('H6a*C')
     end
+    s = ([0]*8).pack('C8') + s if (128..129) === safi
+    s
   end
-  alias :encode :hton
+  alias encode encode_next_hop
 end
 end
 
