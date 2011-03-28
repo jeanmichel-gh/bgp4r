@@ -68,7 +68,7 @@ end
 class TestBgpMessagesCapability < Test::Unit::TestCase
   include BGP
   include BGP::OPT_PARM
-  def test_capability_1
+  def test_adding_dyn_cap_to_message
     cap_msg = BGP::Capability.new
     assert_equal('ffffffffffffffffffffffffffffffff001306', cap_msg.to_shex)
     cap_msg <<  BGP::Capability::Revision.advertise( 10, DYN_CAP::Mbgp.new(1,1))
@@ -76,14 +76,21 @@ class TestBgpMessagesCapability < Test::Unit::TestCase
     cap_msg <<  BGP::Capability::Revision.advertise( 20, DYN_CAP::Mbgp.new(1,2))
     assert_match(/^(ff){16}002b06\s*000000000a01000400010001\s*000000001401000400010002/, cap_msg.to_shex)
   end
-  def test_capability_2
+  def test_new_cap_message_with_dyn_caps
     cap_msg = BGP::Capability.new(
       BGP::Capability::Revision.advertise( 10, DYN_CAP::Mbgp.new(1,1)),
       BGP::Capability::Revision.advertise( 20, DYN_CAP::Mbgp.new(1,2))
     )
     assert_match(/^(ff){16}002b06\s*000000000a01000400010001\s*000000001401000400010002/, cap_msg.to_shex)
   end
-  def test_capability_3
+  def test_new_cap_message_with_dyn_caps_verbose
+    cap_msg = BGP::Capability.new(
+      BGP::Capability::Revision.advertise( 10, DYN_CAP::Mbgp.ipv4_unicast),
+      BGP::Capability::Revision.advertise( 20, DYN_CAP::Mbgp.ipv4_multicast)
+    )
+    assert_match(/^(ff){16}002b06\s*000000000a01000400010001\s*000000001401000400010002/, cap_msg.to_shex)
+  end
+  def test_capability_advertise_remove_dyn_caps
 
     s = 'Capability (6), length: 91
   Seqn        Action     Ack bits    Capability
@@ -95,14 +102,24 @@ class TestBgpMessagesCapability < Test::Unit::TestCase
   0x00000020  Withdraw   Rsp (0x81)  MBGP IPv4, Unicast'
 
     cap_msg = BGP::Capability.new(
-    BGP::Capability::Revision.advertise( 10, DYN_CAP::Mbgp.new(1,1)),
-    BGP::Capability::Revision.advertise_ack_request( 20, DYN_CAP::Mbgp.new(1,1)),
-    BGP::Capability::Revision.advertise_ack_response( 20, DYN_CAP::Mbgp.new(1,1)),
-    BGP::Capability::Revision.remove( 10, DYN_CAP::Mbgp.new(1,1)),
-    BGP::Capability::Revision.remove_ack_request( 20, DYN_CAP::Mbgp.new(1,1)),
-    BGP::Capability::Revision.remove_ack_response( 20, DYN_CAP::Mbgp.new(1,1))
+      BGP::Capability::Revision.advertise( 10, DYN_CAP::Mbgp.new(1,1)),
+      BGP::Capability::Revision.advertise_ack_request( 20, DYN_CAP::Mbgp.new(1,1)),
+      BGP::Capability::Revision.advertise_ack_response( 20, DYN_CAP::Mbgp.new(1,1)),
+      BGP::Capability::Revision.remove( 10, DYN_CAP::Mbgp.new(1,1)),
+      BGP::Capability::Revision.remove_ack_request( 20, DYN_CAP::Mbgp.new(1,1)),
+      BGP::Capability::Revision.remove_ack_response( 20, DYN_CAP::Mbgp.new(1,1))
     )
     assert_equal s, cap_msg.to_s
+    
+    cap_msg2 = BGP::Capability.new(
+      BGP::Capability::Revision.advertise( 10, DYN_CAP::Mbgp.ipv4_unicast),
+      BGP::Capability::Revision.advertise_ack_request( 20, DYN_CAP::Mbgp.ipv4_unicast),
+      BGP::Capability::Revision.advertise_ack_response( 20, DYN_CAP::Mbgp.ipv4_unicast),
+      BGP::Capability::Revision.remove( 10, DYN_CAP::Mbgp.ipv4_unicast),
+      BGP::Capability::Revision.remove_ack_request( 20, DYN_CAP::Mbgp.ipv4_unicast),
+      BGP::Capability::Revision.remove_ack_response( 20, DYN_CAP::Mbgp.ipv4_unicast)
+    )
+    assert_equal(cap_msg.to_shex, cap_msg2.to_shex)
   end
   def test_factory
     s = 'ffffffffffffffffffffffffffffffff002b06000000000a01000400010001000000001401000400010002'
