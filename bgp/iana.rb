@@ -22,9 +22,20 @@
 
 
 module IANA
-    def self.afi?(arg)
+  def self.afi?(arg)
+    afis[arg]
+  end
+  def self.afi(arg)
+    arg.is_a?(Fixnum) ? arg : afis[arg]
+  end
+  def self.safi(arg)
+    arg.is_a?(Fixnum) ? arg : safis[arg]
+  end
+  def self.safis
+    @h_safis ||= SAFI.set_h_safis
+  end
+  def self.afis
     @h_afis ||= AFI.set_h_afis
-    @h_afis[arg]
   end
   def self.safi?(arg)
     case arg
@@ -35,8 +46,7 @@ module IANA
     when SAFI::MPLS_VPN_UNICAST   ; 'Labeled VPN Unicast'
     when SAFI::MPLS_VPN_Multicast ; 'Labeled VPN Multicast'
     else
-      @h_safis ||= SAFI.set_h_safis
-      @h_safis[arg]
+      safis[arg]
     end
   end
   module AFI

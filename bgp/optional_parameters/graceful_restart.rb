@@ -36,8 +36,8 @@ class Graceful_restart < BGP::OPT_PARM::Capability
     end
   end
   
-  def add(afi,safi,flags)
-    @tuples << [_afi(afi), _safi(safi), flags]
+  def add(afi,safi,af_flags=0)
+    @tuples << [_afi(afi), _safi(safi), af_flags]
   end
 
   def parse(s)
@@ -59,16 +59,40 @@ class Graceful_restart < BGP::OPT_PARM::Capability
   end
   def to_s
     s = []
-    s <<  "\n    Graceful Restart Extension (#{CAP_GR}), length: 4"
+    s <<  "\n    Graceful Restart Extension (#{CAP_GR}), length: #{encode.size}"
     s <<  "    Restart Flags: #{restart_flag}, Restart Time #{@restart_time}s"
     s = s.join("\n  ")
     super + (s + (['']+@tuples.collect { |af| address_family(*af)}).join("\n        "))
   end
   
+  def method_missing(name, *args, &block)
+    if name.to_s =~ /^(.+)_forwarding_state_(.+)/
+      state = $2
+      afi_safi = $1
+      afi, *safi = afi_safi.to_s.split('_')
+      _afi  = IANA.afi?(afi.to_sym)
+      _safi = IANA.safi?((safi.join('_')).to_sym)
+      if state == 'preserved'
+        _state = 0x80
+      elsif state == 'not_preserved'
+        _state = 0
+      else
+        super
+      end
+      if _afi and _safi
+        add _afi,_safi, _state
+      else
+        super
+      end
+    else
+      super
+    end
+  end
+  
   private
   
   def address_family(afi, safi, flags)
-    "AFI #{IANA.afi(afi)} (#{afi}), SAFI #{IANA.safi(safi)} (#{safi}), #{address_family_flags(flags)}"
+    "AFI #{IANA.afi?(afi)} (#{afi}), SAFI #{IANA.safi?(safi)} (#{safi}), #{address_family_flags(flags)}"
   end
   
   def restart_flag
@@ -80,33 +104,22 @@ class Graceful_restart < BGP::OPT_PARM::Capability
   end
   
   def address_family_flags(flags)
-    if flags & 1 == 0
+    if flags & 0x80 == 0
       "Forwarding state not preserved (0x#{flags.to_s(16)})"
-    elsif flags & 1 == 1
+    elsif flags & 0x80 == 0x80
       "Forwarding state preserved (0x#{flags.to_s(16)})"
+    else
+      "Flags (0x#{flags.to_s(16)}"
     end
   end
   
   def _afi(val)
-    if val.is_a?(Fixnum)
-      val
-    elsif val == :ipv4
-      1
-    elsif val == :ipv6
-      2
-    end
+    IANA.afi(val)
   end
   
   def _safi(val)
-    if val.is_a?(Fixnum)
-      val
-    elsif val == :unicast
-      1
-    elsif val == :multicast
-      2
-    end
+    IANA.safi(val)
   end
-  
   
 end
 end

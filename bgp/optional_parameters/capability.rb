@@ -80,14 +80,6 @@ module BGP::OPT_PARM
       end
     end
     
-    def method_missing()
-      if name == :to_s_brief
-        "#{self.class.to_s.split('::').last}"
-      else
-        super
-      end
-    end
-    
   end
 end
 
