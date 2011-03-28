@@ -32,4 +32,24 @@ class Mbgp_cap_Test < Test::Unit::TestCase
     assert_equal(mbgp2.encode, mbgp3.encode)
     assert_equal "Option Capabilities Advertisement (2): [0206010400010001]\n    Multiprotocol Extensions (1), length: 4\n      AFI IPv4 (1), SAFI Unicast (1)", mbgp2.to_s
   end
+  def test_mbgp_capabilities
+    assert_equal(1,Mbgp.ipv4_unicast.afi)
+    assert_equal(1,Mbgp.ipv4_unicast.safi)
+    assert_equal(2,Mbgp.ipv6_unicast.afi)
+    assert_equal(1,Mbgp.ipv6_unicast.safi)
+    assert_equal(3,Mbgp.nsap_unicast.afi)
+    assert_equal(1,Mbgp.nsap_unicast.safi)
+    assert_equal(1,Mbgp.ipv4_multicast.afi)
+    assert_equal(2,Mbgp.ipv4_multicast.safi)
+    assert_equal(2,Mbgp.ipv6_multicast.afi)
+    assert_equal(2,Mbgp.ipv6_multicast.safi)
+    assert_equal(3,Mbgp.nsap_multicast.afi)
+    assert_equal(2,Mbgp.nsap_multicast.safi)
+    assert_equal(1,Mbgp.ipv4_mpls_vpn_unicast.afi)
+    assert_equal(2,Mbgp.ipv6_mpls_vpn_multicast.afi)
+    assert_equal(3,Mbgp.nsap_mpls_vpn_unicast.afi)
+    assert_equal(128,Mbgp.ipv4_mpls_vpn_unicast.safi)
+    assert_equal(129,Mbgp.ipv6_mpls_vpn_multicast.safi)
+    assert_equal(128,Mbgp.nsap_mpls_vpn_unicast.safi)
+  end
 end

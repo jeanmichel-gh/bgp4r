@@ -80,9 +80,6 @@ class BGP::Update < BGP::Message
         self.path_attribute = arg
       elsif arg.is_a?(Nlri)
         self.nlri = arg
-        # FIXME
-      # elsif arg.is_a?(Ext_Nlri)
-      #   self.nlri = arg
       end
     }
   end
@@ -196,34 +193,6 @@ class BGP::Update < BGP::Message
   end
 
 end
-
-#  JME
-# include BGP
-# 
-# require 'bgp/path_attributes/attributes'
-# 
-# 
-#  def ext_update(s)
-#    sbin = [s.split.join].pack('H*')
-#    o = Update::Info.new(true)
-#    def o.path_id?(*args) ; true ; end
-#    def o.recv_inet_unicast? ; true ; end
-#    def o.send_inet_unicast? ; true ; end
-#    Update.factory(sbin,o)
-#  end
-# 
-# 
-#  upd = ext_update "
-#   ffff ffff ffff ffff ffff ffff ffff ffff
-#   0031 0200 0000 1a90 0f00 1600 0180 0000
-#   0001 7080 0001 0000 0001 0000 0001 0a01
-#   01"
-#   p upd.path_attribute.has_a_mp_unreach_attr?
-#   p mp_unreach = upd.path_attribute[:mp_unreach]
-#   puts mp_unreach
-#   puts mp_unreach.to_shex
-
-
 
 
 

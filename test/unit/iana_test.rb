@@ -34,8 +34,8 @@ class TestBgpIana < Test::Unit::TestCase
     assert_equal 'NSAP', IANA.afi?(3)
   end
   def test_safi?
-    assert_equal 1, IANA.safi?(:unicast_nlri)
-    assert_equal 2, IANA.safi?(:multicast_nlri)
+    assert_equal 1, IANA.safi?(:unicast)
+    assert_equal 2, IANA.safi?(:multicast)
     assert_equal 4, IANA.safi?(:label_nlri)
     assert_equal 5, IANA.safi?(:mcast_vpn)
     assert_equal 64, IANA.safi?(:tunnel)

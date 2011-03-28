@@ -74,7 +74,7 @@ module BGP
 
     def set(h)
       @safi = h[:safi]
-      @path_id = path_id = h[:path_id]
+      @path_id = h[:path_id]
       @afi = Mp_reach.afi_from_nlris(h[:nlris])
       case safi
       when 1,2
@@ -231,7 +231,7 @@ module BGP
       s[1]= [MP_UNREACH].pack('C')
       Mp_unreach.new(s)
     end
-
+    
     private
     
     def nexthop_klass(afi, safi)
@@ -268,7 +268,6 @@ module BGP
       ::BGP.const_get([_afi,_safi].join('_'))
     end
     
-
   end
 
 end

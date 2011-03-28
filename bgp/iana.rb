@@ -28,8 +28,8 @@ module IANA
   end
   def self.safi?(arg)
     case arg
-    when SAFI::UNICAST_NLRI       ; 'Unicast'
-    when SAFI::MULTICAST_NLRI     ; 'Multicast'
+    when SAFI::UNICAST            ; 'Unicast'
+    when SAFI::MULTICAST          ; 'Multicast'
     when SAFI::LABEL_NLRI         ; 'Labeled NLRI'
     when SAFI::MCAST_VPN          ; 'Multicast VPN'
     when SAFI::MPLS_VPN_UNICAST   ; 'Labeled VPN Unicast'
@@ -84,8 +84,8 @@ module IANA
       end
       h_safis
     end
-    UNICAST_NLRI = 1
-    MULTICAST_NLRI = 2
+    UNICAST = 1
+    MULTICAST = 2
     LABEL_NLRI = 4
     MCAST_VPN = 5
     MULTI_SEGMENT_PW_NLRI = 6

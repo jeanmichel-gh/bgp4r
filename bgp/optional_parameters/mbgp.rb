@@ -25,21 +25,18 @@ require 'bgp/optional_parameters/capability'
 module BGP::OPT_PARM::CAP
   
   class Mbgp < BGP::OPT_PARM::Capability 
-
-    def self.ipv4_unicast
-      Mbgp.new(1,1)
-    end
-
-    def self.ipv4_multicast
-      Mbgp.new(1,2)
-    end
-
-    def self.ipv6_unicast
-      Mbgp.new(2,2)
-    end
-
-    def self.ipv6_multicast
-      Mbgp.new(2,2)
+    
+    class << self
+      def method_missing(name, *args, &block)
+        afi, *safi = name.to_s.split('_')
+        _afi  = IANA.afi?(afi.to_sym)
+        _safi = IANA.safi?((safi.join('_')).to_sym)
+        if _afi and _safi
+          new _afi,_safi
+        else
+          super
+        end
+      end
     end
 
     def initialize(afi,safi=nil)
@@ -59,6 +56,8 @@ module BGP::OPT_PARM::CAP
         raise ArgumentError, "Invalid afi #{arg}"
       end
     end
+    
+    attr_reader :afi, :safi
     
     def safi=(val)
       @safi = if val.is_a?(Fixnum)

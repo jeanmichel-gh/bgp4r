@@ -72,8 +72,8 @@ module BGP
             super
           end
           case $3
-          when 'unicast'            ; safi = IANA.safi?(:unicast_nlri)
-          when 'multicast'          ; safi = IANA.safi?(:multicast_nlri)
+          when 'unicast'            ; safi = IANA.safi?(:unicast)
+          when 'multicast'          ; safi = IANA.safi?(:multicast)
           when 'mpls_vpn_unicast'   ; safi = IANA.safi?(:mpls_vpn_unicast)
           when 'mpls_vpn_multicast' ; safi = IANA.safi?(:mpls_vpn_multicast)
           else

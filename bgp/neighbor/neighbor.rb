@@ -99,6 +99,25 @@ module BGP
       end
     end
     alias :add_cap :capability
+    
+    def method_missing(name, *args, &block)
+      if name.to_s =~ /^(capability|add_capability)_(.+)$/
+        r = $2.dup
+        @opt_parms << if r =~ /mbgp_(.+)/
+          OPT_PARM::CAP::Mbgp.send $1
+        elsif r =~ /(rr|route_refresh)/
+          OPT_PARM::CAP::Route_refresh.new *args
+        elsif r =~ /(4byte_as|as4byte|four_(byte|octet)_as)/
+          OPT_PARM::CAP::As4.new(@my_as)
+        elsif r =~ /(gr|graceful_restart)/
+          OPT_PARM::CAP::Graceful_restart.new *args
+        else
+          super
+        end
+      else
+        super
+      end
+    end
 
     def state
       "#{@state}"

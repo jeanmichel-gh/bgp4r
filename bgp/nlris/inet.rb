@@ -5,7 +5,7 @@ module BGP
     [:unicast, :multicast].each do |n|
       inet_klass = Class.new(Prefix) do
         define_method(:safi) do
-          @safi ||=IANA::SAFI.const_get("#{n.to_s.upcase}_NLRI")
+          @safi ||=IANA::SAFI.const_get(n.to_s.upcase)
         end
       end
       const_set("Inet_#{n}", inet_klass)

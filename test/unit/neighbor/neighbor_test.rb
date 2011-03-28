@@ -152,6 +152,19 @@ class TestBgpNeighbor < Test::Unit::TestCase
     assert ! @c.session_info.send_inet_unicast?, 
            "Should have the capability to send inet unicast reachability path info."
   end
+  def test_add_capabilities
+    n = Neighbor.new(4,100,180,'0.0.0.2')
+    n.capability_mbgp_ipv4_unicast
+    n.capability_mbgp_ipv4_multicast
+    n.capability_mbgp_ipv4_mpls_vpn_unicast
+    n.capability_mbgp_ipv6_mpls_vpn_multicast
+    n.capability_mbgp_nsap_mpls_vpn_unicast
+    n.capability_mbgp_nsap_unicast
+    n.capability_route_refresh
+    n.capability_route_refresh 128
+    n.capability_four_byte_as
+    assert_equal(9, n.instance_eval { @opt_parms }.size )
+  end
 
 
 end
