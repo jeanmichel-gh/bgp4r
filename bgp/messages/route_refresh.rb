@@ -87,7 +87,6 @@ class Orf
   end
 end
 
-#FIXME: Unit-test
 class Orf_route_refresh < Message
   
   attr_accessor :orfs
@@ -116,11 +115,11 @@ class Orf_route_refresh < Message
   end
   
   def afi
-    IANA.afi(@afi)
+    IANA.afi?(@afi)
   end
   
   def safi
-     IANA.safi(@safi)
+     IANA.safi?(@safi)
   end
   
   def afi=(val)
@@ -149,9 +148,7 @@ class Orf_route_refresh < Message
   def parse(s)
     @afi, reserved, @safi, orfs= super(s).unpack('nCCa*')
     while orfs.size>0
-      #puts "orfs before factory: #{orfs.unpack('H*')}"
       @orfs << Orf.factory(orfs.is_packed)
-      #puts "orfs after factory: #{orfs.unpack('H*')}"
     end
   end
   
@@ -162,7 +159,7 @@ class Orf_route_refresh < Message
   def to_s
     msg = self.encode
     "ORF Route Refresh (#{ROUTE_REFRESH}), length: #{msg.size}\n" +   
-    "AFI #{IANA.afi(@afi)} (#{@afi}), SAFI #{IANA.safi(@safi)} (#{@safi}):\n" +
+    "AFI #{IANA.afi?(@afi)} (#{@afi}), SAFI #{IANA.safi?(@safi)} (#{@safi}):\n" +
     @orfs.collect { |orf| orf.to_s}.join("\n")
   end
   

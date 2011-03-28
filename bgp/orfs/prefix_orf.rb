@@ -120,18 +120,15 @@ module BGP
     end
     
     def size
-      @prefix.nbyte+7+1    
+      @prefix.nbytes+7+1
     end
     
     def _parse_(s, afi=1)
-      #puts "s before parse: #{s.unpack('H*')}"
       o1, @seqn, @min, @max, prefix = s.unpack('CNCCa*')
       @action = o1 >> 6
       @match = (o1 >> 5) & 1
-      @prefix = BGP::Prefix.new(prefix.is_packed, afi)
-      #puts "size of orf entry is : #{size}"
+      @prefix = BGP::Prefix.new_ntop(prefix.is_packed, afi)
       s.slice!(0,size)
-      #puts "s after parse: #{s.unpack('H*')}"
     end
 
     def self.add(*args) ; Prefix_entry.new(0,*args)  ; end
@@ -178,7 +175,7 @@ class BGP::Prefix_orf < BGP::Orf
 
 end
 
-load "../../test/orfs/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0
+load "../../test/unit/orfs/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0
 
 __END__
 

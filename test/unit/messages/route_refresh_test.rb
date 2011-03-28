@@ -28,7 +28,7 @@ class Route_refresh_Test < Test::Unit::TestCase
   def test_1
     s = "ffffffffffffffffffffffffffffffff00170500010001"
     sbin = [s].pack('H*')
-    assert_equal(Route_refresh, Message.factory(sbin).class)
+    assert_equal(BGP::Route_refresh, Message.factory(sbin).class)
     rr =  Message.factory(sbin)
     assert_equal(s, rr.to_shex)
     rr.afi, rr.safi=2,2
@@ -37,9 +37,9 @@ class Route_refresh_Test < Test::Unit::TestCase
     assert_equal('ffffffffffffffffffffffffffffffff00170500020002', rr.to_shex)
     assert_raise(ArgumentError) { rr.safi=0x100 }
     assert_raise(ArgumentError) { rr.afi=-1 }
-    assert_equal(s, Route_refresh.new(1,1).to_shex)
-    assert_equal(s, Route_refresh.new(:afi=>1, :safi=>1).to_shex)
-    assert_equal({:afi=>1, :safi=>1}, Route_refresh.new(:afi=>1, :safi=>1).to_hash)
+    assert_equal(s, BGP::Route_refresh.new(1,1).to_shex)
+    assert_equal(s, BGP::Route_refresh.new(:afi=>1, :safi=>1).to_shex)
+    assert_equal({:afi=>1, :safi=>1}, BGP::Route_refresh.new(:afi=>1, :safi=>1).to_hash)
     assert_equal(s, Message.route_refresh(1,1).unpack('H*')[0])
   end
 end

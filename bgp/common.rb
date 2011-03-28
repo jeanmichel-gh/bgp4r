@@ -13,6 +13,19 @@
 #    You should have received a copy of the GNU General Public License
 #    along with Foobar.  If not, see <http://www.gnu.org/licenses/>.
 
+module Kernel
+  alias :require_orig :require
+  
+  def my_caller(caller)
+    caller.split('/')
+  end
+  
+  def require(*args)
+    #puts format("%-20s : %s", "require '#{args}'", caller[0])
+    require_orig(*args)
+  end
+end
+
 require 'ipaddr'
 require 'logger'
 
@@ -31,18 +44,6 @@ class IPAddr
     end
   end
 
-  #TODO: if not used, get rid of it.
-  def self.new_nlri4(arg)
-    if arg.is_a?(String) and arg.is_packed?
-      arg +=([0]*3).pack('C*')
-      plen, *nlri = arg.unpack('CC4')
-      ipaddr = nlri.collect { |n| n.to_s }.join('.') + "/" + plen .to_s
-      IPAddr.new(ipaddr)
-    else
-      IPAddr.new(arg)
-    end
-  end
-  
   def mlen
     @_jme_mlen_ ||= _mlen_
   end

@@ -1,5 +1,5 @@
 #--
-# Copyright 2008, 2009 Jean-Michel Esnault.
+# Copyright 2008-2009, 2011 Jean-Michel Esnault.
 # All rights reserved.
 # See LICENSE.txt for permissions.
 #
@@ -22,24 +22,12 @@
 
 
 module IANA
-  def self.afi(afi)
-    case afi
-    when AFI::IP   ; 'IPv4'
-    when AFI::IP6  ; 'IPv6'
-    else
-      ''
-    end
-  end
-  def self.afi?(arg)
+    def self.afi?(arg)
     @h_afis ||= AFI.set_h_afis
     @h_afis[arg]
   end
   def self.safi?(arg)
-    @h_safis ||= SAFI.set_h_safis
-    @h_safis[arg]
-  end
-  def self.safi(safi)
-    case safi
+    case arg
     when SAFI::UNICAST_NLRI       ; 'Unicast'
     when SAFI::MULTICAST_NLRI     ; 'Multicast'
     when SAFI::LABEL_NLRI         ; 'Labeled NLRI'
@@ -47,12 +35,13 @@ module IANA
     when SAFI::MPLS_VPN_UNICAST   ; 'Labeled VPN Unicast'
     when SAFI::MPLS_VPN_Multicast ; 'Labeled VPN Multicast'
     else
-      ''
+      @h_safis ||= SAFI.set_h_safis
+      @h_safis[arg]
     end
   end
   module AFI
-    IP = 1
-    IP6 = 2 
+    IPv4 = 1
+    IPv6 = 2
     NSAP = 3
     HDLC = 4
     BBN = 5
@@ -244,7 +233,7 @@ Value    Description                                     Reference
 
 References
 ----------
-[RFC2547]  E. Rosen and Y. Rekhter, "BGP/MPLS VPNs", RFC 2547, March 1999.
+[RFC2547]  E. Rosen and Y. Rekhter, "BGP/Labeled VPNs", RFC 2547, March 1999.
 
 [RFC3107]  Y. Rekhter and E. Rosen, "Carrying Label Information in 
            BGP-4", RFC 3107, May 2001.

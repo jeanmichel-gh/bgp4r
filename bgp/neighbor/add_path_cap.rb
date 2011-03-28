@@ -66,8 +66,8 @@ module BGP
       def method_missing(name, *args, &block)
         if (/^(send|recv)_(ipv4|ipv6|inet|inet6)_(.+)\?$/ =~ name.to_s)
           case $2
-          when 'ipv4', 'inet'   ; afi = IANA.afi?(:ip)
-          when 'ipv6', 'inet6'  ; afi = IANA.afi?(:ip6)
+          when 'ipv4', 'inet'   ; afi = IANA.afi?(:ipv4)
+          when 'ipv6', 'inet6'  ; afi = IANA.afi?(:ipv6)
           else
             super
           end
@@ -122,4 +122,4 @@ module BGP
   
 end
 
-load "../../test/neighbor/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0
+load "../../test/unit/neighbor/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0

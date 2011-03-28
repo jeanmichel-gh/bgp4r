@@ -6,7 +6,6 @@
 #
 #++
 
-require 'rubygems'
 require 'bgp4r'
 require 'yaml'
 include BGP

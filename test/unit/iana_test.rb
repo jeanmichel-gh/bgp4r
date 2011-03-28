@@ -25,12 +25,13 @@ require "bgp/iana"
 require 'test/unit'
 class TestBgpIana < Test::Unit::TestCase
   def test_afi?
-    assert_equal 1, IANA.afi?(:ip)
-    assert_equal 2, IANA.afi?(:ip6)
+    assert_equal 1, IANA.afi?(:ipv4)
+    assert_equal 2, IANA.afi?(:ipv6)
     assert_equal 5, IANA.afi?(:bbn)
     assert_equal 12, IANA.afi?(:appletalk)
-    assert_equal 'IP', IANA.afi?(1)
-    assert_equal 'IP6',IANA.afi?(2)
+    assert_equal 'IPv4', IANA.afi?(1)
+    assert_equal 'IPv6', IANA.afi?(2)
+    assert_equal 'NSAP', IANA.afi?(3)
   end
   def test_safi?
     assert_equal 1, IANA.safi?(:unicast_nlri)

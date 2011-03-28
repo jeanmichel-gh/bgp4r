@@ -51,16 +51,15 @@ module BGP::OPT_PARM::CAP
       end
     end
 
-    def afi=(val)
-      @afi = if val.is_a?(Fixnum)
-        val
-      elsif val == :ipv4
-        1
-      elsif val == :ipv6
-        2
+    def afi=(arg)
+      @afi = case arg
+      when Fixnum ; arg
+      when Symbol ; IANA.afi?(arg)
+      else
+        raise ArgumentError, "Invalid afi #{arg}"
       end
     end
-
+    
     def safi=(val)
       @safi = if val.is_a?(Fixnum)
         val
@@ -81,11 +80,11 @@ module BGP::OPT_PARM::CAP
 
     def to_s
       super + "\n    Multiprotocol Extensions (#{CAP_MBGP}), length: 4" +
-      "\n      AFI #{IANA.afi(@afi)} (#{@afi}), SAFI #{IANA.safi(@safi)} (#{@safi})"
+      "\n      AFI #{IANA.afi?(@afi)} (#{@afi}), SAFI #{IANA.safi?(@safi)} (#{@safi})"
     end
     
     def to_s_brief
-      "MBGP #{IANA.afi(@afi)}, #{IANA.safi(@safi)}"
+      "MBGP #{IANA.afi?(@afi)}, #{IANA.safi?(@safi)}"
     end
 
     def to_hash
@@ -94,4 +93,4 @@ module BGP::OPT_PARM::CAP
   end
 end
 
-load "../../test/optional_parameters/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0
+load "../../test/unit/optional_parameters/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0

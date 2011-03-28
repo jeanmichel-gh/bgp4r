@@ -213,6 +213,7 @@ module BGP
     def stop
       @socket.close  if defined?(@socket) and not @socket.closed?
       clean
+      @open=nil
       new_state :Idle, "Disable"
     end
 
@@ -334,4 +335,4 @@ module BGP
 
 end
 
-load "../../test/neighbor/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0
+load "../../test/unit/neighbor/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0
