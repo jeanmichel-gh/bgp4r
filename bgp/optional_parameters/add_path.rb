@@ -60,9 +60,9 @@ module BGP::OPT_PARM::CAP
         raise
       end
     end
-
-    def add(sr, afi,safi)
-      @af[[_afi(afi), _safi(safi)]] = _send_recv(sr)
+    
+    def add(sr, _afi,_safi)
+      @af[[afi(_afi), safi(_safi)]] = _send_recv(sr)
     end
 
     def parse(s)
@@ -133,29 +133,14 @@ module BGP::OPT_PARM::CAP
         'bogus'
       end
     end
-
-    #FIXME
-    def _afi(val)
-      if val.is_a?(Fixnum)
-        val
-      elsif val == :ipv4
-        1
-      elsif val == :ipv6
-        2
-      end
+    
+    def afi(arg)
+      IANA.afi(arg)
     end
-
-    #FIXME
-    def _safi(val)
-      if val.is_a?(Fixnum)
-        val
-      elsif val == :unicast
-        1
-      elsif val == :multicast
-        2
-      end
+    def safi(arg)
+      IANA.safi(arg)
     end
-
+    
   end
 end
 

@@ -47,28 +47,16 @@ module BGP::OPT_PARM::CAP
         self.safi, self.afi = safi, afi
       end
     end
-
+    
     def afi=(arg)
-      @afi = case arg
-      when Fixnum ; arg
-      when Symbol ; IANA.afi?(arg)
-      else
-        raise ArgumentError, "Invalid afi #{arg}"
-      end
+      @afi = IANA.afi(arg)
+    end
+    def safi=(arg)
+      @safi = IANA.safi(arg)
     end
     
     attr_reader :afi, :safi
     
-    def safi=(val)
-      @safi = if val.is_a?(Fixnum)
-        val
-      elsif val == :unicast
-        1
-      elsif val == :multicast
-        2
-      end
-    end
-
     def encode
       super([@afi,0,@safi].pack('nCC'))
     end
