@@ -7,7 +7,13 @@ module BGP
       nlri.path_id=path_id if path_id
       nlri
     end
-
+    
+    def self.new_with_path_id(path_id, *args)
+      l = new(*args)
+      l.path_id=path_id
+      l
+    end
+    
     def initialize(*args)
       if args.size>0 and args[0].is_a?(String) and args[0].is_packed?
         parse(*args)

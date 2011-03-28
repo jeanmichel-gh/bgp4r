@@ -10,34 +10,27 @@ class Prefix
   include BGP
   
   def self.new_ntop_extended(arg, afi=1)
+    raise "#{afi}" unless (1..3) === afi || [:nsap, :ipv4, :ipv6].include?(afi)
     path_id = arg.slice!(0,4).unpack('N')[0]
-    if afi == 1
-      new_ntop(arg,afi,path_id)
-    else
-      # AFI 2 and 3 are handled elsewhere
-      raise
-    end
+    new_ntop(arg,afi,path_id)
   end
   
   class << self
     def new_ntop(arg, afi=1, path_id=nil)
       case afi
       when IANA::AFI::IPv4, :ipv4
-        #TODO: Testcase...
         s = arg.dup
         s +=([0]*3).pack('C*')
         plen, *nlri = s.unpack('CC4')
         arg.slice!(0,1+(plen+7)/8)
         pfx = nlri.collect { |n| n.to_s }.join('.') + "/" + plen .to_s
       when IANA::AFI::IPv6, :ipv6
-        #TODO: Testcase...
         s = arg.dup
         s +=([0]*16).pack('C*')
         plen, *nlri = s.unpack('Cn8')
         arg.slice!(0,1+(plen+7)/8)
         pfx = nlri.collect { |n| n.to_s(16) }.join(':') + "/" + plen .to_s
       when IANA::AFI::NSAP, :nsap
-        #TODO: Testcase...
         s = arg.dup
         plen, o1, r = s.unpack('CH2H*')
         pfx = [o1, r.scan(/..../).collect { |x| r.slice!(0,4)}, r].flatten.join('.').chomp('.')  + "/" + plen .to_s
@@ -51,7 +44,6 @@ class Prefix
 
   def initialize(*args)
     @path_id=nil
-    # JME p args
     if args.size>1 and args[0].is_a?(Integer)
       @path_id, pfx, afi = args
     else
@@ -161,6 +153,10 @@ class Prefix
   end
   
 end
+
+s = '00000064200a000000'
+pfx = Prefix.new_ntop([s].pack('H*'), 2)
+
 
 end
 

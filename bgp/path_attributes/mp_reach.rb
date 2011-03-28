@@ -1,5 +1,5 @@
  #--
-# Copyright 2008, 2009 Jean-Michel Esnault.
+# Copyright 2008-2009, 2011 Jean-Michel Esnault.
 # All rights reserved.
 # See LICENSE.txt for permissions.
 #
@@ -26,8 +26,36 @@ require 'bgp/nlris/nlris'
 module BGP
 
   class Mp_reach < Attr
+    
+    def self.afi_from_nlris(arg)
+      case arg
+      when String
+        _arg = arg
+      when Hash,Array
+        case [arg].flatten[0]
+        when Hash
+          _arg = [arg].flatten[0][:prefix]
+        when String
+          _arg = [arg].flatten[0]
+        else
+          raise
+        end
+      when Hash
+        _arg = arg[:prefix]
+      else
+        raise
+      end
+      
+      if _arg.respond_to?(:afi)
+        _arg.afi
+      elsif _arg =~ /^49\./
+        3
+      else
+        IPAddr.new(_arg).ipv4? ? 1 : 2
+      end
+    end
 
-    attr_reader :safi, :nlris, :path_id
+    attr_reader :safi, :nlris, :path_id, :afi
 
     def initialize(*args)
       @safi, @nexthops, @nlris, @path_id= 1, [], [], nil # default is ipv4/unicast
@@ -44,107 +72,43 @@ module BGP
       end
     end
 
-    def afi
-      @afi ||= @nexthops[0].afi
-    end
-
-    def mapped_nexthop(nexthop)
-      nh = IPAddr.new(nexthop)
-    end
-
     def set(h)
       @safi = h[:safi]
       @path_id = path_id = h[:path_id]
-
-      case h[:afi]
-      when 3, :nsap
-        @afi = 3
-        # mpr1 =  Mp_reach.new(:afi=>3, :safi=>1, :nexthop=> ['10.0.0.1'], :nlris=> '49.0001.0002.0003.0004.0005.0006' )
-        # nlris
-        case @safi
-        when 1,2
-          @nlris = [h[:nlris]].flatten.collect do |n|
-            case n
-            when String
-              path_id ? Prefix.new(path_id, n) : Prefix.new(n)
-            when Hash
-              nlri = Prefix.new(n[:prefix])
-              nlri.path_id=n[:path_id] if n.has_key?(:path_id)
-              nlri
-            else
-              raise ArgumentError, "Invalid: #{n.inspect}"
-            end
-          end
-        when 128
-          @nlris = [h[:nlris]].flatten.collect do |n|
-            path_id = n[:path_id] || @path_id
-            prefix = n[:prefix].is_a?(Prefix) ? n[:prefix] :  Prefix.new(n[:prefix]) 
-            rd = n[:rd].is_a?(Rd) ?  n[:rd] : Rd.new(*n[:rd])
-            nlri = Labeled.new(Vpn.new(prefix,rd), *n[:label]) 
-            nlri.path_id=path_id
-            nlri
+      @afi = Mp_reach.afi_from_nlris(h[:nlris])
+      case safi
+      when 1,2
+        pfx_klass = prefix_klass(afi, safi)
+        @nlris = [h[:nlris]].flatten.collect do |n|
+          case n
+          when String
+            path_id ? pfx_klass.new(path_id, n) : pfx_klass.new(n)
+          when Hash
+            path_id = n[:path_id] if n[:path_id]
+            pfx = n[:prefix]
+            path_id ? pfx_klass.new(path_id, pfx) : pfx_klass.new(pfx)
+          else
+            raise ArgumentError, "Invalid: #{n.inspect}"
           end
         end
-
-        # Nexthop
-        @nexthops = [h[:nexthop]].flatten.collect { |nh| Iso_ip_mapped.new(nh) }
-
+      when 4
+        @nlris = [h[:nlris]].flatten.collect do |n|
+          path_id = n[:path_id] || @path_id
+          prefix = n[:prefix].is_a?(String) ? Prefix.new(n[:prefix]) : n[:prefix]
+          Labeled.new_with_path_id(path_id,prefix, *n[:label])
+        end
+      when 128,129
+        @nlris = [h[:nlris]].flatten.collect do |n|
+          path_id = n[:path_id] || @path_id
+          prefix = n[:prefix].is_a?(Prefix) ? n[:prefix] :  Prefix.new(n[:prefix]) 
+          rd = n[:rd].is_a?(Rd) ?  n[:rd] : Rd.new(*n[:rd])
+          Labeled.new_with_path_id(path_id,Vpn.new(prefix,rd), *n[:label]) 
+        end
       else
-        
-        case @safi
-        when 1,2,4   ; @nexthops = [h[:nexthop]].flatten.collect { |nh| Prefix.new(nh) }
-        when 128,129 ; @nexthops = [h[:nexthop]].flatten.collect { |nh| Vpn.new(nh) }
-        else
-        end
-
-        case @safi
-        when 1
-          @nlris = [h[:nlris]].flatten.collect do |n|
-            case n
-            when String
-              path_id ? Inet_unicast.new(path_id, n) : Inet_unicast.new(n)
-            when Hash
-              path_id = n[:path_id] if n[:path_id]
-              pfx = n[:prefix]
-              path_id ? Inet_unicast.new(path_id, pfx) : Inet_unicast.new(pfx)
-            else
-              raise ArgumentError, "Invalid: #{n.inspect}"
-            end
-          end
-        when 2
-          @nlris = [h[:nlris]].flatten.collect do |n|
-            case n
-            when String
-              path_id ? Inet_multicast.new(path_id, n) : Inet_multicast.new(n)
-            when Hash
-              nlri = Inet_multicast.new(n[:prefix])
-              nlri.path_id=n[:path_id] if n.has_key?(:path_id)
-              nlri
-            else
-              raise ArgumentError, "Invalid: #{n.inspect}"
-            end
-          end
-        when 4
-          @nlris = [h[:nlris]].flatten.collect do |n|
-            path_id = n[:path_id] || @path_id
-            prefix = n[:prefix].is_a?(String) ? Prefix.new(n[:prefix]) : n[:prefix]
-            nlri = Labeled.new(prefix, *n[:label])
-            nlri.path_id=path_id
-            nlri
-          end
-        when 128,129
-            @nlris = [h[:nlris]].flatten.collect do |n|
-            path_id = n[:path_id] || @path_id
-            prefix = n[:prefix].is_a?(Prefix) ? n[:prefix] :  Prefix.new(n[:prefix]) 
-            rd = n[:rd].is_a?(Rd) ?  n[:rd] : Rd.new(*n[:rd])
-            nlri = Labeled.new(Vpn.new(prefix,rd), *n[:label]) 
-            nlri.path_id=path_id
-            nlri
-          end
-        else
-          raise "SAFI #{safi} not implemented!!!"
-        end
+        raise "SAFI #{safi} not implemented!"
       end
+      @nexthops = [h[:nexthop]].flatten.collect { |nh| nexthop_klass(afi,safi).new(nh) }
+      self
     end
 
     def nexthops
@@ -222,8 +186,6 @@ module BGP
           s.slice!(0,3)
           @nexthops << Iso_ip_mapped.new(Prefix.new_ntop([128,s.slice!(0,16)].pack('Ca*'),2).to_s)
         else
-          p @safi
-          p s.unpack('H*')
           raise 
         end
         # skip magic
@@ -270,15 +232,45 @@ module BGP
       Mp_unreach.new(s)
     end
 
+    private
+    
+    def nexthop_klass(afi, safi)
+      case afi
+      when 3
+        ::BGP::const_get('Iso_ip_mapped')
+      else
+        case safi
+        when 1,2,4
+           ::BGP::const_get('Prefix')
+        when 128,129
+          ::BGP::const_get('Vpn')
+        else
+          raise
+        end
+      end
+    end
+    
+    def prefix_klass(afi, safi)
+      case afi
+      when 1,2
+        _afi='Inet'
+      when 3
+        return ::BGP.const_get('Prefix')
+      else
+        raise
+      end
+      _safi = case safi
+      when 1 ; 'unicast'
+      when 2 ; 'multicast'
+      else
+        raise
+      end
+      ::BGP.const_get([_afi,_safi].join('_'))
+    end
+    
+
   end
 
-  # s = '80 0e 33 0003 80 
-  # 1c 0000000000000000 350000 2011000300260000000000000000000100 00 88 000641 0000006400000064 49ababcdcdef'
-  # sbin = [s.split.join].pack('H*') 
-  # mpr = Mp_reach.new(sbin)
-  # puts mpr
-
 end
-
 
 load "../../test/unit/path_attributes/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0

@@ -75,6 +75,19 @@ class Iso_ip_mapped < IPAddr
   end
   alias encode encode_next_hop
 end
+
+unless const_defined?(:Nsap_unicast)
+  [:unicast, :multicast].each do |n|
+    inet_klass = Class.new(Nsap) do
+      define_method(:safi) do
+        @safi ||=IANA::SAFI.const_get("#{n.to_s.upcase}_NLRI")
+      end
+    end
+    const_set("Nsap_#{n}", inet_klass)
+  end
+end
+
+
 end
 
 include BGP

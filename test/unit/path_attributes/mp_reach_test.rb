@@ -95,6 +95,23 @@ class Mp_reach_Test < Test::Unit::TestCase
     assert_equal(s.split.join, mpr2.to_shex)
 
   end
+
+  def test_afi_3_safi_1_ipv6_mapped_nexthops_with_path_id
+    mpr1 =  Mp_reach.new(:afi=>3, :safi=>1, :nexthop=> ['2011::1'], :nlris=> '49.0001.0002.0003.0004.0005.0006/72', :path_id=>100 )
+
+    s = '80 0e 27 0003 01 14 350000 2011000000000000000000000000000100 00 00000064 48490001000200030004'
+    assert_equal(s.split.join, mpr1.to_shex)
+
+    mpr2 =  Mp_reach.new(:afi=>3, :safi=>1, :nexthop=> ['2011::1', '2011::2'], :nlris=> '49.0001.0002.0003.0004.0005.0006/103' )
+
+    s = '
+    80 0e 3b 0003 01 28
+        350000 2011000000000000000000000000000100
+        350000 2011000000000000000000000000000200 00
+        6749000100020003000400050006'
+    assert_equal(s.split.join, mpr2.to_shex)
+
+  end
   
   def test_afi_3_safi_1_ipv4_mapped_nexthops_ntoh
     
@@ -342,6 +359,62 @@ class Mp_reach_Test < Test::Unit::TestCase
     assert_match(/^\s+ID=100, 2011:2::\/32/, mpr.to_s)
   end
   
+  def test_afi_3_safi_1
+    # TODO: either use :iso_nexthop=> ''2011:3:27::1'
+    # :afi=> :iso or :nasp
+    # test :afi=> ipv4 ipv6 osi nsap
+    # test :safi unicast multicast
+    mpr1 =  Mp_reach.new(:afi=>3, :safi=>1, :nexthop=> '2011:3:27::1', :nlris=>  '49.0001.0002.0000/48')
+    mpr2 =  Mp_reach.new(:afi=>3, :safi=>1, :nexthop=> '2011:3:27::1', :nlris=>  '49.0001.0002.0000/48', :path_id=>100)
+    mpr3 =  Mp_reach.new(:afi=>3, :safi=>1, :nexthop=> '2011:3:27::1', :nlris=> ['49.0001.0002.0000/48','49.0a00.0b00/32'])
+    mpr4 =  Mp_reach.new(:afi=>3, :safi=>1, :nexthop=> '2011:3:27::1', :nlris=> ['49.0001.0002.0000/48','49.0a00.0b00/32'], :path_id=>100)
+    mpr5 =  Mp_reach.new(:afi=>3, :safi=>1, :nexthop=> '2011:3:27::1', :nlris=> [
+      {:prefix=> '49.0a00.0b00/32', :path_id=> 100},
+      {:prefix=> '49.0a00.0b00/32', :path_id=> 101},
+      {:prefix=> '49.0a00.0b00/32', :path_id=> 102},
+    ])
+    
+    assert_equal('80 0e 20 0003 01 14 3500002011000300270000000000000000000100 00          30 490001000200'.split.join, mpr1.to_shex)
+    assert_equal('80 0e 24 0003 01 14 3500002011000300270000000000000000000100 00 00000064 30 490001000200'.split.join, mpr2.to_shex)
+    assert_equal attr_len(mpr1)+4, attr_len(mpr2)
+    
+    assert_equal('800e25000301143500002011000300270000000000000000000100 00 30 49000100020020 490a000b'.split.join, mpr3.to_shex)
+    assert_equal('800e2d0003011435000020110003002700000000000000000001000000000064304900010002000000006420490a000b'.split.join, mpr4.to_shex)
+    assert_equal attr_len(mpr3)+8, attr_len(mpr4) 
+    
+    smpr5 = '
+      80 0e 34 0003 01 14 3500002011000300270000000000000000000100 00 
+      00000064 20490a000b 
+      0000006520490a000b
+      0000006620490a000b'
+    assert_equal(smpr5.split.join, mpr5.to_shex)
+  end
+  
+  def test_afi_3_safi_1_ntop
+    s = '800e25000301143500002011000300270000000000000000000100 00 30 49000100020020 490a000b'
+    sbin = [s.split.join].pack('H*') 
+    mpr = Mp_reach.new(sbin, false)
+    assert_match(/nexthop: 2011:3:27::1/, mpr.to_s)
+    assert_match(/^\s+49.0001.0002.0000.0000.0000.0000.0000.0000.0000.00\/48/, mpr.to_s)
+    assert_match(/^\s+49.0a00.0b00.0000.0000.0000.0000.0000.0000.0000.00\/32/, mpr.to_s)
+
+    s = '
+      80 0e 34 0003 01 14 3500002011000300270000000000000000000100 00 
+      00000064 20490a100b 
+      00000065 20490a200b
+      00000066 20490a300b'
+    sbin = [s.split.join].pack('H*') 
+    mpr = Mp_reach.new(sbin, true)
+
+    assert_match(/nexthop: 2011:3:27::1/, mpr.to_s)
+    assert_match(/ID=100, 49.0a10.0b00.0000.0000.0000.0000.0000.0000.0000.00\/32/, mpr.to_s)
+    assert_match(/ID=101, 49.0a20.0b00.0000.0000.0000.0000.0000.0000.0000.00\/32/, mpr.to_s)
+    assert_match(/ID=102, 49.0a30.0b00.0000.0000.0000.0000.0000.0000.0000.00\/32/, mpr.to_s)
+
+    
+  end
+  
+  
   def test_safi_4
     mpr1 =  Mp_reach.new(:safi=>4, :nexthop=> ['10.0.0.1'], :nlris=> {:prefix=> '192.168.0.0/24', :label=>101} )
     mpr2 =  Mp_reach.new(:safi=>4, :nexthop=> ['10.0.0.1'], :nlris=> {:prefix=> '192.168.0.0/24', :label=>101, :path_id=>100} )
@@ -375,7 +448,7 @@ class Mp_reach_Test < Test::Unit::TestCase
     
   end
   
-  def test_safi_128
+  def test_afi_1_safi_128
     
     smpr1 = '80 0e 20 0001 80 0c 00000000000000000a000001 00          70 000651 0000006400000064 c0a800'
     smpr2 = '80 0e 24 0001 80 0c 00000000000000000a000001 00 00000064 70 000651 0000006400000064 c0a800'
@@ -422,7 +495,7 @@ class Mp_reach_Test < Test::Unit::TestCase
 
   end
   
-  def test_safi_4_ntop
+  def test_afi_1safi_4_ntop
     
     s = '80 0e 1e 0001 04 04 0a000001 00 30000651 c0a800
                                          30000661 c0a801
@@ -444,7 +517,7 @@ class Mp_reach_Test < Test::Unit::TestCase
     assert_match(/Stack=103 \(bottom\) ID=100/, mpr.to_s)
   end
   
-  def test_safi_128_ntop
+  def test_afi_1_safi_128_ntop
     
     s = '80 0e 3e 0001 80 0c 0000000000000000 0a000001 00 70 000651 0000006400000064 c0a800
                                                           70 000661 0000006400000064 c0a801
@@ -464,6 +537,21 @@ class Mp_reach_Test < Test::Unit::TestCase
     assert_match(/Label Stack=102.*ID=102, /, mpr.to_s)
     assert_match(/Label Stack=103.*ID=103, /, mpr.to_s)
     
+  end
+  
+  def test_derive_afi_from_nlris
+    assert_equal(1, Mp_reach.afi_from_nlris('192.168.1.0/24'))
+    assert_equal(2, Mp_reach.afi_from_nlris('2011:1::/32'))
+    assert_equal(3, Mp_reach.afi_from_nlris('49.0001.0002.0003.0004.0005.0006/64'))
+    assert_equal(1, Mp_reach.afi_from_nlris(['192.168.1.0/24','192.168.2.0/24' ]))
+    assert_equal(2, Mp_reach.afi_from_nlris(['2011:1::/32','2011:2::/32']))
+    assert_equal(3, Mp_reach.afi_from_nlris(['49.0001.0002.0003.0004.0005.0006/64','49.0001.0002/32']))
+    assert_equal(1, Mp_reach.afi_from_nlris(:prefix=>'192.168.1.0/24'))
+    assert_equal(3, Mp_reach.afi_from_nlris(:prefix=>'49.0001.0002.0003.0004.0005.0006/64'))
+    assert_equal(1, Mp_reach.afi_from_nlris([{:prefix=>'192.168.1.0/24'}]))
+    assert_equal(3, Mp_reach.afi_from_nlris([
+      {:rd=> [100,100], :prefix=> '49.abab.cdcd.efef/48', :label=>100},
+      ]))
   end
   
   private
