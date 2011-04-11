@@ -55,7 +55,7 @@ class BGP::Update < BGP::Message
     end
   end
 
-  def initialize(*args)
+  def initialize(*args, &block)
     @nlri, @path_attribute, @withdrawn=nil,nil,nil
     @session_info = Info.new
     if args[0].is_a?(String) and args[0].is_packed?
@@ -69,6 +69,11 @@ class BGP::Update < BGP::Message
     else
       @msg_type=UPDATE
       set(*args)
+    end
+    if block
+      @path_attribute ||= Path_attribute.new
+      @nlri ||= Nlri.new
+      instance_eval(&block)
     end
   end
 
@@ -188,6 +193,8 @@ class BGP::Update < BGP::Message
     end
   end
 
+  private
+
   def encoded_nlri
     @nlri.encode if @nlri
   end
@@ -196,6 +203,7 @@ end
 
 
 
+load "../../test/unit/messages/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0
 
 
 

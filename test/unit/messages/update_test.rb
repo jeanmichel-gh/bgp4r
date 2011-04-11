@@ -60,6 +60,17 @@ class Update_Test < Test::Unit::TestCase
     assert_equal(Update,w.class)
     assert_equal('200a0a0a0a2020202020', w.withdrawn.to_shex)
   end
+  
+  def test_experiment
+    upd = Update.new do
+      path_attribute << Local_pref.new
+      path_attribute << Origin.new
+      path_attribute << Next_hop.new('10.1.1.1')
+      10.times { |i| nlri << "10.0.#{i}.0/24"}
+    end
+    puts upd
+  end
+  
   def test_verify_as4_byte_encoding
     an_update = Update.new(
     Path_attribute.new(
