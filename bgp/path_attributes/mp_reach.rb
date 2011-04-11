@@ -25,35 +25,107 @@ require 'bgp/nlris/nlris'
 
 module BGP
 
-  class Mp_reach < Attr
+  module MpReachCommon
+
+    def self.included(obj)
+      obj.extend ClassMethods
+    end
+
+    def set(h)
+      @safi = h[:safi]
+      @path_id = h[:path_id]
+      @afi = h.has_key?(:afi) ? h[:afi] : self.class.afi_from_nlris(h[:nlris])
+      case safi
+      when 1,2
+        pfx_klass = prefix_klass(afi, safi)
+        @nlris = [h[:nlris]].flatten.compact.collect do |n|
+          case n
+          when String
+            path_id ? pfx_klass.new(path_id, n) : pfx_klass.new(n)
+          when Hash
+            path_id = n[:path_id] if n[:path_id]
+            pfx = n[:prefix]
+            path_id ? pfx_klass.new(path_id, pfx) : pfx_klass.new(pfx)
+          else
+            raise ArgumentError, "Invalid: #{n.inspect}"
+          end
+        end
+      when 4
+        @nlris = [h[:nlris]].flatten.compact.collect do |n|
+          path_id = n[:path_id] || @path_id
+          prefix = n[:prefix].is_a?(String) ? Prefix.new(n[:prefix]) : n[:prefix]
+          Labeled.new_with_path_id(path_id,prefix, *n[:label])
+        end
+      when 128,129
+        @nlris = [h[:nlris]].flatten.compact.collect do |n|
+          path_id = n[:path_id] || @path_id
+          prefix = n[:prefix].is_a?(Prefix) ? n[:prefix] :  Prefix.new(n[:prefix]) 
+          rd = n[:rd].is_a?(Rd) ?  n[:rd] : Rd.new(*n[:rd])
+          Labeled.new_with_path_id(path_id,Vpn.new(prefix,rd), *n[:label]) 
+        end
+      else
+        raise "SAFI #{safi} not implemented!"
+      end
+      @nexthops = [h[:nexthop]].flatten.collect { |nh| nexthop_klass(afi,safi).new(nh) } if h[:nexthop]
+      self
+    end
     
-    def self.afi_from_nlris(arg)
-      case arg
-      when String
-        _arg = arg
-      when Hash,Array
-        case [arg].flatten[0]
-        when Hash
-          _arg = [arg].flatten[0][:prefix]
+    module ClassMethods
+      def afi_from_nlris(arg)
+        case arg
         when String
-          _arg = [arg].flatten[0]
+          _arg = arg
+        when Hash,Array
+          case [arg].flatten[0]
+          when Hash
+            _arg = [arg].flatten[0][:prefix]
+          when String
+            _arg = [arg].flatten[0]
+          else
+            raise
+          end
+        when Hash
+          _arg = arg[:prefix]
         else
           raise
         end
-      when Hash
-        _arg = arg[:prefix]
+
+        if _arg.respond_to?(:afi)
+          _arg.afi
+        elsif _arg =~ /^49\./
+          3
+        else
+          IPAddr.new(_arg).ipv4? ? 1 : 2
+        end
+      end
+    end
+    
+    private 
+    
+    def prefix_klass(afi, safi)
+      case afi
+      when 1,2
+        _afi='Inet'
+      when 3
+        return ::BGP.const_get('Prefix')
       else
         raise
       end
-      
-      if _arg.respond_to?(:afi)
-        _arg.afi
-      elsif _arg =~ /^49\./
-        3
+      _safi = case safi
+      when 1 ; 'unicast'
+      when 2 ; 'multicast'
       else
-        IPAddr.new(_arg).ipv4? ? 1 : 2
+        raise
       end
+      ::BGP.const_get([_afi,_safi].join('_'))
     end
+    
+  end
+
+
+  class Mp_reach < Attr
+    
+    include MpReachCommon
 
     attr_reader :safi, :nlris, :path_id, :afi
 
@@ -70,45 +142,6 @@ module BGP
       else
         raise ArgumentError, "invalid argument" 
       end
-    end
-
-    def set(h)
-      @safi = h[:safi]
-      @path_id = h[:path_id]
-      @afi = Mp_reach.afi_from_nlris(h[:nlris])
-      case safi
-      when 1,2
-        pfx_klass = prefix_klass(afi, safi)
-        @nlris = [h[:nlris]].flatten.collect do |n|
-          case n
-          when String
-            path_id ? pfx_klass.new(path_id, n) : pfx_klass.new(n)
-          when Hash
-            path_id = n[:path_id] if n[:path_id]
-            pfx = n[:prefix]
-            path_id ? pfx_klass.new(path_id, pfx) : pfx_klass.new(pfx)
-          else
-            raise ArgumentError, "Invalid: #{n.inspect}"
-          end
-        end
-      when 4
-        @nlris = [h[:nlris]].flatten.collect do |n|
-          path_id = n[:path_id] || @path_id
-          prefix = n[:prefix].is_a?(String) ? Prefix.new(n[:prefix]) : n[:prefix]
-          Labeled.new_with_path_id(path_id,prefix, *n[:label])
-        end
-      when 128,129
-        @nlris = [h[:nlris]].flatten.collect do |n|
-          path_id = n[:path_id] || @path_id
-          prefix = n[:prefix].is_a?(Prefix) ? n[:prefix] :  Prefix.new(n[:prefix]) 
-          rd = n[:rd].is_a?(Rd) ?  n[:rd] : Rd.new(*n[:rd])
-          Labeled.new_with_path_id(path_id,Vpn.new(prefix,rd), *n[:label]) 
-        end
-      else
-        raise "SAFI #{safi} not implemented!"
-      end
-      @nexthops = [h[:nexthop]].flatten.collect { |nh| nexthop_klass(afi,safi).new(nh) }
-      self
     end
 
     def nexthops
@@ -248,24 +281,6 @@ module BGP
           raise
         end
       end
-    end
-    
-    def prefix_klass(afi, safi)
-      case afi
-      when 1,2
-        _afi='Inet'
-      when 3
-        return ::BGP.const_get('Prefix')
-      else
-        raise
-      end
-      _safi = case safi
-      when 1 ; 'unicast'
-      when 2 ; 'multicast'
-      else
-        raise
-      end
-      ::BGP.const_get([_afi,_safi].join('_'))
     end
     
   end
