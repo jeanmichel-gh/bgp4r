@@ -27,7 +27,6 @@ require 'bgp/io'
 require 'bgp/neighbor/add_path_cap'
 
 module BGP
-
   class Neighbor
     include Observable
     
@@ -46,12 +45,7 @@ module BGP
     def initialize(*args)
       @opt_parms = []
       if args.size==1 and args[0].is_a?(Hash)
-        @version = args[0][:version] if args[0][:version]
-        @my_as = args[0][:my_as] if args[0][:my_as]
-        @holdtime = args[0][:holdtime] if args[0][:holdtime]
-        @id = args[0][:id] if args[0][:id]
-        @remote_addr = args[0][:remote_addr] if args[0][:remote_addr]
-        @local_addr = args[0][:local_addr] if args[0][:local_addr]
+        set args[0]
       else
         @version, @my_as, @holdtime, @id, @remote_addr, @local_addr  = args
       end
@@ -63,22 +57,20 @@ module BGP
       event_dispatch
     end
     
+    def set(h)
+      [:version, :my_as, :holdtime, :id, :remote_addr, :local_addr].each do |name|
+        instance_variable_set("@#{name}", h[name]) if h.has_key?(name)
+      end
+    end
+    
     [:Idle, :Established, :OpenRecv, :OpenConfirm, :Active, :OpenSent].each do |state|
       define_method("is_#{state.to_s.downcase}?") do
         @state == state
       end
     end
     
-    # FIXME:
-    #  neighbor.add_capability 
-    #  neighbor.remove_capability 
-    #  neighbor.capability :as4_byte | :as4 | :as4byte
-    #  neighbor.capability :route_refresh, :rr
-    #  neighbor.capability :route_refresh, 128
-    #  neighbor.capability :mbgp, :ipv4, :unicast
-    #  neighbor.capability :mbgp, :ipv4, :multicast
-    
     def capability(*args)
+
       @opt_parms << if args[0].is_a?(Symbol)
         case args[0]
         when :route_refresh, :rr
