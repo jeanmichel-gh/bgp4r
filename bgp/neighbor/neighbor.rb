@@ -121,7 +121,7 @@ module BGP
         @restart_thread = Thread.new do
           Thread.current['name']='restart'
           loop do
-            enable if @state == :Idle
+            start if @state == :Idle
             sleep(4)
           end
         end

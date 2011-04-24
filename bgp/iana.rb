@@ -78,9 +78,8 @@ module IANA
     def self.set_h_afis
       h_afis = Hash.new
       constants.each do |c|
-        h_afis.store(c.downcase.to_sym, const_get(c))
-        h_afis.store(const_get(c), c.split('_').collect { |w| w }.join(' '))
-        # h_afis.store(const_get(c), c.downcase.to_sym)
+        h_afis.store(c.to_s.downcase.to_sym, const_get(c))
+        h_afis.store(const_get(c), c.to_s.split('_').collect { |w| w }.join(' '))
       end
       h_afis
     end
@@ -89,8 +88,8 @@ module IANA
     def self.set_h_safis
       h_safis = Hash.new
       constants.each do |c|
-        h_safis.store(c.downcase.to_sym, const_get(c))
-        h_safis.store(const_get(c), c.split('_').collect { |w| w }.join(' '))
+        h_safis.store(c.to_s.downcase.to_sym, const_get(c))
+        h_safis.store(const_get(c), c.to_s.split('_').collect { |w| w }.join(' '))
       end
       h_safis
     end
