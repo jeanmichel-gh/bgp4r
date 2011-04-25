@@ -95,16 +95,20 @@ while a Path_attribute object or Nlri object is added to an Update object.
 
 ==== Set its capabilities:
 
-  neighbor.capability :as4_byte
-  neighbor.capability :route_refresh
-  neighbor.capability :route_refresh, 128
-  neighbor.capability :mbgp, :ipv4, :unicast
-  neighbor.capability :mbgp, :ipv4, :multicast
+  neighbor.capability_mbgp_ipv4_unicast  
+  neighbor.capability_mbgp_ipv4_multicast
+  neighbor.capability_mbgp_ipv4_mpls_vpn_unicast
+  neighbor.capability_mbgp_ipv6_mpls_vpn_multicast
+  neighbor.capability_mbgp_nsap_mpls_vpn_unicast
+  neighbor.capability_mbgp_nsap_unicast  
+  neighbor.capability_route_refresh
+  neighbor.capability_route_refresh 128  
+  neighbor.capability_four_byte_as
 
 
 ==== Start peering:
 
-  neighbor.start :auto_retry
+  neighbor.start :auto_retry=> true
 
 ==== Build an BGP Update object made up of a Path_attribute and a Nlri objects:
 
@@ -229,7 +233,7 @@ Source code is hosted on github.
 
 ==== Install the gem
 
-  sudo gem install bgp4r
+sudo gem install bgp4r
 
 == Requirements
 
