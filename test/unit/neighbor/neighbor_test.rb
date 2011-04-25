@@ -159,6 +159,7 @@ class TestBgpNeighbor < Test::Unit::TestCase
     neighbor.capability :route_refresh, 128
     neighbor.capability :mbgp, :ipv4, :unicast
     neighbor.capability :mbgp, :ipv4, :multicast
+    assert_equal('ffffffffffffffffffffffffffffffff003d0104006400b400000002200206410400000064020202000202800002060104000100010206010400010002', neighbor.open.to_shex)
     assert_equal(5, neighbor.instance_eval { @opt_parms}.size)
   end
   def test_add_capabilities_using_method_missing
@@ -173,7 +174,6 @@ class TestBgpNeighbor < Test::Unit::TestCase
     n.capability_route_refresh 128
     n.capability_four_byte_as
     assert_equal(9, n.instance_eval { @opt_parms }.size )
+    assert_equal('ffffffffffffffffffffffffffffffff005d0104006400b4000000024002060104000100010206010400010002020601040001008002060104000200810206010400030080020601040003000102020200020280000206410400000064', n.open.to_shex)
   end
-
-
 end
