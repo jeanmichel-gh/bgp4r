@@ -38,7 +38,6 @@ class LiveFeed
   end
   alias msg read
   alias readmessage read
-
 end
-# 
+
 

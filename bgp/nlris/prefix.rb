@@ -1,3 +1,11 @@
+#--
+# Copyright 2011 Jean-Michel Esnault.
+# All rights reserved.
+# See LICENSE.txt for permissions.
+#
+#
+# This file is part of BGP4R.
+# 
 
 require 'bgp/common'
 require 'bgp/iana'

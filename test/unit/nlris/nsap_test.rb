@@ -76,8 +76,5 @@ class Nsap_Test < Test::Unit::TestCase
     addr = Iso_ip_mapped.new('2011:13:11::64')
     assert_equal('3500002011001300110000000000000000006400', addr.to_shex)
     assert_equal('2011:13:11::64', addr.to_s)
-  end
-  
-  private
-  
+  end  
 end

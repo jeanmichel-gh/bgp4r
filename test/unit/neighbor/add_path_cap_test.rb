@@ -26,6 +26,16 @@ class TestBgpNeighborAddPathCap < Test::Unit::TestCase
     assert   session_cap.path_id_send?(1,1)
     assert ! session_cap.send_inet_multicast?
   end
+  def test_add_path_recv_inet_unicast
+    peer    = Open.new(4,100, 200, '10.0.0.1', OPT_PARM::CAP::Add_path.new( :send, 1, 1))
+    speaker = Open.new(4,100, 200, '10.0.0.1', OPT_PARM::CAP::Add_path.new( :send_and_receive, 1, 1))
+    session_cap = Neighbor::Capabilities.new(speaker, peer)
+    assert    session_cap.recv_inet_unicast?
+    assert    session_cap.path_id_recv?(1,1)
+    assert  ! session_cap.send_inet_unicast?
+    assert  ! session_cap.path_id_send?(1,1)
+    assert  ! session_cap.send_inet_multicast?
+  end
   def test_add_path_send_and_recv_inet6_multicast
     peer    = Open.new(4,100, 200, '10.0.0.1', OPT_PARM::CAP::Add_path.new( :send_and_receive, 2, 2))
     speaker = Open.new(4,100, 200, '10.0.0.1', OPT_PARM::CAP::Add_path.new( :send_and_receive, 2, 2))
@@ -51,4 +61,35 @@ class TestBgpNeighborAddPathCap < Test::Unit::TestCase
     assert  ! session_cap.send_inet6_multicast?
     assert  ! session_cap.recv_inet6_multicast?
   end
+
+  def test_add_path_send_inet_unicast
+    peer    = Open.new(4,100, 200, '10.0.0.1', OPT_PARM::CAP::Add_path.new( :recv, 1, 1))
+    speaker = Open.new(4,100, 200, '10.0.0.1', OPT_PARM::CAP::Add_path.new( :send, 1, 1))
+    session_cap = Neighbor::Capabilities.new(speaker, peer)
+    assert   session_cap.send_inet_unicast?
+    assert   session_cap.path_id_send?(1,1)
+    assert ! session_cap.path_id_recv?(1,1)
+    assert ! session_cap.send_inet_multicast?
+  end
+  def test_add_path_send_inet_unicast_2
+    peer    = Open.new(4,100, 200, '10.0.0.1', OPT_PARM::CAP::Add_path.new( :send_and_receive, 1, 1))
+    speaker = Open.new(4,100, 200, '10.0.0.1', OPT_PARM::CAP::Add_path.new( :send, 1, 1))
+    session_cap = Neighbor::Capabilities.new(speaker, peer)
+    assert   session_cap.send_inet_unicast?
+    assert ! session_cap.path_id_recv?(1,1)
+    assert   session_cap.path_id_send?(1,1)
+    assert ! session_cap.send_inet_multicast?
+  end
+  def test_add_path_recv_inet6_multicast
+    peer    = Open.new(4,100, 200, '10.0.0.1', OPT_PARM::CAP::Add_path.new( :send, 2, 2))
+    speaker = Open.new(4,100, 200, '10.0.0.1', OPT_PARM::CAP::Add_path.new( :recv, 2, 2))
+    session_cap = Neighbor::Capabilities.new(speaker, peer)
+    assert ! session_cap.path_id_recv?(2,1)
+    assert   session_cap.path_id_recv?(2,2)
+    assert ! session_cap.path_id_send?(2,2)
+    assert   session_cap.recv_inet6_multicast?
+    assert ! session_cap.recv_inet_multicast?
+    assert ! session_cap.send_inet_unicast?
+  end
+
 end

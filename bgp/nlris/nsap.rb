@@ -1,3 +1,11 @@
+#--
+# Copyright 2011 Jean-Michel Esnault.
+# All rights reserved.
+# See LICENSE.txt for permissions.
+#
+#
+# This file is part of BGP4R.
+# 
 
 require 'bgp/common'
 require 'bgp/iana'
@@ -89,13 +97,5 @@ end
 
 
 end
-
-include BGP
-# 
-# s = '49.0001.0002.0003.0004.0005.0006/64'
-# n = Nsap.new_nsap(s)
-# p n
-# p n.to_shex
-
 
 load "../../test/unit/nlris/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0

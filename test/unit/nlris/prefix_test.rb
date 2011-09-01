@@ -115,17 +115,6 @@ class Prefix_Test < Test::Unit::TestCase
     assert_equal('2011:13:11::/64', pfx.to_s)
     assert_equal(2, pfx.afi)
   end
-  def test_new_ntop_inet6
-    s = '402011001300110000'
-    pfx = Prefix.new_ntop([s].pack('H*'),:ipv6)
-    assert_equal(s, pfx.to_shex)
-    assert_equal('2011:13:11::/64', pfx.to_s)
-    s = '402011001300110000'
-    pfx = Prefix.new_ntop([s].pack('H*'),2)
-    assert_equal(s, pfx.to_shex)
-    assert_equal('2011:13:11::/64', pfx.to_s)
-    assert_equal(2, pfx.afi)
-  end
   def test_new_ntop_inet_extended
     s = '00000064402011001300110000'
     pfx = Prefix.new_ntop_extended([s].pack('H*'),2)

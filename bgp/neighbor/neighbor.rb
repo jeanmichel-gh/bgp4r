@@ -98,11 +98,11 @@ module BGP
         @opt_parms << if r =~ /mbgp_(.+)/
           OPT_PARM::CAP::Mbgp.send $1
         elsif r =~ /(rr|route_refresh)/
-          OPT_PARM::CAP::Route_refresh.new *args
+          OPT_PARM::CAP::Route_refresh.new( *args)
         elsif r =~ /(4byte_as|as4byte|four_(byte|octet)_as)/
           OPT_PARM::CAP::As4.new(@my_as)
         elsif r =~ /(gr|graceful_restart)/
-          OPT_PARM::CAP::Graceful_restart.new *args
+          OPT_PARM::CAP::Graceful_restart.new( *args)
         else
           super
         end

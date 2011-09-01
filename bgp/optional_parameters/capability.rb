@@ -90,8 +90,6 @@ module BGP
   end
 end
 
-# require 'bgp4r'
-
 module BGP::OPT_PARM
   def Capability.factory(s)
     code = s.slice(2,1).unpack('C')[0]

@@ -48,7 +48,7 @@ module BGP
         return false unless speaker and peer
         case sr
         when :recv, 'recv'
-          speaker.has?(:recv, afi, safi) && peer.has?(:send, afi, safi)
+          speaker.has?(:recv, afi, safi) && peer.has?(:send, afi, safi)        
         when :send, 'send'
           speaker.has?(:send, afi, safi) && peer.has?(:recv, afi, safi)
         else
@@ -85,16 +85,17 @@ module BGP
         end
       end
 
-    private
+      private
 
-    def def_method(name, action, afi, safi)
-      self.class.instance_eval do
-        define_method("#{name}") do
-          path_id? action, afi, safi
+      def def_method(name, action, afi, safi)
+        return if respond_to? :name
+        self.class.instance_eval do
+          define_method("#{name}") do
+            path_id? action, afi, safi
+          end
         end
+        __send__ name
       end
-      __send__ name
-    end
 
     end
     

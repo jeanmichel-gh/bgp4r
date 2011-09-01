@@ -24,19 +24,6 @@ require 'bgp/optional_parameters/capability'
 
 module BGP::OPT_PARM::CAP
 
-  #
-  # Belongs to Neighbor this is a session attribute....
-  # def include_path_id?(speeker, peer, sr, afi, safi)
-  #   # when sending afi, safi, speaker agrees to send and peer to receive
-  #   # when receiving afi, safi, speaker agrees to recv and peer agress to send
-  #   case sr
-  #   when :recv
-  #     speeker.has?(:recv, afi, safi) && peer.has?(:send, afi, safi)
-  #   when :send
-  #     speeker.has?(:send, afi, safi) && peer.has?(:recv, afi, safi)
-  #   end
-  # end
-
   class Add_path < BGP::OPT_PARM::Capability 
 
     class << self

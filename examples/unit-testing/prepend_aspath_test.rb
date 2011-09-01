@@ -58,12 +58,12 @@ class TestBgp < Test::Unit::TestCase
   
   def recv(q, timeout=5)
     begin
-       Timeout::timeout(timeout) do |t| 
-         msg = q.deq
-       end
-     rescue Timeout::Error => e
-       nil
-     end
+      Timeout::timeout(timeout) do |t| 
+        msg = q.deq
+      end
+    rescue Timeout::Error => e
+      nil
+    end
   end
   
   def update1

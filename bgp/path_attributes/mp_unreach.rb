@@ -47,7 +47,7 @@ module BGP
       end
     end
 
-   def afi
+    def afi
       @afi ||= @nlris[0].afi
     end
 

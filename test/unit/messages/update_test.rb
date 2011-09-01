@@ -61,7 +61,7 @@ class Update_Test < Test::Unit::TestCase
     assert_equal('200a0a0a0a2020202020', w.withdrawn.to_shex)
   end
   
-  def test_experiment
+  def __test_experiment
     upd = Update.new do
       path_attribute << Local_pref.new
       path_attribute << Origin.new

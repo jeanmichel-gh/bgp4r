@@ -52,7 +52,6 @@ module BGP
               s.write obj.respond_to?(:encode) ? obj.encode : obj
             end
           rescue IOError, Errno::ECONNRESET, Errno::EBADF => e
-            puts "ECONNRESET"
             changed and notify_observers(:ev_conn_reset, e)
           ensure
             Log.debug "Exiting #{Thread.current['name']}"
