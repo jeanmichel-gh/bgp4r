@@ -49,6 +49,7 @@ class Extended_communitiesTest < Test::Unit::TestCase
   end
   def test_sort
     ec = Extended_communities.new
+    ec.add(Link_bandwidth.new(999_999_999))
     ec.add(Route_target.new('10.0.1.2',10))
     ec.add(Ospf_domain_id.new('9.1.0.1'))
     ec.add(Route_target.new('11.0.1.1',10))
@@ -67,9 +68,11 @@ class Extended_communitiesTest < Test::Unit::TestCase
     assert_equal("Ospf domain id: 9.1.0.1:0",ec.sort.communities[6].to_s)
     assert_equal("Ospf domain id: 20.0.0.1:0",ec.sort.communities[7].to_s)
     assert_equal("Ospf router id: 10.0.0.1:0",ec.sort.communities[8].to_s)
+    assert_equal("Link bandwidth: 1000000000.0",ec.sort.communities[9].to_s)
   end
   def test_sort!
     ec = Extended_communities.new
+    ec.add(Link_bandwidth.new(999_999_999))
     ec.add(Route_target.new('10.0.1.2',10))
     ec.add(Ospf_domain_id.new('9.1.0.1'))
     ec.add(Route_target.new('11.0.1.1',10))
@@ -89,6 +92,7 @@ class Extended_communitiesTest < Test::Unit::TestCase
     assert_equal("Ospf domain id: 9.1.0.1:0",ec.communities[6].to_s)
     assert_equal("Ospf domain id: 20.0.0.1:0",ec.communities[7].to_s)
     assert_equal("Ospf router id: 10.0.0.1:0",ec.communities[8].to_s)
+    assert_equal("Link bandwidth: 1000000000.0",ec.communities[9].to_s)
     ec1 = Extended_communities.new(ec)
     assert_equal(ec.encode, ec1.encode)
   end

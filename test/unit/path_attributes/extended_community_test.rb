@@ -89,5 +89,14 @@ class Extended_community_Test < Test::Unit::TestCase
     assert_equal("Bgp data collect: 100:100",Bgp_data_collect.new(100,100).to_s)
     assert_equal("Bgp data collect: 100:100", Bgp_data_collect.new(['0008006400000064'].pack('H*')).to_s)
   end
+  
+  def test_link_bandwidth
+    assert_equal('04040000461c4000', Link_bandwidth.new(10_000).to_shex)
+    assert_equal('Link bandwidth: 10000.0', Link_bandwidth.new(10_000).to_s)
+    assert_equal('Link bandwidth: 10000.0', Link_bandwidth.new(['04040000461c4000'].pack('H*')).to_s)
+    assert_equal('040400004cbebc20', Link_bandwidth.new(99_999_999).to_shex)
+    assert_equal('Link bandwidth: 100000000.0', Link_bandwidth.new(99_999_999).to_s)
+    assert_equal('Link bandwidth: 100000000.0', Link_bandwidth.new(['040400004cbebc20'].pack('H*')).to_s)
+  end
 
 end

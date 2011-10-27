@@ -30,6 +30,7 @@ module BGP
 
     ROUTE_TARGET = 2
     ROUTE_ORIGIN = 3
+    LINK_BANDWIDTH = 4
     OSPF_DOMAIN_ID = 5
     OSPF_ROUTER_ID = 7
     BGP_DATA_COLLECT = 8
@@ -40,19 +41,7 @@ module BGP
     TWO_OCTET_AS = 0
     IPV4_ADDR = 1
     OPAQUE = 3
-
-    def _encoded_value_
-      case @type & 3
-      when TWO_OCTET_AS
-        [@global, @local].pack('nN')
-      when IPV4_ADDR
-        [@global, @local].pack('Nn')
-      when OPAQUE
-        [@global].pack('H12')
-      else
-        raise RuntimeError, "bogus type: #{@type}"
-      end
-    end
+    FLOAT = -1
     
     def encode
       [@type, @subtype, _encoded_value_].pack('CCa6')
@@ -60,12 +49,14 @@ module BGP
     
     def parse(s)
       @type, @subtype = s.slice!(0,2).unpack('CC')
-      case @type & 3
+      case community_structure
       when TWO_OCTET_AS ; @global, @local = s.unpack('nN')
       when IPV4_ADDR
         @global, @local = s.unpack('Nn')
       when OPAQUE
         @global = s.unpack('H12')
+      when FLOAT
+        _, @global = s.unpack('ng')
       end
     end
     
@@ -121,6 +112,44 @@ module BGP
     def name
       self.class.to_s.split('::').last.gsub('_',' ')
     end
+
+    def to_s
+      case community_structure
+      when TWO_OCTET_AS
+        "#{name}: #{@global}:#{@local}"
+      when IPV4_ADDR
+        "#{name}: #{IPAddr.create(@global)}:#{@local}"
+      when OPAQUE
+        "#{name}: #{@global}"
+      when FLOAT
+        "#{name}: #{[@global].pack('g').unpack('g')}"
+      else
+        raise RuntimeError, "bogus type: #{@type}"
+      end
+    end
+
+    private
+
+    def community_structure
+      cs = @type & 3
+      cs = FLOAT if cs == TWO_OCTET_AS and @subtype == LINK_BANDWIDTH
+      return cs
+    end
+
+    def _encoded_value_
+      case community_structure
+      when TWO_OCTET_AS
+        [@global, @local].pack('nN')
+      when IPV4_ADDR
+        [@global, @local].pack('Nn')
+      when OPAQUE
+        [@global].pack('H12')
+      when FLOAT
+        [0,@global].pack('ng')
+      else
+        raise RuntimeError, "bogus type: #{@type}"
+      end
+    end
     
   end
   
@@ -142,6 +171,7 @@ module BGP
       when OSPF_DOMAIN_ID   ; Ospf_domain_id.new(s)
       when OSPF_ROUTER_ID   ; Ospf_router_id.new(s)
       when BGP_DATA_COLLECT ; Bgp_data_collect.new(s)
+      when LINK_BANDWIDTH   ; Link_bandwidth.new(s)
       else
         puts "too bad type #{type}, subtype #{subtype} : #{s.unpack('H*')}"
         Extended_community.new(s)
@@ -173,18 +203,6 @@ module BGP
       end
     end
 
-    def to_s
-      case @type & 3
-      when TWO_OCTET_AS
-        "#{name}: #{@global}:#{@local}"
-      when IPV4_ADDR
-        "#{name}: #{IPAddr.create(@global)}:#{@local}"
-      when OPAQUE
-        "#{name}: #{@global}"
-      else
-        raise RuntimeError, "bogus type: #{@type}"
-      end
-    end
 
   end
 
@@ -247,6 +265,17 @@ module BGP
       else
         raise ArgumentError, "not an opaque extended community" if [2,3,5,7,8].include?(args[0])
         super(0,*args)
+      end
+    end
+  end
+  
+  class Link_bandwidth < Extended_community
+    def initialize(*args)
+      if args[0].is_a?(String) and args[0].is_packed?
+        super(*args)
+      else
+        args += [0]
+        super(NON_TRANSITIVE | TWO_OCTET_AS, LINK_BANDWIDTH, *args)
       end
     end
   end
