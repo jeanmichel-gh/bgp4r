@@ -1,0 +1,83 @@
+=== 0.0.13 October 27, 2011
+* add support for link bandwidth extended community
+* refactor test, i.e changed test directory structure
+* add afi 3, safi 1 support
+
+=== 0.0.12 February 13, 2011
+* add add-path capability support
+ 
+=== 0.0.11 January 8, 2011
+* stop using autoload
+* fix Communities#has_no_<well_known_community>? predicates
+  eg
+   c.has_no_export_sub_confed?
+
+=== 0.0.10 October 30, 2010
+* add Path_attribute#has_a_<attr_name>? predicates
+  eg
+   pa.has_a_local_pref?
+   pa.has_a_aggregator?
+   pa.has_a_mp_reach?
+   
+* example that shows how to use 
+    bgpdata.netsec.colostate.edu bgp xml feed with bgp4r
+ 
+=== 0.0.9 October 12, 2010
+* add support for Capability message
+* add notification code 7 subcode 1,2,3,4 
+* refactoring capabilities adding dynamic capability opt parameter
+      
+=== 0.0.8 September 30, 2010 
+* add end of rib markers
+   eg
+    Mp_unreach.new(:afi=>1, :safi=>4).to_shex 
+    => '800f03000104'
+    Mp_unreach.new(:afi=>1, :safi=>128).to_shex 
+    => '800f03000180'
+    Mp_unreach.new(:afi=>1, :safi=>2).to_shex 
+    => '800f03000102'
+    
+* change optional parameter length encoding 
+     as per draft-ietf-idr-ext-opt-param-01
+
+=== 0.0.7 September 12, 2010
+* refactoring
+* more tests
+* more examples
+* Add Neighbor#is_<state>? predicates
+
+=== 0.0.6 September 12, 2010
+* Fix decoding updates with as4byte as in ruy 1.9
+
+=== 0.0.5 August 14, 2010
+
+* allow for appending Nlri to update object
+  eg, 
+
+   u = Update.new
+   u << '100.0.0.0/13'
+   u << '99.0.0.0/12'
+
+   >> u.nlri.size
+   => 2
+
+   >> puts u.nlri.to_s
+   => 100.0.0.0/13
+      99.0.0.0/12
+      
+* allow for apending Attributes to an Update object
+   eg,
+ 
+    update = Update.new
+    update << Origin.new
+    update << Next_hop.new('10.0.0.1')
+    update << As_path.new(1,2,3,4,5,6,7,8)        
+  
+=== 0.0.4 June 30, 2009
+=== 0.0.3 June 29, 2009
+=== 0.0.2 June 29, 2009
+* example of how to code a simple route generator using bgp4r
+
+=== 0.0.1 Fri Jun 26 2009
+* Initial commit  
+
