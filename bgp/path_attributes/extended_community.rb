@@ -122,7 +122,7 @@ module BGP
       when OPAQUE
         "#{name}: #{@global}"
       when FLOAT
-        "#{name}: #{[@global].pack('g').unpack('g')}"
+        "#{name}: #{[@global].pack('g').unpack('g')[0]}"
       else
         raise RuntimeError, "bogus type: #{@type}"
       end
