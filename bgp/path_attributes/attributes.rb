@@ -12,6 +12,7 @@
   mp_unreach 
   extended_communities 
   path_attribute
+  aigp
 }.each do |attr|
   require "bgp/path_attributes/#{attr}"
 end

@@ -45,6 +45,8 @@ module BGP
     AS4_PATH = 17
     AS4_AGGREGATOR = 18
     
+    ACCUMULATED_IGP_METRIC = 26
+    
     SET = 1
     SEQUENCE = 2
     CONFED_SEQUENCE = 3
@@ -134,6 +136,14 @@ module BGP
       s +="P" if (flags&2>0)
       s +="E" if (flags&1>0)
       s +="]"
+    end
+    
+    def is_optional?
+       (@flags&8>0)
+    end
+    
+    def is_transitive?
+      (@flags&4>0)
     end
     
     def attribute_name
