@@ -34,14 +34,20 @@ module BGP
     OSPF_DOMAIN_ID = 5
     OSPF_ROUTER_ID = 7
     BGP_DATA_COLLECT = 8
+    COLOR = 11
+    ENCAPSULATION = 12
 
-    IANA_AUTHORITY_BIT = 0x8
-    NON_TRANSITIVE = 0x4    
+    IANA_AUTHORITY_BIT = 0x80
+    TRANSITIVE = 0x0    
+    NON_TRANSITIVE = 0x40    
 
     TWO_OCTET_AS = 0
     IPV4_ADDR = 1
     OPAQUE = 3
     FLOAT = -1
+    
+    DEFAULT_OPAQUE_ENCODING = 'H12'
+    
     
     def encode
       [@type, @subtype, _encoded_value_].pack('CCa6')
@@ -54,7 +60,14 @@ module BGP
       when IPV4_ADDR
         @global, @local = s.unpack('Nn')
       when OPAQUE
-        @global = s.unpack('H12')
+        case self
+        when Color
+          _,@global = s.unpack('nN')
+        when Encapsulation
+          _,@global = s.unpack('Nn')
+        else
+          @global = s.unpack('H12')
+        end
       when FLOAT
         _, @global = s.unpack('ng')
       end
@@ -143,7 +156,14 @@ module BGP
       when IPV4_ADDR
         [@global, @local].pack('Nn')
       when OPAQUE
-        [@global].pack('H12')
+        case self
+        when BGP::Color
+          [0,@global].pack('nN')
+        when BGP::Encapsulation
+          [0,@global].pack('Nn')
+        else
+          [@global].pack('H12')
+        end
       when FLOAT
         [0,@global].pack('ng')
       else
@@ -172,8 +192,10 @@ module BGP
       when OSPF_ROUTER_ID   ; Ospf_router_id.new(s)
       when BGP_DATA_COLLECT ; Bgp_data_collect.new(s)
       when LINK_BANDWIDTH   ; Link_bandwidth.new(s)
+      when COLOR            ; Color.new(s)
+      when ENCAPSULATION    ; Encapsulation.new(s)
       else
-        puts "too bad type #{type}, subtype #{subtype} : #{s.unpack('H*')}"
+        puts "too bad type #{type.to_s(16)}, subtype #{subtype.to_s(16)} : #{s.unpack('H*')}"
         Extended_community.new(s)
       end
     end
@@ -184,9 +206,10 @@ module BGP
         parse(args[0])
       elsif args.size==3
         @type, @subtype, value = args
-        raise ArgumentError, "invalid argument #{args.inspect}"  unless instance_of?(Opaque)
+        raise ArgumentError, "invalid argument #{args.inspect}"  unless is_a?(Opaque)
         @type |= OPAQUE
         @global, @local=value, nil
+        
       elsif args.size==4
         raise  ArgumentError, "This is a base class and should not be instanciated"  if instance_of?(Extended_community)
         @type, @subtype, @global, @local = args
@@ -263,8 +286,7 @@ module BGP
       if args[0].is_a?(String) and args[0].is_packed?
         super(*args)
       else
-        raise ArgumentError, "not an opaque extended community" if [2,3,5,7,8].include?(args[0])
-        super(0,*args)
+        super(*args)
       end
     end
   end
@@ -280,4 +302,35 @@ module BGP
     end
   end
 
+  class Color < Opaque
+    def initialize(*args)
+      args = 0 if args.empty?
+      if args[0].is_a?(String) and args[0].is_packed?
+        super(*args)
+      else        
+        super(TRANSITIVE, COLOR, *args)
+      end
+    end
+  end
+  
+  class Encapsulation < Opaque
+    def initialize(*args)
+      args = 0 if args.empty?
+      if args[0].is_a?(String) and args[0].is_packed?
+        super(*args)
+      else        
+        case args[0]
+        when :l2tpv3 ; tunnel_type = 1
+        when :gre    ; tunnel_type = 2
+        when :ipip   ; tunnel_type = 7
+        else
+          tunnel_type = *args
+        end
+        super(TRANSITIVE, ENCAPSULATION, tunnel_type)
+      end
+    end
+  end  
+  
 end
+
+load "../../test/unit/path_attributes/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0
