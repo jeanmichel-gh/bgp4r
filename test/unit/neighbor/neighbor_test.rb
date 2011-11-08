@@ -24,7 +24,6 @@ require "test/unit"
 require 'bgp4r'
 require 'test/helpers/server'
 include BGP
-include BGP
 include BGP::OPT_PARM::CAP
 include BGP::TestHelpers
 
