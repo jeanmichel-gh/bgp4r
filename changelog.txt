@@ -1,5 +1,6 @@
 === 0.0.14
 * add support for accumlated igp metric attribute
+* add support for VPN default_route RD: 0/0
 
 === 0.0.13 October 27, 2011
 * add support for link bandwidth extended community

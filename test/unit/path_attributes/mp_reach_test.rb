@@ -527,7 +527,9 @@ class Mp_reach_Test < Test::Unit::TestCase
     assert_match(/^\s+Label Stack=101 /, mpr.to_s)
     assert_match(/^\s+Label Stack=102 /, mpr.to_s)
     assert_match(/^\s+Label Stack=103 /, mpr.to_s)
-
+    
+    assert_equal(s.split.join, mpr.to_shex)
+    
     s = '80 0e 4a 0001 80 0c 00000000000000000a000001 00 00000065 70 000651 0000006400000064 c0a800
                                                          00000066 70 000661 0000006400000064 c0a801
                                                          00000067 70 000671 0000006400000064 c0a802'
@@ -537,6 +539,14 @@ class Mp_reach_Test < Test::Unit::TestCase
     assert_match(/Label Stack=102.*ID=102, /, mpr.to_s)
     assert_match(/Label Stack=103.*ID=103, /, mpr.to_s)
     
+    s = '80 0e 3b 0001 80 0c 0000000000000000 0a000001 00 70 000651 0000006400000064 c0a800
+                                                          70 000661 0000006400000064 c0a801
+                                                          58 000671 0000006400000064'
+    sbin = [s.split.join].pack('H*')
+    mpr = Mp_reach.new(sbin, false)
+    assert_equal(s.split.join, mpr.to_shex)
+    assert_match(/IPv4=0.0.0.0\/0/, mpr.to_s)
+  
   end
   
   def test_derive_afi_from_nlris

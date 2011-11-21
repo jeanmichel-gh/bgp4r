@@ -25,6 +25,9 @@ module BGP
     #FIXME... a mixin path_id ????
     def path_id
       @prefix.path_id
+    rescue
+      # return nil
+      # RD: 0/0
     end
     def path_id=(val)
       @prefix.path_id=val

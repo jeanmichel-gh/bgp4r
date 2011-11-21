@@ -14,9 +14,16 @@ module BGP
       if args.size>0 and args[0].is_a?(String) and args[0].is_packed?
         parse(*args)
       else
-        prefix, *rd = args
-        self.prefix=(prefix)
-        self.rd=rd
+        case args[0]
+        when String, Prefix
+          prefix, *rd = args
+          self.prefix=(prefix)
+          self.rd=rd
+        when Rd
+          *rd = args
+          @prefix=nil
+          self.rd=rd
+        end
       end      
     end
     def prefix=(arg)
@@ -42,23 +49,38 @@ module BGP
     end
     def encode(len_included=true)
       if len_included
-        [bit_length, @rd.encode, @prefix.encode_with_len_without_path_id].pack('Ca*a*')
+        [bit_length, @rd.encode, encode_prefix(false)].pack('Ca*a*')
       else
-        @rd.encode + @prefix.encode_without_len_without_path_id
+        @rd.encode + encode_prefix(false)
       end
     end
+    
+    def encode_prefix(len_included)
+      if @prefix
+        if len_included
+          @prefix.encode_with_len_without_path_id
+        else
+          @prefix.encode_without_len_without_path_id
+        end
+      else
+        ''
+      end
+    end
+    
     def encode_without_len_without_path_id
       encode(false)
     end
+    
     def path_id
       @prefix.path_id
-    rescue
     end
     def path_id=(val)
       @prefix.path_id=val
     end
     def bit_length
-      @rd.bit_length + @prefix.mlen
+      len = @rd.bit_length 
+      len += @prefix.mlen if @prefix
+      len
     end
     def ipv4?
       @prefix.ipv4?
@@ -73,14 +95,32 @@ module BGP
       nbits = s.slice!(0,1).unpack('C')[0]
       rd,vpn = s.slice!(0,(7+nbits)/8).unpack("a8a*")
       @rd = Rd.new(rd.is_packed)
-      @prefix= Prefix.new_ntop([nbits-64,vpn].pack('Ca*'), afi)
+      @prefix= Prefix.new_ntop([nbits-64,vpn].pack('Ca*'), afi) if vpn.size>0
     end
     def nexthop
       @prefix.nexthop
     end
-    def to_s
+    def to_s(afi=1)
        #Label Stack=5806 (bottom) RD=3215:317720610, IPv4=10.45.142.64/32
-      "#{@rd.to_s(false)}, #{@prefix.to_s_with_afi}"
+      "#{@rd.to_s(false)}, #{prefix_to_s(afi)}"
     end
+    
+    private
+    
+    def prefix_to_s(afi)
+      if @prefix
+        @prefix.to_s_with_afi
+      else
+        case afi
+        when 1 ; 'IPv4=0.0.0.0/0'
+        when 2 ; 'IPv6=0::0/0'
+        else
+          ''
+        end
+      end
+    end
+    
   end
 end
+
+load "../../test/unit/nlris/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0
