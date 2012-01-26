@@ -35,6 +35,9 @@ module BGP
         raise ArgumentError, "invalid argument, #{arg.class} #{arg}"
       end
     end
+    def to_hash
+      {}
+    end
   end
 
 end

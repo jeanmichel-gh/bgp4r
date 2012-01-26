@@ -100,7 +100,11 @@ module BGP
     def sort
       Cluster_list.new(to_ary.sort)
     end
-
+    
+    def to_hash
+      {:cluster_ids=>@cluster_ids.collect { |c| c.to_s  }}
+    end
+      
     def sort!
       @cluster_ids = @cluster_ids.sort_by { |c| c.to_i }
       self
@@ -110,6 +114,25 @@ module BGP
       self.sort.to_shex <=> other.sort.to_shex
     end
 
+  end
+  
+  class Cluster_list
+    class << self
+      def new_hash(arg={})
+        o = new
+        [:cluster_ids].each do |set_type|
+          next unless arg.has_key? set_type
+          case set_type
+          when :cluster_ids
+            o << arg[set_type]
+          else
+            raise
+          end 
+        end
+        o
+        
+      end
+    end
   end
 
 end

@@ -27,7 +27,17 @@ module BGP
   class Communities < Attr
 
     class Community
-      
+
+      class << self
+        def method_missing(name, *args, &block)
+          if name.to_s =~ /^(no_export|no_advertise|no_export_sub_confed|no_peer)$/
+            new name
+          else
+            super
+          end
+        end
+      end
+
       unless const_defined? :NO_EXPORT
         NO_EXPORT             = 0xFFFFFF01
         NO_ADVERTISE          = 0xFFFFFF02
@@ -79,6 +89,22 @@ module BGP
 
     end
 
+    class << self
+      def new_hash(arg={})
+        o = new
+        [:communities].each do |set_type|
+          next unless arg.has_key? set_type
+          case set_type
+          when :communities
+            o << arg[set_type]
+          else
+            raise
+          end 
+        end
+        o
+      end
+    end
+
     def initialize(*args)
       @flags, @type = OPTIONAL_TRANSITIVE, COMMUNITIES
       if args[0].is_a?(String) and args[0].is_packed?
@@ -113,6 +139,10 @@ module BGP
 
     def to_s(method=:default)
       super(communities, method)
+    end
+    
+    def to_hash
+      { :communities=> @communities.collect { |comm| comm.to_s } }
     end
 
     def encode
@@ -171,4 +201,5 @@ module BGP
   end
   
 end
+
 load "../../test/unit/path_attributes/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0

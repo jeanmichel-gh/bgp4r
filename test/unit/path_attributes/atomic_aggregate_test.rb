@@ -31,5 +31,8 @@ class Atomic_aggregate_Test < Test::Unit::TestCase
     obj =  Atomic_aggregate.new
     assert_equal("800600", Atomic_aggregate.new(obj.encode).to_shex)
   end
+  def test_2
+    assert_equal({},Atomic_aggregate.new.to_hash)
+  end
 end
 

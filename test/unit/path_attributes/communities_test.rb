@@ -26,10 +26,10 @@ require 'test/unit'
 class Community_Test < Test::Unit::TestCase
   include BGP
   def test_1
-    assert_equal(0xFFFFFF01,Communities::Community.new(:no_export).to_i)
-    assert_equal(0xFFFFFF02,Communities::Community.new(:no_advertise).to_i)
-    assert_equal(0xFFFFFF03,Communities::Community.new(:no_export_sub_confed).to_i)
-    assert_equal(0xFFFFFF04,Communities::Community.new(:no_peer).to_i)
+    assert_equal(0xFFFFFF01,Communities::Community.no_export.to_i)
+    assert_equal(0xFFFFFF02,Communities::Community.no_advertise.to_i)
+    assert_equal(0xFFFFFF03,Communities::Community.no_export_sub_confed.to_i)
+    assert_equal(0xFFFFFF04,Communities::Community.no_peer.to_i)
     assert_equal(0xdeadbeef,Communities::Community.new(0xdeadbeef).to_i)
     assert_equal '5:1234', Communities::Community.new(Communities::Community.new('5:1234')).to_s
   end
@@ -58,6 +58,11 @@ class Communities_Test < Test::Unit::TestCase
     assert_equal('145:30 145:40 145:50 145:60', com3.communities)
     assert_equal("[OTcr]  (8) Communities: [c008100091001e0091002...] '145:30 145:40 145:50 145:60'", com3.to_s)        
     assert_equal(com3.to_shex, Communities.new(com3.encode).to_shex)
+    assert_equal({:communities=>["145:30", "145:40", "145:50", "145:60"]}, com1.to_hash)
+    com4 = Communities.new_hash :communities=> ["145:30", "145:40", "145:50", "145:60", :no_export, :no_advertise]
+    assert_equal('c008180091001e00910028009100320091003cffffff01ffffff02', com4.to_shex)
+    com5 = Communities.new_hash(com4.to_hash)
+    assert_equal(com4.to_shex, com5.to_shex)
   end
   def test_2
     com1 = Communities.new("145:60", "145:10", "145:30", "145:20")
