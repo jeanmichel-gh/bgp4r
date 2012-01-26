@@ -23,6 +23,10 @@ module BGP
       @aigp.to_i
     end
     
+    def to_hash
+      {:metric=> to_i}
+    end
+    
     def accumulated_igp_metric
       format("(0x%8.8x) %d", to_i, to_i)
     end
@@ -43,6 +47,16 @@ module BGP
     end
 
   end
+
+  class Aigp
+    class << self
+      def new_hash(_arg={})
+        arg = {:metric=>0}.merge(_arg)
+        new arg[:metric]
+      end
+    end
+  end
+
 
 end
 

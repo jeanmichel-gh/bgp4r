@@ -117,6 +117,9 @@ module BGP
             super(:set, *args)
           end
         end
+        def to_hash
+          {:set=> as}
+        end
       end
       
       class As_path::Sequence < As_path::Segment
@@ -127,6 +130,9 @@ module BGP
             super(:sequence, *args)
           end
         end
+        def to_hash
+          {:sequence=> as}
+        end        
       end
       
       class As_path::Confed_set < As_path::Segment
@@ -137,6 +143,9 @@ module BGP
             super(:confed_set, *args)
           end
         end
+        def to_hash
+          {:confed_set=> as}
+        end        
       end
       
       class As_path::Confed_sequence < As_path::Segment
@@ -147,6 +156,9 @@ module BGP
             super(:confed_sequence, *args)
           end
         end
+        def to_hash
+          {:confed_sequence=> as}
+        end        
       end
       
       def integer?(arg)
@@ -204,6 +216,12 @@ module BGP
         @segments.find { |s| s.seg_type == SEQUENCE }
       end
       
+      def to_hash
+        h = {}
+        @segments.each { |s| h = h.merge(s.to_hash) }
+        h
+      end
+      
       private
       
       def parse(s,as4byte=false)
@@ -222,6 +240,45 @@ module BGP
       end
       def parse(s,as4byte=@as4byte)
         super(s,true)
+      end
+    end
+    
+    class As_path
+      class << self
+        def new_hash(arg={})
+          o = new
+          [:set, :sequence, :confed_sequence, :confed_set].each do |set_type|
+            next unless arg.has_key? set_type
+            case set_type
+            when :set
+              o << As_path::Set.new(*arg[:set])
+            when :sequence
+              o << As_path::Sequence.new(*arg[:sequence])
+            when :confed_set
+              o << As_path::Confed_set.new(*arg[:confed_set])
+            when :confed_sequence
+              o << As_path::Confed_sequence.new(*arg[:confed_sequence])
+            else
+              raise
+            end 
+          end
+          o
+        end
+      end
+    
+      class << self
+        def new_set(*args)
+          new_hash :set=>args
+        end
+        def new_sequence(*args)
+          new_hash :sequence=>args
+        end
+        def new_confed_set(*args)
+          new_hash :confed_set=>args
+        end
+        def new_confed_sequence(*args)
+          new_hash :confed_sequence=>args
+        end
       end
     end
     

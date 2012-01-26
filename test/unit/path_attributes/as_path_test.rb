@@ -63,6 +63,12 @@ class Segment_Test < Test::Unit::TestCase
     assert_equal('0203000000010000000200000003', seg.to_shex(true))
     assert_equal('0203000100020003', seg.to_shex(false))
   end
+  def test_5
+    assert_equal({:set=>[1, 2]},As_path::Set.new(1,2).to_hash)
+    assert_equal({:sequence=>[3,4]},As_path::Sequence.new(3,4).to_hash)
+    assert_equal({:confed_sequence=>[5,6]},As_path::Confed_sequence.new(5,6).to_hash)
+    assert_equal({:confed_set=>[7,8]},As_path::Confed_set.new(7,8).to_hash)
+  end
 end
 
 class As_path_Test < Test::Unit::TestCase
@@ -123,6 +129,53 @@ class As_path_Test < Test::Unit::TestCase
     asp = As_path.new(['40020c020500010002000300040005c0080c051f00010137003b0af50040'].pack('H*'))
     asp2 = As_path.new(asp)
     assert_equal(asp.encode, asp2.encode)
+  end
+  def test_6
+    set1 = As_path.new_set 1,2,3,4
+    set2 = As_path.new As_path.new(As_path::Set.new(1,2,3,4))
+    assert_equal( set1.encode, set2.encode)
+    set1 = As_path.new_sequence 1,2,3,4
+    set2 = As_path.new As_path.new(As_path::Sequence.new(1,2,3,4))
+    assert_equal( set1.encode, set2.encode)
+    set1 = As_path.new_confed_set 1,2,3,4
+    set2 = As_path.new As_path.new(As_path::Confed_set.new(1,2,3,4))
+    assert_equal( set1.encode, set2.encode)
+    set1 = As_path.new_confed_sequence 1,2,3,4
+    set2 = As_path.new As_path.new(As_path::Confed_sequence.new(1,2,3,4))
+    assert_equal( set1.encode, set2.encode)
+  end
+  def test_7
+    set1 = As_path.new_hash :set=> [1,2,3,4]
+    set2 = As_path.new As_path.new(As_path::Set.new(1,2,3,4))
+    assert_equal( set1.encode, set2.encode)
+    set1 = As_path.new_hash :sequence=> [1,2,3,4]
+    set2 = As_path.new As_path.new(As_path::Sequence.new(1,2,3,4))
+    assert_equal( set1.encode, set2.encode)
+    set1 = As_path.new_hash :confed_set=> [1,2,3,4]
+    set2 = As_path.new As_path.new(As_path::Confed_set.new(1,2,3,4))
+    assert_equal( set1.encode, set2.encode)
+    set1 = As_path.new_hash :confed_sequence=> [1,2,3,4]
+    set2 = As_path.new As_path.new(As_path::Confed_sequence.new(1,2,3,4))
+    assert_equal( set1.encode, set2.encode)
+  end
+  def test_8
+    set = As_path.new_hash :set=> [1,2], :sequence=>[3,4], :confed_sequence=>[5,6], :confed_set=>[7,8]
+    assert_equal('400218010200010002020200030004030200050006040200070008', set.to_shex)
+    assert_equal [1,2], set.to_hash[:set]
+    assert_equal [3,4], set.to_hash[:sequence]
+    assert_equal [5,6], set.to_hash[:confed_sequence]
+    assert_equal [7,8], set.to_hash[:confed_set]
+    set1 = As4_path.new
+    set1 << As_path::Set.new(1,2)
+    set1 << As_path::Sequence.new(3,4)
+    set1 << As_path::Confed_sequence.new(5,6)
+    set1 << As_path::Confed_set.new(7,8)
+    set2 = As4_path.new_hash :set=> [1,2], :sequence=>[3,4], :confed_sequence=>[5,6], :confed_set=>[7,8]
+    assert_equal(set1.to_shex, set2.to_shex)    
+    assert_equal [1,2], set2.to_hash[:set]
+    assert_equal [3,4], set2.to_hash[:sequence]
+    assert_equal [5,6], set2.to_hash[:confed_sequence]
+    assert_equal [7,8], set2.to_hash[:confed_set]
   end
 end
 

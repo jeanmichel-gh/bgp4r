@@ -63,4 +63,10 @@ class Aggregator_Test < Test::Unit::TestCase
     assert_raise(ArgumentError) {As4_aggregator.new(ag2)}
     assert_equal(ag4.encode, ag.encode)
   end
+  def test5
+    ag1 = Aggregator.new('10.0.0.1', 100)
+    ag2 = Aggregator.new_hash :as=> 100, :address=> '10.0.0.1'
+    assert_equal(ag1.encode,ag2.encode)
+    assert_equal({:as=>100, :address=>"10.0.0.1"}, ag2.to_hash)
+  end
 end

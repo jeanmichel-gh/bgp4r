@@ -48,6 +48,10 @@ module BGP
     def address
       @ip_address.to_s
     end
+    
+    def asn
+      @as
+    end
 
     def as(sep='')
       case sep
@@ -78,6 +82,10 @@ module BGP
       super([@as].pack(f) + @ip_address.hton)
     end
     
+    def to_hash
+      {:as=> asn, :address=> address}
+    end
+    
   end
 
   class As4_aggregator < Aggregator
@@ -98,6 +106,17 @@ module BGP
     end
 
   end
+  
+  class Aggregator
+    class << self
+      def new_hash(arg={})
+        new arg[:address], arg[:as]
+      end
+    end    
+  end
+  
+  
+  
 
 end
 
