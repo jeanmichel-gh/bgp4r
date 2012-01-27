@@ -30,6 +30,13 @@ module BGP
 
   class Originator_id < Attr
 
+    class << self
+      def new_hash(arg={})
+        new arg[:origin_id]
+      end
+    end
+
+
     def initialize(*args)
       @flags, @type = OPTIONAL, ORIGINATOR_ID
       if args[0].is_a?(String) and args[0].is_packed?
@@ -42,27 +49,31 @@ module BGP
     end
 
     def to_i
-      @next_hop.to_i
+      @origin_id.to_i
     end
     def parse(s)
       @flags, @type, len, value = super(s)
-      @next_hop = IPAddr.create(value)
+      @origin_id = IPAddr.create(value)
     end
 
     def encode
-      super(@next_hop.encode)
+      super(@origin_id.encode)
     end
 
     def to_s(method=:default)
-      super(@next_hop.to_s, method)
+      super(@origin_id.to_s, method)
     end
     
     def originator_id
-      @next_hop.to_s
+      @origin_id.to_s
+    end
+    
+    def to_hash
+      {:origin_id=> originator_id}
     end
     
     def originator_id=(val)
-      @next_hop=IPAddr.create(val)
+      @origin_id=IPAddr.create(val)
     end
 
 

@@ -27,15 +27,29 @@ module BGP
 
   class Next_hop < Attr
 
+    class << self
+      def new_hash(arg={})
+        # next_hop =nil
+        if arg.has_key?(:next_hop)
+          new( arg[:next_hop])
+        elsif arg.has_key?(:nexthop)
+          new( arg[:nexthop])
+        end
+      end
+    end
+
     def initialize(*args)
+      p args
       @flags, @type = WELL_KNOWN_MANDATORY, NEXT_HOP
       if args[0].is_a?(String) and args[0].is_packed?
         parse(args[0])
       elsif args[0].is_a?(self.class)
         parse(args[0].encode, *args[1..-1])
       else
+        p 'HERE'
         @next_hop = IPAddr.create(*args)
       end
+      p self
     end
 
     def next_hop
@@ -43,6 +57,10 @@ module BGP
     end
     def to_s(method=:default)
       super(next_hop, method)
+    end
+    
+    def to_hash
+      {:next_hop=> next_hop }
     end
 
     def to_i

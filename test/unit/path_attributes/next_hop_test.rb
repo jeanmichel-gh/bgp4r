@@ -34,4 +34,7 @@ class Next_hop_Test < Test::Unit::TestCase
     next_hop1 = Next_hop.new(next_hop)
     assert_equal(next_hop.encode, next_hop1.encode)
   end
+  def test_2
+    next_hop = Next_hop.new_hash :next_hop=> '10.0.0.1'
+  end
 end

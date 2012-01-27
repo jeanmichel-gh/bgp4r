@@ -27,6 +27,12 @@ module BGP
 
   class Multi_exit_disc < Attr
 
+    class << self
+      def new_hash(arg={})
+        new arg
+      end
+    end
+
     def initialize(arg=0)
       @flags, @type=OPTIONAL, MULTI_EXIT_DISC
       if arg.is_a?(String) and arg.is_packed?
@@ -66,6 +72,10 @@ module BGP
 
     def to_s(method=:default)
       super(multi_exit_disc, method)
+    end
+
+    def to_hash
+      {:multi_exit_disc=>to_i}
     end
 
     private

@@ -27,6 +27,12 @@ module BGP
 
   class Local_pref < Attr
 
+    class << self
+      def new_hash(arg={})
+        new arg
+      end
+    end
+
     def initialize(arg=100)
       @flags, @type = WELL_KNOWN_MANDATORY, LOCAL_PREF
       if arg.is_a?(String) and arg.is_packed?
@@ -53,6 +59,10 @@ module BGP
 
     def to_i
       @local_pref
+    end
+    
+    def to_hash
+      {:local_pref=>to_i}
     end
 
     def encode

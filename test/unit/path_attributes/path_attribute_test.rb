@@ -49,6 +49,17 @@ class Path_attribute_Test < Test::Unit::TestCase # :nodoc:
     assert(@pa.has? Multi_exit_disc)
     assert(@pa.has? As_path)
   end
+  
+  def test_11
+    pa = Path_attribute.new { |p|  
+      p << Origin.new(1)
+      p << Next_hop.new('1.1.1.1')
+      p << Multi_exit_disc.new(222)
+      p << Local_pref.new(333)
+      p << As_path.new( :set=> [1,2,3,4], :sequence=> [11,12,13])
+    }
+    assert_equal([BGP::Origin,BGP::Next_hop,BGP::Multi_exit_disc,BGP::Local_pref,BGP::As_path], pa.has?)
+  end
 
   def test_2
     ss = '400101014003040a000001800404000000644005040000006440020c020500010002000300040005c0080c051f00010137003b0af50040'
@@ -153,6 +164,38 @@ class Path_attribute_Test < Test::Unit::TestCase # :nodoc:
     assert_equal(BGP::Mp_reach, Attr.factory(sbin, :path_id=>true).class)
   end
   
+  def test_8
+    
+    mp_reach = {:safi=>128, :nexthop=> ['10.0.0.1'], :path_id=> 100, :nlris=> [
+      {:rd=> [100,100], :prefix=> '192.168.0.0/24', :label=>101},
+      {:rd=> [100,100], :prefix=> '192.168.1.0/24', :label=>102},
+      {:rd=> [100,100], :prefix=> '192.168.2.0/24', :label=>103},
+    ]}
+    
+    mp_unreach = {:safi=>2, :nlris=>['192.168.1.0/24', '192.168.2.0/24']}
+    
+    
+    p = Path_attribute.new  :local_pref=>100, 
+                            :next_hop => '10.0.0.1', 
+                            :med=>300, 
+                            :mp_reach=> mp_reach, 
+                            :mp_unreach=> mp_unreach, 
+                            :origin=> :igp, 
+                            :as_path=> {:set=> [1,2], :sequence=>[3,4], :confed_sequence=>[5,6], :confed_set=>[7,8]},
+                            :cluster_list=> ['1.1.1.1', '2.2.2.2', '3.3.3.3'],
+                            :communities=> [],
+                            :extended_communities=> [],
+                            :aggregator=> ['1.1.1.1', 100],
+                            :originator_id=> '2.2.2.2',
+                            :as4_aggregator=> ['4.4.4.4',200],
+                            :as4_path=> {:set=> [11,12], :sequence=>[13,14], :confed_sequence=>[15,16], :confed_set=>[17,18]},
+                            :atomic_aggregate=> 1
+                            
+    puts p
+    
+    
+  end
+  
   def test_path_attribute_path_id_true_and_as4byte_false
     path_attr = Path_attribute.new
     path_attr.insert(
@@ -172,6 +215,6 @@ class Path_attribute_Test < Test::Unit::TestCase # :nodoc:
     # TODO: UT: a path attr with mp_unreach w path_id
     # TODO: UT: a path attr with mp_reach w path_id and as4
     
-  end
+  end      
   
 end

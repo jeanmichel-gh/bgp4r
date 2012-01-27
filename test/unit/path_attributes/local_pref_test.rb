@@ -40,4 +40,9 @@ class Local_pref_Test < Test::Unit::TestCase
     lp1 = Local_pref.new(lp)
     assert_equal(lp.encode, lp1.encode)
   end
+  def test_3
+    lp = Local_pref.new_hash :local_pref=>100
+    assert_equal({:local_pref=>100}, lp.to_hash)
+    assert_equal(lp.to_hash, Local_pref.new_hash(lp.to_hash).to_hash)
+  end
 end

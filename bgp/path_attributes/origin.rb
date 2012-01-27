@@ -27,6 +27,12 @@ module BGP
   
   class Origin < Attr
 
+    class << self
+      def new_hash(arg={})
+        new arg[:origin]
+      end
+    end
+
     def initialize(arg=0)
       @type=ORIGIN
       @flags=WELL_KNOWN_MANDATORY
@@ -58,6 +64,20 @@ module BGP
 
     def to_i
       @origin
+    end
+    
+    def to_sym
+      case @origin
+      when 1 ; :egp
+      when 2 ; :incomplete
+      when 0 ; :igp
+      else
+        :undefined
+      end
+    end
+    
+    def to_hash
+      {:origin=> to_sym}
     end
 
     def origin

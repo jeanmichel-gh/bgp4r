@@ -36,9 +36,34 @@ module BGP
         while s.size>0
           @attributes << Attr.factory(*args)
         end
+      elsif args.size ==1 and args[0].is_a?(Hash)
+        @attributes = []
+        @attributes = args[0].keys.collect { |attr|  
+
+          case attr
+          when :next_hop, :nexthop     ; Next_hop.new(args[0][attr])
+          when :local_pref             ; Local_pref.new(args[0][attr])
+          when :med, :multi_exit_disc  ; Multi_exit_disc.new(args[0][attr])
+          when :mp_reach               ; Mp_reach.new(args[0][attr])
+          when :mp_unreach             ; Mp_unreach.new(args[0][attr])
+          when :as_path                ; As_path.new_hash(args[0][attr])
+          when :as4_path               ; As4_path.new_hash(args[0][attr])
+          when :origin                 ; Origin.new(args[0][attr])
+          when :cluster_list           ; Cluster_list.new(*args[0][attr])
+          when :aggregator             ; Aggregator.new(args[0][attr])
+          when :as4_aggregator         ; As4_aggregator.new(args[0][attr])
+          when :originator_id          ; Originator_id.new(args[0][attr])
+            # FIXME: add other attr here ...
+          else 
+            puts "#{attr} to be implemented!"
+          end
+          }.compact
       else
         add(*args)
       end
+      
+      yield(self) if block_given?
+      
     end
 
     def add(*args)
@@ -53,7 +78,12 @@ module BGP
         if as4byte and a.is_a?(As_path)
           a.to_s(method, as4byte)
         else
+          begin
           a.to_s(method)
+        rescue => e
+          p e 
+          p a.class
+        end
         end
       }).join("\n  ")
     end
@@ -276,8 +306,51 @@ module BGP
         Unknown.new(s)
       end
     end
+
+    # def self.new_hash(_arg={:arg=>nil})
+    #   #FIXME:
+    #   
+    #   arg = _arg.delete(:arg)
+    #   
+    #   if arg.is_a?(Neighbor::Capabilities)
+    #     as4byte_flag = arg.as4byte?
+    #     path_id_flag = arg
+    #   elsif arg.is_a?(Hash)
+    #     as4byte_flag=arg[:as4byte]
+    #     path_id_flag=arg[:path_id]
+    #   elsif arg.is_a?(TrueClass)
+    #     as4byte_flag=true
+    #     path_id_flag=nil
+    #   elsif arg.respond_to? :as4byte?
+    #     as4byte_flag = arg.as4byte?
+    #     path_id_flag = arg
+    #   else
+    #     as4byte_flag=nil
+    #     path_id_flag=nil
+    #   end
+    # 
+    #   _arg.keys.each { |attr|
+    #     case attr
+    #     when :local_pref ; Local_pref.new(_arg[attr])
+    #     when :next_hop   ; Next_hop.new(_arg[attr])
+    #     else
+    #     end
+    #   }
+    # end
+
+
     
   end
-end
 
+  # require 'bgp/path_attributes/local_pref'
+  # require 'bgp/path_attributes/next_hop'
+  # require 'bgp/path_attributes/multi_exit_disc'
+  #   
+  # p = Path_attribute.new :local_pref=>100, :next_hop => '10.0.0.1', :med=>300
+  # # p p
+  # puts p 
+  
+  
+  
+end
 load "../../test/unit/path_attributes/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0
