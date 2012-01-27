@@ -68,6 +68,7 @@ class Extended_community_Test < Test::Unit::TestCase
     assert_equal("Route origin: 2.2.2.2:333",Route_origin.new('2.2.2.2', 333).to_s)
     assert_equal("Route origin: 10:20",Route_origin.new(10, 20).to_s)
     assert_equal("000300ff00deadbe",Route_origin.new(0xff,0xdeadbe).to_shex)
+    
   end
 
   def test_ospf_domain_id
@@ -78,8 +79,8 @@ class Extended_community_Test < Test::Unit::TestCase
   end
 
   def test_ospf_router_id
-    did = Ospf_router_id.new('1.1.1.1')
-    assert_equal('Ospf router id: 1.1.1.1:0', did.to_s)
+    rid = Ospf_router_id.new('1.1.1.1')
+    assert_equal('Ospf router id: 1.1.1.1:0', rid.to_s)
     assert_equal("0107010203040000",Ospf_router_id.new('1.2.3.4').to_shex)
     assert_equal("Ospf router id: 1.2.3.4:0", Ospf_router_id.new(['0105010203040000'].pack('H*')).to_s)
   end
@@ -118,28 +119,27 @@ class Extended_community_Test < Test::Unit::TestCase
     assert_equal('Encapsulation: 1', Encapsulation.new(:l2tpv3).to_s)
     assert_equal('Encapsulation: 7', Encapsulation.new(:ipip).to_s)
     assert_equal('Encapsulation: 2', Encapsulation.new(:gre).to_s)
-    assert_equal('Encapsulation: 7', Encapsulation.new(Encapsulation.new(7).encode).to_s)
-    
+    assert_equal('Encapsulation: 7', Encapsulation.new(Encapsulation.new(7).encode).to_s)    
   end
 
   def test_factory
-      s = '0102070001010008 010208000101000a 01020a000102000a 01020a0003020007 01020b000101000a 
-           01030a0003020009 0105090100010000 0105140000010000 01070a0000010000 400400004e6e6b28 
-           430b000000000064 030c000000000007'.split.join
-      comms = []
-      communities = s.scan(/[0-9a-f]{16}/) { |comm| comms << Extended_community.factory([comm].pack('H*'))  }
-      assert_equal BGP::Route_target, comms[0].class
-      assert_equal BGP::Route_target, comms[1].class
-      assert_equal BGP::Route_target, comms[2].class
-      assert_equal BGP::Route_target, comms[3].class
-      assert_equal BGP::Route_target, comms[4].class
-      assert_equal BGP::Route_origin, comms[5].class
-      assert_equal BGP::Ospf_domain_id, comms[6].class
-      assert_equal BGP::Ospf_domain_id, comms[7].class
-      assert_equal BGP::Ospf_router_id, comms[8].class
-      assert_equal BGP::Link_bandwidth, comms[9].class
-      assert_equal BGP::Color, comms[10].class
-      assert_equal BGP::Encapsulation, comms[11].class
-    end
-    
+    s = '0102070001010008 010208000101000a 01020a000102000a 01020a0003020007 01020b000101000a 
+         01030a0003020009 0105090100010000 0105140000010000 01070a0000010000 400400004e6e6b28 
+         430b000000000064 030c000000000007'.split.join
+    comms = []
+    communities = s.scan(/[0-9a-f]{16}/) { |comm| comms << Extended_community.factory([comm].pack('H*'))  }
+    assert_equal BGP::Route_target, comms[0].class
+    assert_equal BGP::Route_target, comms[1].class
+    assert_equal BGP::Route_target, comms[2].class
+    assert_equal BGP::Route_target, comms[3].class
+    assert_equal BGP::Route_target, comms[4].class
+    assert_equal BGP::Route_origin, comms[5].class
+    assert_equal BGP::Ospf_domain_id, comms[6].class
+    assert_equal BGP::Ospf_domain_id, comms[7].class
+    assert_equal BGP::Ospf_router_id, comms[8].class
+    assert_equal BGP::Link_bandwidth, comms[9].class
+    assert_equal BGP::Color, comms[10].class
+    assert_equal BGP::Encapsulation, comms[11].class
+  end
+
 end

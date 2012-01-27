@@ -28,6 +28,26 @@ module BGP
 
   class Extended_communities < Attr
 
+    class << self
+      def new_hash(arg={})
+        o = new
+        arg.keys.each do |comm|
+          case comm
+          when :color           ; o << Color.new(*arg[comm])
+          when :route_target    ; o << Route_target.new(*arg[comm])
+          when :link_bandwidth  ; o << Link_bandwidth.new(*arg[comm])
+          when :ospf_domain_id  ; o << Ospf_domain_id.new(*arg[comm])
+          when :encapsulation   ; o << Encapsulation.new(*arg[comm])
+          when :route_origin    ; o << Route_origin.new(*arg[comm])
+          when :ospf_router_id  ; o << Ospf_router_id.new(arg[comm])
+          else
+            raise
+          end 
+        end
+        o        
+      end
+    end
+
     attr_reader :communities
 
     def initialize(*args)
@@ -58,6 +78,12 @@ module BGP
       self
     end
     alias << add
+
+    def to_hash
+      h = {}
+      @communities.each { |c|  h = h.merge( { c.class.to_s.split('::').last.downcase.to_sym => c.instance_eval { value2 } }) }
+      h
+    end
 
     def extended_communities
       len = @communities.size*8

@@ -47,6 +47,28 @@ class Extended_communitiesTest < Test::Unit::TestCase
     exc = Extended_communities.new(['c010080002282b00007530'].pack('H*'))
     assert_equal(Route_target, exc.communities[0].class)
   end
+  def test_4
+    ec = Extended_communities.new_hash  :color=> 100
+    ec2 = Extended_communities.new_hash(ec.to_hash)
+    assert_equal(ec.to_hash, Extended_communities.new_hash(ec.to_hash).to_hash)
+    ec = Extended_communities.new_hash  :link_bandwidth=> 999_999_999
+    ec2 = Extended_communities.new_hash(ec.to_hash)
+    assert_equal(ec.to_hash, Extended_communities.new_hash(ec.to_hash).to_hash)
+    ec = Extended_communities.new_hash  :route_target=> ['10.0.1.2', 10]
+    ec2 = Extended_communities.new_hash(ec.to_hash)
+    assert_equal(ec.to_hash, Extended_communities.new_hash(ec.to_hash).to_hash)
+    ec = Extended_communities.new_hash  :ospf_domain_id=> '9.1.0.1'
+    ec2 = Extended_communities.new_hash(ec.to_hash)
+    assert_equal(ec.to_hash, Extended_communities.new_hash(ec.to_hash).to_hash)
+    ec = Extended_communities.new_hash  :encapsulation=> :l2tpv3
+    ec2 = Extended_communities.new_hash(ec.to_hash)
+    assert_equal(ec.to_hash, Extended_communities.new_hash(ec.to_hash).to_hash)
+    ec = Extended_communities.new_hash  :route_origin=> ['10.0.1.2', 10]
+    ec2 = Extended_communities.new_hash(ec.to_hash)
+    assert_equal(ec.to_hash, Extended_communities.new_hash(ec.to_hash).to_hash)
+    ec = Extended_communities.new_hash  :color => 100, :link_bandwidth => 999_999_999, :route_origin => ['10.0.1.2', 10], :encapsulation => :ipip
+    assert_equal(100, ec.to_hash[:color]) 
+  end
   def test_sort
     ec = Extended_communities.new
     ec.add(Color.new(100))
@@ -102,7 +124,6 @@ class Extended_communitiesTest < Test::Unit::TestCase
     ec1 = Extended_communities.new(ec)
     assert_equal(ec.encode, ec1.encode)
   end
-  
   def test_compare_eql?
     ec = Extended_communities.new
     ec.add(Route_target.new('10.0.1.2',100))

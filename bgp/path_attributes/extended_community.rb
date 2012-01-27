@@ -125,23 +125,36 @@ module BGP
     def name
       self.class.to_s.split('::').last.gsub('_',' ')
     end
-
     def to_s
-      case community_structure
-      when TWO_OCTET_AS
-        "#{name}: #{@global}:#{@local}"
-      when IPV4_ADDR
-        "#{name}: #{IPAddr.create(@global)}:#{@local}"
-      when OPAQUE
-        "#{name}: #{@global}"
-      when FLOAT
-        "#{name}: #{[@global].pack('g').unpack('g')[0]}"
-      else
-        raise RuntimeError, "bogus type: #{@type}"
-      end
+      "#{name}: #{value}"
     end
 
     private
+
+    def value
+      case community_structure
+      when TWO_OCTET_AS
+        "#{@global}:#{@local}"
+      when IPV4_ADDR
+        "#{IPAddr.create(@global)}:#{@local}"
+      when OPAQUE
+        "#{@global}"
+      when FLOAT
+        "#{[@global].pack('g').unpack('g')[0]}"
+      else
+        raise RuntimeError, "bogus type: #{@type}"
+      end
+      
+    end
+
+    def value2
+      case community_structure
+      when FLOAT ; @global
+      when IPV4_ADDR ;  ["#{IPAddr.create(@global)}",@local]
+      else 
+        [@global, @local]
+      end
+    end
 
     def community_structure
       cs = @type & 3
@@ -225,8 +238,6 @@ module BGP
         raise ArgumentError, "invalid arg #{args.inspect}"
       end
     end
-
-
   end
 
   class Route_target < Extended_community
@@ -258,6 +269,9 @@ module BGP
         super(1,OSPF_DOMAIN_ID,*args)
       end
     end
+    def value2
+      "#{IPAddr.create(@global)}"
+    end
   end
 
   class Ospf_router_id < Extended_community
@@ -268,6 +282,9 @@ module BGP
         args += [0]
         super(1,OSPF_ROUTER_ID,*args)
       end
+    end
+    def value2
+      "#{IPAddr.create(@global)}"
     end
   end
 
@@ -300,6 +317,9 @@ module BGP
         super(NON_TRANSITIVE | TWO_OCTET_AS, LINK_BANDWIDTH, *args)
       end
     end
+    def value2
+      @global
+    end
   end
 
   class Color < Opaque
@@ -310,6 +330,9 @@ module BGP
       else        
         super(TRANSITIVE, COLOR, *args)
       end
+    end
+    def value2
+      @global
     end
   end
   
@@ -327,6 +350,15 @@ module BGP
           tunnel_type = *args
         end
         super(TRANSITIVE, ENCAPSULATION, tunnel_type)
+      end
+    end
+    def value2
+      case @global
+      when 1 ; :l2tpv3
+      when 2 ; :gre
+      when 7 ; :ipip
+      else 
+        @global
       end
     end
   end  
