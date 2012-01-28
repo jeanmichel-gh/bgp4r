@@ -59,7 +59,7 @@ module BGP
     def to_s(method=:default)
       super(mp_unreach, method)
     end
-    
+  
     def parse(s,arg=false)
       
       @flags, @type, len, value = super(s)
@@ -85,6 +85,10 @@ module BGP
     rescue => e 
       p nlris[0].prefix
       raise
+    end
+
+    def to_hash
+      {:mp_unreach=>super}
     end
     
   end

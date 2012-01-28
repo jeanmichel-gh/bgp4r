@@ -36,6 +36,9 @@ module BGP
         @as = args[1]
       elsif args[0].is_a?(self.class)
         parse(args[0].encode, *args[1..-1])
+      elsif args[0].is_a?(Hash)
+        @ip_address = IPAddr.create(args[0][:address])
+        @as = args[0][:asn]
       else
         raise ArgumentError, "invalid argument, #{args.inspect}"
       end
@@ -83,7 +86,7 @@ module BGP
     end
     
     def to_hash
-      {:as=> asn, :address=> address}
+      {:asn=> asn, :address=> address}
     end
     
   end
@@ -114,9 +117,6 @@ module BGP
       end
     end    
   end
-  
-  
-  
 
 end
 

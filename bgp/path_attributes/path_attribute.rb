@@ -39,7 +39,6 @@ module BGP
       elsif args.size ==1 and args[0].is_a?(Hash)
         @attributes = []
         @attributes = args[0].keys.collect { |attr|  
-
           case attr
           when :next_hop, :nexthop     ; Next_hop.new(args[0][attr])
           when :local_pref             ; Local_pref.new(args[0][attr])
@@ -53,6 +52,10 @@ module BGP
           when :aggregator             ; Aggregator.new(args[0][attr])
           when :as4_aggregator         ; As4_aggregator.new(args[0][attr])
           when :originator_id          ; Originator_id.new(args[0][attr])
+          when :communities, :community; Communities.new(args[0][attr])
+          when :extended_communities, :extended_community
+            Extended_communities.new_hash(args[0][attr])
+          when :atomic_aggregate       ; Atomic_aggregate.new
             # FIXME: add other attr here ...
           else 
             puts "#{attr} to be implemented!"
@@ -217,7 +220,16 @@ module BGP
       end
       eval "alias :has_an_#{attr}? :has_a_#{attr}_attr?" if (attr =~ /^[aeiou]/)
     end
-
+    
+    def to_hash
+      h = {}
+      @attributes.each { |att| 
+        _h = att.to_hash
+        h = h.merge(_h)  if _h
+      }
+      h
+    end
+    
     private
 
     def att_sym_to_klass(sym)

@@ -65,8 +65,8 @@ class Aggregator_Test < Test::Unit::TestCase
   end
   def test5
     ag1 = Aggregator.new('10.0.0.1', 100)
-    ag2 = Aggregator.new_hash :as=> 100, :address=> '10.0.0.1'
+    ag2 = Aggregator.new :asn=> 100, :address=> '10.0.0.1'
     assert_equal(ag1.encode,ag2.encode)
-    assert_equal({:as=>100, :address=>"10.0.0.1"}, ag2.to_hash)
+    assert_equal({:asn=>100, :address=>"10.0.0.1"}, ag2.to_hash)
   end
 end

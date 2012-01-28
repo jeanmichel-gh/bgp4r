@@ -87,14 +87,16 @@ class Mp_unreach_Test < Test::Unit::TestCase
       {:prefix=> '192.168.2.0/24', :path_id=> 102},
     ])
     
+    h = {:safi=>1, :nlris=> '192.168.1.0/24', :afi=>1}
+    assert_equal(h, mpr1.to_hash[:mp_unreach])
     
-    # 
-    # puts mpr1
-    # puts mpr2
-    # puts mpr3
-    # puts mpr4
-    # puts mpr5
-    # 
+    assert_equal({:safi=>1, :nlris=>{:prefix=>"192.168.1.0/24", :path_id=>100}, :afi=>1}, mpr2.to_hash[:mp_unreach])
+
+    assert_equal(mpr1.to_hash, Mp_unreach.new(mpr1.to_hash[:mp_unreach]).to_hash)
+    assert_equal(mpr2.to_hash, Mp_unreach.new(mpr2.to_hash[:mp_unreach]).to_hash)
+    assert_equal(mpr3.to_hash, Mp_unreach.new(mpr3.to_hash[:mp_unreach]).to_hash)
+    assert_equal(mpr4.to_hash, Mp_unreach.new(mpr4.to_hash[:mp_unreach]).to_hash)
+    assert_equal(mpr5.to_hash, Mp_unreach.new(mpr5.to_hash[:mp_unreach]).to_hash)
     assert_equal('800f0700010118c0a801', mpr1.to_shex)
     assert_equal('800f0b0001010000006418c0a801', mpr2.to_shex)
     assert_equal attr_len(mpr1)+4, attr_len(mpr2)

@@ -48,9 +48,6 @@ class Path_attribute_Test < Test::Unit::TestCase # :nodoc:
       BGP::Communities], @pa.has?)
     assert(@pa.has? Multi_exit_disc)
     assert(@pa.has? As_path)
-  end
-  
-  def test_11
     pa = Path_attribute.new { |p|  
       p << Origin.new(1)
       p << Next_hop.new('1.1.1.1')
@@ -60,7 +57,7 @@ class Path_attribute_Test < Test::Unit::TestCase # :nodoc:
     }
     assert_equal([BGP::Origin,BGP::Next_hop,BGP::Multi_exit_disc,BGP::Local_pref,BGP::As_path], pa.has?)
   end
-
+  
   def test_2
     ss = '400101014003040a000001800404000000644005040000006440020c020500010002000300040005c0080c051f00010137003b0af50040'
     assert_equal(ss, @pa.to_shex)
@@ -174,7 +171,6 @@ class Path_attribute_Test < Test::Unit::TestCase # :nodoc:
     
     mp_unreach = {:safi=>2, :nlris=>['192.168.1.0/24', '192.168.2.0/24']}
     
-    
     p = Path_attribute.new  :local_pref=>100, 
                             :next_hop => '10.0.0.1', 
                             :med=>300, 
@@ -183,16 +179,28 @@ class Path_attribute_Test < Test::Unit::TestCase # :nodoc:
                             :origin=> :igp, 
                             :as_path=> {:set=> [1,2], :sequence=>[3,4], :confed_sequence=>[5,6], :confed_set=>[7,8]},
                             :cluster_list=> ['1.1.1.1', '2.2.2.2', '3.3.3.3'],
-                            :communities=> [],
-                            :extended_communities=> [],
-                            :aggregator=> ['1.1.1.1', 100],
+                            :communities=> ["145:30", "145:40", "145:50", "145:60", :no_export, :no_advertise,],
+                            :extended_communities=> { :color => 100, :link_bandwidth => 999_999_999, :route_origin => ['10.0.1.2', 10], :encapsulation => :ipip },
+                            :aggregator=> { :address=>'1.1.1.1', :asn=>100 },
                             :originator_id=> '2.2.2.2',
-                            :as4_aggregator=> ['4.4.4.4',200],
+                            :as4_aggregator=> { :asn=> 200, :address=> '4.4.4.4' },
                             :as4_path=> {:set=> [11,12], :sequence=>[13,14], :confed_sequence=>[15,16], :confed_set=>[17,18]},
                             :atomic_aggregate=> 1
-                            
-    puts p
-    
+  
+    assert p.has?(Origin), "Path attributes should have a Origin attr."
+    assert p.has?(Local_pref), "Path attributes should have a Local_pref attr."
+    assert p.has?(Next_hop), "Path attributes should have a Next_hop  attr."
+    assert p.has?(Multi_exit_disc), "Path attributes should have a Multi_exit_disc attr."
+    assert p.has?(As_path), "Path attributes should have a As_path attr."
+    assert p.has?(As4_path), "Path attributes should have a As4_path attr."
+    assert p.has?(As4_aggregator), "Path attributes should have a As4_aggregator attr."
+    assert p.has?(Mp_reach), "Path attributes should have a Mp_reach attr."
+    assert p.has?(Mp_unreach), "Path attributes should have a Mp_unreach attr."
+    assert p.has?(Communities), "Path attributes should have a Communities attr."
+    assert p.has?(Extended_communities), "Path attributes should have a Extended_communities attr."
+    assert p.has?(Atomic_aggregate), "Path attributes should have a Atomic_aggregate attr."
+    assert p.has?(Originator_id), "Path attributes should have a Originator_id attr."
+    assert p.has?(Cluster_list), "Path attributes should have a Cluster_list attr."
     
   end
   

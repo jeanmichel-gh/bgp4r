@@ -219,7 +219,7 @@ module BGP
       def to_hash
         h = {}
         @segments.each { |s| h = h.merge(s.to_hash) }
-        h
+        { :as_path=> h}
       end
       
       private

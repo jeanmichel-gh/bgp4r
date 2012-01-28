@@ -161,10 +161,10 @@ class As_path_Test < Test::Unit::TestCase
   def test_8
     set = As_path.new_hash :set=> [1,2], :sequence=>[3,4], :confed_sequence=>[5,6], :confed_set=>[7,8]
     assert_equal('400218010200010002020200030004030200050006040200070008', set.to_shex)
-    assert_equal [1,2], set.to_hash[:set]
-    assert_equal [3,4], set.to_hash[:sequence]
-    assert_equal [5,6], set.to_hash[:confed_sequence]
-    assert_equal [7,8], set.to_hash[:confed_set]
+    assert_equal [1,2], set.to_hash[:as_path][:set]
+    assert_equal [3,4], set.to_hash[:as_path][:sequence]
+    assert_equal [5,6], set.to_hash[:as_path][:confed_sequence]
+    assert_equal [7,8], set.to_hash[:as_path][:confed_set]
     set1 = As4_path.new
     set1 << As_path::Set.new(1,2)
     set1 << As_path::Sequence.new(3,4)
@@ -172,10 +172,10 @@ class As_path_Test < Test::Unit::TestCase
     set1 << As_path::Confed_set.new(7,8)
     set2 = As4_path.new_hash :set=> [1,2], :sequence=>[3,4], :confed_sequence=>[5,6], :confed_set=>[7,8]
     assert_equal(set1.to_shex, set2.to_shex)    
-    assert_equal [1,2], set2.to_hash[:set]
-    assert_equal [3,4], set2.to_hash[:sequence]
-    assert_equal [5,6], set2.to_hash[:confed_sequence]
-    assert_equal [7,8], set2.to_hash[:confed_set]
+    assert_equal [1,2], set2.to_hash[:as_path][:set]
+    assert_equal [3,4], set2.to_hash[:as_path][:sequence]
+    assert_equal [5,6], set2.to_hash[:as_path][:confed_sequence]
+    assert_equal [7,8], set2.to_hash[:as_path][:confed_set]
   end
 end
 

@@ -410,7 +410,6 @@ class Mp_reach_Test < Test::Unit::TestCase
     assert_match(/ID=100, 49.0a10.0b00.0000.0000.0000.0000.0000.0000.0000.00\/32/, mpr.to_s)
     assert_match(/ID=101, 49.0a20.0b00.0000.0000.0000.0000.0000.0000.0000.00\/32/, mpr.to_s)
     assert_match(/ID=102, 49.0a30.0b00.0000.0000.0000.0000.0000.0000.0000.00\/32/, mpr.to_s)
-
     
   end
   
@@ -436,8 +435,7 @@ class Mp_reach_Test < Test::Unit::TestCase
     
     assert_equal('800e10000104040a0000010030000651c0a800', mpr1.to_shex)
     assert_equal('800e14000104040a000001000000006430000651c0a800', mpr2.to_shex)
-    
-    
+  
     assert_equal attr_len(mpr1)+4, attr_len(mpr2)
     
     assert_equal('800e1e000104040a0000010030000651c0a80030000661c0a80130000671c0a801', mpr3.to_shex)
@@ -474,6 +472,7 @@ class Mp_reach_Test < Test::Unit::TestCase
       {:rd=> [100,100], :prefix=> '192.168.1.0/24', :label=>102},
       {:rd=> [100,100], :prefix=> '192.168.2.0/24', :label=>103},
     ]
+    
     mpr4 = Mp_reach.new :safi=>128, :nexthop=> ['10.0.0.1'], :path_id=> 100, :nlris=> [
       {:rd=> [100,100], :prefix=> '192.168.0.0/24', :label=>101},
       {:rd=> [100,100], :prefix=> '192.168.1.0/24', :label=>102},
@@ -564,6 +563,44 @@ class Mp_reach_Test < Test::Unit::TestCase
       ]))
   end
   
+  def test_to_hash
+    
+    mpr1 = Mp_reach.new :safi=>128, :nexthop=> ['10.0.0.1'], 
+                        :nlris=> {:rd=> [100,100], :prefix=> '192.168.0.0/24', :label=>101}
+    mpr2 = Mp_reach.new :safi=>128, :nexthop=> ['10.0.0.1'], 
+                        :nlris=> {:rd=> [100,100], :prefix=> '192.168.0.0/24', :label=>101, :path_id=>100}
+    mpr3 = Mp_reach.new :safi=>128, :nexthop=> ['10.0.0.1'], :nlris=> [
+      {:rd=> [100,100], :prefix=> '192.168.0.0/24', :label=>101},
+      {:rd=> [100,100], :prefix=> '192.168.1.0/24', :label=>102},
+      {:rd=> [100,100], :prefix=> '192.168.2.0/24', :label=>103},
+    ]
+    
+    h = {:safi=>128, :nexthop=> ['10.0.0.1'], 
+                        :nlris=> {:rd=> [100,100], :prefix=> '192.168.0.0/24', :label=>101}}
+
+    assert_equal( 128, mpr1.to_hash[:mp_reach][:safi])
+    assert_equal( 1, mpr1.to_hash[:mp_reach][:afi])
+    assert_equal( h[:nexthop], mpr1.to_hash[:mp_reach][:nexthop])
+    assert_equal( h[:nlris], mpr1.to_hash[:mp_reach][:nlris])
+    
+    h = {:safi=>128, :nexthop=> ['10.0.0.1'], :nlris=> [
+      {:rd=> [100,100], :prefix=> '192.168.0.0/24', :label=>101},
+      {:rd=> [100,100], :prefix=> '192.168.1.0/24', :label=>102},
+      {:rd=> [100,100], :prefix=> '192.168.2.0/24', :label=>103},
+      ]}
+
+    assert_equal( 128, mpr3.to_hash[:mp_reach][:safi])
+    assert_equal( 1, mpr3.to_hash[:mp_reach][:afi])
+    assert_equal( h[:nexthop], mpr3.to_hash[:mp_reach][:nexthop])
+    assert_equal( h[:nlris], mpr3.to_hash[:mp_reach][:nlris])
+    
+    
+    assert_equal(mpr1.to_hash, Mp_reach.new(mpr1.to_hash[:mp_reach]).to_hash)
+    assert_equal(mpr2.to_hash, Mp_reach.new(mpr2.to_hash[:mp_reach]).to_hash)
+    assert_equal(mpr3.to_hash, Mp_reach.new(mpr3.to_hash[:mp_reach]).to_hash)
+    
+  end
+    
   private
   
   def attr_len(attr)

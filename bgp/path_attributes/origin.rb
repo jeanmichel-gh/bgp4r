@@ -27,12 +27,6 @@ module BGP
   
   class Origin < Attr
 
-    class << self
-      def new_hash(arg={})
-        new arg[:origin]
-      end
-    end
-
     def initialize(arg=0)
       @type=ORIGIN
       @flags=WELL_KNOWN_MANDATORY

@@ -42,6 +42,8 @@ class Prefix_Test < Test::Unit::TestCase
     assert_equal(1, pfx.afi)
     assert ! pfx.extended?
     assert_equal('IPv4=10.255.128.0/17', pfx.to_s_with_afi)
+    assert_equal({:prefix=>"10.255.128.0/17"}, pfx.to_hash)
+    assert_equal(pfx.to_hash, Prefix.new(pfx.to_hash).to_hash)
   end
   def test_extended
     pfx = Prefix.new(100, '10.0.0.0')
@@ -55,7 +57,8 @@ class Prefix_Test < Test::Unit::TestCase
     assert_equal('ID=100, 2011:13:11::/64', pfx.to_s)
     assert_equal('00000064402011001300110000', pfx.to_shex)
     assert_equal('ID=100, IPv6=2011:13:11::/64', pfx.to_s_with_afi)
-    
+    assert_equal({:path_id=>100, :prefix=>"2011:13:11::/64"}, pfx.to_hash)
+    assert_equal(pfx.to_hash, Prefix.new(pfx.to_hash).to_hash)
   end
   def test_inet6
     pfx =  Prefix.new('2011:13:11::0/64')
@@ -97,6 +100,7 @@ class Prefix_Test < Test::Unit::TestCase
     assert   pfx.iso?
     assert_equal(3, pfx.afi)
     assert_equal('NSAP=49.0001.0002.0003.0000.0000.0000.0000.0000.0000.00/56', pfx.to_s_with_afi)
+    assert_equal(pfx.to_hash, Prefix.new(pfx.to_hash).to_hash)
   end
   def test_new_ntop_inet
     s = '110aff80'

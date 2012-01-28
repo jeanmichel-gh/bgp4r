@@ -54,6 +54,9 @@ class Prefix
     @path_id=nil
     if args.size>1 and args[0].is_a?(Integer)
       @path_id, pfx, afi = args
+    elsif args.size==1 and args[0].is_a?(Hash)
+      @path_id = args[0][:path_id]
+      pfx = args[0][:prefix]
     else
       pfx, afi = args
     end
@@ -105,6 +108,14 @@ class Prefix
       ["ID=#{@path_id}", [IANA.afi?(afi), pfx_to_s].join('=')].join(', ')
     else
       [IANA.afi?(afi), pfx_to_s].join('=')
+    end
+  end
+  
+  def to_hash
+    if extended?
+      {:prefix=> pfx_to_s}.merge({:path_id=>@path_id})
+    else
+      {:prefix=> pfx_to_s}
     end
   end
   

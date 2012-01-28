@@ -94,18 +94,29 @@ module BGP
     def to_s(indent=0)
       @nlris.join("\n#{([' ']*indent).join}")
     end
-
+    
     def size
       @nlris.size
+    end
+
+    def to_ary
+      @nlris.collect { |n| n.to_s }
     end
 
   end
 
   unless const_defined?(:Nlri)
-    Nlri      = Class.new(Base_nlri)
-    Withdrawn = Class.new(Base_nlri)
+    Nlri      = Class.new(Base_nlri) do
+      def to_hash
+        {:nlris=>to_ary}
+      end
+    end
+    Withdrawn = Class.new(Base_nlri) do
+      def to_hash
+        {:withdrawns=>to_ary}
+      end
+    end
   end
-  
   class Nlri
     def self.factory(s, afi, safi, path_id=nil)
       if afi== 1 and safi==1

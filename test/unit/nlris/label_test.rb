@@ -34,6 +34,8 @@ class Label_Test < Test::Unit::TestCase
     assert_equal('000641', Label.new(100).to_shex)
     assert_equal('000643', Label.new(100,1).to_shex)
     assert_equal({:label=>100, :exp=>1},Label.new(100,1).to_hash)
+    assert_equal({:label=>100, :exp=>1}, Label.new(:label=>100, :exp=>1).to_hash)
+    assert_equal({:label=>100, :exp=>0}, Label.new(:label=>100).to_hash)
   end
 end
 
@@ -46,5 +48,9 @@ class Label_stack_Test < Test::Unit::TestCase
     assert_equal('Label stack:(empty)', Label_stack.new.to_s)
     assert_equal(ls.encode, Label_stack.new(['000640000650000661'].pack('H*')).encode)
     assert_equal("Label Stack=100,101 (bottom)", Label_stack.new(['000640000651000661'].pack('H*')).to_s)
+    assert_equal({:labels=>[100,101]}, Label_stack.new(['000640000651000661'].pack('H*')).to_hash)
+    assert_equal({:labels=>[100,101,102]}, ls.to_hash)
+    ls = Label_stack.new :labels=>[100,101,102]
+    assert_equal('000640000650000661', ls.to_shex)
   end
 end

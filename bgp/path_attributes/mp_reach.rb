@@ -70,6 +70,25 @@ module BGP
       self
     end
     
+    def to_hash
+      h_afi_safi = {:safi=> @safi, :afi=>@afi}
+      h_nlris = @nlris.size>1 ? @nlris.collect { |n| nlri_to_hash(n) } : nlri_to_hash(@nlris[0])
+      h = if @nexthops.empty?
+        h_afi_safi.merge(:nlris=>h_nlris)
+      else
+        h_afi_safi.merge(:nlris=>h_nlris).merge({:nexthop=>@nexthops.collect { |n| n.nexthop.to_s }} )
+      end      
+    end
+    
+    def nlri_to_hash(nlri)
+      if nlri.is_a?(Prefix) and ! nlri.extended?
+        nlri.to_s
+      else
+        nlri.to_hash
+      end  
+    end
+    private :nlri_to_hash
+    
     module ClassMethods
       def afi_from_nlris(arg)
         case arg
@@ -157,8 +176,8 @@ module BGP
     def to_s(method=:default)
       super(mp_reach, method)
     end
-
     def to_hash
+      {:mp_reach=>super}
     end
 
     def parse(s,arg=false)
@@ -206,7 +225,7 @@ module BGP
       end
       raise RuntimeError, "leftover afer parsing: #{value.unpack('H*')}" if value.size>0
     end
-
+    
     def parse_iso_mapped_next_hops(s)
       raise unless @afi == 3
       while s.size>0

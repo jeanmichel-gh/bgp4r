@@ -39,4 +39,12 @@ class TestNlrisVpn < Test::Unit::TestCase
     vpn = Vpn.new('1.2.3.4/32', Rd.new(1,1))
     assert_equal('000000010000000101020304', vpn.encode_without_len_without_path_id.unpack('H*')[0])
   end
+  def test_2
+    vpn = Vpn.new("10.0.0.1/8", Rd.new('1.1.1.1',1))
+    assert_equal("RD=1.1.1.1:1, IPv4=10.0.0.0/8", vpn.to_s)
+    assert_equal({:prefix=>"10.0.0.0/8", :rd=>["1.1.1.1", 1]}, vpn.to_hash)
+    vpn = Vpn.new("10.0.0.1/8", Rd.new(1,1))
+    assert_equal("RD=1:1, IPv4=10.0.0.0/8", vpn.to_s)
+    assert_equal({:prefix=>"10.0.0.0/8", :rd=>[1, 1]}, vpn.to_hash)
+  end
 end

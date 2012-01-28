@@ -54,9 +54,21 @@ module BGP
         else
           @admin, @assign, @enc_type,  = admin, assign, 0
         end
+      elsif args.size==1 and args[0].is_a?(Hash)
+        # assuming Rd.new :rd=> [100,100]
+        parse(Rd.new(*args[0][:rd]).encode)
       end
     end
-
+    
+    def to_hash
+      #FIXME
+      if @admin.is_a?(IPAddr)
+        {:rd=> [@admin.to_s, @assign]}
+      else
+        {:rd=> [@admin, @assign]}
+      end
+    end
+    
     def encode
       case @enc_type
       when 0

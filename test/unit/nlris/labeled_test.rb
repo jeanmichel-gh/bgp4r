@@ -14,6 +14,10 @@ class TestBgpNlrisLabeled < Test::Unit::TestCase
     assert_equal('200006410a',  Labeled.new(Prefix.new('10.0.0.1/8'), 100).to_shex)
     assert_equal('380006400006510a',  Labeled.new(Prefix.new('10.0.0.1/8'), 100,101).to_shex)
     assert_equal('500006400006500006610a',  Labeled.new(Prefix.new('10.0.0.1/8'), 100,101,102).to_shex)
+    assert_equal({:prefix=>"10.0.0.0/8", :labels=>[100, 101, 102]}, Labeled.new(Prefix.new('10.0.0.1/8'), 100,101,102).to_hash)
+    labeled = Labeled.new(Prefix.new('10.0.0.1/8'), 100,101,102)
+    assert_equal(labeled.to_shex, Labeled.new(labeled.to_hash).to_shex)
+    assert_equal({:prefix=>"10.0.0.0/8", :labels=>[100, 101, 102]}, Labeled.new(Prefix.new('10.0.0.1/8'), 100,101,102).to_hash)
     #FIXME: add labeled  and labeled vpn tests
   end
   def test_new_ntop
@@ -29,11 +33,7 @@ class TestBgpNlrisLabeled < Test::Unit::TestCase
     lb = Labeled.new_ntop(['580064b10000006405591311'].pack('H*'), 1, 128)
     assert_equal('580064b10000006405591311', lb.to_shex)
     assert_equal('Label Stack=1611 (bottom) RD=100:89723665, IPv4=0.0.0.0/0', lb.to_s)
-  end
-  def test_new_ntop_afi_1_safi_128_rd_0_0
-    lb = Labeled.new_ntop(['580064b10000006405591311'].pack('H*'), 1, 128)
-    assert_equal('580064b10000006405591311', lb.to_shex)
-    assert_equal('Label Stack=1611 (bottom) RD=100:89723665, IPv4=0.0.0.0/0', lb.to_s)
+    assert_equal({:rd=>[100, 89723665], :label=>1611}, lb.to_hash)
   end
   def test_new_ntop_path_id
     #FIXME: add labeled  and labeled vpn tests

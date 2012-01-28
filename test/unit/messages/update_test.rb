@@ -46,6 +46,27 @@ class Update_Test < Test::Unit::TestCase
     assert_equal(Update, m.class)
     assert_equal(s, m.to_shex)
     assert_equal(9, m.path_attribute.size)
+  
+    h = {
+      :path_attributes=> {
+        :origin=>:incomplete,
+        :as_path=>{},
+        :multi_exit_disc=>0,
+        :local_pref=>100,
+        :communities=>["10283:20103"],
+        :route_target=>[10283, 30000],
+        :cluster_ids=>["0.0.0.1"],
+        :origin_id=>"81.52.17.128",
+        :mp_reach=> {
+          :safi=>128,
+          :afi=>1,
+          :nlris=>{:label=>1851, :rd=>[3215, 1291308], :prefix=>"172.31.63.251/32"},
+          :nexthop=>["81.52.17.128"]
+        }
+      }
+    }
+  
+    assert_equal(h, m.to_hash)
 
     s = 'ffffffffffffffffffffffffffffffff0050020000002f40010101400304c0a80105800404000000644005040000006440020402010064c0080c051f00010137003b0af50040200a0a0a0a2020202020'
     m = Message.factory([s].pack('H*'))
@@ -57,18 +78,27 @@ class Update_Test < Test::Unit::TestCase
     s = 'ffffffffffffffffffffffffffffffff0050020000002f40010101400304c0a80105800404000000644005040000006440020402010064c0080c051f00010137003b0af50040200a0a0a0a2020202020'
     m = Message.factory([s].pack('H*'))
     w = Update.withdrawn(m)
+    assert_equal({:withdrawns=>["10.10.10.10/32", "32.32.32.32/32"]}, w.to_hash)
     assert_equal(Update,w.class)
     assert_equal('200a0a0a0a2020202020', w.withdrawn.to_shex)
   end
   
-  def __test_experiment
+  def test_experiment
     upd = Update.new do
       path_attribute << Local_pref.new
       path_attribute << Origin.new
       path_attribute << Next_hop.new('10.1.1.1')
-      10.times { |i| nlri << "10.0.#{i}.0/24"}
+      5.times { |i| nlri << "10.0.#{i}.0/24"}
     end
-    puts upd
+    h = {
+      :path_attributes=>{
+        :local_pref=>100, 
+        :next_hop=>"10.1.1.1", 
+        :origin=>:igp
+      }, 
+      :nlris=>["10.0.0.0/24", "10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24", "10.0.4.0/24"]
+    }
+    assert_equal(h, upd.to_hash)
   end
   
   def test_verify_as4_byte_encoding
@@ -158,6 +188,7 @@ class Update_Test < Test::Unit::TestCase
     m = Update.new([s].pack('H*'))
     assert m.withdrawn, "Should contain withdrawn routes."
     assert_equal 3,m.withdrawn.nlris.size
+    assert_equal({:withdrawns=>["212.3.116.0/22", "85.198.136.0/23", "212.8.48.0/22"]}, m.to_hash)
   end
  
   def test_factory_to_create_an_update_message_witth_ext_inet_unicast_nlris
@@ -174,6 +205,7 @@ class Update_Test < Test::Unit::TestCase
     # Need to tell the factory we are dealing with a ext nlri.
     upd2 = Update.factory(upd1.encode(o), o)
     assert_equal(upd1.to_shex(o), upd2.to_shex(o))
+    assert_equal({:path_attributes=>{:as_path=>{:sequence=>[100]}}, :nlris=>["ID=100, 77.0.0.0/17"]}, upd1.to_hash)
   end
   
   def test_path_id_and_as4byte
@@ -202,7 +234,25 @@ class Update_Test < Test::Unit::TestCase
     upd3 = Update.factory upd1.encode(o), :as4byte=> true, :path_id=>true
     assert_equal upd1.to_shex, upd2.to_shex
     assert_equal upd2.to_shex, upd3.to_shex
-    
+    h = {
+      :path_attributes=>{
+        :as_path=>{:sequence=>[100]},
+        :multi_exit_disc=>20,
+        :mp_reach=>{
+          :nexthop=>["10.0.0.1"],
+          :safi=>128,
+          :afi=>1,
+          :nlris=>[
+            {:label=>101,:rd=>[100, 100],:prefix=>"192.168.0.0/24",:path_id=>100},
+            {:label=>102,:rd=>[100, 100],:prefix=>"192.168.1.0/24",:path_id=>100},
+            {:label=>103,:rd=>[100, 100],:prefix=>"192.168.2.0/24",:path_id=>100}
+          ]
+        },
+        :local_pref=>10,
+        :origin=>:igp
+      }
+    }
+    assert_equal(h, upd3.to_hash)
   end
   
   # updates with path_id
@@ -254,7 +304,22 @@ class Update_Test < Test::Unit::TestCase
     assert upd.path_attribute.has_a_mp_reach_attr?
     assert_equal s2.split.join, upd.to_shex
     assert_equal s2.split.join, ext_update(upd.to_shex).to_shex
-    
+    h = {
+      :path_attributes=>{
+        :as_path=>{}, 
+        :multi_exit_disc=>0, 
+        :mp_reach=>{
+          :nexthop=>["1.1.1.1"], 
+          :safi=>128, 
+          :afi=>1, 
+          :nlris=>{:label=>16000, :rd=>[19, 17], :prefix=>"10.1.1.0/24", :path_id=>1}
+        }, 
+        :local_pref=>1, 
+        :origin=>:egp, 
+        :route_target=>[4, 1]
+      }
+    }
+    assert_equal(h, upd.to_hash)
   end
   
   def test_factory_to_build_a_withdrawn_update_for_inet_mpls_vpn_unicast_with_path_id
@@ -268,6 +333,15 @@ class Update_Test < Test::Unit::TestCase
     mp_unreach = upd.path_attribute[:mp_unreach]
     assert_equal 1, mp_unreach.nlris[0].path_id
     assert_equal 'Label Stack=524288 (bottom) RD=1:1, ID=1, IPv4=10.1.1.0/24', mp_unreach.nlris[0].to_s
+    h = {
+      :path_attributes=>{
+        :mp_unreach=>{
+          :safi=>128, :afi=>1, 
+          :nlris=>{:label=>524288, :rd=>[1, 1], :prefix=>"10.1.1.0/24", :path_id=>1}
+        }
+      }
+    }
+    assert_equal(h, upd.to_hash)
   end
 
 end

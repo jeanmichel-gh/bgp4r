@@ -34,6 +34,8 @@ class Rd_Test < Test::Unit::TestCase
     assert_equal('0002000000010101', Rd.new(1,'1.1.1.1').to_shex)
     assert_equal('RD=1:1 (0x01 0x0001)',Rd.new(1,1,0).to_s)
     assert_equal('RD=1:1 (0x0001 0x01)',Rd.new(1,1,2).to_s)
+    assert_equal('RD=1:1 (0x01 0x0001)',Rd.new(:rd=>[1,1]).to_s)
+    assert_equal({:rd=>[1,1]},Rd.new(:rd=>[1,1]).to_hash)
   end
   def test_2
     assert_equal('0000000100000001', Rd.new(['0000000100000001'].pack('H*')).to_shex)

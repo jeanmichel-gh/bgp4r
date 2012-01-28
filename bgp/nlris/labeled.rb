@@ -17,6 +17,11 @@ module BGP
     def initialize(*args)
       if args.size>0 and args[0].is_a?(String) and args[0].is_packed?
         parse(*args)
+      elsif args.size==1 and args[0].is_a?(Hash)
+        # TODO: a new_prefix :prefix=>, :labels=>
+        #                    :other=> ...
+        @prefix = Prefix.new(args[0][:prefix]) # assuming it's a Prefix, which it may not be
+        @labels = Label_stack.new(*args[0][:labels])
       else
         @prefix, *labels = args
         @labels = Label_stack.new(*labels)
@@ -42,6 +47,9 @@ module BGP
       else
         s
       end
+    end
+    def to_hash
+      @labels.to_hash.merge(@prefix.to_hash)
     end
     def to_s
       "#{@labels} #{@prefix}"

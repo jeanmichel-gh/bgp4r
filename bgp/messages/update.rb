@@ -183,6 +183,14 @@ class BGP::Update < BGP::Message
     s.join("\n") + "\n" + msg.hexlify.join("\n") + "\n"
   end
 
+  def to_hash
+    h = {}
+    h[:withdrawns] = @withdrawn.to_ary if @withdrawn
+    h[:path_attributes] = @path_attribute.to_hash if @path_attribute
+    h[:nlris] = @nlri.to_ary if @nlri
+    h
+  end
+
   def self.withdrawn(u)
     if u.nlri and u.nlri.size>0
       Update.new(Withdrawn.new(*(u.nlri.nlris.collect { |n| n.to_s})))

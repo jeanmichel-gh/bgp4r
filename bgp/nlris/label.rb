@@ -58,8 +58,10 @@ module BGP
       @label_stack=[]
       if args.size==1 and args[0].is_a?(String) and args[0].is_packed?
         parse(args[0])
+      elsif args.size==1 and args[0].is_a?(Hash)
+        @label_stack = args[0][:labels].collect { |l| Label.new(l) }
       else
-        args.each { |arg| @label_stack << (arg.is_a?(Label) ? arg : Label.new(arg)) }
+        @label_stack = args.collect { |arg| (arg.is_a?(Label) ? arg : Label.new(arg)) }
       end
     end
     def size
@@ -83,6 +85,12 @@ module BGP
       else
         "Label Stack=#{@label_stack.collect{ |l| l.label }.join(',')} (bottom)"
       end
+    end
+    def to_ary
+      @label_stack.collect { |e| e.label }
+    end
+    def to_hash
+      @label_stack.size==1 ? {:label=>@label_stack[0].label} :  {:labels=> to_ary} 
     end
     def bit_length
       @label_stack.compact.size*24

@@ -11,6 +11,7 @@ module BGP
   class Vpn
     attr_reader :prefix, :rd
     def initialize(*args)
+      @prefix=nil
       if args.size>0 and args[0].is_a?(String) and args[0].is_packed?
         parse(*args)
       else
@@ -103,6 +104,14 @@ module BGP
     def to_s(afi=1)
        #Label Stack=5806 (bottom) RD=3215:317720610, IPv4=10.45.142.64/32
       "#{@rd.to_s(false)}, #{prefix_to_s(afi)}"
+    end
+    
+    def to_hash
+      if @prefix
+        @rd.to_hash.merge(@prefix.to_hash)
+      else
+        @rd.to_hash
+      end
     end
     
     private
