@@ -56,6 +56,7 @@ class BGP::Update < BGP::Message
   end
 
   def initialize(*args, &block)
+    @msg_type=UPDATE
     @nlri, @path_attribute, @withdrawn=nil,nil,nil
     @session_info = Info.new
     if args[0].is_a?(String) and args[0].is_packed?
@@ -66,6 +67,10 @@ class BGP::Update < BGP::Message
       end
     elsif args[0].is_a?(self.class)
       parse(args[0].encode, *args[1..-1])
+    elsif args[0].is_a?(Hash)
+      @withdrawn = Withdrawn.new(*args[0][:withdrawns])                if args[0].has_key?(:withdrawns)
+      @path_attribute = Path_attribute.new(args[0][:path_attributes])  if args[0].has_key?(:path_attributes)
+      @nlri = Nlri.new(*args[0][:nlris])                               if args[0].has_key?(:nlris)
     else
       @msg_type=UPDATE
       set(*args)

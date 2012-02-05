@@ -204,6 +204,31 @@ class Path_attribute_Test < Test::Unit::TestCase # :nodoc:
     
   end
   
+  def test_9
+    pa1 = Path_attribute.new { |p|  
+      p << Multi_exit_disc.new(222)
+      p << Next_hop.new('1.1.1.1')
+      p << Local_pref.new(333)
+      p << As_path.new( :set=> [1,2,3,4], :sequence=> [11,12,13])
+      p << Origin.new(1)
+    }
+    pa2 = Path_attribute.new { |p|  
+      p << Next_hop.new('1.1.1.1')
+      p << Origin.new(1)
+      p << Local_pref.new(333)
+      p << As_path.new(:sequence=> [11,12,14], :set=> [1,2,3,4])
+      p << Multi_exit_disc.new(222)
+    }
+    assert_not_equal(pa1.to_shex,pa2.to_shex)
+    assert_equal(pa1.sort.to_shex, pa2.sort.to_shex)
+    assert_equal(0, pa1 <=> pa2)
+    pa1.add(Communities.new("1:1"))
+    assert_equal(1, pa1 <=> pa2)
+    pa2.insert(Communities.new("1:1"))
+    assert_equal(0, pa1 <=> pa2)
+  end
+    
+  
   def test_path_attribute_path_id_true_and_as4byte_false
     path_attr = Path_attribute.new
     path_attr.insert(

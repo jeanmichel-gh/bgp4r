@@ -192,7 +192,21 @@ module BGP
       self
     end
     
-    def delete(*klasses)
+    def sort
+      attributes.sort { |a,b| a.type <=> b.type }
+      Path_attribute.new(*attributes.sort { |a,b| a.type <=> b.type })
+    end
+
+    def sort!
+      attributes.sort! { |a,b| a.type <=> b.type }
+      self
+    end
+
+    def <=>(other)
+      self.sort.to_shex <=> other.sort.to_shex
+    end
+    
+      def delete(*klasses)
       for klass in klasses
         next unless klass.is_a?(Class)
         attributes.delete_if { |x| x.class == klass }
@@ -318,39 +332,6 @@ module BGP
         Unknown.new(s)
       end
     end
-
-    # def self.new_hash(_arg={:arg=>nil})
-    #   #FIXME:
-    #   
-    #   arg = _arg.delete(:arg)
-    #   
-    #   if arg.is_a?(Neighbor::Capabilities)
-    #     as4byte_flag = arg.as4byte?
-    #     path_id_flag = arg
-    #   elsif arg.is_a?(Hash)
-    #     as4byte_flag=arg[:as4byte]
-    #     path_id_flag=arg[:path_id]
-    #   elsif arg.is_a?(TrueClass)
-    #     as4byte_flag=true
-    #     path_id_flag=nil
-    #   elsif arg.respond_to? :as4byte?
-    #     as4byte_flag = arg.as4byte?
-    #     path_id_flag = arg
-    #   else
-    #     as4byte_flag=nil
-    #     path_id_flag=nil
-    #   end
-    # 
-    #   _arg.keys.each { |attr|
-    #     case attr
-    #     when :local_pref ; Local_pref.new(_arg[attr])
-    #     when :next_hop   ; Next_hop.new(_arg[attr])
-    #     else
-    #     end
-    #   }
-    # end
-
-
     
   end
 
@@ -360,9 +341,7 @@ module BGP
   #   
   # p = Path_attribute.new :local_pref=>100, :next_hop => '10.0.0.1', :med=>300
   # # p p
-  # puts p 
-  
-  
+  # puts p   
   
 end
 load "../../test/unit/path_attributes/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0

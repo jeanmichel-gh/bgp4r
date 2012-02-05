@@ -132,6 +132,20 @@ class Update_Test < Test::Unit::TestCase
     assert_equal 2, an_update.nlri.size
     an_update << Nlri.new('21.0.0.0/11', '22.0.0.0/22')
     assert_equal 4, an_update.nlri.size
+    
+    h = {
+      :path_attributes=> {
+        :multi_exit_disc=>100, 
+        :local_pref=>113, 
+        :next_hop=>"10.0.0.1", 
+        :origin=>:egp
+      }, 
+      :nlris=> ["77.0.0.0/17", "88.0.0.0/18", "21.0.0.0/11", "22.0.0.0/22"]
+    }
+
+    upd = Update.new h
+    assert_equal(0, an_update.path_attribute <=> upd.path_attribute)
+    
   end
 
   def test_factory_to_build_update_with_session_info
@@ -342,6 +356,8 @@ class Update_Test < Test::Unit::TestCase
       }
     }
     assert_equal(h, upd.to_hash)
+    upd2 = Update.new upd.to_hash
+    assert_equal(upd2.to_shex, upd.to_shex)
   end
 
 end

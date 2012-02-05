@@ -188,7 +188,7 @@ module BGP
     attr_reader :type
     
     def <=>(o)
-      0
+      type <=> o.type
     end
     
     def method_missing(name, *args, &block)

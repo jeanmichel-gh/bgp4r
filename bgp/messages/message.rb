@@ -39,6 +39,7 @@ module ::BGP
     end
 
     def encode(message='')
+      raise unless @msg_type.is_a?(Integer)
       len = message.size+19
       [[255]*16,len,@msg_type,message].flatten.pack('C16nCa*')
     end
