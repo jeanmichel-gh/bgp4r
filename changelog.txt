@@ -1,6 +1,7 @@
-=== 0.0.14
-* add support for accumlated igp metric attribute
+=== 0.0.14 February 5, 2012
+* add support for accumulated igp metric attribute
 * add support for VPN default_route RD: 0/0
+* add Update#to_hash()  to return a hash representation of an update message.
 
 === 0.0.13 October 27, 2011
 * add support for link bandwidth extended community
