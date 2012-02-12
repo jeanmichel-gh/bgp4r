@@ -24,7 +24,7 @@ module BGP
     end
     
     def to_hash
-      {:metric=> to_i}
+      {:aigp=> to_i}
     end
     
     def accumulated_igp_metric
@@ -51,8 +51,8 @@ module BGP
   class Aigp
     class << self
       def new_hash(_arg={})
-        arg = {:metric=>0}.merge(_arg)
-        new arg[:metric]
+        arg = {:aigp=>0}.merge(_arg)
+        new arg[:aigp]
       end
     end
   end

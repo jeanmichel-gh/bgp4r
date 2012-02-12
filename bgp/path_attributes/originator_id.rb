@@ -32,7 +32,7 @@ module BGP
 
     class << self
       def new_hash(arg={})
-        new arg[:origin_id]
+        new arg[:originator_id]
       end
     end
 
@@ -69,7 +69,7 @@ module BGP
     end
     
     def to_hash
-      {:origin_id=> originator_id}
+      {:originator_id=> originator_id}
     end
     
     def originator_id=(val)

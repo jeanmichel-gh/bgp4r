@@ -55,6 +55,8 @@ module BGP
         parse(args[0])
       elsif args[0].is_a?(self.class)
         parse(args[0].encode, *args[1..-1])
+      elsif args[0].is_a?(Hash)
+        add *args[0][:cluster_list]
       else
         add(*args)
       end
@@ -102,7 +104,7 @@ module BGP
     end
     
     def to_hash
-      {:cluster_ids=>@cluster_ids.collect { |c| c.to_s  }}
+      {:cluster_list=>@cluster_ids.collect { |c| c.to_s  }}
     end
       
     def sort!
@@ -116,25 +118,6 @@ module BGP
 
   end
   
-  class Cluster_list
-    class << self
-      def new_hash(arg={})
-        o = new
-        [:cluster_ids].each do |set_type|
-          next unless arg.has_key? set_type
-          case set_type
-          when :cluster_ids
-            o << arg[set_type]
-          else
-            raise
-          end 
-        end
-        o
-        
-      end
-    end
-  end
-
 end
 
 load "../../test/unit/path_attributes/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0

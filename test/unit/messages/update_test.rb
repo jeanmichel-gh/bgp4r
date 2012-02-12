@@ -51,12 +51,12 @@ class Update_Test < Test::Unit::TestCase
       :path_attributes=> {
         :origin=>:incomplete,
         :as_path=>{},
-        :multi_exit_disc=>0,
+        :med=>0,
         :local_pref=>100,
         :communities=>["10283:20103"],
-        :route_target=>[10283, 30000],
-        :cluster_ids=>["0.0.0.1"],
-        :origin_id=>"81.52.17.128",
+        :extended_communities=>[{:route_target=>[10283, 30000]}],
+        :cluster_list=>["0.0.0.1"],
+        :originator_id=>"81.52.17.128",
         :mp_reach=> {
           :safi=>128,
           :afi=>1,
@@ -66,8 +66,15 @@ class Update_Test < Test::Unit::TestCase
       }
     }
   
+    assert_equal(h[:path_attributes][:originator_id], m.to_hash[:path_attributes][:originator_id])
+    assert_equal(h[:path_attributes][:as_path], m.to_hash[:path_attributes][:as_path])
+    assert_equal(h[:path_attributes][:multi_exit_disc], m.to_hash[:path_attributes][:multi_exit_disc])
+    assert_equal(h[:path_attributes][:local_pref], m.to_hash[:path_attributes][:local_pref])
+    assert_equal(h[:path_attributes][:originator_id], m.to_hash[:path_attributes][:originator_id])
+    assert_equal(h[:path_attributes][:mp_unreach], m.to_hash[:path_attributes][:mp_unreach])
+    assert_equal(h[:path_attributes], m.to_hash[:path_attributes])
     assert_equal(h, m.to_hash)
-
+  
     s = 'ffffffffffffffffffffffffffffffff0050020000002f40010101400304c0a80105800404000000644005040000006440020402010064c0080c051f00010137003b0af50040200a0a0a0a2020202020'
     m = Message.factory([s].pack('H*'))
     assert_equal(Update, m.class)
@@ -251,7 +258,7 @@ class Update_Test < Test::Unit::TestCase
     h = {
       :path_attributes=>{
         :as_path=>{:sequence=>[100]},
-        :multi_exit_disc=>20,
+        :med=>20,
         :mp_reach=>{
           :nexthop=>["10.0.0.1"],
           :safi=>128,
@@ -321,7 +328,7 @@ class Update_Test < Test::Unit::TestCase
     h = {
       :path_attributes=>{
         :as_path=>{}, 
-        :multi_exit_disc=>0, 
+        :med=>0, 
         :mp_reach=>{
           :nexthop=>["1.1.1.1"], 
           :safi=>128, 
@@ -330,10 +337,14 @@ class Update_Test < Test::Unit::TestCase
         }, 
         :local_pref=>1, 
         :origin=>:egp, 
-        :route_target=>[4, 1]
+        :extended_communities=>[{:route_target=>[4, 1] }]
       }
     }
     assert_equal(h, upd.to_hash)
+    assert_equal(BGP::Route_target, upd.path_attribute.extended_communities.route_target.class)
+    assert_equal(BGP::Route_target, upd.path_attribute.extended_communities.route_target.to_s)
+    assert_equal(128, upd.path_attribute.mp_reach.safi)
+    assert_equal('Label Stack=16000 (bottom) RD=19:17, ID=1, IPv4=10.1.1.0/24', upd.path_attribute.mp_reach.nlris[0].to_s)
   end
   
   def test_factory_to_build_a_withdrawn_update_for_inet_mpls_vpn_unicast_with_path_id
@@ -359,5 +370,99 @@ class Update_Test < Test::Unit::TestCase
     upd2 = Update.new upd.to_hash
     assert_equal(upd2.to_shex, upd.to_shex)
   end
+  
+  def test_to_hash
+    h = {:nlris=>
+      ["59.88.128.0/18",
+        "59.88.192.0/18",
+        "59.89.0.0/18",
+        "59.89.192.0/18",
+        "59.90.0.0/18",
+        "59.90.64.0/18",
+        "59.90.128.0/18",
+        "59.90.192.0/18",
+        "59.91.192.0/18",
+        "59.93.128.0/18",
+        "59.93.192.0/18",
+        "59.94.0.0/18",
+        "59.94.64.0/18",
+        "59.94.128.0/18",
+        "59.94.192.0/18",
+        "59.95.0.0/18",
+        "59.95.128.0/18",
+        "59.96.128.0/18",
+        "59.96.192.0/18",
+        "59.97.128.0/18",
+        "59.97.192.0/18",
+        "59.98.192.0/18",
+        "59.99.0.0/18",
+        "59.99.64.0/18",
+        "117.197.0.0/18",
+        "117.197.64.0/18",
+        "117.197.128.0/18",
+        "117.198.128.0/18",
+        "117.198.192.0/18",
+        "117.199.64.0/18",
+        "117.199.128.0/18",
+        "117.199.192.0/18",
+        "117.200.0.0/18",
+        "117.200.64.0/18",
+        "117.201.0.0/18",
+        "117.201.64.0/18",
+        "117.202.192.0/18",
+        "117.203.0.0/18",
+        "117.203.128.0/18",
+        "117.203.192.0/18",
+        "117.205.0.0/18",
+        "117.205.64.0/18",
+        "117.205.192.0/18",
+        "117.206.128.0/18",
+        "117.206.192.0/18",
+        "117.207.0.0/18",
+        "117.207.128.0/18",
+        "117.209.192.0/18",
+        "117.210.0.0/18",
+        "117.210.64.0/18",
+        "117.210.128.0/18",
+        "117.210.192.0/18",
+        "117.212.0.0/18",
+        "117.212.64.0/18",
+        "117.214.0.0/18",
+        "117.214.128.0/18",
+        "117.214.192.0/18",
+        "117.218.0.0/18",
+        "117.239.0.0/18",
+        "117.239.64.0/18",
+        "117.239.128.0/18",
+        "117.239.192.0/18",
+        "117.241.0.0/18",
+        "117.241.64.0/18",
+        "117.241.128.0/18",
+        "117.241.192.0/18",
+        "117.242.0.0/18",
+        "117.242.64.0/18",
+        "117.242.128.0/18",
+        "117.242.192.0/18",
+        "210.212.0.0/18",
+        "210.212.64.0/18",
+        "210.212.128.0/18",
+        "210.212.192.0/18",
+        "218.248.0.0/18",
+        "218.248.128.0/18"],
+        :path_attributes=> {
+          :communities=>["28289:65500"],
+          :origin=>:igp,
+          :as_path=>{:sequence=>[28289, 53131, 16735, 3549, 9829, 9829, 9829]},
+          :next_hop=>"187.121.193.33"
+        }
+      }
+       u = Update.new h       
+       assert_equal(h, u.to_hash)
+              
+       # s = "ffffffffffffffffffffffffffffffff016c02000000254001010040021002076e81cf8b415f0ddd266526652665400304bb79c121c008046e81ffdc123b5880123b58c0123b5900123b59c0123b5a00123b5a40123b5a80123b5ac0123b5bc0123b5d80123b5dc0123b5e00123b5e40123b5e80123b5ec0123b5f00123b5f80123b6080123b60c0123b6180123b61c0123b62c0123b6300123b63401275c5001275c5401275c5801275c6801275c6c01275c7401275c7801275c7c01275c8001275c8401275c9001275c9401275cac01275cb001275cb801275cbc01275cd001275cd401275cdc01275ce801275cec01275cf001275cf801275d1c01275d2001275d2401275d2801275d2c01275d4001275d4401275d6001275d6801275d6c01275da001275ef001275ef401275ef801275efc01275f1001275f1401275f1801275f1c01275f2001275f2401275f2801275f2c012d2d40012d2d44012d2d48012d2d4c012daf80012daf880" 
+       # assert_equal(s, u.to_shex)
+  end
+  
+  
 
 end

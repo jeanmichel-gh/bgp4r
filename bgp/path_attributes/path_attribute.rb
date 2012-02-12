@@ -35,6 +35,7 @@ module BGP
         @attributes=[]
         while s.size>0
           @attributes << Attr.factory(*args)
+          @attributes
         end
       elsif args.size ==1 and args[0].is_a?(Hash)
         @attributes = []
@@ -48,13 +49,15 @@ module BGP
           when :as_path                ; As_path.new_hash(args[0][attr])
           when :as4_path               ; As4_path.new_hash(args[0][attr])
           when :origin                 ; Origin.new(args[0][attr])
+          when :originator_id          ; Originator_id.new(args[0][attr])
           when :cluster_list           ; Cluster_list.new(*args[0][attr])
           when :aggregator             ; Aggregator.new(args[0][attr])
           when :as4_aggregator         ; As4_aggregator.new(args[0][attr])
           when :originator_id          ; Originator_id.new(args[0][attr])
           when :communities, :community; Communities.new(args[0][attr])
+          when :aigp                   ; Aigp.new(args[0][attr])
           when :extended_communities, :extended_community
-            Extended_communities.new_hash(args[0][attr])
+            Extended_communities.new_hash(*args[0][attr])
           when :atomic_aggregate       ; Atomic_aggregate.new
             # FIXME: add other attr here ...
           else 
@@ -228,9 +231,13 @@ module BGP
       mp_reach 
       mp_unreach 
       extended_communities 
-    }.each do |attr| 
+    }.each do |attr|
       define_method("has_a_#{attr}_attr?") do
         has? BGP.const_get(attr.capitalize)
+      end
+      define_method("#{attr}") do
+        k = BGP.const_get(attr.capitalize)
+        @attributes.find { |a| a.is_a?(k) }
       end
       eval "alias :has_an_#{attr}? :has_a_#{attr}_attr?" if (attr =~ /^[aeiou]/)
     end
@@ -251,6 +258,11 @@ module BGP
       when :communities, :community ; Communities
       end
     end
+    
+    def method_missing(name, *args, &block)
+      super
+    end
+
   end
 end
 

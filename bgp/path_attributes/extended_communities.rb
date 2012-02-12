@@ -29,20 +29,24 @@ module BGP
   class Extended_communities < Attr
 
     class << self
-      def new_hash(arg={})
+      def new_hash(*args)
+        raise unless args[0].is_a?(Hash)
         o = new
-        arg.keys.each do |comm|
-          case comm
-          when :color           ; o << Color.new(*arg[comm])
-          when :route_target    ; o << Route_target.new(*arg[comm])
-          when :link_bandwidth  ; o << Link_bandwidth.new(*arg[comm])
-          when :ospf_domain_id  ; o << Ospf_domain_id.new(*arg[comm])
-          when :encapsulation   ; o << Encapsulation.new(*arg[comm])
-          when :route_origin    ; o << Route_origin.new(*arg[comm])
-          when :ospf_router_id  ; o << Ospf_router_id.new(arg[comm])
-          else
-            raise
-          end 
+        args.each do |arg|
+          arg.keys.each do |comm|
+            case comm
+            when :extended_communities ; o = new_hash *args[0][:extended_communities]
+            when :color                ; o << Color.new(*arg[comm])
+            when :route_target         ; o << Route_target.new(*arg[comm])
+            when :link_bandwidth       ; o << Link_bandwidth.new(*arg[comm])
+            when :ospf_domain_id       ; o << Ospf_domain_id.new(*arg[comm])
+            when :encapsulation        ; o << Encapsulation.new(*arg[comm])
+            when :route_origin         ; o << Route_origin.new(*arg[comm])
+            when :ospf_router_id       ; o << Ospf_router_id.new(*arg[comm])
+            else
+              raise
+            end 
+          end
         end
         o        
       end
@@ -55,11 +59,13 @@ module BGP
 
       if args[0].is_a?(String) and args[0].is_packed?
         parse(args[0])
+        return
       elsif args[0].is_a?(self.class)
         parse(args[0].encode, *args[1..-1])
       else
         add(*args)
       end
+      yield(self) if block_given?
     end
 
     def add(*args)
@@ -80,9 +86,7 @@ module BGP
     alias << add
 
     def to_hash
-      h = {}
-      @communities.each { |c|  h = h.merge( { c.class.to_s.split('::').last.downcase.to_sym => c.instance_eval { value2 } }) }
-      h
+      {:extended_communities=> @communities.collect  { |c| c.to_hash }}
     end
 
     def extended_communities
@@ -92,6 +96,24 @@ module BGP
       s << "  Carried Extended communities"
       s <<  "     " + @communities.collect { |c| c.to_s }.join("\n     ")
       s.join("\n")
+    end
+    
+    def find(klass)
+      communities.find { |c| c.is_a?(klass) }
+    end
+    
+    %w{ 
+      color
+      route_target
+      link_bandwidth
+      ospf_domain_id
+      encapsulation
+      route_origin
+      ospf_router_id      
+    }.each do |ecom|
+      define_method("#{ecom}") do
+        find(BGP.const_get(ecom.capitalize))
+      end
     end
     
     def to_s(method=:default)

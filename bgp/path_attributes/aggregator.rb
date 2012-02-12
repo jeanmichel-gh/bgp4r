@@ -86,7 +86,7 @@ module BGP
     end
     
     def to_hash
-      {:asn=> asn, :address=> address}
+      {:aggregator=> {:asn=> asn, :address=> address}}
     end
     
   end

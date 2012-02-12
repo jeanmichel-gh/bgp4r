@@ -1,3 +1,33 @@
+=== 0.0.15
+* more support for building an update from a hash
+ +  Extended_communities
+   o revisit Extended_communities#to_hash()
+   o changed to_hash() to return
+   => :extended_communities=> [ ec1, ec2, ..., ecn ] 
+
+ + revisit to_hash()  for following attr.
+  o Originator_id
+  o Aggregator
+  o Multi_exit_disc
+  o Cluster_list
+	  
+* make Path_attribute comparable to test for equality:
+   add following instance methods
+      Path_attributes#sort
+      Path_attributes#sort!
+      Path_attributes#<=>
+
+* add getters for:
+  +  all known path attributes 
+  +  all known extended communities	  
+   So one can write:
+   > puts upd.path_attribute.mp_reach.safi
+   => 128
+   > puts upd.path_attribute.extended_communities.route_target
+   => "Route target: 4:1"
+   > puts upd.path_attribute.mp_reach.nlris[0]
+   => "Label Stack=16000 (bottom) RD=19:17, ID=1, IPv4=10.1.1.0/24"
+	  
 === 0.0.14 February 5, 2012
 * add support for accumulated igp metric attribute
 * add support for VPN default_route RD: 0/0

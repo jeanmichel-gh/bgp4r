@@ -75,7 +75,7 @@ module BGP
     end
 
     def to_hash
-      {:multi_exit_disc=>to_i}
+      {:med=>to_i}
     end
 
     private

@@ -19,11 +19,11 @@ class TestAigp < Test::Unit::TestCase
   end
   def test_2
     assert Aigp.new_hash
-    assert Aigp.new_hash :metric=> 0x1f2f3f4f5f6f7f8f
+    assert Aigp.new_hash :aigp=> 0x1f2f3f4f5f6f7f8f
     m1 = Aigp.new 0x1f2f3f4f5f6f7f8f
-    m2 = Aigp.new_hash :metric=> 0x1f2f3f4f5f6f7f8f
+    m2 = Aigp.new_hash :aigp=> 0x1f2f3f4f5f6f7f8f
     assert_equal(m1.encode, m2.encode)
-    assert_equal({:metric=>2247084349217275791}, m2.to_hash)
+    assert_equal({:aigp=>2247084349217275791}, m2.to_hash)
   end
 end
 

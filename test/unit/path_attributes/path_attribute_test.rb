@@ -180,7 +180,7 @@ class Path_attribute_Test < Test::Unit::TestCase # :nodoc:
                             :as_path=> {:set=> [1,2], :sequence=>[3,4], :confed_sequence=>[5,6], :confed_set=>[7,8]},
                             :cluster_list=> ['1.1.1.1', '2.2.2.2', '3.3.3.3'],
                             :communities=> ["145:30", "145:40", "145:50", "145:60", :no_export, :no_advertise,],
-                            :extended_communities=> { :color => 100, :link_bandwidth => 999_999_999, :route_origin => ['10.0.1.2', 10], :encapsulation => :ipip },
+                            :extended_communities=> [ :color => 100, :link_bandwidth => 999_999_999, :route_origin => ['10.0.1.2', 10], :encapsulation => :ipip ],
                             :aggregator=> { :address=>'1.1.1.1', :asn=>100 },
                             :originator_id=> '2.2.2.2',
                             :as4_aggregator=> { :asn=> 200, :address=> '4.4.4.4' },
@@ -248,6 +248,63 @@ class Path_attribute_Test < Test::Unit::TestCase # :nodoc:
     # TODO: UT: a path attr with mp_unreach w path_id
     # TODO: UT: a path attr with mp_reach w path_id and as4
     
-  end      
+  end
   
+  def test_hash
+    
+    h = {
+      :aigp=> 0x1f2f3f4f5f6f7f8f,
+      :aggregator=>{:asn=>100, :address=>"10.0.0.1"},
+      :cluster_list=>["1.0.1.1"], 
+      :as_path=>{}, 
+      :communities=>["1133:2015"], 
+      :local_pref=>113, 
+      :origin=>:incomplete,
+      :med=>10, 
+      :extended_communities=>[{:route_target=>[13111, 26054]}], 
+      :originator_id=>"196.168.28.123", 
+      :mp_reach=>{
+        :nexthop=>["10.0.0.2"], :afi=>1, :safi=>128, 
+        :nlris=>[
+          {:label=>2226, :prefix=>"172.23.21.113/32", :rd=>[1311, 4567814]}, 
+          {:label=>2151, :prefix=>"10.48.9.175/32",   :rd=>[1311, 32117824]}, 
+          {:label=>3382, :prefix=>"172.33.169.92/32", :rd=>[1311, 80037224]}, 
+          {:label=>1452, :prefix=>"10.46.52.31/32",   :rd=>[1311, 3117824]}, 
+          {:label=>3785, :prefix=>"172.41.96.104/32", :rd=>[1311, 45657424]}, 
+          {:label=>5228, :prefix=>"10.46.53.69/32",   :rd=>[1311, 59407624]}, 
+          {:label=>5141, :prefix=>"172.21.55.36/32",  :rd=>[1311, 321617824]}, 
+          {:label=>3724, :prefix=>"10.99.25.81/32",   :rd=>[1311, 311197824]}, 
+          {:label=>2281, :prefix=>"10.35.9.169/32",   :rd=>[1311, 321147824]}, 
+          {:label=>4615, :prefix=>"10.65.128.200/32", :rd=>[1311, 6627884]}, 
+          {:label=>3404, :prefix=>"172.29.96.8/32",   :rd=>[1311, 45657824]}, 
+          {:label=>3767, :prefix=>"10.32.19.165/32",  :rd=>[1311, 44657824]}, 
+          {:label=>3451, :prefix=>"10.14.186.28/32",  :rd=>[1311, 45657824]}, 
+          {:label=>3027, :prefix=>"10.95.176.91/32",  :rd=>[1311, 371197824]}, 
+          {:label=>5034, :prefix=>"10.24.176.99/32",  :rd=>[1311, 321197824]}, 
+          {:label=>3565, :prefix=>"10.72.83.239/32",  :rd=>[1311, 311197824]}, 
+          {:label=>3551, :prefix=>"10.45.142.161/32", :rd=>[1311, 321157824]}, 
+          {:label=>5238, :prefix=>"10.32.83.219/32",  :rd=>[1311, 351177824]}, 
+          {:label=>5223, :prefix=>"10.13.142.117/32", :rd=>[1311, 321197824]}, 
+          {:label=>3360, :prefix=>"172.50.34.141/32", :rd=>[1311, 348987824]},  
+          {:label=>3579, :prefix=>"10.26.42.36/32",   :rd=>[1311, 325697824]}, 
+          {:label=>4118, :prefix=>"10.76.42.34/32",   :rd=>[1311, 347517824]}, 
+          {:label=>3971, :prefix=>"172.21.192.24/32", :rd=>[1311, 86627824]},
+          {:label=>4223, :prefix=>"10.12.209.131/32", :rd=>[1311, 42655824]}, 
+          {:label=>2241, :prefix=>"10.34.186.201/32", :rd=>[1311, 42656824]},
+        ], 
+      }
+    }
+    
+    assert_equal(h[:local_pref], Path_attribute.new(h).to_hash[:local_pref])
+    assert_equal(h[:as_path], Path_attribute.new(h).to_hash[:as_path])
+    assert_equal(h[:extended_communities], Path_attribute.new(h).to_hash[:extended_communities])
+    assert_equal(h[:communities], Path_attribute.new(h).to_hash[:communities])
+    assert_equal(h[:cluster_list], Path_attribute.new(h).to_hash[:cluster_list])
+    assert_equal(h[:aggregator], Path_attribute.new(h).to_hash[:aggregator])
+    assert_equal(h[:mp_reach], Path_attribute.new(h).to_hash[:mp_reach])
+    assert_equal(h, Path_attribute.new(h).to_hash)
+    
+  end
+      
 end
+

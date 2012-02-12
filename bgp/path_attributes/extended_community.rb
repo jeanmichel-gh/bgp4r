@@ -47,8 +47,7 @@ module BGP
     FLOAT = -1
     
     DEFAULT_OPAQUE_ENCODING = 'H12'
-    
-    
+
     def encode
       [@type, @subtype, _encoded_value_].pack('CCa6')
     end
@@ -127,6 +126,10 @@ module BGP
     end
     def to_s
       "#{name}: #{value}"
+    end
+    
+    def to_hash
+      { self.class.to_s.split('::').last.downcase.to_sym => value2 }
     end
 
     private

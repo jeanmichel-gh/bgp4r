@@ -1,5 +1,6 @@
 %w{ 
-  origin next_hop 
+  origin 
+  next_hop 
   local_pref 
   multi_exit_disc 
   as_path 
@@ -11,6 +12,7 @@
   mp_reach 
   mp_unreach 
   extended_communities 
+  originator_id
   path_attribute
   aigp
 }.each do |attr|

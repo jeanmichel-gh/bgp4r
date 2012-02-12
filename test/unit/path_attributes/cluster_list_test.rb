@@ -38,7 +38,7 @@ class Cluster_list_Test < Test::Unit::TestCase
   end
   def test_2
     cids = ['1.1.1.1', '2.2.2.2', '3.3.3.3']
-    clist1 = Cluster_list.new_hash :cluster_ids=> cids
-    assert_equal( cids, clist1.to_hash[:cluster_ids])
+    clist1 = Cluster_list.new :cluster_list=> cids
+    assert_equal( cids, clist1.to_hash[:cluster_list])
   end
 end
