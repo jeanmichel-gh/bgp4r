@@ -268,16 +268,16 @@ module BGP
     
       class << self
         def new_set(*args)
-          new_hash :set=>args
+          new_hash :set=>args.flatten
         end
         def new_sequence(*args)
-          new_hash :sequence=>args
+          new_hash :sequence=>args.flatten
         end
         def new_confed_set(*args)
-          new_hash :confed_set=>args
+          new_hash :confed_set=>args.flatten
         end
         def new_confed_sequence(*args)
-          new_hash :confed_sequence=>args
+          new_hash :confed_sequence=>args.flatten
         end
       end
     end

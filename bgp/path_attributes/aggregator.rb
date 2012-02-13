@@ -31,18 +31,24 @@ module BGP
       if args[0].is_a?(String) and args[0].is_packed?
         parse(*args)
       elsif args.size==2 and
-        args[0].is_a?(String) and (args[1].is_a?(Fixnum) or args[1].is_a?(Bignum))
+        args[0].is_a?(String) and args[1].is_a?(Integer)
         @ip_address = IPAddr.create(args[0])
-        @as = args[1]
+        self.asn = args[1]
       elsif args[0].is_a?(self.class)
         parse(args[0].encode, *args[1..-1])
       elsif args[0].is_a?(Hash)
         @ip_address = IPAddr.create(args[0][:address])
-        @as = args[0][:asn]
+        self.asn = args[0][:asn]
       else
         raise ArgumentError, "invalid argument, #{args.inspect}"
       end
     end
+    
+    def asn=(arg)
+      raise unless arg.is_a?(Integer)
+      @as=arg
+    end
+    
 
     def address=(val)
       @ip_address=IPAddr.create(val)

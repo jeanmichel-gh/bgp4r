@@ -5,11 +5,11 @@
 
 Gem::Specification.new do |s|
   s.name = "bgp4r"
-  s.version = "0.0.13"
+  s.version = "0.0.15"
 
   s.required_rubygems_version = Gem::Requirement.new(">= 0") if s.respond_to? :required_rubygems_version=
   s.authors = ["Jean-Michel Esnault"]
-  s.date = "2011-10-27"
+  s.date = "2012-02-13"
   s.description = "BGP4R is a BGP-4 ruby library to create,  send, and receive  BGP messages in an  object oriented manner"
   s.email = "bgp4r@esnault.org"
   s.extra_rdoc_files = [
@@ -57,6 +57,7 @@ Gem::Specification.new do |s|
     "bgp/orfs/orf.rb",
     "bgp/orfs/prefix_orf.rb",
     "bgp/path_attributes/aggregator.rb",
+    "bgp/path_attributes/aigp.rb",
     "bgp/path_attributes/as_path.rb",
     "bgp/path_attributes/atomic_aggregate.rb",
     "bgp/path_attributes/attribute.rb",
@@ -79,8 +80,6 @@ Gem::Specification.new do |s|
     "examples/routegen",
     "examples/routegen.yml",
     "examples/simple.rb",
-    "examples/test.rb",
-    "examples/test2.rb",
     "examples/unit-testing/malformed_update_test.rb",
     "examples/unit-testing/no_export_test.rb",
     "examples/unit-testing/prepend_aspath_test.rb",
@@ -108,6 +107,7 @@ Gem::Specification.new do |s|
     "test/unit/nlris/nsap_test.rb",
     "test/unit/nlris/prefix_test.rb",
     "test/unit/nlris/rd_test.rb",
+    "test/unit/nlris/vpn_test.rb",
     "test/unit/optional_parameters/add_path_test.rb",
     "test/unit/optional_parameters/as4_test.rb",
     "test/unit/optional_parameters/capability_test.rb",
@@ -119,7 +119,7 @@ Gem::Specification.new do |s|
     "test/unit/optional_parameters/route_refresh_test.rb",
     "test/unit/orfs/prefix_orf_test.rb",
     "test/unit/path_attributes/aggregator_test.rb",
-    "test/unit/path_attributes/aigp.rb",
+    "test/unit/path_attributes/aigp_test.rb",
     "test/unit/path_attributes/as_path_test.rb",
     "test/unit/path_attributes/atomic_aggregate_test.rb",
     "test/unit/path_attributes/attribute_test.rb",
@@ -134,15 +134,16 @@ Gem::Specification.new do |s|
     "test/unit/path_attributes/next_hop_test.rb",
     "test/unit/path_attributes/origin_test.rb",
     "test/unit/path_attributes/originator_id_test.rb",
-    "test/unit/path_attributes/path_attribute_test.rb"
+    "test/unit/path_attributes/path_attribute_test.rb",
+    "test/unit/path_attributes/tunnel_encapsulation_test (Jean-Michel's Laptop's conflicted copy 2011-11-02).rb"
   ]
   s.homepage = "http://github.com/jesnault/bgp4r/tree/master"
   s.require_paths = ["."]
   s.required_ruby_version = Gem::Requirement.new(">= 1.8.6")
   s.rubyforge_project = "bgp4r"
-  s.rubygems_version = "1.8.10"
+  s.rubygems_version = "1.8.11"
   s.summary = "A BGP-4 Ruby Library"
-  s.test_files = ["test/functional", "test/functional/add_path_test.rb", "test/functional/live_feed_test.rb", "test/helpers", "test/helpers/server.rb", "test/misc", "test/misc/misc.rb", "test/unit", "test/unit/common_test.rb", "test/unit/iana_test.rb", "test/unit/messages", "test/unit/messages/capability_test.rb", "test/unit/messages/keepalive_test.rb", "test/unit/messages/markers_test.rb", "test/unit/messages/message_test.rb", "test/unit/messages/notification_test.rb", "test/unit/messages/open_test.rb", "test/unit/messages/route_refresh_test.rb", "test/unit/messages/update_test.rb", "test/unit/neighbor", "test/unit/neighbor/add_path_cap_test.rb", "test/unit/neighbor/neighbor_test.rb", "test/unit/nlris", "test/unit/nlris/inet_test.rb", "test/unit/nlris/label_test.rb", "test/unit/nlris/labeled_test.rb", "test/unit/nlris/nlri_test.rb", "test/unit/nlris/nsap_test.rb", "test/unit/nlris/prefix_test.rb", "test/unit/nlris/rd_test.rb", "test/unit/optional_parameters", "test/unit/optional_parameters/add_path_test.rb", "test/unit/optional_parameters/as4_test.rb", "test/unit/optional_parameters/capability_test.rb", "test/unit/optional_parameters/dynamic_test.rb", "test/unit/optional_parameters/graceful_restart_test.rb", "test/unit/optional_parameters/mbgp_test.rb", "test/unit/optional_parameters/optional_parameter_test.rb", "test/unit/optional_parameters/orf_test.rb", "test/unit/optional_parameters/route_refresh_test.rb", "test/unit/orfs", "test/unit/orfs/prefix_orf_test.rb", "test/unit/path_attributes", "test/unit/path_attributes/aggregator_test.rb", "test/unit/path_attributes/aigp.rb", "test/unit/path_attributes/as_path_test.rb", "test/unit/path_attributes/atomic_aggregate_test.rb", "test/unit/path_attributes/attribute_test.rb", "test/unit/path_attributes/cluster_list_test.rb", "test/unit/path_attributes/communities_test.rb", "test/unit/path_attributes/extended_communities_test.rb", "test/unit/path_attributes/extended_community_test.rb", "test/unit/path_attributes/local_pref_test.rb", "test/unit/path_attributes/mp_reach_test.rb", "test/unit/path_attributes/mp_unreach_test.rb", "test/unit/path_attributes/multi_exit_disc_test.rb", "test/unit/path_attributes/next_hop_test.rb", "test/unit/path_attributes/origin_test.rb", "test/unit/path_attributes/originator_id_test.rb", "test/unit/path_attributes/path_attribute_test.rb"]
+  s.test_files = ["test/functional", "test/functional/add_path_test.rb", "test/functional/live_feed_test.rb", "test/helpers", "test/helpers/server.rb", "test/misc", "test/misc/misc.rb", "test/unit", "test/unit/common_test.rb", "test/unit/iana_test.rb", "test/unit/messages", "test/unit/messages/capability_test.rb", "test/unit/messages/keepalive_test.rb", "test/unit/messages/markers_test.rb", "test/unit/messages/message_test.rb", "test/unit/messages/notification_test.rb", "test/unit/messages/open_test.rb", "test/unit/messages/route_refresh_test.rb", "test/unit/messages/update_test.rb", "test/unit/neighbor", "test/unit/neighbor/add_path_cap_test.rb", "test/unit/neighbor/neighbor_test.rb", "test/unit/nlris", "test/unit/nlris/inet_test.rb", "test/unit/nlris/label_test.rb", "test/unit/nlris/labeled_test.rb", "test/unit/nlris/nlri_test.rb", "test/unit/nlris/nsap_test.rb", "test/unit/nlris/prefix_test.rb", "test/unit/nlris/rd_test.rb", "test/unit/nlris/vpn_test.rb", "test/unit/optional_parameters", "test/unit/optional_parameters/add_path_test.rb", "test/unit/optional_parameters/as4_test.rb", "test/unit/optional_parameters/capability_test.rb", "test/unit/optional_parameters/dynamic_test.rb", "test/unit/optional_parameters/graceful_restart_test.rb", "test/unit/optional_parameters/mbgp_test.rb", "test/unit/optional_parameters/optional_parameter_test.rb", "test/unit/optional_parameters/orf_test.rb", "test/unit/optional_parameters/route_refresh_test.rb", "test/unit/orfs", "test/unit/orfs/prefix_orf_test.rb", "test/unit/path_attributes", "test/unit/path_attributes/aggregator_test.rb", "test/unit/path_attributes/aigp_test.rb", "test/unit/path_attributes/as_path_test.rb", "test/unit/path_attributes/atomic_aggregate_test.rb", "test/unit/path_attributes/attribute_test.rb", "test/unit/path_attributes/cluster_list_test.rb", "test/unit/path_attributes/communities_test.rb", "test/unit/path_attributes/extended_communities_test.rb", "test/unit/path_attributes/extended_community_test.rb", "test/unit/path_attributes/local_pref_test.rb", "test/unit/path_attributes/mp_reach_test.rb", "test/unit/path_attributes/mp_unreach_test.rb", "test/unit/path_attributes/multi_exit_disc_test.rb", "test/unit/path_attributes/next_hop_test.rb", "test/unit/path_attributes/origin_test.rb", "test/unit/path_attributes/originator_id_test.rb", "test/unit/path_attributes/path_attribute_test.rb", "test/unit/path_attributes/tunnel_encapsulation_test (Jean-Michel's Laptop's conflicted copy 2011-11-02).rb"]
 
   if s.respond_to? :specification_version then
     s.specification_version = 3

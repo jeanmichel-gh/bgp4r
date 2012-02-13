@@ -69,4 +69,12 @@ class Aggregator_Test < Test::Unit::TestCase
     assert_equal(ag1.encode,ag2.encode)
     assert_equal({:asn=>100, :address=>"10.0.0.1"}, ag2.to_hash[:aggregator])
   end
+  def test6
+    ag1 = Aggregator.new('10.0.0.1', 100)
+    ag1.asn=200
+    ag1.address='11.0.0.2'
+    assert_equal(200, ag1.asn)
+    assert_equal('11.0.0.2', ag1.address)
+    assert_equal({:asn=>200, :address=>"11.0.0.2"}, ag1.to_hash[:aggregator])
+   end 
 end

@@ -240,6 +240,12 @@ module BGP
         @attributes.find { |a| a.is_a?(k) }
       end
       eval "alias :has_an_#{attr}? :has_a_#{attr}_attr?" if (attr =~ /^[aeiou]/)
+      
+      define_method("#{attr}=") do |*args|
+        k = BGP.const_get(attr.capitalize)
+        replace(k.new(*args))
+      end
+            
     end
     
     def to_hash
@@ -260,7 +266,13 @@ module BGP
     end
     
     def method_missing(name, *args, &block)
-      super
+      if name.to_s == 'med='
+        multi_exit_disc(*args, &block)
+      elsif name.to_s =~ /^as_path_(.+)=$/
+        replace(As_path, As_path.send("new_#{$1}", *args))
+      else
+        super
+      end
     end
 
   end

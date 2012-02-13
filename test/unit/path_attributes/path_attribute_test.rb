@@ -294,7 +294,6 @@ class Path_attribute_Test < Test::Unit::TestCase # :nodoc:
         ], 
       }
     }
-    
     assert_equal(h[:local_pref], Path_attribute.new(h).to_hash[:local_pref])
     assert_equal(h[:as_path], Path_attribute.new(h).to_hash[:as_path])
     assert_equal(h[:extended_communities], Path_attribute.new(h).to_hash[:extended_communities])
@@ -303,8 +302,58 @@ class Path_attribute_Test < Test::Unit::TestCase # :nodoc:
     assert_equal(h[:aggregator], Path_attribute.new(h).to_hash[:aggregator])
     assert_equal(h[:mp_reach], Path_attribute.new(h).to_hash[:mp_reach])
     assert_equal(h, Path_attribute.new(h).to_hash)
+  end
+  
+  def test_setters
+    h = {
+      :aigp=> 0x1f2f3f4f5f6f7f8f,
+      :nexthop=> '2.2.2.2',
+      :aggregator=>{:asn=>100, :address=>"10.0.0.1"},
+      :cluster_list=>["1.0.1.1"], 
+      :as_path=>{}, 
+      :communities=>["1133:2015"], 
+      :local_pref=>113, 
+      :origin=>:incomplete,
+      :med=>10, 
+      :extended_communities=>[{:route_target=>[13111, 26054]}, {:ospf_domain_id=>'1.1.1.1'}], 
+      :originator_id=>"196.168.28.123", 
+      :mp_reach=>{
+        :nexthop=>["10.0.0.2"], :afi=>1, :safi=>128, 
+        :nlris=>[
+          {:label=>2226, :prefix=>"172.23.21.113/32", :rd=>[1311, 4567814]}, 
+          {:label=>2151, :prefix=>"10.48.9.175/32",   :rd=>[1311, 32117824]}, 
+        ], 
+      }
+    }
+    
+    pa = Path_attribute.new h
+    pa.origin=:egp
+    pa.as_path_sequence=[1,2,3,4]
+    pa.next_hop='1.2.3.4'
+    pa.local_pref=20
+    pa.med=30
+    pa.communities="1113:2805"
+    pa.aggregator.asn=200
+    pa.aggregator.address='11.0.0.2'
+    pa.originator_id='2.2.2.2'
+    pa.cluster_list=['11.1.1.1','12.2.2.2']
+    assert_equal(1, pa[Origin].to_i)
+    assert_equal(:egp, pa.origin.to_sym)
+    assert_equal("1 2 3 4", pa.as_path.as_path)
+    assert_equal(200, pa.aggregator.asn)
+    assert_equal("11.0.0.2", pa.aggregator.address)
+    assert_equal("2.2.2.2", pa.originator_id.originator_id)
+    assert_equal("b010101", pa.cluster_list.to_ary[0].to_s(16))
+    assert_equal("c020202", pa.cluster_list.to_ary[1].to_s(16))
+    
+    #TODO:
+    # pa.extended_communities.ospf_domain_id='2.2.2.2'
+    
+    
+    
     
   end
+  
       
 end
 

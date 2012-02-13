@@ -342,7 +342,7 @@ class Update_Test < Test::Unit::TestCase
     }
     assert_equal(h, upd.to_hash)
     assert_equal(BGP::Route_target, upd.path_attribute.extended_communities.route_target.class)
-    assert_equal(BGP::Route_target, upd.path_attribute.extended_communities.route_target.to_s)
+    assert_equal("Route target: 4:1", upd.path_attribute.extended_communities.route_target.to_s)
     assert_equal(128, upd.path_attribute.mp_reach.safi)
     assert_equal('Label Stack=16000 (bottom) RD=19:17, ID=1, IPv4=10.1.1.0/24', upd.path_attribute.mp_reach.nlris[0].to_s)
   end
@@ -456,9 +456,16 @@ class Update_Test < Test::Unit::TestCase
           :next_hop=>"187.121.193.33"
         }
       }
+      
+      npfx = h[:nlris].size
+      assert_equal(76, npfx)
+      
        u = Update.new h       
+       assert_equal(npfx, u.nlri.size)
+       assert_equal(:igp, u.path_attribute.origin.to_sym)
+       assert_equal('187.121.193.33', u.path_attribute.next_hop.next_hop)
        assert_equal(h, u.to_hash)
-              
+       
        # s = "ffffffffffffffffffffffffffffffff016c02000000254001010040021002076e81cf8b415f0ddd266526652665400304bb79c121c008046e81ffdc123b5880123b58c0123b5900123b59c0123b5a00123b5a40123b5a80123b5ac0123b5bc0123b5d80123b5dc0123b5e00123b5e40123b5e80123b5ec0123b5f00123b5f80123b6080123b60c0123b6180123b61c0123b62c0123b6300123b63401275c5001275c5401275c5801275c6801275c6c01275c7401275c7801275c7c01275c8001275c8401275c9001275c9401275cac01275cb001275cb801275cbc01275cd001275cd401275cdc01275ce801275cec01275cf001275cf801275d1c01275d2001275d2401275d2801275d2c01275d4001275d4401275d6001275d6801275d6c01275da001275ef001275ef401275ef801275efc01275f1001275f1401275f1801275f1c01275f2001275f2401275f2801275f2c012d2d40012d2d44012d2d48012d2d4c012daf80012daf880" 
        # assert_equal(s, u.to_shex)
   end
