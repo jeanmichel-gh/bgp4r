@@ -140,28 +140,43 @@ class Extended_communitiesTest < Test::Unit::TestCase
     assert_equal(0, ec <=> ec2)
     assert(! ec.eql?(ec2))
   end
-  def test_getters
+  def test_getters_setters
     ec = Extended_communities.new do |c|    
       c.add(Color.new(100))
       c.add(Link_bandwidth.new(999_999_999))
       c.add(Route_target.new('10.0.1.2',10))
       c.add(Ospf_domain_id.new('9.1.0.1'))
-      c.add(Route_target.new('11.0.1.1',10))
+      c.add(Route_target.new('11.0.1.1',11))
       c.add(Route_target.new('8.0.1.1',10))
       c.add(Route_target.new('7.0.1.1',8))
       c.add(Encapsulation.new(:l2tpv3))
       c.add(Ospf_domain_id.new('20.0.0.1'))
       c.add(Route_origin.new('10.0.3.2',9))
-      c.add(Route_target.new('10.0.3.2',7))
+      c.add(Route_target.new('10.0.3.2',12))
       c.add(Ospf_router_id.new('10.0.0.1'))
     end
     assert_equal('Color: 100',ec.color.to_s)
-    assert_equal('Route target: 10.0.1.2:10',ec.route_target.to_s)
-    assert_equal('Ospf domain id: 9.1.0.1:0',ec.ospf_domain_id.to_s)
+    assert_equal('Route target: 10.0.1.2:10',ec.route_target[0].to_s)
+    assert_equal('Ospf domain id: 9.1.0.1:0',ec.ospf_domain_id[0].to_s)
     assert_equal('Encapsulation: 1',ec.encapsulation.to_s)
     assert_equal('Ospf router id: 10.0.0.1:0',ec.ospf_router_id.to_s)
     assert_equal('Link bandwidth: 1000000000.0',ec.link_bandwidth.to_s)
     assert_equal('Route origin: 10.0.3.2:9',ec.route_origin.to_s)
+    ec.route_target= '20.0.1.2', 20
+    ec.link_bandwidth= 100_000
+    assert_equal('Route target: 20.0.1.2:20',ec.route_target[0].to_s)
+    assert_equal('Link bandwidth: 100000.0',ec.link_bandwidth.to_s)
+
+    ec = Extended_communities.new do |c|
+      c.route_target   = '10.0.0.1', 1311
+      c.link_bandwidth = 100_000_000
+      c.ospf_router_id = '1.1.1.1'
+      c.ospf_domain_id = '2.2.2.2'
+      c.encapsulation  = 1
+      c.route_origin   = '3.3.3.3', 33
+      c.color          = 1311
+    end
+    
   end
     
 end

@@ -98,8 +98,41 @@ module BGP
       s.join("\n")
     end
     
+    def insert(*args)
+      for arg in args
+        next unless arg.is_a?(Extended_community)
+        communities.insert(0,arg)
+      end
+      self
+    end
+    
+    def append(*args)
+      for arg in args
+        next unless arg.is_a?(Extended_community)
+        communities << (arg)
+      end
+      self
+    end
+    
+    def replace(*args)
+      for arg in args
+        next unless arg.is_a?(Extended_community)
+        ind = communities.find_index { |x| x.class == arg.class }
+        if ind
+          communities[ind] = arg
+        else
+          append(arg)
+        end
+      end
+      self
+    end
+
     def find(klass)
       communities.find { |c| c.is_a?(klass) }
+    end
+
+    def find_all(klass)
+      communities.find_all { |c| c.is_a?(klass) }
     end
     
     %w{ 
@@ -112,7 +145,12 @@ module BGP
       ospf_router_id      
     }.each do |ecom|
       define_method("#{ecom}") do
-        find(BGP.const_get(ecom.capitalize))
+        ecs = find_all(BGP.const_get(ecom.capitalize))
+        ecs.size==1 ? ecs[0] : ecs
+      end
+      define_method("#{ecom}=") do |*args|
+        k = BGP.const_get(ecom.capitalize)
+        replace(k.new(*args))
       end
     end
     

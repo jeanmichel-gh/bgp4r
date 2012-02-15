@@ -248,7 +248,7 @@ module BGP
       if args[0].is_a?(String) and args[0].is_packed?
         super(*args)
       else
-        super(0, ROUTE_TARGET, *args)
+        super(*[0, ROUTE_TARGET, *args].flatten)
       end
     end
   end
@@ -258,7 +258,7 @@ module BGP
       if args[0].is_a?(String) and args[0].is_packed?
         super(*args)
       else
-        super(0,ROUTE_ORIGIN,*args)
+        super(*[0,ROUTE_ORIGIN,*args].flatten)
       end
     end
   end

@@ -337,6 +337,13 @@ class Path_attribute_Test < Test::Unit::TestCase # :nodoc:
     pa.aggregator.address='11.0.0.2'
     pa.originator_id='2.2.2.2'
     pa.cluster_list=['11.1.1.1','12.2.2.2']
+    pa.extended_communities.route_target= '10.0.0.1', 1311
+    pa.extended_communities.link_bandwidth= 100_000_000
+    pa.extended_communities.ospf_router_id= '1.1.1.1'
+    pa.extended_communities.ospf_domain_id= '2.2.2.2'
+    pa.extended_communities.encapsulation=1
+    pa.extended_communities.route_origin= '3.3.3.3', 33
+    pa.extended_communities.color=1311    
     assert_equal(1, pa[Origin].to_i)
     assert_equal(:egp, pa.origin.to_sym)
     assert_equal("1 2 3 4", pa.as_path.as_path)
@@ -345,15 +352,10 @@ class Path_attribute_Test < Test::Unit::TestCase # :nodoc:
     assert_equal("2.2.2.2", pa.originator_id.originator_id)
     assert_equal("b010101", pa.cluster_list.to_ary[0].to_s(16))
     assert_equal("c020202", pa.cluster_list.to_ary[1].to_s(16))
-    
-    #TODO:
-    # pa.extended_communities.ospf_domain_id='2.2.2.2'
-    
-    
-    
-    
+    assert_equal("Route target: 10.0.0.1:1311", pa.extended_communities.route_target.to_s)
+    assert_equal("Ospf domain id: 2.2.2.2:0", pa.extended_communities.ospf_domain_id.to_s)
+    assert_equal("Link bandwidth: 100000000.0", pa.extended_communities.link_bandwidth.to_s)
   end
   
-      
 end
 
