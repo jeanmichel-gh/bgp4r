@@ -81,7 +81,10 @@ module BGP
           end
           if @buf.size>18
             @len, @type=@buf[16,3].unpack('nC')
-            return @buf.slice!(0,@len) if @len<=@buf.size
+            if @len<=@buf.size
+              bgp_message = @buf.slice!(0,@len) 
+              return bgp_message
+            end 
           end
         end
       end

@@ -267,7 +267,7 @@ module BGP
     
     def method_missing(name, *args, &block)
       if name.to_s == 'med='
-        multi_exit_disc(*args, &block)
+        multi_exit_disc= *args
       elsif name.to_s =~ /^as_path_(.+)=$/
         replace(As_path, As_path.send("new_#{$1}", *args))
       else
@@ -358,14 +358,6 @@ module BGP
     end
     
   end
-
-  # require 'bgp/path_attributes/local_pref'
-  # require 'bgp/path_attributes/next_hop'
-  # require 'bgp/path_attributes/multi_exit_disc'
-  #   
-  # p = Path_attribute.new :local_pref=>100, :next_hop => '10.0.0.1', :med=>300
-  # # p p
-  # puts p   
   
 end
 load "../../test/unit/path_attributes/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0

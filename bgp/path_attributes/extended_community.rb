@@ -62,7 +62,7 @@ module BGP
         case self
         when Color
           _,@global = s.unpack('nN')
-        when Encapsulation
+        # when Encapsulation
           _,@global = s.unpack('Nn')
         else
           @global = s.unpack('H12')
@@ -175,8 +175,8 @@ module BGP
         case self
         when BGP::Color
           [0,@global].pack('nN')
-        when BGP::Encapsulation
-          [0,@global].pack('Nn')
+        # when BGP::Encapsulation
+        #   [0,@global].pack('Nn')
         else
           [@global].pack('H12')
         end
@@ -209,9 +209,10 @@ module BGP
       when BGP_DATA_COLLECT ; Bgp_data_collect.new(s)
       when LINK_BANDWIDTH   ; Link_bandwidth.new(s)
       when COLOR            ; Color.new(s)
-      when ENCAPSULATION    ; Encapsulation.new(s)
+      # when ENCAPSULATION    ; Encapsulation.new(s)
       else
         puts "too bad type #{type.to_s(16)}, subtype #{subtype.to_s(16)} : #{s.unpack('H*')}"
+        raise
         Extended_community.new(s)
       end
     end
@@ -339,33 +340,38 @@ module BGP
     end
   end
   
-  class Encapsulation < Opaque
-    def initialize(*args)
-      args = 0 if args.empty?
-      if args[0].is_a?(String) and args[0].is_packed?
-        super(*args)
-      else        
-        case args[0]
-        when :l2tpv3 ; tunnel_type = 1
-        when :gre    ; tunnel_type = 2
-        when :ipip   ; tunnel_type = 7
-        else
-          tunnel_type = *args
-        end
-        super(TRANSITIVE, ENCAPSULATION, tunnel_type)
-      end
-    end
-    def value2
-      case @global
-      when 1 ; :l2tpv3
-      when 2 ; :gre
-      when 7 ; :ipip
-      else 
-        @global
-      end
-    end
-  end  
+  # class Encapsulation < Opaque
+  #   def initialize(*args)
+  #     args = 0 if args.empty?
+  #     if args[0].is_a?(String) and args[0].is_packed?
+  #       super(*args)
+  #     else        
+  #       case args[0]
+  #       when :l2tpv3 ; tunnel_type = 1
+  #       when :gre    ; tunnel_type = 2
+  #       when :ipip   ; tunnel_type = 7
+  #       else
+  #         tunnel_type = *args
+  #       end
+  #       super(TRANSITIVE, ENCAPSULATION, tunnel_type)
+  #     end
+  #   end
+  #   def value2
+  #     case @global
+  #     when 1 ; :l2tpv3
+  #     when 2 ; :gre
+  #     when 7 ; :ipip
+  #     else 
+  #       @global
+  #     end
+  #   end
+  # end  
   
 end
+
+
+
+__END__
+
 
 load "../../test/unit/path_attributes/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0

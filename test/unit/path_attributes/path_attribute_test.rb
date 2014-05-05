@@ -180,7 +180,7 @@ class Path_attribute_Test < Test::Unit::TestCase # :nodoc:
                             :as_path=> {:set=> [1,2], :sequence=>[3,4], :confed_sequence=>[5,6], :confed_set=>[7,8]},
                             :cluster_list=> ['1.1.1.1', '2.2.2.2', '3.3.3.3'],
                             :communities=> ["145:30", "145:40", "145:50", "145:60", :no_export, :no_advertise,],
-                            :extended_communities=> [ :color => 100, :link_bandwidth => 999_999_999, :route_origin => ['10.0.1.2', 10], :encapsulation => :ipip ],
+                            :extended_communities=> [ :color => 100, :link_bandwidth => 999_999_999, :route_origin => ['10.0.1.2', 10], ],
                             :aggregator=> { :address=>'1.1.1.1', :asn=>100 },
                             :originator_id=> '2.2.2.2',
                             :as4_aggregator=> { :asn=> 200, :address=> '4.4.4.4' },
@@ -341,7 +341,7 @@ class Path_attribute_Test < Test::Unit::TestCase # :nodoc:
     pa.extended_communities.link_bandwidth= 100_000_000
     pa.extended_communities.ospf_router_id= '1.1.1.1'
     pa.extended_communities.ospf_domain_id= '2.2.2.2'
-    pa.extended_communities.encapsulation=1
+    # pa.extended_communities.encapsulation=1
     pa.extended_communities.route_origin= '3.3.3.3', 33
     pa.extended_communities.color=1311    
     assert_equal(1, pa[Origin].to_i)

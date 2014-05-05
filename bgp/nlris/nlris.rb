@@ -4,5 +4,6 @@
   inet 
   labeled 
   vpn 
-  rd 
+  rd
+  mapped_ipv4
 }.each { |n| require "bgp/nlris/#{n}" }

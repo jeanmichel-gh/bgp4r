@@ -1,0 +1,10 @@
+require 'fileutils'
+dir = File.dirname(File.expand_path(__FILE__ ))
+
+FileUtils.chdir(dir) do
+  Dir.glob("**/*rb") do |filename| 
+    next if __FILE__ == filename
+    require File.join(dir,filename) unless filename == File.basename(__FILE__)
+  end
+end
+

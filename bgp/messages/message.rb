@@ -74,7 +74,7 @@ module ::BGP
       end
     end
     def self.keepalive
-      Keepalive.new.encode
+      @keepalive ||= Keepalive.new.encode
     end
     def self.route_refresh(afi,safi)
       Route_refresh.new(afi,safi).encode

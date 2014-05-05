@@ -22,9 +22,13 @@ module BGP
   class Keepalive < Message
     def initialize
       @msg_type=KEEPALIVE
+      @keepalive=[[0xffffffff]*4,"001304"].flatten.pack('NNNNH6')
     end
     def to_s
       "Keepalive Message (#{KEEPALIVE}), length: 19" + ", [#{self.to_shex[32..-1]}]"
+    end
+    def encode
+      @keepalive
     end
   end
 end

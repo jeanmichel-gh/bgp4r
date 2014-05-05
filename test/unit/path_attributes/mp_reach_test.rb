@@ -25,7 +25,7 @@ require 'test/unit'
 
 class Mp_reach_Test < Test::Unit::TestCase
   include BGP
-  
+   
   def test_iso_mapped_ip_addr
     mapped_addr = Iso_ip_mapped.new('10.0.0.1')
     assert_equal('470006010a00000100', mapped_addr.to_shex)
@@ -171,9 +171,6 @@ class Mp_reach_Test < Test::Unit::TestCase
     assert_equal(smpr.split.join, mpr.to_shex)
   end
   
-  
-
-
   def test_afi_3_safi_1_ipv6_mapped_nexthops_ntoh
 
     # Mp Reach (14), length: 57, Flags [O]: 
@@ -198,7 +195,18 @@ class Mp_reach_Test < Test::Unit::TestCase
     
     assert_equal(s.split.join, mpr.to_shex)
     assert_equal("[Oncr] (14)   Mp Reach: [800e3b000301283500002...] '\n    AFI NSAP (3), SAFI Unicast (1)\n    nexthop: 2011::1, 2011::2\n      49.0001.0002.0003.0004.0005.0006.0000.0000.0000.00/104'", mpr.to_s())
+  end    
+  
+  def test_afi_2_safi_2_ipv4_mapped
+    s = '800e30000202102009000900190000000000000000000100402009000100000000402009000200000000402009000300000000'
+    sbin = [s].pack('H*') 
+    mpr = Mp_reach.new(sbin)
+    assert_equal("\n    AFI IPv6 (2), SAFI Multicast (2)\n    nexthop: 2009:9:19::1\n      2009:1::/64\n      2009:2::/64\n      2009:3::/64", mpr.mp_reach)
+    assert_equal(2, mpr.afi)
+    assert_equal(2, mpr.safi)
+    assert_equal(s, mpr.to_shex)
   end
+  
   
   def test_afi_2_safi_2
     s = '800e30000202102009000900190000000000000000000100402009000100000000402009000200000000402009000300000000'
@@ -600,7 +608,7 @@ class Mp_reach_Test < Test::Unit::TestCase
     assert_equal(mpr3.to_hash, Mp_reach.new(mpr3.to_hash[:mp_reach]).to_hash)
     
   end
-    
+      
   private
   
   def attr_len(attr)

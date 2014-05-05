@@ -60,17 +60,12 @@ class Extended_communitiesTest < Test::Unit::TestCase
     ec = Extended_communities.new_hash  :ospf_domain_id=> '9.1.0.1'
     ec2 = Extended_communities.new_hash(ec.to_hash)
     assert_equal(ec.to_hash, Extended_communities.new_hash(ec.to_hash).to_hash)
-    ec = Extended_communities.new_hash  :encapsulation=> :l2tpv3
-    ec2 = Extended_communities.new_hash(ec.to_hash)
     assert_equal(ec.to_hash, Extended_communities.new_hash(ec.to_hash).to_hash)
     ec = Extended_communities.new_hash  :route_origin=> ['10.0.1.2', 10]
     ec2 = Extended_communities.new_hash(ec.to_hash)
-    assert_equal(ec.to_hash, Extended_communities.new_hash(ec.to_hash).to_hash)
-    ec = Extended_communities.new_hash  :color => 100, :link_bandwidth => 999_999_999, :route_origin => ['10.0.1.2', 10], :encapsulation => :ipip
-    assert_equal(ec.to_hash, Extended_communities.new_hash(ec.to_hash).to_hash)
-    assert_equal({:color=>100}, ec.color.to_hash)
     ec = Extended_communities.new_hash :extended_communities=>[{:route_target=>[13111, 26054]}]
     assert_equal({:extended_communities=>[{:route_target=>[13111, 26054]}]}, ec.to_hash)
+    assert_equal(ec.to_hash, Extended_communities.new_hash(ec.to_hash).to_hash)
   end
   def test_sort
     ec = Extended_communities.new
@@ -81,7 +76,7 @@ class Extended_communitiesTest < Test::Unit::TestCase
     ec.add(Route_target.new('11.0.1.1',10))
     ec.add(Route_target.new('8.0.1.1',10))
     ec.add(Route_target.new('7.0.1.1',8))
-    ec.add(Encapsulation.new(:l2tpv3))
+    # ec.add(Encapsulation.new(:l2tpv3))
     ec.add(Ospf_domain_id.new('20.0.0.1'))
     ec.add(Route_origin.new('10.0.3.2',9))
     ec.add(Route_target.new('10.0.3.2',7))
@@ -96,8 +91,8 @@ class Extended_communitiesTest < Test::Unit::TestCase
     assert_equal("Ospf domain id: 20.0.0.1:0",ec.sort.communities[7].to_s)
     assert_equal("Ospf router id: 10.0.0.1:0",ec.sort.communities[8].to_s)
     assert_equal("Color: 100",ec.sort.communities[9].to_s)
-    assert_equal("Encapsulation: 1",ec.sort.communities[10].to_s)
-    assert_equal("Link bandwidth: 1000000000.0",ec.sort.communities[11].to_s)
+    # assert_equal("Encapsulation: 1",ec.sort.communities[10].to_s)
+    assert_equal("Link bandwidth: 1000000000.0",ec.sort.communities[10].to_s)
   end
   def test_sort!
     ec = Extended_communities.new
@@ -149,7 +144,7 @@ class Extended_communitiesTest < Test::Unit::TestCase
       c.add(Route_target.new('11.0.1.1',11))
       c.add(Route_target.new('8.0.1.1',10))
       c.add(Route_target.new('7.0.1.1',8))
-      c.add(Encapsulation.new(:l2tpv3))
+      ### c.add(Encapsulation.new(:l2tpv3))
       c.add(Ospf_domain_id.new('20.0.0.1'))
       c.add(Route_origin.new('10.0.3.2',9))
       c.add(Route_target.new('10.0.3.2',12))
@@ -158,7 +153,7 @@ class Extended_communitiesTest < Test::Unit::TestCase
     assert_equal('Color: 100',ec.color.to_s)
     assert_equal('Route target: 10.0.1.2:10',ec.route_target[0].to_s)
     assert_equal('Ospf domain id: 9.1.0.1:0',ec.ospf_domain_id[0].to_s)
-    assert_equal('Encapsulation: 1',ec.encapsulation.to_s)
+    ###assert_equal('Encapsulation: 1',ec.encapsulation.to_s)
     assert_equal('Ospf router id: 10.0.0.1:0',ec.ospf_router_id.to_s)
     assert_equal('Link bandwidth: 1000000000.0',ec.link_bandwidth.to_s)
     assert_equal('Route origin: 10.0.3.2:9',ec.route_origin.to_s)
@@ -172,7 +167,7 @@ class Extended_communitiesTest < Test::Unit::TestCase
       c.link_bandwidth = 100_000_000
       c.ospf_router_id = '1.1.1.1'
       c.ospf_domain_id = '2.2.2.2'
-      c.encapsulation  = 1
+      ###c.encapsulation  = 1
       c.route_origin   = '3.3.3.3', 33
       c.color          = 1311
     end

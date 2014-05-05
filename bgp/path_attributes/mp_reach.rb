@@ -34,7 +34,7 @@ module BGP
     def set(h)
       @safi = h[:safi]
       @path_id = h[:path_id]
-      @afi = h.has_key?(:afi) ? h[:afi] : self.class.afi_from_nlris(h[:nlris])
+      @afi = h[:afi] || self.class.afi_from_nlris(h[:nlris])
       case safi
       when 1,2
         pfx_klass = prefix_klass(afi, safi)
@@ -66,7 +66,7 @@ module BGP
       else
         raise "SAFI #{safi} not implemented!"
       end
-      @nexthops = [h[:nexthop]].flatten.collect { |nh| nexthop_klass(afi,safi).new(nh) } if h[:nexthop]
+      @nexthops = [h[:nexthop]].flatten.collect { |nh| nexthop_klass(afi,safi,nh).new(nh) } if h[:nexthop]
       self
     end
     
@@ -106,6 +106,8 @@ module BGP
         when Hash
           _arg = arg[:prefix]
         else
+          p "**********************"
+          p arg
           raise
         end
 
@@ -159,6 +161,7 @@ module BGP
       elsif args[0].is_a?(Hash) and args.size==1
         set(*args)
       else
+        p args
         raise ArgumentError, "invalid argument" 
       end
     end
@@ -286,14 +289,18 @@ module BGP
     
     private
     
-    def nexthop_klass(afi, safi)
+    def nexthop_klass(afi, safi, nh)
       case afi
       when 3
         ::BGP::const_get('Iso_ip_mapped')
       else
         case safi
         when 1,2,4
-           ::BGP::const_get('Prefix')
+          if afi==2 &&  IPAddr.new(nh).ipv4?
+              ::BGP::const_get('Ipv4_mapped')
+            else
+              ::BGP::const_get('Prefix')
+            end
         when 128,129
           ::BGP::const_get('Vpn')
         else

@@ -243,7 +243,9 @@ module BGP
 
     def send_message(m)
       raise if m.nil?
-      return unless @out
+      unless @out
+        log_warn "Could not Send#{m.class.to_s.split('::')[-1]}  @out is nil"
+      end
       unless m.is_a?(String)
         log_info "Send#{m.class.to_s.split('::')[-1]}"
         log_debug "Send #{m.is_a?(Update) ? m.to_s : m }\n"
