@@ -65,6 +65,14 @@ class Common_Test < Test::Unit::TestCase
     assert_equal('10.16.0.0/12', ip3 ^ 1)
     assert_equal('10.32.0.0/12', ip3 ^ 2)
   end
+  def test_ipaddr_v6_arithmetic
+    ip1 = IPAddr.new('2014:aa:bb:cc::1/126')
+    assert_equal('2014:aa:bb:cc::4/126', ip1 ^ 1)
+    assert_equal('2014:aa:bb:cc::8/126', ip1 ^ 2)
+    assert_equal('2014:aa:bb:cc::c/126', ip1 ^ 3)
+    assert_equal('2014:aa:bb:cc::10/126', ip1 ^ 4)
+    assert_equal('2014:aa:bb:cc::14/126', ip1 ^ 5)
+  end
   def test_string_pack
     sbin = ['00'].pack('H*')
     assert_equal '0x0000:  00', sbin.hexlify.join
