@@ -1,5 +1,5 @@
 #--
-# Copyright 2008, 2009 Jean-Michel Esnault.
+# Copyright 2008, 2009, 2014 Jean-Michel Esnault.
 # All rights reserved.
 # See LICENSE.txt for permissions.
 #
@@ -57,7 +57,8 @@ module BGP
       event_dispatch
     end
     
-    def set(h)
+    def set(_h)
+      h = { :version=>4, :holdtime=>180 }.merge(_h)
       [:version, :my_as, :holdtime, :id, :remote_addr, :local_addr].each do |name|
         instance_variable_set("@#{name}", h[name]) if h.has_key?(name)
       end

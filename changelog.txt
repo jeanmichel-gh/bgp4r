@@ -1,3 +1,14 @@
+=== 0.0.17
+* Get rid of Rakefile, VERSION.yml ...
+* Simpler gem specification
+* add ebgp example
+
+=== 0.0.16
+* Fixes
+  + set encoding to binary
+  + inc ipv6 subnet
+  + fix unit tests
+
 === 0.0.15
 * more support for building an update from a hash
  +  Extended_communities
