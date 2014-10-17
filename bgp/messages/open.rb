@@ -37,6 +37,8 @@ class Open < Message
   
   include OPT_PARM
   
+  AS_TRANS=23456
+  
   attr_reader :version, :local_as, :holdtime, :opt_parms
   
   def initialize(*args)
@@ -59,7 +61,7 @@ class Open < Message
 
   def encode
     opt_parms = @opt_parms.compact.collect { |cap| cap.encode }.join
-    s  = [@version, @local_as, @holdtime, @bgp_id.hton].pack("Cnna4")
+    s  = [@version, _my_encoded_as_, @holdtime, @bgp_id.hton].pack("Cnna4")
     s += if opt_parms.size>255
       [0xffff, opt_parms.size, opt_parms].pack("nna*")
     else
@@ -75,7 +77,7 @@ class Open < Message
   def to_s
     msg = self.encode
     "Open Message (#{OPEN}), length: #{msg.size}\n" +
-    "  Version #{@version}, my AS #{@local_as}, Holdtime #{@holdtime}s, ID #{@bgp_id}" + 
+    "  Version #{@version}, my AS #{_my_encoded_as_}, Holdtime #{@holdtime}s, ID #{@bgp_id}" +
     ([""] + @opt_parms.compact.collect { |cap| cap.to_s } + [""]).join("\n  ") +
     msg.hexlify.join("\n") + "\n"
   end
@@ -97,6 +99,10 @@ class Open < Message
   end
   
   private
+
+  def _my_encoded_as_
+    @local_as > 0xffff ? AS_TRANS : @local_as
+  end
   
   def parse(_s)
     s = super(_s)
