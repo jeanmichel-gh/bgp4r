@@ -3,7 +3,7 @@ Gem::Specification.new do |s|
   s.version = "0.0.18"
   s.email = "jesnault@gmail.com"
   s.authors = ["Jean-Michel Esnault"]
-  s.date = "2014-09-23"
+  s.date = "2014-10-17"
   s.description = "Best way to play with BGP protocol using ruby"
   s.summary = "Best way to play with BGP protocol using ruby"
   s.homepage = "http://github.com/jesnault/bgp4r"

@@ -98,6 +98,10 @@ module BGP
     def size
       @nlris.size
     end
+    
+    def empty?
+      @nlris.empty?
+    end
 
     def to_ary
       @nlris.collect { |n| n.to_s }
