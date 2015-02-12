@@ -163,6 +163,7 @@ module BGP
             Log.warn "#{type}"
             stop
           when :ev_holdtime_expire
+            changed and notify_observers(BGP::Notification.code_to_s(4))
             Log.warn "Holdtime expire: #{type}"
             stop
           else
