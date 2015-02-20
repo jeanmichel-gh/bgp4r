@@ -135,6 +135,7 @@ module BGP
     end
 
     def event_dispatch
+      Thread::abort_on_exception = true
       Thread.new(@eventQ) do |eventQ|
         loop do
           ev, type, m = eventQ.deq
