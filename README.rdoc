@@ -1,5 +1,7 @@
 = BGP4R
 
+{<img src="https://travis-ci.org/jesnault/bgp4r.svg?branch=master" alt="Build Status" />}[https://travis-ci.org/jesnault/bgp4r]
+
 == Description
 
 BGP4R is a ruby library which enables the creation and manipulation of BGP messages.
