@@ -206,7 +206,7 @@ module BGP
       if options[:session]
         @socket = session
       else
-        @socket = TCPSocket.new(@remote_addr, options[:port])
+        @socket = TCPSocket.new(@remote_addr, options[:port], local_host=@local_addr)
       end
       init_io
       send_open :ev_send_open
