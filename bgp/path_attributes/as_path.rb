@@ -162,7 +162,7 @@ module BGP
       end
       
       def integer?(arg)
-        arg.is_a?(Fixnum) or arg.is_a?(Bignum)
+        arg.is_a?(Integer)
       end
       
       attr_accessor :as4byte

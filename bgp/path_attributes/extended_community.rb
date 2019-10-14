@@ -195,7 +195,7 @@ module BGP
     include Comparable
 
     def self.factory(_s)
-      if _s.is_a?(Bignum) or _s.is_a?(Fixnum)
+      if _s.is_a?(Integer)
         s = [format("%16.16x",_s)].pack('H*')
       else
         s = _s
@@ -230,11 +230,11 @@ module BGP
       elsif args.size==4
         raise  ArgumentError, "This is a base class and should not be instanciated"  if instance_of?(Extended_community)
         @type, @subtype, @global, @local = args
-        if @global.is_a?(String) and @local.is_a?(Fixnum)
+        if @global.is_a?(String) and @local.is_a?(Integer)
           @type |= IPV4_ADDR
           @global = IPAddr.new(@global).to_i
         end
-      elsif args.size==1 and args[0].is_a?(Bignum)
+      elsif args.size==1 and args[0].is_a?(Integer)
         parse([s].pack('H*'))
       elsif args.empty?
         @type, @subtype, @global, @local = 0,0,0,0

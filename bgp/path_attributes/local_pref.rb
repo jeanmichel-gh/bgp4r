@@ -39,7 +39,7 @@ module BGP
         parse(arg)
       elsif arg.is_a?(self.class)
         parse(arg.encode)
-      elsif arg.is_a?(Fixnum) or arg.is_a?(Bignum)
+      elsif arg.is_a?(Integer)
         self.local_pref = arg
       elsif arg.is_a?(Hash) and arg[:local_pref]
         self.local_pref = arg[:local_pref]

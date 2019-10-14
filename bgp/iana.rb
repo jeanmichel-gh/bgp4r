@@ -28,10 +28,10 @@ module IANA
     afis[arg]
   end
   def self.afi(arg)
-    arg.is_a?(Fixnum) ? arg : afis[arg]
+    arg.is_a?(Integer) ? arg : afis[arg]
   end
   def self.safi(arg)
-    arg.is_a?(Fixnum) ? arg : safis[arg]
+    arg.is_a?(Integer) ? arg : safis[arg]
   end
   def self.safis
     @h_safis ||= SAFI.set_h_safis

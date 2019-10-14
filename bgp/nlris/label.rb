@@ -32,7 +32,7 @@ module BGP
         @exp=args[0][:exp] if args[0][:exp]
       elsif args.size==1 and args[0].is_a?(String) and args[0].is_packed?
         parse(args[0])
-      else args[0].is_a?(Fixnum)
+      else args[0].is_a?(Integer)
         @label, @exp = args + [0]
       end
     end
