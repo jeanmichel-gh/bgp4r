@@ -237,7 +237,7 @@ module BGP
       @out.thread
     end
 
-    attr_reader :as4byte, :session_info
+    attr_reader :as4byte, :session_info, :socket
     
     def as4byte?
       @session_info.as4byte?
