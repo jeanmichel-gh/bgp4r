@@ -247,20 +247,19 @@ module BGP
       class << self
         def new_hash(arg={})
           o = new
-          [:set, :sequence, :confed_sequence, :confed_set].each do |set_type|
-            next unless arg.has_key? set_type
-            case set_type
+          arg.each do |set_type, set|
+            case set_type.to_sym
             when :set
-              o << As_path::Set.new(*arg[:set])
+              o << As_path::Set.new(*set)
             when :sequence
-              o << As_path::Sequence.new(*arg[:sequence])
+              o << As_path::Sequence.new(*set)
             when :confed_set
-              o << As_path::Confed_set.new(*arg[:confed_set])
+              o << As_path::Confed_set.new(*set)
             when :confed_sequence
-              o << As_path::Confed_sequence.new(*arg[:confed_sequence])
+              o << As_path::Confed_sequence.new(*set)
             else
               raise
-            end 
+            end
           end
           o
         end
