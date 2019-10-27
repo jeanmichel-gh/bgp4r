@@ -209,7 +209,7 @@ module BGP
       self.sort.to_shex <=> other.sort.to_shex
     end
     
-      def delete(*klasses)
+    def delete(*klasses)
       for klass in klasses
         next unless klass.is_a?(Class)
         attributes.delete_if { |x| x.class == klass }
