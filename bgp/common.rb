@@ -64,10 +64,10 @@ class IPAddr
     x = to_i + increment.call(i)
     if ipv4?
       [IPAddr.create(x).to_s, mlen].join("/")
-     else
-       y = [(format "%032x",x)].pack('H*')
-       [IPAddr.new_ntoh(y).to_s ,mlen].join("/")
-     end
+    else
+      y = [(format "%032x",x)].pack('H*')
+      [IPAddr.new_ntoh(y).to_s ,mlen].join("/")
+    end
   end
   
   private :_generate_network_inc_
