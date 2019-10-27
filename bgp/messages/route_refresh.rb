@@ -52,7 +52,7 @@ class Route_refresh < Message
   end
   
   def parse(s)
-    @afi, reserved, @safi= super(s).unpack('nCC')
+    @afi, _, @safi= super(s).unpack('nCC')
   end
   
   def to_hash
@@ -146,7 +146,7 @@ class Orf_route_refresh < Message
   end
   
   def parse(s)
-    @afi, reserved, @safi, orfs= super(s).unpack('nCCa*')
+    @afi, _, @safi, orfs= super(s).unpack('nCCa*')
     while orfs.size>0
       @orfs << Orf.factory(orfs.is_packed)
     end

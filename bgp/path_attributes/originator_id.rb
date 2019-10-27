@@ -52,7 +52,7 @@ module BGP
       @origin_id.to_i
     end
     def parse(s)
-      @flags, @type, len, value = super(s)
+      @flags, @type, _, value = super(s)
       @origin_id = IPAddr.create(value)
     end
 

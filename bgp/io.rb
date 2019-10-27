@@ -100,7 +100,7 @@ module BGP
             while @continue
               begin
                 Timeout::timeout(h) do |_h| 
-                  message, type = recv_msg(s)
+                  message, _ = recv_msg(s)
                   break unless @continue
                   changed and notify_observers(:ev_msg, @type, message)
                 end

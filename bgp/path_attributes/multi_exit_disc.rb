@@ -81,7 +81,7 @@ module BGP
     private
 
     def parse(s)
-      @flags, @type, len, @med=super(s,'N')
+      @flags, @type, _, @med=super(s,'N')
     end
 
   end

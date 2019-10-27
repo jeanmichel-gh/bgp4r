@@ -91,7 +91,7 @@ module BGP
     private
 
     def parse(s)
-      @flags, @type, len, @origin=super(s, 'C')
+      @flags, @type, _, @origin=super(s, 'C')
     end
 
   end

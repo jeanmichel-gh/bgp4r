@@ -90,7 +90,6 @@ module BGP
     end
 
     def extended_communities
-      len = @communities.size*8
       s=[]
       s << ''
       s << "  Carried Extended communities"
@@ -167,7 +166,7 @@ module BGP
     end
 
     def parse(s)
-      @flags, @type, len, value=super(s)
+      @flags, @type, _, value=super(s)
       while value.size>0
         self << Extended_community.factory(value.slice!(0,8).is_packed)
       end

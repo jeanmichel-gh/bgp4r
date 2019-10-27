@@ -206,7 +206,7 @@ module BGP
       else
         s = _s
       end
-      type, subtype, value = s.unpack('CCa6')
+      type, subtype, _ = s.unpack('CCa6')
       case subtype
       when ROUTE_TARGET     ; Route_target.new(s)
       when ROUTE_ORIGIN     ; Route_origin.new(s)

@@ -78,6 +78,7 @@ module BGP
       else
         h_afi_safi.merge(:nlris=>h_nlris).merge({:nexthop=>@nexthops.collect { |n| n.nexthop.to_s }} )
       end      
+      h
     end
     
     def nlri_to_hash(nlri)
@@ -185,7 +186,7 @@ module BGP
 
     def parse(s,arg=false)
 
-      @flags, @type, len, value = super(s)
+      @flags, @type, _, value = super(s)
       @afi, @safi, nh_len = value.slice!(0,4).unpack('nCC')
 
       case @afi
@@ -297,10 +298,10 @@ module BGP
         case safi
         when 1,2,4
           if afi==2 &&  IPAddr.new(nh).ipv4?
-              ::BGP::const_get('Ipv4_mapped')
-            else
-              ::BGP::const_get('Prefix')
-            end
+            ::BGP::const_get('Ipv4_mapped')
+          else
+            ::BGP::const_get('Prefix')
+          end
         when 128,129
           ::BGP::const_get('Vpn')
         else

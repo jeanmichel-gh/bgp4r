@@ -84,7 +84,7 @@ module BGP
         end
         
         def parse(s, as4byte=false)
-          @seg_type, skip, *@as = s.unpack("CC#{as4byte ? 'N' : 'n'}*")
+          @seg_type, _, *@as = s.unpack("CC#{as4byte ? 'N' : 'n'}*")
           @as = [@as].flatten
         end
         
@@ -225,7 +225,7 @@ module BGP
       private
       
       def parse(s,as4byte=false)
-        @flags, @type, len, value=super(s)
+        @flags, @type, _, value=super(s)
         while value.size>0
           @segments << Segment.factory(value.is_packed, as4byte)
         end
