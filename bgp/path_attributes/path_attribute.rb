@@ -286,7 +286,7 @@ module BGP
         attr_reader :type, :flags, :value
         def initialize(*args)
           if args.size>1
-            @flags, @type, len, @value=args
+            @flags, @type, _, @value = args
           else
             parse(*args)
           end
@@ -295,7 +295,7 @@ module BGP
           super(@value)
         end
         def parse(s)
-          @flags, @type, len, @value = super
+          @flags, @type, _, @value = super
         end
       end
     end
@@ -320,7 +320,7 @@ module BGP
         path_id_flag=nil
       end
       
-      flags, type = s.unpack('CC')
+      _, type = s.unpack('CC')
       case type
       when ORIGIN
         Origin.new(s)
