@@ -33,6 +33,8 @@ module BGP
     LINK_BANDWIDTH = 4
     OSPF_DOMAIN_ID = 5
     OSPF_ROUTER_ID = 7
+
+    BGP_ORIGIN_VALIDATION_STATE = 0
     BGP_DATA_COLLECT = 8
     COLOR = 11
     ENCAPSULATION = 12
@@ -64,6 +66,8 @@ module BGP
           _,@global = s.unpack('nN')
         # when Encapsulation
           _,@global = s.unpack('Nn')
+        when Origin_validation_state
+          _,@global = s.unpack('nN')
         else
           @global = s.unpack('H12')
         end
@@ -175,6 +179,8 @@ module BGP
         case self
         when BGP::Color
           [0,@global].pack('nN')
+        when BGP::Origin_validation_state
+          [0,@global].pack('nN')
         # when BGP::Encapsulation
         #   [0,@global].pack('Nn')
         else
@@ -209,6 +215,7 @@ module BGP
       when BGP_DATA_COLLECT ; Bgp_data_collect.new(s)
       when LINK_BANDWIDTH   ; Link_bandwidth.new(s)
       when COLOR            ; Color.new(s)
+      when BGP_ORIGIN_VALIDATION_STATE ; Origin_validation_state.new(s)
       # when ENCAPSULATION    ; Encapsulation.new(s)
       else
         puts "too bad type #{type.to_s(16)}, subtype #{subtype.to_s(16)} : #{s.unpack('H*')}"
@@ -338,6 +345,42 @@ module BGP
     def value2
       @global
     end
+  end
+
+  class Origin_validation_state < Opaque
+    def initialize(*args)
+      args = 0 if args.empty?
+      if args[0].is_a?(String) and args[0].is_packed?
+        super(*args)
+      else
+        raise  ArgumentError, "Too many arguments." if args.length>1
+        value = 0
+        case args[0]
+        when :valid
+          value=0
+        when :not_found
+          value=1
+        when :invalid
+          value=2
+        else
+          value=args[0]
+        end
+        super(NON_TRANSITIVE, BGP_ORIGIN_VALIDATION_STATE, value)
+      end
+    end
+    def validation_state
+      case value2
+      when 0; :valid
+      when 1; :not_found
+      when 2; :invalid
+      else
+        raise RuntimeError("bogus validation state")
+      end
+    end
+    def value2
+      @global
+    end
+
   end
   
   # class Encapsulation < Opaque

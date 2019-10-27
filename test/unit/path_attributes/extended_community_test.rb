@@ -107,6 +107,18 @@ class Extended_community_Test < Test::Unit::TestCase
     assert_equal('Color: 100', Color.new(100).to_s)
     assert_equal('Color: 10000', Color.new(Color.new(10_000).encode).to_s)
   end
+
+  def test_origin_validation_state
+    assert_equal(:valid, Origin_validation_state.new(0).validation_state)
+    assert_equal(:not_found, Origin_validation_state.new(1).validation_state)
+    assert_equal(:invalid, Origin_validation_state.new(2).validation_state)
+    assert_equal(:valid, Origin_validation_state.new(:valid).validation_state)
+    assert_equal(:not_found, Origin_validation_state.new(:not_found).validation_state)
+    assert_equal(:invalid, Origin_validation_state.new(:invalid).validation_state)
+    assert_equal('4300000000000000', Origin_validation_state.new(:valid).to_shex)
+    assert_equal('4300000000000001', Origin_validation_state.new(:not_found).to_shex)
+    assert_equal('4300000000000002', Origin_validation_state.new(:invalid).to_shex)
+  end
   
   # def test_encapsulation
   #   assert_equal('030c000000000000', Encapsulation.new.to_shex)
@@ -125,7 +137,7 @@ class Extended_community_Test < Test::Unit::TestCase
   def test_factory
     s = '0102070001010008 010208000101000a 01020a000102000a 01020a0003020007 01020b000101000a 
          01030a0003020009 0105090100010000 0105140000010000 01070a0000010000 400400004e6e6b28 
-         430b000000000064 '.split.join # 030c000000000007
+         430b000000000064 4300000000000001'.split.join # 030c000000000007
     comms = []
     communities = s.scan(/[0-9a-f]{16}/) { |comm| comms << Extended_community.factory([comm].pack('H*'))  }
     assert_equal BGP::Route_target, comms[0].class
@@ -139,6 +151,7 @@ class Extended_community_Test < Test::Unit::TestCase
     assert_equal BGP::Ospf_router_id, comms[8].class
     assert_equal BGP::Link_bandwidth, comms[9].class
     assert_equal BGP::Color, comms[10].class
+    assert_equal BGP::Origin_validation_state, comms[11].class
     # assert_equal BGP::Encapsulation, comms[11].class
   end
 
