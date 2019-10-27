@@ -53,7 +53,6 @@ module BGP
           when :cluster_list           ; Cluster_list.new(*args[0][attr])
           when :aggregator             ; Aggregator.new(args[0][attr])
           when :as4_aggregator         ; As4_aggregator.new(args[0][attr])
-          when :originator_id          ; Originator_id.new(args[0][attr])
           when :communities, :community; Communities.new(args[0][attr])
           when :aigp                   ; Aigp.new(args[0][attr])
           when :extended_communities, :extended_community
