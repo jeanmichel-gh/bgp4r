@@ -35,12 +35,12 @@ class Route_refresh < Message
   end
   
   def afi=(val)
-    raise ArgumentError, "invalid argument" unless val.is_a?(Fixnum) and (0..0xffff) === val
+    raise ArgumentError, "invalid argument" unless val.is_a?(Integer) and (0..0xffff) === val
     @afi=val
   end
   
   def safi=(val)
-    raise ArgumentError, "invalid argument" unless val.is_a?(Fixnum) and (0..0xff) === val
+    raise ArgumentError, "invalid argument" unless val.is_a?(Integer) and (0..0xff) === val
     @safi=val
   end
   
@@ -123,12 +123,12 @@ class Orf_route_refresh < Message
   end
   
   def afi=(val)
-    raise ArgumentError, "invalid argument" unless val.is_a?(Fixnum) and (0..0xffff) === val
+    raise ArgumentError, "invalid argument" unless val.is_a?(Integer) and (0..0xffff) === val
     @afi=val
   end
   
   def safi=(val)
-    raise ArgumentError, "invalid argument" unless val.is_a?(Fixnum) and (0..0xff) === val
+    raise ArgumentError, "invalid argument" unless val.is_a?(Integer) and (0..0xff) === val
     @safi=val
   end
   

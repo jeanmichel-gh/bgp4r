@@ -36,7 +36,7 @@ module BGP
         parse(arg.encode)
       elsif arg.is_a?(Hash) and arg[:origin]
         @origin = arg[:origin]
-      elsif arg.is_a?(Fixnum) and (0..2)===arg
+      elsif arg.is_a?(Integer) and (0..2)===arg
         @origin=arg
       elsif arg.is_a?(Symbol)
         case arg

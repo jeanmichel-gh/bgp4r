@@ -107,7 +107,7 @@ module BGP
     end
     
     def [](type)
-      if type.is_a?(Fixnum)
+      if type.is_a?(Integer)
         return find_by_type(type)
       end
       case type
@@ -150,7 +150,7 @@ module BGP
         case arg
         when Class
           @attributes.find { |a| a.is_a?(arg) }.nil? ? false : true
-        when Fixnum
+        when Integer
           @attributes.find { |a| a.type == arg }.nil? ? false : true
         end
       else
