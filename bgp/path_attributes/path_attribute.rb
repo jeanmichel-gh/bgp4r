@@ -85,11 +85,11 @@ module BGP
           a.to_s(method, as4byte)
         else
           begin
-          a.to_s(method)
-        rescue => e
-          p e 
-          p a.class
-        end
+            a.to_s(method)
+          rescue => e
+            p e 
+            p a.class
+          end
         end
       }).join("\n  ")
     end
