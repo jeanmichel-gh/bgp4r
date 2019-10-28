@@ -169,9 +169,9 @@ module BGP
         end
       when :tcpdump
         if as4byte
-          f, t, len, enc_value = _parse_(self.encode4, nil)
+          _, _, len, enc_value = _parse_(self.encode4, nil)
         else
-          f, t, len, enc_value = _parse_(self.encode, nil)
+          _, _, len, enc_value = _parse_(self.encode, nil)
         end
         s = sprintf "%s (%d), length: %d, Flags %s: %s", attribute_name, @type, len, flags_short, value
         s += enc_value.hexlify.join(("\n   "))

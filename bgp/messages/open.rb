@@ -107,9 +107,9 @@ class Open < Message
   def parse(_s)
     s = super(_s)
     if s[9,2].unpack('CC') == [255,255]
-      @version, @local_as, @holdtime, bgp_id, _, opt_parm_len, opt_parms = s.unpack('Cnna4nna*')
+      @version, @local_as, @holdtime, bgp_id, _, _, opt_parms = s.unpack('Cnna4nna*')
     else
-      @version, @local_as, @holdtime, bgp_id, opt_parm_len, opt_parms = s.unpack('Cnna4Ca*')
+      @version, @local_as, @holdtime, bgp_id, _, opt_parms = s.unpack('Cnna4Ca*')
     end
     while opt_parms.size>0
       @opt_parms << Optional_parameter.factory(opt_parms)

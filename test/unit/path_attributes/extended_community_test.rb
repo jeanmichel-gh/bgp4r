@@ -139,7 +139,7 @@ class Extended_community_Test < Test::Unit::TestCase
          01030a0003020009 0105090100010000 0105140000010000 01070a0000010000 400400004e6e6b28 
          430b000000000064 4300000000000001'.split.join # 030c000000000007
     comms = []
-    communities = s.scan(/[0-9a-f]{16}/) { |comm| comms << Extended_community.factory([comm].pack('H*'))  }
+    s.scan(/[0-9a-f]{16}/) { |comm| comms << Extended_community.factory([comm].pack('H*'))  }
     assert_equal BGP::Route_target, comms[0].class
     assert_equal BGP::Route_target, comms[1].class
     assert_equal BGP::Route_target, comms[2].class

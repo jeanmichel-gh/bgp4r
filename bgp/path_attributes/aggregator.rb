@@ -82,7 +82,7 @@ module BGP
     end
     
     def parse(s,as4byte=false)
-      @flags, @type, len, @as, addr = super(s, as4byte ? 'NN' : 'nN')
+      @flags, @type, _, @as, addr = super(s, as4byte ? 'NN' : 'nN')
       self.address = addr
     end
     

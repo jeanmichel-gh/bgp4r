@@ -112,7 +112,7 @@ class BGP::Update < BGP::Message
   end
 
   def encode(session_info=@session_info)
-    withdrawn, path_attribute, nlri = '', '', ''
+    withdrawn, path_attribute = '', ''
     withdrawn = @withdrawn.encode if @withdrawn
     path_attribute = @path_attribute.encode(session_info.as4byte?) if @path_attribute
     super([withdrawn.size, withdrawn, path_attribute.size, path_attribute, encoded_nlri].pack('na*na*a*'))

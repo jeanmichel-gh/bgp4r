@@ -69,7 +69,7 @@ module BGP
       @next_hop.to_i
     end
     def parse(s)
-      @flags, @type, len, value = super(s)
+      @flags, @type, _, value = super(s)
       @next_hop = IPAddr.new_ntoh(value[0,4])
     end
 

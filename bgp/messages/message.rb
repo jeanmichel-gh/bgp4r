@@ -45,7 +45,7 @@ module ::BGP
     end
 
     def parse(s)
-      len, @msg_type, message = s[16..-1].unpack('nCa*')
+      _, @msg_type, message = s[16..-1].unpack('nCa*')
       message.is_packed
     end
     def self.factory(_s, session_info=nil)

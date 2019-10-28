@@ -50,6 +50,7 @@ class Extended_communitiesTest < Test::Unit::TestCase
   def test_4
     ec = Extended_communities.new_hash  :color=> 100
     ec2 = Extended_communities.new_hash(ec.to_hash)
+    assert_equal(ec.to_shex, ec2.to_shex)
     assert_equal(ec.to_hash, Extended_communities.new_hash(ec.to_hash).to_hash)
     ec = Extended_communities.new_hash  :link_bandwidth=> 999_999_999
     ec2 = Extended_communities.new_hash(ec.to_hash)

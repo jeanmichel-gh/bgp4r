@@ -80,7 +80,7 @@ module BGP
     private
 
     def parse(s)
-      @flags, @type, len, @local_pref = super(s,'N')
+      @flags, @type, _, @local_pref = super(s,'N')
     end
 
   end

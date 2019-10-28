@@ -36,5 +36,6 @@ class Next_hop_Test < Test::Unit::TestCase
   end
   def test_2
     next_hop = Next_hop.new :next_hop=> '10.0.0.1'
+    assert_equal({:next_hop=>"10.0.0.1"}, next_hop.to_hash)
   end
 end

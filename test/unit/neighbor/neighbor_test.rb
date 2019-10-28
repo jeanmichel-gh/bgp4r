@@ -74,7 +74,7 @@ class TestBgpNeighbor < Test::Unit::TestCase
     assert ! neighbor.is_openconfirm?
   end
   def test_start
-    status = Timeout::timeout(4) {
+    Timeout::timeout(4) {
       start_server(3456)
       @c = Neighbor.new(4, 100, 180, '0.0.0.2', '127.0.0.1', '127.0.0.1')
       @c.start :port=> 3456
@@ -85,7 +85,7 @@ class TestBgpNeighbor < Test::Unit::TestCase
     assert false, "Timeout"
   end
   def test_start_no_blocking
-    status = Timeout::timeout(4) {
+    Timeout::timeout(4) {
       start_server(3333)
       @c = Neighbor.new(4, 100, 180, '0.0.0.2', '127.0.0.1', '127.0.0.1')
       @c.start :port=> 3333, :no_blocking=>true
@@ -95,7 +95,7 @@ class TestBgpNeighbor < Test::Unit::TestCase
     assert false, "Timeout"
   end
   def test_start_blocking
-    status = Timeout::timeout(4) {
+    Timeout::timeout(4) {
       start_server(3333)
       @c = Neighbor.new(4, 100, 180, '0.0.0.2', '127.0.0.1', '127.0.0.1')
       @c.start :port=> 3333, :no_blocking=>false
@@ -106,7 +106,7 @@ class TestBgpNeighbor < Test::Unit::TestCase
     assert false, "Timeout"
   end
   def test_send_and_receive_path_id_afi_1_safi_1
-    status = Timeout::timeout(4) {
+    Timeout::timeout(4) {
       server_add_path_cap = BGP::OPT_PARM::CAP::Add_path.new
       server_add_path_cap.add(:send_and_recv, 1, 1)
       start_server(3456, server_add_path_cap)
@@ -122,11 +122,11 @@ class TestBgpNeighbor < Test::Unit::TestCase
       assert @c.session_info.send_inet_unicast?, 
       "Should have the capability to send inet unicast reachability path info."
     }
-  rescue Timeout::Error => e
+  rescue Timeout::Error
     assert false, "timeout"
   end
   def test_send_path_id_afi_1_safi_1
-    status = Timeout::timeout(4) {
+    Timeout::timeout(4) {
       server_add_path_cap = BGP::OPT_PARM::CAP::Add_path.new
       server_add_path_cap.add(:send, 1, 1)
       client_add_path_cap = BGP::OPT_PARM::CAP::Add_path.new
@@ -144,12 +144,12 @@ class TestBgpNeighbor < Test::Unit::TestCase
       assert ! @c.session_info.send_inet_unicast?, 
       "Should NOT have the capability to send inet unicast reachability path info."
     }
-  rescue Timeout::Error => e
+  rescue Timeout::Error
     assert false, "timeout"
 
   end
   def test_recv_path_id_afi_1_safi_1
-    status = Timeout::timeout(4) {
+    Timeout::timeout(4) {
       server_add_path_cap = BGP::OPT_PARM::CAP::Add_path.new
       server_add_path_cap.add(:recv, 1, 1)
       client_add_path_cap = BGP::OPT_PARM::CAP::Add_path.new
@@ -167,12 +167,12 @@ class TestBgpNeighbor < Test::Unit::TestCase
       assert  @c.session_info.send_inet_unicast?, 
       "Should have the capability to send inet unicast reachability path info."
     }
-  rescue Timeout::Error => e
+  rescue Timeout::Error
     assert false, "timeout"
 
   end
   def test_nor_recv_nor_send_path_id_afi_1_safi_1
-    status = Timeout::timeout(4) {
+    Timeout::timeout(4) {
       server_add_path_cap = BGP::OPT_PARM::CAP::Add_path.new
       server_add_path_cap.add(:recv, 1, 1)
       client_add_path_cap = BGP::OPT_PARM::CAP::Add_path.new
@@ -190,7 +190,7 @@ class TestBgpNeighbor < Test::Unit::TestCase
       assert ! @c.session_info.send_inet_unicast?, 
       "Should have the capability to send inet unicast reachability path info."
     }
-  rescue Timeout::Error => e
+  rescue Timeout::Error
     assert false, "timeout"
   end
   def test_add_capabilities_using_sym

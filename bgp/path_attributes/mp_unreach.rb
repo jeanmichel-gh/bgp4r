@@ -62,7 +62,7 @@ module BGP
   
     def parse(s,arg=false)
       
-      @flags, @type, len, value = super(s)
+      @flags, @type, _, value = super(s)
       @afi, @safi = value.slice!(0,3).unpack('nC')
       
       if arg.respond_to?(:path_id?)
@@ -84,7 +84,7 @@ module BGP
       super([afi, @safi, @nlris.collect { |n| n.encode }.join].pack('nCa*'))
     rescue => e 
       p nlris[0].prefix
-      raise
+      raise RuntimeError("#{e}")
     end
 
     def to_hash

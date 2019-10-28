@@ -49,16 +49,15 @@ class Prefix
     end
   end
 
-
   def initialize(*args)
     @path_id=nil
     if args.size>1 and args[0].is_a?(Integer)
-      @path_id, pfx, afi = args
+      @path_id, pfx, _ = args
     elsif args.size==1 and args[0].is_a?(Hash)
       @path_id = args[0][:path_id]
       pfx = args[0][:prefix]
     else
-      pfx, afi = args
+      pfx, _ = args
     end
     if pfx =~ /^49\./
       @pfx = Nsap.new_nsap(pfx)
@@ -150,7 +149,7 @@ class Prefix
   alias :bit_length :mlen
   
   def nbytes
-    nbyte = (mlen+7)/8
+    (mlen+7)/8
   end
   def pfx_to_s
     [@pfx,mlen.to_s].join('/')
@@ -173,9 +172,8 @@ class Prefix
   
 end
 
-s = '00000064200a000000'
-pfx = Prefix.new_ntop([s].pack('H*'), 2)
-
+#s = '00000064200a000000'
+#pfx = Prefix.new_ntop([s].pack('H*'), 2)
 
 end
 

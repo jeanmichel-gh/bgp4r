@@ -53,7 +53,6 @@ module BGP
           when :cluster_list           ; Cluster_list.new(*args[0][attr])
           when :aggregator             ; Aggregator.new(args[0][attr])
           when :as4_aggregator         ; As4_aggregator.new(args[0][attr])
-          when :originator_id          ; Originator_id.new(args[0][attr])
           when :communities, :community; Communities.new(args[0][attr])
           when :aigp                   ; Aigp.new(args[0][attr])
           when :extended_communities, :extended_community
@@ -85,11 +84,11 @@ module BGP
           a.to_s(method, as4byte)
         else
           begin
-          a.to_s(method)
-        rescue => e
-          p e 
-          p a.class
-        end
+            a.to_s(method)
+          rescue => e
+            p e 
+            p a.class
+          end
         end
       }).join("\n  ")
     end
@@ -209,7 +208,7 @@ module BGP
       self.sort.to_shex <=> other.sort.to_shex
     end
     
-      def delete(*klasses)
+    def delete(*klasses)
       for klass in klasses
         next unless klass.is_a?(Class)
         attributes.delete_if { |x| x.class == klass }
@@ -267,7 +266,7 @@ module BGP
     
     def method_missing(name, *args, &block)
       if name.to_s == 'med='
-        multi_exit_disc= *args
+        #multi_exit_disc= *args
       elsif name.to_s =~ /^as_path_(.+)=$/
         replace(As_path, As_path.send("new_#{$1}", *args))
       else
@@ -286,7 +285,7 @@ module BGP
         attr_reader :type, :flags, :value
         def initialize(*args)
           if args.size>1
-            @flags, @type, len, @value=args
+            @flags, @type, _, @value = args
           else
             parse(*args)
           end
@@ -295,7 +294,7 @@ module BGP
           super(@value)
         end
         def parse(s)
-          @flags, @type, len, @value = super
+          @flags, @type, _, @value = super
         end
       end
     end
@@ -320,7 +319,7 @@ module BGP
         path_id_flag=nil
       end
       
-      flags, type = s.unpack('CC')
+      _, type = s.unpack('CC')
       case type
       when ORIGIN
         Origin.new(s)

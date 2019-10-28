@@ -102,8 +102,8 @@ class Open_Test < Test::Unit::TestCase
   end
   def test_5
     open = Open.new(4,0xffff, 200, '10.0.0.1')
-    assert_match /my AS 65535/, open.to_s
+    assert_match(/my AS 65535/, open.to_s)
     open = Open.new(4,0x1ffff, 200, '10.0.0.1')
-    assert_match /my AS 23456/, open.to_s
+    assert_match(/my AS 23456/, open.to_s)
   end
 end

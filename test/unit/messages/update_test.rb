@@ -28,7 +28,7 @@ class Update_Test < Test::Unit::TestCase
   def test_factory_to_create_an_update_message
     s = "ffffffffffffffffffffffffffffffff006b0200000054400101024002009004040000000040050400000064c0100800020c8f04127ee8800a0800000001000000048009045134134d800e1f0001800c00000000000000005134134d00680114d100000c8f041291480a39"
     sbin = [s].pack('H*')
-    u = Update.new(sbin)
+   # u = Update.new(sbin)
     assert_equal(Update, Message.factory(sbin).class)
   end
   def test_factory_to_create_an_update_message_with_multiple_nlris
@@ -186,6 +186,7 @@ class Update_Test < Test::Unit::TestCase
     originator-id: 10.0.0.2
     cluster: 0.0.0.1
     "
+    puts(s)
   end
 
   def test_verify_one_can_modify_update_info

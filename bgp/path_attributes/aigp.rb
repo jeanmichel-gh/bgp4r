@@ -41,7 +41,7 @@ module BGP
     end
 
     def parse(s)
-      @flags, @type, len, value=super(s)
+      @flags, @type, _, value=super(s)
       _, _, high, low = value.unpack('CnNN')
       @aigp = (high << 32) + low
     end

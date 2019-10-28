@@ -20,7 +20,6 @@ class Nsap
     new [pfx, (len.to_i > 152 ? 152 : len)].join('/')
   end
   def self.new_ntoh(s)
-    sbin = s.dup
     o1, r = s.unpack('H2H*')
     new [o1, r.scan(/..../).collect { |x| r.slice!(0,4)}, r].flatten.join('.').chomp('.')
   end
@@ -32,8 +31,7 @@ class Nsap
   def iso? ; true ; end
   def to_s
     o1, r = hton.unpack('H2H*')
-    s = [o1, r.scan(/..../).collect { |x| r.slice!(0,4)},r].flatten.join('.')
-    # mlen < 160 ? [s, mlen].join('/') : s
+    [o1, r.scan(/..../).collect { |x| r.slice!(0,4)},r].flatten.join('.')
   end
   def mlen
     @mlen ||= 160

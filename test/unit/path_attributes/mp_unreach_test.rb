@@ -27,6 +27,9 @@ class Mp_unreach_Test < Test::Unit::TestCase
   include BGP
   def test_1
     mpur = Mp_unreach.new(:safi=>1, :nlris=>['10.0.0.0/16', '10.1.0.0/16'])
+    assert_equal(mpur.to_shex,'800f09000101100a00100a01')
+    h = {:afi=>1, :safi=>1, :nlris=>["10.0.0.0/16", "10.1.0.0/16"]}
+    assert_equal({:mp_unreach=>h}, mpur.to_hash)
     assert_raise(ArgumentError) { Mp_unreach.new }
   end
   

@@ -162,9 +162,8 @@ class BGP::Prefix_orf < BGP::Orf
 
   def _parse_(s)
     @entries=[]
-    @type, len, entries = s.unpack('Cna*')
+    @type, _, entries = s.unpack('Cna*')
     while entries.size>0
-      #p entries.unpack('H*')
       @entries << BGP::Prefix_entry.new(entries.is_packed)
     end
   end
