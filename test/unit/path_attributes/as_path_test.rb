@@ -75,7 +75,6 @@ class As_path_Test < Test::Unit::TestCase
   include BGP
   def test_1
     assert_equal('400200', As_path.new.to_shex)
-    path =  As_path.new(1)
     assert_equal("40020402010001", As_path.new(1).to_shex)
     assert_equal("40020402010001", As_path.new(As_path::Sequence.new(1)).to_shex)
     assert_equal("40020402010001", As_path.new(As_path::Segment.new(:sequence,1)).to_shex)
@@ -107,7 +106,6 @@ class As_path_Test < Test::Unit::TestCase
   end
   def test_4
     assert_equal('400200', As_path.new.to_shex)
-    path =  As_path.new(1)
     assert_equal("1", As_path.new(1).as_path)
     assert_equal("1", As_path.new(As_path::Sequence.new(1)).as_path)
     assert_equal("1", As_path.new(As_path::Segment.new(:sequence,1)).as_path)
@@ -183,7 +181,6 @@ class As4_path_Test < Test::Unit::TestCase
   include BGP
   def test_1
     assert_equal('c01100', As4_path.new.to_shex)
-    path =  As4_path.new(1)
     assert_equal("c01106020100000001", As4_path.new(1).to_shex)
     assert_equal("c01106020100000001", As4_path.new(As_path::Sequence.new(1)).to_shex)
     assert_equal("c01106020100000001", As4_path.new(As_path::Segment.new(:sequence,1)).to_shex)

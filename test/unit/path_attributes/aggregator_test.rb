@@ -76,5 +76,5 @@ class Aggregator_Test < Test::Unit::TestCase
     assert_equal(200, ag1.asn)
     assert_equal('11.0.0.2', ag1.address)
     assert_equal({:asn=>200, :address=>"11.0.0.2"}, ag1.to_hash[:aggregator])
-   end 
+  end 
 end

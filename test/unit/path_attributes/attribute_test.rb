@@ -35,11 +35,11 @@ class ATTR_Test < Test::Unit::TestCase
         if args.size>1
           @flags, @type,	@value = args
         else
-          arr = parse(*args)
+          parse(*args)
         end
       end
       def parse(s)
-        @flags, @type, len, @value = super
+        @flags, @type, _, @value = super
       end
       def encode
         super(value)

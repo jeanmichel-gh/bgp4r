@@ -17,8 +17,11 @@ module BGP
       @s = Neighbor.new(4, 100, 180, '0.0.0.1', '127.0.0.1', '127.0.0.1')
       @s.add_cap cap if cap
       @thread = Thread.new(@s, @server) do |peer, sock| 
-        while (session = sock.accept())
-          @s.start_session(session)
+        begin
+          while (session = sock.accept())
+            @s.start_session(session)
+          end
+        rescue IOError
         end
       end
     rescue

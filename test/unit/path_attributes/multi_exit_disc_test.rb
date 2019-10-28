@@ -41,6 +41,6 @@ class Multi_exit_disc_Test < Test::Unit::TestCase
     assert_equal("(0x00c8) 200", Multi_exit_disc.new(200).multi_exit_disc)
     assert_equal(200, Multi_exit_disc.new(200).to_i)
     mp1 = Multi_exit_disc.new(mp)
-    assert_equal(mp.encode, mp.encode)
+    assert_equal(mp.encode, mp1.encode)
   end
 end

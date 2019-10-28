@@ -266,7 +266,7 @@ module BGP
     
     def method_missing(name, *args, &block)
       if name.to_s == 'med='
-        multi_exit_disc= *args
+        #multi_exit_disc= *args
       elsif name.to_s =~ /^as_path_(.+)=$/
         replace(As_path, As_path.send("new_#{$1}", *args))
       else

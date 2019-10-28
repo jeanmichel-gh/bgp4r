@@ -62,7 +62,7 @@ module BGP::OPT_PARM::CAP
     end
 
     def parse(s)
-      @afi, ignore, @safi = super(s).unpack('nCC')
+      @afi, _, @safi = super(s).unpack('nCC')
     end
 
     def to_s

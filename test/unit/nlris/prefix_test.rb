@@ -51,7 +51,7 @@ class Prefix_Test < Test::Unit::TestCase
     assert_equal('00000064200a000000', pfx.to_shex)
     assert_equal('ID=100, 10.0.0.0/32', pfx.to_s)
     pfx1 = Prefix.new_ntop_extended(pfx.encode)
-    assert_equal(pfx.to_shex, pfx.to_shex)
+    assert_equal(pfx.to_shex, pfx1.to_shex)
     pfx = Prefix.new(100, '2011:13:11::0/64')
     assert pfx.extended?
     assert_equal('ID=100, 2011:13:11::/64', pfx.to_s)
