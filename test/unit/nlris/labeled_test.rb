@@ -36,8 +36,8 @@ class TestBgpNlrisLabeled < Test::Unit::TestCase
     assert_equal({:rd=>[100, 89723665], :label=>1611}, lb.to_hash)
   end
   def test_new_ntop_path_id
-    # RFC 7911 section 3: the 4 byte path id comes before the
-    # RFC 8277 section 2 labeled NLRI (length, label, prefix).
+    # RFC 7911 section 3: a 4 byte path id is prepended to the NLRI.
+    # RFC 8277 section 2: the labeled NLRI is length, label, prefix.
     lb = Labeled.new_ntop(['200006410a'].pack('H*'), 1, 1, 7)
     assert_equal(7, lb.path_id)
     assert_equal('00000007200006410a', lb.to_shex)
