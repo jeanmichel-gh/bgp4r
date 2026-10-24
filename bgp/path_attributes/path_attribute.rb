@@ -60,7 +60,7 @@ module BGP
           when :atomic_aggregate       ; Atomic_aggregate.new
             # FIXME: add other attr here ...
           else 
-            puts "#{attr} to be implemented!"
+            raise ArgumentError, "#{attr} not implemented"
           end
           }.compact
       else
@@ -86,8 +86,8 @@ module BGP
           begin
             a.to_s(method)
           rescue => e
-            p e 
-            p a.class
+            Log.error "#{a.class}#to_s: #{e}"
+            a.class
           end
         end
       }).join("\n  ")
@@ -350,8 +350,6 @@ module BGP
       when EXTENDED_COMMUNITY
         Extended_communities.new(s)
       else
-        #FIXME: raise UnknownPathAttributeError() ....
-        p s
         Unknown.new(s)
       end
     end

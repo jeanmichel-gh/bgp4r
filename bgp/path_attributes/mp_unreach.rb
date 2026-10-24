@@ -82,9 +82,6 @@ module BGP
     
     def encode
       super([afi, @safi, @nlris.collect { |n| n.encode }.join].pack('nCa*'))
-    rescue => e 
-      p nlris[0].prefix
-      raise RuntimeError("#{e}")
     end
 
     def to_hash

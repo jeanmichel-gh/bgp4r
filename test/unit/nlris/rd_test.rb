@@ -23,6 +23,7 @@
 require 'bgp/nlris/rd'
 
 require 'test/unit'
+require 'stringio'
 class Rd_Test < Test::Unit::TestCase
   include BGP
   def test_1
@@ -41,5 +42,12 @@ class Rd_Test < Test::Unit::TestCase
     assert_equal('0000000100000001', Rd.new(['0000000100000001'].pack('H*')).to_shex)
     assert_equal('0001010101010001', Rd.new(['0001010101010001'].pack('H*')).to_shex)
     assert_equal('0002000000010101', Rd.new(['0002000000010101'].pack('H*')).to_shex)
+  end
+  def test_unknown_type_raises_quietly
+    out, $stdout = $stdout, StringIO.new
+    assert_raise(ArgumentError) { Rd.new(['0003000000010001'].pack('H*')) }
+    assert_equal('', $stdout.string)
+  ensure
+    $stdout = out
   end
 end

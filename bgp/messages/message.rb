@@ -69,8 +69,8 @@ module ::BGP
       when CAPABILITY
         Capability.new(s)
       else
-        #FIXME: raise UnknownMessageTypeError() ...
-        puts "don't know what kind of bgp messgage this is #{s.slice(18,1).unpack('C')}"
+        # RFC 4271 section 6.1: Bad Message Type.
+        raise UnknownBgpMessage, "unknown BGP message type #{s.slice(18,1).unpack('C')[0]}"
       end
     end
     def self.keepalive

@@ -154,15 +154,8 @@ class BGP::Update < BGP::Message
       @path_attribute ||= Path_attribute.new
       @path_attribute << val
     elsif val.is_a?(String)
-      begin 
-        # Nlri.new(val)
-        @nlri ||=Nlri.new
-        @nlri << val
-      rescue => e
-        p "JME: ***** #{val.inspect}"
-        p e
-        raise
-      end
+      @nlri ||=Nlri.new
+      @nlri << val
     elsif val.is_a?(Nlri)
       val.to_s.split.each { |n| self << n }
     else
