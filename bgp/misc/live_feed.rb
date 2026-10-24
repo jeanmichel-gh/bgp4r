@@ -1,36 +1,64 @@
 #require 'net/telnet'
+require 'socket'
 require 'bgp4r'
 
 class LiveFeed
-  def self.open
-    new.open
+  HOST = '129.82.138.6'
+  PORT = 50001
+  CONNECT_TIMEOUT = 10
+  OCTETS = /<OCTETS length=[^>]*>([^<]*)<\/OCTETS>/
+
+  def self.open(**opts)
+    new.open(**opts)
   end
-  def open
-    @host = '129.82.138.6'
-    @port = '50001'
-    @buf = ''
+  def open(host: HOST, port: PORT, timeout: CONNECT_TIMEOUT)
+    @host = host
+    @port = port
+    @buf = ''.b
+    @eof = false
+    @lock = Mutex.new
+    @cond = ConditionVariable.new
     @queue = Queue.new
 
-    th = Thread.new do 
-      @feed = TCPSocket.new @host, @port
+    @feed = Socket.tcp @host, @port, connect_timeout: timeout
+
+    @reader = Thread.new do
       loop do
-        @buf += @feed.recv(5000)
+        data = begin
+          @feed.recv(5000).to_s
+        rescue IOError, SystemCallError
+          ''
+        end
+        @lock.synchronize do
+          if data.empty?
+            @eof = true
+          else
+            @buf << data
+          end
+          @cond.signal
+        end
+        break if data.empty?
       end
     end
     @th=Thread.new do
       loop do
-        pos = (@buf =~ /<OCTETS length=.*>([^<]*)<\/OCTETS>/)
-        if pos
-          @queue.enq [$1].pack('H*')
-          @buf.slice!(0,pos+10)
-          sleep(0.1)
+        msg = @lock.synchronize do
+          until (m = OCTETS.match(@buf)) || @eof
+            @cond.wait(@lock)
+          end
+          @buf.slice!(0, m.end(0)) if m
+          m
         end
+        break unless msg
+        @queue.enq [msg[1]].pack('H*')
       end
+      @queue.close
     end
     self
   end
   def close
     @th.kill
+    @reader.kill
     @feed.close
   end
   def read
