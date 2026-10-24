@@ -72,8 +72,9 @@ module BGP
       encode(false)
     end
     
+    # RD only, no prefix (e.g. RD 0/0): no path id.
     def path_id
-      @prefix.path_id
+      @prefix.path_id if @prefix
     end
     def path_id=(val)
       @prefix.path_id=val

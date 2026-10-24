@@ -137,4 +137,18 @@ class Prefix_Test < Test::Unit::TestCase
     assert_equal(s, pfx.to_shex)
     assert_equal('ID=101, 49.0001.0000.0000.0000.0000.0000.0000.0000.0000.00/32', pfx.to_s)
   end
+  def test_afi_predicates_return_false_not_nil
+    # An IPAddr has no iso?, an Nsap has no ipv4? or ipv6?. Answer false.
+    assert_equal(false, Prefix.new('10.0.0.0/8').iso?)
+    assert_equal(false, Prefix.new('2011:13:11::/48').iso?)
+    assert_equal(false, Prefix.new('49.0001.0002.0003/56').ipv4?)
+    assert_equal(false, Prefix.new('49.0001.0002.0003/56').ipv6?)
+  end
+  def test_afi_predicates_do_not_hide_errors
+    pfx = Prefix.new('10.0.0.0/8')
+    broken = Object.new
+    def broken.ipv4? ; raise ArgumentError, 'broken' ; end
+    pfx.instance_variable_set(:@pfx, broken)
+    assert_raise(ArgumentError) { pfx.ipv4? }
+  end
 end
