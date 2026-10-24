@@ -22,10 +22,20 @@
 
 require 'bgp4r'
 require 'test/unit'
+require 'stringio'
 
 class Mp_reach_Test < Test::Unit::TestCase
   include BGP
-   
+
+  def test_invalid_arguments_raise_quietly
+    out, $stdout = $stdout, StringIO.new
+    assert_raise(ArgumentError) { Mp_reach.new(1, 2) }
+    assert_raise(ArgumentError) { Mp_reach.new(:safi=>1, :nexthop=>['10.0.0.1'], :nlris=>1) }
+    assert_equal('', $stdout.string)
+  ensure
+    $stdout = out
+  end
+
   def test_iso_mapped_ip_addr
     mapped_addr = Iso_ip_mapped.new('10.0.0.1')
     assert_equal('470006010a00000100', mapped_addr.to_shex)

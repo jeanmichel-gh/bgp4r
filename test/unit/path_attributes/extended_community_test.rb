@@ -22,6 +22,7 @@
 
 require 'bgp/path_attributes/extended_community'
 require 'test/unit'
+require 'stringio'
 class Extended_community_Test < Test::Unit::TestCase
   include BGP
   def test_community
@@ -153,6 +154,14 @@ class Extended_community_Test < Test::Unit::TestCase
     assert_equal BGP::Color, comms[10].class
     assert_equal BGP::Origin_validation_state, comms[11].class
     # assert_equal BGP::Encapsulation, comms[11].class
+  end
+
+  def test_factory_unknown_subtype_raises_quietly
+    out, $stdout = $stdout, StringIO.new
+    assert_raise(ArgumentError) { Extended_community.factory(['0099000000000000'].pack('H*')) }
+    assert_equal('', $stdout.string)
+  ensure
+    $stdout = out
   end
 
 end

@@ -21,6 +21,7 @@
 #++
 
 require 'test/unit'
+require 'stringio'
 require 'bgp4r'
 
 class Message_Test < Test::Unit::TestCase
@@ -46,5 +47,13 @@ class Message_Test < Test::Unit::TestCase
     assert msg.respond_to? :is_an_open?
     assert msg.respond_to? :is_a_notification?
     assert msg.respond_to? :is_a_route_refresh?
+  end
+  def test_factory_unknown_message_type_raises_quietly
+    s = ['ff'*16 + '0013ee'].pack('H*')
+    out, $stdout = $stdout, StringIO.new
+    assert_raise(UnknownBgpMessage) { Message.factory(s) }
+    assert_equal('', $stdout.string)
+  ensure
+    $stdout = out
   end
 end

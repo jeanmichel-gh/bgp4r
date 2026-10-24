@@ -90,7 +90,8 @@ module BGP
       when 2
         @enc_type, @admin, @assign = s.unpack('nNn')
       else
-        puts "Bogus rd ? #{s.unpack('H*')}"
+        # RFC 4364 section 4.2 defines RD types 0, 1 and 2 only.
+        raise ArgumentError, "unknown RD type: #{s.unpack('H*')[0]}"
       end
     end
 

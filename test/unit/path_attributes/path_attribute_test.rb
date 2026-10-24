@@ -21,6 +21,7 @@
 #++
 
 require 'test/unit'
+require 'stringio'
 require 'bgp/path_attributes/path_attribute'
 require 'bgp/path_attributes/attributes'
 
@@ -356,6 +357,22 @@ class Path_attribute_Test < Test::Unit::TestCase # :nodoc:
     assert_equal("Ospf domain id: 2.2.2.2:0", pa.extended_communities.ospf_domain_id.to_s)
     assert_equal("Link bandwidth: 100000000.0", pa.extended_communities.link_bandwidth.to_s)
   end
-  
+
+  def test_unknown_hash_key_raises_quietly
+    out, $stdout = $stdout, StringIO.new
+    assert_raise(ArgumentError) { Path_attribute.new(:no_such_attr=>1) }
+    assert_equal('', $stdout.string)
+  ensure
+    $stdout = out
+  end
+
+  def test_factory_unknown_attribute_is_quiet
+    out, $stdout = $stdout, StringIO.new
+    assert_equal(Attr::Unknown, Attr.factory(['c0630100'].pack('H*')).class)
+    assert_equal('', $stdout.string)
+  ensure
+    $stdout = out
+  end
+
 end
 

@@ -140,7 +140,12 @@ module BGP
           ev, type, m = eventQ.deq
           case ev
           when :ev_msg
-            msg = BGP::Message.factory(m, @session_info)
+            begin
+              msg = BGP::Message.factory(m, @session_info)
+            rescue UnknownBgpMessage => e
+              Log.error e.message
+              next
+            end
             log_info "Recv#{msg.class.to_s.split('::').last}"
             log_debug "Recv #{msg}\n"
             if msg.is_a?(Update)

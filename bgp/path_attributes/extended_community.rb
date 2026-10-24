@@ -218,9 +218,7 @@ module BGP
       when BGP_ORIGIN_VALIDATION_STATE ; Origin_validation_state.new(s)
       # when ENCAPSULATION    ; Encapsulation.new(s)
       else
-        puts "too bad type #{type.to_s(16)}, subtype #{subtype.to_s(16)} : #{s.unpack('H*')}"
-        raise
-        Extended_community.new(s)
+        raise ArgumentError, "unknown extended community type #{type.to_s(16)}, subtype #{subtype.to_s(16)}: #{s.unpack('H*')[0]}"
       end
     end
 

@@ -107,9 +107,7 @@ module BGP
         when Hash
           _arg = arg[:prefix]
         else
-          p "**********************"
-          p arg
-          raise
+          raise ArgumentError, "invalid argument: #{arg.inspect}"
         end
 
         if _arg.respond_to?(:afi)
@@ -162,8 +160,7 @@ module BGP
       elsif args[0].is_a?(Hash) and args.size==1
         set(*args)
       else
-        p args
-        raise ArgumentError, "invalid argument" 
+        raise ArgumentError, "invalid argument: #{args.inspect}"
       end
     end
 

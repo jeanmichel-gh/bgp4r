@@ -41,8 +41,7 @@ module BGP
       elsif args.size==1 and args[0].is_a?(Hash)
         set(args[0])
       else
-        p args
-        raise
+        raise ArgumentError, "invalid argument: #{args.inspect}"
       end
     end
     

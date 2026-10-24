@@ -23,6 +23,7 @@
 require 'bgp4r'
 require 'bgp/orfs/prefix_orf'
 require 'test/unit'
+require 'stringio'
 class Prefix_orf_Test < Test::Unit::TestCase
   include BGP
   def test_1
@@ -94,5 +95,13 @@ class Prefix_orf_Test < Test::Unit::TestCase
     assert_match(/\n  seq  40    add 40.0.0.0\/8 permit/, orf.to_s)
     assert_match(/\n  seq  50    add 50.0.0.0\/8 permit/, orf.to_s)
   end
-  
+
+  def test_invalid_argument_raises_quietly
+    out, $stdout = $stdout, StringIO.new
+    assert_raise(ArgumentError) { Prefix_entry.new(1, 2) }
+    assert_equal('', $stdout.string)
+  ensure
+    $stdout = out
+  end
+
 end
