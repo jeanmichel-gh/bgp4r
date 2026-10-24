@@ -36,7 +36,25 @@ class TestBgpNlrisLabeled < Test::Unit::TestCase
     assert_equal({:rd=>[100, 89723665], :label=>1611}, lb.to_hash)
   end
   def test_new_ntop_path_id
-    #FIXME: add labeled  and labeled vpn tests
+    # RFC 7911 section 3: the 4 byte path id comes before the
+    # RFC 8277 section 2 labeled NLRI (length, label, prefix).
+    lb = Labeled.new_ntop(['200006410a'].pack('H*'), 1, 1, 7)
+    assert_equal(7, lb.path_id)
+    assert_equal('00000007200006410a', lb.to_shex)
+  end
+  def test_path_id_rd_only_vpn
+    # Labeled VPN with RD 0:0 and no prefix: no path id, still encodes.
+    lb = Labeled.new(Vpn.new(Rd.new), 100)
+    assert_nil(lb.path_id)
+    # 24 label bits + 64 RD bits = 88 (0x58), RFC 8277 section 2.
+    assert_equal('58000641' + '00' * 8, lb.to_shex)
+  end
+  def test_path_id_does_not_hide_errors
+    broken = Object.new
+    def broken.path_id ; raise ArgumentError, 'broken' ; end
+    lb = Labeled.new(Prefix.new('10.0.0.0/8'), 100)
+    lb.instance_variable_set(:@prefix, broken)
+    assert_raise(ArgumentError) { lb.path_id }
   end
 
 end

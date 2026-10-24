@@ -66,11 +66,9 @@ class Prefix
     end
   end
   [:iso, :ipv4, :ipv6].each do |afi|
+    # @pfx is an IPAddr (no iso?) or an Nsap (no ipv4?/ipv6?).
     define_method("#{afi}?") do
-      begin
-        @pfx.send "#{afi}?"
-      rescue
-      end
+      @pfx.respond_to?("#{afi}?") ? @pfx.send("#{afi}?") : false
     end
   end
   
