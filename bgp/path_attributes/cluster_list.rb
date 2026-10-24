@@ -56,7 +56,7 @@ module BGP
       elsif args[0].is_a?(self.class)
         parse(args[0].encode, *args[1..-1])
       elsif args[0].is_a?(Hash)
-        add *args[0][:cluster_list]
+        add(*args[0][:cluster_list])
       else
         add(*args)
       end

@@ -35,7 +35,7 @@ module BGP
         args.each do |arg|
           arg.keys.each do |comm|
             case comm
-            when :extended_communities ; o = new_hash *args[0][:extended_communities]
+            when :extended_communities ; o = new_hash(*args[0][:extended_communities])
             when :color                ; o << Color.new(*arg[comm])
             when :route_target         ; o << Route_target.new(*arg[comm])
             when :link_bandwidth       ; o << Link_bandwidth.new(*arg[comm])
