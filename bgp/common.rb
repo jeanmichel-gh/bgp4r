@@ -52,8 +52,14 @@ class IPAddr
     max_len =  ipv4? ? 32 : 128
     Proc.new { |n| n*(2**(max_len - mlen)) }
   end
-  def +(i)
-    [IPAddr.create(to_i + i).to_s, mlen].join("/")
+  # Newer ipaddr (the one in Ruby 4.0) defines IPAddr#+, returning an
+  # IPAddr. bgp4r used to redefine it to return an "a.b.c.d/len" String.
+  # That warned on Ruby 4.0 and changed IPAddr for every other library.
+  # Only define it when ipaddr lacks it, with the same behavior as ipaddr.
+  unless method_defined?(:+)
+    def +(offset)
+      clone.set(to_i + offset, family)
+    end
   end
   
   def increment
