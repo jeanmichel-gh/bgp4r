@@ -210,7 +210,7 @@ module BGP
       return if @state == :Established
       stop unless @state == :Idle
       if options[:session]
-        @socket = session
+        @socket = options[:session]
       else
         @socket = TCPSocket.new(@remote_addr, options[:port], local_host=@local_addr)
       end
