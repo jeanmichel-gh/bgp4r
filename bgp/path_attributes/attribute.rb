@@ -1,5 +1,5 @@
 #--
-# Copyright 2008, 2009 Jean-Michel Esnault.
+# Copyright 2008, 2009, 2026 Jean-Michel Esnault.
 # All rights reserved.
 # See LICENSE.txt for permissions.
 #
@@ -199,6 +199,81 @@ module BGP
       end
     end 
 
+    # One registered path attribute class.
+    # session is nil, :as4byte or :path_id: the session info that
+    # Attr.factory passes to new when it parses wire bytes.
+    Registration = Struct.new(:type, :klass, :keys, :session, :builder) do
+      def name
+        keys.first
+      end
+      def build(value)
+        builder.call(value)
+      end
+    end
+
+    class << self
+
+      # Registers a path attribute class. Each attribute file does this
+      # once, after its class:
+      #
+      #   Attr.register(ORIGIN, Origin, :origin)
+      #
+      # type is the attribute type code (RFC 4271 section 4.3).
+      # keys are the Path_attribute hash keys. The first one is the
+      # canonical name, used for accessors such as pa.origin.
+      # session: :as4byte or :path_id when parsing needs session info.
+      # The block builds the attribute from a hash value. The default
+      # is klass.new(value).
+      def register(type, klass, *keys, session: nil, &builder)
+        if registered_types[type] && registered_types[type].klass != klass
+          raise ArgumentError, "attribute type #{type} already registered"
+        end
+        builder ||= ->(value) { klass.new(value) }
+        reg = Registration.new(type, klass, keys, session, builder)
+        registered_types[type] = reg
+        keys.each { |key| registered_keys[key] = reg }
+        Attr_accessors.define(reg.name, type, klass)
+        reg
+      end
+
+      # The Registration for a type code, or nil.
+      def by_type(type)
+        registered_types[type]
+      end
+
+      # The Registration for a hash key, or nil.
+      def by_key(key)
+        registered_keys[key]
+      end
+
+      def registrations
+        registered_types.values
+      end
+
+      private
+
+      def registered_types
+        @registered_types ||= {}
+      end
+
+      def registered_keys
+        @registered_keys ||= {}
+      end
+
+    end
+
+  end
+
+  # Accessors for Path_attribute, one set per registered class:
+  # has_a_origin_attr?, has_an_origin?, origin and origin=.
+  # They match on the type code, so an As4_path is not an as_path.
+  module Attr_accessors
+    def self.define(name, type, klass)
+      define_method("has_a_#{name}_attr?") { has?(type) }
+      alias_method "has_an_#{name}?", "has_a_#{name}_attr?" if name =~ /\A[aeiou]/
+      define_method(name) { find_by_type(type) }
+      define_method("#{name}=") { |*args| replace(klass.new(*args)) }
+    end
   end
 
 end

@@ -271,7 +271,9 @@ module BGP
     end
 
   end
-  
+
+  Attr.register(ATTR::COMMUNITIES, Communities, :communities, :community)
+
 end
 
 load "../../test/unit/path_attributes/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0

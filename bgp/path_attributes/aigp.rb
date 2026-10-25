@@ -140,6 +140,8 @@ module BGP
     end
   end
 
+  # RFC 7311 section 3: AIGP, type 26.
+  Attr.register(ATTR::ACCUMULATED_IGP_METRIC, Aigp, :aigp)
 
 end
 

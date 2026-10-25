@@ -27,6 +27,7 @@ module BGP
 
   class Path_attribute
     include BGP::ATTR
+    include Attr_accessors
     attr_reader :attributes
 
     def initialize(*args)
@@ -38,31 +39,11 @@ module BGP
           @attributes
         end
       elsif args.size ==1 and args[0].is_a?(Hash)
-        @attributes = []
-        @attributes = args[0].keys.collect { |attr|  
-          case attr
-          when :next_hop, :nexthop     ; Next_hop.new(args[0][attr])
-          when :local_pref             ; Local_pref.new(args[0][attr])
-          when :med, :multi_exit_disc  ; Multi_exit_disc.new(args[0][attr])
-          when :mp_reach               ; Mp_reach.new(args[0][attr])
-          when :mp_unreach             ; Mp_unreach.new(args[0][attr])
-          when :as_path                ; As_path.new_hash(args[0][attr])
-          when :as4_path               ; As4_path.new_hash(args[0][attr])
-          when :origin                 ; Origin.new(args[0][attr])
-          when :originator_id          ; Originator_id.new(args[0][attr])
-          when :cluster_list           ; Cluster_list.new(*args[0][attr])
-          when :aggregator             ; Aggregator.new(args[0][attr])
-          when :as4_aggregator         ; As4_aggregator.new(args[0][attr])
-          when :communities, :community; Communities.new(args[0][attr])
-          when :aigp                   ; Aigp.new(args[0][attr])
-          when :extended_communities, :extended_community
-            Extended_communities.new_hash(*args[0][attr])
-          when :atomic_aggregate       ; Atomic_aggregate.new
-            # FIXME: add other attr here ...
-          else 
-            raise ArgumentError, "#{attr} not implemented"
-          end
-          }.compact
+        @attributes = args[0].collect { |key, value|
+          reg = Attr.by_key(key)
+          raise ArgumentError, "#{key} not implemented" unless reg
+          reg.build(value)
+        }.compact
       else
         add(*args)
       end
@@ -105,40 +86,16 @@ module BGP
       @attributes.size
     end
     
+    # Looks up an attribute by type code, hash key or class:
+    # pa[ATTR::ORIGIN], pa[:origin] or pa[Origin].
     def [](type)
-      if type.is_a?(Integer)
-        return find_by_type(type)
-      end
       case type
-      when  ORIGIN, :origin
-        find(Origin)
-      when  AS_PATH, :as_path
-        find(As_path)
-      when  NEXT_HOP, :next_hop
-        find(Next_hop)
-      when  MULTI_EXIT_DISC, :multi_exit_disc
-        find(Multi_exit_disc)
-      when  LOCAL_PREF, :local_pref
-        find(Local_pref)
-      when  ATOMIC_AGGREGATE, :atomic_aggregate
-        find(Atomic_aggregate)
-      when  AGGREGATOR, :aggregator
-        find(Aggregator)
-      when  COMMUNITIES, :communities, :community
-        find(Communities)
-      when ORIGINATOR_ID, :originator_id
-        find(Originator_id)
-      when CLUSTER_LIST, :cluster_list
-        find(Cluster_list)
-      when MP_REACH, :mp_reach
-        find(Mp_reach)
-      when MP_UNREACH, :mp_unreach
-        find(Mp_unreach)
-      when EXTENDED_COMMUNITY, :extended_community
-        find(Extended_communities)
-      when AS4_PATH, :as4_path
-        find(As4_path)
-      when AS4_AGGREGATOR, :as4_aggregator
+      when Integer
+        find_by_type(type)
+      when Symbol
+        # By type code, so :as_path never finds an As4_path subclass.
+        reg = Attr.by_key(type)
+        find_by_type(reg.type) if reg
       else
         find(type)
       end
@@ -216,37 +173,6 @@ module BGP
       self
     end
 
-    %w{ 
-      origin 
-      next_hop 
-      local_pref 
-      multi_exit_disc 
-      as_path 
-      communities 
-      aggregator 
-      atomic_aggregate 
-      originator_id 
-      cluster_list 
-      mp_reach 
-      mp_unreach 
-      extended_communities 
-    }.each do |attr|
-      define_method("has_a_#{attr}_attr?") do
-        has? BGP.const_get(attr.capitalize)
-      end
-      define_method("#{attr}") do
-        k = BGP.const_get(attr.capitalize)
-        @attributes.find { |a| a.is_a?(k) }
-      end
-      eval "alias :has_an_#{attr}? :has_a_#{attr}_attr?" if (attr =~ /^[aeiou]/)
-      
-      define_method("#{attr}=") do |*args|
-        k = BGP.const_get(attr.capitalize)
-        replace(k.new(*args))
-      end
-            
-    end
-    
     def to_hash
       h = {}
       @attributes.each { |att| 
@@ -258,12 +184,6 @@ module BGP
     
     private
 
-    def att_sym_to_klass(sym)
-      case sym
-      when :communities, :community ; Communities
-      end
-    end
-    
     def method_missing(name, *args, &block)
       if name.to_s == 'med='
         #multi_exit_disc= *args
@@ -300,8 +220,6 @@ module BGP
     end
     include BGP::ATTR
     def self.factory(s, arg=nil)
-      #FIXME:
-      
       if arg.is_a?(Neighbor::Capabilities)
         as4byte_flag = arg.as4byte?
         path_id_flag = arg
@@ -319,38 +237,14 @@ module BGP
         path_id_flag=nil
       end
       
+      # Look the type code up in the registry (RFC 4271 section 4.3).
+      # Types nobody registered come back as Attr::Unknown.
       _, type = s.unpack('CC')
-      case type
-      when ORIGIN
-        Origin.new(s)
-      when AS_PATH
-        As_path.new(s,as4byte_flag)
-      when NEXT_HOP
-        Next_hop.new(s)
-      when MULTI_EXIT_DISC
-        Multi_exit_disc.new(s)
-      when LOCAL_PREF
-        Local_pref.new(s)
-      when ATOMIC_AGGREGATE
-        Atomic_aggregate.new(s)
-      when AGGREGATOR
-        Aggregator.new(s)
-      when COMMUNITIES
-        Communities.new(s)
-      when ATOMIC_AGGREGATE
-        Atomic_aggregate.new(s)
-      when ORIGINATOR_ID
-        Originator_id.new(s)
-      when CLUSTER_LIST
-        Cluster_list.new(s)
-      when MP_REACH
-        Mp_reach.new(s,path_id_flag)
-      when MP_UNREACH
-        Mp_unreach.new(s,path_id_flag)
-      when EXTENDED_COMMUNITY
-        Extended_communities.new(s)
-      else
-        Unknown.new(s)
+      reg = by_type(type)
+      case reg && reg.session
+      when nil      ; reg ? reg.klass.new(s) : Unknown.new(s)
+      when :as4byte ; reg.klass.new(s, as4byte_flag)
+      when :path_id ; reg.klass.new(s, path_id_flag)
       end
     end
     

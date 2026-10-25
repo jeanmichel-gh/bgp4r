@@ -88,7 +88,9 @@ module BGP
     end
     
   end
-  
+
+  Attr.register(ATTR::MP_UNREACH, Mp_unreach, :mp_unreach, session: :path_id)
+
 end
 
 load "../../test/unit/path_attributes/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0

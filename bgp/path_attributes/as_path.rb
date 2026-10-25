@@ -285,7 +285,11 @@ module BGP
         end
       end
     end
-    
+
+  Attr.register(ATTR::AS_PATH, As_path, :as_path, session: :as4byte) { |v| As_path.new_hash(v) }
+  # RFC 6793 section 3: AS4_PATH always carries 4-octet AS numbers.
+  Attr.register(ATTR::AS4_PATH, As4_path, :as4_path) { |v| As4_path.new_hash(v) }
+
 end
 
 load "../../test/unit/path_attributes/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0

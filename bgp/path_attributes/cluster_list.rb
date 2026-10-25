@@ -122,7 +122,9 @@ module BGP
     end
 
   end
-  
+
+  Attr.register(ATTR::CLUSTER_LIST, Cluster_list, :cluster_list) { |v| Cluster_list.new(*v) }
+
 end
 
 load "../../test/unit/path_attributes/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0

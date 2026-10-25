@@ -1,5 +1,5 @@
 #--
-# Copyright 2008, 2009 Jean-Michel Esnault.
+# Copyright 2008, 2009, 2026 Jean-Michel Esnault.
 # All rights reserved.
 # See LICENSE.txt for permissions.
 #
@@ -123,6 +123,10 @@ module BGP
       end
     end    
   end
+
+  Attr.register(ATTR::AGGREGATOR, Aggregator, :aggregator)
+  # RFC 6793 section 3: AS4_AGGREGATOR always carries a 4-octet AS number.
+  Attr.register(ATTR::AS4_AGGREGATOR, As4_aggregator, :as4_aggregator)
 
 end
 
