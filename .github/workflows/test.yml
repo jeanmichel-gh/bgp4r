@@ -45,6 +45,9 @@ jobs:
       - name: Functional test (add path over loopback)
         run: bundle exec ruby -I. test/functional/add_path_test.rb
         timeout-minutes: 2
+      - name: Lab speaker over loopback
+        run: bundle exec ruby -I. test/functional/lab/speaker_test.rb
+        timeout-minutes: 3
       # Never run test/functional/live_feed_test.rb: its feed is gone.
 
   # The same suites inside the Docker image, so the Dockerfile is tested too.
@@ -78,3 +81,30 @@ jobs:
       - name: Functional test (add path over loopback)
         run: docker run --rm bgp4r-test ruby -I. test/functional/add_path_test.rb
         timeout-minutes: 2
+
+  # The lab topologies in Docker Compose: real containers, real addresses,
+  # TCP 179 bound by the non-root user. See lab/README.md.
+  lab:
+    name: lab topologies
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.4'
+          bundler-cache: true
+      - name: Lab tests
+        shell: bash
+        env:
+          LAB_REQUIRE_DOCKER: '1' # fail, don't skip, if compose is missing
+        run: bundle exec ruby test/run_lab.rb 2>&1 | tee test.log
+      - name: Show test failures as an annotation
+        if: failure()
+        shell: bash
+        run: |
+          [ -f test.log ] || exit 0
+          msg=$(grep -E -A15 "^(Failure|Error):|Error\b.*\(LoadError\)|cannot load such file" test.log | head -80)
+          [ -n "$msg" ] || msg=$(tail -40 test.log)
+          msg=${msg//'%'/'%25'}; msg=${msg//$'\r'/'%0D'}; msg=${msg//$'\n'/'%0A'}
+          echo "::error title=Test output::$msg"

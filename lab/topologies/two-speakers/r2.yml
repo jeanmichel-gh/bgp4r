@@ -1,0 +1,10 @@
+# r2 connects to r1 and retries until r1 answers.
+router_id: 10.10.0.2
+as: 65002
+neighbors:
+  - address: 10.10.0.1
+    as: 65001
+    connect: true
+    hold_time: 30
+announce:
+  - prefixes: [192.168.2.0/24]
