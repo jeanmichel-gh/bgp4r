@@ -4,4 +4,3 @@ gem 'logger'
 # Dev and test
 gem 'rake'
 gem 'test-unit'
-gem 'ci_reporter'
