@@ -74,8 +74,7 @@ module BGP
       while value.size>0
         path_id = value.slice!(0,4).unpack('N')[0]  if path_id_flag
         blen = value.slice(0,1).unpack('C')[0]
-        nlri = Nlri.factory(value.slice!(0,(blen+7)/8+1), @afi, @safi, path_id)
-        @nlris << nlri
+        @nlris << self.class.nlri_ntop(value.slice!(0,(blen+7)/8+1), @afi, @safi, path_id)
       end
       raise RuntimeError, "leftover after parsing: #{value.unpack('H*')}" if value.size>0
     end

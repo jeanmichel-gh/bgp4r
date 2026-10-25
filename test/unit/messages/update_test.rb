@@ -484,6 +484,19 @@ class Update_Test < Test::Unit::TestCase
     assert_raise(ArgumentError) { Update.new << 42 }
   end
 
+  def test_parse_mp_reach_with_4_byte_as_info
+    # Update::Info says nothing about add-path, so MP_REACH NLRI carry no
+    # Path Identifier. It used to be taken as the add-path flag itself, so
+    # the first 4 octets of each NLRI were read as a path ID.
+    u = Update.new(Path_attribute.new(Origin.new(0), As_path.new(197014),
+      Mp_reach.new(:afi=>2, :safi=>1, :nexthop=>'2001:db8::1', :nlris=>['2001:db8:1::/48', '2001:db8:2::/48'])))
+    o = Update::Info.new(true)
+    m = Message.factory(u.encode(o), o)
+    assert_equal(['2001:db8:1::/48', '2001:db8:2::/48'], m.path_attribute[:mp_reach].nlris.map(&:to_s))
+    assert_equal('197014', m.path_attribute[:as_path].as_path)
+    assert_equal(u.to_shex(o), m.to_shex(o))
+  end
+
   
 
 end

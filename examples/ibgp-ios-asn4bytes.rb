@@ -1,21 +1,10 @@
 require 'bgp4r'
+require 'bgp/misc/route_generator'
 include BGP
 
-def create_fiber(base_prefix, nprefix=22, npack=10)
-  fiber = Fiber.new do 
-    ipaddr = IPAddr.new(base_prefix)
-    prefixes=[]
-    nprefix.times do |i|
-      prefixes << (ipaddr ^ i)
-      next unless (i%npack)==0
-      Fiber.yield prefixes
-      prefixes=[]
-    end
-    Fiber.yield prefixes unless prefixes.empty?
-    nil
-  end
-  fiber
-end
+# 22 prefixes, 10 per UPDATE. RouteGenerator fills every UPDATE but the
+# last, so they go out as 10, 10 and 2. The old create_fiber sent 1, 10, 10, 1.
+nprefix, npack = 22, 10
 
 nexthop4='192.168.131.20'
 
@@ -26,7 +15,8 @@ pa = Path_attribute.new(
  Local_pref.new(100),
 )
 
-ipv4_routes = create_fiber("13.11.0.0/26")
+# IPv4 in MP_REACH_NLRI.
+ipv4_routes = RouteGenerator.new("13.11.0.0/26", nprefix, npack, pa, :nexthop=> nexthop4, :mp_reach=> true)
 
 Log.create
 Log.level=Logger::DEBUG
@@ -38,9 +28,7 @@ n.capability_four_byte_as
 n.start
 
 
-while subnets = ipv4_routes.resume
-  n.send_message Update.new pa.replace(Mp_reach.new(:afi=>1, :safi=>1, :nexthop=> nexthop4, :nlris=> subnets))
-end
+ipv4_routes.each_update { |u| n.send_message u }
 
 
 sleep(300)

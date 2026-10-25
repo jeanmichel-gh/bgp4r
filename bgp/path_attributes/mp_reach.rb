@@ -91,6 +91,19 @@ module BGP
     private :nlri_to_hash
     
     module ClassMethods
+      # One NLRI of an MP_REACH or MP_UNREACH attribute. RFC 4760 sections 3
+      # and 4: for SAFI 1 and 2 each NLRI is a single <length, prefix>, with
+      # the Path Identifier already read when add-path is on (RFC 7911
+      # section 3). Nlri.factory treats AFI 1 SAFI 1 as a whole plain NLRI
+      # field and would read the Path Identifier a second time.
+      def nlri_ntop(s, afi, safi, path_id=nil)
+        if (afi == 1 || afi == 2) && (safi == 1 || safi == 2)
+          Prefix.new_ntop(s.is_packed, afi, path_id)
+        else
+          Nlri.factory(s, afi, safi, path_id)
+        end
+      end
+
       def afi_from_nlris(arg)
         case arg
         when String
@@ -220,8 +233,7 @@ module BGP
         while value.size>0          
           path_id = path_id_flag ? value.slice!(0,4).unpack('N')[0] : nil
           blen = value.slice(0,1).unpack('C')[0]
-          nlri = Nlri.factory(value.slice!(0,(blen+7)/8+1), @afi, @safi, path_id)
-          @nlris << nlri
+          @nlris << self.class.nlri_ntop(value.slice!(0,(blen+7)/8+1), @afi, @safi, path_id)
         end
       end
       raise RuntimeError, "leftover afer parsing: #{value.unpack('H*')}" if value.size>0

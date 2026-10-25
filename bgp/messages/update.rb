@@ -53,6 +53,12 @@ class BGP::Update < BGP::Message
     def recv_inet_unicast?
       false
     end
+    # No add-path for any family (RFC 7911 section 4). Without this, the
+    # MP_REACH and MP_UNREACH parsers took the Info object as the flag
+    # itself, a true value, and read a Path Identifier before every NLRI.
+    def path_id?(*args)
+      false
+    end
   end
 
   def initialize(*args, &block)

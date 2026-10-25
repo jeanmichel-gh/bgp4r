@@ -1,5 +1,5 @@
 #--
-# Copyright 2008, 2009 Jean-Michel Esnault.
+# Copyright 2008, 2009, 2026 Jean-Michel Esnault.
 # All rights reserved.
 # See LICENSE.txt for permissions.
 #
@@ -109,7 +109,19 @@ class Mp_unreach_Test < Test::Unit::TestCase
     assert_equal attr_len(mpr3)+8, attr_len(mpr4)
     
     assert_equal('800f1b0001010000006418c0a8010000006518c0a8020000006618c0a802', mpr5.to_shex)
-    
+
+  end
+
+  def test_afi_1_safi_1_ntop
+    # Each withdrawn NLRI is one prefix, not a whole Nlri, and with add-path
+    # its Path Identifier is read once (RFC 7911 section 3).
+    s = '800f0b00010118c0a80118c0a802'
+    mpr = Mp_unreach.new([s].pack('H*'))
+    assert_equal({:safi=>1, :afi=>1, :nlris=>['192.168.1.0/24', '192.168.2.0/24']}, mpr.to_hash[:mp_unreach])
+    s = '800f130001010000006418c0a8010000006518c0a802'
+    mpr = Mp_unreach.new([s].pack('H*'), true)
+    assert_equal(['ID=100, 192.168.1.0/24', 'ID=101, 192.168.2.0/24'], mpr.nlris.map(&:to_s))
+    assert_equal(s, mpr.to_shex)
   end
   
   def test_safi_2_afi_2
