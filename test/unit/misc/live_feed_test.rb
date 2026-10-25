@@ -64,14 +64,20 @@ class TestBgpMiscLiveFeedUnit < Test::Unit::TestCase
     open_feed
     msgs = (1..50).map { |i| 'ff' * 16 + '0013' + '04' + format('%02x', i) }
     data = msgs.map { |m| octets(m) }.join
-    Thread.new do
+    # The writer keeps its own reference to the socket, and the test waits
+    # for it. The feed can return the last message before the writer has
+    # sent the closing tag, and test-unit clears instance variables once a
+    # test ends, so @client may be nil by then.
+    client = @client
+    writer = Thread.new do
       until data.empty?
-        @client.write data.slice!(0, rand(1..40))
+        client.write data.slice!(0, rand(1..40))
         sleep 0.001
       end
     end
     Timeout.timeout(5) do
       msgs.each { |m| assert_equal [m].pack('H*'), @feed.read }
+      writer.join
     end
   end
   def test_parser_does_not_busy_loop
