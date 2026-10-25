@@ -72,11 +72,15 @@ class IPAddr
   
   private :_generate_network_inc_
 
-  def netmask
-    if ipv4?
-      [@mask_addr].pack('N').unpack('C4').collect { |x| x.to_s}.join('.')
-    else
-      @mask_addr.to_s(16).scan(/..../).collect { |x| x }.join(':')
+  # Stdlib IPAddr has had a compatible #netmask since Ruby 2.5.
+  # Only define ours when it is missing, to avoid a redefinition warning.
+  unless method_defined?(:netmask)
+    def netmask
+      if ipv4?
+        [@mask_addr].pack('N').unpack('C4').collect { |x| x.to_s}.join('.')
+      else
+        format('%032x', @mask_addr).scan(/..../).join(':')
+      end
     end
   end
   

@@ -53,6 +53,18 @@ class Common_Test < Test::Unit::TestCase
     assert_equal('ffff:ffff:ffff:fffe:0000:0000:0000:0000',IPAddr.new('2011:1:18::1/63').netmask)
     assert_equal('ffff:ffff:ffff:0000:0000:0000:0000:0000',IPAddr.new('2011:1:18::1/48').netmask)
     assert_equal('ffff:ffff:0000:0000:0000:0000:0000:0000',IPAddr.new('2011:1:18::1/32').netmask)
+    assert_equal('0.0.0.0', IPAddr.new('0.0.0.0/0').netmask)
+    assert_equal('255.0.0.0', IPAddr.new('10.0.0.0/8').netmask)
+    assert_equal('0000:0000:0000:0000:0000:0000:0000:0000',IPAddr.new('::/0').netmask)
+  end
+  def test_no_warnings_from_library_under_w
+    require 'rbconfig'
+    root = File.expand_path('../..', File.dirname(__FILE__))
+    ruby = File.join(RbConfig::CONFIG['bindir'], RbConfig::CONFIG['ruby_install_name'])
+    out = IO.popen([ruby, '-w', "-I#{root}", '-e', 'require "bgp4r"', :err => [:child, :out]]) { |io| io.read }
+    bgp_dir = File.join(root, 'bgp') + '/'
+    warnings = out.lines.select { |l| l.include?(bgp_dir) }
+    assert_equal([], warnings)
   end
   def test_ipaddr_arithmetic
     ip1 = IPAddr.new('10.0.0.1/28')
