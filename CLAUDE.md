@@ -31,8 +31,9 @@ Ruby 3.x works. Tests use test-unit. The load path is the repo root, so always p
 
 All unit tests:
 ```
-ruby -I. -e 'Dir["test/unit/**/*test.rb"].sort.each { |f| require "./#{f}" }'
+ruby test/run_unit.rb
 ```
+`rake test` runs the same files.
 
 One file:
 ```
@@ -46,7 +47,13 @@ ruby -I. test/functional/add_path_test.rb
 
 Do not run `test/functional/live_feed_test.rb`. It connects to a public feed that no longer answers and hangs forever.
 
-Known gap: `rake test` only matches `test/unit/*/*test.rb`, so it skips `test/unit/common_test.rb` and `test/unit/iana_test.rb`. Use the command above.
+In Docker, on any Ruby version (the default is 3.4):
+```
+docker build --target test --build-arg RUBY_VERSION=4.0 -t bgp4r-test .
+docker run --rm bgp4r-test
+docker run --rm bgp4r-test ruby -I. test/functional/add_path_test.rb
+```
+The image runs as the non-root user `bgp`. It can still bind TCP 179, because Docker sets `net.ipv4.ip_unprivileged_port_start=0` in a container's own network namespace. With `--network host` the host's setting applies.
 
 Baseline on 2026-10-24: 238 tests, 1223 assertions, all passing. Line coverage of `bgp/` about 89%.
 
