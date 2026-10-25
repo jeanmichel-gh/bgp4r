@@ -66,9 +66,13 @@ module BGP
           end
         end
       end
+      # Stops the writer thread. It closes the queue instead of enqueuing a
+      # sentinel, so it never waits on a full queue and never raises on a
+      # closed one. Messages still queued are dropped. Safe to call twice.
       def exit
         @continue = false
-        enq('you\'re done dude!')
+        close
+        self
       end
     end
 
