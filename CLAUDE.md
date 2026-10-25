@@ -4,7 +4,7 @@ Guide for AI agents working on bgp4r. Read this before changing anything.
 
 ## What this is
 
-bgp4r is a pure Ruby library to build, parse and speak BGP-4 (RFC 4271 and many extensions). It is used to script BGP peers for testing and research. No external gem dependencies at runtime.
+bgp4r is a pure Ruby library to build, parse and speak BGP-4 (RFC 4271 and many extensions). It is used to script BGP peers for testing and research. Its only runtime gem is `logger`, which ships with Ruby.
 
 ## Layout
 
@@ -64,7 +64,7 @@ Baseline on 2026-10-24: 238 tests, 1223 assertions, all passing. Line coverage o
 * Tests check round trips: build, encode, parse back, compare. Use real hex captures from the RFCs or from Wireshark when possible.
 * One test file per source file, same name with `_test.rb`, in the matching folder under `test/unit/`.
 * Two space indent. Match the style of the file you edit.
-* Keep the library free of runtime gem dependencies.
+* Keep the library free of runtime gem dependencies. The one exception is `logger`: it ships with Ruby, but Ruby 4.0 made it a bundled gem, so `bgp4r.gemspec` and the `Gemfile` declare it.
 
 ## Rules for agents
 

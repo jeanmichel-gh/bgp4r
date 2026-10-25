@@ -68,6 +68,16 @@ class Common_Test < Test::Unit::TestCase
     warnings = out.lines.select { |l| l.include?(bgp_dir) }
     assert_equal([], warnings)
   end
+  def test_logger_is_declared
+    # common.rb requires 'logger'. Ruby 4.0 made it a bundled gem, so under
+    # Bundler it loads only when declared. Read the files as text: loading
+    # the gemspec runs git, which the Docker image does not have.
+    root = File.expand_path('../..', File.dirname(__FILE__))
+    gemspec = File.read(File.join(root, 'bgp4r.gemspec'))
+    gemfile = File.read(File.join(root, 'Gemfile'))
+    assert_match(/^\s*s\.add(_runtime)?_dependency\s+['"]logger['"]/, gemspec)
+    assert_match(/^\s*gem\s+['"]logger['"]/, gemfile)
+  end
   def test_ipaddr_arithmetic
     ip1 = IPAddr.new('10.0.0.1/28')
     ip2 = IPAddr.new('10.0.0.1/24')

@@ -11,6 +11,9 @@ Gem::Specification.new do |s|
   s.require_paths = ["."]
   s.required_ruby_version = Gem::Requirement.new(">= 1.8.6")
   s.required_rubygems_version = '>= 1.3.6'
+  # logger ships with Ruby, but Ruby 4.0 made it a bundled gem, so it
+  # must be declared. It is the only runtime dependency.
+  s.add_dependency 'logger'
   s.files =  `git ls-files -z`.split("\x0")
   s.test_files = `git ls-files test -z`.split("\x0")
   s.extra_rdoc_files = ["LICENSE.txt","README.rdoc"] + `git ls-files bgp -z`.split("\x0")
