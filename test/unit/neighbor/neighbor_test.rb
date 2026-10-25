@@ -242,6 +242,54 @@ class TestBgpNeighbor < Test::Unit::TestCase
       assert_nil(@c.last_error)
     }
   end
+  def test_close_ends_the_event_thread
+    n = Neighbor.new(4, 100, 180, '0.0.0.2', '127.0.0.1', '127.0.0.1')
+    before = Thread.list.size
+    event_thread = n.instance_variable_get(:@event_thread)
+    assert event_thread.alive?
+    n.close
+    assert n.closed?
+    assert ! event_thread.alive?, 'close must end the event thread'
+    assert_equal(before - 1, Thread.list.size)
+    # start after close is refused: start logs the error and stays Idle.
+    n.start(:port=> 1)
+    assert n.is_idle?
+    assert_nil(n.socket)
+    n.close # twice is fine
+  end
+  def test_many_neighbors_do_not_leak_threads
+    before = Thread.list.size
+    50.times { Neighbor.new(4, 100, 180, '0.0.0.2', '127.0.0.1', '127.0.0.1').close }
+    assert_equal(before, Thread.list.size)
+  end
+  def test_close_stops_an_established_session
+    Timeout::timeout(4) {
+      port = start_free_server
+      @c = Neighbor.new(4, 100, 180, '0.0.0.2', '127.0.0.1', '127.0.0.1')
+      @c.start :port=> port
+      assert @c.is_established?
+      threads = [@c.instance_variable_get(:@event_thread), @c.in, @c.out]
+      @c.close
+      assert @c.is_idle?
+      assert @c.socket.closed?
+      threads.each { |t| assert ! t.alive?, "#{t['name']} still alive after close" }
+    }
+  end
+  def test_start_stop_start_again
+    Timeout::timeout(6) {
+      port = start_free_server
+      @c = Neighbor.new(4, 100, 180, '0.0.0.2', '127.0.0.1', '127.0.0.1')
+      @c.start :port=> port
+      assert @c.is_established?
+      @c.stop
+      assert @c.is_idle?
+      @s.stop
+      @c.start :port=> port
+      assert @c.is_established?, 'start after stop must still work'
+      assert @s.wait_for_state(:Established, 2)
+      @c.close
+    }
+  end
   def test_send_and_receive_path_id_afi_1_safi_1
     Timeout::timeout(4) {
       server_add_path_cap = BGP::OPT_PARM::CAP::Add_path.new
