@@ -27,7 +27,7 @@ test/helpers/            a small test BGP server
 
 ## Running tests
 
-Ruby 3.x works. Tests use test-unit. The load path is the repo root, so always pass `-I.`.
+Ruby 3.3, 3.4 and 4.0 are supported and tested in CI. Tests use test-unit. The load path is the repo root, so pass `-I.` when you run a single file.
 
 All unit tests:
 ```
@@ -57,7 +57,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image.
 
-Baseline on 2026-10-24: 238 tests, 1223 assertions, all passing. Line coverage of `bgp/` about 89%.
+Baseline on 2026-10-24: 275 tests, 1364 assertions, all passing. Line coverage of `bgp/` from the unit suite: 90.7%.
 
 ## Conventions
 
@@ -67,6 +67,9 @@ Baseline on 2026-10-24: 238 tests, 1223 assertions, all passing. Line coverage o
 * One test file per source file, same name with `_test.rb`, in the matching folder under `test/unit/`.
 * Two space indent. Match the style of the file you edit.
 * Keep the library free of runtime gem dependencies. The one exception is `logger`: it ships with Ruby, but Ruby 4.0 made it a bundled gem, so `bgp4r.gemspec` and the `Gemfile` declare it.
+* Before requiring a standard library, check that it is still a default gem. Ruby keeps moving libraries to bundled gems (`observer` in 3.4, `logger` in 4.0), and under Bundler those fail to load unless declared. Prefer a small built-in copy, as with `BGP::Observable`.
+* Do not redefine methods of standard library classes. Newer versions may add the same method with different behavior (`IPAddr#+` in Ruby 4.0). Guard additions with `unless method_defined?`.
+* Do not mutate string literals. CI runs the suite with `--enable-frozen-string-literal`. Use `String.new` or `+''` for a buffer.
 
 ## Rules for agents
 
@@ -80,9 +83,14 @@ Baseline on 2026-10-24: 238 tests, 1223 assertions, all passing. Line coverage o
 
 ## Known issues to work on
 
-* `bgp/misc/live_feed.rb`: no connect timeout, the parser thread busy loops with no sleep when nothing matches, and the shared buffer is touched by two threads without a lock.
-* `Neighbor#start` with `:waitfor` loops forever if the state is never reached. Needs a timeout.
-* Several bare `rescue` blocks swallow errors (`nlris/prefix.rb`, `nlris/labeled.rb`).
-* Debug output left in library code: `p "JME: ..."` in `messages/update.rb`, and `puts` calls in `message.rb`, `path_attribute.rb`, `extended_community.rb`, `rd.rb`. Should go through `Log` or raise.
-* Ruby warnings under `-w`: `IPAddr#netmask` redefined in `common.rb`, ambiguous `*` in `cluster_list.rb` and `extended_communities.rb`.
-* Lowest coverage: `nlris/mapped_ipv4.rb`, `common.rb`, `orfs/prefix_orf.rb`, `neighbor/neighbor.rb`, `messages/update.rb`.
+Found while fixing other bugs, not fixed yet:
+
+* `Neighbor#start` rescues every error, logs it and calls `stop`. A caller can't tell a failed start from a good one without checking `state`.
+* `test/helpers/server.rb`: `start_server` and `stop_server` use bare `rescue`. A busy test port fails silently and the test fails later with a confusing message. Tests use fixed ports 3456 and 3333.
+* `bgp/path_attributes/mp_reach.rb` uses bare `raise` with no message in five places.
+* `Prefix.new_ntop` raises with only the AFI as the message when the AFI is unknown.
+* `bgp/messages/message.rb`: the message type list has a typo, `capabity`, so it defines `is_a_capabity?`.
+* `LiveFeed#close` on a feed that was never opened raises `NoMethodError`.
+* `bgp/nlris/nsap.rb` has its own `netmask` method, unrelated to `IPAddr#netmask`. Confusing to read.
+* `ci_reporter` in the `Gemfile` looks unused.
+* Lowest coverage (unit suite): `orfs/prefix_orf.rb` 79%, `neighbor/neighbor.rb` 81%, `common.rb` 83%, `messages/route_refresh.rb` 83%, `nlris/nlri.rb` 83%, `messages/update.rb` 84%.
