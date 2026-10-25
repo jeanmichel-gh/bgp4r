@@ -102,6 +102,10 @@ module BGP
           OPT_PARM::CAP::As4.new(@my_as)
         when :gr, :graceful_restart
           OPT_PARM::CAP::Graceful_restart.new(*args[1..-1])
+        when :extended_nexthop, :extended_next_hop
+          # RFC 8950 section 4. With no family, IPv4 unicast with IPv6 next hops.
+          fam = args[1..-1]
+          OPT_PARM::CAP::Extended_nexthop.new(*(fam.empty? ? [1, 1, 2] : fam))
         else
           raise ArgumentError, "Invalid argument #{args.inspect}", caller
         end        

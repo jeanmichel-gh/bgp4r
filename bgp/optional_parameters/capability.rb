@@ -1,5 +1,5 @@
 #--
-# Copyright 2008, 2009 Jean-Michel Esnault.
+# Copyright 2008, 2009, 2026 Jean-Michel Esnault.
 # All rights reserved.
 # See LICENSE.txt for permissions.
 #
@@ -106,6 +106,8 @@ module BGP::OPT_PARM
       CAP::Graceful_restart.new(s)
     when CAP_ADD_PATH
       CAP::Add_path.new(s)
+    when CAP_EXTENDED_NEXTHOP
+      CAP::Extended_nexthop.new(s)
     when CAP_DYNAMIC
       CAP::Dynamic.new(s)
     else

@@ -263,12 +263,21 @@ module BGP
     end
     
     def parse_next_hops(s)
+      # RFC 8950 section 3: for AFI 1 the Length of Next Hop Address tells
+      # the next hop type. 16 or 32 octets (SAFI 1, 2, 4), or 24 or 48
+      # octets (SAFI 128, 129), is an IPv6 next hop: a global address,
+      # then an optional link-local one.
+      ipv6_nh = @afi == 1 && ipv6_nexthop_length?(s.size)
       while s.size>0
         case @safi
         when 1,2,4
           case @afi
           when 1
-            @nexthops << Prefix.new_ntop([32,s.slice!(0,4)].pack('Ca*'),1)
+            if ipv6_nh
+              @nexthops << Prefix.new_ntop([128,s.slice!(0,16)].pack('Ca*'),2)
+            else
+              @nexthops << Prefix.new_ntop([32,s.slice!(0,4)].pack('Ca*'),1)
+            end
           when 2
             @nexthops << Prefix.new_ntop([128,s.slice!(0,16)].pack('Ca*'),2)
           when 3
@@ -277,10 +286,24 @@ module BGP
             raise "SHOULD NOT BE HERE ...."
           end
         when 128,129
-          @nexthops << Vpn.new([64+32,s.slice!(0,12)].pack('Ca*'))
+          if ipv6_nh
+            # RD of 8 zero octets, then the IPv6 address (RFC 8950 section 3).
+            @nexthops << Vpn.new([64+128,s.slice!(0,24)].pack('Ca*'), 2)
+          else
+            @nexthops << Vpn.new([64+32,s.slice!(0,12)].pack('Ca*'))
+          end
         else
           raise RuntimeError, "cannot parse nexthop for safi #{@safi}"
         end
+      end
+    end
+
+    def ipv6_nexthop_length?(len)
+      case @safi
+      when 1,2,4     ; len == 16 || len == 32
+      when 128,129   ; len == 24 || len == 48
+      else
+        false
       end
     end
     

@@ -396,6 +396,14 @@ class TestBgpNeighbor < Test::Unit::TestCase
     assert_equal('ffffffffffffffffffffffffffffffff003d0104006400b400000002200206410400000064020202000202800002060104000100010206010400010002', neighbor.open.to_shex)
     assert_equal(5, neighbor.instance_eval { @opt_parms}.size)
   end
+  def test_add_extended_nexthop_capability
+    neighbor = Neighbor.new(4,100,180,'0.0.0.2')
+    neighbor.capability :extended_nexthop
+    neighbor.capability :extended_nexthop, 1, 128, 2
+    # RFC 8950 section 4: capability code 5, <AFI, SAFI, Nexthop AFI>.
+    assert_match(/0208 0506 000100010002 0208 0506 000100800002\z/x, neighbor.open.to_shex)
+  end
+
   def test_add_capabilities_using_method_missing
     n = Neighbor.new(4,100,180,'0.0.0.2')
     n.capability_mbgp_ipv4_unicast

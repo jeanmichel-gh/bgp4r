@@ -1,5 +1,5 @@
 #--
-# Copyright 2011 Jean-Michel Esnault.
+# Copyright 2011, 2026 Jean-Michel Esnault.
 # All rights reserved.
 # See LICENSE.txt for permissions.
 #
@@ -23,6 +23,15 @@ module BGP
         (! @speaker.has?(OPT_PARM::CAP::As4).nil? and  ! @peer.has?(OPT_PARM::CAP::As4).nil?)
       end
       
+      # RFC 8950 section 4: IPv4 NLRI of afi/safi may carry an IPv6 next
+      # hop only when both speakers advertised the Extended Next Hop
+      # Encoding capability for it.
+      def extended_nexthop?(afi=1, safi=1, nexthop_afi=2)
+        s = @speaker.find(OPT_PARM::CAP::Extended_nexthop)
+        p = @peer.find(OPT_PARM::CAP::Extended_nexthop)
+        !!(s && p && s.has?(afi, safi, nexthop_afi) && p.has?(afi, safi, nexthop_afi))
+      end
+
       def path_id_recv? afi, safi
         path_id? :recv, afi, safi
       end
