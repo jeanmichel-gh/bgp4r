@@ -32,6 +32,19 @@ docker compose -f lab/topologies/two-speakers/compose.yml logs -f
 
 Each speaker keeps its state in `/tmp/bgp4r-state.json`: each session's state, the peer's AS and router ID, and every route received with its attributes. It rewrites the file twice a second. Tests read it, and so can you.
 
+Each neighbor entry also has counters and times for the current session:
+
+| Key | What it is |
+|---|---|
+| `prefixes_received` | prefixes announced minus prefixes withdrawn |
+| `updates_received` | UPDATE messages received |
+| `established_at` | when the session reached Established |
+| `first_update_at`, `last_update_at` | when the first and the last UPDATE arrived |
+| `seconds_to_last_update` | from Established to the last UPDATE |
+| `prefixes_per_second` | `prefixes_received` divided by `seconds_to_last_update` |
+
+Times are ISO 8601 in UTC with milliseconds. With `record: count` the entry has no `received` routes, and gets `first_prefix` and `last_prefix` instead.
+
 The speakers run as the non-root user `bgp` and still listen on TCP 179. Docker allows that inside a container's own network namespace.
 
 ## Topologies
@@ -39,6 +52,7 @@ The speakers run as the non-root user `bgp` and still listen on TCP 179. Docker 
 | Folder | What it shows |
 |---|---|
 | `two-speakers` | eBGP between AS 65001 and AS 65002 on one link. r2 connects, r1 waits. Routes cross both ways with AS_PATH, NEXT_HOP, MED and communities. |
+| `routegen` | A dockerized routegen. gen (AS 65001, 10.20.0.1) connects and sends 10000 generated prefixes. sink (AS 65002, 10.20.0.2) waits, counts them and times them. |
 
 ## Node file
 
@@ -59,6 +73,8 @@ neighbors:
     retry: 2                # optional, seconds between connect attempts
     capabilities: [as4_byte, route_refresh]   # optional, default [as4_byte]
                             # also mbgp_ipv4_unicast, mbgp_ipv6_unicast
+    record: routes          # optional. routes keeps every route received.
+                            # count keeps counters and times only.
 
 announce:                   # each block is one UPDATE, sent to every neighbor
   - prefixes: [192.168.1.0/24, 192.168.11.0/24]
@@ -67,9 +83,38 @@ announce:                   # each block is one UPDATE, sent to every neighbor
     as_path: [64999]        # optional, put after our own AS over eBGP
     local_pref: 200         # optional, iBGP only, default 100
     next_hop: 10.10.0.9     # optional, default our address on that session
+  - generate: { start: 11.0.0.0/28, count: 10000, per_update: 127 }
+    med: 100                # same optional keys as above
+    communities: ['100:1', '200:1', '300:1']
+    as_path: [90, 80]
 ```
 
+A `prefixes` block is one UPDATE. A `generate` block is many: `count` prefixes of the same length, starting at `start` itself (11.0.0.0/28, 11.0.0.16/28, and so on), `per_update` in each UPDATE. They all carry the block's path attributes. The speaker builds and sends them one at a time, so the routes never sit in memory. Two environment variables override every `generate` block when set:
+
+* `ROUTEGEN_COUNT`: the number of prefixes.
+* `ROUTEGEN_PER_UPDATE`: prefixes per UPDATE. A full UPDATE must fit in 4096 octets; 127 /28 prefixes with these attributes do.
+
 Over eBGP the speaker puts its own AS first in AS_PATH and sets NEXT_HOP to itself (RFC 4271 section 5.1). Over iBGP it sends LOCAL_PREF.
+
+## Dockerized routegen
+
+`lab/topologies/routegen` runs a route generator and a sink, with no router needed. Use it to see how fast bgp4r sends and takes routes, or to try a feed before you point it at a real router.
+
+```
+docker compose -f lab/topologies/routegen/compose.yml up -d --build
+docker compose -f lab/topologies/routegen/compose.yml exec sink cat /tmp/bgp4r-state.json
+docker compose -f lab/topologies/routegen/compose.yml down
+```
+
+Pick the size on the command line. The defaults are 10000 and 127:
+
+```
+ROUTEGEN_COUNT=200000 ROUTEGEN_PER_UPDATE=127 docker compose -f lab/topologies/routegen/compose.yml up -d
+```
+
+Read the sink's entry for gen, under `neighbors` and `10.20.0.1`. When `prefixes_received` equals the count, all routes are in. `seconds_to_last_update` and `prefixes_per_second` give the time and the rate. `first_prefix` and `last_prefix` show the range: 10000 /28 prefixes from 11.0.0.0/28 end at 11.2.112.240/28.
+
+`examples/routegen` stays the native tool for loading a real router: one session, one YAML file, no Docker. Both share `BGP::RouteGenerator` in `bgp/misc/route_generator.rb`, so they send the same prefixes in the same UPDATEs.
 
 ## Add a topology
 

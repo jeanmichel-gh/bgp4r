@@ -1,0 +1,50 @@
+# A dockerized routegen: gen sends many generated routes, sink counts them.
+#
+#   gen   AS 65001  10.20.0.1  connects to sink, sends a generate block
+#   sink  AS 65002  10.20.0.2  waits for gen, record: count
+#
+# From the repo root:
+#   docker compose -f lab/topologies/routegen/compose.yml up -d --build
+#   ROUTEGEN_COUNT=200000 docker compose -f lab/topologies/routegen/compose.yml up -d
+#   docker compose -f lab/topologies/routegen/compose.yml exec sink cat /tmp/bgp4r-state.json
+#   docker compose -f lab/topologies/routegen/compose.yml down
+
+name: bgp4r-routegen
+
+x-speaker: &speaker
+  build:
+    context: ../../..
+    target: speaker
+  image: bgp4r-speaker
+  volumes:
+    - ./:/topology:ro
+  environment:
+    # info or debug. Debug also prints every message decoded.
+    LAB_LOG_LEVEL: ${LAB_LOG_LEVEL:-info}
+    # Override count and per_update of every generate block.
+    ROUTEGEN_COUNT: ${ROUTEGEN_COUNT:-10000}
+    ROUTEGEN_PER_UPDATE: ${ROUTEGEN_PER_UPDATE:-127}
+  stop_grace_period: 5s
+
+services:
+  gen:
+    <<: *speaker
+    command: ["lab/speaker.rb", "/topology/gen.yml"]
+    networks:
+      link:
+        ipv4_address: 10.20.0.1
+
+  sink:
+    <<: *speaker
+    command: ["lab/speaker.rb", "/topology/sink.yml"]
+    networks:
+      link:
+        ipv4_address: 10.20.0.2
+
+networks:
+  link:
+    ipam:
+      config:
+        # Move the gateway off .1 so the routers can use .1 and .2.
+        - subnet: 10.20.0.0/24
+          gateway: 10.20.0.254

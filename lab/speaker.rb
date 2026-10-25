@@ -35,6 +35,7 @@
 
 $LOAD_PATH.unshift File.expand_path('..', __dir__)
 require 'bgp4r'
+require 'bgp/misc/route_generator'
 require 'yaml'
 require 'json'
 require 'socket'
@@ -42,15 +43,24 @@ require 'thread'
 
 module Lab
 
-  # Records what one neighbor tells us: peer details and received routes.
+  # Records what one neighbor tells us: peer details, received routes and
+  # timing. With mode 'count' it keeps counters and timing only, not each
+  # route, so a sink can take a large feed.
   class Recorder
-    attr_reader :data
+    MODES = %w[routes count]
 
-    def initialize
+    attr_reader :data, :mode
+
+    def initialize(mode='routes')
+      @mode = mode.to_s
+      raise ArgumentError, "record #{mode.inspect}: use one of #{MODES.join(', ')}" unless MODES.include?(@mode)
       @lock = Mutex.new
       @data = { 'peer_as' => nil, 'peer_router_id' => nil, 'updates_received' => 0,
-                'established_count' => 0, 'last_error' => nil, 'received' => {} }
+                'prefixes_received' => 0, 'established_count' => 0, 'last_error' => nil }
+      reset_session
     end
+
+    def routes? ; @mode == 'routes' ; end
 
     # Called by BGP::Neighbor (an Observable) with every message it receives.
     def update(msg)
@@ -59,13 +69,17 @@ module Lab
         when BGP::Open
           @data['peer_as'] = msg.local_as
           @data['peer_router_id'] = msg.bgp_id
+          reset_session
+        when BGP::Keepalive
+          # RFC 4271 section 8.2.2: the first KEEPALIVE after OPEN takes the
+          # session to Established. Taken here, on the thread that also
+          # sees the UPDATEs, so no UPDATE can come before it.
+          @established_at ||= Time.now
         when BGP::Update
+          @last_update_at = Time.now
+          @first_update_at ||= @last_update_at
           @data['updates_received'] += 1
-          msg.withdrawn.to_ary.each { |p| @data['received'].delete(p) } if msg.withdrawn
-          if msg.nlri
-            attrs = Recorder.attributes(msg.path_attribute)
-            msg.nlri.to_ary.each { |p| @data['received'][p] = attrs }
-          end
+          routes? ? record_routes(msg) : count_routes(msg)
         when BGP::Notification
           @data['last_error'] = "notification: #{msg}"
         when String
@@ -79,7 +93,7 @@ module Lab
     end
 
     def session_down!
-      @lock.synchronize { @data['received'] = {} }
+      @lock.synchronize { reset_session }
     end
 
     def error!(txt)
@@ -87,7 +101,13 @@ module Lab
     end
 
     def snapshot
-      @lock.synchronize { Marshal.load(Marshal.dump(@data)) }
+      @lock.synchronize do
+        h = Marshal.load(Marshal.dump(@data))
+        h['prefixes_received'] = h['received'].size if routes?
+        h.merge!(timing(h['prefixes_received']))
+        h.merge!('first_prefix' => @first_prefix, 'last_prefix' => @last_prefix) unless routes?
+        h
+      end
     end
 
     def self.attributes(pa)
@@ -101,6 +121,44 @@ module Lab
       h['communities'] = pa[:communities].communities if pa.has?(BGP::Communities)
       h
     end
+
+    private
+
+    # Forget the routes and the timing of the last session.
+    def reset_session
+      @data['received'] = {} if routes?
+      @data['prefixes_received'] = 0
+      @established_at = @first_update_at = @last_update_at = nil
+      @first_prefix = @last_prefix = nil
+    end
+
+    def record_routes(msg)
+      msg.withdrawn.to_ary.each { |p| @data['received'].delete(p) } if msg.withdrawn
+      return unless msg.nlri
+      attrs = Recorder.attributes(msg.path_attribute)
+      msg.nlri.to_ary.each { |p| @data['received'][p] = attrs }
+    end
+
+    # A running count: prefixes announced minus prefixes withdrawn.
+    def count_routes(msg)
+      @data['prefixes_received'] -= msg.withdrawn.size if msg.withdrawn
+      return unless msg.nlri && msg.nlri.size > 0
+      @data['prefixes_received'] += msg.nlri.size
+      @first_prefix ||= msg.nlri.nlris.first.to_s
+      @last_prefix = msg.nlri.nlris.last.to_s
+    end
+
+    # Times of the current session. prefixes_per_second is the prefixes
+    # held divided by the time from Established to the last UPDATE.
+    def timing(prefixes)
+      secs = @established_at && @last_update_at && (@last_update_at - @established_at)
+      { 'established_at' => iso(@established_at), 'first_update_at' => iso(@first_update_at),
+        'last_update_at' => iso(@last_update_at),
+        'seconds_to_last_update' => secs && secs.round(3),
+        'prefixes_per_second' => secs && secs > 0 ? (prefixes / secs).round(1) : nil }
+    end
+
+    def iso(t) ; t && t.utc.iso8601(3) ; end
   end
 
   # One configured neighbor: its settings, its current session, its record.
@@ -110,7 +168,7 @@ module Lab
     def initialize(speaker, config)
       @speaker, @config = speaker, config
       @address = config.fetch('address')
-      @recorder = Recorder.new
+      @recorder = Recorder.new(config.fetch('record', 'routes'))
       @neighbor = nil
       @busy = Mutex.new
     end
@@ -192,7 +250,7 @@ module Lab
     def announce(n, sock)
       local = sock.local_address.ip_address
       @speaker.announcements.each do |a|
-        n.send_message @speaker.build_update(a, ebgp?, local)
+        @speaker.each_update(a, ebgp?, local, n.session_info) { |u| n.send_message u }
       end
     end
   end
@@ -230,6 +288,31 @@ module Lab
     # speaker prepends its own AS to AS_PATH and sets NEXT_HOP to itself.
     # Over iBGP the AS_PATH is left as configured and LOCAL_PREF is sent.
     def build_update(a, ebgp, local_ip)
+      BGP::Update.new(path_attribute(a, ebgp, local_ip), BGP::Nlri.new(*Array(a.fetch('prefixes'))))
+    end
+
+    # Yields the UPDATEs of one announce block, one at a time. A prefixes
+    # block makes one. A generate block makes many with BGP::RouteGenerator,
+    # all with the same path attributes as build_update.
+    def each_update(a, ebgp, local_ip, session_info=nil, env=ENV)
+      return yield(build_update(a, ebgp, local_ip)) unless a['generate']
+      g = Speaker.generate_options(a['generate'], env)
+      BGP::RouteGenerator.new(g['start'], g['count'], g['per_update'], path_attribute(a, ebgp, local_ip))
+                         .each_update(session_info) { |u| yield u }
+    end
+
+    # start, count and per_update of a generate block. ROUTEGEN_COUNT and
+    # ROUTEGEN_PER_UPDATE, when set, override count and per_update.
+    def self.generate_options(g, env=ENV)
+      raise ArgumentError, "generate: expected start, count and per_update, got #{g.inspect}" unless g.is_a?(Hash)
+      count = env['ROUTEGEN_COUNT'].to_s.strip
+      per = env['ROUTEGEN_PER_UPDATE'].to_s.strip
+      { 'start' => g.fetch('start'),
+        'count' => Integer(count.empty? ? g.fetch('count') : count),
+        'per_update' => Integer(per.empty? ? g.fetch('per_update', 1) : per) }
+    end
+
+    def path_attribute(a, ebgp, local_ip)
       path = Array(a['as_path'])
       path = [@my_as] + path if ebgp
       attrs = [BGP::Origin.new(a.fetch('origin', 0)),
@@ -238,7 +321,7 @@ module Lab
       attrs << BGP::Multi_exit_disc.new(a['med']) if a['med']
       attrs << BGP::Local_pref.new(a.fetch('local_pref', 100)) unless ebgp
       attrs << BGP::Communities.new(Array(a['communities']).join(' ')) if a['communities']
-      BGP::Update.new(BGP::Path_attribute.new(*attrs), BGP::Nlri.new(*Array(a.fetch('prefixes'))))
+      BGP::Path_attribute.new(*attrs)
     end
 
     def state
