@@ -1,5 +1,5 @@
 #--
-# Copyright 2010 Jean-Michel Esnault.
+# Copyright 2010, 2026 Jean-Michel Esnault.
 # All rights reserved.
 # See LICENSE.txt for permissions.
 #
