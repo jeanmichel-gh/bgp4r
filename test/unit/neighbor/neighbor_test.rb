@@ -105,9 +105,9 @@ class TestBgpNeighbor < Test::Unit::TestCase
   end
   def test_start
     Timeout::timeout(4) {
-      start_server(3456)
+      port = start_server(0)
       @c = Neighbor.new(4, 100, 180, '0.0.0.2', '127.0.0.1', '127.0.0.1')
-      @c.start :port=> 3456
+      @c.start :port=> port
       assert_equal('Established', @c.state)
       assert @s.wait_for_state(:Established, 2), "server did not reach Established"
       assert_equal('Established', @s.state)
@@ -117,9 +117,9 @@ class TestBgpNeighbor < Test::Unit::TestCase
   end
   def test_start_no_blocking
     Timeout::timeout(4) {
-      start_server(3333)
+      port = start_server(0)
       @c = Neighbor.new(4, 100, 180, '0.0.0.2', '127.0.0.1', '127.0.0.1')
-      @c.start :port=> 3333, :no_blocking=>true
+      @c.start :port=> port, :no_blocking=>true
       assert_equal('OpenSent', @c.state)
     }
   rescue Timeout::Error
@@ -127,9 +127,9 @@ class TestBgpNeighbor < Test::Unit::TestCase
   end
   def test_start_blocking
     Timeout::timeout(4) {
-      start_server(3333)
+      port = start_server(0)
       @c = Neighbor.new(4, 100, 180, '0.0.0.2', '127.0.0.1', '127.0.0.1')
-      @c.start :port=> 3333, :no_blocking=>false
+      @c.start :port=> port, :no_blocking=>false
       assert_equal('Established', @c.state)
       assert @s.wait_for_state(:Established, 2), "server did not reach Established"
       assert_match(/Established/, @s.state)
@@ -176,10 +176,10 @@ class TestBgpNeighbor < Test::Unit::TestCase
     Timeout::timeout(4) {
       server_add_path_cap = BGP::OPT_PARM::CAP::Add_path.new
       server_add_path_cap.add(:send_and_recv, 1, 1)
-      start_server(3456, server_add_path_cap)
+      port = start_server(0, server_add_path_cap)
       @c = Neighbor.new(4, 100, 180, '0.0.0.2', '127.0.0.1', '127.0.0.1')
       @c.add_cap server_add_path_cap
-      @c.start :port=> 3456    
+      @c.start :port=> port    
       assert @s.wait_for_state(:Established, 2), "server did not reach Established"
       assert @s.session_info.recv_inet_unicast?, 
       "Should have the capability to recv inet unicast reachability path info."
@@ -199,10 +199,10 @@ class TestBgpNeighbor < Test::Unit::TestCase
       server_add_path_cap.add(:send, 1, 1)
       client_add_path_cap = BGP::OPT_PARM::CAP::Add_path.new
       client_add_path_cap.add(:recv, 1, 1)
-      start_server(3456, server_add_path_cap)
+      port = start_server(0, server_add_path_cap)
       @c = Neighbor.new(4, 100, 180, '0.0.0.2', '127.0.0.1', '127.0.0.1')
       @c.add_cap client_add_path_cap
-      @c.start :port=> 3456    
+      @c.start :port=> port    
       assert @s.wait_for_state(:Established, 2), "server did not reach Established"
       assert ! @s.session_info.recv_inet_unicast?, 
       "Should NOT have the capability to recv inet unicast reachability path info."
@@ -223,10 +223,10 @@ class TestBgpNeighbor < Test::Unit::TestCase
       server_add_path_cap.add(:recv, 1, 1)
       client_add_path_cap = BGP::OPT_PARM::CAP::Add_path.new
       client_add_path_cap.add(:send, 1, 1)
-      start_server(3456, server_add_path_cap)
+      port = start_server(0, server_add_path_cap)
       @c = Neighbor.new(4, 100, 180, '0.0.0.2', '127.0.0.1', '127.0.0.1')
       @c.add_cap client_add_path_cap
-      @c.start :port=> 3456    
+      @c.start :port=> port    
       assert @s.wait_for_state(:Established, 2), "server did not reach Established"
       assert  @s.session_info.recv_inet_unicast?, 
       "Should have the capability to recv inet unicast reachability path info."
@@ -247,10 +247,10 @@ class TestBgpNeighbor < Test::Unit::TestCase
       server_add_path_cap.add(:recv, 1, 1)
       client_add_path_cap = BGP::OPT_PARM::CAP::Add_path.new
       client_add_path_cap.add(:recv, 1, 1)
-      start_server(3456, server_add_path_cap)
+      port = start_server(0, server_add_path_cap)
       @c = Neighbor.new(4, 100, 180, '0.0.0.2', '127.0.0.1', '127.0.0.1')
       @c.add_cap client_add_path_cap
-      @c.start :port=> 3456    
+      @c.start :port=> port    
       assert @s.wait_for_state(:Established, 2), "server did not reach Established"
       assert ! @s.session_info.recv_inet_unicast?, 
       "Should NOT have the capability to recv inet unicast reachability path info."
