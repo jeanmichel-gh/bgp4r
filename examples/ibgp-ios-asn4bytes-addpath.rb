@@ -1,21 +1,10 @@
 require 'bgp4r'
+require 'bgp/misc/route_generator'
 include BGP
 
-def create_fiber(base_prefix, path_id, nprefix=22, npack=10)
-  fiber = Fiber.new do 
-    ipaddr = IPAddr.new(base_prefix)
-     nlris = Nlri.new
-    nprefix.times do |i|
-      nlris  << [path_id, (ipaddr ^ i)]
-      next unless (i%npack)==0
-      Fiber.yield nlris
-      nlris = Nlri.new
-    end
-    Fiber.yield nlris unless nlris.empty?
-    nil
-  end
-  fiber
-end
+# 22 prefixes, 10 per UPDATE. RouteGenerator fills every UPDATE but the
+# last, so they go out as 10, 10 and 2. The old create_fiber sent 1, 10, 10, 1.
+nprefix, npack = 22, 10
 
 nexthop4='192.168.131.20'
 
@@ -26,8 +15,9 @@ pa = Path_attribute.new(
  Local_pref.new(100),
 )
 
-routes_with_pathid_100 = create_fiber("13.11.0.0/26",0x100)
-routes_with_pathid_200 = create_fiber("13.11.0.0/26",0x200)
+# The same prefixes twice in plain NLRI, with add-path path IDs 0x100 and 0x200.
+routes_with_pathid_100 = RouteGenerator.new("13.11.0.0/26", nprefix, npack, pa, :path_id=> 0x100)
+routes_with_pathid_200 = RouteGenerator.new("13.11.0.0/26", nprefix, npack, pa, :path_id=> 0x200)
 
 Log.create
 Log.level=Logger::DEBUG
@@ -39,12 +29,8 @@ n.capability_four_byte_as
 n.add_cap OPT_PARM::CAP::Add_path.new( :send_and_receive, 1, 1)
 n.start
 
-while nlris = routes_with_pathid_100.resume
-  n.send_message Update.new pa, nlris
-end
-while nlris = routes_with_pathid_200.resume
-  n.send_message Update.new pa, nlris
-end
+routes_with_pathid_100.each_update { |u| n.send_message u }
+routes_with_pathid_200.each_update { |u| n.send_message u }
 
 sleep(300)
 

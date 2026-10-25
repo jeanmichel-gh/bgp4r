@@ -34,37 +34,68 @@ module BGP
   # The first prefix is start itself: 11.0.0.0/28, then 11.0.0.16/28, and so
   # on. Updates are built one at a time, so a large count never sits in
   # memory at once.
+  #
+  # Options, as keywords after path_attribute:
+  #
+  # nexthop::  next hop for MP_REACH_NLRI. Required for IPv6 and with mp_reach.
+  # mp_reach:: true to send IPv4 prefixes in MP_REACH_NLRI instead of plain
+  #            NLRI. IPv6 prefixes always go in MP_REACH_NLRI.
+  # path_id::  an add-path path ID (RFC 7911) put in front of every prefix.
+  #
+  #   gen = RouteGenerator.new('2001:db8::/48', 1000, 100, pa, nexthop: '2001:db8::1')
+  #   gen = RouteGenerator.new('11.0.0.0/24', 1000, 100, pa, path_id: 0x100)
+  #
+  # With MP_REACH_NLRI, each Update gets a copy of path_attribute with its
+  # MP_REACH_NLRI attribute replaced, or added if it had none. The given
+  # path_attribute is not changed. Other attributes, NEXT_HOP included, are
+  # kept as given.
   class RouteGenerator
     # RFC 4271 section 4: a BGP message is at most 4096 octets.
     MAX_MESSAGE_SIZE = 4096
 
-    attr_reader :count, :per_update, :path_attribute
+    # RFC 7911 section 3: the Path Identifier is four octets.
+    MAX_PATH_ID = 0xffffffff
 
-    def initialize(start, count, per_update=1, path_attribute=nil)
-      @first = IPAddr.new(start.to_s)
-      # Plain NLRI in an UPDATE carries IPv4 unicast only (RFC 4271 section 4.3).
-      raise ArgumentError, "only IPv4 prefixes are supported, got #{start}" unless @first.ipv4?
+    attr_reader :count, :per_update, :path_attribute, :nexthop, :path_id, :afi
+
+    def initialize(start, count, per_update=1, path_attribute=nil, nexthop: nil, mp_reach: nil, path_id: nil)
+      @first = begin
+        IPAddr.new(start.to_s)
+      rescue IPAddr::Error => e
+        raise ArgumentError, "invalid start prefix #{start.inspect}: #{e.message}"
+      end
       @mlen = @first.prefix
-      @step = 2**(32 - @mlen)
+      if @first.ipv4?
+        @afi, @bits, @family = IANA::AFI::IPv4, 32, Socket::AF_INET
+      else
+        @afi, @bits, @family = IANA::AFI::IPv6, 128, Socket::AF_INET6
+      end
+      @step = 2**(@bits - @mlen)
       @count, @per_update = Integer(count), Integer(per_update)
       raise ArgumentError, "count must be at least 1, got #{@count}" if @count < 1
       raise ArgumentError, "per_update must be at least 1, got #{@per_update}" if @per_update < 1
-      if @first.to_i + (@count - 1) * @step > 0xffffffff
-        raise ArgumentError, "#{@count} prefixes from #{start} run past 255.255.255.255"
+      if @first.to_i + (@count - 1) * @step > 2**@bits - 1
+        raise ArgumentError, "#{@count} prefixes from #{start} run past #{IPAddr.new(2**@bits - 1, @family)}"
       end
       @path_attribute = path_attribute
+      @mp_reach = set_mp_reach(start, mp_reach)
+      @nexthop = set_nexthop(nexthop)
+      @path_id = set_path_id(path_id)
     end
 
-    # The first prefix, as "a.b.c.d/len".
+    # True when prefixes go in MP_REACH_NLRI, false for plain NLRI.
+    def mp_reach? ; @mp_reach ; end
+
+    # The first prefix, as "a.b.c.d/len" or "x:x::/len".
     def start ; prefix(0) ; end
 
-    # The last prefix, as "a.b.c.d/len".
+    # The last prefix.
     def last ; prefix(@count - 1) ; end
 
     # The i-th prefix, counting from 0.
     def prefix(i)
       raise IndexError, "prefix #{i} is outside 0..#{@count - 1}" unless (0...@count) === i
-      "#{IPAddr.new(@first.to_i + i * @step, Socket::AF_INET)}/#{@mlen}"
+      "#{IPAddr.new(@first.to_i + i * @step, @family)}/#{@mlen}"
     end
 
     def each_prefix
@@ -79,18 +110,88 @@ module BGP
 
     # Yields one Update per batch of per_update prefixes. The last one may
     # hold fewer. Raises ArgumentError if a full batch would not fit in one
-    # BGP message.
+    # BGP message. Pass the session info (Neighbor#session_info) to size
+    # the messages as the session will encode them, with 4 byte ASes.
     def each_update(session_info=nil)
       return enum_for(:each_update, session_info) { update_count } unless block_given?
       (0...@count).step(@per_update) do |i|
         n = [@per_update, @count - i].min
-        u = Update.new(@path_attribute, Nlri.new(*(i...i + n).map { |j| prefix(j) }))
+        u = build_update((i...i + n).map { |j| prefix(j) })
+        # Every prefix has the same length, so the first batch is the largest.
         check_size(u, session_info) if i == 0
         yield u
       end
     end
 
     private
+
+    def build_update(prefixes)
+      if @mp_reach
+        # RFC 4760 section 3: MP_REACH_NLRI carries the AFI, the SAFI, the
+        # next hop and the NLRI. SAFI 1 is unicast. With add-path, each NLRI
+        # gets the Path Identifier in front (RFC 7911 section 3).
+        h = { :afi => @afi, :safi => IANA::SAFI::UNICAST, :nexthop => @nexthop, :nlris => prefixes }
+        h[:path_id] = @path_id if @path_id
+        pa = Path_attribute.new(*(@path_attribute ? @path_attribute.attributes : []))
+        Update.new(pa.replace(Mp_reach.new(h)))
+      else
+        # RFC 4271 section 4.3: plain NLRI, IPv4 unicast only. RFC 7911
+        # section 3: with add-path, each one starts with its Path Identifier.
+        nlri = @path_id ? Nlri.new(*prefixes.map { |p| [@path_id, p] }) : Nlri.new(*prefixes)
+        Update.new(@path_attribute, nlri)
+      end
+    end
+
+    def set_mp_reach(start, mp_reach)
+      if @afi == IANA::AFI::IPv6
+        if mp_reach == false
+          raise ArgumentError, "#{start}: plain NLRI carries only IPv4 (RFC 4271 section 4.3); " \
+                               "IPv6 prefixes go in MP_REACH_NLRI (RFC 4760 section 3)"
+        end
+        true
+      else
+        mp_reach ? true : false
+      end
+    end
+
+    def set_nexthop(nexthop)
+      unless @mp_reach
+        raise ArgumentError, "nexthop is only used with MP_REACH_NLRI; set mp_reach: true" if nexthop
+        return nil
+      end
+      if nexthop.nil?
+        if @afi == IANA::AFI::IPv6
+          raise ArgumentError, "#{@first}/#{@mlen}: plain NLRI carries only IPv4 (RFC 4271 section 4.3); " \
+                               "IPv6 prefixes go in MP_REACH_NLRI and need a nexthop"
+        end
+        raise ArgumentError, "MP_REACH_NLRI needs a nexthop"
+      end
+      nh = begin
+        IPAddr.new(nexthop.to_s)
+      rescue IPAddr::Error => e
+        raise ArgumentError, "invalid nexthop #{nexthop.inspect}: #{e.message}"
+      end
+      # An IPv4 next hop for AFI 1 is 4 octets. For AFI 2 it is 16, and an
+      # IPv4 one is sent as an IPv4-mapped IPv6 address. An IPv6 next hop
+      # for IPv4 NLRI (RFC 8950) is not supported by Mp_reach.
+      if @afi == IANA::AFI::IPv4 && !nh.ipv4?
+        raise ArgumentError, "nexthop #{nexthop} for IPv4 prefixes must be an IPv4 address"
+      end
+      nexthop.to_s
+    end
+
+    def set_path_id(path_id)
+      return nil if path_id.nil?
+      id = begin
+        Integer(path_id)
+      rescue ArgumentError, TypeError
+        raise ArgumentError, "path_id must be an integer, got #{path_id.inspect}"
+      end
+      unless (0..MAX_PATH_ID) === id
+        raise ArgumentError, "path_id #{id} does not fit in 4 octets (RFC 7911 section 3)"
+      end
+      id
+    end
 
     def check_size(update, session_info)
       size = (session_info ? update.encode(session_info) : update.encode).bytesize

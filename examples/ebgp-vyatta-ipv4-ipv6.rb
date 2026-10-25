@@ -1,21 +1,10 @@
 require 'bgp4r'
+require 'bgp/misc/route_generator'
 include BGP
 
-def create_fiber(base_prefix, nprefix=22, npack=10)
-  fiber = Fiber.new do 
-    ipaddr = IPAddr.new(base_prefix)
-    prefixes=[]
-    nprefix.times do |i|
-      prefixes << (ipaddr ^ i)
-      next unless (i%npack)==0
-      Fiber.yield prefixes
-      prefixes=[]
-    end
-    Fiber.yield prefixes unless prefixes.empty?
-    nil
-  end
-  fiber
-end
+# 22 prefixes, 10 per UPDATE. RouteGenerator fills every UPDATE but the
+# last, so they go out as 10, 10 and 2. The old create_fiber sent 1, 10, 10, 1.
+nprefix, npack = 22, 10
 
 nexthop4='22.22.22.254'
 nexthop6='2014:33::fe'
@@ -27,8 +16,9 @@ pa = Path_attribute.new(
  As_path.new(200),
 )
 
-ipv4_routes = create_fiber("13.11.0.0/26")
-ipv6_routes = create_fiber("2014:13:11::0/49")
+# Both families go in MP_REACH_NLRI, each with its own next hop.
+ipv4_routes = RouteGenerator.new("13.11.0.0/26", nprefix, npack, pa, :nexthop=> nexthop4, :mp_reach=> true)
+ipv6_routes = RouteGenerator.new("2014:13:11::0/49", nprefix, npack, pa, :nexthop=> nexthop6)
 
 Log.create
 Log.level=Logger::INFO
@@ -43,13 +33,9 @@ end
 
 [n4,n6].each { |n| n.start }
 
-while subnets = ipv4_routes.resume
-  n6.send_message Update.new pa.replace(Mp_reach.new(:afi=>1, :safi=>1, :nexthop=> nexthop4, :nlris=> subnets))
-end
+ipv4_routes.each_update { |u| n6.send_message u }
 
-while subnets = ipv6_routes.resume
-  n4.send_message Update.new pa.replace(Mp_reach.new(:afi=>2, :safi=>1, :nexthop=> nexthop6, :nlris=> subnets))
-end
+ipv6_routes.each_update { |u| n4.send_message u }
 
 
 sleep(300)
