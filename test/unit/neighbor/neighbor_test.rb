@@ -244,13 +244,13 @@ class TestBgpNeighbor < Test::Unit::TestCase
   end
   def test_close_ends_the_event_thread
     n = Neighbor.new(4, 100, 180, '0.0.0.2', '127.0.0.1', '127.0.0.1')
-    before = Thread.list.size
     event_thread = n.instance_variable_get(:@event_thread)
     assert event_thread.alive?
     n.close
     assert n.closed?
+    # Check this neighbor's own thread. A count of all threads is not
+    # reliable here: threads left by earlier tests may end at any time.
     assert ! event_thread.alive?, 'close must end the event thread'
-    assert_equal(before - 1, Thread.list.size)
     # start after close is refused: start logs the error and stays Idle.
     n.start(:port=> 1)
     assert n.is_idle?
@@ -258,9 +258,13 @@ class TestBgpNeighbor < Test::Unit::TestCase
     n.close # twice is fine
   end
   def test_many_neighbors_do_not_leak_threads
-    before = Thread.list.size
-    50.times { Neighbor.new(4, 100, 180, '0.0.0.2', '127.0.0.1', '127.0.0.1').close }
-    assert_equal(before, Thread.list.size)
+    threads = 50.times.map do
+      n = Neighbor.new(4, 100, 180, '0.0.0.2', '127.0.0.1', '127.0.0.1')
+      t = n.instance_variable_get(:@event_thread)
+      n.close
+      t
+    end
+    assert_equal([], threads.select(&:alive?), 'every closed neighbor ends its event thread')
   end
   def test_close_stops_an_established_session
     Timeout::timeout(4) {
