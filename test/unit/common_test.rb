@@ -79,6 +79,17 @@ class Common_Test < Test::Unit::TestCase
     assert_equal('10.16.0.0/12', ip3 ^ 1)
     assert_equal('10.32.0.0/12', ip3 ^ 2)
   end
+  def test_ipaddr_plus_matches_ruby_ipaddr
+    # Same result as IPAddr#+ in Ruby's own ipaddr: an IPAddr, mask kept.
+    # IPAddr.new masks the address, so 10.0.0.1/24 would start at 10.0.0.0.
+    ip = IPAddr.new('10.0.0.0/24') + 5
+    assert_kind_of(IPAddr, ip)
+    assert_equal('10.0.0.5', ip.to_s)
+    assert_equal(24, ip.prefix)
+    v6 = IPAddr.new('2014:aa:bb:cc::1') + 15
+    assert_kind_of(IPAddr, v6)
+    assert_equal('2014:aa:bb:cc::10', v6.to_s)
+  end
   def test_ipaddr_v6_arithmetic
     ip1 = IPAddr.new('2014:aa:bb:cc::1/126')
     assert_equal('2014:aa:bb:cc::4/126', ip1 ^ 1)
