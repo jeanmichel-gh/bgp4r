@@ -107,6 +107,10 @@ class Extended_community_Test < Test::Unit::TestCase
     assert_equal('030b000000000064', Color.new(100).to_shex)
     assert_equal('Color: 100', Color.new(100).to_s)
     assert_equal('Color: 10000', Color.new(Color.new(10_000).encode).to_s)
+    # RFC 9012 section 4.3: the color value is 4 octets.
+    assert_equal('030b0000000186a0', Color.new(100_000).to_shex)
+    assert_equal('Color: 100000', Color.new(Color.new(100_000).encode).to_s)
+    assert_equal('Color: 4294967295', Extended_community.factory(0x030b0000ffffffff).to_s)
   end
 
   def test_origin_validation_state
@@ -156,12 +160,76 @@ class Extended_community_Test < Test::Unit::TestCase
     # assert_equal BGP::Encapsulation, comms[11].class
   end
 
-  def test_factory_unknown_subtype_raises_quietly
+  def test_factory_unknown_subtype_is_kept_quietly
     out, $stdout = $stdout, StringIO.new
-    assert_raise(ArgumentError) { Extended_community.factory(['0099000000000000'].pack('H*')) }
+    ec = Extended_community.factory(['0099000000000000'].pack('H*'))
+    assert_equal(Extended_community::Unknown, ec.class)
     assert_equal('', $stdout.string)
   ensure
     $stdout = out
+  end
+
+  # RFC 4360 sections 2 and 4, RFC 7606 section 7.14: unknown types and
+  # subtypes are kept and sent back byte for byte.
+  def test_unknown_round_trip
+    %w{
+      0306000000000000
+      030c000000000007
+      8006000000000000
+      8007000000000000
+      0600000000000064
+      0099000000000000
+    }.each do |hex|
+      ec = Extended_community.factory([hex].pack('H*'))
+      assert_equal(Extended_community::Unknown, ec.class, hex)
+      assert_equal(hex, ec.to_shex)
+      assert_equal(hex.to_i(16), ec.to_i)
+      assert_equal({:unknown=>hex}, ec.to_hash)
+      assert_equal(hex, Extended_community::Unknown.new(ec.to_hash[:unknown]).to_shex)
+      assert_equal(hex, Extended_community.factory(hex.to_i(16)).to_shex)
+    end
+  end
+
+  def test_unknown_to_s
+    ec = Extended_community.factory(['8006000000000000'].pack('H*'))
+    assert_equal('Unknown extended community: type 0x80, subtype 0x06, 8006000000000000', ec.to_s)
+    ec = Extended_community.factory(['030c000000000007'].pack('H*'))
+    assert_equal('Unknown extended community: type 0x03, subtype 0x0c, 030c000000000007', ec.to_s)
+  end
+
+  # RFC 4360 section 2: dispatch on type and subtype, not subtype alone.
+  def test_factory_uses_type_and_subtype
+    # Subtype 0x02 under the IANA authority type 0x80 is not a route target.
+    assert_equal(Extended_community::Unknown, Extended_community.factory(0x8002000000000000).class)
+    # Subtype 0x0b under type 0x00 is not a color.
+    assert_equal(Extended_community::Unknown, Extended_community.factory(0x000b000000000064).class)
+    # The transitive bit is masked.
+    assert_equal(Route_target, Extended_community.factory(0x4002000a00000014).class)
+  end
+
+  # RFC 5668 section 2: 4 octet AS specific, 4 octet global, 2 octet local.
+  def test_four_octet_as_route_target
+    rt = Route_target.new(4200000000, 1)
+    assert_equal('0202fa56ea000001', rt.to_shex)
+    assert_equal('Route target: 4200000000:1', rt.to_s)
+    ec = Extended_community.factory(['0202fa56ea000001'].pack('H*'))
+    assert_equal(Route_target, ec.class)
+    assert_equal('Route target: 4200000000:1', ec.to_s)
+    assert_equal('0202fa56ea000001', ec.to_shex)
+    assert_equal({:route_target=>[4200000000, 1]}, ec.to_hash)
+    assert_equal('Route target: 65538:3', Extended_community.factory(0x0202000100020003).to_s)
+    assert_equal('0202000100020003', Extended_community.factory(0x0202000100020003).to_shex)
+    assert_raise(ArgumentError) { Route_target.new(4200000000, 0x10000) }
+  end
+
+  def test_four_octet_as_route_origin
+    ro = Route_origin.new(4200000000, 1)
+    assert_equal('0203fa56ea000001', ro.to_shex)
+    assert_equal('Route origin: 4200000000:1', ro.to_s)
+    ec = Extended_community.factory(['0203000100020003'].pack('H*'))
+    assert_equal(Route_origin, ec.class)
+    assert_equal('Route origin: 65538:3', ec.to_s)
+    assert_equal('0203000100020003', ec.to_shex)
   end
 
 end

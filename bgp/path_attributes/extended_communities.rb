@@ -43,6 +43,7 @@ module BGP
             when :encapsulation        ; o << Encapsulation.new(*arg[comm])
             when :route_origin         ; o << Route_origin.new(*arg[comm])
             when :ospf_router_id       ; o << Ospf_router_id.new(*arg[comm])
+            when :unknown              ; o << Extended_community::Unknown.new(arg[comm])
             else
               raise
             end 

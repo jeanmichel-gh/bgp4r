@@ -45,6 +45,7 @@ module BGP
 
     TWO_OCTET_AS = 0
     IPV4_ADDR = 1
+    FOUR_OCTET_AS = 2
     OPAQUE = 3
     FLOAT = -1
     
@@ -60,12 +61,15 @@ module BGP
       when TWO_OCTET_AS ; @global, @local = s.unpack('nN')
       when IPV4_ADDR
         @global, @local = s.unpack('Nn')
+      when FOUR_OCTET_AS
+        # RFC 5668 section 2: 4 octet global admin (AS), 2 octet local admin.
+        @global, @local = s.unpack('Nn')
       when OPAQUE
         case self
         when Color
           _,@global = s.unpack('nN')
         # when Encapsulation
-          _,@global = s.unpack('Nn')
+        #   _,@global = s.unpack('Nn')
         when Origin_validation_state
           _,@global = s.unpack('nN')
         else
@@ -140,7 +144,7 @@ module BGP
 
     def value
       case community_structure
-      when TWO_OCTET_AS
+      when TWO_OCTET_AS, FOUR_OCTET_AS
         "#{@global}:#{@local}"
       when IPV4_ADDR
         "#{IPAddr.create(@global)}:#{@local}"
@@ -173,7 +177,7 @@ module BGP
       case community_structure
       when TWO_OCTET_AS
         [@global, @local].pack('nN')
-      when IPV4_ADDR
+      when IPV4_ADDR, FOUR_OCTET_AS
         [@global, @local].pack('Nn')
       when OPAQUE
         case self
@@ -207,18 +211,17 @@ module BGP
         s = _s
       end
       type, subtype, _ = s.unpack('CCa6')
-      case subtype
-      when ROUTE_TARGET     ; Route_target.new(s)
-      when ROUTE_ORIGIN     ; Route_origin.new(s)
-      when OSPF_DOMAIN_ID   ; Ospf_domain_id.new(s)
-      when OSPF_ROUTER_ID   ; Ospf_router_id.new(s)
-      when BGP_DATA_COLLECT ; Bgp_data_collect.new(s)
-      when LINK_BANDWIDTH   ; Link_bandwidth.new(s)
-      when COLOR            ; Color.new(s)
-      when BGP_ORIGIN_VALIDATION_STATE ; Origin_validation_state.new(s)
-      # when ENCAPSULATION    ; Encapsulation.new(s)
+      # RFC 4360 section 2: the type (high octet) and the subtype (low octet)
+      # together say what the community is. The transitive bit (0x40) is
+      # masked. The IANA authority bit (0x80) is kept, so 0x80xx types do not
+      # alias 0x00xx types.
+      klass = FACTORY[[type & ~NON_TRANSITIVE, subtype]]
+      if klass
+        klass.new(s)
       else
-        raise ArgumentError, "unknown extended community type #{type.to_s(16)}, subtype #{subtype.to_s(16)}: #{s.unpack('H*')[0]}"
+        # RFC 4360 sections 2 and 4, RFC 7606 section 7.14: an unknown type
+        # or subtype is not an error. Keep it as is.
+        Unknown.new(s)
       end
     end
 
@@ -238,6 +241,11 @@ module BGP
         if @global.is_a?(String) and @local.is_a?(Integer)
           @type |= IPV4_ADDR
           @global = IPAddr.new(@global).to_i
+        elsif four_octet_as_specific?
+          # RFC 5668 section 2: an AS above 65535 needs the 4 octet AS
+          # specific type (0x02), with a 2 octet local admin.
+          raise ArgumentError, "local admin #{@local} does not fit in 2 octets" if @local.to_i > 0xffff
+          @type |= FOUR_OCTET_AS
         end
       elsif args.size==1 and args[0].is_a?(Integer)
         parse([s].pack('H*'))
@@ -246,6 +254,14 @@ module BGP
       else
         raise ArgumentError, "invalid arg #{args.inspect}"
       end
+    end
+  end
+
+  class Extended_community
+    private
+    def four_octet_as_specific?
+      [ROUTE_TARGET, ROUTE_ORIGIN].include?(@subtype) and
+        @type & 3 == TWO_OCTET_AS and @global.is_a?(Integer) and @global > 0xffff
     end
   end
 
@@ -381,6 +397,53 @@ module BGP
 
   end
   
+  # RFC 4360 section 2, RFC 7606 section 7.14: a community of a type or
+  # subtype we do not know. The 8 octets are kept and sent back unchanged.
+  class Extended_community::Unknown < Extended_community
+    def initialize(*args)
+      if args.size==1 and args[0].is_a?(String) and args[0].is_packed?
+        @raw = args[0].dup
+      elsif args.size==1 and args[0].is_a?(String)
+        @raw = [args[0].delete(' ')].pack('H16')
+      elsif args.size==1 and args[0].is_a?(Integer)
+        @raw = [format("%16.16x",args[0])].pack('H*')
+      else
+        raise ArgumentError, "invalid arg #{args.inspect}"
+      end
+      @type, @subtype = @raw.unpack('CC')
+    end
+    def encode
+      @raw
+    end
+    def to_s
+      format("Unknown extended community: type 0x%02x, subtype 0x%02x, %s",
+             @type, @subtype, @raw.unpack('H*')[0])
+    end
+    def to_hash
+      { :unknown => @raw.unpack('H*')[0] }
+    end
+  end
+
+  class Extended_community
+    # RFC 4360 section 2 and the IANA "BGP Extended Communities" registry.
+    # Key: [type with the transitive bit masked, subtype].
+    FACTORY = {
+      [TWO_OCTET_AS,  ROUTE_TARGET]     => Route_target,       # RFC 4360 section 4
+      [IPV4_ADDR,     ROUTE_TARGET]     => Route_target,
+      [FOUR_OCTET_AS, ROUTE_TARGET]     => Route_target,       # RFC 5668 section 2
+      [TWO_OCTET_AS,  ROUTE_ORIGIN]     => Route_origin,       # RFC 4360 section 5
+      [IPV4_ADDR,     ROUTE_ORIGIN]     => Route_origin,
+      [FOUR_OCTET_AS, ROUTE_ORIGIN]     => Route_origin,       # RFC 5668 section 2
+      [TWO_OCTET_AS,  LINK_BANDWIDTH]   => Link_bandwidth,
+      [TWO_OCTET_AS,  OSPF_DOMAIN_ID]   => Ospf_domain_id,     # RFC 4577 section 4
+      [IPV4_ADDR,     OSPF_DOMAIN_ID]   => Ospf_domain_id,
+      [IPV4_ADDR,     OSPF_ROUTER_ID]   => Ospf_router_id,
+      [TWO_OCTET_AS,  BGP_DATA_COLLECT] => Bgp_data_collect,   # RFC 4384
+      [OPAQUE,        COLOR]            => Color,              # RFC 9012 section 4.3
+      [OPAQUE,        BGP_ORIGIN_VALIDATION_STATE] => Origin_validation_state, # RFC 8097
+    }.freeze
+  end
+
   # class Encapsulation < Opaque
   #   def initialize(*args)
   #     args = 0 if args.empty?

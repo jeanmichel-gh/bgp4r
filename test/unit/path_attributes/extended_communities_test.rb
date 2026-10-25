@@ -1,5 +1,5 @@
 #--
-# Copyright 2008, 2009 Jean-Michel Esnault.
+# Copyright 2008, 2009, 2026 Jean-Michel Esnault.
 # All rights reserved.
 # See LICENSE.txt for permissions.
 #
@@ -21,6 +21,7 @@
 #++
 
 require 'bgp/path_attributes/extended_communities'
+require 'bgp/path_attributes/path_attribute'
 require 'test/unit'
 class Extended_communitiesTest < Test::Unit::TestCase
   include BGP
@@ -175,4 +176,42 @@ class Extended_communitiesTest < Test::Unit::TestCase
     
   end
     
+  # RFC 4360 sections 2 and 4, RFC 7606 section 7.14: unknown communities
+  # must not abort parsing and must be kept.
+  def test_unknown_encapsulation
+    exc = Extended_communities.new(['c010080306000000000000'].pack('H*'))
+    assert_equal(Extended_community::Unknown, exc.communities[0].class)
+    assert_equal('c010080306000000000000', exc.to_shex)
+  end
+
+  def test_mixed_known_and_unknown
+    hex = 'c01030' +
+          '0002fde800000064' + # route target 65000:100
+          '030c000000000007' + # encapsulation, not decoded yet
+          '8006000000000000' + # flowspec traffic rate, not decoded yet
+          '0202fa56ea000001' + # route target 4200000000:1, RFC 5668
+          '0600000000000064' + # EVPN MAC mobility, not decoded yet
+          '0203000100020003'   # route origin 65538:3, RFC 5668
+    exc = Extended_communities.new([hex].pack('H*'))
+    assert_equal([Route_target, Extended_community::Unknown, Extended_community::Unknown,
+                  Route_target, Extended_community::Unknown, Route_origin],
+                 exc.communities.collect { |c| c.class })
+    assert_equal(hex, exc.to_shex)
+    assert_match(/Route target: 65000:100/, exc.to_s)
+    assert_match(/Route target: 4200000000:1/, exc.to_s)
+    assert_match(/Route origin: 65538:3/, exc.to_s)
+    assert_match(/type 0x80, subtype 0x06, 8006000000000000/, exc.to_s)
+    assert_equal(hex, Extended_communities.new(exc).to_shex)
+    assert_equal(hex, Extended_communities.new_hash(exc.to_hash).to_shex)
+    assert_equal(exc.to_hash, Extended_communities.new_hash(exc.to_hash).to_hash)
+    pa = Path_attribute.new(exc)
+    assert_equal(hex, Path_attribute.new(pa.to_hash).to_shex)
+  end
+
+  def test_four_octet_as_hash_round_trip
+    ec = Extended_communities.new_hash :route_target=>[4200000000, 1]
+    assert_equal('c010080202fa56ea000001', ec.to_shex)
+    assert_equal(ec.to_shex, Extended_communities.new_hash(ec.to_hash).to_shex)
+  end
+
 end
