@@ -27,6 +27,11 @@ module BGP
 
   class Cluster_list < Attr
 
+    # The CLUSTER_IDs as dotted strings, nearest reflector first (RFC 4456 section 8).
+    def cluster_ids
+      @cluster_ids.map(&:to_s)
+    end
+
     ##########################################################
     # CLUSTER ID                                             #
     ##########################################################
