@@ -55,6 +55,8 @@ docker run --rm bgp4r-test ruby -I. test/functional/add_path_test.rb
 ```
 The image runs as the non-root user `bgp`. It can still bind TCP 179, because Docker sets `net.ipv4.ip_unprivileged_port_start=0` in a container's own network namespace. With `--network host` the host's setting applies.
 
+CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image.
+
 Baseline on 2026-10-24: 238 tests, 1223 assertions, all passing. Line coverage of `bgp/` about 89%.
 
 ## Conventions
@@ -84,4 +86,3 @@ Baseline on 2026-10-24: 238 tests, 1223 assertions, all passing. Line coverage o
 * Debug output left in library code: `p "JME: ..."` in `messages/update.rb`, and `puts` calls in `message.rb`, `path_attribute.rb`, `extended_community.rb`, `rd.rb`. Should go through `Log` or raise.
 * Ruby warnings under `-w`: `IPAddr#netmask` redefined in `common.rb`, ambiguous `*` in `cluster_list.rb` and `extended_communities.rb`.
 * Lowest coverage: `nlris/mapped_ipv4.rb`, `common.rb`, `orfs/prefix_orf.rb`, `neighbor/neighbor.rb`, `messages/update.rb`.
-* `.travis.yml` is dead. Replace with a GitHub Actions workflow.

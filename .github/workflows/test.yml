@@ -1,0 +1,77 @@
+name: test
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  # Fast feedback: install each Ruby on the runner and run the suites.
+  ruby:
+    name: ruby ${{ matrix.ruby }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: ${{ matrix.experimental }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Quote versions: unquoted, YAML reads 4.0 as the number 4.
+        ruby: ['3.3', '3.4', '4.0']
+        experimental: [false]
+        include:
+          - ruby: head
+            experimental: true
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ matrix.ruby }}
+          bundler-cache: true
+      - name: Unit tests
+        shell: bash
+        run: bundle exec ruby test/run_unit.rb 2>&1 | tee test.log
+      - name: Show test failures as an annotation
+        if: failure()
+        shell: bash
+        run: |
+          [ -f test.log ] || exit 0
+          msg=$(grep -E -A15 "^(Failure|Error):|Error\b.*\(LoadError\)|cannot load such file" test.log | head -80)
+          [ -n "$msg" ] || msg=$(tail -40 test.log)
+          msg=${msg//'%'/'%25'}; msg=${msg//$'\r'/'%0D'}; msg=${msg//$'\n'/'%0A'}
+          echo "::error title=Test output::$msg"
+      - name: Functional test (add path over loopback)
+        run: bundle exec ruby -I. test/functional/add_path_test.rb
+        timeout-minutes: 2
+      # Never run test/functional/live_feed_test.rb: its feed is gone.
+
+  # The same suites inside the Docker image, so the Dockerfile is tested too.
+  docker:
+    name: docker ruby ${{ matrix.ruby }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        ruby: ['3.3', '3.4', '4.0']
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build the test image
+        run: >
+          docker build --target test
+          --build-arg RUBY_VERSION=${{ matrix.ruby }}
+          -t bgp4r-test .
+      - name: Unit tests
+        shell: bash
+        run: docker run --rm bgp4r-test 2>&1 | tee test.log
+      - name: Show test failures as an annotation
+        if: failure()
+        shell: bash
+        run: |
+          [ -f test.log ] || exit 0
+          msg=$(grep -E -A15 "^(Failure|Error):|Error\b.*\(LoadError\)|cannot load such file" test.log | head -80)
+          [ -n "$msg" ] || msg=$(tail -40 test.log)
+          msg=${msg//'%'/'%25'}; msg=${msg//$'\r'/'%0D'}; msg=${msg//$'\n'/'%0A'}
+          echo "::error title=Test output::$msg"
+      - name: Functional test (add path over loopback)
+        run: docker run --rm bgp4r-test ruby -I. test/functional/add_path_test.rb
+        timeout-minutes: 2
