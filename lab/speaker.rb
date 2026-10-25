@@ -220,7 +220,7 @@ module Lab
           announce(n, sock)
           n.wait_for_state(:Idle)
         else
-          @recorder.error!("session did not reach Established, state #{n.state}")
+          @recorder.error!("session did not reach Established, state #{n.state}#{": #{n.last_error.message}" if n.last_error}")
           n.stop
         end
         @recorder.session_down!

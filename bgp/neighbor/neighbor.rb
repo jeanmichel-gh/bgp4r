@@ -224,9 +224,17 @@ module BGP
       send_open :ev_send_open
     end
     
+    # The error that made the last start fail, or nil.
+    attr_reader :last_error
+
+    # Opens the session. Returns true when the :waitfor state was reached,
+    # or with :no_blocking once the OPEN was queued. Returns false on any
+    # error: the error is logged, kept in last_error, and the session is
+    # stopped. With :raise => true the error is raised again after that.
     def start(arg={})
-      options = {:port=> 179, :auto_retry=> false, :no_blocking=>false, :waitfor=> :Established, :timeout=> 60}.merge(arg)
-      return if @state == :Established
+      @last_error = nil
+      options = {:port=> 179, :auto_retry=> false, :no_blocking=>false, :waitfor=> :Established, :timeout=> 60, :raise=> false}.merge(arg)
+      return true if @state == :Established
       stop unless @state == :Idle
       if options[:session]
         @socket = options[:session]
@@ -242,9 +250,13 @@ module BGP
         end
         log_info "#{self} started"
       end
+      true
     rescue => e
+      @last_error = e
       Log.error "#{e}"
       stop
+      raise if options && options[:raise]
+      false
     end
         
     # Block until @state is state or timeout seconds pass. A nil timeout waits forever.
