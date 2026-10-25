@@ -167,7 +167,7 @@ class Log  < Logger
     self.level = Logger::INFO
   end 
   def Log.time_reset
-    @time = Time.now
+    @@time = Time.now
   end
   def Log.create(s=STDERR)
     @@logger ||= new(s)
@@ -189,8 +189,11 @@ class Log  < Logger
     end
   end
   def Log.clear
-    `rm #{Log.filename}`
-    Log.set_filename(Log.filename)
+    name = Log.filename
+    return unless name # logging to a stream such as STDERR: nothing to clear
+    @@logger.close
+    File.delete(name) if File.exist?(name)
+    Log.set_filename(name)
   end
   def Log.filename
     @@logger.instance_eval { @logdev.filename }
