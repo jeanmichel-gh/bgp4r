@@ -18,7 +18,7 @@ bgp/nlris/               prefix encodings (inet, labeled, VPN, RD, mapped IPv4)
 bgp/optional_parameters/ OPEN capabilities (4-byte AS, add-path, graceful restart...)
 bgp/orfs/                outbound route filtering
 bgp/neighbor/            the BGP finite state machine and TCP session (neighbor.rb)
-bgp/misc/                extras (live_feed.rb, a client for an old public BGP feed)
+bgp/misc/                extras: route_generator.rb (many prefixes packed in UPDATEs), live_feed.rb (a client for an old public BGP feed)
 examples/                runnable scripts
 test/unit/               unit tests, mirroring bgp/
 test/functional/         tests that open real TCP sessions
@@ -45,6 +45,11 @@ ruby -I. test/unit/path_attributes/as_path_test.rb
 Functional test over loopback (port 3456):
 ```
 ruby -I. test/functional/add_path_test.rb
+```
+
+Route generator over loopback: `examples/routegen` against the test server, with `bgp/misc/route_generator.rb` doing the prefixes:
+```
+ruby -I. test/functional/routegen_test.rb
 ```
 
 Lab tests (the Compose ones skip without Docker):

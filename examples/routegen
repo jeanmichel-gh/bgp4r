@@ -1,82 +1,140 @@
+#!/usr/bin/env ruby
 #--
 #
-# Copyright 2008, 2009 Jean-Michel Esnault.
+# Copyright 2008, 2009, 2026 Jean-Michel Esnault.
 # All rights reserved.
 # See LICENSE.txt for permissions.
 #
 #++
+#
+# routegen: open one BGP session and send it many generated routes.
+#
+#   ruby -I. examples/routegen examples/routegen.yml
+#
+# The YAML file describes the session and the routes; see routegen.yml.
+# routegen sends the routes, then keeps the session up until you press
+# Ctrl-C or the peer goes away.
+#
+# A dockerized routegen, with a receiving peer that counts and times the
+# routes, lives in lab/topologies/routegen. See lab/README.md.
 
 require 'bgp4r'
+require 'bgp/misc/route_generator'
 require 'yaml'
 include BGP
 
-require 'pp'
-config_file = ARGV[0] ||= File.basename($0) + ".yml"
+module Routegen
+  LOG_LEVELS = { 'debug' => Logger::DEBUG, 'info' => Logger::INFO, 'warn' => Logger::WARN }
 
-Log.create
-Log.level=Logger::DEBUG
-config = YAML::load_file(config_file)
+  module_function
 
-config.keys.each do |k|
-  case k
-  when 'neighbor'
-    neighbor = config['neighbor']
-    neighbor.keys.each do |k|
-      case k
-      when /router\s+id/        ; @router_id = neighbor[k]
-      when /my\s+as/            ; @my_as = neighbor[k]
-      when 'holdtime'           ; @holdtime = neighbor[k]
-      when /neighbor\s+address/ ; @neighbor_addr = neighbor[k]
-      when /local\s+address/    ; @local_addr = neighbor[k]
-      when 'capabilities'
-      end
+  # Read the YAML file into a Hash with plain keys. Keys are matched loosely,
+  # as before: "router id", "router_id" and "Router Id" all work.
+  def load(file)
+    raw = YAML.safe_load(File.read(file))
+    raise ArgumentError, "#{file}: expected 'neighbor' and 'routes' sections" unless raw.is_a?(Hash)
+    n = section(raw, 'neighbor', file)
+    r = section(raw, 'routes', file)
+    cfg = {
+      router_id:      fetch(n, /router\s*_?id/, 'router id', file),
+      my_as:          Integer(fetch(n, /my\s*_?as/, 'my as', file)),
+      holdtime:       Integer(find(n, /hold\s*_?time/) || 180),
+      remote_addr:    fetch(n, /neighbor\s*_?address/, 'neighbor address', file),
+      local_addr:     find(n, /local\s*_?address/),
+      port:           Integer(find(n, /\Aport\z/) || 179),
+      capabilities:   Array(find(n, /capabilities/)),
+      log_level:      ENV['ROUTEGEN_LOG_LEVEL'] || find(n, /log\s*_?level/) || find(raw, /log\s*_?level/) || 'info',
+      next_hop:       fetch(r, /next\s*_?hop/, 'next hop', file),
+      local_pref:     find(r, /local\s*_?pref/),
+      med:            find(r, /\Amed\z/),
+      origin:         Integer(find(r, /\Aorigin\z/) || 0),
+      communities:    find(r, /communities/),
+      as_path:        find(r, /as\s*_?path/).to_s.split.map { |a| Integer(a) },
+    }
+    start, count, pack = fetch(r, /\Anlris?\z/, 'nlris', file).to_s.split(',').map(&:strip)
+    cfg[:start] = start
+    cfg[:count] = Integer(count || 1)
+    cfg[:per_update] = Integer(pack || 1)
+    cfg
+  end
+
+  def section(h, name, file)
+    s = h[name]
+    raise ArgumentError, "#{file}: missing '#{name}' section" unless s.is_a?(Hash)
+    s
+  end
+
+  def find(h, re)
+    k = h.keys.find { |key| key.to_s.downcase =~ re }
+    k && h[k]
+  end
+
+  def fetch(h, re, name, file)
+    v = find(h, re)
+    raise ArgumentError, "#{file}: missing '#{name}'" if v.nil?
+    v
+  end
+
+  def capability(neighbor, name)
+    case name.to_s.downcase.tr('_-', '  ').squeeze(' ').strip
+    when 'four byte as', '4 byte as', 'as4 byte', 'as4'        then neighbor.capability :as4_byte
+    when 'route refresh'                                         then neighbor.capability :route_refresh
+    when 'mbgp ipv4 unicast'                                     then neighbor.capability :mbgp, :ipv4, :unicast
+    else raise ArgumentError, "unknown capability #{name.inspect}: use four byte as, route refresh or mbgp ipv4 unicast"
     end
-  when 'routes'
-    routes = config['routes']
-    routes.keys.each do |k|
-      case k
-      when /nlri(|s)/
-        _pfx, _npfx, _pack = routes[k].split(',')
-        @nlri = IPAddr.new _pfx
-        @times = _npfx.to_i ||=1
-        @pack = _pack.to_i  ||=1 
-      when /next\s*hop/     ; @nexthop= routes[k]
-      when /local\s*pref/   ; @local_pref= routes[k]
-      when /med/          ; @med = routes[k]
-      when /origin/       ; @origin = routes[k]
-      when /communities/  ; @communities = routes[k]
-      when /as\s*path/      ; @as_path= routes[k]
-      end
+  end
+
+  def path_attribute(cfg)
+    attrs = [Origin.new(cfg[:origin]), Next_hop.new(cfg[:next_hop])]
+    attrs << Local_pref.new(Integer(cfg[:local_pref])) if cfg[:local_pref]
+    attrs << Multi_exit_disc.new(Integer(cfg[:med])) if cfg[:med]
+    # Pass communities as text, "100:1 200:1". Converting them to integers
+    # turned 100:1 into 0:100.
+    attrs << Communities.new(cfg[:communities].to_s) if cfg[:communities]
+    attrs << As_path.new(*cfg[:as_path])
+    Path_attribute.new(*attrs)
+  end
+
+  def run(file)
+    cfg = load(file)
+    Log.create
+    Log.level = LOG_LEVELS.fetch(cfg[:log_level].to_s.downcase) do
+      raise ArgumentError, "log level #{cfg[:log_level].inspect}: use one of #{LOG_LEVELS.keys.join(', ')}"
     end
+
+    gen = RouteGenerator.new(cfg[:start], cfg[:count], cfg[:per_update], path_attribute(cfg))
+
+    neighbor = Neighbor.new(:version => 4, :my_as => cfg[:my_as], :remote_addr => cfg[:remote_addr],
+                            :local_addr => cfg[:local_addr], :id => cfg[:router_id], :holdtime => cfg[:holdtime])
+    cfg[:capabilities].each { |c| capability(neighbor, c) }
+
+    stop = false
+    %w[INT TERM].each { |sig| trap(sig) { stop = true } }
+
+    puts "routegen: connecting to #{cfg[:remote_addr]} port #{cfg[:port]}"
+    neighbor.start(:port => cfg[:port])
+    abort "routegen: session to #{cfg[:remote_addr]} did not come up (state #{neighbor.state})" unless neighbor.is_established?
+
+    t0 = Time.now
+    gen.each_update { |u| neighbor.send_message u }
+    secs = Time.now - t0
+    puts format('routegen: sent %d prefixes, %s to %s, in %d updates in %.2fs',
+                gen.count, gen.start, gen.last, gen.update_count, secs)
+    puts 'routegen: session up, press Ctrl-C to stop'
+
+    sleep 0.2 until stop || !neighbor.is_established?
+    lost = !stop
+    neighbor.stop
+    abort 'routegen: session went down' if lost
+    puts 'routegen: stopped'
   end
 end
 
-neighbor = Neighbor.new \
-  :version => 4,
-  :my_as=> @my_as,
-  :remote_addr => @neighbor_addr,
-  :local_addr => @local_addr,
-  :id=> @router_id,
-  :holdtime=> @holdtime
-
-# neighbor.capability :as4_byte
-
-pa = Path_attribute.new(
-  Origin.new(@origin),
-  Next_hop.new(@nexthop),
-  Local_pref.new(@local_pref),
-  Communities.new(*(@communities.split.map { |com| com.to_i})),
-  As_path.new(*(@as_path.split.map { |as| as.to_i}))
-)
-
-neighbor.start
-
-nlris = Nlri.new
-(1..@times.to_i).each do |n|
-  nlris << (@nlri ^ n)
-  next unless (n % @pack) == 0 or (n == @times)
-  neighbor.send_message Update.new(pa, nlris)
-  nlris = Nlri.new
+if $0 == __FILE__
+  $stdout.sync = true
+  begin
+    Routegen.run(ARGV[0] || File.join(__dir__, 'routegen.yml'))
+  rescue ArgumentError, SystemCallError => e
+    abort "routegen: #{e.message}"
+  end
 end
-
-sleep(200)
