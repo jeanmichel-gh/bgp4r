@@ -73,6 +73,12 @@ class TestBgpNeighbor < Test::Unit::TestCase
     assert ! neighbor.is_openrecv?
     assert ! neighbor.is_openconfirm?
   end
+  def test_send_message_before_start_raises
+    n = Neighbor.new(4, 100, 180, '0.0.0.2', '127.0.0.1', '127.0.0.1')
+    e = assert_raise(RuntimeError) { n.send_message Keepalive.new }
+    assert_match(/not started/, e.message)
+    assert n.is_idle?
+  end
   def test_start
     Timeout::timeout(4) {
       start_server(3456)
