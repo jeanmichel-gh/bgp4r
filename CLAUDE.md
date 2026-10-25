@@ -23,6 +23,8 @@ examples/                runnable scripts
 test/unit/               unit tests, mirroring bgp/
 test/functional/         tests that open real TCP sessions
 test/helpers/            a small test BGP server
+lab/                     speakers in containers: lab/speaker.rb and lab/topologies/ (see lab/README.md)
+test/functional/lab/     lab tests: loopback speaker test and one Compose test per topology
 ```
 
 ## Running tests
@@ -45,6 +47,11 @@ Functional test over loopback (port 3456):
 ruby -I. test/functional/add_path_test.rb
 ```
 
+Lab tests (the Compose ones skip without Docker):
+```
+ruby test/run_lab.rb
+```
+
 Do not run `test/functional/live_feed_test.rb`. It connects to a public feed that no longer answers and hangs forever.
 
 In Docker, on any Ruby version (the default is 3.4):
@@ -55,7 +62,7 @@ docker run --rm bgp4r-test ruby -I. test/functional/add_path_test.rb
 ```
 The image runs as the non-root user `bgp`. It can still bind TCP 179, because Docker sets `net.ipv4.ip_unprivileged_port_start=0` in a container's own network namespace. With `--network host` the host's setting applies.
 
-CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image.
+CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. A `lab` job runs the Compose topologies.
 
 Baseline on 2026-10-24: 275 tests, 1364 assertions, all passing. Line coverage of `bgp/` from the unit suite: 90.7%.
 

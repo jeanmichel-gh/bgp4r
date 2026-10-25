@@ -1,0 +1,43 @@
+# Two bgp4r speakers over eBGP on one link.
+#
+#   r1  AS 65001  10.10.0.1  waits for r2
+#   r2  AS 65002  10.10.0.2  connects to r1
+#
+# From the repo root:
+#   docker compose -f lab/topologies/two-speakers/compose.yml up -d --build
+#   docker compose -f lab/topologies/two-speakers/compose.yml exec r1 cat /tmp/bgp4r-state.json
+#   docker compose -f lab/topologies/two-speakers/compose.yml down
+
+name: bgp4r-two-speakers
+
+x-speaker: &speaker
+  build:
+    context: ../../..
+    target: speaker
+  image: bgp4r-speaker
+  volumes:
+    - ./:/topology:ro
+  stop_grace_period: 5s
+
+services:
+  r1:
+    <<: *speaker
+    command: ["lab/speaker.rb", "/topology/r1.yml"]
+    networks:
+      link:
+        ipv4_address: 10.10.0.1
+
+  r2:
+    <<: *speaker
+    command: ["lab/speaker.rb", "/topology/r2.yml"]
+    networks:
+      link:
+        ipv4_address: 10.10.0.2
+
+networks:
+  link:
+    ipam:
+      config:
+        # Move the gateway off .1 so the routers can use .1 and .2.
+        - subnet: 10.10.0.0/24
+          gateway: 10.10.0.254
