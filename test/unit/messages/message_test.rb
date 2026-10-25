@@ -48,6 +48,16 @@ class Message_Test < Test::Unit::TestCase
     assert msg.respond_to? :is_a_notification?
     assert msg.respond_to? :is_a_route_refresh?
   end
+  def test_is_a_capability
+    # Before the fix the list said 'capabity', so is_a_capabity? looked up
+    # BGP::Capabity and raised NameError, and is_a_capability? did not exist.
+    assert MyMessage.new.respond_to?(:is_a_capability?)
+    assert_equal(false, MyMessage.new.is_a_capability?)
+    assert_equal(true, Capability.new.is_a_capability?)
+    assert_equal(false, Keepalive.new.is_a_capability?)
+    assert_equal(false, Capability.new.is_a_keepalive?)
+    assert !MyMessage.new.respond_to?(:is_a_capabity?)
+  end
   def test_factory_unknown_message_type_raises_quietly
     s = ['ff'*16 + '0013ee'].pack('H*')
     out, $stdout = $stdout, StringIO.new

@@ -79,7 +79,7 @@ module ::BGP
     def self.route_refresh(afi,safi)
       Route_refresh.new(afi,safi).encode
     end    
-    %w{update keepalive open notification capabity route_refresh }.each do |m|
+    %w{update keepalive open notification capability route_refresh }.each do |m|
       define_method("is_a_#{m}?") do
         is_a?(BGP.const_get(m.capitalize))
       end      
