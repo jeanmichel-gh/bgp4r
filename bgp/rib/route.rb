@@ -145,6 +145,18 @@ module BGP
       # (RFC 4456 section 9), else the peer's router ID (RFC 4271 9.1.2.2 f).
       def router_id ; originator_id || @peer.router_id ; end
 
+      # True when other is the same path: same prefix, path ID, peer and
+      # attributes. Used to tell a real change from a repeated announcement.
+      def same_path?(other)
+        other.is_a?(Route) && other.key == key && other.peer == @peer &&
+          other.path_attribute.encode(true) == @path_attribute.encode(true)
+      end
+
+      # A copy of this route with other path attributes.
+      def with_path_attribute(path_attribute)
+        Route.new(@prefix, path_attribute, @peer, path_id: @path_id)
+      end
+
       def to_s
         id = @path_id ? "ID=#{@path_id}, " : ''
         "#{id}#{@prefix} via #{next_hop || '-'} from #{@peer} path #{as_path}"
