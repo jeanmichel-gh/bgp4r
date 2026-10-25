@@ -31,13 +31,20 @@ require 'bgp/messages/message'
 module BGP
   module IO
 
-    class Output < Queue
+    # Messages waiting to be written to the socket. The queue is bounded:
+    # when it holds max messages, enq waits until the socket takes one. So a
+    # caller sending many UPDATEs to a slow peer waits instead of filling
+    # memory. Closing the queue wakes a waiting caller with ClosedQueueError.
+    class Output < SizedQueue
+      # At most 4096 octets per BGP message (RFC 4271 section 4): about 1 MB.
+      DEFAULT_MAX = 256
+
       include Observable
       def initialize(session, holdtime, *obs)
         @session, @holdtime = session, holdtime
         obs.each { |o| add_observer(o) }
         @continue = true
-        super()
+        super(DEFAULT_MAX)
       end
       attr_reader :thread
       attr_writer :holdtime
@@ -48,6 +55,7 @@ module BGP
           begin
             while @continue
               obj = deq
+              break if obj.nil? # closed and empty
               break unless @continue
               s.write obj.respond_to?(:encode) ? obj.encode : obj
             end

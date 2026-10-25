@@ -63,6 +63,25 @@ module BGP
       [:version, :my_as, :holdtime, :id, :remote_addr, :local_addr].each do |name|
         instance_variable_set("@#{name}", h[name]) if h.has_key?(name)
       end
+      self.send_queue_limit = h[:send_queue_limit] if h.has_key?(:send_queue_limit)
+    end
+
+    # How many messages may wait to be written to the socket. When the
+    # queue is full, send_message waits. The default is 256.
+    def send_queue_limit
+      @send_queue_limit ||= BGP::IO::Output::DEFAULT_MAX
+    end
+
+    def send_queue_limit=(n)
+      n = Integer(n)
+      raise ArgumentError, "send_queue_limit must be at least 1, got #{n}" if n < 1
+      @send_queue_limit = n
+      @out.max = n if @out
+    end
+
+    # Messages waiting to be written to the socket right now.
+    def send_queue_size
+      @out ? @out.size : 0
     end
     
     [:Idle, :Established, :OpenRecv, :OpenConfirm, :Active, :OpenSent].each do |state|
@@ -247,6 +266,8 @@ module BGP
     end
 
     def stop
+      # Wake any caller waiting in send_message on a full queue.
+      @out.close if defined?(@out) and @out
       @socket.close  if defined?(@socket) and not @socket.closed?
       clean
       @open=nil
@@ -282,11 +303,16 @@ module BGP
       else
         @out.enq m
       end
+    rescue ClosedQueueError
+      txt = "Could not Send#{m.class.to_s.split('::')[-1]}: session closed"
+      log_warn txt
+      raise txt
     end
     
     def init_io
       @in = BGP::IO::Input.new(@socket, holdtime, self)
       @out = BGP::IO::Output.new(@socket, @holdtime, self)
+      @out.max = send_queue_limit
       new_state(:Active, "Open Socket")
       [@in, @out].each { |io| 
         io.start 

@@ -73,6 +73,30 @@ class TestBgpNeighbor < Test::Unit::TestCase
     assert ! neighbor.is_openrecv?
     assert ! neighbor.is_openconfirm?
   end
+  def test_send_message_waits_on_a_full_queue_and_fails_cleanly_on_stop
+    ours, theirs = UNIXSocket.pair
+    n = Neighbor.new(:my_as=>100, :id=>'1.1.1.1', :send_queue_limit=>2)
+    n.start(:session=>ours, :no_blocking=>true)
+    assert_equal(2, n.send_queue_limit)
+    # The peer never reads, so the socket buffer and then the queue fill up.
+    sender = Thread.new do
+      begin
+        500.times { n.send_message('x' * 4000) }
+        :all_sent
+      rescue RuntimeError => e
+        e.message
+      end
+    end
+    sleep 1
+    assert(sender.alive?, 'send_message should wait while the send queue is full')
+    assert_operator(n.send_queue_size, :<=, 2)
+    n.stop
+    result = sender.join(3) && sender.value
+    assert_match(/session closed/, result.to_s, 'a waiting send_message must not hang after stop')
+  ensure
+    sender.kill if sender && sender.alive?
+    [ours, theirs].each { |s| s.close unless s.closed? }
+  end
   def test_send_message_before_start_raises
     n = Neighbor.new(4, 100, 180, '0.0.0.2', '127.0.0.1', '127.0.0.1')
     e = assert_raise(RuntimeError) { n.send_message Keepalive.new }

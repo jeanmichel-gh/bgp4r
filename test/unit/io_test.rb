@@ -71,6 +71,41 @@ class TestBgpIo < Test::Unit::TestCase
     assert(!@input.thread.alive?, 'Input thread should exit after the peer closes')
   end
 
+  def test_output_queue_has_a_default_limit
+    assert_equal(BGP::IO::Output::DEFAULT_MAX, BGP::IO::Output.new(@ours, 30).max)
+    assert_equal(256, BGP::IO::Output::DEFAULT_MAX)
+  end
+
+  def test_output_queue_is_bounded
+    # A peer that does not read: the socket buffer fills, then the queue,
+    # then the producer waits instead of piling messages up in memory.
+    out = BGP::IO::Output.new(@ours, 30, @events)
+    out.max = 4
+    out.start
+    blob = 'x' * 4000
+    producer = Thread.new { 300.times { out.enq blob } ; :done }
+    sleep 1
+    assert(producer.alive?, 'producer should wait while the queue is full')
+    assert_operator(out.size, :<=, 4)
+    drain = Thread.new { loop { @theirs.readpartial(65536) } rescue nil }
+    assert_equal(:done, producer.join(10) && producer.value, 'producer finishes once the peer reads')
+  ensure
+    drain.kill if drain
+    producer.kill if producer && producer.alive?
+    out.thread.kill if out && out.thread
+  end
+
+  def test_close_wakes_a_waiting_producer
+    out = BGP::IO::Output.new(@ours, 30)
+    out.max = 1
+    out.enq 'first'
+    t = Thread.new { begin ; out.enq 'second' ; :sent ; rescue ClosedQueueError ; :closed ; end }
+    sleep 0.2
+    assert(t.alive?, 'enq should wait on a full queue')
+    out.close
+    assert_equal(:closed, t.join(2) && t.value)
+  end
+
   def test_input_reports_close_after_a_partial_message
     @input.start
     @theirs.write BGP::Keepalive.new.encode[0, 10]
