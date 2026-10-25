@@ -151,4 +151,13 @@ class Prefix_Test < Test::Unit::TestCase
     pfx.instance_variable_set(:@pfx, broken)
     assert_raise(ArgumentError) { pfx.ipv4? }
   end
+
+  def test_new_ntop_unknown_afi_says_so
+    s = ['0a0a'].pack('H*')
+    [[:new_ntop, 25], [:new_ntop, :ipx], [:new_ntop_extended, 25]].each do |meth, afi|
+      e = assert_raise(ArgumentError) { Prefix.send(meth, ['00000001'].pack('H*') + s, afi) }
+      assert_match(/unknown AFI #{Regexp.escape(afi.inspect)}/, e.message)
+      assert_match(/:ipv4.*:ipv6.*:nsap/, e.message)
+    end
+  end
 end

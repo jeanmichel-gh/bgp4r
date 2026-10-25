@@ -17,8 +17,14 @@ module BGP
 class Prefix
   include BGP
   
+  SUPPORTED_AFIS = '1 or :ipv4 (IPv4), 2 or :ipv6 (IPv6), 3 or :nsap (NSAP)'
+
+  def self.unknown_afi(afi)
+    ArgumentError.new("unknown AFI #{afi.inspect}, supported AFIs are #{SUPPORTED_AFIS}")
+  end
+
   def self.new_ntop_extended(arg, afi=1)
-    raise "#{afi}" unless (1..3) === afi || [:nsap, :ipv4, :ipv6].include?(afi)
+    raise unknown_afi(afi) unless (1..3) === afi || [:nsap, :ipv4, :ipv6].include?(afi)
     path_id = arg.slice!(0,4).unpack('N')[0]
     new_ntop(arg,afi,path_id)
   end
@@ -43,7 +49,7 @@ class Prefix
         plen, o1, r = s.unpack('CH2H*')
         pfx = [o1, r.scan(/..../).collect { |x| r.slice!(0,4)}, r].flatten.join('.').chomp('.')  + "/" + plen .to_s
       else
-        raise
+        raise unknown_afi(afi)
       end
       path_id ? new(path_id, pfx) : new(pfx)
     end
