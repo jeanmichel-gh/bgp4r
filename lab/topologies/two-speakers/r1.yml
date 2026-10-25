@@ -1,0 +1,11 @@
+# r1 waits for r2 to connect. It listens on TCP 179 as the non-root user bgp.
+router_id: 10.10.0.1
+as: 65001
+neighbors:
+  - address: 10.10.0.2
+    as: 65002
+    hold_time: 30
+announce:
+  - prefixes: [192.168.1.0/24, 192.168.11.0/24]
+    med: 10
+    communities: ['65001:100']
