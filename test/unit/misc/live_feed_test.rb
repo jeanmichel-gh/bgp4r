@@ -92,6 +92,25 @@ class TestBgpMiscLiveFeedUnit < Test::Unit::TestCase
       assert_nil @feed.read
     end
   end
+  def test_close_on_a_feed_never_opened
+    # Before the fix close used @lock, which open sets, so it raised
+    # NoMethodError on nil. No network: open is never called.
+    feed = LiveFeed.new
+    assert_nothing_raised { feed.close }
+    assert_nothing_raised { feed.close }
+  end
+  def test_close_after_a_failed_open
+    # Before the fix @feed was nil after a failed connect, so close raised.
+    @server.close
+    feed = LiveFeed.new
+    Timeout.timeout(3) do
+      assert_raise_kind_of(SystemCallError) do
+        feed.open(:host => '127.0.0.1', :port => @port, :timeout => 1)
+      end
+    end
+    assert_nothing_raised { feed.close }
+    assert_nothing_raised { feed.close }
+  end
   def test_close_unblocks_read
     open_feed
     th = Thread.new { @feed.read }
