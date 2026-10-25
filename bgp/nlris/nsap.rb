@@ -1,5 +1,5 @@
 #--
-# Copyright 2011 Jean-Michel Esnault.
+# Copyright 2011, 2026 Jean-Michel Esnault.
 # All rights reserved.
 # See LICENSE.txt for permissions.
 #
@@ -46,14 +46,17 @@ class Nsap
 
   private
   
-  def netmask
+  # The prefix mask of a 160 bit (20 octet) NSAP address, as an Integer:
+  # mlen one bits, then zeros. Not related to IPAddr#netmask.
+  def prefix_mask_bits
     0xffffffffffffffffffffffffffffffffffffffff - (2**(160-mlen)) +1
   end
-  def netmask_to_c
-    @netmask_to_c ||= [netmask.to_s(16)].pack('H*').unpack('C*')
+  # The same mask as 20 octets, to AND with @nsap.
+  def prefix_mask_octets
+    @prefix_mask_octets ||= [prefix_mask_bits.to_s(16)].pack('H*').unpack('C*')
   end
   def apply_mask
-    @nsap.each_with_index { |v,i| @nsap[i] = v & netmask_to_c[i] }
+    @nsap.each_with_index { |v,i| @nsap[i] = v & prefix_mask_octets[i] }
   end
   
 end
