@@ -21,7 +21,7 @@
 #++
 
 
-require 'observer'
+require 'bgp/observable'
 require 'thread'
 require 'timeout'
 require 'bgp/common'

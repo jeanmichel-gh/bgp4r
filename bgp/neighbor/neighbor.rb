@@ -22,7 +22,7 @@
 
 require 'socket'
 require 'thread'
-require 'observer'
+require 'bgp/observable'
 require 'bgp/io'
 require 'bgp/neighbor/add_path_cap'
 
