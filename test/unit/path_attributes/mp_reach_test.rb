@@ -635,9 +635,43 @@ class Mp_reach_Test < Test::Unit::TestCase
     assert_equal(mpr3.to_hash, Mp_reach.new(mpr3.to_hash[:mp_reach]).to_hash)
     
   end
-      
+
+  def test_invalid_nlri_type_without_afi_has_a_message
+    e = assert_raise(ArgumentError) { Mp_reach.new(:safi=>1, :nexthop=>'10.0.0.1', :nlris=>[1]) }
+    assert_match(/invalid NLRI: 1/, e.message)
+  end
+
+  def test_unknown_afi_has_a_message
+    e = assert_raise(ArgumentError) { Mp_reach.new(:afi=>5, :safi=>1, :nexthop=>'10.0.0.1', :nlris=>'10.0.0.0/8') }
+    assert_match(/AFI 5 is not supported/, e.message)
+  end
+
+  def test_iso_mapped_next_hops_need_afi_3
+    mpr = Mp_reach.new(:safi=>1, :nexthop=>'10.0.0.1', :nlris=>'10.0.0.0/8')
+    e = assert_raise(ArgumentError) { mpr.parse_iso_mapped_next_hops(['470006010a00000100'].pack('H*')) }
+    assert_match(/need AFI 3, not AFI 1/, e.message)
+  end
+
+  def test_unknown_iso_mapped_next_hop_has_a_message
+    # Same as the AFI 3 test above, with IDP 0x99 in place of 0x47.
+    s =['800e1700030109990006010a00000100004049000100020003'+'00'].pack('H*')
+    e = assert_raise(ArgumentError) { Mp_reach.new(s) }
+    assert_match(/IDP 0x99/, e.message)
+  end
+
+  def test_top_level_path_id_applies_to_hash_nlris
+    mpr = Mp_reach.new(:safi=>1, :nexthop=>'10.0.0.1', :path_id=>7,
+                       :nlris=>[{:prefix=>'10.0.0.0/8'}, {:prefix=>'11.0.0.0/8', :path_id=>9}])
+    assert_equal([7, 9], mpr.nlris.collect { |n| n.path_id })
+    # AFI 1, SAFI 1, next hop 10.0.0.1, then <path id, length, prefix>
+    # per NLRI (RFC 7911 section 3).
+    assert_equal('800e15000101040a0000010000000007080a00000009080b', mpr.to_shex)
+    v6 = Mp_reach.new(:safi=>1, :nexthop=>'2001:db8::1', :path_id=>3, :nlris=>{:prefix=>'2001:db8:1::/48'})
+    assert_equal(3, v6.nlris[0].path_id)
+  end
+
   private
-  
+
   def attr_len(attr)
     attr.encode[2,1].unpack('C')[0]
   end
