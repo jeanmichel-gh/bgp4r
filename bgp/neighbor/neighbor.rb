@@ -53,6 +53,7 @@ module BGP
       @session_info=nil
       @threads=ThreadGroup.new
       @mutex = Mutex.new
+      @state_cv = ConditionVariable.new
       @eventQ = Queue.new
       event_dispatch
     end
@@ -205,7 +206,7 @@ module BGP
     end
     
     def start(arg={})
-      options = {:port=> 179, :auto_retry=> false, :no_blocking=>false, :waitfor=> :Established}.merge(arg)
+      options = {:port=> 179, :auto_retry=> false, :no_blocking=>false, :waitfor=> :Established, :timeout=> 60}.merge(arg)
       return if @state == :Established
       stop unless @state == :Idle
       if options[:session]
@@ -217,9 +218,8 @@ module BGP
       send_open :ev_send_open
       retry_thread if options[:auto_retry] == true
       unless options[:no_blocking] == true
-        loop do
-          sleep(0.3)
-          break if @state == options[:waitfor]
+        unless wait_for_state(options[:waitfor], options[:timeout])
+          raise "timeout after #{options[:timeout]}s waiting for state #{options[:waitfor]}, state is #{@state}"
         end
         log_info "#{self} started"
       end
@@ -228,6 +228,24 @@ module BGP
       stop
     end
         
+    # Block until @state is state or timeout seconds pass. A nil timeout waits forever.
+    # Returns true if the state was reached, false on timeout.
+    def wait_for_state(state, timeout=nil)
+      deadline = Time.now + timeout if timeout
+      @mutex.synchronize do
+        until @state == state
+          if deadline
+            remaining = deadline - Time.now
+            return false if remaining <= 0
+            @state_cv.wait(@mutex, remaining)
+          else
+            @state_cv.wait(@mutex)
+          end
+        end
+        true
+      end
+    end
+
     def stop
       @socket.close  if defined?(@socket) and not @socket.closed?
       clean
@@ -280,7 +298,10 @@ module BGP
     
     def new_state(state, txt='')
       log_info "#{txt} old state #{@state} new state #{state}"
-      @state = state
+      @mutex.synchronize do
+        @state = state
+        @state_cv.broadcast
+      end
     end
     
     def send_update(u)

@@ -105,6 +105,21 @@ class TestBgpNeighbor < Test::Unit::TestCase
   rescue Timeout::Error
     assert false, "Timeout"
   end
+  def test_start_waitfor_timeout
+    # Peer accepts the TCP connection but never speaks BGP.
+    @server = TCPServer.new('127.0.0.1', 0)
+    port = @server.addr[1]
+    @thread = Thread.new { loop { @server.accept } rescue nil }
+    Timeout::timeout(4) {
+      @c = Neighbor.new(4, 100, 180, '0.0.0.2', '127.0.0.1', '127.0.0.1')
+      t0 = Time.now
+      @c.start :port=> port, :timeout=> 0.5
+      assert_operator(Time.now - t0, :<, 2)
+      assert_equal('Idle', @c.state)
+    }
+  rescue Timeout::Error
+    assert false, "Timeout"
+  end
   def test_send_and_receive_path_id_afi_1_safi_1
     Timeout::timeout(4) {
       server_add_path_cap = BGP::OPT_PARM::CAP::Add_path.new
