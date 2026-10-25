@@ -248,10 +248,21 @@ module Lab
 
     private
 
+    LOG_LEVELS = { 'debug' => Logger::DEBUG, 'info' => Logger::INFO, 'warn' => Logger::WARN }
+
+    # LAB_LOG_LEVEL wins over log_level in the node file, so one run can
+    # turn on debug for every node: LAB_LOG_LEVEL=debug docker compose up
+    def self.log_level(config, env=ENV)
+      name = env['LAB_LOG_LEVEL'].to_s.strip.downcase
+      name = config.fetch('log_level', 'info').to_s.downcase if name.empty?
+      LOG_LEVELS.fetch(name) do
+        raise ArgumentError, "log level #{name.inspect}: use one of #{LOG_LEVELS.keys.join(', ')}"
+      end
+    end
+
     def setup_log
       Log.create(STDOUT)
-      level = { 'debug' => Logger::DEBUG, 'info' => Logger::INFO, 'warn' => Logger::WARN }
-      Log.level = level.fetch(@config.fetch('log_level', 'info'))
+      Log.level = Speaker.log_level(@config)
     end
 
     # Accept sessions from passive peers, matched by source address.
@@ -287,6 +298,8 @@ module Lab
     $stdout.sync = true # docker logs shows lines as they happen
     abort "usage: ruby -I. lab/speaker.rb NODE.yml" unless argv.size == 1
     Speaker.new(YAML.safe_load(File.read(argv[0]))).run
+  rescue ArgumentError, KeyError => e
+    abort "lab/speaker.rb: #{e.message}"
   end
 end
 
