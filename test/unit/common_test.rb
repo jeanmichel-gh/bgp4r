@@ -23,6 +23,8 @@
 require "bgp/common"
 
 require 'test/unit'
+require 'tmpdir'
+require 'stringio'
 class Common_Test < Test::Unit::TestCase
   def test_array_pack_returns_a_packed_string
     s = [1,2,3].pack('C*')
@@ -98,5 +100,49 @@ class Common_Test < Test::Unit::TestCase
     sbin = ['000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20'].pack('H*')
     assert_equal '0x0001:  1011 1213 1415 1617 1819 1a1b 1c1d 1e1f', sbin.hexlify[2]
     assert_equal '0x0002:  20', sbin.hexlify[3]
+  end
+  def save_log_state
+    [Log.class_variable_get(:@@logger), (Log.class_variable_get(:@@time) if Log.class_variable_defined?(:@@time))]
+  end
+  def restore_log_state(state)
+    Log.class_variable_set(:@@logger, state[0])
+    Log.class_variable_set(:@@time, state[1]) if state[1]
+  end
+  def test_log_clear_with_shell_characters_in_filename
+    state = save_log_state
+    Dir.mktmpdir do |dir|
+      other = File.join(dir, 'other')
+      File.write(other, 'keep')
+      name = File.join(dir, 'bgp log;touch pwned')
+      Log.set_filename(name)
+      Log.info 'before clear'
+      assert_match(/before clear/, File.read(name))
+      Dir.chdir(dir) { Log.clear }
+      assert(File.exist?(name))
+      assert_no_match(/before clear/, File.read(name))
+      assert_equal(name, Log.filename)
+      assert_equal('keep', File.read(other))
+      assert_equal(['bgp log;touch pwned', 'other'], Dir.children(dir).sort)
+      Log.class_variable_get(:@@logger).close
+    end
+  ensure
+    restore_log_state(state)
+  end
+  def test_log_clear_when_logging_to_stream
+    state = save_log_state
+    Log.class_variable_set(:@@logger, nil)
+    logger = Log.create(StringIO.new)
+    Log.clear
+    assert_same(logger, Log.class_variable_get(:@@logger))
+  ensure
+    restore_log_state(state)
+  end
+  def test_log_time_reset
+    state = save_log_state
+    Log.class_variable_set(:@@time, Time.now - 3600)
+    Log.time_reset
+    assert_operator(Time.now - Log.class_variable_get(:@@time), :<, 5)
+  ensure
+    restore_log_state(state)
   end
 end
