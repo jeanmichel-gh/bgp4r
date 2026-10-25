@@ -159,7 +159,7 @@ class BGP::Update < BGP::Message
     elsif val.is_a?(Nlri)
       val.to_s.split.each { |n| self << n }
     else
-      raise ArgmentError, "Invalid arg: #{val.inspect}"
+      raise ArgumentError, "Invalid arg: #{val.inspect}"
     end
   end
 

@@ -480,6 +480,10 @@ class Update_Test < Test::Unit::TestCase
     $stdout = out
   end
 
+  def test_append_invalid_type_raises_argument_error
+    assert_raise(ArgumentError) { Update.new << 42 }
+  end
+
   
 
 end
