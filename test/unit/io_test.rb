@@ -106,6 +106,36 @@ class TestBgpIo < Test::Unit::TestCase
     assert_equal(:closed, t.join(2) && t.value)
   end
 
+  def test_exit_on_a_full_queue_does_not_wait
+    # Before the fix exit enqueued a sentinel string, so on a full queue it
+    # waited for ever.
+    out = BGP::IO::Output.new(@ours, 30)
+    out.max = 1
+    out.enq 'first'
+    t = Thread.new { out.exit ; :done }
+    assert_equal(:done, t.join(2) && t.value, 'exit should not wait on a full queue')
+    assert(out.closed?)
+  ensure
+    t.kill if t && t.alive?
+  end
+
+  def test_exit_twice_does_not_raise
+    # Before the fix the second exit raised ClosedQueueError.
+    out = BGP::IO::Output.new(@ours, 30)
+    out.close
+    assert_nothing_raised { out.exit ; out.exit }
+  end
+
+  def test_exit_ends_the_writer_thread_without_writing
+    out = BGP::IO::Output.new(@ours, 30)
+    out.start
+    sleep 0.1
+    out.exit
+    assert(out.thread.join(2), 'writer thread should end after exit')
+    @ours.close
+    assert_equal('', @theirs.read, 'exit should write nothing to the socket')
+  end
+
   def test_input_reports_close_after_a_partial_message
     @input.start
     @theirs.write BGP::Keepalive.new.encode[0, 10]
