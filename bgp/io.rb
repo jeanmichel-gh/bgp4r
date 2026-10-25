@@ -72,24 +72,24 @@ module BGP
       end
       attr_reader :thread
       attr_writer :holdtime
+      # Returns the next whole message. A message already in the buffer is
+      # returned before reading more: the length checked is the one in that
+      # message's header, not the previous message's.
       def recv_msg(s)
         loop do
-          if @buf.size<18 or @buf.size <@len
-            recv = s.recv(4100)
-            # recv returns an empty String once the peer closes the connection.
-            # RFC 4271 section 8.2.2: that is a TcpConnectionFails event, so
-            # report it now instead of spinning until the hold timer expires.
-            raise EOFError, 'connection closed by peer' if recv.nil? || recv.empty?
-            @buf += recv
-            break unless @continue
+          # RFC 4271 section 4.1: a 19 octet header, with Length at octet 16
+          # and Type at octet 18.
+          if @buf.size >= 19
+            @len, @type = @buf[16,3].unpack('nC')
+            return @buf.slice!(0, @len) if @len <= @buf.size
           end
-          if @buf.size>18
-            @len, @type=@buf[16,3].unpack('nC')
-            if @len<=@buf.size
-              bgp_message = @buf.slice!(0,@len) 
-              return bgp_message
-            end 
-          end
+          recv = s.recv(4100)
+          # recv returns an empty String once the peer closes the connection.
+          # RFC 4271 section 8.2.2: that is a TcpConnectionFails event, so
+          # report it now instead of spinning until the hold timer expires.
+          raise EOFError, 'connection closed by peer' if recv.nil? || recv.empty?
+          @buf += recv
+          break unless @continue
         end
       end
       

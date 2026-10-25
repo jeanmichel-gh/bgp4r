@@ -79,4 +79,19 @@ class TestBgpIo < Test::Unit::TestCase
     assert_equal(:ev_conn_reset, ev)
   end
 
+  def test_input_delivers_a_short_message_after_a_long_one_at_once
+    # A long UPDATE and a short KEEPALIVE arrive in one write. Before the
+    # fix, Input compared the buffer with the long message's length, so it
+    # waited for more bytes before it handed over the KEEPALIVE.
+    pa = BGP::Path_attribute.new(BGP::Origin.new(0), BGP::Next_hop.new('10.0.0.1'), BGP::As_path.new(1))
+    long = BGP::Update.new(pa, BGP::Nlri.new('11.0.0.0/28', '11.0.0.16/28', '11.0.0.32/28')).encode
+    @input.start
+    @theirs.write long + BGP::Keepalive.new.encode
+    assert_equal(long, @events.next_event(2)[2])
+    ev, type, msg = @events.next_event(2)
+    assert_equal(:ev_msg, ev, 'the KEEPALIVE should not wait for more bytes')
+    assert_equal(4, type)
+    assert_equal(BGP::Keepalive.new.encode, msg)
+  end
+
 end
