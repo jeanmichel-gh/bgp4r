@@ -1,5 +1,15 @@
 # YAML config file for routegen demo.
-# $ ruby routegen routegen.yaml
+# $ ruby -I. examples/routegen examples/routegen.yml
+#
+# nlris: first prefix, how many prefixes, how many per UPDATE.
+# The first prefix sent is 11.0.0.0/28 itself. Older versions of routegen
+# skipped it and started at 11.0.0.16/28, as in the output further down.
+#
+# Optional:
+#   port: 179           under neighbor, the peer's TCP port
+#   log level: info     under neighbor: debug, info or warn.
+#                       ROUTEGEN_LOG_LEVEL=debug overrides it.
+#   capabilities: four byte as, route refresh, mbgp ipv4 unicast
 --- 
 neighbor: 
   router id: 1.1.1.1
