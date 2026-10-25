@@ -55,8 +55,7 @@ class TestRoutegen < Test::Unit::TestCase
   end
 
   def setup
-    @port = free_port
-    start_server(@port)
+    @port = start_server
     @rec = Recorder.new
     @s.add_observer @rec
     @dir = Dir.mktmpdir('routegen')
@@ -112,13 +111,6 @@ class TestRoutegen < Test::Unit::TestCase
   end
 
   private
-
-  def free_port
-    s = TCPServer.new('127.0.0.1', 0)
-    s.addr[1]
-  ensure
-    s.close if s
-  end
 
   # The test server is AS 100, so this is an iBGP session, as in routegen.yml.
   def config(routes)
