@@ -120,6 +120,26 @@ class TestBgpNeighbor < Test::Unit::TestCase
   rescue Timeout::Error
     assert false, "Timeout"
   end
+  def test_start_with_session
+    # Hand an already connected socket to start via :session.
+    @server = TCPServer.new('127.0.0.1', 0)
+    peer = TCPSocket.new('127.0.0.1', @server.addr[1])
+    session = @server.accept
+    Timeout::timeout(4) {
+      @c = Neighbor.new(4, 100, 180, '0.0.0.2', '127.0.0.1', '127.0.0.1')
+      @c.start :session=> session, :no_blocking=>true
+      assert_equal('OpenSent', @c.state)
+      assert_same(session, @c.socket)
+      # The OPEN must go out on the session socket: 16 byte marker, length, type 1.
+      header = peer.read(19)
+      assert_equal('ff'*16, header[0,16].unpack('H*')[0])
+      assert_equal(1, header[18].unpack('C')[0])
+    }
+  rescue Timeout::Error
+    assert false, "Timeout"
+  ensure
+    peer.close if peer and not peer.closed?
+  end
   def test_send_and_receive_path_id_afi_1_safi_1
     Timeout::timeout(4) {
       server_add_path_cap = BGP::OPT_PARM::CAP::Add_path.new
