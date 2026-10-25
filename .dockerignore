@@ -1,0 +1,8 @@
+.git
+.github
+.claude
+*.gem
+Gemfile.lock
+coverage
+tmp
+*.log
