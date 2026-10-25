@@ -1,5 +1,5 @@
 #--
-# Copyright 2008, 2009 Jean-Michel Esnault.
+# Copyright 2008, 2009, 2026 Jean-Michel Esnault.
 # All rights reserved.
 # See LICENSE.txt for permissions.
 #
@@ -208,6 +208,11 @@ module BGP
         super(as_path, method, as4byte)
       end
       
+      # The segments, in order. A copy, so callers cannot change the path.
+      def segments
+        @segments.dup
+      end
+
       def find_set
         @segments.find { |s| s.seg_type == SET }
       end

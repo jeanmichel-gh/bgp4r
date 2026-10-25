@@ -1,5 +1,5 @@
 #--
-# Copyright 2008, 2009 Jean-Michel Esnault.
+# Copyright 2008, 2009, 2026 Jean-Michel Esnault.
 # All rights reserved.
 # See LICENSE.txt for permissions.
 #
@@ -174,6 +174,15 @@ class As_path_Test < Test::Unit::TestCase
     assert_equal [3,4], set2.to_hash[:as_path][:sequence]
     assert_equal [5,6], set2.to_hash[:as_path][:confed_sequence]
     assert_equal [7,8], set2.to_hash[:as_path][:confed_set]
+  end
+  def test_segments
+    path = As_path.new(As_path::Segment.new(:sequence, 1, 2), As_path::Segment.new(:set, 3, 4))
+    segs = path.segments
+    assert_equal([As_path::SEQUENCE, As_path::SET], segs.map(&:seg_type))
+    assert_equal([[1, 2], [3, 4]], segs.map(&:as))
+    segs.clear
+    assert_equal(2, path.segments.size, 'segments returns a copy')
+    assert_equal([], As_path.new.segments)
   end
 end
 

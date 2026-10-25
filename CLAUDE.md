@@ -18,6 +18,7 @@ bgp/nlris/               prefix encodings (inet, labeled, VPN, RD, mapped IPv4)
 bgp/optional_parameters/ OPEN capabilities (4-byte AS, add-path, graceful restart...)
 bgp/orfs/                outbound route filtering
 bgp/neighbor/            the BGP finite state machine and TCP session (neighbor.rb)
+bgp/rib/                 routes and the decision process (RFC 4271 section 9); require 'bgp/rib'
 bgp/misc/                extras: route_generator.rb (many prefixes packed in UPDATEs), live_feed.rb (a client for an old public BGP feed)
 examples/                runnable scripts
 test/unit/               unit tests, mirroring bgp/

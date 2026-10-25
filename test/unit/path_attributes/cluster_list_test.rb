@@ -1,5 +1,5 @@
 #--
-# Copyright 2008, 2009 Jean-Michel Esnault.
+# Copyright 2008, 2009, 2026 Jean-Michel Esnault.
 # All rights reserved.
 # See LICENSE.txt for permissions.
 #
@@ -40,5 +40,10 @@ class Cluster_list_Test < Test::Unit::TestCase
     cids = ['1.1.1.1', '2.2.2.2', '3.3.3.3']
     clist1 = Cluster_list.new :cluster_list=> cids
     assert_equal( cids, clist1.to_hash[:cluster_list])
+  end
+  def test_cluster_ids
+    assert_equal(['1.1.1.1', '2.2.2.2'], Cluster_list.new('1.1.1.1', '2.2.2.2').cluster_ids)
+    cl = Cluster_list.new(Cluster_list.new('1.1.1.1', '2.2.2.2').encode)
+    assert_equal(['1.1.1.1', '2.2.2.2'], cl.cluster_ids)
   end
 end
