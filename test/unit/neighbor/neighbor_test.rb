@@ -172,6 +172,76 @@ class TestBgpNeighbor < Test::Unit::TestCase
   ensure
     peer.close if peer and not peer.closed?
   end
+  # A port nothing listens on: bind a free one, then close it.
+  def closed_port
+    s = TCPServer.new('127.0.0.1', 0)
+    port = s.addr[1]
+    s.close
+    port
+  end
+  # A peer that answers like a BGP speaker, on a free port.
+  def start_free_server
+    @server = TCPServer.new('127.0.0.1', 0)
+    @s = Neighbor.new(4, 100, 180, '0.0.0.1', '127.0.0.1', '127.0.0.1')
+    @thread = Thread.new do
+      begin
+        while (session = @server.accept)
+          @s.start_session(session)
+        end
+      rescue IOError
+      end
+    end
+    @server.addr[1]
+  end
+  def test_start_on_closed_port_returns_false_and_keeps_error
+    @c = Neighbor.new(4, 100, 180, '0.0.0.2', '127.0.0.1', '127.0.0.1')
+    assert_nil(@c.last_error)
+    assert_equal(false, @c.start(:port=> closed_port, :timeout=> 2))
+    assert_kind_of(Errno::ECONNREFUSED, @c.last_error)
+    assert @c.is_idle?
+  end
+  def test_start_with_raise_reraises_after_cleanup
+    @c = Neighbor.new(4, 100, 180, '0.0.0.2', '127.0.0.1', '127.0.0.1')
+    assert_raise(Errno::ECONNREFUSED) { @c.start(:port=> closed_port, :timeout=> 2, :raise=> true) }
+    assert_kind_of(Errno::ECONNREFUSED, @c.last_error)
+    assert @c.is_idle?
+  end
+  def test_start_waitfor_timeout_with_raise
+    @server = TCPServer.new('127.0.0.1', 0)
+    port = @server.addr[1]
+    @thread = Thread.new { loop { @server.accept } rescue nil }
+    @c = Neighbor.new(4, 100, 180, '0.0.0.2', '127.0.0.1', '127.0.0.1')
+    e = assert_raise(RuntimeError) { @c.start(:port=> port, :timeout=> 0.5, :raise=> true) }
+    assert_match(/timeout/, e.message)
+    assert_same(e, @c.last_error)
+    assert @c.is_idle?
+  end
+  def test_good_start_returns_true
+    Timeout::timeout(4) {
+      port = start_free_server
+      @c = Neighbor.new(4, 100, 180, '0.0.0.2', '127.0.0.1', '127.0.0.1')
+      assert_equal(true, @c.start(:port=> port))
+      assert_nil(@c.last_error)
+      assert @c.is_established?
+    }
+  end
+  def test_good_start_no_blocking_returns_true
+    Timeout::timeout(4) {
+      port = start_free_server
+      @c = Neighbor.new(4, 100, 180, '0.0.0.2', '127.0.0.1', '127.0.0.1')
+      assert_equal(true, @c.start(:port=> port, :no_blocking=> true))
+      assert_nil(@c.last_error)
+    }
+  end
+  def test_failed_start_then_good_start_clears_last_error
+    Timeout::timeout(4) {
+      @c = Neighbor.new(4, 100, 180, '0.0.0.2', '127.0.0.1', '127.0.0.1')
+      assert_equal(false, @c.start(:port=> closed_port))
+      port = start_free_server
+      assert_equal(true, @c.start(:port=> port))
+      assert_nil(@c.last_error)
+    }
+  end
   def test_send_and_receive_path_id_afi_1_safi_1
     Timeout::timeout(4) {
       server_add_path_cap = BGP::OPT_PARM::CAP::Add_path.new
