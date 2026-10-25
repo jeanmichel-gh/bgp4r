@@ -102,7 +102,6 @@ Found while fixing other bugs, not fixed yet:
 * `test/helpers/server.rb`: `start_server` and `stop_server` use bare `rescue`. A busy test port fails silently and the test fails later with a confusing message. Tests use fixed ports 3456 and 3333.
 * `bgp/path_attributes/mp_reach.rb` uses bare `raise` with no message in five places.
 * `Prefix.new_ntop` raises with only the AFI as the message when the AFI is unknown.
-* `bgp/messages/message.rb`: the message type list has a typo, `capabity`, so it defines `is_a_capabity?`.
 * `LiveFeed#close` on a feed that was never opened raises `NoMethodError`.
 * `bgp/nlris/nsap.rb` has its own `netmask` method, unrelated to `IPAddr#netmask`. Confusing to read.
 * `ci_reporter` in the `Gemfile` looks unused.
