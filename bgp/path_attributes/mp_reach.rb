@@ -43,9 +43,10 @@ module BGP
           when String
             path_id ? pfx_klass.new(path_id, n) : pfx_klass.new(n)
           when Hash
-            path_id = n[:path_id] if n[:path_id]
+            # A path ID in the NLRI hash wins over the top level :path_id.
+            pid = n[:path_id] || @path_id
             pfx = n[:prefix]
-            path_id ? pfx_klass.new(path_id, pfx) : pfx_klass.new(pfx)
+            pid ? pfx_klass.new(pid, pfx) : pfx_klass.new(pfx)
           else
             raise ArgumentError, "Invalid: #{n.inspect}"
           end
@@ -115,7 +116,7 @@ module BGP
           when String
             _arg = [arg].flatten[0]
           else
-            raise
+            raise ArgumentError, "invalid NLRI: #{[arg].flatten[0].inspect}, expected a String or a Hash"
           end
         when Hash
           _arg = arg[:prefix]
@@ -142,13 +143,13 @@ module BGP
       when 3
         return ::BGP.const_get('Prefix')
       else
-        raise
+        raise ArgumentError, "AFI #{afi.inspect} is not supported, expected 1 (IPv4), 2 (IPv6) or 3 (NSAP)"
       end
       _safi = case safi
       when 1 ; 'unicast'
       when 2 ; 'multicast'
       else
-        raise
+        raise ArgumentError, "SAFI #{safi.inspect} has no prefix class, expected 1 (unicast) or 2 (multicast)"
       end
       ::BGP.const_get([_afi,_safi].join('_'))
     end
@@ -240,7 +241,7 @@ module BGP
     end
     
     def parse_iso_mapped_next_hops(s)
-      raise unless @afi == 3
+      raise ArgumentError, "ISO mapped next hops need AFI 3, not AFI #{@afi.inspect}" unless @afi == 3
       while s.size>0
         s.slice!(0,8) if (128..129)===@safi
         case s.slice(0,1).unpack('C')[0]
@@ -251,7 +252,10 @@ module BGP
           s.slice!(0,3)
           @nexthops << Iso_ip_mapped.new(Prefix.new_ntop([128,s.slice!(0,16)].pack('Ca*'),2).to_s)
         else
-          raise 
+          # RFC 4760 section 3 leaves the next hop format to the AFI. For
+          # AFI 3 it is an IP address in an NSAP: IDP 0x47 (ICP 0006) for
+          # IPv4 and IDP 0x35 for IPv6.
+          raise ArgumentError, "unknown ISO mapped next hop, IDP 0x#{s.slice(0,1).unpack('H2')[0]}, expected 0x47 (IPv4) or 0x35 (IPv6)"
         end
         # skip magic
         s.slice!(0,1)
@@ -314,7 +318,7 @@ module BGP
         when 128,129
           ::BGP::const_get('Vpn')
         else
-          raise
+          raise ArgumentError, "no next hop class for AFI #{afi.inspect} SAFI #{safi.inspect}"
         end
       end
     end
