@@ -1,5 +1,5 @@
 #--
-# Copyright 2008, 2009 Jean-Michel Esnault.
+# Copyright 2008, 2009, 2026 Jean-Michel Esnault.
 # All rights reserved.
 # See LICENSE.txt for permissions.
 #
@@ -95,6 +95,8 @@ module BGP
     end
 
   end
+
+  Attr.register(ATTR::ORIGIN, Origin, :origin)
 
 end
 

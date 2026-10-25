@@ -187,6 +187,8 @@ module BGP
 
   end
 
+  Attr.register(ATTR::EXTENDED_COMMUNITY, Extended_communities, :extended_communities, :extended_community) { |v| Extended_communities.new_hash(*v) }
+
 end
 
 load "../../test/unit/path_attributes/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0

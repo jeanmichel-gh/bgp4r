@@ -348,6 +348,8 @@ module BGP
     
   end
 
+  Attr.register(ATTR::MP_REACH, Mp_reach, :mp_reach, session: :path_id)
+
 end
 
 load "../../test/unit/path_attributes/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0

@@ -12,7 +12,6 @@
   mp_reach 
   mp_unreach 
   extended_communities 
-  originator_id
   path_attribute
   aigp
 }.each do |attr|

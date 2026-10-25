@@ -366,6 +366,54 @@ class Path_attribute_Test < Test::Unit::TestCase # :nodoc:
     $stdout = out
   end
 
+  def test_lookup_as4_aggregator_and_extended_communities
+    pa = Path_attribute.new(
+      :as4_aggregator=>{:asn=>100, :address=>'1.1.1.1'},
+      :extended_communities=>[{:route_target=>[13111, 26054]}]
+    )
+    assert_equal(As4_aggregator, pa[:as4_aggregator].class)
+    assert_equal(As4_aggregator, pa[ATTR::AS4_AGGREGATOR].class)
+    assert_equal(Extended_communities, pa[:extended_communities].class)
+    assert_equal(Extended_communities, pa[:extended_community].class)
+    assert_equal(Extended_communities, pa[ATTR::EXTENDED_COMMUNITY].class)
+    assert_nil(pa[:aggregator])
+    assert_nil(pa[:no_such_attr])
+  end
+
+  def test_as_path_and_as4_path_are_kept_apart
+    pa = Path_attribute.new(As4_path.new(1,2), As_path.new(3))
+    assert_equal(As4_path, pa[:as4_path].class)
+    assert_equal(As_path, pa[:as_path].class)
+    assert_equal(As_path, pa.as_path.class)
+    assert_equal(As4_path, pa.as4_path.class)
+  end
+
+  def test_helpers_for_aigp_as4_path_as4_aggregator
+    pa = Path_attribute.new(:aigp=>10, :as4_path=>{:sequence=>[1,2]})
+    assert pa.has_an_aigp?
+    assert pa.has_a_aigp_attr?
+    assert pa.has_an_as4_path?
+    assert ! pa.has_an_as4_aggregator?
+    assert ! pa.has_an_as_path?
+    assert_equal(10, pa.aigp.to_i)
+    assert_equal('1 2', pa.as4_path.as_path)
+    pa.as4_aggregator = {:address=>'1.1.1.1', :asn=>100}
+    assert pa.has_an_as4_aggregator?
+    assert_equal(100, pa.as4_aggregator.asn)
+    pa.aigp = 20
+    assert_equal(20, pa.aigp.to_i)
+  end
+
+  def test_wire_round_trip_with_new_types
+    pa = Path_attribute.new(
+      Origin.new(0), As_path.new(1), As4_path.new(1),
+      As4_aggregator.new('1.1.1.1',100), Aigp.new(10)
+    )
+    parsed = Path_attribute.new(pa.encode)
+    assert_equal([Origin, As_path, As4_path, As4_aggregator, Aigp], parsed.attributes.map(&:class))
+    assert_equal(pa.encode, parsed.encode)
+  end
+
   def test_factory_unknown_attribute_is_quiet
     out, $stdout = $stdout, StringIO.new
     assert_equal(Attr::Unknown, Attr.factory(['c0630100'].pack('H*')).class)

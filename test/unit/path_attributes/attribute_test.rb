@@ -1,5 +1,5 @@
 #--
-# Copyright 2008, 2009 Jean-Michel Esnault.
+# Copyright 2008, 2009, 2026 Jean-Michel Esnault.
 # All rights reserved.
 # See LICENSE.txt for permissions.
 #
@@ -67,5 +67,71 @@ class Attr_factory_Test < Test::Unit::TestCase
     assert_equal(As_path, BGP::Attr.factory(s).class)
     assert_equal(Communities, BGP::Attr.factory(s).class)
     assert_equal('',s)
+  end
+
+  # RFC 6793 section 3 and RFC 7311 section 3. These came back as
+  # Attr::Unknown before the registry.
+  def test_factory_as4_path_as4_aggregator_aigp
+    { As4_path       => As4_path.new(As_path::Sequence.new(1,2)),
+      As4_aggregator => As4_aggregator.new('1.1.1.1',100),
+      Aigp           => Aigp.new(10),
+    }.each do |klass, attr|
+      wire = attr.encode
+      parsed = Attr.factory(wire.dup)
+      assert_equal(klass, parsed.class)
+      assert_equal(wire, parsed.encode)
+    end
+    assert_equal('c0110a02020000000100000002', Attr.factory(['c0110a02020000000100000002'].pack('H*')).to_shex)
+    assert_equal('c012080000006401010101', Attr.factory(['c012080000006401010101'].pack('H*')).to_shex)
+    assert_equal('801a0b01000b000000000000000a', Attr.factory(['801a0b01000b000000000000000a'].pack('H*')).to_shex)
+  end
+
+  def test_factory_passes_as4byte_to_as_path
+    wire = ['40020a02020000000100000002'].pack('H*')
+    assert_equal('1 2', Attr.factory(wire.dup, true).as_path)
+    assert_equal('1 2', Attr.factory(wire.dup, :as4byte=>true).as_path)
+  end
+end
+
+class Attr_registry_Test < Test::Unit::TestCase
+  include BGP
+
+  def test_every_type_is_registered_once
+    expected = {
+      ATTR::ORIGIN => Origin, ATTR::AS_PATH => As_path, ATTR::NEXT_HOP => Next_hop,
+      ATTR::MULTI_EXIT_DISC => Multi_exit_disc, ATTR::LOCAL_PREF => Local_pref,
+      ATTR::ATOMIC_AGGREGATE => Atomic_aggregate, ATTR::AGGREGATOR => Aggregator,
+      ATTR::COMMUNITIES => Communities, ATTR::ORIGINATOR_ID => Originator_id,
+      ATTR::CLUSTER_LIST => Cluster_list, ATTR::MP_REACH => Mp_reach,
+      ATTR::MP_UNREACH => Mp_unreach, ATTR::EXTENDED_COMMUNITY => Extended_communities,
+      ATTR::AS4_PATH => As4_path, ATTR::AS4_AGGREGATOR => As4_aggregator,
+      ATTR::ACCUMULATED_IGP_METRIC => Aigp,
+    }
+    expected.each { |type, klass| assert_equal(klass, Attr.by_type(type).klass, "type #{type}") }
+    assert_equal(expected.size, Attr.registrations.size)
+    assert_nil(Attr.by_type(99))
+  end
+
+  def test_keys_and_aliases
+    { :next_hop=>Next_hop, :nexthop=>Next_hop, :med=>Multi_exit_disc,
+      :multi_exit_disc=>Multi_exit_disc, :community=>Communities,
+      :communities=>Communities, :extended_community=>Extended_communities,
+      :extended_communities=>Extended_communities, :as4_path=>As4_path,
+      :as4_aggregator=>As4_aggregator, :aigp=>Aigp,
+    }.each { |key, klass| assert_equal(klass, Attr.by_key(key).klass, key.to_s) }
+    assert_nil(Attr.by_key(:no_such_attr))
+  end
+
+  def test_session_option
+    assert_equal(:as4byte, Attr.by_type(ATTR::AS_PATH).session)
+    assert_equal(:path_id, Attr.by_type(ATTR::MP_REACH).session)
+    assert_equal(:path_id, Attr.by_type(ATTR::MP_UNREACH).session)
+    assert_nil(Attr.by_type(ATTR::AS4_PATH).session)
+  end
+
+  def test_type_cannot_be_taken_by_another_class
+    assert_raise(ArgumentError) { Attr.register(ATTR::ORIGIN, Class.new(Attr), :other_origin) }
+    assert_equal(Origin, Attr.by_type(ATTR::ORIGIN).klass)
+    assert_nil(Attr.by_key(:other_origin))
   end
 end
