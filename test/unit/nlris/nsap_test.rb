@@ -1,5 +1,5 @@
 #--
-# Copyright 2011 Jean-Michel Esnault.
+# Copyright 2011, 2026 Jean-Michel Esnault.
 # All rights reserved.
 # See LICENSE.txt for permissions.
 #
@@ -49,6 +49,27 @@ class Nsap_Test < Test::Unit::TestCase
     nsap = Nsap.new('49.0102.0304.0506.0608.0910.1112.1314.1516.1718.00/16')
     assert_equal('49.0100.0000.0000.0000.0000.0000.0000.0000.0000.00', nsap.to_s)
     
+  end
+
+  def test_mask_on_a_length_that_is_not_a_whole_octet
+    all_ones = '49.ffff.ffff.ffff.ffff.ffff.ffff.ffff.ffff.ffff.ff'
+    assert_equal('49fff0', Nsap.new("#{all_ones}/20").to_shex)
+    assert_equal('40', Nsap.new("#{all_ones}/4").to_shex)
+    assert_equal('49' + 'ff' * 18 + 'fe', Nsap.new("#{all_ones}/159").to_shex)
+  end
+
+  def test_mask_helpers_are_private_and_not_named_netmask
+    # Nsap had a private netmask unrelated to IPAddr#netmask: a 160 bit
+    # Integer, not a dotted mask. Before the rename it existed under that
+    # name, which read as if it were the IPAddr method.
+    nsap = Nsap.new
+    assert(!nsap.respond_to?(:netmask, true), 'netmask should be renamed')
+    assert(!nsap.respond_to?(:netmask_to_c, true), 'netmask_to_c should be renamed')
+    assert(nsap.respond_to?(:prefix_mask_bits, true))
+    assert(nsap.respond_to?(:prefix_mask_octets, true))
+    assert(!nsap.respond_to?(:prefix_mask_bits))
+    assert(!nsap.respond_to?(:prefix_mask_octets))
+    assert_equal([0xff, 0xf0] + [0] * 18, Nsap.new('49/12').send(:prefix_mask_octets))
   end
 
   def test_new_ntoh
