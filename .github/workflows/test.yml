@@ -39,6 +39,9 @@ jobs:
           [ -n "$msg" ] || msg=$(tail -40 test.log)
           msg=${msg//'%'/'%25'}; msg=${msg//$'\r'/'%0D'}; msg=${msg//$'\n'/'%0A'}
           echo "::error title=Test output::$msg"
+      - name: Unit tests with frozen string literals
+        # Catches code that mutates a string literal before Ruby freezes them.
+        run: bundle exec ruby --enable-frozen-string-literal test/run_unit.rb
       - name: Functional test (add path over loopback)
         run: bundle exec ruby -I. test/functional/add_path_test.rb
         timeout-minutes: 2
