@@ -194,6 +194,10 @@ module Lab
       @speaker.announcements.each do |a|
         n.send_message @speaker.build_update(a, ebgp?, local)
       end
+    rescue RuntimeError => e
+      # The session went down while we were sending. run_session waits for
+      # Idle next, and the active side reconnects.
+      @recorder.error!("announce: #{e.message}")
     end
   end
 
