@@ -92,4 +92,17 @@ class TestBgpNeighborAddPathCap < Test::Unit::TestCase
     assert ! session_cap.send_inet_unicast?
   end
 
+  def test_extended_nexthop_needs_both_sides
+    enh = OPT_PARM::CAP::Extended_nexthop
+    both    = Open.new(4,100, 200, '10.0.0.1', enh.new(1, 1, 2))
+    neither = Open.new(4,100, 200, '10.0.0.1')
+    vpn     = Open.new(4,100, 200, '10.0.0.1', enh.new(1, 128, 2))
+    assert   Neighbor::Capabilities.new(both, both).extended_nexthop?
+    assert   Neighbor::Capabilities.new(both, both).extended_nexthop?(1, 1, 2)
+    assert ! Neighbor::Capabilities.new(both, neither).extended_nexthop?
+    assert ! Neighbor::Capabilities.new(neither, both).extended_nexthop?
+    assert ! Neighbor::Capabilities.new(both, vpn).extended_nexthop?
+    assert ! Neighbor::Capabilities.new(both, vpn).extended_nexthop?(1, 128)
+  end
+
 end

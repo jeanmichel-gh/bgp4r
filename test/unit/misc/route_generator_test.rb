@@ -241,6 +241,21 @@ class TestBgpRouteGenerator < Test::Unit::TestCase
     assert_equal('40.0.0.1', m.path_attribute[:next_hop].next_hop, 'other attributes are kept')
   end
 
+  def test_ipv4_with_an_ipv6_nexthop_rfc8950
+    g = RouteGenerator.new('13.11.0.0/26', 3, 3, pa, nexthop: '2001:db8::1', mp_reach: true)
+    u = g.each_update.first
+    m = Message.factory(u.encode)
+    assert_equal(u.to_shex, m.to_shex)
+    mp = mp_reach_of(m)
+    assert_equal([1, 1], [mp.afi, mp.safi])
+    assert_equal('2001:db8::1', mp.nexthops)
+    assert_equal(['13.11.0.0/26', '13.11.0.64/26', '13.11.0.128/26'], mp.nlris.map(&:to_s))
+    # RFC 8950 section 3: AFI 1, SAFI 1, next hop length 16, the IPv6
+    # next hop, a reserved 0, then the IPv4 NLRI.
+    assert_equal(%w(800e24 0001 01 10 20010db8000000000000000000000001 00
+                    1a0d0b0000 1a0d0b0040 1a0d0b0080).join, mp.to_shex)
+  end
+
   def test_ipv4_in_mp_reach_size_check
     # A /28 is 5 octets in MP_REACH_NLRI too.
     e = assert_raise(ArgumentError) do
@@ -251,7 +266,7 @@ class TestBgpRouteGenerator < Test::Unit::TestCase
 
   def test_ipv4_mp_reach_bad_arguments
     assert_raise(ArgumentError) { RouteGenerator.new('11.0.0.0/28', 1, 1, pa, mp_reach: true) }
-    assert_raise(ArgumentError) { RouteGenerator.new('11.0.0.0/28', 1, 1, pa, nexthop: '2001:db8::1', mp_reach: true) }
+    assert_raise(ArgumentError) { RouteGenerator.new('11.0.0.0/28', 1, 1, pa, nexthop: 'not an address', mp_reach: true) }
     e = assert_raise(ArgumentError) { RouteGenerator.new('11.0.0.0/28', 1, 1, pa, nexthop: '40.0.0.1') }
     assert_match(/mp_reach/, e.message)
   end

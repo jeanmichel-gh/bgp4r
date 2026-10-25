@@ -38,6 +38,8 @@ module BGP
   # Options, as keywords after path_attribute:
   #
   # nexthop::  next hop for MP_REACH_NLRI. Required for IPv6 and with mp_reach.
+  #            IPv4 prefixes can take an IPv6 next hop (RFC 8950). The peer
+  #            must then have the Extended Next Hop Encoding capability.
   # mp_reach:: true to send IPv4 prefixes in MP_REACH_NLRI instead of plain
   #            NLRI. IPv6 prefixes always go in MP_REACH_NLRI.
   # path_id::  an add-path path ID (RFC 7911) put in front of every prefix.
@@ -166,17 +168,15 @@ module BGP
         end
         raise ArgumentError, "MP_REACH_NLRI needs a nexthop"
       end
-      nh = begin
+      begin
         IPAddr.new(nexthop.to_s)
       rescue IPAddr::Error => e
         raise ArgumentError, "invalid nexthop #{nexthop.inspect}: #{e.message}"
       end
       # An IPv4 next hop for AFI 1 is 4 octets. For AFI 2 it is 16, and an
       # IPv4 one is sent as an IPv4-mapped IPv6 address. An IPv6 next hop
-      # for IPv4 NLRI (RFC 8950) is not supported by Mp_reach.
-      if @afi == IANA::AFI::IPv4 && !nh.ipv4?
-        raise ArgumentError, "nexthop #{nexthop} for IPv4 prefixes must be an IPv4 address"
-      end
+      # for IPv4 NLRI is 16 octets (RFC 8950 section 3). The session must
+      # have the Extended Next Hop Encoding capability (RFC 8950 section 4).
       nexthop.to_s
     end
 

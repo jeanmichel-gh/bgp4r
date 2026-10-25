@@ -42,6 +42,59 @@ class Mp_reach_Test < Test::Unit::TestCase
     mapped_addr = Iso_ip_mapped.new('2011::1')
     assert_equal('3500002011000000000000000000000000000100', mapped_addr.to_shex)
   end
+
+  # RFC 8950 section 3: IPv4 NLRI with an IPv6 next hop. The next hop
+  # length tells the type: 16 or 32 for SAFI 1, 2 and 4, 24 or 48 for
+  # SAFI 128 and 129. RFC 8950 has no hex capture; these follow its
+  # field layout.
+
+  def test_rfc8950_afi_1_safi_1_ipv6_nexthop
+    s = '800e17 0001 01 10 20010db8000000000000000000000001 00 080a'.split.join
+    mpr = Mp_reach.new(:afi=>1, :safi=>1, :nexthop=>'2001:db8::1', :nlris=>'10.0.0.0/8')
+    assert_equal(s, mpr.to_shex)
+    mpr2 = Mp_reach.new([s].pack('H*'))
+    assert_equal('2001:db8::1', mpr2.nexthops)
+    assert_equal('10.0.0.0/8', mpr2.nlris[0].to_s)
+    assert_equal(mpr.to_hash, mpr2.to_hash)
+    assert_equal(s, mpr2.to_shex)
+  end
+
+  def test_rfc8950_afi_1_safi_1_global_and_link_local_nexthops
+    s = ('800e27 0001 01 20 20010db8000000000000000000000001 ' +
+         'fe800000000000000000000000000001 00 080a').split.join
+    mpr = Mp_reach.new([s].pack('H*'))
+    assert_equal('2001:db8::1, fe80::1', mpr.nexthops)
+    assert_equal(s, mpr.to_shex)
+    assert_equal(s, Mp_reach.new(mpr.to_hash[:mp_reach]).to_shex)
+  end
+
+  def test_rfc8950_afi_1_safi_4_ipv6_nexthop
+    s = '800e1a 0001 04 10 20010db8000000000000000000000001 00 20 000641 0a'.split.join
+    mpr = Mp_reach.new([s].pack('H*'))
+    assert_equal('2001:db8::1', mpr.nexthops)
+    assert_equal(s, mpr.to_shex)
+  end
+
+  def test_rfc8950_afi_1_safi_128_vpn_ipv6_nexthop
+    # Next hop: an RD of 8 zero octets, then the IPv6 address.
+    s = ('800e2a 0001 80 18 0000000000000000 20010db8000000000000000000000001 00 ' +
+         '60 000651 0000006400000064 0a').split.join
+    mpr = Mp_reach.new(:afi=>1, :safi=>128, :nexthop=>'2001:db8::1',
+                       :nlris=>{:rd=>[100,100], :prefix=>'10.0.0.0/8', :label=>101})
+    assert_equal(s, mpr.to_shex)
+    mpr2 = Mp_reach.new([s].pack('H*'))
+    assert_equal('2001:db8::1', mpr2.nexthops)
+    assert_equal(mpr.to_hash, mpr2.to_hash)
+    s48 = ('800e42 0001 80 30 0000000000000000 20010db8000000000000000000000001 ' +
+           '0000000000000000 fe800000000000000000000000000001 00 60 000651 0000006400000064 0a').split.join
+    assert_equal('2001:db8::1, fe80::1', Mp_reach.new([s48].pack('H*')).nexthops)
+  end
+
+  def test_rfc8950_ipv4_nexthops_still_parse_as_ipv4
+    # Two IPv4 next hops are 8 octets, not an RFC 8950 length.
+    s = '800e0f 0001 01 08 0a000001 0a000002 00 080a'.split.join
+    assert_equal('10.0.0.1, 10.0.0.2', Mp_reach.new([s].pack('H*')).nexthops)
+  end
   
   def test_afi_3_safi_1_ipv4_mapped_nexthops
     mpr1 =  Mp_reach.new( :afi=>3, 

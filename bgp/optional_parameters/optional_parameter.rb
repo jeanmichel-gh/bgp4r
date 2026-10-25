@@ -1,5 +1,5 @@
 #--
-# Copyright 2008, 2009 Jean-Michel Esnault.
+# Copyright 2008, 2009, 2026 Jean-Michel Esnault.
 # All rights reserved.
 # See LICENSE.txt for permissions.
 #
@@ -33,6 +33,7 @@ module OPT_PARM
     CAP_MBGP = 1
     CAP_ROUTE_REFRESH = 2
     CAP_ORF = 3
+    CAP_EXTENDED_NEXTHOP = 5 # RFC 8950 section 4
     CAP_GR  = 64
     CAP_AS4 = 65
     CAP_DYNAMIC = 67
