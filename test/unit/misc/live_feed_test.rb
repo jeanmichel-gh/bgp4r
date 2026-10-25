@@ -70,4 +70,18 @@ class TestBgpMiscLiveFeedUnit < Test::Unit::TestCase
       assert_nil @feed.read
     end
   end
+  def test_close_unblocks_read
+    open_feed
+    th = Thread.new { @feed.read }
+    sleep 0.1
+    assert th.alive?, "read should block while the feed is silent"
+    Timeout.timeout(3) do
+      @feed.close
+      assert_nil th.value
+    end
+    assert_nil @feed.read
+    assert_nothing_raised { @feed.close }
+  ensure
+    th.kill if th
+  end
 end
