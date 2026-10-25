@@ -26,7 +26,7 @@ require 'bgp4r'
 class Optional_parameter_Test < Test::Unit::TestCase
   include BGP
   def test_draft_ietf_idr_ext_opt_param_01_encoding
-    octet = ''
+    octet = String.new
     def octet.encode
       [0xab].pack('C')
     end
