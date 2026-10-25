@@ -75,8 +75,12 @@ module BGP
       def recv_msg(s)
         loop do
           if @buf.size<18 or @buf.size <@len
-            recv = s.recv(4100) 
-            @buf += recv unless recv.nil?
+            recv = s.recv(4100)
+            # recv returns an empty String once the peer closes the connection.
+            # RFC 4271 section 8.2.2: that is a TcpConnectionFails event, so
+            # report it now instead of spinning until the hold timer expires.
+            raise EOFError, 'connection closed by peer' if recv.nil? || recv.empty?
+            @buf += recv
             break unless @continue
           end
           if @buf.size>18
