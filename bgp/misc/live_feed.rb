@@ -56,10 +56,16 @@ class LiveFeed
     end
     self
   end
+  # Safe to call more than once. A read blocked on the queue returns nil.
   def close
-    @th.kill
-    @reader.kill
+    @lock.synchronize do
+      @eof = true
+      @buf.clear
+      @cond.signal
+    end
     @feed.close
+    [@reader, @th].each { |t| t.join(1) or t.kill }
+    @queue.close
   end
   def read
     @queue.deq
