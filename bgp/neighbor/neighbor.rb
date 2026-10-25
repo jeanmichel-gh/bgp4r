@@ -269,7 +269,9 @@ module BGP
     def send_message(m)
       raise if m.nil?
       unless @out
-        log_warn "Could not Send#{m.class.to_s.split('::')[-1]}  @out is nil"
+        txt = "Could not Send#{m.class.to_s.split('::')[-1]}: session not started, call start first"
+        log_warn txt
+        raise txt
       end
       unless m.is_a?(String)
         log_info "Send#{m.class.to_s.split('::')[-1]}"

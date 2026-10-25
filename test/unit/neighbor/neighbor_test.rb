@@ -120,6 +120,12 @@ class TestBgpNeighbor < Test::Unit::TestCase
   rescue Timeout::Error
     assert false, "Timeout"
   end
+  def test_send_message_before_start_raises
+    n = Neighbor.new(4, 100, 180, '0.0.0.2', '127.0.0.1', '127.0.0.1')
+    e = assert_raise(RuntimeError) { n.send_message Keepalive.new }
+    assert_match(/not started/, e.message)
+    assert n.is_idle?
+  end
   def test_send_and_receive_path_id_afi_1_safi_1
     Timeout::timeout(4) {
       server_add_path_cap = BGP::OPT_PARM::CAP::Add_path.new
