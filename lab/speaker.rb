@@ -212,6 +212,8 @@ module Lab
 
     def run_session(sock)
       @busy.synchronize do
+        # Each session gets a new Neighbor. close ends the old one's thread.
+        @neighbor.close if @neighbor
         n = new_neighbor
         @neighbor = n
         n.start(:session => sock, :timeout => @config.fetch('open_timeout', 30))
@@ -221,9 +223,10 @@ module Lab
           n.wait_for_state(:Idle)
         else
           @recorder.error!("session did not reach Established, state #{n.state}#{": #{n.last_error.message}" if n.last_error}")
-          n.stop
         end
         @recorder.session_down!
+      ensure
+        n.close if n
       end
     end
 

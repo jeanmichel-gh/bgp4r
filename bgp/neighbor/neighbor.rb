@@ -55,7 +55,7 @@ module BGP
       @mutex = Mutex.new
       @state_cv = ConditionVariable.new
       @eventQ = Queue.new
-      event_dispatch
+      @event_thread = event_dispatch
     end
     
     def set(_h)
@@ -154,10 +154,16 @@ module BGP
       end
     end
 
+    # The thread that handles messages and events from the session.
+    # It runs until close.
     def event_dispatch
       Thread.new(@eventQ) do |eventQ|
+        Thread.current['name'] = 'BGP event dispatch'
         loop do
-          ev, type, m = eventQ.deq
+          event = eventQ.deq
+          # A closed and empty queue returns nil: close was called.
+          break if event.nil?
+          ev, type, m = event
           case ev
           when :ev_msg
             begin
@@ -234,6 +240,7 @@ module BGP
     def start(arg={})
       @last_error = nil
       options = {:port=> 179, :auto_retry=> false, :no_blocking=>false, :waitfor=> :Established, :timeout=> 60, :raise=> false}.merge(arg)
+      raise IOError, "#{self.class} is closed" if closed?
       return true if @state == :Established
       stop unless @state == :Idle
       if options[:session]
@@ -286,6 +293,21 @@ module BGP
       new_state :Idle, "Disable"
     end
 
+    # Stops the session if needed and ends the event thread for good.
+    # Call it when the Neighbor is no longer used. stop alone keeps the
+    # thread, so start can be called again after stop, but not after close.
+    def close
+      retry_thread :stop
+      stop if @state != :Idle or (@socket and not @socket.closed?)
+      @eventQ.close
+      @event_thread.join unless Thread.current == @event_thread
+      nil
+    end
+
+    def closed?
+      @eventQ.closed?
+    end
+
     define_method(:in) do
       @in.thread
     end
@@ -334,6 +356,8 @@ module BGP
     
     def update(*args)
       @eventQ.enq(args)
+    rescue ClosedQueueError
+      # close was called; nothing handles events any more.
     end
     
     def new_state(state, txt='')
