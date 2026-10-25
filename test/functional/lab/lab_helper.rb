@@ -48,8 +48,11 @@ module LabHelper
       false
     end
 
-    def initialize(topology)
+    # env: extra environment for docker compose, e.g. ROUTEGEN_COUNT. The
+    # compose file passes the variables it names on to the containers.
+    def initialize(topology, env: {})
       @file = File.join(ROOT, 'lab', 'topologies', topology, 'compose.yml')
+      @env = env.to_h { |k, v| [k.to_s, v.to_s] }
     end
 
     def up ; compose('up', '--detach', '--build') ; end
@@ -68,7 +71,7 @@ module LabHelper
     private
 
     def compose(*args, check: true)
-      out, status = Open3.capture2e('docker', 'compose', '-f', @file, *args)
+      out, status = Open3.capture2e(@env, 'docker', 'compose', '-f', @file, *args)
       raise "docker compose #{args.join(' ')} failed:\n#{out}" if check && !status.success?
       out
     end
@@ -102,8 +105,10 @@ module LabHelper
       conf = File.join(@dir, "#{node}.yml")
       File.write(conf, @nodes.fetch(node).to_yaml)
       log = File.join(@dir, "#{node}.log")
+      # One open file for both streams. out: log, err: log opened it twice,
+      # and lines from stderr overwrote lines from stdout.
       @pids[node] = Process.spawn(@env, RbConfig.ruby, File.join(ROOT, 'lab', 'speaker.rb'), conf,
-                                  out: log, err: log)
+                                  out: log, err: [:child, :out])
     end
 
     def stop(node)

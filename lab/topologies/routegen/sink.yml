@@ -1,0 +1,8 @@
+# sink waits for gen. It counts and times the routes instead of keeping them.
+router_id: 10.20.0.2
+as: 65002
+neighbors:
+  - address: 10.20.0.1
+    as: 65001
+    hold_time: 30
+    record: count
