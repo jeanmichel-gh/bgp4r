@@ -28,7 +28,17 @@ jobs:
           ruby-version: ${{ matrix.ruby }}
           bundler-cache: true
       - name: Unit tests
-        run: bundle exec ruby test/run_unit.rb
+        shell: bash
+        run: bundle exec ruby test/run_unit.rb 2>&1 | tee test.log
+      - name: Show test failures as an annotation
+        if: failure()
+        shell: bash
+        run: |
+          [ -f test.log ] || exit 0
+          msg=$(grep -E -A15 "^(Failure|Error):|Error\b.*\(LoadError\)|cannot load such file" test.log | head -80)
+          [ -n "$msg" ] || msg=$(tail -40 test.log)
+          msg=${msg//'%'/'%25'}; msg=${msg//$'\r'/'%0D'}; msg=${msg//$'\n'/'%0A'}
+          echo "::error title=Test output::$msg"
       - name: Functional test (add path over loopback)
         run: bundle exec ruby -I. test/functional/add_path_test.rb
         timeout-minutes: 2
@@ -51,7 +61,17 @@ jobs:
           --build-arg RUBY_VERSION=${{ matrix.ruby }}
           -t bgp4r-test .
       - name: Unit tests
-        run: docker run --rm bgp4r-test
+        shell: bash
+        run: docker run --rm bgp4r-test 2>&1 | tee test.log
+      - name: Show test failures as an annotation
+        if: failure()
+        shell: bash
+        run: |
+          [ -f test.log ] || exit 0
+          msg=$(grep -E -A15 "^(Failure|Error):|Error\b.*\(LoadError\)|cannot load such file" test.log | head -80)
+          [ -n "$msg" ] || msg=$(tail -40 test.log)
+          msg=${msg//'%'/'%25'}; msg=${msg//$'\r'/'%0D'}; msg=${msg//$'\n'/'%0A'}
+          echo "::error title=Test output::$msg"
       - name: Functional test (add path over loopback)
         run: docker run --rm bgp4r-test ruby -I. test/functional/add_path_test.rb
         timeout-minutes: 2
