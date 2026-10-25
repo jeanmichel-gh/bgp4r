@@ -15,6 +15,21 @@ docker compose -f lab/topologies/two-speakers/compose.yml exec r1 cat /tmp/bgp4r
 docker compose -f lab/topologies/two-speakers/compose.yml down
 ```
 
+### Logs
+
+Each speaker logs every message it sends and receives, and every session state change, to `docker compose logs`. Pick the level on the command line:
+
+```
+LAB_LOG_LEVEL=debug docker compose -f lab/topologies/two-speakers/compose.yml up -d
+docker compose -f lab/topologies/two-speakers/compose.yml logs -f
+```
+
+`info`, the default, shows message types and state changes, like `RecvOpen old state OpenSent new state OpenConfirm`. `debug` also prints every message decoded: OPEN capabilities, UPDATE path attributes and prefixes. Running `up -d` again with a new level recreates the containers, so the sessions restart.
+
+`LAB_LOG_LEVEL` works for the lab tests too: `LAB_LOG_LEVEL=debug ruby test/run_lab.rb`. The logs are printed when a test fails.
+
+### State
+
 Each speaker keeps its state in `/tmp/bgp4r-state.json`: each session's state, the peer's AS and router ID, and every route received with its attributes. It rewrites the file twice a second. Tests read it, and so can you.
 
 The speakers run as the non-root user `bgp` and still listen on TCP 179. Docker allows that inside a container's own network namespace.
@@ -32,7 +47,7 @@ router_id: 10.10.0.1        # BGP identifier
 as: 65001                   # local AS
 listen_address: 0.0.0.0     # optional, where passive peers connect
 port: 179                   # optional, listen port
-log_level: info             # optional: debug, info, warn
+log_level: info             # optional: debug, info, warn. LAB_LOG_LEVEL overrides it.
 state_file: /tmp/bgp4r-state.json   # optional
 
 neighbors:

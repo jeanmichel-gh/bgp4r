@@ -76,7 +76,9 @@ module LabHelper
 
   class Local
     # nodes: name => speaker config (a Hash). state_file is filled in here.
-    def initialize(nodes)
+    # env: extra environment for every speaker process, e.g. LAB_LOG_LEVEL.
+    def initialize(nodes, env: {})
+      @env = env
       @dir = Dir.mktmpdir('bgp4r-lab')
       @nodes = nodes.to_h { |name, conf| [name, conf.merge('state_file' => File.join(@dir, "#{name}.json"))] }
       @pids = {}
@@ -100,7 +102,7 @@ module LabHelper
       conf = File.join(@dir, "#{node}.yml")
       File.write(conf, @nodes.fetch(node).to_yaml)
       log = File.join(@dir, "#{node}.log")
-      @pids[node] = Process.spawn(RbConfig.ruby, File.join(ROOT, 'lab', 'speaker.rb'), conf,
+      @pids[node] = Process.spawn(@env, RbConfig.ruby, File.join(ROOT, 'lab', 'speaker.rb'), conf,
                                   out: log, err: log)
     end
 
@@ -109,6 +111,12 @@ module LabHelper
       Process.kill('TERM', pid)
       Process.wait(pid)
     rescue Errno::ESRCH, Errno::ECHILD
+    end
+
+    def log(node)
+      File.read(File.join(@dir, "#{node}.log"))
+    rescue Errno::ENOENT
+      ''
     end
 
     def logs
