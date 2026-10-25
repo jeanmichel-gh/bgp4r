@@ -17,7 +17,7 @@
 #     removed from inter-AS routing.
 #  
 #     An UPDATE message is used to advertise feasible routes that share
-#     common path Copyright 2008, 2009 to a peer, or to withdraw multiple unfeasible
+#     common path attributes to a peer, or to withdraw multiple unfeasible
 #     routes from service (see 3.1).  An UPDATE message MAY simultaneously
 #     advertise a feasible route and withdraw multiple unfeasible routes
 #     from service.  The UPDATE message always includes the fixed-size BGP
@@ -118,6 +118,7 @@ class BGP::Update < BGP::Message
   end
 
   def encode(session_info=@session_info)
+    session_info ||= @session_info
     withdrawn, path_attribute = '', ''
     withdrawn = @withdrawn.encode if @withdrawn
     path_attribute = @path_attribute.encode(session_info.as4byte?) if @path_attribute

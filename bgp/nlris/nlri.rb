@@ -1,5 +1,5 @@
 #--
-# Copyright 2008, 2009 Jean-Michel Esnault.
+# Copyright 2008, 2009, 2026 Jean-Michel Esnault.
 # All rights reserved.
 # See LICENSE.txt for permissions.
 #
@@ -58,8 +58,14 @@ module BGP
             raise
           end
         when String
-          o = Prefix.new(arg)
-          @nlris << o
+          # "ID=100, 10.0.0.0/8" is how to_ary writes a prefix with an
+          # add-path Path Identifier (RFC 7911 section 3). Read it back so
+          # to_hash round trips through new.
+          if arg =~ /\AID=(\d+), (.+)\z/
+            @nlris << Prefix.new($1.to_i, $2)
+          else
+            @nlris << Prefix.new(arg)
+          end
         when Array
           if arg[0].is_a?(Integer)
             @nlris << Prefix.new(*arg)

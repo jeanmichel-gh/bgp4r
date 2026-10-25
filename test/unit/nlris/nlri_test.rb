@@ -100,4 +100,13 @@ class Nlri_Test < Test::Unit::TestCase
     assert_match(/ID=105, 105.0/, nlri.to_s)
     assert_equal(s, nlri.to_shex)
   end
+
+  def test_to_ary_round_trips_with_path_ids
+    nlri = Nlri.new([100, '77.0.0.0/17'], '78.0.0.0/8')
+    nlri2 = Nlri.new(*nlri.to_ary)
+    assert_equal(nlri.to_ary, nlri2.to_ary)
+    assert_equal(nlri.to_shex, nlri2.to_shex)
+    w = Withdrawn.new([5, '10.0.0.0/8'])
+    assert_equal(5, Withdrawn.new(*w.to_ary).nlris[0].path_id)
+  end
 end

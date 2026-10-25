@@ -497,6 +497,31 @@ class Update_Test < Test::Unit::TestCase
     assert_equal(u.to_shex(o), m.to_shex(o))
   end
 
-  
+  def test_to_hash_round_trips_with_add_path_nlris_and_withdrawns
+    u = Update.new(Path_attribute.new(Origin.new(0), As_path.new(100)),
+                   Withdrawn.new([5, '10.0.0.0/8'], '11.0.0.0/8'),
+                   Nlri.new([100, '77.0.0.0/17'], '78.0.0.0/8'))
+    h = u.to_hash
+    assert_equal(['ID=5, 10.0.0.0/8', '11.0.0.0/8'], h[:withdrawns])
+    assert_equal(['ID=100, 77.0.0.0/17', '78.0.0.0/8'], h[:nlris])
+    u2 = Update.new(h)
+    assert_equal(h, u2.to_hash)
+    assert_equal([5, nil], u2.withdrawn.nlris.collect { |n| n.path_id })
+    assert_equal([100, nil], u2.nlri.nlris.collect { |n| n.path_id })
+    assert_equal(u.to_shex, u2.to_shex)
+  end
+
+  def test_to_hash_round_trips_with_plain_nlris_and_withdrawns
+    u = Update.new(Path_attribute.new(Origin.new(0), As_path.new(100)),
+                   Withdrawn.new('10.0.0.0/8'), Nlri.new('77.0.0.0/17', '78.0.0.0/8'))
+    u2 = Update.new(u.to_hash)
+    assert_equal(u.to_hash, u2.to_hash)
+    assert_equal(u.to_shex, u2.to_shex)
+  end
+
+  def test_encode_nil_uses_the_default_session_info
+    u = Update.new(Path_attribute.new(Origin.new(0), As_path.new(100)), Nlri.new('77.0.0.0/17'))
+    assert_equal(u.encode, u.encode(nil))
+  end
 
 end
