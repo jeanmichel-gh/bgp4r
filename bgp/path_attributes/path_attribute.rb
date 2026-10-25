@@ -21,6 +21,7 @@
 #++
 
 require 'bgp/path_attributes/attribute'
+require 'bgp/path_attributes/raw'
 require 'bgp/neighbor/add_path_cap'
 
 module BGP
@@ -40,10 +41,14 @@ module BGP
         end
       elsif args.size ==1 and args[0].is_a?(Hash)
         @attributes = args[0].collect { |key, value|
+          # Attr::Unknown has no type code of its own, so it is not in
+          # the registry. Its hash value is a list of attributes.
+          next [value].flatten.collect { |h| Attr::Unknown.new(h) } if key == :unknown
           reg = Attr.by_key(key)
           raise ArgumentError, "#{key} not implemented" unless reg
           reg.build(value)
-        }.compact
+        # Splice the :unknown lists. Not flatten: Cluster_list has to_ary.
+        }.inject([]) { |a, x| x.instance_of?(Array) ? a + x : a << x }.compact
       else
         add(*args)
       end
@@ -177,7 +182,13 @@ module BGP
       h = {}
       @attributes.each { |att| 
         _h = att.to_hash
-        h = h.merge(_h)  if _h
+        next unless _h
+        # Several unknown attributes each give an :unknown array: join
+        # them, a plain merge would keep only the last one.
+        if _h.key?(:unknown) and h.key?(:unknown)
+          _h = _h.merge(:unknown => h[:unknown] + _h[:unknown])
+        end
+        h = h.merge(_h)
       }
       h
     end
@@ -201,20 +212,21 @@ module BGP
 
   class Attr
     unless const_defined? :Unknown
-      Unknown = Class.new(Attr) do
-        attr_reader :type, :flags, :value
+      # An attribute that Attr.factory does not know. A Raw that keeps
+      # the old forms: Unknown.new(flags, type, length, value), where the
+      # length is ignored, and Unknown.new(wire bytes). Unlike Raw, it
+      # sets or clears the Extended Length bit from the value size.
+      Unknown = Class.new(Raw) do
         def initialize(*args)
-          if args.size>1
+          if args.size == 4
             @flags, @type, _, @value = args
           else
-            parse(*args)
+            super
           end
         end
-        def encode
-          super(@value)
-        end
-        def parse(s)
-          @flags, @type, _, @value = super
+        def header_flags(len)
+          len_fmt(len)
+          @flags
         end
       end
     end
