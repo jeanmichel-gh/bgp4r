@@ -134,4 +134,24 @@ class TestBgpRibRoute < Test::Unit::TestCase
     assert_equal('ID=3, 10.1.0.0/16 via 10.0.0.2 from 10.0.0.2 AS65002 path 65002',
                  Route.new('10.1.0.0/16', pa, peer, path_id: 3).to_s)
   end
+
+  def test_same_path
+    pa = Path_attribute.new(Origin.new(0), Next_hop.new('10.0.0.2'), As_path.new(65002))
+    a = Route.new('10.1.0.0/16', pa, peer)
+    assert a.same_path?(Route.new('10.1.0.0/16', Path_attribute.new(pa.encode(true), true), peer))
+    assert !a.same_path?(Route.new('10.1.0.0/16', pa, peer('10.0.0.9')))
+    assert !a.same_path?(Route.new('10.1.0.0/16', pa, peer, path_id: 1))
+    assert !a.same_path?(Route.new('10.2.0.0/16', pa, peer))
+    assert !a.same_path?(Route.new('10.1.0.0/16', Path_attribute.new(Origin.new(1), Next_hop.new('10.0.0.2'), As_path.new(65002)), peer))
+    assert !a.same_path?(nil)
+  end
+
+  def test_with_path_attribute
+    a = Route.new('10.1.0.0/16', nil, peer, path_id: 4)
+    b = a.with_path_attribute(Path_attribute.new(Origin.new(2)))
+    assert_equal(2, b.origin)
+    assert_nil(a.origin)
+    assert_equal(a.key, b.key)
+    assert_equal(a.peer, b.peer)
+  end
 end

@@ -25,3 +25,6 @@
 
 require 'bgp/rib/route'
 require 'bgp/rib/decision'
+require 'bgp/rib/adj_rib_in'
+require 'bgp/rib/loc_rib'
+require 'bgp/rib/table'
