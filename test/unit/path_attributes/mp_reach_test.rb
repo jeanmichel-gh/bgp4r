@@ -335,12 +335,29 @@ class Mp_reach_Test < Test::Unit::TestCase
     assert_match(/^\s+192.168.1.0\/24/, mpr.to_s)
 
     s = '800e19000102040a000001000000006418c0a8010000006418c0a802'
-    sbin = [s].pack('H*') 
+    sbin = [s].pack('H*')
     mpr = Mp_reach.new(sbin, true)
     assert_match(/^\s+ID=100, 192.168.1.0\/24/, mpr.to_s)
     assert_match(/^\s+ID=100, 192.168.1.0\/24/, mpr.to_s)
   end
-  
+
+  def test_afi_1_safi_1_ntop
+    # AFI 1 SAFI 1 used to parse each prefix as a whole Nlri: to_hash gave
+    # {:nlris=>[...]} per prefix, and with path IDs the ID was read twice.
+    s = '800e11000101040a0000010018c0a80118c0a802'
+    mpr = Mp_reach.new([s].pack('H*'), false)
+    assert_equal(['192.168.1.0/24', '192.168.2.0/24'], mpr.nlris.map(&:to_s))
+    assert_equal({:mp_reach=>{:safi=>1, :afi=>1, :nexthop=>['10.0.0.1'],
+                              :nlris=>['192.168.1.0/24', '192.168.2.0/24']}}, mpr.to_hash)
+    assert_equal(s, mpr.to_shex)
+
+    # RFC 7911 section 3: each NLRI starts with its 4 octet Path Identifier.
+    s = '800e19000101040a000001000000006418c0a8010000006518c0a802'
+    mpr = Mp_reach.new([s].pack('H*'), true)
+    assert_equal(['ID=100, 192.168.1.0/24', 'ID=101, 192.168.2.0/24'], mpr.nlris.map(&:to_s))
+    assert_equal(s, mpr.to_shex)
+  end
+
   def test_afi_2
     mpr1 =  Mp_reach.new(:safi=>1, :nexthop=> ['2011:1:7::1'], :nlris=>  '2011:1::/32')
     mpr2 =  Mp_reach.new(:safi=>1, :nexthop=> ['2011:1:7::1'], :nlris=>  '2011:1::/32', :path_id=>100)
