@@ -524,4 +524,14 @@ class Update_Test < Test::Unit::TestCase
     assert_equal(u.encode, u.encode(nil))
   end
 
+
+  def test_info_carries_the_receive_policy
+    assert_equal :lenient, Update::Info.new.policy
+    assert_equal :strict, Update::Info.new(false, :strict).policy
+    s = 'ffffffffffffffffffffffffffffffff' + '0022' + '02' + '0000' + '000b' + 'c0010100' + '4003040a000001'
+    m = Update.new([s].pack('H*'), Update::Info.new(false))
+    assert_equal 1, m.path_attribute.errors.size
+    assert_raise(Malformed_attribute) { Update.new([s].pack('H*'), Update::Info.new(false, :strict)) }
+  end
+
 end

@@ -90,6 +90,12 @@ module BGP
       f = as4byte ? 'N' : 'n'
       super([@as].pack(f) + @ip_address.hton)
     end
+
+    # RFC 6793 section 3: on a 4-octet AS session, AGGREGATOR carries a
+    # 4-octet AS number (8 octets in all, RFC 7606 section 7.7).
+    def encode4
+      encode(true)
+    end
     
     def to_hash
       {:aggregator=> {:asn=> asn, :address=> address}}
@@ -125,7 +131,8 @@ module BGP
     end    
   end
 
-  Attr.register(ATTR::AGGREGATOR, Aggregator, :aggregator)
+  # The AS number size follows the session (RFC 6793 section 3).
+  Attr.register(ATTR::AGGREGATOR, Aggregator, :aggregator, session: :as4byte)
   # RFC 6793 section 3: AS4_AGGREGATOR always carries a 4-octet AS number.
   Attr.register(ATTR::AS4_AGGREGATOR, As4_aggregator, :as4_aggregator)
 

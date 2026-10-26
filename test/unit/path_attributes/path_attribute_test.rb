@@ -464,4 +464,99 @@ class Path_attribute_Test < Test::Unit::TestCase # :nodoc:
     assert_equal('80ff0401020304', a.partial!.to_shex)
   end
 
+
+  # Receive policies (RFC 7606)
+
+  def wire(hex) [hex.delete(' ')].pack('H*') end
+  GOOD = '40010100 4002060201fa56ea01 4003040a000001'
+
+  # B9: flags were never checked.
+  def test_flags_error_is_reported
+    pa = Path_attribute.new(wire('c0010100 4002060201fa56ea01 4003040a000001'), true)
+    assert_instance_of Origin, pa[:origin]
+    assert_equal [[1, 4, :treat_as_withdraw]], pa.errors.collect { |f| [f.type, f.subcode, f.action] }
+    assert_equal :treat_as_withdraw, pa.action
+  end
+
+  # B10: lengths were never checked.
+  def test_bad_lengths_are_reported
+    pa = Path_attribute.new(wire('40010100 c008050102030405'), true)
+    assert_equal [[8, 5, :treat_as_withdraw]], pa.errors.collect { |f| [f.type, f.subcode, f.action] }
+    pa = Path_attribute.new(wire('40010100 40030800 0a000001'), true)
+    assert_equal [[3, 1, :treat_as_withdraw]], pa.errors.collect { |f| [f.type, f.subcode, f.action] }
+    assert_instance_of Attr::Raw, pa.attributes.last
+  end
+
+  def test_cut_attributes_keep_their_octets
+    %w{ 400101004003080a000001 400101004001 4001010040 }.each do |hex|
+      pa = Path_attribute.new(wire(hex), true)
+      assert_equal hex, pa.encode(true).unpack1('H*'), hex
+      assert_equal 1, pa.errors.size, hex
+    end
+  end
+
+  # B11: duplicates were accepted silently.
+  def test_duplicates_are_reported
+    pa = Path_attribute.new(wire('40010100 40010102'), true)
+    assert_equal 2, pa.size                        # what was on the wire
+    assert_equal [[1, 1, :attribute_discard]], pa.errors.collect { |f| [f.type, f.subcode, f.action] }
+    mp = Mp_reach.new(:afi=>2, :safi=>1, :nexthop=>'2001:db8::1', :nlris=>['2001:db8:1::/48']).encode
+    pa = Path_attribute.new((mp + mp).is_packed, true)
+    assert_equal :session_reset, pa.action
+  end
+
+  def test_clean_attributes_have_no_errors
+    pa = Path_attribute.new(wire(GOOD), true)
+    assert_equal [], pa.errors
+    assert_nil pa.action
+    assert_equal [], Path_attribute.new(Origin.new(0)).errors
+  end
+
+  def test_strict_policy_raises_the_strongest_finding
+    e = assert_raise(Malformed_attribute) {
+      Path_attribute.new(wire('80060101 c0010100 40fa0178'), :as4byte=>true, :policy=>:strict)
+    }
+    assert_equal [250, 2, :session_reset], [e.type, e.subcode, e.action]
+    # ATOMIC_AGGREGATE: flags and length, ORIGIN: flags, type 250: well-known.
+    assert_equal 4, e.findings.size
+    assert_instance_of Path_attribute, e.path_attribute
+    assert_nothing_raised { Path_attribute.new(wire(GOOD), :as4byte=>true, :policy=>:strict) }
+  end
+
+  def test_raw_policy_keeps_every_octet
+    hex = '50010001 00 c008050102030405 40010102 4003080a000001'.delete(' ')
+    pa = Path_attribute.new(wire(hex), :as4byte=>true, :policy=>:raw)
+    assert pa.attributes.all? { |a| a.instance_of?(Attr::Raw) }
+    assert_equal hex, pa.encode(true).unpack1('H*')
+    # COMMUNITIES length, ORIGIN twice, NEXT_HOP cut. Extended Length is fine.
+    assert_equal 3, pa.errors.size
+  end
+
+  def test_lenient_decodes_as_before
+    hex = '50010001 00 4002060201fa56ea01 4003040a000001'.delete(' ')
+    pa = Path_attribute.new(wire(hex), true)
+    assert_instance_of Origin, pa[:origin]
+    assert_equal '4200000001', pa[:as_path].as_path
+  end
+
+  def test_unknown_policy
+    assert_raise(ArgumentError) { Path_attribute.new(wire(GOOD), :policy=>:loose) }
+  end
+
+  def test_validate_built_attributes
+    assert_equal [], Path_attribute.new(Origin.new(0), As_path.new(100), Next_hop.new('1.1.1.1')).validate
+    found = Path_attribute.new(Origin.new(0).override(length: 2), Origin.new(1),
+                               Origin.new(0).override(flags: ATTR::OPTIONAL_TRANSITIVE)).validate
+    assert_equal [[1, :treat_as_withdraw], [1, :attribute_discard], [4, :treat_as_withdraw], [1, :attribute_discard]],
+                 found.collect { |f| [f.subcode, f.action] }
+  end
+
+  def test_validate_reports_a_cut_as_number
+    pa = Path_attribute.new(As_path.new(4200000001), Aggregator.new('1.1.1.1', 4200000002))
+    found = pa.validate(false)
+    assert_equal [[2, nil], [7, nil]], found.collect { |f| [f.type, f.action] }
+    assert_equal [], pa.validate(true)
+    assert_equal [], pa.as4_fixup.validate(false)
+  end
+
 end

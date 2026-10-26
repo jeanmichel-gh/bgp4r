@@ -65,6 +65,26 @@ module BGP
       end
       self.send_queue_limit = h[:send_queue_limit] if h.has_key?(:send_queue_limit)
       self.auto_as4 = h[:auto_as4] if h.has_key?(:auto_as4)
+      self.policy = h[:policy] if h.has_key?(:policy)
+    end
+
+    # The receive policy for path attributes: :lenient (the default),
+    # :strict or :raw. See Path_attribute::POLICIES.
+    #
+    # With :strict, a received UPDATE with a malformed attribute is not
+    # passed on. Observers get the Malformed_attribute error instead. When
+    # its RFC 7606 action is a session reset, the NOTIFICATION it names is
+    # sent and the session stops (RFC 7606 section 3).
+    def policy
+      @policy || :lenient
+    end
+
+    def policy=(val)
+      unless Path_attribute::POLICIES.include?(val)
+        raise ArgumentError, "unknown receive policy #{val.inspect}, use #{Path_attribute::POLICIES.inspect}"
+      end
+      @policy = val
+      @session_info.policy = val if @session_info.respond_to?(:policy=)
     end
 
     # On a session where the peer has no 4-octet AS capability, apply
@@ -189,6 +209,9 @@ module BGP
               msg = BGP::Message.factory(m, @session_info)
             rescue UnknownBgpMessage => e
               Log.error e.message
+              next
+            rescue Malformed_attribute => e
+              rcv_malformed(e)
               next
             end
             log_info "Recv#{msg.class.to_s.split('::').last}"
@@ -410,6 +433,7 @@ module BGP
   
     def rcv_open(peer_open)
       @session_info = Neighbor::Capabilities.new open, peer_open
+      @session_info.policy = policy
       
       @rmt_version  = peer_open.version
       @rmt_as       = peer_open.local_as
@@ -452,6 +476,22 @@ module BGP
     end
     
     def rcv_route_refresh(m)
+    end
+
+    # The :strict policy found a malformed attribute (RFC 7606).
+    def rcv_malformed(e)
+      log_warn "RecvUpdate malformed: #{e.message}"
+      changed and notify_observers(e)
+      if e.action == :session_reset and e.finding.notification
+        # Written here, not queued: stop drops what the writer still has
+        # queued. IO#write does not interleave with the writer thread's.
+        begin
+          log_info "SendNotification #{e.finding.notification}"
+          @socket.write e.finding.notification.encode
+        rescue IOError, SystemCallError
+        end
+        stop
+      end
     end
     
     def rcv_update(m)

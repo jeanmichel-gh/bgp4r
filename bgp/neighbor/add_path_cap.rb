@@ -18,6 +18,13 @@ module BGP
         @peer    = peer_open    # peer_open.find(OPT_PARM::CAP::Add_path)
       end
       attr_reader :speaker, :peer
+
+      # The receive policy for path attributes on this session, see
+      # Path_attribute::POLICIES. Neighbor sets it from its own.
+      attr_writer :policy
+      def policy
+        @policy || :lenient
+      end
       
       def as4byte?
         (! @speaker.has?(OPT_PARM::CAP::As4).nil? and  ! @peer.has?(OPT_PARM::CAP::As4).nil?)

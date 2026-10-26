@@ -44,11 +44,17 @@ class BGP::Update < BGP::Message
   include BGP
   
   class Info
+    # Info.new(as4byte, policy). policy is the receive policy for the
+    # path attributes, see Path_attribute::POLICIES.
     def initialize(*args)
       @as4byte=args[0]
+      @policy=args[1]
     end
     def as4byte?
       @as4byte
+    end
+    def policy
+      @policy || :lenient
     end
     def recv_inet_unicast?
       false

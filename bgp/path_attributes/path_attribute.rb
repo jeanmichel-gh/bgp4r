@@ -22,6 +22,7 @@
 
 require 'bgp/path_attributes/attribute'
 require 'bgp/path_attributes/raw'
+require 'bgp/path_attributes/validation'
 require 'bgp/neighbor/add_path_cap'
 
 module BGP
@@ -31,14 +32,26 @@ module BGP
     include Attr_accessors
     attr_reader :attributes
 
+    # Receive policies for attributes parsed from wire bytes. Building
+    # and encoding never check anything, whatever the policy.
+    #
+    #   :lenient  the default: decode as before and list problems in
+    #             errors. An attribute bgp4r cannot decode is kept as
+    #             Attr::Raw instead of raising.
+    #   :strict   the same, then raise Malformed_attribute when errors is
+    #             not empty
+    #   :raw      decode the headers only: every attribute is an Attr::Raw,
+    #             so encode gives back the octets received
+    #
+    # The policy comes with the session argument: a Hash such as
+    # {:as4byte=>true, :policy=>:strict}, or an object with a policy
+    # method, such as the session info of a Neighbor.
+    POLICIES = [:lenient, :strict, :raw]
+
     def initialize(*args)
+      @errors = []
       if args.size <= 2 and args[0].is_a?(String) and args[0].is_packed?
-        s = args[0]
-        @attributes=[]
-        while s.size>0
-          @attributes << Attr.factory(*args)
-          @attributes
-        end
+        parse_wire(*args)
       elsif args.size ==1 and args[0].is_a?(Hash)
         @attributes = args[0].collect { |key, value|
           # Attr::Unknown has no type code of its own, so it is not in
@@ -124,7 +137,42 @@ module BGP
     end
     
     def encode(as4byte=false)
-      [@attributes.compact.collect { |x| as4byte ? x.encode4 : x.encode }.join].pack('a*')
+      [@attributes.compact.collect { |x| as4byte ? x.encode4 : x.encode }.join + (@tail || '')].pack('a*')
+    end
+
+    # Problems found when these attributes were parsed from wire bytes,
+    # as Attr::Finding objects. Empty for attributes built from values.
+    def errors
+      @errors ||= []
+    end
+
+    # The strongest RFC 7606 action among errors (section 3 (h)), or nil.
+    def action
+      f = Attr.strongest(errors)
+      f && f.action
+    end
+
+    # Runs the receive checks on these attributes as they would be sent,
+    # without raising. Returns a list of Attr::Finding. bgp4r builds and
+    # sends anything; validate tells a test whether what it built is
+    # wrong, and in which way.
+    def validate(as4byte=false)
+      out, seen = [], {}
+      @attributes.compact.each do |a|
+        bytes = as4byte ? a.encode4 : a.encode
+        type = bytes.getbyte(1)
+        out.concat Attr::Check.attribute(bytes, as4byte, exact: true)
+        out << Attr::Check.duplicate_finding(type) if seen[type]
+        seen[type] = true
+        next if as4byte
+        large = (type == AS_PATH and As4.large?(a)) || (type == AGGREGATOR and a.asn.to_i > 0xffff)
+        if large
+          out << Attr::Finding.new(type, nil, nil,
+            "AS number above 65535 cut to 16 bits in a 2-octet encoding, see as4_fixup (RFC 6793 section 4.2.2)")
+        end
+      end
+      out << Attr::Finding.new(nil, 1, :treat_as_withdraw, "#{@tail.size} octets left over after the last attribute") if @tail
+      out
     end
     
     def insert(*args)
@@ -195,6 +243,52 @@ module BGP
     
     private
 
+    # Splits the attribute list, checks each attribute, and decodes it
+    # as the policy says (RFC 7606 sections 3 and 4).
+    def parse_wire(s, arg=nil)
+      as4byte, _ = Attr.session_args(arg)
+      policy = Attr.policy_of(arg)
+      raise ArgumentError, "unknown receive policy #{policy.inspect}, use #{POLICIES.inspect}" unless POLICIES.include?(policy)
+      @attributes, @errors, seen = [], [], {}
+      while s.size > 0
+        bytes, cut = Attr::Check.next_attribute(s)
+        if cut
+          @errors << cut
+          @attributes << cut_attribute(bytes)
+          next
+        end
+        type = bytes.getbyte(1)
+        @errors.concat Attr::Check.attribute(bytes, as4byte)
+        @errors << Attr::Check.duplicate_finding(type) if seen[type]
+        seen[type] = true
+        @attributes << decode_attribute(bytes, arg, policy)
+      end
+      @attributes.compact!
+      raise Malformed_attribute.new(@errors, self) if policy == :strict and not @errors.empty?
+    end
+
+    def decode_attribute(bytes, arg, policy)
+      return Attr::Raw.new(bytes) if policy == :raw
+      Attr.factory(bytes.dup.is_packed, arg)
+    rescue StandardError => e
+      @errors << Attr::Finding.new(bytes.getbyte(1), nil, nil, "bgp4r could not decode it: #{e.message}")
+      Attr::Raw.new(bytes)
+    end
+
+    # An attribute cut short. Kept so that encode gives the same octets:
+    # an Attr::Raw whose length field still says what was received, or,
+    # when even the header is cut, octets appended after the list.
+    def cut_attribute(bytes)
+      flags = bytes.getbyte(0)
+      hdr = (flags & 0x10) > 0 ? 4 : 3
+      if bytes.size < hdr
+        @tail = (@tail || ''.b) + bytes
+        return nil
+      end
+      len = hdr == 4 ? bytes.unpack('xxn')[0] : bytes.getbyte(2)
+      Attr::Raw.new(flags >> 4, bytes.getbyte(1), bytes.byteslice(hdr, bytes.size - hdr)).override(flags: flags >> 4, length: len)
+    end
+
     def method_missing(name, *args, &block)
       if name.to_s == 'med='
         #multi_exit_disc= *args
@@ -231,23 +325,35 @@ module BGP
       end
     end
     include BGP::ATTR
-    def self.factory(s, arg=nil)
+    # The session argument of factory and Path_attribute.new, as
+    # [as4byte, path_id]: a Neighbor::Capabilities or any object with
+    # as4byte?, a Hash with :as4byte and :path_id, or true for 4-octet AS.
+    def self.session_args(arg)
       if arg.is_a?(Neighbor::Capabilities)
-        as4byte_flag = arg.as4byte?
-        path_id_flag = arg
+        [arg.as4byte?, arg]
       elsif arg.is_a?(Hash)
-        as4byte_flag=arg[:as4byte]
-        path_id_flag=arg[:path_id]
+        [arg[:as4byte], arg[:path_id]]
       elsif arg.is_a?(TrueClass)
-        as4byte_flag=true
-        path_id_flag=nil
+        [true, nil]
       elsif arg.respond_to? :as4byte?
-        as4byte_flag = arg.as4byte?
-        path_id_flag = arg
+        [arg.as4byte?, arg]
       else
-        as4byte_flag=nil
-        path_id_flag=nil
+        [nil, nil]
       end
+    end
+
+    # The receive policy in the session argument, :lenient by default.
+    def self.policy_of(arg)
+      policy = if arg.is_a?(Hash)
+        arg[:policy]
+      elsif arg.respond_to?(:policy)
+        arg.policy
+      end
+      policy || :lenient
+    end
+
+    def self.factory(s, arg=nil)
+      as4byte_flag, path_id_flag = session_args(arg)
       
       # Look the type code up in the registry (RFC 4271 section 4.3).
       # Types nobody registered come back as Attr::Unknown.
