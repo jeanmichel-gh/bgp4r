@@ -22,13 +22,16 @@
 
 
 require 'bgp/path_attributes/aggregator'
+require 'bgp/path_attributes/attributes'
 require 'test/unit'
 class Aggregator_Test < Test::Unit::TestCase
   include BGP
   def test_1
     aggregator = Aggregator.new('10.0.0.1',100)
-    aggregator.encode4
-    assert_equal(aggregator.encode4, aggregator.encode)
+    # encode4 is the 4-octet AS form (RFC 6793 section 3, B15). This
+    # asserted encode4 == encode, the 2-octet form, which pinned the bug.
+    assert_equal(aggregator.encode(true), aggregator.encode4)
+    assert_not_equal(aggregator.encode, aggregator.encode4)
     assert_equal('10.0.0.1, 100', aggregator.aggregator)
     assert_equal('c0070600640a000001', aggregator.to_shex)
     assert_equal('c00708000000640a000001', aggregator.to_shex(true))
@@ -81,5 +84,20 @@ class Aggregator_Test < Test::Unit::TestCase
   def test_as4_aggregator_encode_is_always_4_octets
     agg = As4_aggregator.new('2.2.2.2', 4200000001)
     assert_equal 'c01208fa56ea0102020202', agg.encode(false).unpack1('H*')
+  end
+  # B15, RFC 6793 section 3: 4-octet AS numbers on a 4-octet session.
+  def test_encode4_is_8_octets
+    agg = Aggregator.new('1.1.1.1', 4200000001)
+    assert_equal 'c00708fa56ea0101010101', agg.encode4.unpack1('H*')
+    assert_equal 'c00706ea0101010101', agg.encode.unpack1('H*')
+    assert_equal 'c00708fa56ea0101010101', Path_attribute.new(agg).encode(true).unpack1('H*')
+  end
+
+  def test_parsed_on_a_4_octet_session
+    pa = Path_attribute.new(['c00708fa56ea0101010101'].pack('H*'), true)
+    assert_equal [4200000001, '1.1.1.1'], [pa[:aggregator].asn, pa[:aggregator].address]
+    assert_equal 'c00708fa56ea0101010101', pa.encode(true).unpack1('H*')
+    pa = Path_attribute.new(['c007060064 01010101'.delete(' ')].pack('H*'), false)
+    assert_equal [100, '1.1.1.1'], [pa[:aggregator].asn, pa[:aggregator].address]
   end
 end

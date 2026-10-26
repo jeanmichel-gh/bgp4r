@@ -491,4 +491,66 @@ class TestBgpNeighbor < Test::Unit::TestCase
       assert pa.has_no?(As4_aggregator)
     }
   end
+
+  class Catcher
+    def initialize(klass); @klass, @q = klass, Queue.new; end
+    def update(msg); @q << msg if msg.is_a?(@klass); end
+    def pop(secs=3)
+      Timeout.timeout(secs) { @q.pop }
+    rescue Timeout::Error
+      nil
+    end
+  end
+
+  def test_policy_option
+    assert_equal :lenient, Neighbor.new(4, 100, 180, '0.0.0.2').policy
+    assert_equal :strict, Neighbor.new(:my_as=> 100, :policy=> :strict).policy
+    assert_raise(ArgumentError) { Neighbor.new(:my_as=> 100, :policy=> :loose) }
+  end
+
+  def bad_update(*attrs)
+    Update.new(Path_attribute.new(*attrs), Nlri.new('10.0.0.0/8')).encode
+  end
+
+  def strict_client_with_server
+    port = start_server(0)
+    @server_notifications = Catcher.new(Notification)
+    @s.add_observer @server_notifications
+    @c = Neighbor.new(:version=> 4, :my_as=> 100, :id=> '0.0.0.2', :remote_addr=> '127.0.0.1',
+                      :local_addr=> '127.0.0.1', :policy=> :strict)
+    @errors = Catcher.new(Malformed_attribute)
+    @c.add_observer @errors
+    assert @c.start(:port=> port), "no session: #{@c.last_error}"
+    assert @s.wait_for_state(:Established, 2)
+    assert_equal :strict, @c.session_info.policy
+  end
+
+  # RFC 7606 section 7.1: treat-as-withdraw, the session stays up.
+  def test_strict_policy_reports_and_keeps_the_session
+    Timeout::timeout(8) {
+      strict_client_with_server
+      origin = Attr::Raw.new(ATTR::WELL_KNOWN_MANDATORY, ATTR::ORIGIN, "\x00\x00".b)
+      @s.send_message bad_update(origin, As_path.new(100), Next_hop.new('127.0.0.1'))
+      e = @errors.pop
+      assert_instance_of Malformed_attribute, e
+      assert_equal [1, 5, :treat_as_withdraw], [e.type, e.subcode, e.action]
+      sleep 0.2
+      assert @c.is_established?
+    }
+  end
+
+  # RFC 7606 section 3 (g): a second MP_REACH_NLRI resets the session.
+  def test_strict_policy_resets_on_a_session_reset_error
+    Timeout::timeout(8) {
+      strict_client_with_server
+      mp = Mp_reach.new(:afi=>2, :safi=>1, :nexthop=>'2001:db8::1', :nlris=>['2001:db8:1::/48'])
+      @s.send_message Update.new(Path_attribute.new(Origin.new(0), As_path.new(100), mp, Mp_reach.new(mp.encode))).encode
+      e = @errors.pop
+      assert_equal :session_reset, e.action
+      n = @server_notifications.pop
+      assert n, "server got no NOTIFICATION"
+      assert_equal [3, 1], n.to_hash.values_at(:code, :subcode)
+      assert @c.wait_for_state(:Idle, 2)
+    }
+  end
 end
