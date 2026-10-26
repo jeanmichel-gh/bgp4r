@@ -46,6 +46,7 @@ module BGP
     AS4_AGGREGATOR = 18
     
     PMSI_TUNNEL = 22               # RFC 6514 section 5
+    TUNNEL_ENCAP = 23              # RFC 9012 section 2
     IPV6_EXTENDED_COMMUNITY = 25   # RFC 5701 section 3
     ACCUMULATED_IGP_METRIC = 26
     LARGE_COMMUNITY = 32           # RFC 8092 section 3

@@ -86,6 +86,7 @@ module BGP
         IPV6_EXTENDED_COMMUNITY => OPTIONAL | TRANSITIVE,
         PREFIX_SID       => OPTIONAL | TRANSITIVE,
         PMSI_TUNNEL      => OPTIONAL | TRANSITIVE,
+        TUNNEL_ENCAP     => OPTIONAL | TRANSITIVE,
       }
 
       extend self
@@ -190,6 +191,8 @@ module BGP
           return multiple(type, n, 20, TAW, '7606 section 7.15')
         when PREFIX_SID
           return prefix_sid_finding(type, v)
+        when TUNNEL_ENCAP
+          return tunnel_encap_finding(type, v)
         when PMSI_TUNNEL
           # RFC 6514 section 5: flags, tunnel type, a 3 octet label, then
           # the tunnel identifier.
@@ -262,6 +265,59 @@ module BGP
               "Originator SRGB TLV length #{len}, must be 2 plus a non-zero multiple of 6 (RFC 8669 section 3.2)")
           end
           i += 3 + len
+        end
+        nil
+      end
+
+      # RFC 9012 section 13. The attribute is malformed, and the action
+      # is treat-as-withdraw, when it holds no valid TLV, or when a
+      # TLV's last octet is not the last octet of its last sub-TLV.
+      #
+      # Nothing else here is an attribute error. Section 13 says an
+      # unrecognized tunnel type is not malformed, and that a sub-TLV
+      # that is unrecognized, malformed, duplicated or meaningless for
+      # its tunnel type affects its own TLV at most. So the sub-TLV
+      # lengths the RFC gives are not checked, and bgp4r keeps and
+      # passes on every sub-TLV it reads.
+      def tunnel_encap_finding(type, v)
+        return Finding.new(type, 5, TAW, "no TLVs (RFC 9012 section 13)") if v.empty?
+        i = 0
+        while i < v.size
+          if v.size - i < 4
+            return Finding.new(type, 5, TAW,
+              "#{v.size - i} octets left, a TLV header needs 4 (RFC 9012 section 13)")
+          end
+          tunnel = v.byteslice(i, 2).unpack1('n')
+          len    = v.byteslice(i + 2, 2).unpack1('n')
+          if i + 4 + len > v.size
+            return Finding.new(type, 5, TAW,
+              "TLV type #{tunnel} runs past the attribute (RFC 9012 section 13)")
+          end
+          if (f = sub_tlv_fit_finding(type, tunnel, v.byteslice(i + 4, len)))
+            return f
+          end
+          i += 4 + len
+        end
+        nil
+      end
+
+      # RFC 9012 section 13: the last octet of a TLV must be the last
+      # octet of its last sub-TLV. A sub-TLV of type 128 or above has a
+      # two octet length, the rest one octet (section 2).
+      def sub_tlv_fit_finding(type, tunnel, body)
+        i = 0
+        while i < body.size
+          hdr = body.getbyte(i) >= 128 ? 3 : 2
+          if body.size - i < hdr
+            return Finding.new(type, 5, TAW,
+              "#{body.size - i} octets left in TLV type #{tunnel}, a sub-TLV header needs #{hdr} (RFC 9012 section 13)")
+          end
+          len = hdr == 3 ? body.byteslice(i + 1, 2).unpack1('n') : body.getbyte(i + 1)
+          if i + hdr + len > body.size
+            return Finding.new(type, 5, TAW,
+              "sub-TLV type #{body.getbyte(i)} runs past TLV type #{tunnel} (RFC 9012 section 13)")
+          end
+          i += hdr + len
         end
         nil
       end
