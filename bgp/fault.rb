@@ -54,9 +54,7 @@ module BGP
       [:as_path_segment,   'AS_PATH segment overruns',       :treat_as_withdraw, 11, '7606 7.2',
         -> { Fault.truncate(As_path.new(100, 200), 3) }],
       [:atomic_length,     'ATOMIC_AGGREGATE length not 0',  :attribute_discard, 5, '7606 7.6',
-        # Correct well-known flags, so only the length is wrong.
-        # Atomic_aggregate.new itself uses OPTIONAL flags (a bug).
-        -> { Attr::Raw.new(ATTR::WELL_KNOWN_DISCRETIONARY, ATTR::ATOMIC_AGGREGATE, "\x00".b) }],
+        -> { Fault.pad(Atomic_aggregate.new) }],
       [:aggregator_length, 'AGGREGATOR length wrong',        :attribute_discard, 5, '7606 7.7',
         -> { Fault.truncate(Aggregator.new('10.0.0.1', 100), 5) }],
       [:community_length,  'COMMUNITIES length not /4',      :treat_as_withdraw, 5, '7606 7.8',
