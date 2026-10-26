@@ -34,24 +34,41 @@ module BGP
         o = new
         args.each do |arg|
           arg.keys.each do |comm|
-            case comm
-            when :extended_communities ; o = new_hash(*args[0][:extended_communities])
-            when :color                ; o << Color.new(*arg[comm])
-            when :route_target         ; o << Route_target.new(*arg[comm])
-            when :link_bandwidth       ; o << Link_bandwidth.new(*arg[comm])
-            when :ospf_domain_id       ; o << Ospf_domain_id.new(*arg[comm])
-            when :encapsulation        ; o << Encapsulation.new(*arg[comm])
-            when :route_origin         ; o << Route_origin.new(*arg[comm])
-            when :ospf_router_id       ; o << Ospf_router_id.new(*arg[comm])
-            when :unknown              ; o << Extended_community::Unknown.new(arg[comm])
-            else
-              raise
-            end 
+            if comm == :extended_communities
+              o = new_hash(*args[0][:extended_communities])
+              next
+            end
+            build = HASH_BUILDERS[comm]
+            raise ArgumentError, "unknown extended community #{comm.inspect}" unless build
+            o << build.call(arg[comm])
           end
         end
-        o        
+        o
       end
     end
+
+    # The to_hash key of each community, and how to build it back.
+    HASH_BUILDERS = {
+      :color                   => ->(v) { Color.new(*v) },
+      :route_target            => ->(v) { Route_target.new(*v) },
+      :route_origin            => ->(v) { Route_origin.new(*v) },
+      :link_bandwidth          => ->(v) { Link_bandwidth.new(*v) },
+      :ospf_domain_id          => ->(v) { Ospf_domain_id.new(*v) },
+      :ospf_router_id          => ->(v) { Ospf_router_id.new(*v) },
+      :bgp_data_collect        => ->(v) { Bgp_data_collect.new(*v) },
+      :origin_validation_state => ->(v) { Origin_validation_state.new(v) },
+      :unknown                 => ->(v) { Extended_community::Unknown.new(v) },
+      :encapsulation           => ->(v) { Encapsulation.new(v) },
+      :traffic_rate_bytes      => ->(v) { Traffic_rate_bytes.new(*v) },
+      :traffic_rate_packets    => ->(v) { Traffic_rate_packets.new(*v) },
+      :traffic_action          => ->(v) { Traffic_action.new(v) },
+      :redirect                => ->(v) { Redirect.new(*v) },
+      :traffic_marking         => ->(v) { Traffic_marking.new(v) },
+      :mac_mobility            => ->(v) { Mac_mobility.new(v[0], sticky: v[1]) },
+      :esi_label               => ->(v) { Esi_label.new(v[0], single_active: v[1]) },
+      :es_import               => ->(v) { Es_import.new(v) },
+      :router_mac              => ->(v) { Router_mac.new(v) },
+    }.freeze
 
     attr_reader :communities
 

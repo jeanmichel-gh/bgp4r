@@ -185,22 +185,25 @@ class Extended_communitiesTest < Test::Unit::TestCase
   end
 
   def test_mixed_known_and_unknown
-    hex = 'c01030' +
+    hex = 'c01038' +
           '0002fde800000064' + # route target 65000:100
-          '030c000000000007' + # encapsulation, not decoded yet
-          '8006000000000000' + # flowspec traffic rate, not decoded yet
+          '030c000000000007' + # encapsulation, RFC 9012
+          '8006000000000000' + # flowspec traffic rate, RFC 8955
           '0202fa56ea000001' + # route target 4200000000:1, RFC 5668
-          '0600000000000064' + # EVPN MAC mobility, not decoded yet
-          '0203000100020003'   # route origin 65538:3, RFC 5668
+          '0600000000000064' + # EVPN MAC mobility, RFC 7432
+          '0203000100020003' + # route origin 65538:3, RFC 5668
+          '8077000000000000'   # unassigned, kept as is
     exc = Extended_communities.new([hex].pack('H*'))
-    assert_equal([Route_target, Extended_community::Unknown, Extended_community::Unknown,
-                  Route_target, Extended_community::Unknown, Route_origin],
+    assert_equal([Route_target, Encapsulation, Traffic_rate_bytes,
+                  Route_target, Mac_mobility, Route_origin, Extended_community::Unknown],
                  exc.communities.collect { |c| c.class })
     assert_equal(hex, exc.to_shex)
     assert_match(/Route target: 65000:100/, exc.to_s)
     assert_match(/Route target: 4200000000:1/, exc.to_s)
     assert_match(/Route origin: 65538:3/, exc.to_s)
-    assert_match(/type 0x80, subtype 0x06, 8006000000000000/, exc.to_s)
+    assert_match(/type 0x80, subtype 0x77, 8077000000000000/, exc.to_s)
+    assert_match(/Encapsulation: 7/, exc.to_s)
+    assert_match(/MAC Mobility: sequence 100/, exc.to_s)
     assert_equal(hex, Extended_communities.new(exc).to_shex)
     assert_equal(hex, Extended_communities.new_hash(exc.to_hash).to_shex)
     assert_equal(exc.to_hash, Extended_communities.new_hash(exc.to_hash).to_hash)
@@ -212,6 +215,34 @@ class Extended_communitiesTest < Test::Unit::TestCase
     ec = Extended_communities.new_hash :route_target=>[4200000000, 1]
     assert_equal('c010080202fa56ea000001', ec.to_shex)
     assert_equal(ec.to_shex, Extended_communities.new_hash(ec.to_hash).to_shex)
+  end
+
+
+  # Every community round trips through to_hash and new_hash. The old
+  # case list had no Origin_validation_state or Bgp_data_collect, and its
+  # :encapsulation branch named a class that did not exist.
+  def test_hash_round_trip_for_every_sub_type
+    cs = [Route_target.new(65000, 1), Route_origin.new('10.0.0.1', 2), Color.new(100),
+          Link_bandwidth.new(1000), Ospf_domain_id.new('1.1.1.1'), Ospf_router_id.new('2.2.2.2'),
+          Bgp_data_collect.new(1, 2), Origin_validation_state.new(:invalid),
+          Encapsulation.new(:vxlan), Traffic_rate_bytes.new(0, 1000), Traffic_rate_packets.new(1, 2),
+          Traffic_action.new(sample: true), Redirect.new(65001, 100), Traffic_marking.new(46),
+          Mac_mobility.new(5, sticky: true), Esi_label.new(1000), Es_import.new('00:11:22:33:44:55'),
+          Router_mac.new('aa:bb:cc:dd:ee:ff'), Extended_community::Unknown.new('8077000000000000')]
+    exc = Extended_communities.new(*cs)
+    h = exc.to_hash
+    assert_equal(exc.encode, Extended_communities.new_hash(*h[:extended_communities]).encode)
+    assert_equal(Path_attribute.new(exc).encode, Path_attribute.new(h).encode)
+    assert_equal(exc.encode, Extended_communities.new(exc.encode).encode)
+  end
+
+  def test_new_hash_rejects_an_unknown_key
+    assert_raise(ArgumentError) { Extended_communities.new_hash(:carrier_pigeon => 1) }
+  end
+
+  def test_encapsulation_accessor
+    exc = Extended_communities.new(Route_target.new(1, 1), Encapsulation.new(:vxlan))
+    assert_equal(:vxlan, exc.encapsulation.tunnel_name)
   end
 
 end
