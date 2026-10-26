@@ -45,6 +45,7 @@ module BGP
     AS4_PATH = 17
     AS4_AGGREGATOR = 18
     
+    IPV6_EXTENDED_COMMUNITY = 25   # RFC 5701 section 3
     ACCUMULATED_IGP_METRIC = 26
     LARGE_COMMUNITY = 32           # RFC 8092 section 3
     ONLY_TO_CUSTOMER = 35          # RFC 9234 section 5

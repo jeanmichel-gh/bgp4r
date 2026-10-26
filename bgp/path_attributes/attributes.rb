@@ -16,6 +16,7 @@
   aigp
   large_communities
   otc
+  ipv6_extended_communities
   as4
 }.each do |attr|
   require "bgp/path_attributes/#{attr}"
