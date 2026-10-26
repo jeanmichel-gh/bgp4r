@@ -82,6 +82,7 @@ module BGP
         AS4_AGGREGATOR   => OPTIONAL | TRANSITIVE,
         ACCUMULATED_IGP_METRIC => OPTIONAL,
         LARGE_COMMUNITY  => OPTIONAL | TRANSITIVE,
+        ONLY_TO_CUSTOMER => OPTIONAL | TRANSITIVE,
       }
 
       extend self
@@ -180,6 +181,8 @@ module BGP
           return multiple(type, n, 8, TAW, '7606 section 7.14')
         when LARGE_COMMUNITY
           return multiple(type, n, 12, TAW, '8092 section 6')
+        when ONLY_TO_CUSTOMER
+          return fixed(type, n, 4, TAW, '9234 section 5', 5)
         when MP_REACH
           # AFI, SAFI, next hop length, next hop, reserved (RFC 4760 section 3).
           if n < 5 or 5 + v.getbyte(3) > n
