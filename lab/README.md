@@ -130,3 +130,53 @@ Run the lab tests with `ruby test/run_lab.rb`. Without Docker, the Compose tests
 * A speaker originates routes and records what it receives. It never passes routes on from one neighbor to another, so it is not a route reflector or a transit router yet.
 * IPv4 unicast in plain NLRI only, for now.
 * One session per neighbor. If both sides connect at once, the second connection is closed.
+
+## Fault matrix
+
+`lab/fault_matrix.rb` sends every `BGP::Fault::CATALOG` case to a router
+and reports what it did with each one. bgp4r listens and the router
+connects, so it works with any implementation that can be told to peer
+with us.
+
+```
+ruby lab/fault_matrix.rb --peer 127.0.0.2 --peer-as 65002
+ruby lab/fault_matrix.rb --peer 127.0.0.2 --peer-as 65002 \
+  --rib-command 'gobgp global rib' --json gobgp.json
+```
+
+Each fault gets a session of its own, because a reset leaves nothing to
+reuse. From one session the harness can see two things:
+
+| Outcome | What it means |
+|---|---|
+| `reset` | the router sent a NOTIFICATION, or dropped the session |
+| `kept` | the session stayed up |
+
+RFC 7606 treat-as-withdraw and attribute-discard both keep the session
+up. To tell those apart the router has to say whether it installed the
+route, so `--rib-command` runs a shell command that prints its RIB and
+the harness looks for the prefix in the output.
+
+The exit status is 0 when every router answer agrees with the RFC 7606
+action the catalog expects, 1 otherwise.
+
+The peer must negotiate every address family the catalog uses, IPv6
+unicast included: the duplicate MP_REACH_NLRI case carries IPv6 NLRI,
+and a router that never agreed to IPv6 resets over the address family
+instead of the duplicate.
+
+### Running it without containers
+
+The routers do not have to be containers. FRR, BIRD and GoBGP are all
+packaged by Ubuntu, so they can run as plain processes on loopback
+addresses, which is how the results below were produced:
+
+```
+apt-get install -y frr bird2 gobgpd
+gobgpd -f gobgpd.conf &                                   # 127.0.0.2
+/usr/lib/frr/bgpd -f /etc/frr/bgpd.conf -l 127.0.0.3 -Z & # 127.0.0.3
+```
+
+FRR drops privileges to the `frr` user, so its config file has to be
+readable by that user. A next hop of 127.0.0.1 is martian to FRR; use
+an ordinary address such as 10.0.0.1.
