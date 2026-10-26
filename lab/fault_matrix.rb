@@ -220,13 +220,10 @@ module BGP
                        @opts[:peer], @opts[:listen])
       n.capability :as4_byte
       n.capability :mbgp, :ipv4, :unicast
-      # The duplicate MP_REACH case carries IPv6 NLRI, so it needs this to
-      # test the duplicate rather than an address family the router never
-      # agreed to. It is off by default because negotiating IPv6 changes
-      # what routers do with the IPv4 faults: both GoBGP 3.23 and FRR
-      # 8.4.4 then answer Invalid Network Field (3/10) to faults they
-      # otherwise treat as withdraw. Worth getting to the bottom of
-      # before turning it on by default.
+      # The duplicate MP_REACH case carries IPv6 NLRI, so without this the
+      # router resets over an address family it never agreed to instead of
+      # the duplicate. --no-ipv6 turns it off for a router that cannot do
+      # IPv6 at all; the duplicate case is then testing the wrong rule.
       n.capability :mbgp, :ipv6, :unicast if @opts[:ipv6]
       n.add_observer self
       n
@@ -270,7 +267,7 @@ end
 def parse(argv)
   o = { listen: '127.0.0.1', port: 179, my_as: 65001, peer_as: 65002,
         id: '10.0.0.1', next_hop: '10.0.0.1', holdtime: 180,
-        connect_timeout: 40, settle: 4, verbose: false }
+        connect_timeout: 40, settle: 4, verbose: false, ipv6: true }
   OptionParser.new do |p|
     p.banner = 'Usage: ruby lab/fault_matrix.rb --peer ADDR [options]'
     p.on('--peer ADDR', 'address the router speaks from') { |v| o[:peer] = v }
@@ -282,7 +279,7 @@ def parse(argv)
     p.on('--next-hop ADDR', 'NEXT_HOP to advertise')      { |v| o[:next_hop] = v }
     p.on('--settle SECS', Float, 'wait after each fault') { |v| o[:settle] = v }
     p.on('--rib-command CMD', 'shell command printing the router RIB') { |v| o[:rib_command] = v }
-    p.on('--ipv6', 'also negotiate IPv6 unicast')         { o[:ipv6] = true }
+    p.on('--[no-]ipv6', 'negotiate IPv6 unicast (default on)') { |v| o[:ipv6] = v }
     p.on('--only NAMES', 'comma separated fault names')   { |v| o[:only] = v.split(',').collect(&:to_sym) }
     p.on('--json FILE', 'write the results as JSON')      { |v| o[:json] = v }
     p.on('--verbose', 'log what the harness is doing')    { o[:verbose] = true }
