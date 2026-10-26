@@ -64,6 +64,21 @@ module BGP
         instance_variable_set("@#{name}", h[name]) if h.has_key?(name)
       end
       self.send_queue_limit = h[:send_queue_limit] if h.has_key?(:send_queue_limit)
+      self.auto_as4 = h[:auto_as4] if h.has_key?(:auto_as4)
+    end
+
+    # On a session where the peer has no 4-octet AS capability, apply
+    # Path_attribute#as4_fixup to each UPDATE sent (RFC 6793 section 4.2.2):
+    # AS_TRANS in AS_PATH and AGGREGATOR, plus AS4_PATH and AS4_AGGREGATOR.
+    # The default is true. With false, UPDATEs go out exactly as built,
+    # and an AS number above 65535 is cut to its low 16 bits.
+    def auto_as4
+      defined?(@auto_as4) ? @auto_as4 : true
+    end
+    alias auto_as4? auto_as4
+
+    def auto_as4=(val)
+      @auto_as4 = val ? true : false
     end
 
     # How many messages may wait to be written to the socket. When the
@@ -373,6 +388,12 @@ module BGP
     end
     
     def send_update(u)
+      # No session info yet means the 2-octet default encoding.
+      if auto_as4? and u.path_attribute and not (@session_info and @session_info.as4byte?)
+        # A copy, so the caller's Update keeps its attributes.
+        u = u.dup
+        u.path_attribute = u.path_attribute.as4_fixup
+      end
       @out.enq u.encode(@session_info)
     end
     

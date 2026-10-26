@@ -46,6 +46,10 @@ module BGP
     AS4_AGGREGATOR = 18
     
     ACCUMULATED_IGP_METRIC = 26
+
+    # RFC 6793 section 9: AS_TRANS stands in for a 4-octet AS number
+    # in a 2-octet field.
+    AS_TRANS = 23456
     
     SET = 1
     SEQUENCE = 2

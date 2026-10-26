@@ -246,6 +246,11 @@ module BGP
       def parse(s,as4byte=@as4byte)
         super(s,true)
       end
+      # RFC 6793 section 3: AS4_PATH always carries 4-octet AS numbers,
+      # whatever the session uses.
+      def encode(as4byte=true)
+        super(true)
+      end
     end
     
     class As_path

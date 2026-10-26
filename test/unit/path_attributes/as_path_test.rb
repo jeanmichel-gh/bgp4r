@@ -207,6 +207,12 @@ class As4_path_Test < Test::Unit::TestCase
     assert_equal('1 2 3 {1, 2, 3} (1 2 3)',path.as_path)
     assert_equal("[OTcr] (17)   As4 Path: [c0112a020300000001000...] '1 2 3 {1, 2, 3} (1 2 3)'",path.to_s)
   end
+  # RFC 6793 section 3: 4-octet AS numbers even when asked for 2.
+  def test_as4_path_encode_is_always_4_octets
+    path = As4_path.new(As_path::Sequence.new(100, 4200000001))
+    assert_equal 'c0110a020200000064fa56ea01', path.encode(false).unpack1('H*')
+    assert_equal path.encode(true), path.encode(false)
+  end
 end
 
 #MiniTest::Unit.autorun
