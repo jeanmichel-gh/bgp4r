@@ -15,6 +15,7 @@
   path_attribute
   aigp
   large_communities
+  otc
   as4
 }.each do |attr|
   require "bgp/path_attributes/#{attr}"
