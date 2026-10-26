@@ -559,4 +559,15 @@ class Path_attribute_Test < Test::Unit::TestCase # :nodoc:
     assert_equal [], pa.as4_fixup.validate(false)
   end
 
+  # B17: validate read segments and asn off whatever carried those type
+  # codes, so a malformed one raised instead of being reported.
+  def test_validate_handles_raw_attributes
+    pa = Path_attribute.new(Attr::Raw.new(ATTR::WELL_KNOWN_MANDATORY, ATTR::AS_PATH, "\x02\x02\x00".b),
+                            Attr::Raw.new(ATTR::OPTIONAL_TRANSITIVE, ATTR::AGGREGATOR, "\x00\x64".b))
+    found = nil
+    assert_nothing_raised { found = pa.validate(false) }
+    assert_equal [[2, :treat_as_withdraw], [7, :attribute_discard]],
+                 found.collect { |f| [f.type, f.action] }
+  end
+
 end

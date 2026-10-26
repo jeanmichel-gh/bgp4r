@@ -182,4 +182,34 @@ class TestAs4 < Test::Unit::TestCase
     assert_equal pa.encode(false), pa.as4_fixup.encode(false)
   end
 
+  # B17. A malformed AS_PATH or AGGREGATOR arrives as an Attr::Raw, which
+  # has no segments or asn. Both helpers used to raise NoMethodError, so
+  # bgp4r could not send either fault over a session: Neighbor#send_update
+  # calls as4_fixup on every 2-octet session.
+  def test_fixup_passes_raw_attributes_through
+    raw_path = Attr::Raw.new(ATTR::WELL_KNOWN_MANDATORY, ATTR::AS_PATH, "\x02\x02\x00".b)
+    raw_aggr = Attr::Raw.new(ATTR::OPTIONAL_TRANSITIVE, ATTR::AGGREGATOR, "\x00\x64\x0a\x00".b)
+    pa = Path_attribute.new(Origin.new(0), raw_path, raw_aggr)
+    assert_nothing_raised { pa.as4_fixup }
+    assert_equal pa.encode(false), pa.as4_fixup.encode(false), 'a raw attribute goes out as it was built'
+    assert pa.as4_fixup.has_no?(As4_path)
+  end
+
+  def test_merge_passes_raw_attributes_through
+    pa = Path_attribute.new(Origin.new(0),
+                            Attr::Raw.new(ATTR::WELL_KNOWN_MANDATORY, ATTR::AS_PATH, "\x02\x02\x00".b),
+                            Attr::Raw.new(ATTR::OPTIONAL_TRANSITIVE, ATTR::AS4_PATH, "\x02\x01".b))
+    assert_nothing_raised { pa.as4_merge }
+    assert_equal pa.encode(true), pa.as4_merge.encode(true)
+  end
+
+  # A good AS_PATH beside a raw one is still fixed up.
+  def test_fixup_still_works_with_a_raw_aggregator
+    pa = Path_attribute.new(As_path.new(100, BIG),
+                            Attr::Raw.new(ATTR::OPTIONAL_TRANSITIVE, ATTR::AGGREGATOR, "\x00".b))
+    f = pa.as4_fixup
+    assert_equal '100 23456', f[:as_path].as_path
+    assert_equal '100 4200000001', f[:as4_path].as_path
+  end
+
 end
