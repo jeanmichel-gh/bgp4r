@@ -75,12 +75,33 @@ module BGP
     
     def encode(value='',value_fmt=nil)
       len = value.size
+      value = [*value].pack(value_fmt) if value_fmt
+      (encode_header(len) + value).is_packed
+    end
+
+    # The flags to write for a value of len octets. Sets the Extended
+    # Length bit when the length needs two octets (RFC 4271 section 4.3).
+    def header_flags(len)
       len_fmt(len)
-      if value_fmt
-        [@flags<<4, @type, len, *value].pack("CC#{@_len_fmt}#{value_fmt}")
-      else
-        ([@flags<<4, @type, len].pack("CC#{@_len_fmt}") + value).is_packed
-      end
+      @flags
+    end
+
+    # RFC 4271 section 4.3: Attribute Flags, Attribute Type Code, then
+    # the Attribute Length, one octet, or two when the Extended Length
+    # bit is set.
+    #
+    # Overrides set with Attr#override are written as they are, never
+    # checked: bgp4r must be able to send any header. A length override
+    # changes the length field only, the value octets stay the same.
+    # With a flags override, its Extended Length bit picks the size of
+    # the length field. Without one, the length written picks it.
+    def encode_header(len)
+      o = (defined?(@_override) && @_override) || {}
+      type = o.fetch(:type, @type)
+      len  = o.fetch(:length, len)
+      flags = o.key?(:flags) ? o[:flags] : header_flags(len)
+      len_fmt = (flags & EXTENDED_LENGTH) > 0 ? 'n' : 'C'
+      [flags<<4, type, len].pack("CC#{len_fmt}")
     end
     
     def parse(*args)
@@ -189,6 +210,58 @@ module BGP
     
     def <=>(o)
       type <=> o.type
+    end
+
+    OVERRIDE_KEYS = [:flags, :type, :length].freeze
+
+    class << self
+      # Header overrides can be given as trailing options to any
+      # attribute, for example Origin.new(:igp, flags: ATTR::OPTIONAL).
+      # A trailing Hash is taken as options only when all its keys are
+      # :flags, :type or :length, so the from hash forms are not
+      # affected. To combine a hash form and options, pass the options
+      # apart: Mp_reach.new({...}, flags: 0xc).
+      def new(*args, &block)
+        opts = nil
+        last = args.last
+        if last.is_a?(Hash) and ! last.empty? and (last.keys - OVERRIDE_KEYS).empty?
+          opts = args.pop
+        end
+        o = super(*args, &block)
+        o.override(**opts) if opts
+        o
+      end
+    end
+
+    # Sets header fields to write instead of the computed ones:
+    # flags: (the 4 bit flags, as ATTR::OPTIONAL), type:, length:.
+    # A nil value removes that override. Nothing is checked, so the
+    # header may lie on purpose. Returns self.
+    def override(**opts)
+      bad = opts.keys - OVERRIDE_KEYS
+      raise ArgumentError, "unknown override #{bad.inspect}, use #{OVERRIDE_KEYS.inspect}" unless bad.empty?
+      @_override = overrides
+      opts.each { |k, v| v.nil? ? @_override.delete(k) : @_override[k] = v }
+      self
+    end
+
+    # The overrides set, as a Hash. Empty when there are none.
+    def overrides
+      ((defined?(@_override) && @_override) || {}).dup
+    end
+
+    # RFC 4271 section 5: an unrecognized optional transitive attribute
+    # passed on to other peers MUST have its Partial bit set. Sets the
+    # bit only when the attribute is optional transitive (section 4.3
+    # says the bit MUST be 0 otherwise). Use override(flags: ...) to
+    # write any other flags. Returns self.
+    def partial!
+      @flags |= PARTIAL if is_optional? and is_transitive?
+      self
+    end
+
+    def partial?
+      (@flags & PARTIAL) > 0
     end
     
     def method_missing(name, *args, &block)

@@ -422,5 +422,46 @@ class Path_attribute_Test < Test::Unit::TestCase # :nodoc:
     $stdout = out
   end
 
-end
+  # B6: an unknown attribute made Path_attribute#to_hash raise.
+  def test_unknown_to_hash
+    pa = Path_attribute.new(Origin.new(0), Attr.factory(['c0ff0401020304'].pack('H*')))
+    h = pa.to_hash
+    assert_equal({:origin=>:igp, :unknown=>[{:flags=>0xc, :type=>255, :value=>'01020304'}]}, h)
+    assert_equal(pa.to_shex, Path_attribute.new(h).to_shex)
+  end
 
+  def test_several_unknowns_to_hash
+    s = ['40010100c0ff0401020304806302abcd'].pack('H*')
+    pa = Path_attribute.new(s)
+    h = pa.to_hash
+    assert_equal([
+      {:flags=>0xc, :type=>255, :value=>'01020304'},
+      {:flags=>0x8, :type=>99, :value=>'abcd'},
+    ], h[:unknown])
+    assert_equal('40010100c0ff0401020304806302abcd', Path_attribute.new(h).to_shex)
+  end
+
+  def test_unknown_old_forms
+    # Four argument form, the length argument is ignored.
+    assert_equal('c0630178', Attr::Unknown.new(0xc, 99, 0, 'x').to_shex)
+    assert_equal('c0630178', Attr::Unknown.new(['c0630178'].pack('H*')).to_shex)
+    assert_kind_of(Attr::Raw, Attr::Unknown.new(0xc, 99, 0, 'x'))
+  end
+
+  # B7: RFC 4271 section 5 and 9.1.2.2. An unrecognized optional
+  # transitive attribute passed on has its Partial bit set.
+  def test_unknown_partial
+    a = Attr.factory(['c0ff0401020304'].pack('H*'))
+    assert_equal(false, a.partial?)
+    assert_same(a, a.partial!)
+    assert_equal(true, a.partial?)
+    assert_equal('e0ff0401020304', a.to_shex)
+    assert_equal(0xe, a.to_hash[:unknown][0][:flags])
+  end
+
+  def test_unknown_partial_not_set_when_non_transitive
+    a = Attr.factory(['80ff0401020304'].pack('H*'))
+    assert_equal('80ff0401020304', a.partial!.to_shex)
+  end
+
+end

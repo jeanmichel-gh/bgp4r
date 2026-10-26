@@ -135,3 +135,83 @@ class Attr_registry_Test < Test::Unit::TestCase
     assert_nil(Attr.by_key(:other_origin))
   end
 end
+
+# Header overrides: write any flags, type or length, never checked.
+class Attr_override_Test < Test::Unit::TestCase
+  include BGP
+
+  def test_origin
+    assert_equal('40010100', Origin.new(:igp).to_shex)
+    assert_equal('80010100', Origin.new(:igp, flags: ATTR::OPTIONAL).to_shex)
+    assert_equal('40630100', Origin.new(:igp, type: 0x63).to_shex)
+    assert_equal('40010300', Origin.new(:igp, length: 3).to_shex)
+    assert_equal('80010300', Origin.new(:igp, flags: ATTR::OPTIONAL, length: 3).to_shex)
+    # A long length override switches to a two octet length field.
+    assert_equal('5001012c00', Origin.new(:igp, length: 300).to_shex)
+    # Extended Length bit in the flags override: two octet length field.
+    assert_equal('5001000100', Origin.new(:igp, flags: 0x5).to_shex)
+    # Flags without the bit: a one octet field, even if the length is long.
+    assert_equal('40012c00', Origin.new(:igp, flags: 0x4, length: 300).to_shex)
+  end
+
+  def test_next_hop
+    assert_equal('4003040a000001', Next_hop.new('10.0.0.1').to_shex)
+    assert_equal('c003040a000001', Next_hop.new('10.0.0.1', flags: 0xc).to_shex)
+    assert_equal('4004040a000001', Next_hop.new('10.0.0.1', type: 4).to_shex)
+    assert_equal('4003050a000001', Next_hop.new('10.0.0.1', length: 5).to_shex)
+  end
+
+  def test_as_path
+    assert_equal('4002060202006400c8', As_path.new(100, 200).to_shex)
+    assert_equal('500200060202006400c8', As_path.new(100, 200, flags: 0x5).to_shex)
+    assert_equal('4011060202006400c8', As_path.new(100, 200, type: 17).to_shex)
+    assert_equal('4002ff0202006400c8', As_path.new(100, 200, length: 255).to_shex)
+    # The override holds for the 4 byte encoding too.
+    assert_equal('5002000a020200000064000000c8', As_path.new(100, 200, flags: 0x5).encode4.unpack('H*')[0])
+  end
+
+  def test_communities
+    assert_equal('c0080400010001', Communities.new('1:1').to_shex)
+    assert_equal('40080400010001', Communities.new('1:1', flags: ATTR::WELL_KNOWN_MANDATORY).to_shex)
+    assert_equal('c0200400010001', Communities.new('1:1', type: 32).to_shex)
+    assert_equal('c0080300010001', Communities.new('1:1', length: 3).to_shex)
+  end
+
+  def test_mp_reach
+    h = {:afi=>1, :safi=>1, :nexthop=>'10.0.0.1', :nlris=>'10.1.0.0/16'}
+    assert_equal('800e0c000101040a00000100100a01', Mp_reach.new(h).to_shex)
+    assert_equal('900e000c000101040a00000100100a01', Mp_reach.new(h, flags: 0x9).to_shex)
+    assert_equal('80630c000101040a00000100100a01', Mp_reach.new(h, type: 0x63).to_shex)
+    assert_equal('800e02000101040a00000100100a01', Mp_reach.new(h, length: 2).to_shex)
+  end
+
+  def test_override_setter
+    o = Origin.new(:egp)
+    assert_same(o, o.override(flags: 0xf, type: 0, length: 0))
+    assert_equal('f000000001', o.to_shex)
+    assert_equal({:flags=>0xf, :type=>0, :length=>0}, o.overrides)
+    o.override(flags: nil, type: nil, length: nil)
+    assert_equal('40010101', o.to_shex)
+    assert_equal({}, o.overrides)
+    assert_raise(ArgumentError) { o.override(colour: 1) }
+  end
+
+  def test_override_on_parsed_attr
+    a = Attr.factory(['40010100'].pack('H*')).override(type: 2)
+    assert_equal('40020100', a.to_shex)
+  end
+
+  def test_hash_forms_not_taken_as_options
+    assert_equal('40010101', Origin.new(:origin=>1).to_shex)
+    assert_equal('4003040a000001', Next_hop.new(:next_hop=>'10.0.0.1').to_shex)
+  end
+
+  def test_partial_known_attr
+    # Communities is optional transitive: partial! sets the bit.
+    assert_equal('e0080400010001', Communities.new('1:1').partial!.to_shex)
+    # Origin is well known: partial! leaves it, override can still set it.
+    assert_equal('40010100', Origin.new(:igp).partial!.to_shex)
+    assert_equal('60010100', Origin.new(:igp, flags: 0x6).to_shex)
+  end
+
+end
