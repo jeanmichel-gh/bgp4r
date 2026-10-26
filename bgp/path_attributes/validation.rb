@@ -85,6 +85,7 @@ module BGP
         ONLY_TO_CUSTOMER => OPTIONAL | TRANSITIVE,
         IPV6_EXTENDED_COMMUNITY => OPTIONAL | TRANSITIVE,
         PREFIX_SID       => OPTIONAL | TRANSITIVE,
+        PMSI_TUNNEL      => OPTIONAL | TRANSITIVE,
       }
 
       extend self
@@ -189,6 +190,10 @@ module BGP
           return multiple(type, n, 20, TAW, '7606 section 7.15')
         when PREFIX_SID
           return prefix_sid_finding(type, v)
+        when PMSI_TUNNEL
+          # RFC 6514 section 5: flags, tunnel type, a 3 octet label, then
+          # the tunnel identifier.
+          return Finding.new(type, 5, TAW, "length #{n}, needs at least 5 (RFC 6514 section 5)") if n < 5
         when MP_REACH
           # AFI, SAFI, next hop length, next hop, reserved (RFC 4760 section 3).
           if n < 5 or 5 + v.getbyte(3) > n

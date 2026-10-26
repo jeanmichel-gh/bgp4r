@@ -18,6 +18,7 @@
   otc
   ipv6_extended_communities
   prefix_sid
+  pmsi_tunnel
   as4
 }.each do |attr|
   require "bgp/path_attributes/#{attr}"
