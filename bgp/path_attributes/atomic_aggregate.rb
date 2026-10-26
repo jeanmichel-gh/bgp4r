@@ -27,7 +27,9 @@ module BGP
 
   class Atomic_aggregate < Attr
     def initialize(arg=nil)
-      @flags, @type=OPTIONAL, ATOMIC_AGGREGATE
+      # RFC 4271 section 4.3: ATOMIC_AGGREGATE is well-known discretionary,
+      # so the Transitive bit is set and the Optional bit is not.
+      @flags, @type=WELL_KNOWN_DISCRETIONARY, ATOMIC_AGGREGATE
       if arg.is_a?(String) and arg.is_packed?
         parse(arg)
       elsif arg.nil?
@@ -37,6 +39,14 @@ module BGP
     end
     def to_hash
       {}
+    end
+
+    private
+
+    # Keep the flags received, so an attribute parsed from the wire is
+    # encoded back as it came, odd flags included.
+    def parse(s)
+      @flags, @type, _ = super(s)
     end
   end
 
