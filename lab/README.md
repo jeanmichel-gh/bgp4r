@@ -180,3 +180,41 @@ gobgpd -f gobgpd.conf &                                   # 127.0.0.2
 FRR drops privileges to the `frr` user, so its config file has to be
 readable by that user. A next hop of 127.0.0.1 is martian to FRR; use
 an ordinary address such as 10.0.0.1.
+
+### Router configs and results
+
+`lab/conformance/` holds a working config for each router, all three on
+loopback addresses so they can run side by side:
+
+| Router | Address | AS | bgp4r listens on |
+|---|---|---|---|
+| GoBGP | 127.0.0.2 | 65002 | 127.0.0.1:179 |
+| FRR | 127.0.0.3 | 65003 | 127.0.0.1:179 |
+| BIRD | 127.0.0.4 | 65004 | 127.0.0.1:1179 |
+
+```
+gobgpd -f lab/conformance/gobgpd.conf &
+install -o frr -g frr -m 644 lab/conformance/frr-bgpd.conf /etc/frr/bgpd.conf
+/usr/lib/frr/bgpd -f /etc/frr/bgpd.conf -l 127.0.0.3 -Z --log stdout &
+bird -c lab/conformance/bird.conf -s /run/bird.ctl -f &
+
+ruby lab/fault_matrix.rb --peer 127.0.0.2 --peer-as 65002 --rib-command 'gobgp global rib'
+ruby lab/fault_matrix.rb --peer 127.0.0.3 --peer-as 65003 --rib-command 'vtysh -c "show bgp ipv4 unicast"'
+ruby lab/fault_matrix.rb --peer 127.0.0.4 --peer-as 65004 --port 1179 --rib-command 'birdc -s /run/bird.ctl show route'
+```
+
+BIRD takes a port of its own because it wants the wildcard `0.0.0.0:179`
+for its listening socket. `strict bind` keeps it on its own address, and
+it dials bgp4r on 1179 so the two listeners do not collide.
+
+BIRD also needs a short `error wait time`. Each fault gets a session of
+its own, so a router that waits minutes before reconnecting, which is
+BIRD's default after a closed connection, never comes back in time.
+
+### Reading the results
+
+`session only` means the router kept the session, which is right for
+both treat-as-withdraw and attribute-discard, but the RIB said nothing,
+so the two cannot be told apart. BIRD in this setup rejects even a plain
+route, because the next hop does not resolve over a loopback multihop
+session, so every BIRD row reads that way.

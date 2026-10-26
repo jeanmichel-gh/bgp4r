@@ -51,7 +51,7 @@ module BGP
     PREFIX = '203.0.113.0/24'
 
     Result = Struct.new(:name, :description, :expected, :outcome, :code, :subcode,
-                        :installed, :agrees, keyword_init: true)
+                        :installed, :verdict, keyword_init: true)
 
     def initialize(opts)
       @opts = opts
@@ -68,12 +68,34 @@ module BGP
     end
 
     def run(names)
+      baseline
       results = names.collect { |name| run_one(name) }
-      stop_listening
+      close_listener
       results
     end
 
-    private
+    # Whether the RIB command can be trusted. A router that does not
+    # install a plain route, because the next hop does not resolve in
+    # this topology for instance, cannot tell us what it did with a
+    # faulty one either. Saying so beats scoring every discard case
+    # against a probe that always answers no.
+    attr_reader :rib_usable
+
+    def baseline
+      @rib_usable = false
+      return unless @opts[:rib_command]
+      with_session do |up|
+        next unless up
+        drain
+        @peer.send_message Update.new(
+          Path_attribute.new(Origin.new(0), As_path.new(@opts[:my_as]),
+                             Next_hop.new(@opts[:next_hop])),
+          Nlri.new(PREFIX))
+        wait_for_notification(@opts[:settle])
+        @rib_usable = route_installed? == true
+      end
+      log "rib probe usable: #{@rib_usable}"
+    end
 
     def entry(name)
       Fault.catalog.find { |e| e[:name] == name }
@@ -83,35 +105,48 @@ module BGP
     def run_one(name)
       e = entry(name)
       raise ArgumentError, "unknown fault #{name.inspect}" unless e
-      session = establish
-      return Result.new(name: name, description: e[:description], expected: e[:action],
-                        outcome: :no_session, agrees: false) unless session
+      with_session do |up|
+        next no_session(e, name) unless up
+        drain
+        begin
+          @peer.send_message update_for(name)
+        rescue StandardError => ex
+          log "send #{name}: #{ex.class}: #{ex.message}"
+          next result(e, name, :reset, nil, nil)
+        end
+        notification = wait_for_notification(@opts[:settle])
+        outcome = (notification or not @peer.is_established?) ? :reset : :kept
+        installed = (outcome == :kept && @rib_usable) ? route_installed? : nil
+        result(e, name, outcome, notification, installed)
+      end
+    end
 
-      drain
-      @peer.send_message update_for(name)
-      notification = wait_for_notification(@opts[:settle])
-      kept = @peer.is_established?
+    def no_session(e, name)
+      Result.new(name: name, description: e[:description], expected: e[:action],
+                 outcome: :no_session, verdict: :differs)
+    end
 
-      outcome = (notification or not kept) ? :reset : :kept
-      installed = (outcome == :kept) ? route_installed? : nil
-
+    def result(e, name, outcome, notification, installed)
       Result.new(name: name, description: e[:description], expected: e[:action],
                  outcome: outcome,
                  code: notification && notification.to_hash[:code],
                  subcode: notification && notification.to_hash[:subcode],
                  installed: installed,
-                 agrees: agrees?(e[:action], outcome, installed))
-    ensure
-      reset_session
+                 verdict: verdict(e[:action], outcome, installed))
     end
 
-    # The RFC 7606 action the catalog expects, against what was seen.
-    def agrees?(expected, outcome, installed)
-      case expected
-      when :session_reset       then outcome == :reset
-      when :treat_as_withdraw   then outcome == :kept && installed != true
-      when :attribute_discard   then outcome == :kept && installed != false
-      end
+    # What was seen against what the catalog expects.
+    #
+    #   :agrees    the router did what RFC 7606 asks
+    #   :differs   it did not
+    #   :partial   the session part is right, but telling treat-as-withdraw
+    #              from attribute-discard needs a RIB answer we do not have
+    def verdict(expected, outcome, installed)
+      return outcome == :reset ? :agrees : :differs if expected == :session_reset
+      return :differs unless outcome == :kept
+      return :partial if installed.nil?
+      wanted = (expected == :attribute_discard)
+      installed == wanted ? :agrees : :differs
     end
 
     def update_for(name)
@@ -125,61 +160,82 @@ module BGP
       Update.new(pa, Nlri.new(PREFIX))
     end
 
-    def listener
-      @listener ||= TCPServer.new(@opts[:listen], @opts[:port])
+    # A listener and a session of its own for each fault. Reusing one
+    # listener leaves connections the router made while we were not
+    # listening queued in its backlog, and the next accept takes a dead
+    # one, so every other fault saw no session at all.
+    def with_session
+      open_listener
+      ok = @peer.wait_for_state(:Established, @opts[:connect_timeout])
+      yield ok
+    ensure
+      close_listener
     end
 
-    def accept_loop
-      @accepting ||= Thread.new do
+    def open_listener
+      close_listener
+      @listener = TCPServer.new(@opts[:listen], @opts[:port])
+      listening = @listener
+      @peer = new_neighbor
+      @accepting = Thread.new do
         loop do
           begin
-            @peer.start_session(listener.accept)
-          rescue StandardError => e
-            log "accept: #{e.class}: #{e.message}"
+            session = listening.accept
+            from = session.peeraddr[3] rescue nil
+            if from != @opts[:peer]
+              # Another router on this host dialing the same port. Its
+              # answers would land in this run and look like the answers
+              # of the router under test.
+              log "accept: from #{from}, not #{@opts[:peer]}, hanging up"
+              session.close
+            elsif @peer.is_idle?
+              @peer.start_session(session)
+            else
+              session.close
+            end
+          rescue StandardError
+            break
           end
         end
       end
     end
 
-    def neighbor
-      @peer ||= begin
-        n = Neighbor.new(4, @opts[:my_as], @opts[:holdtime], @opts[:id],
-                         @opts[:peer], @opts[:listen])
-        n.capability :as4_byte
-        n.capability :mbgp, :ipv4, :unicast
-        # The duplicate MP_REACH case carries IPv6 NLRI. Without this the
-        # router resets over an AFI it never agreed to, not the duplicate.
-        n.capability :mbgp, :ipv6, :unicast
-        n.add_observer self
-        n
-      end
-    end
-
-    # Waits for the router to connect and finish the OPEN exchange.
-    def establish
-      neighbor
-      accept_loop
-      return true if @peer.is_established?
-      @peer.wait_for_state(:Established, @opts[:connect_timeout])
-    end
-
-    def reset_session
-      @peer.stop if @peer and not @peer.is_idle?
-    rescue StandardError => e
-      log "stop: #{e.class}: #{e.message}"
-    end
-
-    def stop_listening
+    def close_listener
       @accepting.kill if @accepting
-      @peer.close if @peer
-      @listener.close if @listener
-    rescue StandardError
-      nil
+      begin
+        @peer.close if @peer
+      rescue StandardError
+        nil
+      end
+      begin
+        @listener.close if @listener and not @listener.closed?
+      rescue StandardError
+        nil
+      end
+      @accepting, @listener, @peer = nil, nil, nil
+    end
+
+    def new_neighbor
+      n = Neighbor.new(4, @opts[:my_as], @opts[:holdtime], @opts[:id],
+                       @opts[:peer], @opts[:listen])
+      n.capability :as4_byte
+      n.capability :mbgp, :ipv4, :unicast
+      # The duplicate MP_REACH case carries IPv6 NLRI, so it needs this to
+      # test the duplicate rather than an address family the router never
+      # agreed to. It is off by default because negotiating IPv6 changes
+      # what routers do with the IPv4 faults: both GoBGP 3.23 and FRR
+      # 8.4.4 then answer Invalid Network Field (3/10) to faults they
+      # otherwise treat as withdraw. Worth getting to the bottom of
+      # before turning it on by default.
+      n.capability :mbgp, :ipv6, :unicast if @opts[:ipv6]
+      n.add_observer self
+      n
     end
 
     def drain
       @inbox.clear
     end
+
 
     # A NOTIFICATION within secs, or nil. Other messages are ignored.
     def wait_for_notification(secs)
@@ -226,6 +282,7 @@ def parse(argv)
     p.on('--next-hop ADDR', 'NEXT_HOP to advertise')      { |v| o[:next_hop] = v }
     p.on('--settle SECS', Float, 'wait after each fault') { |v| o[:settle] = v }
     p.on('--rib-command CMD', 'shell command printing the router RIB') { |v| o[:rib_command] = v }
+    p.on('--ipv6', 'also negotiate IPv6 unicast')         { o[:ipv6] = true }
     p.on('--only NAMES', 'comma separated fault names')   { |v| o[:only] = v.split(',').collect(&:to_sym) }
     p.on('--json FILE', 'write the results as JSON')      { |v| o[:json] = v }
     p.on('--verbose', 'log what the harness is doing')    { o[:verbose] = true }
@@ -241,14 +298,25 @@ if __FILE__ == $0
   Log.level = opts[:verbose] ? Logger::WARN : Logger::FATAL
 
   names = opts[:only] || BGP::Fault::CATALOG.collect(&:first)
-  results = BGP::Fault_matrix.new(opts).run(names)
+  matrix = BGP::Fault_matrix.new(opts)
+  results = matrix.run(names)
 
   width = results.collect { |r| r.name.length }.max
-  puts format("%-#{width}s  %-22s  %-18s  %-8s  %s", 'FAULT', 'EXPECTED (RFC 7606)', 'WHAT IT DID', 'ROUTE', 'AGREES')
+  verdicts = { :agrees => 'agrees', :differs => 'DIFFERS', :partial => 'session only' }
+  puts format("%-#{width}s  %-22s  %-18s  %-10s  %s", 'FAULT', 'EXPECTED (RFC 7606)', 'WHAT IT DID', 'ROUTE', 'VERDICT')
   results.each do |r|
-    did = r.outcome == :reset ? "reset#{r.code ? " #{r.code}/#{r.subcode}" : ' (no notification)'}" : 'kept the session'
+    did = case r.outcome
+          when :reset      then "reset#{r.code ? " #{r.code}/#{r.subcode}" : ' (no notification)'}"
+          when :no_session then 'never reconnected'
+          else                  'kept the session'
+          end
     route = r.installed.nil? ? '-' : (r.installed ? 'installed' : 'dropped')
-    puts format("%-#{width}s  %-22s  %-18s  %-8s  %s", r.name, r.expected, did, route, r.agrees ? 'yes' : 'NO')
+    puts format("%-#{width}s  %-22s  %-18s  %-10s  %s", r.name, r.expected, did, route, verdicts[r.verdict])
+  end
+  unless matrix.rib_usable
+    puts "\nNo usable RIB answer: the router did not install a plain route either, so" \
+         "\ntreat-as-withdraw and attribute-discard cannot be told apart here." \
+         "\nThe session outcomes above still stand."
   end
 
   if opts[:json]
@@ -256,5 +324,5 @@ if __FILE__ == $0
     puts "\nwrote #{opts[:json]}"
   end
 
-  exit(results.all?(&:agrees) ? 0 : 1)
+  exit(results.any? { |r| r.verdict == :differs } ? 1 : 0)
 end
