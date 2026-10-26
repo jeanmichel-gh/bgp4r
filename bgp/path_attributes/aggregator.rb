@@ -105,9 +105,10 @@ module BGP
     def parse(s,as4byte=@as4byte)
       super(s,true)
     end
-    def encode(as4byte=@as4byte)
-      f = as4byte ? 'N' : 'n'
-      super([@as].pack(f) + @ip_address.hton)
+    # RFC 6793 section 3: AS4_AGGREGATOR always carries a 4-octet AS
+    # number, whatever the session uses.
+    def encode(as4byte=true)
+      super(true)
     end
 
     def aggregator(as4byte=@as4byte)

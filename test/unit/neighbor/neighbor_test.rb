@@ -418,4 +418,77 @@ class TestBgpNeighbor < Test::Unit::TestCase
     assert_equal(9, n.instance_eval { @opt_parms }.size )
     assert_equal('ffffffffffffffffffffffffffffffff005d0104006400b4000000024002060104000100010206010400010002020601040001008002060104000200810206010400030080020601040003000102020200020280000206410400000064', n.open.to_shex)
   end
+
+  class UpdateCatcher
+    def initialize; @q = Queue.new; end
+    def update(msg); @q << msg if msg.is_a?(Update); end
+    def pop(secs=3)
+      Timeout.timeout(secs) { @q.pop }
+    rescue Timeout::Error
+      nil
+    end
+  end
+
+  def as4_update
+    Update.new(
+      Path_attribute.new(Origin.new(0), As_path.new(100, 4200000001),
+                         Next_hop.new('127.0.0.1'), Aggregator.new('2.2.2.2', 4200000001)),
+      Nlri.new('10.0.0.0/8'))
+  end
+
+  def update_received_by_server(client, server_cap=nil)
+    port = start_server(0, server_cap)
+    catcher = UpdateCatcher.new
+    @s.add_observer catcher
+    @c = client
+    assert @c.start(:port=> port), "no session: #{@c.last_error}"
+    @c.send_message @sent = as4_update
+    got = catcher.pop
+    assert got, "server received no UPDATE"
+    got.path_attribute
+  end
+
+  def test_auto_as4_default_and_setter
+    n = Neighbor.new(4, 100, 180, '0.0.0.2', '127.0.0.1', '127.0.0.1')
+    assert n.auto_as4?
+    n.auto_as4 = false
+    assert ! n.auto_as4?
+    assert ! Neighbor.new(:my_as=> 100, :auto_as4=> false).auto_as4?
+  end
+
+  # RFC 6793 section 4.2.2: to a peer without the 4-octet AS capability.
+  def test_2_octet_session_sends_as_trans_and_as4_attributes
+    Timeout::timeout(8) {
+      pa = update_received_by_server(Neighbor.new(4, 100, 180, '0.0.0.2', '127.0.0.1', '127.0.0.1'))
+      assert_equal '100 23456', pa[:as_path].as_path
+      assert_equal '100 4200000001', pa[:as4_path].as_path
+      assert_equal 23456, pa[:aggregator].asn
+      assert_equal 4200000001, pa[:as4_aggregator].asn
+      # The caller's Update is not changed.
+      assert_equal '100 4200000001', @sent.path_attribute[:as_path].as_path
+      assert @sent.path_attribute.has_no?(As4_path)
+    }
+  end
+
+  def test_2_octet_session_with_auto_as4_off_sends_as_built
+    Timeout::timeout(8) {
+      c = Neighbor.new(:version=> 4, :my_as=> 100, :id=> '0.0.0.2', :remote_addr=> '127.0.0.1',
+                       :local_addr=> '127.0.0.1', :auto_as4=> false)
+      pa = update_received_by_server(c)
+      assert_equal '100 59905', pa[:as_path].as_path   # 4200000001 cut to 0xea01
+      assert pa.has_no?(As4_path)
+      assert pa.has_no?(As4_aggregator)
+    }
+  end
+
+  def test_4_octet_session_sends_no_as4_attributes
+    Timeout::timeout(8) {
+      c = Neighbor.new(4, 100, 180, '0.0.0.2', '127.0.0.1', '127.0.0.1')
+      c.capability :as4_byte
+      pa = update_received_by_server(c, As4.new(100))
+      assert_equal '100 4200000001', pa[:as_path].as_path
+      assert pa.has_no?(As4_path)
+      assert pa.has_no?(As4_aggregator)
+    }
+  end
 end

@@ -14,6 +14,7 @@
   extended_communities 
   path_attribute
   aigp
+  as4
 }.each do |attr|
   require "bgp/path_attributes/#{attr}"
 end

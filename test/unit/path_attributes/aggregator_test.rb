@@ -77,4 +77,9 @@ class Aggregator_Test < Test::Unit::TestCase
     assert_equal('11.0.0.2', ag1.address)
     assert_equal({:asn=>200, :address=>"11.0.0.2"}, ag1.to_hash[:aggregator])
   end 
+  # RFC 6793 section 3: a 4-octet AS number even when asked for 2.
+  def test_as4_aggregator_encode_is_always_4_octets
+    agg = As4_aggregator.new('2.2.2.2', 4200000001)
+    assert_equal 'c01208fa56ea0102020202', agg.encode(false).unpack1('H*')
+  end
 end
