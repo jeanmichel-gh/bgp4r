@@ -42,7 +42,9 @@ module BGP
     # An AS4_PATH or AS4_AGGREGATOR the caller already added is kept.
     def as4_fixup
       attrs = attributes.dup
-      as_path = attrs.find { |a| a.type == AS_PATH }
+      # A raw or malformed AS_PATH or AGGREGATOR is passed through as it
+      # is: bgp4r must be able to send one to a router under test.
+      as_path = attrs.find { |a| a.type == AS_PATH and a.respond_to?(:segments) }
       if as_path and As4.large?(as_path)
         unless attrs.find { |a| a.type == AS4_PATH }
           segs = as_path.segments.reject { |seg| As4.confed?(seg) }
@@ -50,7 +52,7 @@ module BGP
         end
         attrs[As4.index(attrs, as_path)] = As4.with_as_trans(as_path)
       end
-      aggregator = attrs.find { |a| a.type == AGGREGATOR }
+      aggregator = attrs.find { |a| a.type == AGGREGATOR and a.respond_to?(:asn) }
       if aggregator and aggregator.asn > 0xffff
         unless attrs.find { |a| a.type == AS4_AGGREGATOR }
           attrs << As4_aggregator.new(aggregator.address, aggregator.asn)
@@ -78,9 +80,9 @@ module BGP
     # as one, a confederation segment as zero (RFC 5065 section 5.3).
     def as4_merge
       attrs = attributes.dup
-      as4_path = attrs.find { |a| a.type == AS4_PATH }
-      as4_aggregator = attrs.find { |a| a.type == AS4_AGGREGATOR }
-      aggregator = attrs.find { |a| a.type == AGGREGATOR }
+      as4_path = attrs.find { |a| a.type == AS4_PATH and a.respond_to?(:segments) }
+      as4_aggregator = attrs.find { |a| a.type == AS4_AGGREGATOR and a.respond_to?(:asn) }
+      aggregator = attrs.find { |a| a.type == AGGREGATOR and a.respond_to?(:asn) }
       attrs.reject! { |a| a.equal?(as4_path) or a.equal?(as4_aggregator) }
       if aggregator and aggregator.asn != AS_TRANS and as4_aggregator
         return Path_attribute.new(*attrs)

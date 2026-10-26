@@ -165,7 +165,9 @@ module BGP
         out << Attr::Check.duplicate_finding(type) if seen[type]
         seen[type] = true
         next if as4byte
-        large = (type == AS_PATH and As4.large?(a)) || (type == AGGREGATOR and a.asn.to_i > 0xffff)
+        # A raw or malformed attribute has no segments or asn to look at.
+        large = (type == AS_PATH and a.respond_to?(:segments) and As4.large?(a)) ||
+                (type == AGGREGATOR and a.respond_to?(:asn) and a.asn.to_i > 0xffff)
         if large
           out << Attr::Finding.new(type, nil, nil,
             "AS number above 65535 cut to 16 bits in a 2-octet encoding, see as4_fixup (RFC 6793 section 4.2.2)")
