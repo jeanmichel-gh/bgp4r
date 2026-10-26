@@ -84,6 +84,7 @@ module BGP
         LARGE_COMMUNITY  => OPTIONAL | TRANSITIVE,
         ONLY_TO_CUSTOMER => OPTIONAL | TRANSITIVE,
         IPV6_EXTENDED_COMMUNITY => OPTIONAL | TRANSITIVE,
+        PREFIX_SID       => OPTIONAL | TRANSITIVE,
       }
 
       extend self
@@ -186,6 +187,8 @@ module BGP
           return fixed(type, n, 4, TAW, '9234 section 5', 5)
         when IPV6_EXTENDED_COMMUNITY
           return multiple(type, n, 20, TAW, '7606 section 7.15')
+        when PREFIX_SID
+          return prefix_sid_finding(type, v)
         when MP_REACH
           # AFI, SAFI, next hop length, next hop, reserved (RFC 4760 section 3).
           if n < 5 or 5 + v.getbyte(3) > n
@@ -230,6 +233,34 @@ module BGP
 
       # RFC 7606 section 3 (g): keep the first, discard the others,
       # except MP_REACH_NLRI and MP_UNREACH_NLRI: session reset.
+      # RFC 8669 section 6: malformed when a TLV does not fit its own
+      # length or runs past the end of the attribute. The action is
+      # attribute discard, the attribute is ignored and not passed on.
+      def prefix_sid_finding(type, v)
+        i = 0
+        while i < v.size
+          if v.size - i < 3
+            return Finding.new(type, 5, DISCARD,
+              "#{v.size - i} octets left, a TLV header needs 3 (RFC 8669 section 6)")
+          end
+          tlv, len = v.getbyte(i), v.byteslice(i + 1, 2).unpack1('n')
+          if i + 3 + len > v.size
+            return Finding.new(type, 5, DISCARD,
+              "TLV type #{tlv} runs past the attribute (RFC 8669 section 6)")
+          end
+          if tlv == 1 and len != 7
+            return Finding.new(type, 5, DISCARD,
+              "Label-Index TLV length #{len}, must be 7 (RFC 8669 section 3.1)")
+          end
+          if tlv == 3 and (len < 8 or (len - 2) % 6 != 0)
+            return Finding.new(type, 5, DISCARD,
+              "Originator SRGB TLV length #{len}, must be 2 plus a non-zero multiple of 6 (RFC 8669 section 3.2)")
+          end
+          i += 3 + len
+        end
+        nil
+      end
+
       def duplicate_finding(type)
         if type == MP_REACH or type == MP_UNREACH
           Finding.new(type, 1, RESET, "appears more than once (RFC 7606 section 3 (g))")

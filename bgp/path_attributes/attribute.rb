@@ -49,6 +49,7 @@ module BGP
     ACCUMULATED_IGP_METRIC = 26
     LARGE_COMMUNITY = 32           # RFC 8092 section 3
     ONLY_TO_CUSTOMER = 35          # RFC 9234 section 5
+    PREFIX_SID = 40                # RFC 8669 section 3
 
     # RFC 6793 section 9: AS_TRANS stands in for a 4-octet AS number
     # in a 2-octet field.

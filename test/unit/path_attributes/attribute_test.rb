@@ -107,6 +107,7 @@ class Attr_registry_Test < Test::Unit::TestCase
       ATTR::AS4_PATH => As4_path, ATTR::AS4_AGGREGATOR => As4_aggregator,
       ATTR::ACCUMULATED_IGP_METRIC => Aigp, ATTR::LARGE_COMMUNITY => Large_communities,
       ATTR::ONLY_TO_CUSTOMER => Otc, ATTR::IPV6_EXTENDED_COMMUNITY => Ipv6_extended_communities,
+      ATTR::PREFIX_SID => Prefix_sid,
     }
     expected.each { |type, klass| assert_equal(klass, Attr.by_type(type).klass, "type #{type}") }
     assert_equal(expected.size, Attr.registrations.size)
