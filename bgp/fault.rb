@@ -36,7 +36,9 @@ module BGP
 
     # The catalog of RFC 7606 cases. Each entry is [name, description,
     # expected RFC 7606 action, UPDATE error subcode (RFC 4271 section
-    # 6.3), RFC section, a block that builds the faulty form]. A
+    # 6.3), RFC section, a block that builds the faulty form]. The block
+    # returns one attribute, or a Path_attribute when the fault needs
+    # more than one. Fault.wire gives the octets either way. A
     # conformance test sends each and checks the reply.
     CATALOG = [
       [:origin_length,     'ORIGIN length not 1',            :treat_as_withdraw, 5, '7606 7.1',
@@ -63,31 +65,39 @@ module BGP
         -> { Attr::Raw.new(ATTR::WELL_KNOWN_MANDATORY, 240, "\x00".b) }],
       [:attr_overrun,      'length past the attribute list', :treat_as_withdraw, 1, '7606 4',
         -> { Fault.length(Origin.new(0), 20) }],
+      [:duplicate_attr,    'attribute sent twice',           :attribute_discard, 1, '7606 3 (g)',
+        -> { Fault.duplicate(Origin.new(0)) }],
+      [:duplicate_mp_reach, 'MP_REACH_NLRI sent twice',      :session_reset,     1, '7606 3 (g)',
+        -> { Fault.duplicate(Mp_reach.new(:afi => 2, :safi => 1,
+                                          :nexthop => '2001:db8::1', :nlris => ['2001:db8:1::/48'])) }],
     ].freeze
 
     class << self
 
-      # An Attr::Raw with the same flags, type and value octets as attr.
-      def raw(attr)
+      # The attribute's flags, type code and value octets, as encoded.
+      def parts(attr)
         bytes = attr.encode
         flags = bytes.getbyte(0) >> 4
         hdr = (flags & ATTR::EXTENDED_LENGTH) > 0 ? 4 : 3
-        Attr::Raw.new(flags, bytes.getbyte(1), bytes.byteslice(hdr, bytes.size - hdr))
+        [flags, bytes.getbyte(1), bytes.byteslice(hdr, bytes.size - hdr).to_s.b]
+      end
+
+      # An Attr::Raw with the same flags, type and value octets as attr.
+      def raw(attr)
+        Attr::Raw.new(*parts(attr))
       end
 
       # Keep the first n value octets. Default 0, an empty value.
       # RFC 7606 section 7: a short value is malformed for most types.
       def truncate(attr, n = 0)
-        r = raw(attr)
-        r.instance_variable_set(:@value, r.value.byteslice(0, n).to_s.b)
-        r
+        flags, type, value = parts(attr)
+        Attr::Raw.new(flags, type, value.byteslice(0, n).to_s.b)
       end
 
       # Add n octets to the value (zero, or the given byte).
       def pad(attr, n = 1, byte = 0)
-        r = raw(attr)
-        r.instance_variable_set(:@value, (r.value + ([byte].pack('C') * n)).b)
-        r
+        flags, type, value = parts(attr)
+        Attr::Raw.new(flags, type, value + ([byte].pack('C') * n))
       end
 
       # Set the length field to len without changing the value octets, so
@@ -107,12 +117,26 @@ module BGP
         raw(attr).override(type: type)
       end
 
-      # Replace the value with bytes (a binary String or hex String).
+      # Replace the value with bytes. A String of hex digits is taken as
+      # hex ('dead' is two octets); pass binary octets for anything else.
       def value(attr, bytes)
         bytes = [bytes].pack('H*') if bytes.is_a?(String) and bytes =~ /\A(\h\h)+\z/
-        r = raw(attr)
-        r.instance_variable_set(:@value, bytes.to_s.b)
-        r
+        flags, type, _ = parts(attr)
+        Attr::Raw.new(flags, type, bytes.to_s.b)
+      end
+
+      # The attribute n times in one list. RFC 7606 section 3 (g): a
+      # receiver keeps the first and discards the rest, except MP_REACH
+      # and MP_UNREACH, which reset the session. Returns a Path_attribute.
+      def duplicate(attr, n = 2)
+        Path_attribute.new(*Array.new(n) { attr })
+      end
+
+      # The faulty form as wire octets, whether the entry builds one
+      # attribute or a whole attribute list.
+      def wire(name, as4byte = true)
+        built = build(name)
+        built.is_a?(Path_attribute) ? built.encode(as4byte) : built.encode
       end
 
       # The CATALOG entries, as Hashes.

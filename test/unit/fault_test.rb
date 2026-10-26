@@ -77,15 +77,29 @@ class TestFault < Test::Unit::TestCase
   def test_catalog_entries_match_their_rfc
     assert_equal Fault::CATALOG.size, Fault.catalog.size
     Fault.catalog.each do |e|
-      attr = Fault.build(e[:name])
-      assert_kind_of Attr, attr, e[:name].to_s
-      pa = Path_attribute.new(attr.encode.is_packed, :as4byte => true)
+      pa = Path_attribute.new(Fault.wire(e[:name]).is_packed, :as4byte => true)
       finding = Attr.strongest(pa.errors)
       assert finding, "#{e[:name]}: no finding"
       assert_equal e[:action], finding.action, "#{e[:name]} action"
       assert_equal e[:subcode], finding.subcode, "#{e[:name]} subcode"
       assert_match(/^RFC /, e[:rfc])
     end
+  end
+
+  # RFC 7606 section 3 (g): the first one counts, except MP_REACH_NLRI
+  # and MP_UNREACH_NLRI, which reset the session.
+  def test_duplicate
+    pa = Fault.duplicate(Origin.new(0))
+    assert_instance_of Path_attribute, pa
+    assert_equal '4001010040010100', pa.encode.unpack1('H*')
+    assert_equal 3, Fault.duplicate(Next_hop.new('10.0.0.1'), 3).size
+    parsed = Path_attribute.new(Fault.wire(:duplicate_mp_reach).is_packed, :as4byte => true)
+    assert_equal :session_reset, parsed.action
+  end
+
+  def test_wire_takes_both_shapes
+    assert_equal '40011400', Fault.wire(:attr_overrun).unpack1('H*')
+    assert_equal '4001010040010100', Fault.wire(:duplicate_attr).unpack1('H*')
   end
 
   def test_catalog_names_are_unique
@@ -101,7 +115,7 @@ class TestFault < Test::Unit::TestCase
   def test_strict_parse_raises_on_each_fault
     Fault.catalog.each do |e|
       assert_raise(Malformed_attribute, e[:name].to_s) do
-        Path_attribute.new(Fault.build(e[:name]).encode.is_packed, :as4byte => true, :policy => :strict)
+        Path_attribute.new(Fault.wire(e[:name]).is_packed, :as4byte => true, :policy => :strict)
       end
     end
   end
