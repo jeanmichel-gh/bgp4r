@@ -174,10 +174,10 @@ class Extended_community_Test < Test::Unit::TestCase
   def test_unknown_round_trip
     %w{
       0306000000000000
-      030c000000000007
-      8006000000000000
-      8007000000000000
-      0600000000000064
+      0377000000000007
+      8077000000000000
+      8002000000000000
+      0677000000000064
       0099000000000000
     }.each do |hex|
       ec = Extended_community.factory([hex].pack('H*'))
@@ -191,10 +191,12 @@ class Extended_community_Test < Test::Unit::TestCase
   end
 
   def test_unknown_to_s
-    ec = Extended_community.factory(['8006000000000000'].pack('H*'))
-    assert_equal('Unknown extended community: type 0x80, subtype 0x06, 8006000000000000', ec.to_s)
-    ec = Extended_community.factory(['030c000000000007'].pack('H*'))
-    assert_equal('Unknown extended community: type 0x03, subtype 0x0c, 030c000000000007', ec.to_s)
+    # 0x8006 and 0x030c, used here before, are decoded now (Traffic_rate_bytes
+    # and Encapsulation). These two are still unassigned.
+    ec = Extended_community.factory(['8077000000000000'].pack('H*'))
+    assert_equal('Unknown extended community: type 0x80, subtype 0x77, 8077000000000000', ec.to_s)
+    ec = Extended_community.factory(['0377000000000007'].pack('H*'))
+    assert_equal('Unknown extended community: type 0x03, subtype 0x77, 0377000000000007', ec.to_s)
   end
 
   # RFC 4360 section 2: dispatch on type and subtype, not subtype alone.
@@ -230,6 +232,105 @@ class Extended_community_Test < Test::Unit::TestCase
     assert_equal(Route_origin, ec.class)
     assert_equal('Route origin: 65538:3', ec.to_s)
     assert_equal('0203000100020003', ec.to_shex)
+  end
+
+
+  # New sub-types: hex, factory, round trip.
+  def check_sub_type(klass, hex, text)
+    ec = Extended_community.factory([hex].pack('H*'))
+    assert_equal(klass, ec.class, hex)
+    assert_equal(hex, ec.to_shex, hex)
+    assert_equal(text, ec.to_s, hex)
+  end
+
+  # RFC 9012 section 4.1
+  def test_encapsulation
+    assert_equal('030c000000000008', Encapsulation.new(:vxlan).to_shex)
+    assert_equal('030c000000000002', Encapsulation.new(2).to_shex)
+    assert_equal(:vxlan, Encapsulation.new(:vxlan).tunnel_name)
+    assert_equal({:encapsulation=>:vxlan}, Encapsulation.new(8).to_hash)
+    assert_equal({:encapsulation=>13}, Encapsulation.new(13).to_hash)
+    check_sub_type(Encapsulation, '030c000000000009', 'Encapsulation: nvgre')
+    check_sub_type(Encapsulation, '430c00000000000b', 'Encapsulation: mpls_in_gre')
+    assert_raise(ArgumentError) { Encapsulation.new(:carrier_pigeon) }
+    assert_raise(ArgumentError) { Encapsulation.new(65536) }
+  end
+
+  # RFC 8955 sections 7.1 and 7.2
+  def test_traffic_rate
+    assert_equal('80060000447a0000', Traffic_rate_bytes.new(0, 1000).to_shex)
+    assert_equal('800cfde941280000', Traffic_rate_packets.new(65001, 10.5).to_shex)
+    assert_equal({:traffic_rate_bytes=>[0, 0.0]}, Traffic_rate_bytes.new(0, 0).to_hash)
+    check_sub_type(Traffic_rate_bytes, '8006000000000000', 'Traffic rate bytes: 0.0 (ID 0)')
+    check_sub_type(Traffic_rate_packets, '800c0001447a0000', 'Traffic rate packets: 1000.0 (ID 1)')
+    assert_raise(ArgumentError) { Traffic_rate_bytes.new(65536, 1) }
+    assert_raise(ArgumentError) { Traffic_rate_bytes.new(0, 'fast') }
+  end
+
+  # RFC 8955 section 7.3: S is 0x02, T is 0x01 in the last octet.
+  def test_traffic_action
+    assert_equal('8007000000000002', Traffic_action.new(sample: true).to_shex)
+    assert_equal('8007000000000001', Traffic_action.new(terminal: true).to_shex)
+    assert_equal('8007000000000000', Traffic_action.new.to_shex)
+    a = Traffic_action.new(['8007000000000003'].pack('H*').is_packed)
+    assert(a.sample? && a.terminal?)
+    assert_equal({:traffic_action=>{:sample=>true, :terminal=>true}}, a.to_hash)
+    # Reserved bits round trip, and show up so a test can see them.
+    check_sub_type(Traffic_action, '8007800000000001', 'Traffic action: terminal, bits 0x800000000001')
+    assert_equal('8007800000000001', Traffic_action.new(Traffic_action.new(bits: 0x800000000001).to_hash[:traffic_action]).to_shex)
+    assert_raise(ArgumentError) { Traffic_action.new(:drop) }
+  end
+
+  # RFC 8955 section 7.4: the three route target formats.
+  def test_redirect
+    assert_equal('8008fde900000064', Redirect.new(65001, 100).to_shex)
+    assert_equal('81080a0000010007', Redirect.new('10.0.0.1', 7).to_shex)
+    assert_equal('8208fa56ea010009', Redirect.new(4200000001, 9).to_shex)
+    check_sub_type(Redirect, '8008fde900000064', 'Redirect: 65001:100')
+    check_sub_type(Redirect, '81080a0000010007', 'Redirect: 10.0.0.1:7')
+    check_sub_type(Redirect, '8208fa56ea010009', 'Redirect: 4200000001:9')
+    assert_equal({:redirect=>['10.0.0.1', 7]}, Redirect.new('10.0.0.1', 7).to_hash)
+    assert_raise(ArgumentError) { Redirect.new(4200000001, 65536) }
+  end
+
+  # RFC 8955 section 7.5: DSCP in the 6 low bits of the last octet.
+  def test_traffic_marking
+    assert_equal('800900000000002e', Traffic_marking.new(46).to_shex)
+    check_sub_type(Traffic_marking, '800900000000002e', 'Traffic marking: DSCP 46')
+    # Reserved bits are ignored on decode and kept on the wire.
+    check_sub_type(Traffic_marking, '80090000000000ee', 'Traffic marking: DSCP 46')
+    assert_raise(ArgumentError) { Traffic_marking.new(64) }
+  end
+
+  # RFC 7432 section 7.7
+  def test_mac_mobility
+    assert_equal('0600000000000005', Mac_mobility.new(5).to_shex)
+    assert_equal('0600010000000005', Mac_mobility.new(5, sticky: true).to_shex)
+    check_sub_type(Mac_mobility, '0600010000000005', 'MAC Mobility: sequence 5, sticky')
+    assert_equal({:mac_mobility=>[5, true]}, Mac_mobility.new(5, sticky: true).to_hash)
+  end
+
+  # RFC 7432 section 7.5: the MPLS label is the high 20 bits of 3 octets.
+  def test_esi_label
+    assert_equal('0601000000003e80', Esi_label.new(1000).to_shex)
+    assert_equal('0601010000003e80', Esi_label.new(1000, single_active: true).to_shex)
+    check_sub_type(Esi_label, '0601010000003e80', 'ESI Label: label 1000, single-active')
+    assert_raise(ArgumentError) { Esi_label.new(0x100000) }
+  end
+
+  # RFC 7432 section 7.6 and RFC 9135 section 8.1
+  def test_mac_address_communities
+    assert_equal('0602001122334455', Es_import.new('00:11:22:33:44:55').to_shex)
+    assert_equal('0603aabbccddeeff', Router_mac.new('AA-BB-CC-DD-EE-FF').to_shex)
+    check_sub_type(Es_import, '0602001122334455', 'ES-Import: 00:11:22:33:44:55')
+    check_sub_type(Router_mac, '0603aabbccddeeff', "Router's MAC: aa:bb:cc:dd:ee:ff")
+    assert_equal({:router_mac=>'aa:bb:cc:dd:ee:ff'}, Router_mac.new('aabbccddeeff').to_hash)
+    assert_raise(ArgumentError) { Router_mac.new('aa:bb:cc') }
+  end
+
+  # The transitive bit is masked when dispatching (RFC 4360 section 2).
+  def test_non_transitive_variants_keep_their_type
+    check_sub_type(Mac_mobility, '4600000000000005', 'MAC Mobility: sequence 5')
   end
 
 end

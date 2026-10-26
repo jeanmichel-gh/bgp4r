@@ -68,8 +68,6 @@ module BGP
         case self
         when Color
           _,@global = s.unpack('nN')
-        # when Encapsulation
-        #   _,@global = s.unpack('Nn')
         when Origin_validation_state
           _,@global = s.unpack('nN')
         else
@@ -185,8 +183,6 @@ module BGP
           [0,@global].pack('nN')
         when BGP::Origin_validation_state
           [0,@global].pack('nN')
-        # when BGP::Encapsulation
-        #   [0,@global].pack('Nn')
         else
           [@global].pack('H12')
         end
@@ -424,6 +420,315 @@ module BGP
     end
   end
 
+
+  # A community whose 6 value octets have a fixed layout of their own.
+  # Subclasses set TYPE and SUBTYPE and write value_octets and
+  # parse_value. A community parsed from the wire keeps its 6 octets, so
+  # reserved bits come back unchanged; one built from values encodes them
+  # as 0, as the RFCs ask.
+  class Extended_community::Typed < Extended_community
+    def initialize(*args, **opts)
+      if args.size == 1 and opts.empty? and args[0].is_a?(String) and args[0].is_packed?
+        @type, @subtype = args[0].unpack('CC')
+        @raw = args[0].byteslice(2, 6).b
+        parse_value(@raw)
+      else
+        @type, @subtype = self.class::TYPE, self.class::SUBTYPE
+        @raw = nil
+        build(*args, **opts)
+      end
+    end
+    def encode
+      [@type, @subtype].pack('CC') + (@raw || value_octets)
+    end
+    def name
+      self.class::LABEL
+    end
+    def to_s
+      "#{name}: #{value_s}"
+    end
+    def to_hash
+      { hash_key => hash_value }
+    end
+    def hash_key
+      self.class.to_s.split('::').last.downcase.to_sym
+    end
+    private
+    def mac_s(octets)
+      octets.unpack('C6').collect { |b| format('%02x', b) }.join(':')
+    end
+    def mac_octets(mac)
+      unless mac.to_s =~ /\A\h\h([:-]?\h\h){5}\z/
+        raise ArgumentError, "invalid MAC address #{mac.inspect}"
+      end
+      [mac.to_s.delete(':-')].pack('H12')
+    end
+    def check(name, val, max)
+      unless val.is_a?(Integer) and val >= 0 and val <= max
+        raise ArgumentError, "invalid #{name} #{val.inspect}, expected 0 to #{max}"
+      end
+      val
+    end
+  end
+
+  # RFC 9012 section 4.1: Encapsulation, type 0x03, sub-type 0x0c.
+  # Value: 4 reserved octets, then a 2-octet Tunnel Type.
+  class Encapsulation < Extended_community::Typed
+    TYPE, SUBTYPE = OPAQUE, ENCAPSULATION
+    LABEL = 'Encapsulation'
+    # RFC 9012 tunnel types. Any other number from 0 to 65535 works too.
+    TUNNEL_TYPES = { :l2tpv3 => 1, :gre => 2, :vxlan => 8, :nvgre => 9, :mpls_in_gre => 11 }
+    attr_reader :tunnel_type
+    def tunnel_name
+      TUNNEL_TYPES.key(@tunnel_type)
+    end
+    private
+    def build(tunnel_type)
+      @tunnel_type = TUNNEL_TYPES[tunnel_type] || check('tunnel type', tunnel_type, 0xffff)
+    end
+    def value_octets
+      [0, @tunnel_type].pack('Nn')
+    end
+    def parse_value(v)
+      @tunnel_type = v.unpack('Nn')[1]
+    end
+    def value_s
+      (tunnel_name || @tunnel_type).to_s
+    end
+    def hash_value
+      tunnel_name || @tunnel_type
+    end
+  end
+
+  # RFC 8955 sections 7.1 and 7.2: a 2-octet ID (informational), then an
+  # IEEE 754 single precision rate, in bytes or in packets per second.
+  # A rate of 0 discards the traffic.
+  class Traffic_rate_bytes < Extended_community::Typed
+    TYPE, SUBTYPE = 0x80, 0x06
+    LABEL = 'Traffic rate bytes'
+    attr_reader :id, :rate
+    private
+    def build(id, rate)
+      @id = check('ID', id, 0xffff)
+      raise ArgumentError, "invalid rate #{rate.inspect}" unless rate.is_a?(Numeric)
+      @rate = rate.to_f
+    end
+    def value_octets
+      [@id, @rate].pack('ng')
+    end
+    def parse_value(v)
+      @id, @rate = v.unpack('ng')
+    end
+    def value_s
+      "#{@rate} (ID #{@id})"
+    end
+    def hash_value
+      [@id, @rate]
+    end
+  end
+
+  class Traffic_rate_packets < Traffic_rate_bytes
+    TYPE, SUBTYPE = 0x80, 0x0c
+    LABEL = 'Traffic rate packets'
+  end
+
+  # RFC 8955 section 7.3: only the two low bits of the last octet are
+  # defined: S, sample (0x02), and T, terminal action (0x01).
+  class Traffic_action < Extended_community::Typed
+    TYPE, SUBTYPE = 0x80, 0x07
+    LABEL = 'Traffic action'
+    SAMPLE, TERMINAL = 0x02, 0x01
+    def sample?
+      (@bits & SAMPLE) > 0
+    end
+    def terminal?
+      (@bits & TERMINAL) > 0
+    end
+    # All 48 bits of the value, reserved ones included.
+    attr_reader :bits
+    private
+    def build(arg = nil, sample: false, terminal: false, bits: nil)
+      if arg.is_a?(Hash)
+        sample, terminal, bits = arg[:sample], arg[:terminal], arg[:bits]
+      elsif arg
+        raise ArgumentError, "invalid traffic action #{arg.inspect}, use sample: and terminal:"
+      end
+      @bits = bits ? check('bits', bits, 0xffffffffffff) : ((sample ? SAMPLE : 0) | (terminal ? TERMINAL : 0))
+    end
+    def value_octets
+      [@bits >> 32, @bits & 0xffffffff].pack('nN')
+    end
+    def parse_value(v)
+      high, low = v.unpack('nN')
+      @bits = (high << 32) | low
+    end
+    def value_s
+      s = []
+      s << 'sample' if sample?
+      s << 'terminal' if terminal?
+      s << format('bits 0x%012x', @bits) if (@bits & ~(SAMPLE | TERMINAL)) > 0
+      s.empty? ? 'none' : s.join(', ')
+    end
+    def hash_value
+      h = { :sample => sample?, :terminal => terminal? }
+      h[:bits] = @bits if (@bits & ~(SAMPLE | TERMINAL)) > 0
+      h
+    end
+  end
+
+  # RFC 8955 section 7.4: redirect to the VRF that imports this route
+  # target. Type 0x80 (2-octet AS, 4-octet value), 0x81 (IPv4 address,
+  # 2-octet value) or 0x82 (4-octet AS, 2-octet value), sub-type 0x08.
+  class Redirect < Extended_community::Typed
+    TYPE, SUBTYPE = 0x80, 0x08
+    LABEL = 'Redirect'
+    attr_reader :global, :local
+    private
+    def build(global, local)
+      if global.is_a?(String)
+        @type, @global = 0x81, IPAddr.new(global).to_s
+        @local = check('local value', local, 0xffff)
+      elsif global.is_a?(Integer) and global > 0xffff
+        @type, @global = 0x82, check('AS', global, 0xffffffff)
+        @local = check('local value', local, 0xffff)
+      else
+        @type, @global = 0x80, check('AS', global, 0xffff)
+        @local = check('local value', local, 0xffffffff)
+      end
+    end
+    def value_octets
+      case @type & ~NON_TRANSITIVE
+      when 0x81 ; IPAddr.new(@global).hton + [@local].pack('n')
+      when 0x82 ; [@global, @local].pack('Nn')
+      else      ; [@global, @local].pack('nN')
+      end
+    end
+    def parse_value(v)
+      case @type & ~NON_TRANSITIVE
+      when 0x81 ; @global, @local = IPAddr.new_ntoh(v.byteslice(0, 4)).to_s, v.byteslice(4, 2).unpack1('n')
+      when 0x82 ; @global, @local = v.unpack('Nn')
+      else      ; @global, @local = v.unpack('nN')
+      end
+    end
+    def value_s
+      "#{@global}:#{@local}"
+    end
+    def hash_value
+      [@global, @local]
+    end
+  end
+
+  # RFC 8955 section 7.5: the 6 low bits of the last octet are the DSCP.
+  class Traffic_marking < Extended_community::Typed
+    TYPE, SUBTYPE = 0x80, 0x09
+    LABEL = 'Traffic marking'
+    attr_reader :dscp
+    private
+    def build(dscp)
+      @dscp = check('DSCP', dscp, 63)
+    end
+    def value_octets
+      [0, 0, @dscp].pack('NCC')
+    end
+    def parse_value(v)
+      @dscp = v.getbyte(5) & 0x3f
+    end
+    def value_s
+      "DSCP #{@dscp}"
+    end
+    def hash_value
+      @dscp
+    end
+  end
+
+  # RFC 7432 section 7.7: MAC Mobility. Flags (low bit: sticky), a
+  # reserved octet, a 4-octet sequence number.
+  class Mac_mobility < Extended_community::Typed
+    TYPE, SUBTYPE = 0x06, 0x00
+    LABEL = 'MAC Mobility'
+    attr_reader :sequence
+    def sticky?
+      @sticky
+    end
+    private
+    def build(sequence, sticky: false)
+      @sequence, @sticky = check('sequence number', sequence, 0xffffffff), sticky ? true : false
+    end
+    def value_octets
+      [@sticky ? 1 : 0, 0, @sequence].pack('CCN')
+    end
+    def parse_value(v)
+      flags, _, @sequence = v.unpack('CCN')
+      @sticky = (flags & 1) > 0
+    end
+    def value_s
+      "sequence #{@sequence}" + (@sticky ? ', sticky' : '')
+    end
+    def hash_value
+      [@sequence, @sticky]
+    end
+  end
+
+  # RFC 7432 section 7.5: ESI Label. Flags (low bit: single-active), two
+  # reserved octets, a 3-octet label field. The MPLS label is its high
+  # 20 bits.
+  class Esi_label < Extended_community::Typed
+    TYPE, SUBTYPE = 0x06, 0x01
+    LABEL = 'ESI Label'
+    attr_reader :label
+    def single_active?
+      @single_active
+    end
+    private
+    def build(label, single_active: false)
+      @label, @single_active = check('MPLS label', label, 0xfffff), single_active ? true : false
+    end
+    def value_octets
+      field = @label << 4
+      [@single_active ? 1 : 0, 0, field >> 16, field & 0xffff].pack('CnCn')
+    end
+    def parse_value(v)
+      flags, _, high, low = v.unpack('CnCn')
+      @single_active = (flags & 1) > 0
+      @label = ((high << 16) | low) >> 4
+    end
+    def value_s
+      "label #{@label}" + (@single_active ? ', single-active' : '')
+    end
+    def hash_value
+      [@label, @single_active]
+    end
+  end
+
+  # RFC 7432 section 7.6: ES-Import Route Target, a 6-octet MAC address.
+  class Es_import < Extended_community::Typed
+    TYPE, SUBTYPE = 0x06, 0x02
+    LABEL = 'ES-Import'
+    attr_reader :mac
+    private
+    def build(mac)
+      @mac = mac_s(mac_octets(mac))
+    end
+    def value_octets
+      mac_octets(@mac)
+    end
+    def parse_value(v)
+      @mac = mac_s(v)
+    end
+    def value_s
+      @mac
+    end
+    def hash_value
+      @mac
+    end
+  end
+
+  # RFC 9135 section 8.1: the PE's MAC address.
+  class Router_mac < Es_import
+    TYPE, SUBTYPE = 0x06, 0x03
+    LABEL = "Router's MAC"
+  end
+
   class Extended_community
     # RFC 4360 section 2 and the IANA "BGP Extended Communities" registry.
     # Key: [type with the transitive bit masked, subtype].
@@ -441,35 +746,21 @@ module BGP
       [TWO_OCTET_AS,  BGP_DATA_COLLECT] => Bgp_data_collect,   # RFC 4384
       [OPAQUE,        COLOR]            => Color,              # RFC 9012 section 4.3
       [OPAQUE,        BGP_ORIGIN_VALIDATION_STATE] => Origin_validation_state, # RFC 8097
+      [OPAQUE,        ENCAPSULATION]    => Encapsulation,      # RFC 9012 section 4.1
+      [0x80, 0x06] => Traffic_rate_bytes,    # RFC 8955 section 7.1
+      [0x80, 0x0c] => Traffic_rate_packets,  # RFC 8955 section 7.2
+      [0x80, 0x07] => Traffic_action,        # RFC 8955 section 7.3
+      [0x80, 0x08] => Redirect,              # RFC 8955 section 7.4
+      [0x81, 0x08] => Redirect,
+      [0x82, 0x08] => Redirect,
+      [0x80, 0x09] => Traffic_marking,       # RFC 8955 section 7.5
+      [0x06, 0x00] => Mac_mobility,          # RFC 7432 section 7.7
+      [0x06, 0x01] => Esi_label,             # RFC 7432 section 7.5
+      [0x06, 0x02] => Es_import,             # RFC 7432 section 7.6
+      [0x06, 0x03] => Router_mac,            # RFC 9135 section 8.1
     }.freeze
   end
 
-  # class Encapsulation < Opaque
-  #   def initialize(*args)
-  #     args = 0 if args.empty?
-  #     if args[0].is_a?(String) and args[0].is_packed?
-  #       super(*args)
-  #     else        
-  #       case args[0]
-  #       when :l2tpv3 ; tunnel_type = 1
-  #       when :gre    ; tunnel_type = 2
-  #       when :ipip   ; tunnel_type = 7
-  #       else
-  #         tunnel_type = *args
-  #       end
-  #       super(TRANSITIVE, ENCAPSULATION, tunnel_type)
-  #     end
-  #   end
-  #   def value2
-  #     case @global
-  #     when 1 ; :l2tpv3
-  #     when 2 ; :gre
-  #     when 7 ; :ipip
-  #     else 
-  #       @global
-  #     end
-  #   end
-  # end  
   
 end
 
