@@ -218,3 +218,8 @@ both treat-as-withdraw and attribute-discard, but the RIB said nothing,
 so the two cannot be told apart. BIRD in this setup rejects even a plain
 route, because the next hop does not resolve over a loopback multihop
 session, so every BIRD row reads that way.
+
+IPv6 unicast is negotiated by default, because the duplicate
+MP_REACH_NLRI case carries IPv6 NLRI: without it the router resets over
+an address family it never agreed to, which is not the rule under test.
+`--no-ipv6` turns it off for a router that cannot do IPv6 at all.
