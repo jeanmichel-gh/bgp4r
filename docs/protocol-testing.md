@@ -1,0 +1,355 @@
+# Protocol testing with bgp4r
+
+bgp4r lets a Ruby script act as a BGP peer that says exactly what you
+tell it, including things no router would ever send. That makes it a
+tool for testing how a router handles both good and bad input.
+
+Every example here was run against the current tree.
+
+## Why bgp4r
+
+A real router is a poor test peer. It validates and normalizes what it
+sends, so it cannot produce a bad message on purpose. bgp4r does the
+opposite.
+
+* **Every byte is yours.** Any flag, type, length or order can be set.
+  Building a message never refuses, and `encode` never checks anything.
+* **Three levels of control.** Normal objects for valid messages, header
+  overrides for wrong fields, `Attr::Raw` for anything at all.
+* **A real session.** `Neighbor` runs the state machine, OPEN,
+  capabilities and keepalives, so the router sees a normal peer until the
+  bad message arrives.
+* **Scripted checks.** Replies come back as decoded Ruby objects.
+* **A catalog and a runner.** `BGP::Fault::CATALOG` names the RFC 7606
+  cases and `lab/fault_matrix.rb` sends them all to a router.
+
+## Setup
+
+You need Ruby 3.3 or later, the repo, and a router to test.
+
+```
+git clone https://github.com/jeanmichel-gh/bgp4r
+cd bgp4r
+ruby test/run_unit.rb
+```
+
+The router does not have to be a container. FRR, BIRD and GoBGP are all
+packaged by Ubuntu and run fine as plain processes on loopback
+addresses:
+
+```
+apt-get install -y frr bird2 gobgpd
+```
+
+`lab/conformance/` has a working config for each, and `lab/README.md`
+explains how to run them side by side.
+
+## Building messages
+
+Every message and attribute builds three ways: from field values, from a
+hash, or from wire bytes.
+
+```ruby
+require 'bgp4r'
+include BGP
+
+u = Update.new(
+  Path_attribute.new(
+    Origin.new(:igp),
+    As_path.new(100, 200),
+    Next_hop.new('192.0.2.2'),
+    Communities.new('100:1', :no_export),
+    Large_communities.new('64496:1:2')
+  ),
+  Nlri.new('10.1.0.0/16'))
+
+puts u                              # decoded, with a hex dump per attribute
+u.encode.unpack1('H*')              # the exact octets
+Update.new(u.to_hash).encode == u.encode
+```
+
+Write well known communities as symbols, `:no_export`, or as names in a
+string. A string that is neither a name nor `asn:value` raises.
+
+## Crafting bad messages
+
+Three techniques, lowest first.
+
+| Technique | Use it for |
+|---|---|
+| Leave out or repeat | missing attribute, duplicate, odd order |
+| Header overrides | any flags, type code or length |
+| `Attr::Raw` | any value octets at all |
+
+### Leave out or repeat
+
+`Path_attribute` keeps attributes in the order given and never removes
+duplicates.
+
+```ruby
+Path_attribute.new(Origin.new(0), As_path.new(100))              # no NEXT_HOP
+Path_attribute.new(Origin.new(0), Origin.new(2), As_path.new(100))
+```
+
+### Header overrides
+
+Every attribute takes `flags:`, `type:` and `length:`, either when built
+or afterwards with `override`. A length override changes the header
+only; the value octets stay as they are. Nothing is checked.
+
+```ruby
+Origin.new(:igp, length: 2).to_shex                              # "40010200"
+Origin.new(:igp, flags: ATTR::OPTIONAL_TRANSITIVE).to_shex       # "c0010100"
+Next_hop.new('10.0.0.1').override(length: 3).to_shex             # "4003030a000001"
+```
+
+Flag bits: `ATTR::OPTIONAL` 0x8, `TRANSITIVE` 0x4, `PARTIAL` 0x2,
+`EXTENDED_LENGTH` 0x1, as the high nibble of the first octet.
+
+### Attr::Raw
+
+Any flags, type and value octets, including a type bgp4r knows.
+
+```ruby
+Attr::Raw.new(ATTR::OPTIONAL_TRANSITIVE, 250, 'hi').to_shex      # "c0fa026869"
+Attr::Raw.new(wire_bytes)
+Attr::Raw.new(:flags => 0xc, :type => 250, :value => '6869')
+```
+
+`partial!` sets the Partial bit on an optional transitive attribute
+(RFC 4271 section 5).
+
+### BGP::Fault
+
+The shapes RFC 7606 covers, built from a good attribute. Each returns an
+`Attr::Raw`, so it goes out exactly as built.
+
+```ruby
+Fault.truncate(Origin.new(0))                 # "400100", value cut to 0 octets
+Fault.pad(Multi_exit_disc.new(10))            # "8004050000000a00", one octet too many
+Fault.length(Origin.new(0), 20)               # "40011400", header lies
+Fault.flags(Origin.new(0), ATTR::OPTIONAL_TRANSITIVE)
+Fault.retype(Origin.new(0), 250)
+Fault.value(Origin.new(0), 'dead')
+Fault.duplicate(Origin.new(0))                # a Path_attribute, the attribute twice
+```
+
+## The catalog
+
+`BGP::Fault::CATALOG` holds 13 named cases, each with the RFC 7606
+action a receiver should take and the UPDATE error subcode.
+
+```ruby
+Fault.catalog.first
+# {:name=>:origin_length, :description=>"ORIGIN length not 1",
+#  :action=>:treat_as_withdraw, :subcode=>5, :rfc=>"RFC 7606 7.1", :build=>#<Proc>}
+
+Fault.build(:origin_length)        # the attribute, or a Path_attribute
+Fault.wire(:origin_length)         # its octets either way
+```
+
+| Name | Fault | Expected |
+|---|---|---|
+| `origin_length` | ORIGIN length not 1 | treat as withdraw |
+| `origin_value` | ORIGIN value undefined | treat as withdraw |
+| `origin_flags` | ORIGIN flags conflict | treat as withdraw |
+| `next_hop_length` | NEXT_HOP length not 4 | treat as withdraw |
+| `med_length` | MULTI_EXIT_DISC length not 4 | treat as withdraw |
+| `as_path_segment` | AS_PATH segment overruns | treat as withdraw |
+| `atomic_length` | ATOMIC_AGGREGATE length not 0 | attribute discard |
+| `aggregator_length` | AGGREGATOR length wrong | attribute discard |
+| `community_length` | COMMUNITIES length not a multiple of 4 | treat as withdraw |
+| `unknown_wellknown` | unrecognized well known type | session reset |
+| `attr_overrun` | length past the attribute list | treat as withdraw |
+| `duplicate_attr` | attribute sent twice | attribute discard |
+| `duplicate_mp_reach` | MP_REACH_NLRI sent twice | session reset |
+
+## Receiving: policies and findings
+
+Parsing checks what it reads, against RFC 7606. The policy says what
+happens then. Building and encoding are never checked, whatever the
+policy.
+
+| Policy | What it does |
+|---|---|
+| `:lenient` | the default: decode as before, list problems in `errors` |
+| `:strict` | raise `Malformed_attribute` with the strongest finding |
+| `:raw` | decode headers only, so `encode` gives back what arrived |
+
+```ruby
+pa = Path_attribute.new(wire_bytes, :as4byte => true)
+pa.errors                 # [#<Attr::Finding type=1 subcode=4 action=:treat_as_withdraw ...>]
+pa.action                 # :treat_as_withdraw, the strongest (RFC 7606 section 3 (h))
+
+f = pa.errors.first
+f.type                    # 1
+f.subcode                 # 4, the UPDATE error subcode (RFC 4271 section 6.3)
+f.reason                  # "flags 0xc0, the Optional and Transitive bits must be 0x40 ..."
+f.notification            # a Notification, code 3, ready to send
+```
+
+Strict mode raises after the whole list is parsed, so the error carries
+every finding:
+
+```ruby
+begin
+  Path_attribute.new(wire_bytes, :as4byte => true, :policy => :strict)
+rescue Malformed_attribute => e
+  e.action                # :session_reset
+  e.subcode               # 2
+  e.findings              # all of them
+end
+```
+
+`validate` runs the same checks on a message you built, without raising.
+It also reports an AS number above 65535 in a 2 octet encoding.
+
+```ruby
+Path_attribute.new(Origin.new(:igp, length: 2)).validate
+# [#<Attr::Finding type=1 subcode=5 action=:treat_as_withdraw ...>]
+```
+
+A `Neighbor` takes the policy for the session:
+
+```ruby
+peer = Neighbor.new(:my_as => 65001, :policy => :strict, ...)
+```
+
+With `:strict`, a received UPDATE carrying a malformed attribute is not
+passed on. Observers get the `Malformed_attribute` instead, and if its
+action is a session reset, bgp4r sends the NOTIFICATION and stops.
+
+## Sending to a router
+
+bgp4r listens and the router connects, which works with any
+implementation that can be told to peer with us.
+
+```ruby
+require 'timeout'
+
+class Inbox
+  def initialize; @q = Queue.new; end
+  def update(msg); @q << msg; end
+  def wait_for(klass, secs = 5)
+    Timeout.timeout(secs) { loop { m = @q.pop; return m if m.is_a?(klass) } }
+  rescue Timeout::Error
+    nil
+  end
+end
+
+server = TCPServer.new('127.0.0.1', 179)
+peer = Neighbor.new(4, 65001, 180, '10.0.0.1', '127.0.0.2', '127.0.0.1')
+peer.capability :as4_byte
+peer.capability :mbgp, :ipv4, :unicast
+inbox = Inbox.new
+peer.add_observer inbox
+Thread.new { loop { peer.start_session(server.accept) } }
+
+peer.wait_for_state(:Established, 40)
+peer.send_message Update.new(
+  Path_attribute.new(Fault.build(:origin_length), As_path.new(65001),
+                     Next_hop.new('10.0.0.1')),
+  Nlri.new('203.0.113.0/24'))
+
+notification = inbox.wait_for(Notification, 4)
+peer.is_established?
+```
+
+Three outcomes to tell apart:
+
+| RFC 7606 action | What you see |
+|---|---|
+| session reset | a NOTIFICATION, then the session goes Idle |
+| treat as withdraw | session stays up, the route is not installed |
+| attribute discard | session stays up, the route is installed without it |
+
+The first is visible from one session. The other two need the router to
+say whether it installed the route, since both keep the session up.
+
+## The fault matrix
+
+`lab/fault_matrix.rb` does all of the above for every catalog case and
+prints a table.
+
+```
+ruby lab/fault_matrix.rb --peer 127.0.0.2 --peer-as 65002 \
+  --rib-command 'gobgp global rib' --json gobgp.json
+```
+
+```
+FAULT               EXPECTED (RFC 7606)     WHAT IT DID         ROUTE       VERDICT
+origin_length       treat_as_withdraw       kept the session    dropped     agrees
+...
+unknown_wellknown   session_reset           reset 3/2           -           agrees
+duplicate_mp_reach  session_reset           reset 3/1           -           agrees
+```
+
+`--rib-command` is what tells treat as withdraw from attribute discard.
+The runner sends a clean route first and checks the router installed it;
+if it did not, those rows read `session only` rather than being scored
+against a probe that cannot answer.
+
+Exit status is 0 when every answer agrees with the catalog.
+
+## What three implementations do
+
+Run as native processes on loopback, all three at once.
+
+| | GoBGP 3.23.0 | FRR 8.4.4 | BIRD 2.14 |
+|---|---|---|---|
+| treat as withdraw cases | agrees | resets, 3/10 | keeps the session |
+| attribute discard cases | agrees | agrees | keeps the session |
+| unrecognized well known | reset 3/2 | reset 3/10 | keeps the session |
+| duplicate MP_REACH | reset 3/1 | reset 3/1 | reset 3/1 |
+
+GoBGP agrees on all 13.
+
+FRR identifies each malformed attribute and says "treating as
+withdrawal" in its log, then its withdraw path fails to parse the NLRI
+and it resets with Invalid Network Field. The two attribute discard
+cases keep both session and route, so it parses our NLRI correctly on
+the normal path. This is the Ubuntu 24.04 build; current FRR is 10.x, so
+check a current build before reporting it anywhere.
+
+BIRD keeps the session on an unrecognized well known attribute, where
+RFC 4271 section 6.3 asks for a reset. That may be deliberate
+robustness. Its rows cannot distinguish withdraw from discard here,
+because it rejects any route whose next hop does not resolve, and
+nothing resolves over a loopback session.
+
+Two things worth knowing when reading any of these results:
+
+* A verdict can be right for the wrong reason. The duplicate MP_REACH
+  case counts as agreeing whenever the session resets, so a router that
+  rejects the address family rather than the duplicate still scores a
+  pass. Read the router's own log when a result matters.
+* Run one router at a time, or make sure the harness is talking to the
+  one you think. Several routers on a host all dial the same port.
+
+## Writing a test
+
+```ruby
+require 'test/unit'
+require 'bgp4r'
+
+class OriginLengthTest < Test::Unit::TestCase
+  include BGP
+
+  # RFC 7606 section 7.1: ORIGIN with a length other than 1 is
+  # treat-as-withdraw, so the session must stay up.
+  def test_origin_length_keeps_the_session
+    # ... establish, as above ...
+    @peer.send_message Update.new(
+      Path_attribute.new(Fault.build(:origin_length), As_path.new(65001),
+                         Next_hop.new('10.0.0.1')),
+      Nlri.new('198.51.100.0/24'))
+
+    notification = @inbox.wait_for(Notification, 3)
+    assert_nil notification, "router reset: #{notification && notification.to_string}"
+    assert @peer.is_established?
+  end
+end
+```
+
+`examples/unit-testing/` has working two peer tests that predate the
+fault layer and still show the shape.

@@ -20,11 +20,13 @@ bgp/orfs/                outbound route filtering
 bgp/neighbor/            the BGP finite state machine and TCP session (neighbor.rb)
 bgp/rib/                 routes and the decision process (RFC 4271 section 9); require 'bgp/rib'
 bgp/misc/                extras: route_generator.rb (many prefixes packed in UPDATEs), live_feed.rb (a client for an old public BGP feed)
+docs/                    protocol-testing.md: using bgp4r to test a router
 examples/                runnable scripts
 test/unit/               unit tests, mirroring bgp/
 test/functional/         tests that open real TCP sessions
 test/helpers/            a small test BGP server
 lab/                     speakers in containers: lab/speaker.rb and lab/topologies/ (see lab/README.md)
+                         lab/fault_matrix.rb sends BGP::Fault::CATALOG to a router; lab/conformance/ has a config per router
 test/functional/lab/     lab tests: loopback speaker test and one Compose test per topology
 ```
 
