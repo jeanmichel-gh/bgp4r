@@ -194,6 +194,41 @@ class Communities_Test < Test::Unit::TestCase
     assert   Communities.new("145:60 145:10").add(:no_export).has_no_export?, 'expected to contain [no_export]'
     assert   Communities.new("145:60 145:10").add(:no_advertise).has_no_advertise?, 'expected to contain [no_advertise]'
   end
+
+  def wire(hex) [hex].pack('H*').is_packed end
+
+  # RFC 7606 section 7.8: a length that is not a non-zero multiple of 4 is
+  # malformed, treat-as-withdraw. The octets are kept as received.
+  def test_trailing_octets_are_kept
+    [['01', 1], ['0102', 2], ['010203', 3]].each do |trailing, n|
+      hex = format('c008%02x', 4 + n) + '00010001' + trailing
+      com = Communities.new(wire(hex))
+      assert_equal '1:1', com.communities, "#{n} trailing octets"
+      assert_equal hex, com.to_shex, "#{n} trailing octets"
+      assert_equal hex, Communities.new(com).to_shex, "#{n} trailing octets"
+    end
+  end
+
+  def test_trailing_octets_only
+    hex = 'c0080300ff00'
+    assert_equal hex, Communities.new(wire(hex)).to_shex
+    assert_equal '', Communities.new(wire(hex)).communities
+  end
+
+  def test_bad_length_is_still_reported
+    pa = Path_attribute.new(wire('c00805' + '00010001' + '00'))
+    assert_equal [[8, 5, :treat_as_withdraw]], pa.errors.collect { |f| [f.type, f.subcode, f.action] }
+    assert_equal 'length 5, must be a non-zero multiple of 4 (RFC 7606 section 7.8)', pa.errors[0].reason
+    assert_equal [[8, 5, :treat_as_withdraw]], Path_attribute.new(wire('c00800')).errors.collect { |f| [f.type, f.subcode, f.action] }
+  end
+
+  def test_well_formed_is_unaffected
+    hex = 'c00808' + '00010001' + 'ffffff01'
+    com = Communities.new(wire(hex))
+    assert_equal '1:1 65535:65281', com.communities
+    assert_equal hex, com.to_shex
+    assert_equal [], Path_attribute.new(wire(hex)).errors
+  end
 end
 
 #MiniTest::Unit.autorun
