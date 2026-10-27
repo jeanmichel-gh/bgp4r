@@ -485,6 +485,21 @@ Two variables are optional:
 | `GOBGP_IMAGE` | the router image, to pin a version or swap the router |
 | `FAULT_SETTLE` | seconds to wait after each fault, 2 by default |
 
+The default router image is community built and has a native
+`linux/arm64` build, so it runs on an Apple Silicon Mac without
+emulation. The `osrg/gobgp` image on Docker Hub is amd64 only and years
+stale, so avoid it there. The image reads `/config/gobgp.toml` and
+carries both the daemon and the `gobgp` client, which is why the
+topology mounts its folder at `/config` and does not override the
+command.
+
+Note the version. The results in the next section were produced by hand
+against GoBGP 3.23, and the topology pins a 4.x image, so the two are
+not the same router. That is also why the test asserts only the two
+session reset cases: those follow from RFC 4271 section 6.3 and should
+hold on any conformant version, while the finer verdicts can move
+between releases.
+
 A full run is roughly two to four minutes at the default settle. Raise
 `FAULT_SETTLE` if a slower machine reports faults with no session.
 

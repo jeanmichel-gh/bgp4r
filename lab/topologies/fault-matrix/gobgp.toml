@@ -1,3 +1,9 @@
+# Read by the router container as /config/gobgp.toml.
+#
+# This schema is the one verified against GoBGP 3.23. The compose file
+# pins a 4.x image, so if the daemon rejects a key, its log says which
+# one and this file is where to fix it.
+
 [global.config]
   as = 65002
   router-id = "10.0.0.2"

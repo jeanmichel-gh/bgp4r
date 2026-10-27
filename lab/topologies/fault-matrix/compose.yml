@@ -18,15 +18,24 @@
 # Two knobs, both optional:
 #   GOBGP_IMAGE   the router image, to pin a version or swap the router
 #   FAULT_SETTLE  seconds to wait after each fault, default 2
+#
+# The default image is community built and has a native linux/arm64
+# build, so it runs on an Apple Silicon Mac without emulation. The old
+# osrg/gobgp image on Docker Hub is amd64 only and years stale.
+#
+# The image reads its config from /config/gobgp.toml and ships both the
+# daemon and the gobgp client, so this mounts the topology folder at
+# /config and lets the image's own entrypoint start the daemon. An image
+# that wants different arguments needs a command here, for example:
+#   command: ["gobgpd", "-f", "/config/gobgp.toml", "-t", "toml"]
 
 name: bgp4r-fault-matrix
 
 services:
   router:
-    image: ${GOBGP_IMAGE:-ghcr.io/osrg/gobgp:latest}
-    command: ["gobgpd", "-f", "/topology/gobgpd.conf", "-t", "toml"]
+    image: ${GOBGP_IMAGE:-jauderho/gobgp:v4.10.0}
     volumes:
-      - ./:/topology:ro
+      - ./:/config:ro
     networks:
       link:
         ipv4_address: 10.30.0.2
