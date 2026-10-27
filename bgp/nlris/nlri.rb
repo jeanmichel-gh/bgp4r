@@ -31,12 +31,8 @@ module BGP
     attr_reader :nlris
     
     class << self
-      def new_ntop(s, path_id=nil)
-        nlri = new
-        while s.size>0
-          nlri.add Prefix.send((path_id ? :new_ntop_extended : :new_ntop ), s, 1)
-        end
-        nlri
+      def new_ntop(s, path_id=nil, afi=IANA::AFI::IPv4)
+        new.parse(s, path_id, afi)
       end
     end
     
@@ -81,11 +77,38 @@ module BGP
     end
     alias << add
 
-    def parse(s)
+    # RFC 4271 section 4.3: the Withdrawn Routes field and the Network Layer
+    # Reachability Information field are each a list of 2-tuples of the form
+    # <length, prefix>, packed one after the other with nothing between them.
+    # Length is the prefix length in bits, and Prefix carries the prefix
+    # followed by the minimum number of trailing bits that make the field end
+    # on an octet boundary, so a tuple is 1+(length+7)/8 octets. A length of
+    # zero is a prefix matching every address, and takes its one length octet
+    # and no prefix octet.
+    #
+    # Prefix.new_ntop reads one such tuple and removes its octets from the
+    # String, so read tuples until none are left. The old code handed the
+    # whole String to add, which gave it to Prefix.new and then IPAddr.new,
+    # and that raised on anything but a zero length field.
+    #
+    # The address family is IPv4 because RFC 4271 section 3 defines "IP
+    # address" as an IP version 4 address, and section 4.3 lists IP address
+    # prefixes. Other families travel in MP_REACH_NLRI and MP_UNREACH_NLRI
+    # (RFC 4760) and do not come here: Nlri.factory sends them to Prefix or
+    # to Labeled. afi stays a parameter with that default because the
+    # collection holds any family when it is built from values, and reading
+    # back the bytes it then encodes needs the family named.
+    def parse(s, path_id=nil, afi=IANA::AFI::IPv4)
       @nlris ||=[]
-      while s.size>0
-        add(s)
+      s = s.dup
+      until s.empty?
+        left = s.size
+        add Prefix.send((path_id ? :new_ntop_extended : :new_ntop ), s, afi)
+        # Prefix.new_ntop does not consume an NSAP prefix, so give up on the
+        # rest of the field rather than read the same octets forever.
+        break unless s.size < left
       end
+      self
     end
 
     def encode(len_included=false)
