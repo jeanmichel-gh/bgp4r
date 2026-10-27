@@ -27,6 +27,7 @@ test/functional/         tests that open real TCP sessions
 test/helpers/            a small test BGP server
 lab/                     speakers in containers: lab/speaker.rb and lab/topologies/ (see lab/README.md)
                          lab/fault_matrix.rb sends BGP::Fault::CATALOG to a router; lab/conformance/ has a config per router
+                         lab/topologies/fault-matrix runs that matrix against GoBGP in one command, and in CI
 test/functional/lab/     lab tests: loopback speaker test and one Compose test per topology
 ```
 
@@ -72,10 +73,17 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. A `lab` job runs the Compose topologies.
 
-Baseline on 2026-10-24: 275 tests, 1364 assertions, all passing. Line coverage of `bgp/` from the unit suite: 90.7%.
+Baseline on 2026-10-26: 697 tests, 17860 assertions, all passing. Line coverage of `bgp/` from the unit suite: 94.8%.
+
+There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
 ## Conventions
 
+* **Building and encoding are never validated, and that is a feature.** This library is used for negative testing: it has to put bytes on the wire that no RFC allows, so a real router can be watched handling them. Any attribute, any length, any combination, any flags. Never add a check to a constructor, to `encode`, or to `to_hash` that refuses something merely invalid. Removing that ability breaks the main reason the library exists.
+  * Validation lives in exactly one place, `bgp/path_attributes/validation.rb`, and runs only when parsing what was received. It is reported through `Path_attribute#errors` and raised only under the `:strict` receive policy. Add a rule there, with its RFC section, never in the attribute.
+  * A constructor may refuse an input it cannot represent at all, such as an Integer too large for the field it goes in, because the alternative is silently sending a different value. It must never refuse a combination that is simply wrong by the RFC. Where a constructor does refuse, the octet level routes stay open and must keep working: wire bytes, `Attr::Raw`, and the `BGP::Fault` helpers.
+  * `lab/fault_matrix.rb` and `BGP::Fault::CATALOG` depend on all of this. `docs/protocol-testing.md` is the guide to it.
+* When parsing cannot interpret trailing octets, keep them and write them back, so `encode` returns byte for byte what arrived. `prefix_sid.rb` keeps a `@tail`, `pmsi_tunnel.rb` keeps a short value in `@short`, and `communities.rb`, `cluster_list.rb`, `extended_communities.rb`, `large_communities.rb` and `ipv6_extended_communities.rb` all keep a tail. Report the fault in `validation.rb`; do not drop the octets.
 * Every class can be built three ways: from field values, from a hash, and from its wire bytes (a binary String). Keep all three working when you change a class.
 * `encode` returns wire bytes. `to_hash` returns a hash that round trips through `new`. `to_s` returns the human readable form.
 * Tests check round trips: build, encode, parse back, compare. Use real hex captures from the RFCs or from Wireshark when possible.
@@ -99,14 +107,44 @@ Baseline on 2026-10-24: 275 tests, 1364 assertions, all passing. Line coverage o
 
 ## Known issues to work on
 
-Found while fixing other bugs, not fixed yet:
+Found while fixing other bugs, not fixed yet. Verified against master on
+2026-10-26, so each one reproduces. Reproductions are one liners with
+`ruby -I. -e '...'`.
 
-* `Neighbor#start` rescues every error, logs it and calls `stop`. A caller can't tell a failed start from a good one without checking `state`.
-* `test/helpers/server.rb`: `start_server` and `stop_server` use bare `rescue`. A busy test port fails silently and the test fails later with a confusing message. Tests use fixed ports 3456 and 3333.
-* `bgp/path_attributes/mp_reach.rb` uses bare `raise` with no message in five places.
-* `Prefix.new_ntop` raises with only the AFI as the message when the AFI is unknown.
-* `LiveFeed#close` on a feed that was never opened raises `NoMethodError`.
-* `bgp/nlris/nsap.rb` has its own `netmask` method, unrelated to `IPAddr#netmask`. Confusing to read.
-* `ci_reporter` in the `Gemfile` looks unused.
+Silent wrong answers, the worst kind here, since the library exists to
+send exact octets:
+
+* `As_path.new` with a bare segment hash drops its argument and builds an empty path: `As_path.new(:set => [1,2], :sequence => [3,4]).to_shex` is `400200`. Use `As_path.new_hash` for that shape. The fix is to accept the hash, the same shape `new_hash` takes, rather than to refuse it. It has to be fixed together with `test_9` in `test/unit/path_attributes/path_attribute_test.rb`, which passes only because of it: that test asserts two path attribute sets encode identically while their AS_PATHs differ, `11 12 13` against `11 12 14`, and in segment order. Correct the test, do not preserve it.
+* `Extended_community.factory` and `Extended_community::Unknown` build their 8 octets from an Integer with no range check, so a value outside `0..0xffffffffffffffff` wraps into a different community than the caller asked for. The constructor was fixed in #76; these two paths were not. This is the narrow case the convention above allows a constructor to refuse, because the value cannot be represented in the field at all. It does not restrict negative testing: a malformed extended community of any length is still built from wire bytes, from `Attr::Raw`, or with `Fault.value`.
+
+Round trips that do not:
+
+* `pa.extended_communities = {:route_target => [1,2]}` raises `NoMethodError`. The setter calls `new(*args)` while the registration builder calls `new_hash(*v)`, so the hash form works through `Path_attribute.new` but not through the setter.
+* `sort`, `sort!` and `to_hash` drop the kept tail on `Cluster_list`, `Extended_communities` and `Large_communities`, so a `to_hash` round trip is not byte for byte for a malformed attribute, although `encode` is.
+
+Smaller things:
+
+* `Path_attribute` has no `respond_to_missing?`, so `pa.respond_to?(:as_path_sequence=)` is false even though the call works.
+* `Link_bandwidth#is_two_octet_asn?` is true, because the structure predicates read the low 2 bits of the type while the private `community_structure` maps that type and subtype to `FLOAT`. Two notions of structure in one file.
+* `Link_bandwidth.new` takes one argument, the bandwidth. A natural looking `Link_bandwidth.new(asn, bandwidth)` raises `ArgumentError: invalid arg [64, 4, 100, 1000, 0]`, which reports the internal argument list rather than what the caller passed.
+* The `else raise RuntimeError, "bogus type"` branches in `Extended_community#value` and `#_encoded_value_` are unreachable.
+* The unit suite sometimes prints a `ClosedQueueError` backtrace from `bgp/neighbor/neighbor.rb` on a background thread. Timing dependent, no test fails.
+
+Lab and conformance:
+
 * The GoBGP configs are written for the 3.23 schema: `lab/conformance/gobgpd.conf` and `lab/topologies/fault-matrix/gobgp.toml`. The fault matrix topology pins GoBGP 3.23 to match them, so the conformance suite only ever tests a router from 2024. Updating both configs to the 4.x schema, then rerunning the matrix to see which verdicts move, is the fix. A rejected key shows up in the router's own log.
-* Lowest coverage (unit suite): `orfs/prefix_orf.rb` 79%, `neighbor/neighbor.rb` 81%, `common.rb` 83%, `messages/route_refresh.rb` 83%, `nlris/nlri.rb` 83%, `messages/update.rb` 84%.
+* `lab/topologies/fault-matrix` does not read the router's RIB, so it cannot tell treat-as-withdraw from attribute-discard and its test asserts session outcomes only. The pinned router image carries the `gobgp` client at `/usr/local/bin/gobgp`, so a multi-stage `COPY --from` into the matrix image would give it a working `--rib-command` with no Docker socket.
+* Lowest coverage (unit suite): `orfs/prefix_orf.rb` 79%, `common.rb` 82%, `nlris/nlri.rb` 83%, `messages/route_refresh.rb` 83%, `optional_parameters/capability.rb` 86%.
+
+## Attribute work left
+
+RFC sections deliberately not implemented, each noted in the pull
+request that added the attribute:
+
+* Tunnel Encapsulation (23): the eight per tunnel type Encapsulation sub-TLV shapes, RFC 9012 sections 3.1.1 to 3.1.8. The attribute keeps their octets, so a test can still build any of them by hand.
+* Tunnel Encapsulation: the SR Policy sub-TLVs, types 12 to 15, 20 and 128 to 130, from RFC 9256, and the Prefix-SID sub-TLV, type 11.
+* Prefix-SID (40): the SRv6 TLVs of RFC 9252, and the RFC 8669 section 4.1 rule for labeled unicast.
+* RFC 9234 section 4: the BGP Role capability. Only the OTC attribute is implemented.
+* No check for a missing well known mandatory attribute. That needs `Update`, not `Path_attribute`, because it depends on whether the message carries NLRI.
+* The external peer rules for LOCAL_PREF, ORIGINATOR_ID and CLUSTER_LIST, and the RFC 7311 section 3.2 AIGP checks. bgp4r does not know whether a peer is external where the checks run.
+* Not started: BGP-LS, ATTR_SET, BGPsec_Path.
