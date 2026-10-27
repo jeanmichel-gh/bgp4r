@@ -53,7 +53,7 @@ The speakers run as the non-root user `bgp` and still listen on TCP 179. Docker 
 |---|---|
 | `two-speakers` | eBGP between AS 65001 and AS 65002 on one link. r2 connects, r1 waits. Routes cross both ways with AS_PATH, NEXT_HOP, MED and communities. |
 | `routegen` | A dockerized routegen. gen (AS 65001, 10.20.0.1) connects and sends 10000 generated prefixes. sink (AS 65002, 10.20.0.2) waits, counts them and times them. |
-| `fault-matrix` | Every `BGP::Fault::CATALOG` case sent to GoBGP. matrix (AS 65001, 10.30.0.1) listens, router (AS 65002, 10.30.0.2) connects. The matrix runs once and exits with 0 when every answer agrees. |
+| `fault-matrix` | Every `BGP::Fault::CATALOG` case sent to GoBGP. matrix (AS 65001, 10.30.0.1) listens, router (AS 65002, 10.30.0.2) connects. It reads the router's RIB with the `gobgp` client, so it scores routes as well as sessions. The matrix runs once and exits, non-zero on any disagreement, which against GoBGP 3.23 means 1. |
 
 ## Node file
 
@@ -180,18 +180,35 @@ docker compose -f lab/topologies/fault-matrix/compose.yml cp \
 docker compose -f lab/topologies/fault-matrix/compose.yml down
 ```
 
-The exit status is 0 when every answer agrees with the catalog. Two
-variables are optional. `GOBGP_IMAGE` pins the router image or swaps the
-router. `FAULT_SETTLE` is the wait after each fault, 2 seconds by
-default; raise it if a slower machine reports faults with no session.
+The exit status is 1, which is the expected result and not a failure.
+The matrix exits non-zero on any disagreement with the catalog, and
+against GoBGP 3.23 two cases disagree: both tunnel encapsulation cases.
+RFC 9012 section 13 is a MUST and asks for treat-as-withdraw, while
+GoBGP discards the malformed attribute and installs the route. bgp4r is
+right there and the router is not, so the catalog is left alone and the
+divergence is asserted as such.
+
+Two variables are optional. `GOBGP_IMAGE` pins the router image or swaps
+the router, and it feeds the matrix image too, so the client and the
+router stay the same version. `FAULT_SETTLE` is the wait after each
+fault, 2 seconds by default; raise it if a slower machine reports faults
+with no session.
+
+The topology reads the router's RIB, with
+`--rib-command 'gobgp -u 10.30.0.2 global rib'`. The client comes from
+the Dockerfile's `conformance` stage, the `speaker` stage plus
+`/usr/local/bin/gobgp` copied out of the router image, so nothing is
+downloaded and no Docker socket is mounted.
 
 `test/functional/lab/fault_matrix_test.rb` runs the same topology and
-asserts the session level answers: the two cases that must reset do
-reset, with NOTIFICATION subcodes 2 and 1, and no other case resets.
-That half of RFC 7606 needs no look at the router's RIB, so it holds for
-any conformant router. Telling treat-as-withdraw from attribute-discard
-does need the RIB, and the topology does not read it, so run the matrix
-by hand with `--rib-command` for that.
+asserts both layers. The session level answers: the two cases that must
+reset do reset, with NOTIFICATION subcodes 2 and 1, and no other case
+resets. That half of RFC 7606 needs no look at the RIB, so it holds for
+any conformant router. Then the route level answers: every
+treat-as-withdraw case dropped the route and every attribute-discard
+case kept it, taken from each catalog entry's own action, with the two
+tunnel encapsulation cases asserted as the known divergence.
+`docs/protocol-testing.md` has the detail.
 
 ### Running it without containers, on Linux
 

@@ -463,10 +463,9 @@ docker compose -f lab/topologies/fault-matrix/compose.yml up --build \
 echo "exit: $?"
 ```
 
-The exit status is 0 when every answer agrees with the catalog. The
-matrix runs once and exits, which is why the run is in the foreground
-with `--abort-on-container-exit`. To read the results as JSON, copy them
-out after the run and take the topology down:
+The matrix runs once and exits, which is why the run is in the
+foreground with `--abort-on-container-exit`. To read the results as
+JSON, copy them out after the run and take the topology down:
 
 ```
 docker compose -f lab/topologies/fault-matrix/compose.yml cp \
@@ -474,9 +473,29 @@ docker compose -f lab/topologies/fault-matrix/compose.yml cp \
 docker compose -f lab/topologies/fault-matrix/compose.yml down
 ```
 
+The exit status is 1, and the run is still correct. The matrix exits
+non-zero on any disagreement with the catalog, and against GoBGP 3.23
+two cases disagree: see the divergence below. Read the table, or the
+JSON, rather than the status.
+
 The addresses are fixed, because `lab/fault_matrix.rb` only listens and
 hangs up on any peer but the one given to `--peer`. The matrix is AS
 65001 on 10.30.0.1 and the router is AS 65002 on 10.30.0.2.
+
+The matrix reads the router's RIB, so it tells treat-as-withdraw from
+attribute-discard here as well as by hand. It passes
+
+```
+--rib-command 'gobgp -u 10.30.0.2 global rib'
+```
+
+and the client comes from the Dockerfile's `conformance` stage, which is
+the `speaker` stage plus `/usr/local/bin/gobgp` copied straight out of
+the router image. Nothing is downloaded, and the client is always the
+same version as the router it queries, because the topology passes its
+own `GOBGP_IMAGE` to the build. The client talks gRPC on port 50051 to
+whatever host `-u` names, so there is no Docker socket to mount and no
+shell needed in the router.
 
 Two variables are optional:
 
@@ -523,10 +542,11 @@ To check that a tag has an arm64 build before pulling it:
 docker buildx imagetools inspect jauderho/gobgp:v3.37.0
 ```
 
-`manifest unknown` means the tag is not there. Either way the test
-asserts only the two session reset cases, which follow from RFC 4271
-section 6.3 and should hold on any conformant version, while the finer
-verdicts can move between releases.
+`manifest unknown` means the tag is not there. Changing the version
+moves the client with the router, since one variable feeds both, but the
+route level assertions in the test are measured against 3.23 and can
+move between releases. The two session reset cases follow from RFC 4271
+section 6.3 and should hold on any conformant version.
 
 A full run is roughly two to four minutes at the default settle. Raise
 `FAULT_SETTLE` if a slower machine reports faults with no session.
@@ -538,24 +558,49 @@ LAB_REQUIRE_DOCKER=1 ruby -I. test/functional/lab/fault_matrix_test.rb
 ```
 
 `test/functional/lab/fault_matrix_test.rb` runs the topology and asserts
-the session level answers: the two cases that must reset do reset, with
-NOTIFICATION subcodes 2 and 1, and no other case resets. It also fails
-if any fault got no session at all, because that means the harness lost
-the router rather than that the router answered. Without Docker the test
-is omitted, unless `LAB_REQUIRE_DOCKER=1` is set, as in CI.
+two layers.
 
-### What it does not cover
+The session level answers first: the two cases that must reset do reset,
+with NOTIFICATION subcodes 2 and 1, and no other case resets. It also
+fails if any fault got no session at all, because that means the harness
+lost the router rather than that the router answered. This layer is the
+router agnostic one. It follows from RFC 4271 section 6.3 and RFC 7606,
+it holds for any router that implements them, and no assertion in it
+names a router specific command.
 
-The topology does not read the router's RIB, so it cannot tell
-treat-as-withdraw from attribute-discard. Both keep the session up, and
-only the RIB separates them. That is why the test asserts session
-outcomes alone: those hold for any conformant router, with no router
-specific command in the assertions.
+Then the route level answers, which are the part the RIB adds: every
+treat-as-withdraw case dropped the route, and every attribute-discard
+case kept it. The expectation comes from each catalog entry's own
+`action`, not from a list in the test, so a case added to the catalog is
+covered the day it lands. One assertion comes first: that the RIB
+answered at all. The matrix sends a plain route of its own before the
+first fault and scores routes only after seeing the router install it,
+so a failed baseline makes every route column meaningless, and the test
+says that instead of reading them.
 
-Adding the RIB would need the `gobgp` CLI inside the matrix container,
-which means either copying the binary between images or mounting the
-Docker socket. Until then, use `--rib-command` by hand, as in the
-sections above, and read the router's own log for anything that matters.
+Without Docker the test is omitted, unless `LAB_REQUIRE_DOCKER=1` is
+set, as in CI.
+
+### The GoBGP 3.23 divergence
+
+The run exits 1, and both the topology and the test expect that. Two
+cases disagree with the catalog, `tunnel_encap_tlv` and
+`tunnel_encap_sub_tlv`, and the test asserts the disagreement is exactly
+those two.
+
+RFC 9012 section 13 is a MUST: the final octet of a tunnel TLV must also
+be the final octet of its last sub-TLV, and a TLV that breaks that is
+malformed, treat as withdraw. GoBGP 3.23 sees the malformed TLV, logs
+"Not all TunnelEncapSubTLV bytes available", discards the attribute and
+installs the route. bgp4r is right here and the router is not, so the
+catalog keeps asking for treat-as-withdraw and the test records what the
+router actually does, naming it as a divergence where it asserts it.
+
+That is why the test asserts per route outcomes rather than the exit
+status. If either case ever reports the route dropped, the router
+improved: take the name out of `TUNNEL_ENCAP` in the test, so it is
+derived with the other treat-as-withdraw cases, and update the GoBGP
+rows above.
 
 ### Two things worth knowing
 
