@@ -1,5 +1,5 @@
 #--
-# Copyright 2008, 2009 Jean-Michel Esnault.
+# Copyright 2008, 2009, 2026 Jean-Michel Esnault.
 # All rights reserved.
 # See LICENSE.txt for permissions.
 #
@@ -37,5 +37,19 @@ class Next_hop_Test < Test::Unit::TestCase
   def test_2
     next_hop = Next_hop.new :next_hop=> '10.0.0.1'
     assert_equal({:next_hop=>"10.0.0.1"}, next_hop.to_hash)
+  end
+  # The attribute is registered under :next_hop and :nexthop. The
+  # :nexthop form used to raise NameError.
+  def test_new_from_either_hash_key
+    assert_equal('4003040a000001', Next_hop.new(:next_hop=> '10.0.0.1').to_shex)
+    assert_equal('4003040a000001', Next_hop.new(:nexthop=> '10.0.0.1').to_shex)
+    assert_equal('4003040a000001', Next_hop.new('10.0.0.1').to_shex)
+    assert_equal('4003040a000001', Next_hop.new(['4003040a000001'].pack('H*').is_packed).to_shex)
+    assert_raise(ArgumentError) { Next_hop.new(:not_a_next_hop=> '10.0.0.1') }
+  end
+  def test_to_hash_round_trips
+    next_hop = Next_hop.new('10.0.0.1')
+    assert_equal(next_hop.to_shex, Next_hop.new(next_hop.to_hash).to_shex)
+    assert_equal(next_hop.to_hash, Next_hop.new(next_hop.to_hash).to_hash)
   end
 end

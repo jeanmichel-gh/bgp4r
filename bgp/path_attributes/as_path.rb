@@ -161,6 +161,16 @@ module BGP
         end        
       end
       
+      # The segment class for each hash key. RFC 4271 section 4.3 for
+      # AS_SET and AS_SEQUENCE, RFC 5065 section 3 for the two
+      # confederation types.
+      SEGMENT_CLASSES = {
+        :set             => As_path::Set,
+        :sequence        => As_path::Sequence,
+        :confed_set      => As_path::Confed_set,
+        :confed_sequence => As_path::Confed_sequence,
+      }.freeze
+
       def integer?(arg)
         arg.is_a?(Integer)
       end
@@ -175,6 +185,8 @@ module BGP
           parse(*args)
         elsif args[0].is_a?(self.class)
           parse(args[0].encode, *args[1..-1])
+        elsif self.class.hash_form?(args[0])
+          @segments = self.class.segments_from_hash(args[0])
         elsif integer?(args[0])
           @segments << Sequence.new(*args.dup)
         elsif args[0].is_a?(Segment)
@@ -221,9 +233,18 @@ module BGP
         @segments.find { |s| s.seg_type == SEQUENCE }
       end
       
+      # A hash that round trips through new. One key per segment type
+      # while the types are all different, which is the shape bgp4r has
+      # always returned. That shape cannot hold the same type twice, so
+      # when a type repeats the segments go in order under :segments.
       def to_hash
-        h = {}
-        @segments.each { |s| h = h.merge(s.to_hash) }
+        segs = @segments.collect { |s| s.to_hash }
+        types = segs.collect { |s| s.keys.first }
+        h = if types.uniq.size == types.size
+          segs.inject({}) { |acc, s| acc.merge(s) }
+        else
+          { :segments=> segs }
+        end
         { :as_path=> h}
       end
       
@@ -257,24 +278,54 @@ module BGP
       class << self
         def new_hash(arg={})
           o = new
-          arg.each do |set_type, set|
-            case set_type.to_sym
-            when :set
-              o << As_path::Set.new(*set)
-            when :sequence
-              o << As_path::Sequence.new(*set)
-            when :confed_set
-              o << As_path::Confed_set.new(*set)
-            when :confed_sequence
-              o << As_path::Confed_sequence.new(*set)
-            else
-              raise
-            end
-          end
+          segments_from_hash(arg).each { |segment| o << segment }
           o
         end
+
+        # True for a hash new builds from: the hash to_hash returns,
+        # wrapped under the attribute name, or a :segments list. A bare
+        # hash of segment types, which new_hash takes, is not one: new
+        # has always ignored such a hash, and Path_attribute builds
+        # those through new_hash.
+        def hash_form?(arg)
+          arg.is_a?(Hash) and
+            (arg.has_key?(:as_path) or arg.has_key?(:as4_path) or arg.has_key?(:segments))
+        end
+
+        # The segments a hash describes, in order. Two shapes:
+        #
+        #   {:sequence=>[1,2], :set=>[3,4]}   one key per segment type
+        #   {:segments=>[{:sequence=>[1,2]}, {:sequence=>[3,4]}]}
+        #
+        # The first is the old shape and stays the one to_hash returns
+        # while no segment type repeats. The second keeps order and
+        # repeats, which a single hash cannot. A bare list of segment
+        # hashes, and a hash wrapped under :as_path or :as4_path as
+        # to_hash returns it, are accepted too.
+        def segments_from_hash(arg)
+          arg = { :segments=> arg } if arg.is_a?(Array)
+          raise ArgumentError, "invalid argument #{arg.inspect}" unless arg.is_a?(Hash)
+          if arg.size==1 and (arg.has_key?(:as_path) or arg.has_key?(:as4_path))
+            return segments_from_hash(arg[:as_path] || arg[:as4_path])
+          end
+          segs = if arg.has_key?(:segments)
+            [arg[:segments]].flatten(1)
+          else
+            arg.collect { |seg_type, as| { seg_type=> as } }
+          end
+          segs.collect { |seg| segment_from_hash(seg) }
+        end
+
+        # One segment from a one key hash such as {:sequence=>[1,2]}.
+        def segment_from_hash(arg)
+          raise ArgumentError, "invalid segment #{arg.inspect}" unless arg.is_a?(Hash) and arg.size==1
+          seg_type, as = arg.first
+          klass = seg_type.respond_to?(:to_sym) ? SEGMENT_CLASSES[seg_type.to_sym] : nil
+          raise ArgumentError, "invalid segment type #{seg_type.inspect}" unless klass
+          klass.new(*[as].flatten)
+        end
       end
-    
+
       class << self
         def new_set(*args)
           new_hash :set=>args.flatten
