@@ -94,7 +94,7 @@ class Extended_communitiesTest < Test::Unit::TestCase
     assert_equal("Ospf router id: 10.0.0.1:0",ec.sort.communities[8].to_s)
     assert_equal("Color: 100",ec.sort.communities[9].to_s)
     # assert_equal("Encapsulation: 1",ec.sort.communities[10].to_s)
-    assert_equal("Link bandwidth: 1000000000.0",ec.sort.communities[10].to_s)
+    assert_equal("Link bandwidth: 0:1000000000.0",ec.sort.communities[10].to_s)
   end
   def test_sort!
     ec = Extended_communities.new
@@ -119,7 +119,7 @@ class Extended_communitiesTest < Test::Unit::TestCase
     assert_equal("Ospf domain id: 9.1.0.1:0",ec.communities[6].to_s)
     assert_equal("Ospf domain id: 20.0.0.1:0",ec.communities[7].to_s)
     assert_equal("Ospf router id: 10.0.0.1:0",ec.communities[8].to_s)
-    assert_equal("Link bandwidth: 1000000000.0",ec.communities[10].to_s)
+    assert_equal("Link bandwidth: 0:1000000000.0",ec.communities[10].to_s)
     assert_equal("Color: 100",ec.communities[9].to_s)
     ec1 = Extended_communities.new(ec)
     assert_equal(ec.encode, ec1.encode)
@@ -157,12 +157,16 @@ class Extended_communitiesTest < Test::Unit::TestCase
     assert_equal('Ospf domain id: 9.1.0.1:0',ec.ospf_domain_id[0].to_s)
     ###assert_equal('Encapsulation: 1',ec.encapsulation.to_s)
     assert_equal('Ospf router id: 10.0.0.1:0',ec.ospf_router_id.to_s)
-    assert_equal('Link bandwidth: 1000000000.0',ec.link_bandwidth.to_s)
+    assert_equal('Link bandwidth: 0:1000000000.0',ec.link_bandwidth.to_s)
     assert_equal('Route origin: 10.0.3.2:9',ec.route_origin.to_s)
     ec.route_target= '20.0.1.2', 20
     ec.link_bandwidth= 100_000
     assert_equal('Route target: 20.0.1.2:20',ec.route_target[0].to_s)
-    assert_equal('Link bandwidth: 100000.0',ec.link_bandwidth.to_s)
+    assert_equal('Link bandwidth: 0:100000.0',ec.link_bandwidth.to_s)
+    # The setter takes the AS too, the same way the route target setter
+    # takes an address and a local administrator.
+    ec.link_bandwidth= 65_000, 100_000
+    assert_equal('Link bandwidth: 65000:100000.0',ec.link_bandwidth.to_s)
 
     ec = Extended_communities.new do |c|
       c.route_target   = '10.0.0.1', 1311
@@ -209,6 +213,28 @@ class Extended_communitiesTest < Test::Unit::TestCase
     assert_equal(exc.to_hash, Extended_communities.new_hash(exc.to_hash).to_hash)
     pa = Path_attribute.new(exc)
     assert_equal(hex, Path_attribute.new(pa.to_hash).to_shex)
+  end
+
+  # draft-ietf-idr-link-bandwidth, on RFC 4360 section 3.1: the 2 octet
+  # global administrator is the advertising speaker's AS. It was filled
+  # with 0 and dropped when parsing, so an attribute that carried one
+  # came back without it, and to_hash gave the bandwidth alone, with
+  # nowhere for the AS to go. to_hash now gives [AS, bandwidth].
+  def test_link_bandwidth_as_hash_round_trip
+    hex = 'c010084004fde8447a0000'   # AS 65000, 1000 bytes per second
+    ec = Extended_communities.new([hex].pack('H*'))
+    assert_equal(hex, ec.to_shex)
+    assert_equal({:extended_communities=>[{:link_bandwidth=>[65000, 1000.0]}]}, ec.to_hash)
+    assert_equal(hex, Extended_communities.new_hash(ec.to_hash).to_shex)
+    assert_equal(ec.to_hash, Extended_communities.new_hash(ec.to_hash).to_hash)
+    assert_equal(hex, Path_attribute.new(Path_attribute.new(ec).to_hash).to_shex)
+    # From the community, and from the hash.
+    assert_equal(hex, Extended_communities.new(Link_bandwidth.new(65_000, 1000)).to_shex)
+    assert_equal(hex, Extended_communities.new_hash(:link_bandwidth=>[65_000, 1000]).to_shex)
+    # A bandwidth on its own still means an AS of 0, the form callers and
+    # tests already use.
+    assert_equal('c0100840040000447a0000',
+                 Extended_communities.new_hash(:link_bandwidth=>1000).to_shex)
   end
 
   def test_four_octet_as_hash_round_trip
