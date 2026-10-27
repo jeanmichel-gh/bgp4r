@@ -493,12 +493,27 @@ carries both the daemon and the `gobgp` client, which is why the
 topology mounts its folder at `/config` and does not override the
 command.
 
-Note the version. The results in the next section were produced by hand
-against GoBGP 3.23, and the topology pins a 4.x image, so the two are
-not the same router. That is also why the test asserts only the two
-session reset cases: those follow from RFC 4271 section 6.3 and should
-hold on any conformant version, while the finer verdicts can move
-between releases.
+The pin is a 3.x tag, because `gobgp.toml` in the topology is the schema
+verified against GoBGP 3.23, which is also the version that produced the
+results in the next section. 4.x tags of the same image exist and are
+the next step. Trying one needs no edit:
+
+```
+GOBGP_IMAGE=jauderho/gobgp:v4.10.0 docker compose \
+  -f lab/topologies/fault-matrix/compose.yml up --build \
+  --abort-on-container-exit --exit-code-from matrix
+```
+
+To check that a tag has an arm64 build before pulling it:
+
+```
+docker buildx imagetools inspect jauderho/gobgp:v3.37.0
+```
+
+`manifest unknown` means the tag is not there. Either way the test
+asserts only the two session reset cases, which follow from RFC 4271
+section 6.3 and should hold on any conformant version, while the finer
+verdicts can move between releases.
 
 A full run is roughly two to four minutes at the default settle. Raise
 `FAULT_SETTLE` if a slower machine reports faults with no session.
