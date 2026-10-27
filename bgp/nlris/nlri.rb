@@ -104,11 +104,20 @@ module BGP
       until s.empty?
         left = s.size
         add Prefix.send((path_id ? :new_ntop_extended : :new_ntop ), s, afi)
-        # Prefix.new_ntop does not consume an NSAP prefix, so give up on the
-        # rest of the field rather than read the same octets forever.
+        # A backstop. Every family Prefix.new_ntop reads consumes at least
+        # its length octet, so nothing reaches this today, but afi is a
+        # parameter and an infinite loop on received octets is worse than
+        # giving up on the rest of a field.
         break unless s.size < left
       end
       self
+    end
+
+    # RFC 7606 section 5.3: the field is syntactically incorrect when a
+    # prefix in it is. Reported, not raised; see
+    # Prefix#syntactically_correct?.
+    def syntactically_correct?
+      @nlris.all? { |n| n.syntactically_correct? }
     end
 
     def encode(len_included=false)

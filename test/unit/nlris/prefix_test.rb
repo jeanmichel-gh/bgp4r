@@ -215,6 +215,77 @@ class Prefix_Test < Test::Unit::TestCase
   ensure
     t.kill if t
   end
+  def test_a_prefix_length_wider_than_the_family_is_kept_not_raised
+    # RFC 4271 section 4.3: "The Length field indicates the length in bits
+    # of the IP address prefix", and nothing caps it at the width of the
+    # family. RFC 7606 section 5.3 calls a length over 32 a syntactically
+    # incorrect NLRI field, and RFC 4271 section 6.3 answers one with the
+    # Invalid Network Field subcode. So the fault is reported, the octets
+    # are kept, and nothing raises.
+    s = ['210102030405'].pack('H*')
+    pfx = Prefix.new_ntop(s.dup)
+    assert_equal(33, pfx.mlen)
+    assert_equal('1.2.3.4/33', pfx.to_s)
+    assert_equal(1, pfx.afi)
+    assert_equal('210102030405', pfx.to_shex)
+    assert_equal(false, pfx.syntactically_correct?)
+    assert_equal('05', pfx.tail.unpack1('H*'))
+    # The tuple is 1+(33+7)/8 octets, so a prefix behind it is untouched.
+    left = ['2101020304050865'].pack('H*')
+    Prefix.new_ntop(left)
+    assert_equal('0865', left.unpack1('H*'))
+  end
+
+  def test_the_three_build_paths_agree_on_an_over_wide_prefix_length
+    from_wire = Prefix.new_ntop(['210102030405'].pack('H*'))
+    from_hash = Prefix.new(from_wire.to_hash)
+    from_values = Prefix.new('1.2.3.4/33')
+    assert_equal({:prefix=>'1.2.3.4/33', :tail=>'05'}, from_wire.to_hash)
+    assert_equal(from_wire.to_shex, from_hash.to_shex)
+    assert_equal(from_wire.to_hash, from_hash.to_hash)
+    # Built from field values there is no leftover octet to carry, so the
+    # one encode writes is zero. The length still arrives on the wire.
+    assert_equal(33, from_values.mlen)
+    assert_equal('210102030400', from_values.to_shex)
+    assert_equal(false, from_values.syntactically_correct?)
+    assert_equal({:prefix=>'1.2.3.4/33'}, from_values.to_hash)
+    # A Path Identifier still goes in front of the whole tuple
+    # (RFC 7911 section 3).
+    ext = Prefix.new_ntop_extended(['00000064210102030405'].pack('H*'))
+    assert_equal('00000064210102030405', ext.to_shex)
+    assert_equal('ID=100, 1.2.3.4/33', ext.to_s)
+    assert_equal(ext.to_shex, Prefix.new(ext.to_hash).to_shex)
+  end
+
+  def test_an_over_wide_prefix_length_in_inet6_and_at_the_ceiling
+    s = ['8120010db8000000000000000000000000ff'].pack('H*')
+    pfx = Prefix.new_ntop(s.dup, 2)
+    assert_equal(129, pfx.mlen)
+    assert_equal('2001:db8::/129', pfx.to_s)
+    assert_equal(2, pfx.afi)
+    assert_equal('8120010db8000000000000000000000000ff', pfx.to_shex)
+    assert_equal(false, pfx.syntactically_correct?)
+    # The widest a length octet can say is 255, which asks for 32 octets.
+    wide = ['ff' + '0a' * 32].pack('H*')
+    p255 = Prefix.new_ntop(wide.dup)
+    assert_equal(255, p255.mlen)
+    assert_equal(32, p255.nbytes)
+    assert_equal('ff' + '0a' * 32, p255.to_shex)
+    # A length that fits is untouched: no tail, no new hash key.
+    ok = Prefix.new('10.255.255.255/17')
+    assert_equal(true, ok.syntactically_correct?)
+    assert_nil(ok.tail)
+    assert_equal({:prefix=>'10.255.128.0/17'}, ok.to_hash)
+  end
+
+  def test_an_over_wide_prefix_length_in_a_truncated_field
+    # A short field reads what arrived and zero fills the rest, the way an
+    # ordinary truncated prefix already does.
+    pfx = Prefix.new_ntop(['21'].pack('H*'))
+    assert_equal('0.0.0.0/33', pfx.to_s)
+    assert_equal('210000000000', pfx.to_shex)
+  end
+
   def test_new_ntop_unknown_afi_says_so
     s = ['0a0a'].pack('H*')
     [[:new_ntop, 25], [:new_ntop, :ipx], [:new_ntop_extended, 25]].each do |meth, afi|

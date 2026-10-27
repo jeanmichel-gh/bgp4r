@@ -484,6 +484,28 @@ class Update_Test < Test::Unit::TestCase
     assert_raise(ArgumentError) { Update.new << 42 }
   end
 
+  def test_the_three_setters_all_ignore_what_they_do_not_accept
+    # nlri= used to test val.is_a?(Ext_Nlri) as well, and BGP::Ext_Nlri is
+    # defined nowhere, so anything that was not an Nlri raised NameError
+    # instead of being ignored the way the other two setters ignore it.
+    u = Update.new
+    [nil, 'nope', 42, Withdrawn.new('10.0.0.0/8'), Path_attribute.new].each do |val|
+      u.nlri = val
+      assert_nil(u.nlri)
+    end
+    u.withdrawn = 'nope'
+    assert_nil(u.withdrawn)
+    u.path_attribute = 'nope'
+    assert_nil(u.path_attribute)
+    # What they do accept still lands, including the add-path form, which
+    # is an Nlri carrying Path Identifiers (RFC 7911 section 3).
+    nlri = Nlri.new([100, '77.0.0.0/17'])
+    u.nlri = nlri
+    assert_same(nlri, u.nlri)
+    u.nlri = 'nope'
+    assert_same(nlri, u.nlri)
+  end
+
   def test_parse_mp_reach_with_4_byte_as_info
     # Update::Info says nothing about add-path, so MP_REACH NLRI carry no
     # Path Identifier. It used to be taken as the add-path flag itself, so

@@ -115,8 +115,13 @@ class BGP::Update < BGP::Message
     @withdrawn=val if val.is_a?(Withdrawn)
   end
 
+  # Anything else is ignored, the way withdrawn= and path_attribute=
+  # ignore it. There used to be an Ext_Nlri test here as well, for a class
+  # defined nowhere, so this raised NameError on everything an Nlri did
+  # not short circuit. The add-path extended encoding (RFC 7911 section 3)
+  # is an Nlri too: the Path Identifier lives on each Prefix.
   def nlri=(val)
-    @nlri=val if val.is_a?(Nlri) or val.is_a?(Ext_Nlri)
+    @nlri=val if val.is_a?(Nlri)
   end
 
   def path_attribute=(val)
