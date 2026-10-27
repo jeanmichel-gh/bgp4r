@@ -40,6 +40,43 @@ class Extended_community_Test < Test::Unit::TestCase
     assert_equal(0x030a0a0000010064, Opaque.new(0,10,"0a0000010064").to_i)
   end
 
+  # RFC 4360 section 2: a community is 8 octets. An Integer holds those
+  # octets as one number, so it round trips through to_i.
+  def test_new_with_an_integer
+    assert_equal('0000000000000064', Extended_community.new(100).to_shex)
+    assert_equal(100, Extended_community.new(100).to_i)
+    assert_equal(0x0002000a00000014, Extended_community.new(0x0002000a00000014).to_i)
+    assert_equal('Extended community: 10:20', Extended_community.new(0x0002000a00000014).to_s)
+    rt = Route_target.new(0xff,0xdeadbe)
+    assert_equal(rt.to_i, Extended_community.new(rt.to_i).to_i)
+  end
+
+  # RFC 4360 section 2: the low 2 bits of the type octet say which
+  # structure the community has, so exactly one predicate is true.
+  def test_structure_predicates
+    two_octet = Route_target.new(10, 20)
+    ipv4_addr = Route_target.new('1.1.1.1', 100)
+    # RFC 5668 section 2: a 4 octet AS gives type 0x02.
+    four_octet = Route_target.new(4200000001, 9)
+    opaque = Opaque.new(0, 10, '0a0000010064')
+    assert_equal('0002000a00000014', two_octet.to_shex)
+    assert_equal('0102010101010064', ipv4_addr.to_shex)
+    assert_equal('0202fa56ea010009', four_octet.to_shex)
+    assert_equal('030a0a0000010064', opaque.to_shex)
+
+    assert_equal([true, false, false], [two_octet.is_two_octet_asn?, two_octet.is_ipv4_addr?, two_octet.is_opaque?])
+    assert_equal([false, true, false], [ipv4_addr.is_two_octet_asn?, ipv4_addr.is_ipv4_addr?, ipv4_addr.is_opaque?])
+    # No predicate for the 4 octet AS structure, so all three are false.
+    assert_equal([false, false, false], [four_octet.is_two_octet_asn?, four_octet.is_ipv4_addr?, four_octet.is_opaque?])
+    assert_equal([false, false, true], [opaque.is_two_octet_asn?, opaque.is_ipv4_addr?, opaque.is_opaque?])
+
+    # The transitive bit (0x40) does not change the structure.
+    non_transitive = Opaque.new(ATTR::XTENDED_COMMUNITY::NON_TRANSITIVE, 10, '0a0000010064')
+    assert_equal('430a0a0000010064', non_transitive.to_shex)
+    assert_equal([false, false, true],
+                 [non_transitive.is_two_octet_asn?, non_transitive.is_ipv4_addr?, non_transitive.is_opaque?])
+  end
+
   def test_compare
     rt = Route_target.new(0xff,0xdeadbe)
     op = Opaque.new(ATTR::XTENDED_COMMUNITY::NON_TRANSITIVE, 10,"0a0000010064")
@@ -123,6 +160,12 @@ class Extended_community_Test < Test::Unit::TestCase
     assert_equal('4300000000000000', Origin_validation_state.new(:valid).to_shex)
     assert_equal('4300000000000001', Origin_validation_state.new(:not_found).to_shex)
     assert_equal('4300000000000002', Origin_validation_state.new(:invalid).to_shex)
+  end
+
+  # RFC 8097 section 2 defines states 0, 1 and 2 only.
+  def test_origin_validation_state_bogus_value
+    e = assert_raise(RuntimeError) { Origin_validation_state.new(3).validation_state }
+    assert_match(/3/, e.message)
   end
   
   # def test_encapsulation
