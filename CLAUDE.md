@@ -108,4 +108,5 @@ Found while fixing other bugs, not fixed yet:
 * `LiveFeed#close` on a feed that was never opened raises `NoMethodError`.
 * `bgp/nlris/nsap.rb` has its own `netmask` method, unrelated to `IPAddr#netmask`. Confusing to read.
 * `ci_reporter` in the `Gemfile` looks unused.
+* The GoBGP configs are written for the 3.23 schema: `lab/conformance/gobgpd.conf` and `lab/topologies/fault-matrix/gobgp.toml`. The fault matrix topology pins GoBGP 3.23 to match them, so the conformance suite only ever tests a router from 2024. Updating both configs to the 4.x schema, then rerunning the matrix to see which verdicts move, is the fix. A rejected key shows up in the router's own log.
 * Lowest coverage (unit suite): `orfs/prefix_orf.rb` 79%, `neighbor/neighbor.rb` 81%, `common.rb` 83%, `messages/route_refresh.rb` 83%, `nlris/nlri.rb` 83%, `messages/update.rb` 84%.

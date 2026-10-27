@@ -23,14 +23,21 @@
 # build, so it runs on an Apple Silicon Mac without emulation. The old
 # osrg/gobgp image on Docker Hub is amd64 only and years stale.
 #
-# The pin is 3.23.0, which is both the version gobgp.toml here was
+# The pin is 3.23.0, a release over two years old. That is deliberate,
+# and the reason is the config, not the router: gobgp.toml next to this
+# file is written for the 3.23 schema, which is the version it was
 # verified against and the version behind the results in
-# docs/protocol-testing.md, so a run here is comparable to those. It has
-# a native linux/arm64 build.
+# docs/protocol-testing.md. The router is pinned to match the config.
 #
-# It is also over two years old. 4.x tags of this image exist and are
-# the next step, but a major version is its own change. Try one without
-# editing anything:
+# So moving to a current GoBGP is a config job, not an image bump. It
+# means updating gobgp.toml here, and lab/conformance/gobgpd.conf, to
+# whatever the 4.x schema wants, then rerunning to see which verdicts
+# move. Worth doing: a conformance suite that only ever tests a router
+# from 2024 is testing the wrong thing.
+#
+# 4.x tags of this image exist. Try one without editing anything, and
+# read the router log if it will not start, which is where a rejected
+# config key shows up:
 #   GOBGP_IMAGE=jauderho/gobgp:v4.10.0 docker compose ... up
 # To check a tag has arm64 before pulling it:
 #   docker buildx imagetools inspect jauderho/gobgp:v3.23.0

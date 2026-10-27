@@ -493,13 +493,23 @@ carries both the daemon and the `gobgp` client, which is why the
 topology mounts its folder at `/config` and does not override the
 command.
 
-The pin is 3.23.0. That is the version `gobgp.toml` in the topology was
+The pin is 3.23.0, a release over two years old. That is deliberate, and
+the reason is the config rather than the router. `gobgp.toml` in the
+topology is written for the 3.23 schema. That is the version it was
 verified against, and the version that produced the results in the next
 section, so a container run is comparable to those results rather than
-being a separate data point.
+being a separate data point. The router is pinned to match the config.
 
-It is also over two years old, which is the trade. 4.x tags of the same
-image exist and are the next step. Trying one needs no edit:
+Which means moving to a current GoBGP is a config job, not an image
+bump. It means updating `gobgp.toml` in the topology, and
+`lab/conformance/gobgpd.conf`, to whatever the 4.x schema wants, then
+rerunning to see which verdicts move. It is worth doing. A conformance
+suite that only ever tests a router from 2024 is testing the wrong
+thing, and the newer code is where a new divergence is most likely to
+be.
+
+4.x tags of the same image exist, so trying one needs no edit. If the
+daemon will not start, its log names the config key it rejected:
 
 ```
 GOBGP_IMAGE=jauderho/gobgp:v4.10.0 docker compose \
