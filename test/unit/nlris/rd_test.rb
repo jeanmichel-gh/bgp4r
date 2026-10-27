@@ -31,8 +31,8 @@ class Rd_Test < Test::Unit::TestCase
     assert_equal('0000000100000001',Rd.new(1,1).to_shex)
     assert_equal('RD=1.1.1.1:1 (0x1010101 0x01)',Rd.new('1.1.1.1',1).to_s)
     assert_equal('0001010101010001',Rd.new('1.1.1.1',1).to_shex)
-    assert_equal('RD=1:16843009 (0x0001 0x1010101)', Rd.new(1,'1.1.1.1').to_s)
-    assert_equal('0002000000010101', Rd.new(1,'1.1.1.1').to_shex)
+    assert_equal('RD=1:257 (0x0001 0x101)', Rd.new(1,257,2).to_s)
+    assert_equal('0002000000010101', Rd.new(1,257,2).to_shex)
     assert_equal('RD=1:1 (0x01 0x0001)',Rd.new(1,1,0).to_s)
     assert_equal('RD=1:1 (0x0001 0x01)',Rd.new(1,1,2).to_s)
     assert_equal('RD=1:1 (0x01 0x0001)',Rd.new(:rd=>[1,1]).to_s)
@@ -60,7 +60,9 @@ class Rd_Test < Test::Unit::TestCase
     assert_equal Rd.new('1.1.1.1', 1).to_shex, Rd.new('1.1.1.1', 1, 1).to_shex
     assert_equal 0, Rd.new(1, 1).encoding_type?
     assert_equal 1, Rd.new('1.1.1.1', 1).encoding_type?
-    assert_equal 2, Rd.new(1, '1.1.1.1').encoding_type?
+    # The two argument form no longer reads a String assigned number as an
+    # inferred type 2, so type 2 is named: see the refusal test below.
+    assert_equal 2, Rd.new(1, 257, 2).encoding_type?
     assert_equal 0, Rd.new.encoding_type?
   end
   def test_built_from_another_rd
@@ -88,6 +90,36 @@ class Rd_Test < Test::Unit::TestCase
     assert_equal({:rd=>[0, 0]}, rd.to_hash)
     assert_equal 'RD=0:0', rd.to_s(false)
     assert_equal 64, rd.bit_length
+  end
+  # RFC 4364 section 4.2 gives encoding type 0 a 2 octet administrator and a
+  # 4 octet assigned number. The verbose form used to print the assigned
+  # number in both places, so the administrator never showed.
+  def test_type_0_verbose_to_s_prints_its_administrator
+    assert_equal 'RD=7:9 (0x07 0x0009)', Rd.new(7, 9).to_s
+    assert_equal 'RD=65535:65536 (0xffff 0x10000)', Rd.new(65535, 65536).to_s
+  end
+  # One line per encoding type, each printing its own two fields.
+  def test_verbose_to_s_prints_each_types_own_fields
+    assert_equal 'RD=7:9 (0x07 0x0009)', Rd.new(7, 9, 0).to_s
+    assert_equal 'RD=1.1.1.1:9 (0x1010101 0x09)', Rd.new('1.1.1.1', 9, 1).to_s
+    assert_equal 'RD=7:9 (0x0007 0x09)', Rd.new(7, 9, 2).to_s
+  end
+  # RFC 4364 section 4.2 gives encoding types 1 and 2 a 2 octet assigned
+  # number, so a 32 bit address cannot go there. The constructor says so
+  # instead of keeping a value its own encode truncates.
+  def test_an_address_is_refused_as_an_assigned_number
+    e = assert_raise(ArgumentError) { Rd.new(1, '1.1.1.1') }
+    assert_match(/1\.1\.1\.1/, e.message)
+    assert_match(/RFC 4364/, e.message)
+  end
+  # Refusing the String leaves every octet level route open.
+  def test_a_type_2_assigned_number_can_still_be_built_and_agrees_with_its_bytes
+    assert_equal '0002000000010101', Rd.new(1, 257, 2).to_shex
+    wire = ['0002000000010101'].pack('H*')
+    assert_equal '0002000000010101', Rd.new(wire).to_shex
+    assert_equal 'RD=1:257', Rd.new(wire).to_s(false)
+    rd = Rd.new(1, 257, 2)
+    assert_equal rd.to_s(false), Rd.new(rd.encode).to_s(false)
   end
   def test_unknown_type_raises_quietly
     out, $stdout = $stdout, StringIO.new
