@@ -15,6 +15,19 @@
 #     matrix:/tmp/fault-matrix.json .
 #   docker compose -f lab/topologies/fault-matrix/compose.yml down
 #
+# With GoBGP 3.23 that status is 1, not 0, and the run is still correct.
+# The two tunnel encapsulation cases differ: GoBGP discards the malformed
+# attribute and installs the route where RFC 9012 section 13 asks for
+# treat-as-withdraw. test/functional/lab/fault_matrix_test.rb asserts the
+# per route outcomes instead of the exit status, and explains it there.
+#
+# The matrix reads the router's RIB, which is what tells treat-as-withdraw
+# from attribute-discard, since both keep the session up. It builds the
+# Dockerfile's conformance stage, the speaker plus the gobgp client copied
+# out of the router image, and runs the client over gRPC against the
+# router's address. GOBGP_IMAGE goes to both services, so the client and
+# the router it queries are the same version.
+#
 # Two knobs, both optional:
 #   GOBGP_IMAGE   the router image, to pin a version or swap the router
 #   FAULT_SETTLE  seconds to wait after each fault, default 2
@@ -63,8 +76,11 @@ services:
   matrix:
     build:
       context: ../../..
-      target: speaker
-    image: bgp4r-speaker
+      target: conformance
+      args:
+        # Same default as the router above, so one GOBGP_IMAGE moves both.
+        GOBGP_IMAGE: ${GOBGP_IMAGE:-jauderho/gobgp:v3.23.0}
+    image: bgp4r-conformance
     command:
       - lab/fault_matrix.rb
       - --peer=10.30.0.2
@@ -74,6 +90,10 @@ services:
       - --id=10.30.0.1
       - --next-hop=10.30.0.1
       - --settle=${FAULT_SETTLE:-2}
+      # The gobgp client speaks gRPC to the router on port 50051. One
+      # argument, spaces and all: the matrix runs it through a shell and
+      # greps the output for the test prefix.
+      - --rib-command=gobgp -u 10.30.0.2 global rib
       - --json=/tmp/fault-matrix.json
     depends_on:
       - router

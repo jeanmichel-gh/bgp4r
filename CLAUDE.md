@@ -133,7 +133,7 @@ Smaller things:
 Lab and conformance:
 
 * The GoBGP configs are written for the 3.23 schema: `lab/conformance/gobgpd.conf` and `lab/topologies/fault-matrix/gobgp.toml`. The fault matrix topology pins GoBGP 3.23 to match them, so the conformance suite only ever tests a router from 2024. Updating both configs to the 4.x schema, then rerunning the matrix to see which verdicts move, is the fix. A rejected key shows up in the router's own log.
-* `lab/topologies/fault-matrix` does not read the router's RIB, so it cannot tell treat-as-withdraw from attribute-discard and its test asserts session outcomes only. The pinned router image carries the `gobgp` client at `/usr/local/bin/gobgp`, so a multi-stage `COPY --from` into the matrix image would give it a working `--rib-command` with no Docker socket.
+* `lab/topologies/fault-matrix` exits 1, and that is the right answer: GoBGP 3.23 discards the malformed tunnel encapsulation attribute and installs the route where RFC 9012 section 13 asks for treat-as-withdraw. Both cases are asserted as a known divergence in `test/functional/lab/fault_matrix_test.rb`. A newer GoBGP may fix it; see the comment on `TUNNEL_ENCAP` there.
 * Lowest coverage (unit suite): `orfs/prefix_orf.rb` 79%, `common.rb` 82%, `nlris/nlri.rb` 83%, `messages/route_refresh.rb` 83%, `optional_parameters/capability.rb` 86%.
 
 ## Attribute work left

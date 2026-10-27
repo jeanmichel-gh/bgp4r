@@ -24,11 +24,20 @@
 #   docker run --rm bgp4r-test
 #
 # Stages:
-#   base     Ruby, the dev and test gems, the bgp4r source, a non-root user
-#   test     runs the unit suite (the default command)
-#   speaker  runs a bgp4r script, for labs: docker run bgp4r-speaker my_peer.rb
+#   base         Ruby, the dev and test gems, the bgp4r source, a non-root user
+#   test         runs the unit suite (the default command)
+#   speaker      runs a bgp4r script, for labs: docker run bgp4r-speaker my_peer.rb
+#   gobgp-cli    the router image, only as a source for the gobgp binary
+#   conformance  speaker plus the gobgp client, for the fault matrix topology
 
 ARG RUBY_VERSION=3.4
+
+# The image the conformance stage takes the gobgp client from. The default
+# matches the router in lab/topologies/fault-matrix/compose.yml, and that
+# topology passes its own value through, so the client and the router it
+# queries are always the same version. It is declared here, above the first
+# stage, because a FROM can only use an ARG declared before the first FROM.
+ARG GOBGP_IMAGE=jauderho/gobgp:v3.23.0
 
 FROM ruby:${RUBY_VERSION}-slim AS base
 WORKDIR /app
@@ -51,3 +60,21 @@ CMD ["ruby", "test/run_unit.rb"]
 FROM base AS speaker
 EXPOSE 179
 ENTRYPOINT ["ruby", "-I/app"]
+
+# The speaker plus the gobgp client, so a script can read GoBGP's RIB:
+#
+#   lab/fault_matrix.rb --rib-command 'gobgp -u 10.30.0.2 global rib'
+#
+# Without a RIB answer the matrix cannot tell RFC 7606 treat-as-withdraw
+# from attribute-discard, because both keep the session up. The client
+# talks gRPC on port 50051 to whatever host -u names, so it needs no
+# Docker socket and no shell in the router.
+#
+# The binary is copied out of the router image rather than downloaded, so
+# there is nothing to fetch and no version to keep in step by hand.
+# BuildKit builds only the stages the target needs, so --target test and
+# --target speaker never pull the router image.
+FROM ${GOBGP_IMAGE} AS gobgp-cli
+
+FROM speaker AS conformance
+COPY --from=gobgp-cli /usr/local/bin/gobgp /usr/local/bin/gobgp
