@@ -36,24 +36,25 @@
 # build, so it runs on an Apple Silicon Mac without emulation. The old
 # osrg/gobgp image on Docker Hub is amd64 only and years stale.
 #
-# The pin is 3.23.0, a release over two years old. That is deliberate,
-# and the reason is the config, not the router: gobgp.toml next to this
-# file is written for the 3.23 schema, which is the version it was
-# verified against and the version behind the results in
-# docs/protocol-testing.md. The router is pinned to match the config.
+# The pin is 4.10.0. It was 3.23.0 for a while, because gobgp.toml next
+# to this file was written against 3.23 and the router was pinned to
+# match the config. That turned out not to be needed: GoBGP 4 takes the
+# same TOML. Every key this config uses is still in the 4.x config
+# structs under the same mapstructure name, and 4.x registers
+# mapstructure's StringToNetIPAddrHookFunc, so the address fields still
+# decode from strings even though their Go type is now netip.Addr.
 #
-# So moving to a current GoBGP is a config job, not an image bump. It
-# means updating gobgp.toml here, and lab/conformance/gobgpd.conf, to
-# whatever the 4.x schema wants, then rerunning to see which verdicts
-# move. Worth doing: a conformance suite that only ever tests a router
-# from 2024 is testing the wrong thing.
+# Both images have a native linux/arm64 build, so either runs on an
+# Apple Silicon Mac without emulation. The old osrg/gobgp image on
+# Docker Hub is amd64 only and years stale; avoid that one.
 #
-# 4.x tags of this image exist. Try one without editing anything, and
-# read the router log if it will not start, which is where a rejected
-# config key shows up:
-#   GOBGP_IMAGE=jauderho/gobgp:v4.10.0 docker compose ... up
+# To go back to the version the notes in docs/protocol-testing.md were
+# measured against, or to try another:
+#   GOBGP_IMAGE=jauderho/gobgp:v3.23.0 docker compose ... up
 # To check a tag has arm64 before pulling it:
-#   docker buildx imagetools inspect jauderho/gobgp:v3.23.0
+#   docker buildx imagetools inspect jauderho/gobgp:v4.10.0
+# If a router will not start, its own log names the config key it
+# rejected.
 #
 # The image reads its config from /config/gobgp.toml and ships both the
 # daemon and the gobgp client, so this mounts the topology folder at
@@ -65,7 +66,7 @@ name: bgp4r-fault-matrix
 
 services:
   router:
-    image: ${GOBGP_IMAGE:-jauderho/gobgp:v3.23.0}
+    image: ${GOBGP_IMAGE:-jauderho/gobgp:v4.10.0}
     volumes:
       - ./:/config:ro
     networks:
@@ -79,7 +80,7 @@ services:
       target: conformance
       args:
         # Same default as the router above, so one GOBGP_IMAGE moves both.
-        GOBGP_IMAGE: ${GOBGP_IMAGE:-jauderho/gobgp:v3.23.0}
+        GOBGP_IMAGE: ${GOBGP_IMAGE:-jauderho/gobgp:v4.10.0}
     image: bgp4r-conformance
     command:
       - lab/fault_matrix.rb
