@@ -33,16 +33,52 @@ cd bgp4r
 ruby test/run_unit.rb
 ```
 
-The router does not have to be a container. FRR, BIRD and GoBGP are all
-packaged by Ubuntu and run fine as plain processes on loopback
-addresses:
+Then you need a router. How you get one depends on your machine, so the
+rest of this section splits in two. Everything after it is the same
+either way.
+
+### On a Mac with Docker
+
+FRR, BIRD and GoBGP are Linux daemons, so on macOS they run in
+containers. The quickest route is the ready made topology, which runs
+the whole fault catalog against GoBGP in one command:
+
+```
+docker compose -f lab/topologies/fault-matrix/compose.yml up --build \
+  --abort-on-container-exit --exit-code-from matrix
+```
+
+The annex at the end of this document covers that run in full. To drive
+a router by hand instead, start it in a container and point bgp4r at its
+address.
+
+One macOS difference worth knowing before you copy a command from the
+Linux path below. `lo0` has only 127.0.0.1 on it, so the extra loopback
+addresses the Linux examples use do not exist until you add them:
+
+```
+sudo ifconfig lo0 alias 127.0.0.2 up     # remove with -alias
+```
+
+That is per address and does not survive a reboot, which is the main
+reason containers are easier here.
+
+### On a Linux VM
+
+FRR, BIRD and GoBGP are all packaged by Ubuntu and run fine as plain
+processes:
 
 ```
 apt-get install -y frr bird2 gobgpd
 ```
 
+All of 127.0.0.0/8 is local on Linux, so several routers can run side by
+side on 127.0.0.2, 127.0.0.3 and 127.0.0.4 with no setup. That is how
+the results later in this document were produced.
+
 `lab/conformance/` has a working config for each, and `lab/README.md`
-explains how to run them side by side.
+explains how to run them side by side. The container topology works here
+too, if Docker is installed.
 
 ## Building messages
 
@@ -414,3 +450,120 @@ end
 
 `examples/unit-testing/` has working two peer tests that predate the
 fault layer and still show the shape.
+
+## Annex: running the fault matrix in containers
+
+Everything above runs the matrix by hand against a router you started
+yourself. `lab/topologies/fault-matrix` does the same run in one
+command, with GoBGP as the router, so it can go in CI.
+
+```
+docker compose -f lab/topologies/fault-matrix/compose.yml up --build \
+  --abort-on-container-exit --exit-code-from matrix
+echo "exit: $?"
+```
+
+The exit status is 0 when every answer agrees with the catalog. The
+matrix runs once and exits, which is why the run is in the foreground
+with `--abort-on-container-exit`. To read the results as JSON, copy them
+out after the run and take the topology down:
+
+```
+docker compose -f lab/topologies/fault-matrix/compose.yml cp \
+  matrix:/tmp/fault-matrix.json .
+docker compose -f lab/topologies/fault-matrix/compose.yml down
+```
+
+The addresses are fixed, because `lab/fault_matrix.rb` only listens and
+hangs up on any peer but the one given to `--peer`. The matrix is AS
+65001 on 10.30.0.1 and the router is AS 65002 on 10.30.0.2.
+
+Two variables are optional:
+
+| Variable | What it does |
+|---|---|
+| `GOBGP_IMAGE` | the router image, to pin a version or swap the router |
+| `FAULT_SETTLE` | seconds to wait after each fault, 2 by default |
+
+The default router image is community built and has a native
+`linux/arm64` build, so it runs on an Apple Silicon Mac without
+emulation. The `osrg/gobgp` image on Docker Hub is amd64 only and years
+stale, so avoid it there. The image reads `/config/gobgp.toml` and
+carries both the daemon and the `gobgp` client, which is why the
+topology mounts its folder at `/config` and does not override the
+command.
+
+The pin is 3.23.0, a release over two years old. That is deliberate, and
+the reason is the config rather than the router. `gobgp.toml` in the
+topology is written for the 3.23 schema. That is the version it was
+verified against, and the version that produced the results in the next
+section, so a container run is comparable to those results rather than
+being a separate data point. The router is pinned to match the config.
+
+Which means moving to a current GoBGP is a config job, not an image
+bump. It means updating `gobgp.toml` in the topology, and
+`lab/conformance/gobgpd.conf`, to whatever the 4.x schema wants, then
+rerunning to see which verdicts move. It is worth doing. A conformance
+suite that only ever tests a router from 2024 is testing the wrong
+thing, and the newer code is where a new divergence is most likely to
+be.
+
+4.x tags of the same image exist, so trying one needs no edit. If the
+daemon will not start, its log names the config key it rejected:
+
+```
+GOBGP_IMAGE=jauderho/gobgp:v4.10.0 docker compose \
+  -f lab/topologies/fault-matrix/compose.yml up --build \
+  --abort-on-container-exit --exit-code-from matrix
+```
+
+To check that a tag has an arm64 build before pulling it:
+
+```
+docker buildx imagetools inspect jauderho/gobgp:v3.37.0
+```
+
+`manifest unknown` means the tag is not there. Either way the test
+asserts only the two session reset cases, which follow from RFC 4271
+section 6.3 and should hold on any conformant version, while the finer
+verdicts can move between releases.
+
+A full run is roughly two to four minutes at the default settle. Raise
+`FAULT_SETTLE` if a slower machine reports faults with no session.
+
+### The test
+
+```
+LAB_REQUIRE_DOCKER=1 ruby -I. test/functional/lab/fault_matrix_test.rb
+```
+
+`test/functional/lab/fault_matrix_test.rb` runs the topology and asserts
+the session level answers: the two cases that must reset do reset, with
+NOTIFICATION subcodes 2 and 1, and no other case resets. It also fails
+if any fault got no session at all, because that means the harness lost
+the router rather than that the router answered. Without Docker the test
+is omitted, unless `LAB_REQUIRE_DOCKER=1` is set, as in CI.
+
+### What it does not cover
+
+The topology does not read the router's RIB, so it cannot tell
+treat-as-withdraw from attribute-discard. Both keep the session up, and
+only the RIB separates them. That is why the test asserts session
+outcomes alone: those hold for any conformant router, with no router
+specific command in the assertions.
+
+Adding the RIB would need the `gobgp` CLI inside the matrix container,
+which means either copying the binary between images or mounting the
+Docker socket. Until then, use `--rib-command` by hand, as in the
+sections above, and read the router's own log for anything that matters.
+
+### Two things worth knowing
+
+The matrix binds TCP 179 as a non-root user. That works because Docker
+sets `net.ipv4.ip_unprivileged_port_start=0` in a container's own
+network namespace. With `--network host` the host setting applies
+instead, and the bind fails.
+
+The results are copied out of a container that has already exited.
+`docker compose cp` resolves the service to its container either way, so
+it does not matter that the matrix finished.

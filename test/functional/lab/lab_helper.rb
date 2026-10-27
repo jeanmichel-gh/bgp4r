@@ -29,6 +29,7 @@ require 'json'
 require 'open3'
 require 'rbconfig'
 require 'socket'
+require 'timeout'
 require 'tmpdir'
 require 'fileutils'
 require 'yaml'
@@ -57,6 +58,25 @@ module LabHelper
 
     def up ; compose('up', '--detach', '--build') ; end
     def down ; compose('down', '--volumes', '--remove-orphans', '--timeout', '5') ; end
+
+    # For a topology whose point is one container running to completion:
+    # runs in the foreground until service exits and returns [output,
+    # that service's exit status]. Never raises on a non-zero status, the
+    # status is the answer.
+    def up_until_exit(service, timeout: 900)
+      out, status = Timeout.timeout(timeout) do
+        Open3.capture2e(@env, 'docker', 'compose', '-f', @file, 'up', '--build',
+                        '--abort-on-container-exit', '--exit-code-from', service)
+      end
+      [out, status.exitstatus]
+    end
+
+    # Copies a file out of a service's container into dir. Works after
+    # the container has exited, which is when a one-shot run is read.
+    def cp(service, path, dir)
+      compose('cp', "#{service}:#{path}", dir)
+    end
+
     def stop(node) ; compose('stop', '--timeout', '5', node) ; end
     def start(node) ; compose('start', node) ; end
     def logs ; compose('logs', '--no-color', check: false) ; end
