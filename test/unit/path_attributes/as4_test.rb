@@ -177,7 +177,11 @@ class TestAs4 < Test::Unit::TestCase
   end
 
   def test_empty_segment_from_the_wire_survives
-    pa = Path_attribute.new(Origin.new(0), As_path.new(['40020a0200020300645ba000c8'].pack('H*').b))
+    # is_packed, not b: As_path.new treats only a marked String as wire
+    # bytes. With a plain one it used to build an empty path in silence,
+    # so this guard asserted nothing. It now parses, two segments, the
+    # first of them empty.
+    pa = Path_attribute.new(Origin.new(0), As_path.new(['40020a0200020300645ba000c8'].pack('H*').is_packed))
     assert_nothing_raised { pa.as4_fixup }
     assert_equal pa.encode(false), pa.as4_fixup.encode(false)
   end

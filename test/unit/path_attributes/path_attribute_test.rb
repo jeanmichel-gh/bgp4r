@@ -205,19 +205,29 @@ class Path_attribute_Test < Test::Unit::TestCase # :nodoc:
     
   end
   
+  # The same five attributes added in two different orders: the lists
+  # encode differently, sort to the same bytes, and compare equal.
+  #
+  # The two AS_PATHs must stay identical, segment order included. They
+  # used to differ, 11 12 13 against 11 12 14 and set before sequence,
+  # and the test passed only because As_path.new ignored a bare segment
+  # hash and built an empty path from both. Once it honoured the hash
+  # the assertion below was false, because the paths really were
+  # different. Attribute order is what this test is about, so the fix is
+  # to make the paths equal, not to compare different ones.
   def test_9
-    pa1 = Path_attribute.new { |p|  
+    pa1 = Path_attribute.new { |p|
       p << Multi_exit_disc.new(222)
       p << Next_hop.new('1.1.1.1')
       p << Local_pref.new(333)
       p << As_path.new( :set=> [1,2,3,4], :sequence=> [11,12,13])
       p << Origin.new(1)
     }
-    pa2 = Path_attribute.new { |p|  
+    pa2 = Path_attribute.new { |p|
       p << Next_hop.new('1.1.1.1')
       p << Origin.new(1)
       p << Local_pref.new(333)
-      p << As_path.new(:sequence=> [11,12,14], :set=> [1,2,3,4])
+      p << As_path.new( :set=> [1,2,3,4], :sequence=> [11,12,13])
       p << Multi_exit_disc.new(222)
     }
     assert_not_equal(pa1.to_shex,pa2.to_shex)
