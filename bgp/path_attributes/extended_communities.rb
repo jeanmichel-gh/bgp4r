@@ -180,14 +180,22 @@ module BGP
     end
 
     def encode
-      super(@communities.collect { |comm| comm.encode }.join)
+      super(@communities.collect { |comm| comm.encode }.join + (@tail || ''))
     end
 
+    # RFC 4360 section 2: an extended community is 8 octets. Only whole
+    # ones go to the factory; octets past the last whole one are kept, so
+    # encode gives back what was received. A shorter slice used to reach
+    # the factory, and a known type and subtype pair gave a community
+    # with nil fields whose encode raised. RFC 7606 section 7.14 makes
+    # such an attribute malformed; Path_attribute#errors reports it.
     def parse(s)
       @flags, @type, _, value=super(s)
-      while value.size>0
+      @communities ||= []
+      while value.size>=8
         self << Extended_community.factory(value.slice!(0,8).is_packed)
       end
+      @tail = value.b if value.size>0
     end
 
     def sort

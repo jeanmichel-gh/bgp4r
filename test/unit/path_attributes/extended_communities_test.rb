@@ -245,4 +245,60 @@ class Extended_communitiesTest < Test::Unit::TestCase
     assert_equal(:vxlan, exc.encapsulation.tunnel_name)
   end
 
+  def wire(hex) [hex].pack('H*').is_packed end
+  def findings(hex)
+    Path_attribute.new(wire(hex)).errors.collect { |f| [f.type, f.subcode, f.action, f.reason] }
+  end
+
+  RT = '0002000100000001' # route target 1:1, RFC 4360 section 3.1
+
+  # RFC 4360 section 2: an extended community is 8 octets. A shorter
+  # slice is kept as a tail, so encode gives back what was received.
+  # Before this, the slice went to Extended_community.factory, and a
+  # known type and subtype pair gave a community with nil fields whose
+  # encode raised.
+  def test_a_tail_is_kept
+    { 'c010020002'             => 0, # known pair, two octet AS route target
+      'c010020102'             => 0, # known pair, ipv4 address route target
+      'c01002ffff'             => 0, # unknown pair
+      'c0100100'               => 0, # one octet
+      'c0100a' + RT + '0002'   => 1, # known pair after a whole community
+      'c0100a' + RT + 'ffff'   => 1, # unknown pair after a whole community
+      'c0100e' + RT + '000200010000' => 1,
+      'c01009' + RT + '00'     => 1,
+    }.each do |hex, n|
+      exc = Extended_communities.new(wire(hex))
+      assert_equal(hex, exc.to_shex, hex)
+      assert_equal(n, exc.communities.size, hex)
+      assert_equal(hex, Extended_communities.new(exc).to_shex, hex)
+      assert_equal(hex, Path_attribute.new(wire(hex)).to_shex, hex)
+    end
+  end
+
+  # RFC 7606 section 7.14: a length that is not a non-zero multiple of 8
+  # is malformed, treat-as-withdraw. Keeping the octets does not change
+  # what Path_attribute#errors reports.
+  def test_findings_are_unchanged
+    { 'c010020002'                   => 2,
+      'c01002ffff'                   => 2,
+      'c0100100'                     => 1,
+      'c0100a' + RT + '0002'         => 10,
+      'c0100a' + RT + 'ffff'         => 10,
+      'c0100e' + RT + '000200010000' => 14,
+    }.each do |hex, len|
+      assert_equal([[16, 5, :treat_as_withdraw,
+                     "length #{len}, must be a non-zero multiple of 8 (RFC 7606 section 7.14)"]],
+                   findings(hex), hex)
+    end
+  end
+
+  # A well formed attribute is unaffected.
+  def test_a_well_formed_attribute_is_unaffected
+    hex = 'c01008' + RT
+    exc = Extended_communities.new(wire(hex))
+    assert_equal(hex, exc.to_shex)
+    assert_equal([Route_target], exc.communities.collect { |c| c.class })
+    assert_equal([], findings(hex))
+  end
+
 end

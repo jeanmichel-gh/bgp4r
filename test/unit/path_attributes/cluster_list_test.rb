@@ -21,9 +21,14 @@
 #++
 
 require 'bgp/path_attributes/cluster_list'
-require 'test/unit'  
+require 'bgp/path_attributes/path_attribute'
+require 'test/unit'
 class Cluster_list_Test < Test::Unit::TestCase
   include BGP
+  def wire(hex) [hex].pack('H*').is_packed end
+  def findings(hex)
+    Path_attribute.new(wire(hex)).errors.collect { |f| [f.type, f.subcode, f.action, f.reason] }
+  end
   def test_1
     clist1 = Cluster_list.new('192.168.0.1','10.0.0.1')
     clist2 = Cluster_list.new('192.168.0.1 10.0.0.1')
@@ -45,5 +50,51 @@ class Cluster_list_Test < Test::Unit::TestCase
     assert_equal(['1.1.1.1', '2.2.2.2'], Cluster_list.new('1.1.1.1', '2.2.2.2').cluster_ids)
     cl = Cluster_list.new(Cluster_list.new('1.1.1.1', '2.2.2.2').encode)
     assert_equal(['1.1.1.1', '2.2.2.2'], cl.cluster_ids)
+  end
+
+  # RFC 4456 section 8: a CLUSTER_ID is 4 octets. Octets past the last
+  # whole one are kept, so encode gives back what was received, length
+  # field included.
+  def test_a_tail_is_kept
+    { '800a050101010102'         => ['1.1.1.1'],
+      '800a060101010102ff'       => ['1.1.1.1'],
+      '800a070101010102ff00'     => ['1.1.1.1'],
+      '800a090101010102020202ff' => ['1.1.1.1', '2.2.2.2'],
+    }.each do |hex, ids|
+      cl = Cluster_list.new(wire(hex))
+      assert_equal(hex, cl.to_shex, hex)
+      assert_equal(ids, cl.cluster_ids, hex)
+      assert_equal(hex, Cluster_list.new(cl).to_shex, hex)
+      assert_equal(hex, Path_attribute.new(wire(hex)).to_shex, hex)
+    end
+  end
+
+  # A tail with no whole CLUSTER_ID at all.
+  def test_a_tail_alone_is_kept
+    cl = Cluster_list.new(wire('800a02ffff'))
+    assert_equal('800a02ffff', cl.to_shex)
+    assert_equal([], cl.cluster_ids)
+  end
+
+  # RFC 7606 section 7.10: a length that is not a non-zero multiple of 4
+  # is malformed, treat-as-withdraw. Keeping the octets does not change
+  # what Path_attribute#errors reports.
+  def test_findings_are_unchanged
+    [['800a050101010102', 5], ['800a060101010102ff', 6], ['800a070101010102ff00', 7],
+     ['800a02ffff', 2]].each do |hex, len|
+      assert_equal([[10, 5, :treat_as_withdraw,
+                     "length #{len}, must be a non-zero multiple of 4 (RFC 7606 section 7.10)"]],
+                   findings(hex), hex)
+    end
+  end
+
+  # A well formed attribute is unaffected.
+  def test_a_well_formed_attribute_is_unaffected
+    hex = '800a08c0a800010a000001'
+    cl = Cluster_list.new(wire(hex))
+    assert_equal(hex, cl.to_shex)
+    assert_equal(['192.168.0.1', '10.0.0.1'], cl.cluster_ids)
+    assert_equal([], findings(hex))
+    assert_equal([], findings('800a0401010101'))
   end
 end
