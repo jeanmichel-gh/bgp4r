@@ -26,16 +26,96 @@ require 'test/unit'
 require 'tmpdir'
 require 'stringio'
 class Common_Test < Test::Unit::TestCase
+  # A stand in for a path attribute: to_shex and to_shex4 only care that
+  # encode and encode4 answer with wire bytes.
+  class Encoded
+    def initialize(hex, hex4)
+      @hex, @hex4 = hex, hex4
+    end
+    def encode(*args)
+      [@hex].pack('H*')
+    end
+    def encode4(*args)
+      [@hex4].pack('H*')
+    end
+  end
   def test_array_pack_returns_a_packed_string
     s = [1,2,3].pack('C*')
     assert(s.is_packed?)
     assert( ! "1234".is_packed?)
+  end
+  def test_is_packed_marks_a_string
+    s = String.new('0001')
+    assert( ! s.is_packed?)
+    assert_same(s, s.is_packed)
+    assert(s.is_packed?)
+    assert(s.packed?)
   end
   def test_ipaddr_create
     ip = IPAddr.new('10.0.0.1')
     assert_equal('0a000001', ip.to_shex)
     assert_equal('0a000001', IPAddr.create(ip.encode).to_shex)
     assert_equal('0a000001', IPAddr.create(ip.to_i).to_shex)
+  end
+  def test_ipaddr_create_from_a_byte_array
+    # Four octets of an IPv4 address as they come off the wire.
+    assert_equal('0a000001', IPAddr.create([10,0,0,1]).to_shex)
+    assert_equal('10.0.0.1', IPAddr.create([10,0,0,1]).to_s)
+    assert(IPAddr.create([10,0,0,1]).ipv4?)
+    # Sixteen octets make an IPv6 address.
+    v6 = IPAddr.create([0x20,0x01,0x0d,0xb8] + [0]*11 + [1])
+    assert(v6.ipv6?)
+    assert_equal('2001:db8::1', v6.to_s)
+  end
+  def test_ipaddr_create_edges
+    assert_equal('00000000', IPAddr.create(0).to_shex)
+    assert_equal('ffffffff', IPAddr.create(0xffffffff).to_shex)
+    assert_equal('255.255.255.255', IPAddr.create(0xffffffff).to_s)
+    assert_equal('0a000001', IPAddr.create('10.0.0.1').to_shex)
+    assert_equal('20010db8000000000000000000000001', IPAddr.create('2001:db8::1').to_shex)
+  end
+  def test_netmask_comes_from_the_standard_library
+    # ipaddr has had a compatible #netmask since Ruby 2.5, so the copy in
+    # common.rb is guarded out on every Ruby bgp4r supports and never runs.
+    # Assert that here, so a Ruby that drops #netmask is noticed in this
+    # file rather than somewhere far away.
+    assert(IPAddr.method_defined?(:netmask))
+    path, = IPAddr.instance_method(:netmask).source_location
+    assert_no_match(/bgp\/common\.rb\z/, path.to_s)
+  end
+  def test_my_caller_splits_a_caller_line_on_the_path_separator
+    assert_equal(['', 'usr', 'lib', 'bgp', 'common.rb:20'],
+                 my_caller('/usr/lib/bgp/common.rb:20'))
+    assert_equal(['common.rb:20'], my_caller('common.rb:20'))
+    assert_equal([], my_caller(''))
+  end
+  def test_to_shex_without_an_encode
+    # Anything that cannot encode hexlifies to the empty string rather
+    # than raising, because to_s of an attribute calls these blind.
+    assert_equal('', Object.new.to_shex)
+    assert_equal('', Object.new.to_s_hexlify)
+    assert_equal('', Object.new.to_shex4)
+    assert_equal('', Object.new.to_shex_len(20))
+    assert_equal('', Object.new.to_shex4_len(20))
+  end
+  def test_to_shex4_uses_encode4
+    # to_shex4 is the 4 byte AS form: it hexlifies encode4, not encode.
+    e = Encoded.new('4002080203000100020003', '40020e0203000000010000000200000003')
+    assert_equal('4002080203000100020003', e.to_shex)
+    assert_equal('40020e0203000000010000000200000003', e.to_shex4)
+    # An object with encode but no encode4 gets nothing from to_shex4.
+    only2 = IPAddr.new('10.0.0.1')
+    assert_equal('0a000001', only2.to_shex)
+    assert_equal('', only2.to_shex4)
+  end
+  def test_to_shex_len_truncates_past_the_given_length
+    e = Encoded.new('4002080203000100020003', '40020e0203000000010000000200000003')
+    # s[0..len] keeps len+1 characters, then marks the cut.
+    assert_equal('400208020300010002000...', e.to_shex_len(20))
+    assert_equal('40020e020300000001000...', e.to_shex4_len(20))
+    # Nothing to cut: the whole string, no ellipsis.
+    assert_equal(e.to_shex, e.to_shex_len(200))
+    assert_equal(e.to_shex4, e.to_shex4_len(200))
   end
   def test_ipaddr_netmask
     assert_equal(32, IPAddr.new('10.0.0.1').mlen)
@@ -122,6 +202,18 @@ class Common_Test < Test::Unit::TestCase
     assert_equal '0x0001:  1011 1213 1415 1617 1819 1a1b 1c1d 1e1f', sbin.hexlify[2]
     assert_equal '0x0002:  20', sbin.hexlify[3]
   end
+  def test_hexlify_edges
+    # A string that was never packed is not a hex dump candidate: it comes
+    # back as it is.
+    assert_equal('not packed', 'not packed'.hexlify)
+    # Nothing to dump.
+    assert_equal([''], [''].pack('H*').hexlify)
+    assert_equal('', String.new.hexlify.join)
+    # One trailing odd octet after a full 16 octet line.
+    sbin = ['000102030405060708090a0b0c0d0e0fff'].pack('H*')
+    assert_equal(['', '0x0000:  0001 0203 0405 0607 0809 0a0b 0c0d 0e0f', '0x0001:  ff'],
+                 sbin.hexlify)
+  end
   def save_log_state
     [Log.class_variable_get(:@@logger), (Log.class_variable_get(:@@time) if Log.class_variable_defined?(:@@time))]
   end
@@ -163,6 +255,88 @@ class Common_Test < Test::Unit::TestCase
     Log.class_variable_set(:@@time, Time.now - 3600)
     Log.time_reset
     assert_operator(Time.now - Log.class_variable_get(:@@time), :<, 5)
+  ensure
+    restore_log_state(state)
+  end
+  def test_log_start_creates_one_logger
+    state = save_log_state
+    Log.class_variable_set(:@@logger, nil)
+    logger = Log.start(StringIO.new)
+    assert_kind_of(Log, logger)
+    assert_same(logger, Log.class_variable_get(:@@logger))
+    # Log.create is memoized: a second start keeps the first logger.
+    assert_same(logger, Log.start(StringIO.new))
+  ensure
+    restore_log_state(state)
+  end
+  def test_log_level
+    state = save_log_state
+    Log.class_variable_set(:@@logger, nil)
+    Log.start(StringIO.new)
+    { Logger::DEBUG => "(0) 'DEBUG'",
+      Logger::INFO  => "(1) 'INFO'",
+      Logger::WARN  => "(2) 'WARN'",
+      Logger::ERROR => "(3) 'ERROR'",
+      Logger::FATAL => "(4) 'FATAL'" }.each { |level, name|
+      Log.level = level
+      assert_equal(name, Log.level)
+      assert_equal(level, Log.class_variable_get(:@@logger).level)
+    }
+    # Out of range is ignored rather than raised, and nothing moves.
+    Log.level = 5
+    assert_equal("(4) 'FATAL'", Log.level)
+    Log.level = -1
+    assert_equal("(4) 'FATAL'", Log.level)
+  ensure
+    restore_log_state(state)
+  end
+  def test_log_writes_every_severity
+    state = save_log_state
+    io = StringIO.new
+    Log.class_variable_set(:@@logger, nil)
+    Log.start(io)
+    Log.level = Logger::DEBUG
+    Log.debug 'a debug line'
+    Log.info 'an info line'
+    Log.warn 'a warn line'
+    Log.error 'an error line'
+    Log.fatal 'a fatal line'
+    out = io.string
+    assert_match(/DEBUG -- : a debug line$/, out)
+    assert_match(/INFO -- : an info line$/, out)
+    assert_match(/WARN -- : a warn line$/, out)
+    assert_match(/ERROR -- : an error line$/, out)
+    assert_match(/FATAL -- : a fatal line$/, out)
+  ensure
+    restore_log_state(state)
+  end
+  def test_log_direction_markers
+    state = save_log_state
+    io = StringIO.new
+    Log.class_variable_set(:@@logger, nil)
+    Log.start(io)
+    Log.time_reset
+    Log << 'sent an open'
+    Log >> 'got a keepalive'
+    lines = io.string.lines.collect { |l| l.chomp }
+    assert_match(/\A<< \d+\.\d{6}: sent an open\z/, lines[0])
+    assert_match(/\A>> \d+\.\d{6}: got a keepalive\z/, lines[1])
+  ensure
+    restore_log_state(state)
+  end
+  def test_log_is_quiet_with_no_logger
+    state = save_log_state
+    Log.class_variable_set(:@@logger, nil)
+    Log.time_reset
+    assert_nothing_raised do
+      Log.debug 'x'
+      Log.info 'x'
+      Log.warn 'x'
+      Log.error 'x'
+      Log.fatal 'x'
+      Log << 'x'
+      Log >> 'x'
+    end
   ensure
     restore_log_state(state)
   end
