@@ -53,6 +53,7 @@ The speakers run as the non-root user `bgp` and still listen on TCP 179. Docker 
 |---|---|
 | `two-speakers` | eBGP between AS 65001 and AS 65002 on one link. r2 connects, r1 waits. Routes cross both ways with AS_PATH, NEXT_HOP, MED and communities. |
 | `routegen` | A dockerized routegen. gen (AS 65001, 10.20.0.1) connects and sends 10000 generated prefixes. sink (AS 65002, 10.20.0.2) waits, counts them and times them. |
+| `fault-matrix` | Every `BGP::Fault::CATALOG` case sent to GoBGP. matrix (AS 65001, 10.30.0.1) listens, router (AS 65002, 10.30.0.2) connects. The matrix runs once and exits with 0 when every answer agrees. |
 
 ## Node file
 
@@ -164,6 +165,33 @@ The peer must negotiate every address family the catalog uses, IPv6
 unicast included: the duplicate MP_REACH_NLRI case carries IPv6 NLRI,
 and a router that never agreed to IPv6 resets over the address family
 instead of the duplicate.
+
+### In containers
+
+`lab/topologies/fault-matrix` runs the whole catalog against GoBGP in one
+command. The matrix runs once and exits, so run it in the foreground and
+take its exit status:
+
+```
+docker compose -f lab/topologies/fault-matrix/compose.yml up --build \
+  --abort-on-container-exit --exit-code-from matrix
+docker compose -f lab/topologies/fault-matrix/compose.yml cp \
+  matrix:/tmp/fault-matrix.json .
+docker compose -f lab/topologies/fault-matrix/compose.yml down
+```
+
+The exit status is 0 when every answer agrees with the catalog. Two
+variables are optional. `GOBGP_IMAGE` pins the router image or swaps the
+router. `FAULT_SETTLE` is the wait after each fault, 2 seconds by
+default; raise it if a slower machine reports faults with no session.
+
+`test/functional/lab/fault_matrix_test.rb` runs the same topology and
+asserts the session level answers: the two cases that must reset do
+reset, with NOTIFICATION subcodes 2 and 1, and no other case resets.
+That half of RFC 7606 needs no look at the router's RIB, so it holds for
+any conformant router. Telling treat-as-withdraw from attribute-discard
+does need the RIB, and the topology does not read it, so run the matrix
+by hand with `--rib-command` for that.
 
 ### Running it without containers
 

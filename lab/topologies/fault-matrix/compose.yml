@@ -1,0 +1,63 @@
+# The RFC 7606 fault matrix against a real router.
+#
+#   matrix  AS 65001  10.30.0.1  listens, sends every BGP::Fault::CATALOG case
+#   router  AS 65002  10.30.0.2  GoBGP, dials the matrix
+#
+# lab/fault_matrix.rb only listens, and it hangs up on any peer but the
+# one given to --peer, so both sides need fixed addresses.
+#
+# The matrix runs once and exits. Run it in the foreground and take its
+# exit status, which is 0 when every answer agrees with the catalog:
+#
+#   docker compose -f lab/topologies/fault-matrix/compose.yml up --build \
+#     --abort-on-container-exit --exit-code-from matrix
+#   docker compose -f lab/topologies/fault-matrix/compose.yml cp \
+#     matrix:/tmp/fault-matrix.json .
+#   docker compose -f lab/topologies/fault-matrix/compose.yml down
+#
+# Two knobs, both optional:
+#   GOBGP_IMAGE   the router image, to pin a version or swap the router
+#   FAULT_SETTLE  seconds to wait after each fault, default 2
+
+name: bgp4r-fault-matrix
+
+services:
+  router:
+    image: ${GOBGP_IMAGE:-ghcr.io/osrg/gobgp:latest}
+    command: ["gobgpd", "-f", "/topology/gobgpd.conf", "-t", "toml"]
+    volumes:
+      - ./:/topology:ro
+    networks:
+      link:
+        ipv4_address: 10.30.0.2
+    stop_grace_period: 5s
+
+  matrix:
+    build:
+      context: ../../..
+      target: speaker
+    image: bgp4r-speaker
+    command:
+      - lab/fault_matrix.rb
+      - --peer=10.30.0.2
+      - --peer-as=65002
+      - --listen=10.30.0.1
+      - --my-as=65001
+      - --id=10.30.0.1
+      - --next-hop=10.30.0.1
+      - --settle=${FAULT_SETTLE:-2}
+      - --json=/tmp/fault-matrix.json
+    depends_on:
+      - router
+    networks:
+      link:
+        ipv4_address: 10.30.0.1
+    stop_grace_period: 5s
+
+networks:
+  link:
+    ipam:
+      config:
+        # The gateway is off .1 and .2 so the two nodes can use them.
+        - subnet: 10.30.0.0/24
+          gateway: 10.30.0.254
