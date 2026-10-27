@@ -255,7 +255,13 @@ module BGP
   # {:route_target=>[1,2]} that new_hash itself takes. A list of
   # community hashes, the shape to_hash returns, reads the same either
   # way.
-  Attr.register(ATTR::EXTENDED_COMMUNITY, Extended_communities, :extended_communities, :extended_community) { |v| Extended_communities.new_hash(v) }
+  # No builder block: the default one calls new, which since it learned
+  # the hash shapes takes everything new_hash takes and everything else
+  # besides, so the :extended_communities key accepts what the
+  # constructor accepts. A block calling new_hash made the key narrower
+  # than the class, and refused the plain forms:
+  # Path_attribute.new(:extended_communities => ['0002000100000001']).
+  Attr.register(ATTR::EXTENDED_COMMUNITY, Extended_communities, :extended_communities, :extended_community)
 
 end
 
