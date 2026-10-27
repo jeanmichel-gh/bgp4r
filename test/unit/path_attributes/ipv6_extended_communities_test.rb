@@ -121,4 +121,33 @@ class TestIpv6ExtendedCommunities < Test::Unit::TestCase
     assert_equal [[25, 4, :treat_as_withdraw]], pa.errors.collect { |f| [f.type, f.subcode, f.action] }
   end
 
+  # to_hash used to drop the kept octets, so a malformed attribute came
+  # back byte for byte through encode but not through a hash. The tail
+  # travels as a {:tail=>hex} entry at the end of the list, which new
+  # takes back.
+  def test_to_hash_keeps_trailing_octets
+    comm = Comm.new(:route_target, '2001:db8::1', 100).to_hash
+    { 'c01915' + RT + '00'    => [comm, {:tail=>'00'}],
+      'c01902' + 'ffff'       => [{:tail=>'ffff'}],
+    }.each do |hex, list|
+      i6 = Ipv6_extended_communities.new(wire(hex))
+      assert_equal({:ipv6_extended_communities=>list}, i6.to_hash, hex)
+      assert_equal hex, Ipv6_extended_communities.new(i6.to_hash).to_shex, hex
+      assert_equal i6.to_hash, Ipv6_extended_communities.new(i6.to_hash).to_hash, hex
+      assert_equal hex, Path_attribute.new(Path_attribute.new(wire(hex)).to_hash).to_shex, hex
+      # Keeping the octets does not change what Path_attribute#errors says.
+      assert_equal [[25, 5, :treat_as_withdraw]],
+                   Path_attribute.new(wire(hex)).errors.collect { |f| [f.type, f.subcode, f.action] }, hex
+    end
+  end
+
+  # The hash of a well formed attribute is the plain list it was.
+  def test_a_well_formed_hash_is_unchanged
+    i6 = Ipv6_extended_communities.new(wire('c01914' + RT))
+    assert_nil i6.tail
+    assert_equal({:ipv6_extended_communities=>[Comm.new(:route_target, '2001:db8::1', 100).to_hash]},
+                 i6.to_hash)
+    assert_equal i6.encode, Ipv6_extended_communities.new(i6.to_hash).encode
+  end
+
 end

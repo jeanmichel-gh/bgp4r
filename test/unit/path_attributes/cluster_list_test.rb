@@ -81,7 +81,7 @@ class Cluster_list_Test < Test::Unit::TestCase
   # what Path_attribute#errors reports.
   def test_findings_are_unchanged
     [['800a050101010102', 5], ['800a060101010102ff', 6], ['800a070101010102ff00', 7],
-     ['800a02ffff', 2]].each do |hex, len|
+     ['800a02ffff', 2], ['800a090202020201010101ff', 9]].each do |hex, len|
       assert_equal([[10, 5, :treat_as_withdraw,
                      "length #{len}, must be a non-zero multiple of 4 (RFC 7606 section 7.10)"]],
                    findings(hex), hex)
@@ -96,5 +96,42 @@ class Cluster_list_Test < Test::Unit::TestCase
     assert_equal(['192.168.0.1', '10.0.0.1'], cl.cluster_ids)
     assert_equal([], findings(hex))
     assert_equal([], findings('800a0401010101'))
+  end
+
+  # sort and to_hash used to drop the kept octets, so a malformed
+  # attribute came back byte for byte through encode but not through a
+  # hash. The tail travels as a {:tail=>hex} entry at the end of the
+  # list, which new takes back.
+  def test_sort_and_to_hash_keep_a_tail
+    { '800a050101010102'         => ['1.1.1.1', {:tail=>'02'}],
+      '800a090202020201010101ff' => ['2.2.2.2', '1.1.1.1', {:tail=>'ff'}],
+      '800a02ffff'               => [{:tail=>'ffff'}],
+    }.each do |hex, list|
+      cl = Cluster_list.new(wire(hex))
+      assert_equal({:cluster_list=>list}, cl.to_hash, hex)
+      assert_equal(hex, Cluster_list.new(cl.to_hash).to_shex, hex)
+      assert_equal(cl.to_hash, Cluster_list.new(cl.to_hash).to_hash, hex)
+      assert_equal(hex, Path_attribute.new(Path_attribute.new(wire(hex)).to_hash).to_shex, hex)
+      # sort and sort! change the order of the ids, never the tail.
+      assert_equal(hex.size, cl.sort.to_shex.size, hex)
+      assert_equal(hex.size, Cluster_list.new(wire(hex)).sort!.to_shex.size, hex)
+    end
+    cl = Cluster_list.new(wire('800a090202020201010101ff'))
+    assert_equal('800a090101010102020202ff', cl.sort.to_shex)
+    assert_equal(['1.1.1.1', '2.2.2.2', {:tail=>'ff'}], cl.sort.to_hash[:cluster_list])
+    assert_equal('800a090101010102020202ff', cl.sort!.to_shex)
+    cl = Cluster_list.new(wire('800a02ffff'))
+    assert_equal('800a02ffff', cl.sort.to_shex)
+    assert_equal('800a02ffff', cl.sort!.to_shex)
+  end
+
+  # The hash of a well formed attribute is the plain list it was.
+  def test_a_well_formed_hash_is_unchanged
+    cl = Cluster_list.new('2.2.2.2', '1.1.1.1')
+    assert_nil(cl.tail)
+    assert_equal({:cluster_list=>['2.2.2.2', '1.1.1.1']}, cl.to_hash)
+    assert_equal({:cluster_list=>['1.1.1.1', '2.2.2.2']}, cl.sort.to_hash)
+    assert_equal({:cluster_list=>['1.1.1.1', '2.2.2.2']}, cl.sort!.to_hash)
+    assert_equal(cl.encode, Cluster_list.new(cl.to_hash).encode)
   end
 end

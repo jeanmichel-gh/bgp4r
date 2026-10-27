@@ -229,6 +229,47 @@ class Communities_Test < Test::Unit::TestCase
     assert_equal hex, com.to_shex
     assert_equal [], Path_attribute.new(wire(hex)).errors
   end
+
+  # sort and to_hash used to drop the kept octets, so a malformed
+  # attribute came back byte for byte through encode but not through a
+  # hash. The tail travels as a {:tail=>hex} entry at the end of the
+  # list, which new and new_hash take back.
+  def test_sort_and_to_hash_keep_trailing_octets
+    { 'c00805' + '00010001' + '02'              => ['1:1', {:tail=>'02'}],
+      'c00809' + '00020002' + '00010001' + 'ff' => ['2:2', '1:1', {:tail=>'ff'}],
+      'c0080300ff00'                            => [{:tail=>'00ff00'}],
+    }.each do |hex, list|
+      com = Communities.new(wire(hex))
+      assert_equal({:communities=>list}, com.to_hash, hex)
+      assert_equal hex, Communities.new(com.to_hash).to_shex, hex
+      assert_equal hex, Communities.new_hash(com.to_hash).to_shex, hex
+      assert_equal com.to_hash, Communities.new(com.to_hash).to_hash, hex
+      assert_equal hex, Path_attribute.new(Path_attribute.new(wire(hex)).to_hash).to_shex, hex
+    end
+    sorted = 'c00809' + '00010001' + '00020002' + 'ff'
+    com = Communities.new(wire('c00809' + '00020002' + '00010001' + 'ff'))
+    assert_equal sorted, com.sort.to_shex
+    assert_equal ['1:1', '2:2', {:tail=>'ff'}], com.sort.to_hash[:communities]
+    assert_equal sorted, com.sort!.to_shex
+    # Keeping the octets does not change what Path_attribute#errors says.
+    [['c00805' + '00010001' + '02', 5], ['c00809' + '00020002' + '00010001' + 'ff', 9],
+     ['c0080300ff00', 3]].each do |hex, len|
+      pa = Path_attribute.new(wire(hex))
+      assert_equal [[8, 5, :treat_as_withdraw,
+                     "length #{len}, must be a non-zero multiple of 4 (RFC 7606 section 7.8)"]],
+                   pa.errors.collect { |f| [f.type, f.subcode, f.action, f.reason] }, hex
+    end
+  end
+
+  # The hash of a well formed attribute is the plain list it was.
+  def test_a_well_formed_hash_is_unchanged
+    com = Communities.new('2:2', '1:1')
+    assert_nil com.tail
+    assert_equal({:communities=>['2:2', '1:1']}, com.to_hash)
+    assert_equal({:communities=>['1:1', '2:2']}, com.sort.to_hash)
+    assert_equal com.encode, Communities.new(com.to_hash).encode
+    assert_equal com.encode, Communities.new_hash(com.to_hash).encode
+  end
 end
 
 #MiniTest::Unit.autorun

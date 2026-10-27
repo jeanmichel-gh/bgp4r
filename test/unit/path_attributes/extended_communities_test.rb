@@ -279,7 +279,9 @@ class Extended_communitiesTest < Test::Unit::TestCase
   # is malformed, treat-as-withdraw. Keeping the octets does not change
   # what Path_attribute#errors reports.
   def test_findings_are_unchanged
-    { 'c010020002'                   => 2,
+    { 'c01009' + RT + 'ff'           => 9,
+      'c01011' + '0002000200000002' + RT + 'ff' => 17,
+      'c010020002'                   => 2,
       'c01002ffff'                   => 2,
       'c0100100'                     => 1,
       'c0100a' + RT + '0002'         => 10,
@@ -299,6 +301,73 @@ class Extended_communitiesTest < Test::Unit::TestCase
     assert_equal(hex, exc.to_shex)
     assert_equal([Route_target], exc.communities.collect { |c| c.class })
     assert_equal([], findings(hex))
+  end
+
+  # The hash form used to work through Path_attribute.new, which builds
+  # with new_hash, and not through the extended_communities= setter,
+  # which calls new: new sent the hash to Extended_community.factory and
+  # it raised NoMethodError. new takes every shape new_hash takes now.
+  def test_the_hash_form_works_through_every_door
+    [ {:route_target=>[1, 2]},
+      [{:route_target=>[1, 2]}],
+      [{:route_target=>[1, 2]}, {:color=>100}],
+      {:route_target=>[1, 2], :color=>100},
+      {:extended_communities=>[{:route_target=>[1, 2]}]},
+    ].each do |h|
+      hex = Extended_communities.new_hash(h).to_shex
+      assert_equal(hex, Extended_communities.new(h).to_shex, h.inspect)
+      assert_equal(hex, Path_attribute.new(:extended_communities=>h)[:extended_communities].to_shex, h.inspect)
+      pa = Path_attribute.new
+      pa.extended_communities = h
+      assert_equal(hex, pa[:extended_communities].to_shex, h.inspect)
+      assert_equal(hex, pa.extended_communities.to_shex, h.inspect)
+    end
+    assert_equal('c010080002000100000002',
+                 Extended_communities.new(:route_target=>[1, 2]).to_shex)
+  end
+
+  # The setter takes the hash to_hash returns, tail and all.
+  def test_the_setter_takes_the_hash_to_hash_returns
+    [Extended_communities.new(Route_target.new(1, 2), Color.new(100)),
+     Extended_communities.new(wire('c01009' + RT + 'ff'))].each do |exc|
+      pa = Path_attribute.new
+      pa.extended_communities = exc.to_hash
+      assert_equal(exc.to_shex, pa.extended_communities.to_shex)
+      assert_equal(exc.to_hash, pa.extended_communities.to_hash)
+    end
+  end
+
+  # sort and to_hash used to drop the kept octets, so a malformed
+  # attribute came back byte for byte through encode but not through a
+  # hash. The tail travels as a {:tail=>hex} entry at the end of the
+  # list, which new and new_hash take back.
+  def test_sort_and_to_hash_keep_a_tail
+    { 'c01009' + RT + 'ff'     => [{:route_target=>[1, 1]}, {:tail=>'ff'}],
+      'c0100a' + RT + '0002'   => [{:route_target=>[1, 1]}, {:tail=>'0002'}],
+      'c01002ffff'             => [{:tail=>'ffff'}],
+    }.each do |hex, list|
+      exc = Extended_communities.new(wire(hex))
+      assert_equal({:extended_communities=>list}, exc.to_hash, hex)
+      assert_equal(hex, exc.sort.to_shex, hex)
+      assert_equal(hex, Extended_communities.new(wire(hex)).sort!.to_shex, hex)
+      assert_equal(hex, Extended_communities.new(exc.to_hash).to_shex, hex)
+      assert_equal(hex, Extended_communities.new_hash(exc.to_hash).to_shex, hex)
+      assert_equal(exc.to_hash, Extended_communities.new(exc.to_hash).to_hash, hex)
+      assert_equal(hex, Path_attribute.new(Path_attribute.new(wire(hex)).to_hash).to_shex, hex)
+    end
+    # sort reorders the communities and leaves the tail where it is.
+    exc = Extended_communities.new(wire('c01011' + '0002000200000002' + RT + 'ff'))
+    assert_equal('c01011' + RT + '0002000200000002' + 'ff', exc.sort.to_shex)
+    assert_equal('c01011' + RT + '0002000200000002' + 'ff', exc.sort!.to_shex)
+  end
+
+  # The hash of a well formed attribute is the plain list it was.
+  def test_a_well_formed_hash_is_unchanged
+    exc = Extended_communities.new(Route_target.new(1, 1), Color.new(100))
+    assert_nil(exc.tail)
+    assert_equal({:extended_communities=>[{:route_target=>[1, 1]}, {:color=>100}]}, exc.to_hash)
+    assert_equal({:extended_communities=>[{:route_target=>[1, 1]}, {:color=>100}]}, exc.sort.to_hash)
+    assert_equal(exc.encode, Extended_communities.new(exc.to_hash).encode)
   end
 
 end

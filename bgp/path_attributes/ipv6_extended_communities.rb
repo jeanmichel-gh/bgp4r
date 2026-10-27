@@ -157,7 +157,7 @@ module BGP
     # Adds values: Ipv6_extended_community objects, [subtype, ipv6, local]
     # arrays, or hashes as to_hash gives them. Returns self.
     def add(*args)
-      args.each do |arg|
+      take_tail(args).each do |arg|
         if arg.is_a?(Array) and not (arg.size == 3 and (arg[0].is_a?(Symbol) or arg[0].is_a?(Integer)))
           add(*arg)      # a list of values
           next
@@ -191,8 +191,11 @@ module BGP
       super(@communities.collect(&:to_s).join(', '), method)
     end
 
+    # The values, plus a {:tail=>hex} entry when octets were kept
+    # (Attr::TAIL_KEY), so the hash of a malformed attribute round trips
+    # byte for byte through new.
     def to_hash
-      { :ipv6_extended_communities => @communities.collect(&:to_hash) }
+      { :ipv6_extended_communities => @communities.collect(&:to_hash) + [tail_entry].compact }
     end
 
     def encode

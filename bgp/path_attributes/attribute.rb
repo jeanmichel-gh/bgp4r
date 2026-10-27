@@ -282,6 +282,41 @@ module BGP
       end
     end 
 
+    # Octets that parsing could not interpret are kept in @tail, so that
+    # encode gives back what arrived (see each attribute's parse). The
+    # hash forms carry them as one {:tail=>hex} entry at the end of the
+    # value list, so sort, sort! and to_hash keep them too. An attribute
+    # with no tail has no such entry, so its hash is the plain list it
+    # has always been.
+    #
+    # Nothing is checked here: the octets a caller gives are the octets
+    # sent, as everywhere else in the building path.
+    TAIL_KEY = :tail
+
+    # True for a {:tail=>hex} entry of a hash form value list.
+    def self.tail_entry?(arg)
+      arg.is_a?(Hash) and arg.size == 1 and arg.has_key?(TAIL_KEY)
+    end
+
+    # The octets kept past the last whole value, or nil.
+    def tail
+      (defined?(@tail) && @tail) || nil
+    end
+
+    # The {:tail=>hex} entry for the end of a to_hash value list, or nil
+    # when there is no tail.
+    def tail_entry
+      { TAIL_KEY => tail.unpack1('H*') } if tail
+    end
+
+    # Keeps the octets of the {:tail=>hex} entries in args, and returns
+    # the arguments that are left. The last entry wins.
+    def take_tail(args)
+      tails, rest = args.partition { |arg| Attr.tail_entry?(arg) }
+      @tail = [tails.last[TAIL_KEY].to_s].pack('H*') unless tails.empty?
+      rest
+    end
+
     # One registered path attribute class.
     # session is nil, :as4byte or :path_id: the session info that
     # Attr.factory passes to new when it parses wire bytes.
