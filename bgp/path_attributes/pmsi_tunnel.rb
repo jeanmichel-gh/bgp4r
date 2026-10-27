@@ -74,7 +74,10 @@ module BGP
         parse(args[0].encode)
       elsif args.size == 1 and args[0].is_a?(Hash)
         h = args[0]
-        build(h[:tunnel_type], h[:identifier],
+        take_tail_key(h)
+        # A hash from a value too short to hold the fixed part carries
+        # the kept octets and nothing else, so the fields start at zero.
+        build(h[:tunnel_type] || (tail && NO_TUNNEL), h[:identifier],
               :label => h[:label], :flags => h[:flags],
               :leaf_info_required => h[:leaf_info_required])
       else
@@ -105,7 +108,13 @@ module BGP
             "#{leaf_info_required? ? ', leaf info required' : ''}", method)
     end
 
+    # The fields, or just a :tail key (Attr::TAIL_KEY) holding the octets
+    # kept from a value too short to read, so the hash of a malformed
+    # attribute round trips byte for byte through new. The key sits in
+    # the nested hash, where the attributes that hash a value list carry
+    # a {:tail=>hex} entry instead.
     def to_hash
+      return { :pmsi_tunnel => tail_entry } if tail
       h = { :tunnel_type => tunnel_name || @tunnel_type }
       h[:identifier] = identifier_hash unless @identifier.empty?
       h[:label] = @label if @label
@@ -117,7 +126,7 @@ module BGP
     # RFC 6514 section 5: flags, tunnel type, 3 octet label, identifier.
     # A value too short to hold the fixed part is written back as it came.
     def encode
-      return super(@short) if @short
+      return super(tail) if tail
       field = @label ? (@label << 4) : 0
       super([@pmsi_flags, @tunnel_type, field >> 16, field & 0xffff].pack('CCCn') + @identifier)
     end
@@ -190,13 +199,13 @@ module BGP
       end
     end
 
-    # A value shorter than the 5 octet fixed part is kept as it came, so
-    # encode gives back what was received. RFC 6514 section 5 makes such
-    # an attribute malformed; Path_attribute#errors reports it.
+    # A value shorter than the 5 octet fixed part is kept in @tail as it
+    # came, so encode gives back what was received. RFC 6514 section 5
+    # makes such an attribute malformed; Path_attribute#errors reports it.
     def parse(s)
       @flags, @type, _, value = super(s)
       if value.size < 5
-        @short = value.b
+        @tail = value.b
         @pmsi_flags, @tunnel_type, @label, @identifier = 0, 0, nil, ''.b
         return
       end

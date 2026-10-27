@@ -144,6 +144,32 @@ class TestPrefixSid < Test::Unit::TestCase
     assert_equal [], Path_attribute.new(Prefix_sid.new(Label_index.new(100))).validate
   end
 
+  # RFC 8669 section 3: octets parsing cannot interpret are kept, and the
+  # hash carries them as a :tail key (Attr::TAIL_KEY) inside the nested
+  # hash, so a to_hash round trip is byte for byte on a malformed
+  # attribute too.
+  def test_hash_round_trip_keeps_the_tail
+    # value octets, and the octets parse keeps out of them.
+    [['0100',           '0100'],
+     ['01ffff00',       '01ffff00'],
+     [LI100 + '0100',   '0100']].each do |value_hex, tail_hex|
+      a = Prefix_sid.new(wire(attr_hex(value_hex)))
+      h = a.to_hash
+      assert_equal attr_hex(value_hex), a.to_shex
+      assert_equal tail_hex, h[:prefix_sid][:tail], h.inspect
+      assert_equal a.encode, Prefix_sid.new(h[:prefix_sid]).encode, h.inspect
+      pa = Path_attribute.new(:origin => :igp, :prefix_sid => h[:prefix_sid])
+      assert_equal a.encode, pa[:prefix_sid].encode
+      assert_equal pa.encode, Path_attribute.new(pa.to_hash).encode
+    end
+  end
+
+  # An attribute with no tail hashes as it always has.
+  def test_hash_has_no_tail_key_without_a_tail
+    h = Prefix_sid.new(Label_index.new(100)).to_hash
+    assert_equal({:prefix_sid => {:label_index => 100}}, h)
+  end
+
   # Building never refuses: a test can send any TLV length.
   def test_bad_tlvs_can_be_built
     a = Prefix_sid.new(Tlv.new(1, "\x00".b))
