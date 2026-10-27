@@ -304,6 +304,19 @@ module BGP
       end
     end
 
+    # The names method_missing resolves, and no others. It sends
+    # new_<x> to As_path, so As_path is the one that knows which names
+    # those are: as_path_bogus= matches the pattern but raises
+    # NoMethodError on the send, and answers false here with it. Every
+    # accessor the registry defines, pa.origin and pa.origin= among
+    # them, is a real method and never reaches this.
+    def respond_to_missing?(name, include_private = false)
+      m = /^as_path_(.+)=$/.match(name.to_s)
+      # send reaches a private singleton method, so respond_to? here does too.
+      return true if m and As_path.respond_to?("new_#{m[1]}", true)
+      super
+    end
+
   end
 end
 

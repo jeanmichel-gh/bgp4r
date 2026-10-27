@@ -438,6 +438,32 @@ class Path_attribute_Test < Test::Unit::TestCase # :nodoc:
     assert_raise(NoMethodError) { pa.as_path_bogus = [1] }
   end
 
+  # respond_to? has to agree with method_missing: true for every
+  # as_path_<x>= name it resolves, false for the ones it hands to
+  # NoMethodError. Without respond_to_missing? they were all false, so
+  # duck typing on the setter saw nothing and pa.method(:as_path_set=)
+  # raised NameError although the call worked.
+  def test_respond_to_the_as_path_builder_setters
+    pa = Path_attribute.new(Origin.new(:igp))
+    %w{ hash set sequence confed_set confed_sequence }.each do |builder|
+      assert(pa.respond_to?("as_path_#{builder}="), builder)
+      assert(pa.respond_to?("as_path_#{builder}=", true), builder)
+    end
+    # There is no As_path.new_bogus, so the call raises NoMethodError and
+    # respond_to? says false with it. Nor is there a getter form.
+    assert(!pa.respond_to?(:as_path_bogus=))
+    assert(!pa.respond_to?(:as_path_=))
+    assert(!pa.respond_to?(:as_path_sequence))
+    assert(!pa.respond_to?(:no_such_attr=))
+    # The accessors the registry defines are real methods, and still answer.
+    assert(pa.respond_to?(:origin=))
+    assert(pa.respond_to?(:med=))
+    assert(pa.respond_to?(:as_path))
+    # method works once respond_to_missing? says true.
+    pa.method(:as_path_sequence=).call([1, 2, 3])
+    assert_equal('1 2 3', pa.as_path.as_path)
+  end
+
   def test_unknown_hash_key_raises_quietly
     out, $stdout = $stdout, StringIO.new
     assert_raise(ArgumentError) { Path_attribute.new(:no_such_attr=>1) }
