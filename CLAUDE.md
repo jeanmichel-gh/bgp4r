@@ -79,6 +79,11 @@ There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Cove
 
 ## Conventions
 
+* **Building and encoding are never validated, and that is a feature.** This library is used for negative testing: it has to put bytes on the wire that no RFC allows, so a real router can be watched handling them. Any attribute, any length, any combination, any flags. Never add a check to a constructor, to `encode`, or to `to_hash` that refuses something merely invalid. Removing that ability breaks the main reason the library exists.
+  * Validation lives in exactly one place, `bgp/path_attributes/validation.rb`, and runs only when parsing what was received. It is reported through `Path_attribute#errors` and raised only under the `:strict` receive policy. Add a rule there, with its RFC section, never in the attribute.
+  * A constructor may refuse an input it cannot represent at all, such as an Integer too large for the field it goes in, because the alternative is silently sending a different value. It must never refuse a combination that is simply wrong by the RFC. Where a constructor does refuse, the octet level routes stay open and must keep working: wire bytes, `Attr::Raw`, and the `BGP::Fault` helpers.
+  * `lab/fault_matrix.rb` and `BGP::Fault::CATALOG` depend on all of this. `docs/protocol-testing.md` is the guide to it.
+* When parsing cannot interpret trailing octets, keep them and write them back, so `encode` returns byte for byte what arrived. `prefix_sid.rb` keeps a `@tail`, `pmsi_tunnel.rb` keeps a short value in `@short`, and `communities.rb`, `cluster_list.rb`, `extended_communities.rb`, `large_communities.rb` and `ipv6_extended_communities.rb` all keep a tail. Report the fault in `validation.rb`; do not drop the octets.
 * Every class can be built three ways: from field values, from a hash, and from its wire bytes (a binary String). Keep all three working when you change a class.
 * `encode` returns wire bytes. `to_hash` returns a hash that round trips through `new`. `to_s` returns the human readable form.
 * Tests check round trips: build, encode, parse back, compare. Use real hex captures from the RFCs or from Wireshark when possible.
@@ -109,8 +114,8 @@ Found while fixing other bugs, not fixed yet. Verified against master on
 Silent wrong answers, the worst kind here, since the library exists to
 send exact octets:
 
-* `As_path.new` with a bare segment hash drops its argument and builds an empty path: `As_path.new(:set => [1,2], :sequence => [3,4]).to_shex` is `400200`. Use `As_path.new_hash` for that shape. Fix it to accept the hash or raise. It has to be fixed together with `test_9` in `test/unit/path_attributes/path_attribute_test.rb`, which passes only because of it: that test asserts two path attribute sets encode identically while their AS_PATHs differ, `11 12 13` against `11 12 14`, and in segment order. Correct the test, do not preserve it.
-* `Extended_community.factory` and `Extended_community::Unknown` build their 8 octets from an Integer with no range check, so a value outside `0..0xffffffffffffffff` wraps into a different community. The constructor was fixed in #76; these two paths were not.
+* `As_path.new` with a bare segment hash drops its argument and builds an empty path: `As_path.new(:set => [1,2], :sequence => [3,4]).to_shex` is `400200`. Use `As_path.new_hash` for that shape. The fix is to accept the hash, the same shape `new_hash` takes, rather than to refuse it. It has to be fixed together with `test_9` in `test/unit/path_attributes/path_attribute_test.rb`, which passes only because of it: that test asserts two path attribute sets encode identically while their AS_PATHs differ, `11 12 13` against `11 12 14`, and in segment order. Correct the test, do not preserve it.
+* `Extended_community.factory` and `Extended_community::Unknown` build their 8 octets from an Integer with no range check, so a value outside `0..0xffffffffffffffff` wraps into a different community than the caller asked for. The constructor was fixed in #76; these two paths were not. This is the narrow case the convention above allows a constructor to refuse, because the value cannot be represented in the field at all. It does not restrict negative testing: a malformed extended community of any length is still built from wire bytes, from `Attr::Raw`, or with `Fault.value`.
 
 Round trips that do not:
 
