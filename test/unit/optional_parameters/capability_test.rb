@@ -90,7 +90,8 @@ class Capability_Test < Test::Unit::TestCase
                  Capability.new(100).to_hash({:as=>100}))
   end
   def test_factory_dynamic
-    # RFC 5291 and RFC 5492 section 4: capability code 67, no value.
+    # RFC 5492 section 4 and draft-ietf-idr-dynamic-cap-19 section 9:
+    # capability code 67, no value.
     cap = Capability.factory(['02024300'].pack('H*'))
     assert_instance_of(Dynamic, cap)
     # The capability came off the wire, so it has to go back on the wire
@@ -155,9 +156,10 @@ class Capability_Test < Test::Unit::TestCase
     assert_equal [], Optional_parameter.factory(s)
   end
 
-  # RFC 5291: the same capabilities carried in a Dynamic Capability
-  # message have a one octet code and a two octet length, so they encode
-  # and parse through a different branch.
+  # draft-ietf-idr-dynamic-cap-19 section 3: the same capabilities
+  # carried in a Dynamic Capability message have a one octet code and a
+  # two octet length, so they encode and parse through a different
+  # branch.
   def test_dynamic_factory_as4
     cap = Capability.dynamic_factory(['41000400000064'].pack('H*'))
     assert_instance_of(BGP::OPT_PARM::DYN_CAP::As4, cap)
@@ -195,5 +197,67 @@ class Capability_Test < Test::Unit::TestCase
     cap = Capability.dynamic_factory([s].pack('H*'))
     assert_instance_of(BGP::OPT_PARM::DYN_CAP::Graceful_restart, cap)
     assert_equal s, cap.to_shex
+  end
+
+  # draft-ietf-idr-dynamic-cap-19 section 3: the capability here has a
+  # one octet code and a two octet length, so a code bgp4r does not
+  # implement has to be kept with that header. The fallback used to be
+  # Capability::Unknown, which read the two octet optional parameter
+  # header instead, left @code nil and raised TypeError, so a Dynamic
+  # Capability message carrying an unimplemented code could not be read
+  # at all.
+  def test_dynamic_factory_keeps_an_unimplemented_capability
+    s = '64000576616c7565'
+    cap = Capability.dynamic_factory([s].pack('H*'))
+    assert_instance_of(BGP::OPT_PARM::DYN_CAP::Unknown, cap)
+    # Parsing cannot interpret the value, so the octets go back on the
+    # wire byte for byte.
+    assert_equal s, cap.to_shex
+    assert_equal 'value', cap.value
+    assert_equal({:code=>100, :value=>'76616c7565'}, cap.to_hash)
+    assert_equal "Option Capabilities Advertisement (2): [#{s}]\n" +
+                 '    Unknown Capability (100), 5 value octets: [76616c7565]',
+                 cap.to_s
+  end
+  def test_dynamic_factory_keeps_an_unimplemented_capability_with_no_value
+    cap = Capability.dynamic_factory(['640000'].pack('H*'))
+    assert_instance_of(BGP::OPT_PARM::DYN_CAP::Unknown, cap)
+    assert_equal '640000', cap.to_shex
+    assert_equal({:code=>100}, cap.to_hash)
+  end
+  def test_dynamic_unknown_builds_three_ways
+    s = '64000576616c7565'
+    from_wire   = BGP::OPT_PARM::DYN_CAP::Unknown.new([s].pack('H*'))
+    from_fields = BGP::OPT_PARM::DYN_CAP::Unknown.new(100, 'value')
+    from_hash   = BGP::OPT_PARM::DYN_CAP::Unknown.new(:code=>100, :value=>'76616c7565')
+    assert_equal s, from_wire.to_shex
+    assert_equal s, from_fields.to_shex
+    assert_equal s, from_hash.to_shex
+    # to_hash round trips through new.
+    assert_equal s, BGP::OPT_PARM::DYN_CAP::Unknown.new(from_wire.to_hash).to_shex
+    assert_equal from_wire.to_hash, from_fields.to_hash
+  end
+  def test_cap_unknown_writes_the_optional_parameter_header
+    # The same class under CAP writes the one octet length of RFC 5492
+    # section 4, as every other capability does. The namespace picks the
+    # header, nothing else changes.
+    s = '0207640576616c7565'
+    assert_equal s, CAP::Unknown.new(100, 'value').to_shex
+    cap = CAP::Unknown.new([s].pack('H*'))
+    assert_equal s, cap.to_shex
+    assert_equal({:code=>100, :value=>'76616c7565'}, cap.to_hash)
+    assert_equal s, CAP::Unknown.new(cap.to_hash).to_shex
+  end
+  def test_unknown_takes_any_code_and_any_value
+    # Building is never validated: any code, any length, any octets.
+    assert_equal '00000b' + ('ff' * 11),
+                 BGP::OPT_PARM::DYN_CAP::Unknown.new(0, ['ff' * 11].pack('H*')).to_shex
+    assert_equal 'ff0000', BGP::OPT_PARM::DYN_CAP::Unknown.new(255).to_shex
+  end
+  def test_unknown_refuses_a_code_it_cannot_hold
+    # A code that is not an Integer cannot go in the field, and a String
+    # that did not come off the wire is not a value either.
+    assert_raise(ArgumentError) { CAP::Unknown.new('0207640576616c7565') }
+    assert_raise(ArgumentError) { BGP::OPT_PARM::DYN_CAP::Unknown.new(:code) }
   end
 end
