@@ -81,19 +81,30 @@ module BGP
     end
     
     # RFC 4360 section 2: the structure of the community is the low 2 bits
-    # of the type octet. Each predicate compares those bits, so a community
+    # of the type octet, and draft-ietf-idr-link-bandwidth is the one
+    # exception. community_structure is the single place that works it out,
+    # and parse, value, value2 and _encoded_value_ all read it, so the
+    # predicates read it too rather than the type octet again. A community
     # answers true to one structure only.
     def is_opaque?
-      @type & 3 == OPAQUE
+      community_structure == OPAQUE
     end
     
     def is_ipv4_addr?
-      @type & 3 == IPV4_ADDR
+      community_structure == IPV4_ADDR
     end
     
     def is_two_octet_asn?
-      @type & 3 == TWO_OCTET_AS
+      community_structure == TWO_OCTET_AS
     end  
+    
+    # draft-ietf-idr-link-bandwidth, on RFC 4360 section 3.1: the link
+    # bandwidth community takes the 2 octet AS specific type, but its local
+    # administrator is an IEEE 754 single precision number, not an integer.
+    # That is the FLOAT structure, and this is its predicate.
+    def is_float?
+      community_structure == FLOAT
+    end
     
     def two_octet
       @type &= ~3
@@ -373,12 +384,23 @@ module BGP
   end
   
   class Link_bandwidth < Extended_community
+    # draft-ietf-idr-link-bandwidth, on RFC 4360 section 3.1: the 2 octet
+    # global administrator is the advertising speaker's AS and the 4 octet
+    # local administrator is the bandwidth. This class fills the AS field
+    # with 0, so the one argument is the bandwidth and a second has nowhere
+    # to go. Say that with what the caller passed. Any other count used to
+    # reach Extended_community#initialize with the wrong number of
+    # arguments and report its own list, "invalid arg [64, 4, 100, 1000, 0]"
+    # for two and "invalid argument [64, 4, 0]" for none, which named
+    # nothing the caller had written.
     def initialize(*args)
       if args[0].is_a?(String) and args[0].is_packed?
         super(*args)
+      elsif args.size == 1
+        super(NON_TRANSITIVE | TWO_OCTET_AS, LINK_BANDWIDTH, args[0], 0)
       else
-        args += [0]
-        super(NON_TRANSITIVE | TWO_OCTET_AS, LINK_BANDWIDTH, *args)
+        raise ArgumentError,
+          "invalid link bandwidth #{args.inspect}, expected one argument, the bandwidth"
       end
     end
     def value2
