@@ -452,43 +452,79 @@ module BGP
     end
   end
 
+  # RFC 4577 section 4.2.6: the OSPF domain ID carries the Domain
+  # Identifier in the six octet value field, and its type "is 0005, 0105,
+  # or 0205". Those three type octets give that field the three
+  # structures of RFC 4360 section 3.1, RFC 4360 section 3.2 and RFC 5668
+  # section 2: a 2 octet administrator and a 4 octet one, a 4 octet
+  # address and a 2 octet one, or a 4 octet AS and a 2 octet one. parse
+  # and encode read and write all three off the type octet already, so
+  # the two fields are all this class has to carry.
+  #
+  # A build from field values passes the IPv4 address specific octet,
+  # which is the form bgp4r builds and the one every caller here writes:
+  # one argument is the domain ID as an address. Two are both fields,
+  # the form the hash carries when the value octets hold more.
   class Ospf_domain_id < Extended_community
     def initialize(*args)
       if args[0].is_a?(String) and args[0].is_packed?
-        super(*args)
-      else
-        args += [0]
-        super(1,OSPF_DOMAIN_ID,*args)
+        return super(*args)
       end
+      # An assignment hands its right hand side over as one Array:
+      # ec.ospf_domain_id = '1.1.1.1', 9 arrives as [['1.1.1.1', 9]].
+      # Route_target flattens for the same reason.
+      args = args.flatten
+      if args.size > 2
+        raise ArgumentError,
+          "invalid OSPF domain ID #{args.inspect}, expected the domain ID, " +
+          "or the global and the local administrator"
+      end
+      # No argument is the all zero value field of RFC 4577 section
+      # 4.2.6, the NULL domain, which is what it built before.
+      super(IPV4_ADDR, OSPF_DOMAIN_ID, args.fetch(0, 0), args.fetch(1, 0))
     end
+    # Both administrator fields, so no octet of the value is lost. The
+    # exception is the IPv4 address specific form whose 2 octet local
+    # administrator is 0: that is every domain ID bgp4r builds, and its
+    # hash stays the plain address it has always been. RFC 4577 does not
+    # say those 2 octets are zero, and section 4.2.8.1 reads all six as
+    # the identifier, so when they are not 0 they are carried.
     def value2
-      "#{IPAddr.create(@global)}"
+      global, local = super
+      is_ipv4_addr? && local.to_i.zero? ? global : [global, local]
     end
-    # RFC 4577 section 4.2.6 lists the types 0x0005, 0x0105 and 0x0205
-    # for the OSPF domain ID. value2 is always an address, the 0x0105
-    # form, so a build from the hash value always gives the IPv4 address
-    # specific structure and a clear T bit. The 0x0005 form loses more
-    # than its type octet in the hash; see "Known issues to work on" in
-    # CLAUDE.md.
+    # Every build from the hash value goes through the IPv4 address
+    # specific octet the constructor passes: an address gives that
+    # structure again (RFC 4360 section 3.2) and a pair of Integers
+    # leaves it alone. So the 0005 and 0205 forms, and a non-transitive
+    # one, carry their type octet under TYPE_KEY.
     def hash_type
       IPV4_ADDR
     end
   end
 
+  # RFC 4577 section 4.2.6 gives the OSPF router ID the type 0107 alone,
+  # so that is the only one in Extended_community::FACTORY, and the
+  # router ID is "the first four bytes of the value field". The class
+  # takes whatever octets it is handed, though, so it reads and hashes
+  # them the same way the domain ID does.
   class Ospf_router_id < Extended_community
     def initialize(*args)
       if args[0].is_a?(String) and args[0].is_packed?
-        super(*args)
-      else
-        args += [0]
-        super(1,OSPF_ROUTER_ID,*args)
+        return super(*args)
       end
+      args = args.flatten
+      if args.size > 2
+        raise ArgumentError,
+          "invalid OSPF router ID #{args.inspect}, expected the router ID, " +
+          "or the global and the local administrator"
+      end
+      super(IPV4_ADDR, OSPF_ROUTER_ID, args.fetch(0, 0), args.fetch(1, 0))
     end
     def value2
-      "#{IPAddr.create(@global)}"
+      global, local = super
+      is_ipv4_addr? && local.to_i.zero? ? global : [global, local]
     end
-    # The OSPF router ID the same way, and only its IPv4 address
-    # specific type, 0x0107, is in Extended_community::FACTORY.
     def hash_type
       IPV4_ADDR
     end
@@ -1006,8 +1042,15 @@ module BGP
       [IPV4_ADDR,     ROUTE_ORIGIN]     => Route_origin,
       [FOUR_OCTET_AS, ROUTE_ORIGIN]     => Route_origin,       # RFC 5668 section 2
       [TWO_OCTET_AS,  LINK_BANDWIDTH]   => Link_bandwidth,
-      [TWO_OCTET_AS,  OSPF_DOMAIN_ID]   => Ospf_domain_id,     # RFC 4577 section 4
+      # RFC 4577 section 4.2.6: the OSPF domain ID's type "is 0005, 0105,
+      # or 0205", so all three are here. 0205 is the 4 octet AS specific
+      # structure of RFC 5668 section 2, which parse and encode already
+      # read and write; without it a PE that sent one got a community
+      # with its octets but no name.
+      [TWO_OCTET_AS,  OSPF_DOMAIN_ID]   => Ospf_domain_id,     # RFC 4577 section 4.2.6
       [IPV4_ADDR,     OSPF_DOMAIN_ID]   => Ospf_domain_id,
+      [FOUR_OCTET_AS, OSPF_DOMAIN_ID]   => Ospf_domain_id,
+      # RFC 4577 section 4.2.6 gives the router ID the type 0107 alone.
       [IPV4_ADDR,     OSPF_ROUTER_ID]   => Ospf_router_id,
       [TWO_OCTET_AS,  BGP_DATA_COLLECT] => Bgp_data_collect,   # RFC 4384
       [OPAQUE,        COLOR]            => Color,              # RFC 9012 section 4.3
