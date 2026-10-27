@@ -121,11 +121,137 @@ class Rd_Test < Test::Unit::TestCase
     rd = Rd.new(1, 257, 2)
     assert_equal rd.to_s(false), Rd.new(rd.encode).to_s(false)
   end
-  def test_unknown_type_raises_quietly
+  # This test used to pin a bug: an encoding type RFC 4364 section 4.2 does
+  # not define was refused by parse, so octets that arrived could not be read
+  # back. They are kept now. The quiet part is what it always was: nothing is
+  # printed.
+  def test_unknown_type_parses_quietly
     out, $stdout = $stdout, StringIO.new
-    assert_raise(ArgumentError) { Rd.new(['0003000000010001'].pack('H*')) }
+    rd = Rd.new(['0003000000010001'].pack('H*'))
+    assert_equal '0003000000010001', rd.to_shex
     assert_equal('', $stdout.string)
   ensure
     $stdout = out
+  end
+  # RFC 4364 section 4.2 gives encoding type 2 a 4 octet administrator, and
+  # type 0 a 2 octet one. The two values of the hash form cannot say which
+  # type they came from, so to_hash carries the type when a build from the
+  # two values would infer a different one.
+  def test_to_hash_carries_the_encoding_type_when_the_values_cannot_say_it
+    rd = Rd.new(1, 257, 2)
+    assert_equal({:rd=>[1, 257, 2]}, rd.to_hash)
+    assert_equal '0002000000010101', Rd.new(rd.to_hash).to_shex
+    assert_equal 2, Rd.new(rd.to_hash).encoding_type?
+  end
+  # A type 2 RD whose administrator is above 65535 is what the two argument
+  # form infers, so its hash stays the plain two element one.
+  def test_to_hash_leaves_out_an_encoding_type_the_values_give_back
+    rd = Rd.new(65536, 1, 2)
+    assert_equal({:rd=>[65536, 1]}, rd.to_hash)
+    assert_equal '0002000100000001', rd.to_shex
+    assert_equal rd.to_shex, Rd.new(rd.to_hash).to_shex
+  end
+  # The hash of an ordinary RD does not change: types 0 and 1 are exactly
+  # what the two values infer.
+  def test_the_hash_of_a_type_0_or_type_1_rd_is_the_plain_two_element_one
+    assert_equal({:rd=>[1, 1]}, Rd.new(1, 1).to_hash)
+    assert_equal({:rd=>[1, 1]}, Rd.new(1, 1, 0).to_hash)
+    assert_equal({:rd=>['1.1.1.1', 1]}, Rd.new('1.1.1.1', 1).to_hash)
+    assert_equal({:rd=>['1.1.1.1', 1]}, Rd.new('1.1.1.1', 1, 1).to_hash)
+    assert_equal({:rd=>[0, 0]}, Rd.new.to_hash)
+  end
+  # Every RD round trips through its own hash form, whatever its type.
+  def test_every_encoding_type_round_trips_through_its_hash
+    [Rd.new, Rd.new(1, 1), Rd.new('1.1.1.1', 1), Rd.new(1, 257, 2),
+     Rd.new(65536, 1, 2), Rd.new(1, 1, 3), Rd.new(1, 1, 65535)].each do |rd|
+      copy = Rd.new(rd.to_hash)
+      assert_equal rd.to_shex, copy.to_shex
+      assert_equal rd.encoding_type?, copy.encoding_type?
+      assert_equal rd.to_hash, copy.to_hash
+    end
+  end
+  # The hash form of an RD is one key, so Vpn#to_hash and Labeled#to_hash can
+  # go on merging it into their own, and mp_reach's splat of n[:rd] reaches
+  # the three argument form.
+  def test_the_hash_form_stays_one_key_and_splats_back
+    rd = Rd.new(1, 257, 2)
+    assert_equal [:rd], rd.to_hash.keys
+    assert_equal rd.to_shex, Rd.new(*rd.to_hash[:rd]).to_shex
+  end
+  # RFC 4364 section 4.2 makes the type 0 administrator a 2 octet AS and the
+  # type 2 one a 4 octet AS, so an AS above 65535 is what type 2 is for. The
+  # two argument form infers it rather than keep a value encode truncates.
+  def test_an_administrator_above_65535_infers_encoding_type_2
+    rd = Rd.new(65536, 1)
+    assert_equal 2, rd.encoding_type?
+    assert_equal 65536, rd.admin
+    assert_equal '0002000100000001', rd.to_shex
+    assert_equal 'RD=65536:1', rd.to_s(false)
+    # The object and its own bytes say the same thing.
+    assert_equal rd.to_s(false), Rd.new(rd.encode).to_s(false)
+    assert_equal rd.to_shex, Rd.new(rd.encode).to_shex
+    assert_equal 0, Rd.new(65535, 1).encoding_type?
+    assert_equal 2, Rd.new(4294967295, 1).encoding_type?
+  end
+  # Where the type is named, the administrator has to fit the field that type
+  # gives it. 65536 cannot be represented in 2 octets at all, so it is
+  # refused rather than truncated by encode.
+  def test_an_administrator_too_wide_for_the_named_type_is_refused
+    e = assert_raise(ArgumentError) { Rd.new(65536, 1, 0) }
+    assert_match(/65536/, e.message)
+    assert_match(/RFC 4364/, e.message)
+    assert_raise(ArgumentError) { Rd.new(4294967296, 1, 2) }
+    assert_raise(ArgumentError) { Rd.new(4294967296, 1) }
+    # And the assigned number, 2 octets in types 1 and 2.
+    assert_raise(ArgumentError) { Rd.new(1, 65536, 2) }
+    assert_raise(ArgumentError) { Rd.new('1.1.1.1', 65536) }
+    assert_raise(ArgumentError) { Rd.new(1, 4294967296) }
+    # A 2 octet type field.
+    assert_raise(ArgumentError) { Rd.new(1, 1, 65536) }
+    # The octet level route stays open.
+    assert_equal '0000000100000001', Rd.new(['0000000100000001'].pack('H*')).to_shex
+  end
+  # Anything that fits still goes to the wire as given.
+  def test_a_value_that_fits_its_field_is_never_checked
+    assert_equal '0000ffffffffffff', Rd.new(65535, 4294967295).to_shex
+    assert_equal '0002ffffffffffff', Rd.new(4294967295, 65535, 2).to_shex
+    assert_equal '0001ffffffffffff', Rd.new('255.255.255.255', 65535).to_shex
+  end
+  # RFC 4364 section 4.2 defines types 0, 1 and 2. The IANA Route
+  # Distinguisher Type Field registry leaves 3 to 65534 unassigned and gives
+  # 65535 to RFC 7524, for use only in certain Leaf A-D routes. bgp4r builds
+  # and reads any of them: encode used to return nil, and parse used to raise.
+  def test_an_undefined_encoding_type_builds_and_round_trips
+    rd = Rd.new(1, 1, 3)
+    assert_equal 3, rd.encoding_type?
+    assert_equal '0003000000010001', rd.to_shex
+    assert_equal 'RD=1:1', rd.to_s(false)
+    assert_equal({:rd=>[1, 1, 3]}, rd.to_hash)
+    assert_equal rd.to_shex, Rd.new(rd.encode).to_shex
+    assert_equal rd.to_shex, Rd.new(rd.to_hash).to_shex
+    assert_equal rd.to_shex, Rd.new(rd).to_shex
+    assert_equal 64, rd.bit_length
+  end
+  # Type 65535, the RFC 7524 Leaf A-D one.
+  def test_the_rfc_7524_leaf_a_d_encoding_type
+    rd = Rd.new(1, 1, 65535)
+    assert_equal 65535, rd.encoding_type?
+    assert_equal 'ffff000000010001', rd.to_shex
+    assert_equal 65535, Rd.new(rd.encode).encoding_type?
+    assert_equal rd.to_shex, Rd.new(rd.encode).to_shex
+  end
+  # Whatever the 6 value octets of an undefined type are, they come back.
+  def test_an_undefined_encoding_type_keeps_its_octets
+    ['0003deadbeefcafe', 'ffffdeadbeefcafe', 'fffeffffffffffff',
+     '0003000000000000'].each do |shex|
+      wire = [shex].pack('H*')
+      assert_equal shex, Rd.new(wire).to_shex
+      assert_equal shex, Rd.new(Rd.new(wire).to_hash).to_shex
+    end
+  end
+  # An undefined type says so when printed, so it is not read as a type 2.
+  def test_the_verbose_to_s_of_an_undefined_encoding_type_names_it
+    assert_equal 'RD=1:1 (type 3, 0x0001 0x01)', Rd.new(1, 1, 3).to_s
+    assert_equal 'RD=1:1 (type 65535, 0x0001 0x01)', Rd.new(1, 1, 65535).to_s
   end
 end
