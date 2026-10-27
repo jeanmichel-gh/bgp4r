@@ -356,9 +356,11 @@ Exit status is 0 when every answer agrees with the catalog.
 
 ## What three implementations do
 
-Run as native processes on loopback, all three at once.
+Run as native processes on loopback, all three at once. The GoBGP column
+was measured on 3.23.0, and 4.10.0 gives the same 18 answers: the
+containerized run asserts every row and passes on both.
 
-| | GoBGP 3.23.0 | FRR 8.4.4 | BIRD 2.14 |
+| | GoBGP 3.23.0 and 4.10.0 | FRR 8.4.4 | BIRD 2.14 |
 |---|---|---|---|
 | treat as withdraw cases | agrees | resets, 3/10 | keeps the session |
 | attribute discard cases | agrees | agrees | keeps the session |
@@ -474,9 +476,9 @@ docker compose -f lab/topologies/fault-matrix/compose.yml down
 ```
 
 The exit status is 1, and the run is still correct. The matrix exits
-non-zero on any disagreement with the catalog, and against GoBGP 3.23
-two cases disagree: see the divergence below. Read the table, or the
-JSON, rather than the status.
+non-zero on any disagreement with the catalog, and against GoBGP two
+cases disagree: see the divergence below. Read the table, or the JSON,
+rather than the status.
 
 The addresses are fixed, because `lab/fault_matrix.rb` only listens and
 hangs up on any peer but the one given to `--peer`. The matrix is AS
@@ -512,26 +514,31 @@ carries both the daemon and the `gobgp` client, which is why the
 topology mounts its folder at `/config` and does not override the
 command.
 
-The pin is 3.23.0, a release over two years old. That is deliberate, and
-the reason is the config rather than the router. `gobgp.toml` in the
-topology is written for the 3.23 schema. That is the version it was
-verified against, and the version that produced the results in the next
-section, so a container run is comparable to those results rather than
-being a separate data point. The router is pinned to match the config.
+The pin is 4.10.0. It was 3.23.0 for a while, because `gobgp.toml` was
+written against 3.23 and the router was pinned to match the config. That
+turned out to be unnecessary, and the reason it looked necessary is
+worth knowing, because it was a bug in bgp4r rather than in either the
+config or the router.
 
-Which means moving to a current GoBGP is a config job, not an image
-bump. It means updating `gobgp.toml` in the topology, and
-`lab/conformance/gobgpd.conf`, to whatever the 4.x schema wants, then
-rerunning to see which verdicts move. It is worth doing. A conformance
-suite that only ever tests a router from 2024 is testing the wrong
-thing, and the newer code is where a new divergence is most likely to
-be.
+GoBGP 4 reads the config unchanged. Every key is still in the 4.x config
+structs under the same `mapstructure` name, and 4.x registers
+`mapstructure.StringToNetIPAddrHookFunc`, so the address fields still
+decode from TOML strings even though their Go type is now `netip.Addr`.
 
-4.x tags of the same image exist, so trying one needs no edit. If the
-daemon will not start, its log names the config key it rejected:
+What did break on 4.10 was that bgp4r read only the first capability out
+of a Capabilities optional parameter. RFC 5492 section 4 allows several,
+and GoBGP packs them that way, so bgp4r missed the 4-octet AS
+capability, kept the 2-octet default, and sent an AS_PATH that GoBGP
+rejected with `seg length is short`. Every UPDATE became a withdraw
+before the attribute under test was ever read, so the run measured that
+bug rather than the router. It is fixed, and the lesson is in the shape
+of the failure: a fault matrix that cannot establish a correct session
+first will produce a full table of confident nonsense.
+
+Going back to 3.23, or forward to another tag, needs no edit:
 
 ```
-GOBGP_IMAGE=jauderho/gobgp:v4.10.0 docker compose \
+GOBGP_IMAGE=jauderho/gobgp:v3.23.0 docker compose \
   -f lab/topologies/fault-matrix/compose.yml up --build \
   --abort-on-container-exit --exit-code-from matrix
 ```
@@ -539,14 +546,16 @@ GOBGP_IMAGE=jauderho/gobgp:v4.10.0 docker compose \
 To check that a tag has an arm64 build before pulling it:
 
 ```
-docker buildx imagetools inspect jauderho/gobgp:v3.37.0
+docker buildx imagetools inspect jauderho/gobgp:v4.10.0
 ```
 
-`manifest unknown` means the tag is not there. Changing the version
-moves the client with the router, since one variable feeds both, but the
-route level assertions in the test are measured against 3.23 and can
-move between releases. The two session reset cases follow from RFC 4271
-section 6.3 and should hold on any conformant version.
+`manifest unknown` means the tag is not there. Changing the version moves
+the client with the router, since one variable feeds both. Both 3.23 and
+4.10 give the same 18 answers, so the results in the next section hold
+for either. The two session reset cases follow from RFC 4271 section 6.3
+and should hold on any conformant version, while the route level
+verdicts can move between releases, which is what the test is there to
+notice.
 
 A full run is roughly two to four minutes at the default settle. Raise
 `FAULT_SETTLE` if a slower machine reports faults with no session.
@@ -581,7 +590,7 @@ says that instead of reading them.
 Without Docker the test is omitted, unless `LAB_REQUIRE_DOCKER=1` is
 set, as in CI.
 
-### The GoBGP 3.23 divergence
+### The GoBGP tunnel encapsulation divergence
 
 The run exits 1, and both the topology and the test expect that. Two
 cases disagree with the catalog, `tunnel_encap_tlv` and
@@ -590,11 +599,15 @@ those two.
 
 RFC 9012 section 13 is a MUST: the final octet of a tunnel TLV must also
 be the final octet of its last sub-TLV, and a TLV that breaks that is
-malformed, treat as withdraw. GoBGP 3.23 sees the malformed TLV, logs
-"Not all TunnelEncapSubTLV bytes available", discards the attribute and
+malformed, treat as withdraw. GoBGP sees the malformed TLV, logs "Not
+all TunnelEncapSubTLV bytes available", discards the attribute and
 installs the route. bgp4r is right here and the router is not, so the
 catalog keeps asking for treat-as-withdraw and the test records what the
 router actually does, naming it as a divergence where it asserts it.
+
+This is not an old bug since fixed. 3.23 does it, and so does 4.10, so
+it is present in the current release and worth reporting upstream. It is
+reproducible in one command.
 
 That is why the test asserts per route outcomes rather than the exit
 status. If either case ever reports the route dropped, the router
