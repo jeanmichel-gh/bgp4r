@@ -35,6 +35,7 @@ module BGP
         @enc_type, @admin, @assign = [0]*3
       elsif args.size==3
         admin, assign, @enc_type = args
+        refuse_an_address_as_an_assigned_number(assign)
         case @enc_type
         when 0
           @admin, @assign,@enc_type = admin, assign, 0
@@ -47,10 +48,9 @@ module BGP
         end
       elsif args.size==2
         admin, assign = args
+        refuse_an_address_as_an_assigned_number(assign)
         if admin.is_a?(String)
           @admin, @assign, @enc_type = IPAddr.new(admin), assign, 1
-        elsif assign.is_a?(String)
-          @admin, @assign, @enc_type,  = admin, IPAddr.new(assign).to_i, 2
         else
           @admin, @assign, @enc_type,  = admin, assign, 0
         end
@@ -98,7 +98,9 @@ module BGP
     def to_s(verbose=true)
       if verbose
         case @enc_type
-        when 0 ; format "RD=%d:%d (0x%02x 0x%04x)", @admin, @assign, @assign, @assign
+        # RFC 4364 section 4.2: type 0 is a 2 octet administrator and a
+        # 4 octet assigned number, so print the administrator first.
+        when 0 ; format "RD=%d:%d (0x%02x 0x%04x)", @admin, @assign, @admin, @assign
         when 1 ; format "RD=%s:%d (0x%04x 0x%02x)", @admin, @assign, @admin.to_i, @assign
         when 2 ; format "RD=%d:%d (0x%04x 0x%02x)", @admin, @assign, @admin, @assign
         end
@@ -114,7 +116,23 @@ module BGP
     def encoding_type?
       @enc_type
     end
-    
+
+    private
+
+    # RFC 4364 section 4.2 makes the assigned number a 4 octet field in
+    # encoding type 0 and a 2 octet field in types 1 and 2. None of them
+    # holds a 32 bit address, so an address String is refused here rather
+    # than kept and silently truncated by encode. Nothing else is checked:
+    # an Integer assigned number goes to the wire as given, and arbitrary
+    # octets still go through Rd.new(wire).
+    def refuse_an_address_as_an_assigned_number(assign)
+      return unless assign.is_a?(String)
+      raise ArgumentError, "an RD assigned number cannot be the address " +
+        "#{assign.inspect}: RFC 4364 section 4.2 makes it a 2 octet field in " +
+        "encoding types 1 and 2, and a 4 octet field in type 0. Pass an Integer, " +
+        "or build the octets with Rd.new(wire)."
+    end
+
   end
 end
 load "../../test/unit/nlris/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0
