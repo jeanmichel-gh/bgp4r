@@ -32,9 +32,11 @@ class Dynamic_capability_Test < Test::Unit::TestCase
   def test_2
     assert_equal '02024300', Dynamic.new.to_shex
   end
-  # RFC 5291 section 3: the Dynamic Capability capability is code 67
-  # with no value, so RFC 5492 section 4 makes it a code and a zero
-  # length inside the Capabilities parameter.
+  # draft-ietf-idr-dynamic-cap-19 section 9: the Dynamic Capability
+  # capability is code 67 with no value, so RFC 5492 section 4 makes it
+  # a code and a zero length inside the Capabilities parameter. Dynamic
+  # capability has no RFC; the draft is the only specification, and IANA
+  # registers 67 citing draft-ietf-idr-dynamic-cap-13.
   def test_to_s
     assert_equal("Option Capabilities Advertisement (2): [02024300]\n" +
                  '    Dynamic Capability 67, length: 2', Dynamic.new.to_s)

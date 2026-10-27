@@ -1,5 +1,5 @@
 #--
-# Copyright 2010 Jean-Michel Esnault.
+# Copyright 2010, 2026 Jean-Michel Esnault.
 # All rights reserved.
 # See LICENSE.txt for permissions.
 #
@@ -126,5 +126,25 @@ class TestBgpMessagesCapability < Test::Unit::TestCase
     msg =  BGP::Message.factory([s].pack('H*'))
     assert_equal(BGP::Capability, msg.class)
     assert_equal s, msg.to_shex
+  end
+
+  # draft-ietf-idr-dynamic-cap-19 section 3: a Dynamic Capability
+  # message can carry a capability code bgp4r does not implement, and
+  # the message still has to come back byte for byte. Reading one used
+  # to raise TypeError, because the fallback capability read the two
+  # octet optional parameter header where the message has a one octet
+  # code and a two octet length.
+  def test_message_keeps_an_unimplemented_capability
+    s = 'ffffffffffffffffffffffffffffffff002006000000000a64000576616c7565'
+    msg = BGP::Message.factory([s].pack('H*'))
+    assert_equal(BGP::Capability, msg.class)
+    assert_equal s, msg.to_shex
+    assert_equal 'Capability (6), length: 32
+  Seqn        Action     Ack bits    Capability
+  0x00000010  Advertise      (0x00)  Unknown Capability 100 [76616c7565]', msg.to_s
+    # The same message built from the capability object.
+    built = BGP::Capability.new(
+      BGP::Capability::Revision.advertise(10, DYN_CAP::Unknown.new(100, 'value')))
+    assert_equal s, built.to_shex
   end
 end
