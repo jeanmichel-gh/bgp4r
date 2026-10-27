@@ -96,6 +96,77 @@ class Prefix_orf_Test < Test::Unit::TestCase
     assert_match(/\n  seq  50    add 50.0.0.0\/8 permit/, orf.to_s)
   end
 
+  # RFC 5292 section 2: an Address Prefix ORF entry is
+  # <Sequence, Match, Length, Prefix, Minlen, Maxlen>. The hash form names
+  # those fields, and must build the same octets as the positional form.
+  def test_prefix_entry_from_a_hash
+    assert_equal('00000000000000080a', Prefix_entry.new(:prefix=>'10.0.0.0/8').to_shex)
+    assert_equal('seq   0    add 10.0.0.0/8 permit', Prefix_entry.new(:prefix=>'10.0.0.0/8').to_s)
+    h = {:action=>1, :match=>1, :seqn=>5, :min=>16, :max=>24, :prefix=>'172.16.0.0/12'}
+    assert_equal('600000000510180cac10', Prefix_entry.new(h).to_shex)
+    assert_equal(Prefix_entry.new(1,1,5,16,24,'172.16.0.0/12').encode, Prefix_entry.new(h).encode)
+    assert_equal('seq   5 remove 172.16.0.0/12 ge 16 le 24 deny', Prefix_entry.new(h).to_s)
+    # the symbols the setters accept name the same values
+    sym = {:action=>:remove, :match=>:deny, :seqn=>5, :min=>16, :max=>24, :prefix=>'172.16.0.0/12'}
+    assert_equal(Prefix_entry.new(h).encode, Prefix_entry.new(sym).encode)
+    assert_equal('a0000000010000080a', Prefix_entry.new(:action=>:remove_all, :match=>:deny, :seqn=>1, :prefix=>'10.0.0.0/8').to_shex)
+    # built from a hash, encoded, parsed back
+    e = Prefix_entry.new(h)
+    assert_equal(e.encode, Prefix_entry.new(e.encode.is_packed).encode)
+  end
+
+  # RFC 5292 section 2: Match is PERMIT (0) or DENY (1); the common part of
+  # RFC 5291 section 5 carries Action in the top two bits.
+  def test_prefix_entry_action_and_match_accessors
+    e = Prefix_entry.new(:prefix=>'10.0.0.0/8')
+    assert_equal(0, e.action_to_i)
+    assert_equal(0, e.match_to_i)
+    e.action, e.match = :remove, :deny
+    assert_equal([1, 'remove', 1, 'deny'], [e.action_to_i, e.action_to_s, e.match_to_i, e.match_to_s])
+    assert_equal('60000000000000080a', e.to_shex)
+    e.action = 2
+    assert_equal([2, 'remove all'], [e.action_to_i, e.action_to_s])
+    e.match = 0
+    assert_equal([0, 'permit'], [e.match_to_i, e.match_to_s])
+    assert_equal('80000000000000080a', e.to_shex)
+    e.action = 0
+    assert_equal('00000000000000080a', e.to_shex)
+  end
+
+  # Match is one bit, so 2 cannot be represented and is refused rather than
+  # silently truncated. The exception class is RuntimeError, not ArgumentError.
+  def test_prefix_entry_match_refuses_a_value_it_cannot_represent
+    assert_raise(RuntimeError) { Prefix_entry.new(:match=>2, :prefix=>'10.0.0.0/8') }
+    assert_raise(RuntimeError) { Prefix_entry.new(:prefix=>'10.0.0.0/8').match = 2 }
+  end
+
+  # Action is two bits, so 3 arrives on the wire. It has no RFC 5291 meaning,
+  # and the octets are kept and written back unchanged.
+  def test_prefix_entry_keeps_an_action_it_does_not_know
+    wire = ['c00000000a0000080a'].pack('H*')
+    e = Prefix_entry.new(wire.is_packed)
+    assert_equal(3, e.action_to_i)
+    assert_equal('unknown action', e.action_to_s)
+    assert_equal(0, e.match_to_i)
+    assert_equal('c00000000a0000080a', e.to_shex)
+    assert_equal('seq  10 unknown action 10.0.0.0/8 permit', e.to_s)
+  end
+
+  # The prefix of an entry is read in the address family of the ORF, so
+  # _parse_ takes the AFI. IANA AFI 2 is IPv6.
+  def test_prefix_entry_ipv6_prefix
+    e = Prefix_entry.new(0, 0, 10, 0, 0, '2011:1::/32')
+    assert_equal('000000000a00002020110001', e.to_shex)
+    back = Prefix_entry.new(e.encode.is_packed, 2)
+    assert_equal('seq  10    add 2011:1::/32 permit', back.to_s)
+    assert_equal(e.encode, back.encode)
+  end
+
+  def test_prefix_orf_add_refuses_anything_but_a_prefix_entry
+    assert_raise(ArgumentError) { Prefix_orf.new << 'not an entry' }
+    assert_raise(ArgumentError) { Prefix_orf.new.add(Prefix_orf.new) }
+  end
+
   def test_invalid_argument_raises_quietly
     out, $stdout = $stdout, StringIO.new
     assert_raise(ArgumentError) { Prefix_entry.new(1, 2) }
