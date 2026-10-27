@@ -291,10 +291,13 @@ module BGP
       Attr::Raw.new(flags >> 4, bytes.getbyte(1), bytes.byteslice(hdr, bytes.size - hdr)).override(flags: flags >> 4, length: len)
     end
 
+    # pa.as_path_sequence=, pa.as_path_set=, and so on, one per
+    # As_path.new_* builder. Every other name falls through to
+    # NoMethodError. There used to be a 'med=' branch here with an empty
+    # body, which made pa.med=10 a silent no-op; med= is now a real
+    # accessor, defined from the :med registration key.
     def method_missing(name, *args, &block)
-      if name.to_s == 'med='
-        #multi_exit_disc= *args
-      elsif name.to_s =~ /^as_path_(.+)=$/
+      if name.to_s =~ /^as_path_(.+)=$/
         replace(As_path, As_path.send("new_#{$1}", *args))
       else
         super

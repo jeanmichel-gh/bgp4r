@@ -303,7 +303,9 @@ module BGP
       #
       # type is the attribute type code (RFC 4271 section 4.3).
       # keys are the Path_attribute hash keys. The first one is the
-      # canonical name, used for accessors such as pa.origin.
+      # canonical name, used by Registration#name. Every key gets its own
+      # Path_attribute accessors, so pa.med works as well as
+      # pa.multi_exit_disc.
       # session: :as4byte or :path_id when parsing needs session info.
       # The block builds the attribute from a hash value. The default
       # is klass.new(value).
@@ -315,7 +317,7 @@ module BGP
         reg = Registration.new(type, klass, keys, session, builder)
         registered_types[type] = reg
         keys.each { |key| registered_keys[key] = reg }
-        Attr_accessors.define(reg.name, type, klass)
+        keys.each { |key| Attr_accessors.define(key, type, klass) }
         reg
       end
 
@@ -347,8 +349,10 @@ module BGP
 
   end
 
-  # Accessors for Path_attribute, one set per registered class:
+  # Accessors for Path_attribute, one set per registered key:
   # has_a_origin_attr?, has_an_origin?, origin and origin=.
+  # A key that is an alias of another gets its own set, so pa.med and
+  # pa.multi_exit_disc both reach attribute 4.
   # They match on the type code, so an As4_path is not an as_path.
   module Attr_accessors
     def self.define(name, type, klass)

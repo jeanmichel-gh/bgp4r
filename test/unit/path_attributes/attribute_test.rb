@@ -125,6 +125,47 @@ class Attr_registry_Test < Test::Unit::TestCase
     assert_nil(Attr.by_key(:no_such_attr))
   end
 
+  # Attr_accessors.define used to be called once per registration, with
+  # the canonical name only, so an alias key had no accessors at all.
+  def test_every_key_has_accessors
+    pa = Path_attribute.new(Origin.new(:igp))
+    Attr.registrations.each do |reg|
+      reg.keys.each do |key|
+        ["has_a_#{key}_attr?", key.to_s, "#{key}="].each do |m|
+          assert(pa.respond_to?(m), "#{m} is missing")
+        end
+      end
+    end
+    # The five alias keys, named, so a lost registration key is caught.
+    # An alias accessor reads the same type code as its canonical name.
+    { :nexthop=>:next_hop, :med=>:multi_exit_disc, :community=>:communities,
+      :large_community=>:large_communities,
+      :extended_community=>:extended_communities,
+    }.each do |alias_key, canonical|
+      assert(pa.respond_to?("#{alias_key}="), "#{alias_key}= is missing")
+      assert(pa.respond_to?("has_a_#{alias_key}_attr?"), "has_a_#{alias_key}_attr? is missing")
+      assert_equal(Attr.by_key(canonical).type, Attr.by_key(alias_key).type, alias_key.to_s)
+    end
+  end
+
+  # The has_an_ form is still added for a key starting with a vowel, and
+  # only for one.
+  def test_vowel_alias_still_follows_the_key
+    pa = Path_attribute.new(Origin.new(:igp))
+    [:has_an_origin?, :has_an_aigp?, :has_an_as_path?, :has_an_aggregator?,
+     :has_an_extended_community?, :has_an_extended_communities?,
+     :has_an_ipv6_extended_communities?].each do |m|
+      assert(pa.respond_to?(m), "#{m} is missing")
+    end
+    [:has_an_med?, :has_an_nexthop?, :has_an_community?, :has_an_next_hop?,
+     :has_an_large_community?].each do |m|
+      assert(! pa.respond_to?(m), "#{m} should not be defined")
+    end
+    assert(pa.has_an_origin?)
+    assert_equal(pa.has_a_origin_attr?, pa.has_an_origin?)
+    assert(! pa.has_an_aigp?)
+  end
+
   def test_session_option
     assert_equal(:as4byte, Attr.by_type(ATTR::AS_PATH).session)
     assert_equal(:path_id, Attr.by_type(ATTR::MP_REACH).session)
