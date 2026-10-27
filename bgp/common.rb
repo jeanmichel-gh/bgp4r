@@ -65,17 +65,44 @@ class IPAddr
   def increment
     @increment ||= _generate_network_inc_
   end
-  
-  def ^(i)
-    x = to_i + increment.call(i)
-    if ipv4?
-      [IPAddr.create(x).to_s, mlen].join("/")
-    else
-      y = [(format "%032x",x)].pack('H*')
-      [IPAddr.new_ntoh(y).to_s ,mlen].join("/")
+
+  # The n-th network of this prefix's length, counting this one as 0, as
+  # "a.b.c.d/len" or "x:x::/len". A negative n steps back.
+  #
+  # An IPv4 address is "fixed length of four octets (32 bits)", RFC 791
+  # section 2.3, and "IPv6 addresses are 128-bit identifiers", RFC 4291
+  # section 2. A result outside 0..IN4MASK, or 0..IN6MASK, is no address of
+  # this family, so both families refuse it with IPAddr::InvalidAddressError.
+  # That is what ipaddr's own IPAddr#set raises for an address outside its
+  # family, so IPAddr#+ raises it too when it steps off the end, and the two
+  # bgp4r operators now agree with each other and with ipaddr.
+  #
+  # The two families used to disagree. IPv4 wrapped silently through
+  # pack('N'), so 255.255.255.0/24 stepped on to 0.0.0.0/24 and 0.0.0.0/0
+  # stepped on to itself. IPv6 raised AddressFamilyError, because
+  # format("%032x", n) of a value past 2**128 is 33 hex digits and
+  # new_ntoh then got 17 octets; under the floor it was worse, since
+  # format("%032x", -4) holds ".." and pack('H*') turned that into an octet,
+  # so ::/126 stepped back to eeff:ffff:ffff:ffff:ffff:ffff:ffff:fffc/126.
+  def nth_network(n)
+    x = to_i + increment.call(n)
+    max = ipv4? ? IN4MASK : IN6MASK
+    unless (0..max) === x
+      raise IPAddr::InvalidAddressError,
+            "#{self}/#{mlen} stepped by #{n} is outside " \
+            "#{IPAddr.new(0, family)}..#{IPAddr.new(max, family)}"
     end
+    [IPAddr.new(x, family).to_s, mlen].join("/")
   end
-  
+
+  # ipaddr has &, |, ~, << and >>, but no ^, on Ruby 3.3, 3.4 and 4.0, so
+  # this adds an operator rather than redefining one. It is not bitwise xor:
+  # it steps whole networks. Prefer nth_network, the name no future ipaddr
+  # can take.
+  def ^(n)
+    nth_network(n)
+  end
+
   private :_generate_network_inc_
 
   private 
@@ -145,11 +172,11 @@ class String
     end
     if l.size%2 >0
       ns = if l.size>1 then 1 else 0 end
-        if RUBY_VERSION.split('.').join[0,2] > "18"
-          ls.last << format("%s%2.2x",' '*ns,l[-1].unpack('C')[0])
-        else
-          ls.last << format("%s%2.2x",' '*ns,l[-1])
-        end
+      # There used to be a RUBY_VERSION test here, with an else branch that
+      # passed l[-1] straight to format. That was for Ruby 1.8, where l[-1]
+      # was an Integer. Since 1.9 it is a one character String, which format
+      # cannot take, so the branch could not run on any Ruby bgp4r supports.
+      ls.last << format("%s%2.2x",' '*ns,l[-1].unpack('C')[0])
     end
     ls
   end
