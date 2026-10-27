@@ -493,10 +493,13 @@ carries both the daemon and the `gobgp` client, which is why the
 topology mounts its folder at `/config` and does not override the
 command.
 
-The pin is a 3.x tag, because `gobgp.toml` in the topology is the schema
-verified against GoBGP 3.23, which is also the version that produced the
-results in the next section. 4.x tags of the same image exist and are
-the next step. Trying one needs no edit:
+The pin is 3.23.0. That is the version `gobgp.toml` in the topology was
+verified against, and the version that produced the results in the next
+section, so a container run is comparable to those results rather than
+being a separate data point.
+
+It is also over two years old, which is the trade. 4.x tags of the same
+image exist and are the next step. Trying one needs no edit:
 
 ```
 GOBGP_IMAGE=jauderho/gobgp:v4.10.0 docker compose \

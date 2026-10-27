@@ -23,13 +23,17 @@
 # build, so it runs on an Apple Silicon Mac without emulation. The old
 # osrg/gobgp image on Docker Hub is amd64 only and years stale.
 #
-# The pin is a 3.x tag because gobgp.toml here is the schema verified
-# against GoBGP 3.23, and 3.37 is the same major line. 4.x tags of this
-# image exist and are the next step, but a major version is its own
-# change; try one without editing anything:
+# The pin is 3.23.0, which is both the version gobgp.toml here was
+# verified against and the version behind the results in
+# docs/protocol-testing.md, so a run here is comparable to those. It has
+# a native linux/arm64 build.
+#
+# It is also over two years old. 4.x tags of this image exist and are
+# the next step, but a major version is its own change. Try one without
+# editing anything:
 #   GOBGP_IMAGE=jauderho/gobgp:v4.10.0 docker compose ... up
 # To check a tag has arm64 before pulling it:
-#   docker buildx imagetools inspect jauderho/gobgp:v3.37.0
+#   docker buildx imagetools inspect jauderho/gobgp:v3.23.0
 #
 # The image reads its config from /config/gobgp.toml and ships both the
 # daemon and the gobgp client, so this mounts the topology folder at
@@ -41,7 +45,7 @@ name: bgp4r-fault-matrix
 
 services:
   router:
-    image: ${GOBGP_IMAGE:-jauderho/gobgp:v3.37.0}
+    image: ${GOBGP_IMAGE:-jauderho/gobgp:v3.23.0}
     volumes:
       - ./:/config:ro
     networks:

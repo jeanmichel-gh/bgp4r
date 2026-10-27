@@ -1,8 +1,8 @@
 # Read by the router container as /config/gobgp.toml.
 #
-# This schema is the one verified against GoBGP 3.23, and the compose
-# file pins a 3.x image to match. On a 4.x image, if the daemon rejects
-# a key its log says which one, and this file is where to fix it.
+# This schema was verified against GoBGP 3.23, and the compose file
+# pins exactly that version. On a newer image, if the daemon rejects a
+# key its log says which one, and this file is where to fix it.
 
 [global.config]
   as = 65002
