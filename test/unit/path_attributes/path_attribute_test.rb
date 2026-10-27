@@ -358,6 +358,76 @@ class Path_attribute_Test < Test::Unit::TestCase # :nodoc:
     assert_equal("Link bandwidth: 100000000.0", pa.extended_communities.link_bandwidth.to_s)
   end
 
+  # method_missing caught 'med=' and its body was commented out, so
+  # pa.med=10 returned 10 and did nothing. A script that set a MED sent
+  # an UPDATE without one and got no warning.
+  def test_med_setter_is_not_a_silent_no_op
+    pa = Path_attribute.new(Origin.new(:igp))
+    pa.med = 10
+    assert(pa.has_a_med_attr?)
+    assert(pa.has_a_multi_exit_disc_attr?)
+    assert_equal(Multi_exit_disc, pa[:med].class)
+    assert_equal(10, pa.med.to_i)
+    assert_equal(10, pa.multi_exit_disc.to_i)
+    assert_equal('8004040000000a', pa.med.to_shex)
+    assert_equal({:origin=>:igp, :med=>10}, pa.to_hash)
+  end
+
+  # The alias key and the canonical name are the same attribute, so a
+  # setter replaces, it does not append a second MULTI_EXIT_DISC.
+  def test_med_alias_and_canonical_name_are_one_attribute
+    pa = Path_attribute.new(:med=>10)
+    pa.med = 20
+    assert_equal(1, pa.size)
+    assert_equal(20, pa.multi_exit_disc.to_i)
+    pa.multi_exit_disc = 30
+    assert_equal(1, pa.size)
+    assert_equal(30, pa.med.to_i)
+  end
+
+  # Every other alias key gets accessors too.
+  def test_alias_accessors_for_the_other_keys
+    pa = Path_attribute.new(Origin.new(:igp))
+    pa.nexthop = '1.2.3.4'
+    pa.community = '1311:1'
+    pa.large_community = '1:2:3'
+    pa.extended_community = Route_target.new(13111, 26054)
+    assert(pa.has_a_nexthop_attr?)
+    assert(pa.has_a_community_attr?)
+    assert(pa.has_a_large_community_attr?)
+    assert(pa.has_an_extended_community?)
+    assert_equal('40030401020304', pa.next_hop.to_shex)
+    assert_equal('c00804051f0001', pa.communities.to_shex)
+    assert_equal('c0200c000000010000000200000003', pa.large_communities.to_shex)
+    assert_equal('c0100800023337000065c6', pa.extended_communities.to_shex)
+    # The alias getter finds the same attribute as the canonical one.
+    assert_same(pa.next_hop, pa.nexthop)
+    assert_same(pa.communities, pa.community)
+    assert_same(pa.large_communities, pa.large_community)
+    assert_same(pa.extended_communities, pa.extended_community)
+  end
+
+  # A setter nobody registered must raise, never be swallowed.
+  def test_unknown_setter_raises
+    pa = Path_attribute.new(Origin.new(:igp))
+    assert_raise(NoMethodError) { pa.no_such_attr = 1 }
+    assert_raise(NoMethodError) { pa.local_preference = 1 }
+    assert_raise(NoMethodError) { pa.multi_exit_discriminator = 1 }
+    assert_equal(1, pa.size)
+  end
+
+  # The /^as_path_(.+)=$/ branch of method_missing, one per
+  # As_path.new_* builder. A name with no builder raises.
+  def test_as_path_builder_setters
+    pa = Path_attribute.new(Origin.new(:igp))
+    pa.as_path_sequence = [1, 2, 3]
+    assert_equal('1 2 3', pa.as_path.as_path)
+    pa.as_path_set = [4, 5]
+    assert_equal('{4, 5}', pa.as_path.as_path)
+    assert_equal(2, pa.size)
+    assert_raise(NoMethodError) { pa.as_path_bogus = [1] }
+  end
+
   def test_unknown_hash_key_raises_quietly
     out, $stdout = $stdout, StringIO.new
     assert_raise(ArgumentError) { Path_attribute.new(:no_such_attr=>1) }
