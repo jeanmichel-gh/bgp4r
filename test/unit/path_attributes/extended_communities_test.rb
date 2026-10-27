@@ -432,4 +432,52 @@ class Extended_communitiesTest < Test::Unit::TestCase
     assert_equal pa.encode, Path_attribute.new(pa.to_hash).encode
   end
 
+  # RFC 4360 section 2: the collection slices its own copy of the
+  # attribute value 8 octets at a time and hands each whole slice to the
+  # factory. Extended_community#parse no longer consumes what it is
+  # given, which the collection never needed, so the loop and every
+  # community it builds stay byte for byte what they were. One attribute
+  # per structure, the FLOAT one of draft-ietf-idr-link-bandwidth
+  # included, plus an attribute whose odd octets are kept as a tail.
+  def test_the_collection_loop_still_reads_whole_communities
+    [['c010100002000100000001400400004cbebc20',
+      [{:route_target=>[1, 1]}, {:link_bandwidth=>[0, 100000000.0]}]],
+     ['c01010010201010101006440040064447a0000',
+      [{:route_target=>['1.1.1.1', 100]}, {:link_bandwidth=>[100, 1000.0]}]],
+     ['c01010030b000000000064030c000000000008',
+      [{:color=>100}, {:encapsulation=>:vxlan}]],
+     # RFC 8097 section 2: the origin validation state is non-transitive.
+     ['c0101043000000000000010008006400000064',
+      [{:origin_validation_state=>1}, {:bgp_data_collect=>[100, 100]}]],
+     ['c0101001050102030400000107010203040000',
+      [{:ospf_domain_id=>'1.2.3.4'}, {:ospf_router_id=>'1.2.3.4'}]],
+     # RFC 7606 section 7.14: octets past the last whole community are
+     # kept, so encode gives back what arrived.
+     ['c0100a0002000100000001ffff',
+      [{:route_target=>[1, 1]}, {:tail=>'ffff'}]],
+    ].each do |hex, hash|
+      # Fresh octets each time: Attr#_parse_ consumes the attribute it
+      # reads, which is how a stream of path attributes is parsed.
+      wire = ->{ [hex].pack('H*') }
+      ec = Extended_communities.new(wire.call)
+      assert_equal(hex, ec.to_shex, hex)
+      assert_equal({:extended_communities=> hash}, ec.to_hash, hex)
+      # The hash round trips, and so does the whole attribute.
+      assert_equal(hex, Extended_communities.new(ec.to_hash).to_shex, hex)
+      assert_equal(hex, Extended_communities.new(ec).to_shex, hex)
+      assert_equal(hex, Path_attribute.new(wire.call)[:extended_communities].to_shex, hex)
+    end
+    # RFC 5668 section 2: the 4 octet AS specific types, 0x02 and 0x03.
+    # The wire form round trips through the loop. The hash does not, and
+    # did not before this change either: a 4 octet AS specific community
+    # whose AS fits in 2 octets comes back as the 2 octet AS form, so
+    # c010080202000000640001 reads back as c010080002006400000001. Listed
+    # under "Known issues to work on" in CLAUDE.md.
+    ['c010080202000000640001', 'c010080203000000640001',
+     'c010080202fa56ea010001', 'c010080203fa56ea010001'].each do |hex|
+      assert_equal(hex, Extended_communities.new([hex].pack('H*')).to_shex, hex)
+      assert_equal(hex, Path_attribute.new([hex].pack('H*'))[:extended_communities].to_shex, hex)
+    end
+  end
+
 end

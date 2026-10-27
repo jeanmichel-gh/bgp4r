@@ -239,8 +239,10 @@ class Extended_community_Test < Test::Unit::TestCase
   # as 40040000447a0000 and the AS could neither be set nor read back.
   # Bytes in, different bytes out, by every route into the class.
   def test_link_bandwidth_carries_the_global_administrator
-    # AS 100, 1000 bytes per second. Fresh octets each time: parse slices
-    # the string it is given.
+    # AS 100, 1000 bytes per second. The octets used to be fresh each
+    # time because parse sliced the String it was given; it reads them
+    # where they lie now, and test_parse_leaves_the_callers_string_alone
+    # holds it to that.
     wire = ->{ ['40040064447a0000'].pack('H*') }
     assert_equal('40040064447a0000', Link_bandwidth.new(wire.call).to_shex)
     assert_equal('40040064447a0000', Extended_community.new(wire.call).to_shex)
@@ -543,6 +545,91 @@ class Extended_community_Test < Test::Unit::TestCase
   # The transitive bit is masked when dispatching (RFC 4360 section 2).
   def test_non_transitive_variants_keep_their_type
     check_sub_type(Mac_mobility, '4600000000000005', 'MAC Mobility: sequence 5')
+  end
+
+  # RFC 4360 section 2: the 8 octets are a type, a sub-type and 6 value
+  # octets, and parse reads them where they lie. It used to start with
+  # s.slice!(0,2), so the caller's String came back 2 octets shorter: the
+  # same wire bytes built a community once and raised TypeError from
+  # pack on every build after that. Wire bytes are one of the three build
+  # paths every class owes, so build from one String twice and check the
+  # String afterwards.
+  def test_parse_leaves_the_callers_string_alone
+    [[Extended_community, '0002000100000001'], # 2 octet AS specific
+     [Route_target,       '0002000100000001'],
+     [Route_target,       '0102010101010064'], # IPv4 address specific
+     [Route_target,       '0202000000640001'], # 4 octet AS specific, RFC 5668
+     [Route_origin,       '0003000100000001'],
+     [Route_origin,       '0103010101010064'],
+     [Route_origin,       '0203000000640001'],
+     [Opaque,             '030a0a0000010064'],
+     [Color,              '030b000000000064'],
+     [Origin_validation_state, '03000000000000ff'],
+     [Link_bandwidth,     '40040064447a0000'], # the FLOAT structure
+     [Bgp_data_collect,   '0008006400000064'],
+     [Ospf_domain_id,     '0105010203040000'],
+     [Ospf_router_id,     '0107010203040000'],
+     [Extended_community::Unknown, 'ffff000000000000'],
+     [Encapsulation,      '030c000000000008'], # Typed, byteslices already
+    ].each do |klass, hex|
+      wire = [hex].pack('H*')
+      first = klass.new(wire)
+      assert_equal(hex, first.to_shex, hex)
+      # The defect itself: the String the caller still holds.
+      assert_equal(hex, wire.unpack1('H*'), hex)
+      assert_equal(8, wire.size, hex)
+      # And so the second build, and the third, give the same community.
+      second = klass.new(wire)
+      assert_equal(hex, second.to_shex, hex)
+      assert_equal(first.to_s, second.to_s, hex)
+      assert_equal(first.to_hash, second.to_hash, hex)
+      assert_equal(hex, klass.new(wire).to_shex, hex)
+      # The factory takes the same octets and must not eat them either.
+      assert_equal(hex, Extended_community.factory(wire).to_shex, hex)
+      assert_equal(hex, Extended_community.factory(wire).to_shex, hex)
+      assert_equal(hex, wire.unpack1('H*'), hex)
+    end
+  end
+
+  # Nothing is mutated, so wire bytes that cannot be written to parse
+  # too. This used to raise FrozenError on the first build.
+  def test_parse_takes_frozen_wire_bytes
+    wire = ['0002000100000001'].pack('H*').freeze
+    assert_equal('0002000100000001', Route_target.new(wire).to_shex)
+    assert_equal('0002000100000001', Extended_community.factory(wire).to_shex)
+  end
+
+  # A truncated community is one of the things this library exists to
+  # put on the wire, so fewer than 8 octets still build, with the fields
+  # that are not there left nil. byteslice gives nil past the end of a
+  # String shorter than the type and the sub-type, where slicing gave
+  # '', which is why parse guards it. Nothing here is new behaviour: the
+  # same objects came out before, only the octets did not survive the
+  # build.
+  def test_parse_keeps_taking_short_octets
+    [[Extended_community, '00',           'Extended community: :'],
+     [Route_target,       '0002',         'Route target: :'],
+     [Route_target,       '000200',       'Route target: :'],
+     [Route_target,       '00020001',     'Route target: 1:'],
+     [Route_target,       '000200010000', 'Route target: 1:'],
+     [Opaque,             '030a',         'Opaque: '],
+    ].each do |klass, hex, text|
+      wire = [hex].pack('H*')
+      assert_equal(text, klass.new(wire).to_s, hex)
+      # Built twice from the same octets, and the octets kept.
+      assert_equal(text, klass.new(wire).to_s, hex)
+      assert_equal(hex, wire.unpack1('H*'), hex)
+    end
+    # An opaque community pads its value, so short octets encode too.
+    short = ['030a'].pack('H*')
+    assert_equal('030a000000000000', Opaque.new(short).to_shex)
+    assert_equal('030a000000000000', Opaque.new(short).to_shex)
+    assert_equal('030a', short.unpack1('H*'))
+    # Octets past the eighth are read no further, and left in place.
+    long = ['0002000100000001ffff'].pack('H*')
+    assert_equal('0002000100000001', Route_target.new(long).to_shex)
+    assert_equal('0002000100000001', Route_target.new(long).to_shex)
+    assert_equal('0002000100000001ffff', long.unpack1('H*'))
   end
 
 end
