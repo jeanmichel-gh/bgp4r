@@ -37,7 +37,7 @@ ARG RUBY_VERSION=3.4
 # topology passes its own value through, so the client and the router it
 # queries are always the same version. It is declared here, above the first
 # stage, because a FROM can only use an ARG declared before the first FROM.
-ARG GOBGP_IMAGE=jauderho/gobgp:v4.10.0
+ARG GOBGP_IMAGE=jauderho/gobgp:v3.23.0
 
 FROM ruby:${RUBY_VERSION}-slim AS base
 WORKDIR /app

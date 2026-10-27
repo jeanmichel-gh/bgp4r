@@ -132,7 +132,10 @@ Smaller things:
 
 Lab and conformance:
 
-* The GoBGP configs are written for the 3.23 schema: `lab/conformance/gobgpd.conf` and `lab/topologies/fault-matrix/gobgp.toml`. The fault matrix topology pins GoBGP 3.23 to match them, so the conformance suite only ever tests a router from 2024. Updating both configs to the 4.x schema, then rerunning the matrix to see which verdicts move, is the fix. A rejected key shows up in the router's own log.
+* The conformance suite only ever tests GoBGP 3.23, a router from 2024. Moving to 4.x is **not** a config job, which is what this entry used to say. GoBGP 4 reads these configs unchanged: every key in `lab/conformance/gobgpd.conf` and `lab/topologies/fault-matrix/gobgp.toml` is still in the 4.x config structs under the same `mapstructure` name, 4.x registers `mapstructure.StringToNetIPAddrHookFunc` in its viper decode hook so the address fields still decode from TOML strings, and a CI run on 4.10 started the router and got a session for all 18 faults.
+  * What breaks on 4.10 is the RIB read. Every route verdict came back empty, so `test_the_rib_answer_was_usable` fails and the attribute-discard assertions fail with it. `aggregator_length` is only the first name in the sorted list, not a special case.
+  * Not the obvious suspects: 4.x `gobgp` still takes `-u` for the host and still defaults to port 50051, and `gobgpd` still defaults `--api-hosts` to `:50051`. Reading more source did not settle it; the next step is to run it and look. The compose file has the two commands for that.
+  * Candidates worth checking first: whether the router installs the plain baseline route at all under 4.x, and whether `gobgp global rib` still prints the prefix in a form `route_installed?` matches, since it greps stdout for the bare string `203.0.113.0`.
 * `lab/topologies/fault-matrix` exits 1, and that is the right answer: GoBGP 3.23 discards the malformed tunnel encapsulation attribute and installs the route where RFC 9012 section 13 asks for treat-as-withdraw. Both cases are asserted as a known divergence in `test/functional/lab/fault_matrix_test.rb`. A newer GoBGP may fix it; see the comment on `TUNNEL_ENCAP` there.
 * Lowest coverage (unit suite): `orfs/prefix_orf.rb` 79%, `common.rb` 82%, `nlris/nlri.rb` 83%, `messages/route_refresh.rb` 83%, `optional_parameters/capability.rb` 86%.
 
