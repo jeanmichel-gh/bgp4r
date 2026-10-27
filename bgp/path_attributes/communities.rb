@@ -221,12 +221,17 @@ module BGP
     end
 
     def encode
-      super(@communities.collect { |comm| comm.encode }.join)
+      super(@communities.collect { |comm| comm.encode }.join + (@tail || ''))
     end
 
+    # RFC 1997: 4 octets per community. Octets past the last whole one are
+    # kept, so encode gives back what was received. RFC 7606 section 7.8
+    # makes such an attribute malformed; Path_attribute#errors reports it.
     def parse(s)
-      @flags, @type, len, value=super(s)
-      self << value.unpack("N#{len/4}")
+      @flags, @type, _, value=super(s)
+      whole = value.size / 4 * 4
+      self << value.byteslice(0, whole).unpack('N*')
+      @tail = value.byteslice(whole, value.size - whole).b if value.size > whole
     end
 
     def sort
