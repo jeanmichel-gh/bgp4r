@@ -193,6 +193,13 @@ module BGP
       end
     end
 
+    # send_message could not queue the message because the session's output
+    # queue is closed: stop or close happened. A RuntimeError, so callers
+    # that rescue RuntimeError still catch it, but a class of its own, so
+    # the event thread can tell it from a real error such as a send before
+    # start.
+    class SessionClosed < RuntimeError ; end
+
     # The thread that handles messages and events from the session.
     # It runs until close.
     def event_dispatch
@@ -202,50 +209,62 @@ module BGP
           event = eventQ.deq
           # A closed and empty queue returns nil: close was called.
           break if event.nil?
-          ev, type, m = event
-          case ev
-          when :ev_msg
-            begin
-              msg = BGP::Message.factory(m, @session_info)
-            rescue UnknownBgpMessage => e
-              Log.error e.message
-              next
-            rescue Malformed_attribute => e
-              rcv_malformed(e)
-              next
-            end
-            log_info "Recv#{msg.class.to_s.split('::').last}"
-            log_debug "Recv #{msg}\n"
-            if msg.is_a?(Update)
-              rcv_update(msg)
-            elsif msg.is_a?(Notification)
-              rcv_notification(msg)
-            elsif msg.is_a?(Open)
-              rcv_open(msg)
-            elsif msg.is_a?(Route_refresh)
-              rcv_route_refresh(msg)
-            elsif msg.is_a?(Orf_route_refresh)
-              rcv_route_refresh(msg)
-            elsif msg.is_a?(Keepalive)
-              rcv_keepalive
-            else
-              Log.error "unexpected message type #{type}"
-            end
-            changed and notify_observers(msg)
-          when :ev_conn_reset
-            Log.warn "#{type}"
-            stop
-          when :ev_holdtime_expire
-            Log.warn "Holdtime expire: #{type}"
-            stop
-            changed and notify_observers(BGP::Notification.code_to_s(4))
-          else
-            Log.error "unexpected event #{ev}"
+          begin
+            dispatch_event(*event)
+          rescue SessionClosed => e
+            # stop won the race: it closed the output queue while this event
+            # was being handled, so the reply the FSM wanted to send has
+            # nowhere to go. Drop the event and keep the thread, which must
+            # outlive stop so that start works again.
+            log_info "#{e.message}, event dropped"
           end
         end
       end
     end
-    
+
+    # Handles one event from the queue. Called on the event thread only.
+    def dispatch_event(ev, type=nil, m=nil)
+      case ev
+      when :ev_msg
+        begin
+          msg = BGP::Message.factory(m, @session_info)
+        rescue UnknownBgpMessage => e
+          Log.error e.message
+          return
+        rescue Malformed_attribute => e
+          rcv_malformed(e)
+          return
+        end
+        log_info "Recv#{msg.class.to_s.split('::').last}"
+        log_debug "Recv #{msg}\n"
+        if msg.is_a?(Update)
+          rcv_update(msg)
+        elsif msg.is_a?(Notification)
+          rcv_notification(msg)
+        elsif msg.is_a?(Open)
+          rcv_open(msg)
+        elsif msg.is_a?(Route_refresh)
+          rcv_route_refresh(msg)
+        elsif msg.is_a?(Orf_route_refresh)
+          rcv_route_refresh(msg)
+        elsif msg.is_a?(Keepalive)
+          rcv_keepalive
+        else
+          Log.error "unexpected message type #{type}"
+        end
+        changed and notify_observers(msg)
+      when :ev_conn_reset
+        Log.warn "#{type}"
+        stop
+      when :ev_holdtime_expire
+        Log.warn "Holdtime expire: #{type}"
+        stop
+        changed and notify_observers(BGP::Notification.code_to_s(4))
+      else
+        Log.error "unexpected event #{ev}"
+      end
+    end
+
     def clean
       @threads.list.each { |x| 
         x.exit; x.join
@@ -382,7 +401,7 @@ module BGP
     rescue ClosedQueueError
       txt = "Could not Send#{m.class.to_s.split('::')[-1]}: session closed"
       log_warn txt
-      raise txt
+      raise SessionClosed, txt
     end
     
     def init_io
@@ -460,9 +479,14 @@ module BGP
         new_state(:Established, 'RecvKeepAlive')
         @keepalive_thread = Thread.new(@holdtime/3) do |h|
           Thread.current['name'] = "BGP Keepalive interval:(#{h})"
-          loop do
-            sleep(h)
-            send_message(BGP::Keepalive.new)
+          begin
+            loop do
+              sleep(h)
+              send_message(BGP::Keepalive.new)
+            end
+          rescue SessionClosed
+            # stop closed the output queue between its close and the kill
+            # that clean does. The session is going away: stop sending.
           end
         end
         @threads.add(@keepalive_thread)
