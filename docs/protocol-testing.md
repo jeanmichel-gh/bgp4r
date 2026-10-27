@@ -136,7 +136,7 @@ Fault.duplicate(Origin.new(0))                # a Path_attribute, the attribute 
 
 ## The catalog
 
-`BGP::Fault::CATALOG` holds 13 named cases, each with the RFC 7606
+`BGP::Fault::CATALOG` holds 18 named cases, each with the RFC 7606
 action a receiver should take and the UPDATE error subcode.
 
 ```ruby
@@ -163,6 +163,33 @@ Fault.wire(:origin_length)         # its octets either way
 | `attr_overrun` | length past the attribute list | treat as withdraw |
 | `duplicate_attr` | attribute sent twice | attribute discard |
 | `duplicate_mp_reach` | MP_REACH_NLRI sent twice | session reset |
+
+The last five are attributes that carry their own TLVs, where the
+framing is what a receiver gets wrong. Each cuts the nesting at a
+different level.
+
+| Name | Fault | Expected |
+|---|---|---|
+| `prefix_sid_tlv` | Prefix-SID TLV overruns the attribute | attribute discard |
+| `prefix_sid_label_index` | Label-Index TLV length not 7 | attribute discard |
+| `pmsi_length` | PMSI_TUNNEL shorter than its 5 octet fixed part | treat as withdraw |
+| `tunnel_encap_tlv` | tunnel TLV overruns the attribute | treat as withdraw |
+| `tunnel_encap_sub_tlv` | sub-TLV overruns its TLV | treat as withdraw |
+
+The last one is worth a closer look, because it is the only case where
+the fault is one level down. RFC 9012 section 13 says the final octet
+of a TLV must also be the final octet of its final sub-TLV, so a TLV
+length of 4 in front of a 12 octet sub-TLV is malformed:
+
+```ruby
+Tunnel_encap.new(Tunnel_encap::Tunnel.new(:vxlan,
+  Tunnel_encap::Egress_endpoint.new('10.0.0.1')).length!(4))
+# c0171000080004060a0000000000010a000001
+```
+
+`Tunnel#length!` writes a TLV length that is not the real one. Nothing
+else in the catalog needs it, because every other fault lives in the
+attribute header or its value.
 
 ## Receiving: policies and findings
 
@@ -301,8 +328,13 @@ Run as native processes on loopback, all three at once.
 | attribute discard cases | agrees | agrees | keeps the session |
 | unrecognized well known | reset 3/2 | reset 3/10 | keeps the session |
 | duplicate MP_REACH | reset 3/1 | reset 3/1 | reset 3/1 |
+| Prefix-SID TLV overruns | agrees | agrees | keeps the session |
+| Label-Index length not 7 | no check | agrees | keeps the session |
+| PMSI_TUNNEL too short | agrees | resets, 3/10 | keeps the session |
+| tunnel TLV overruns | installs the route | installs the route | keeps the session |
+| sub-TLV overruns its TLV | discards the attribute | installs the route | keeps the session |
 
-GoBGP agrees on all 13.
+GoBGP agrees on 16 of the 18.
 
 FRR identifies each malformed attribute and says "treating as
 withdrawal" in its log, then its withdraw path fails to parse the NLRI
@@ -310,6 +342,33 @@ and it resets with Invalid Network Field. The two attribute discard
 cases keep both session and route, so it parses our NLRI correctly on
 the normal path. This is the Ubuntu 24.04 build; current FRR is 10.x, so
 check a current build before reporting it anywhere.
+
+### The TLV carrying attributes
+
+These five cases are the interesting ones, and they need the router's
+own log, not just the verdict column.
+
+Both GoBGP and FRR see the malformed tunnel TLV and then do something
+weaker than RFC 9012 section 13 asks. The section is a MUST: the final
+octet of a TLV must also be the final octet of its final sub-TLV, and a
+TLV that breaks that is malformed, treat as withdraw. GoBGP logs "Not
+all TunnelEncapSubTLV bytes available" and discards the attribute. FRR
+logs `bgp_attr_encap: tlv_length(4) != length(12)` and keeps the route.
+Neither withdraws. Two independent stacks landing in the same place is
+worth knowing before reading it as a bug in either.
+
+On the Prefix-SID Label-Index length they split. FRR logs "Prefix SID
+label index length is 6 instead of 7". GoBGP logs nothing and installs
+the route, so it never checks the length RFC 8669 section 3.1 fixes at
+7. The verdict column scores GoBGP as agreeing here, which is the trap
+below: for an attribute discard case, an installed route looks the same
+whether the router discarded a bad attribute or never looked at it.
+
+The PMSI result is confounded. FRR logs both "Bad PMSI tunnel attribute
+length 4" and that the attribute is not one it knows how to handle,
+because the fault rides an IPv4 unicast route and PMSI_TUNNEL belongs
+to the MVPN SAFIs. Either reason alone would produce the withdraw.
+Carry that fault on an MVPN route to separate them.
 
 BIRD keeps the session on an unrecognized well known attribute, where
 RFC 4271 section 6.3 asks for a reset. That may be deliberate
@@ -322,7 +381,9 @@ Two things worth knowing when reading any of these results:
 * A verdict can be right for the wrong reason. The duplicate MP_REACH
   case counts as agreeing whenever the session resets, so a router that
   rejects the address family rather than the duplicate still scores a
-  pass. Read the router's own log when a result matters.
+  pass. An attribute discard case counts as agreeing whenever the route
+  is installed, so a router that never validated the attribute scores a
+  pass too. Read the router's own log when a result matters.
 * Run one router at a time, or make sure the harness is talking to the
   one you think. Several routers on a host all dial the same port.
 

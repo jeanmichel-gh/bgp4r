@@ -68,6 +68,22 @@ module BGP
       [:duplicate_mp_reach, 'MP_REACH_NLRI sent twice',      :session_reset,     1, '7606 3 (g)',
         -> { Fault.duplicate(Mp_reach.new(:afi => 2, :safi => 1,
                                           :nexthop => '2001:db8::1', :nlris => ['2001:db8:1::/48'])) }],
+      # Attributes that carry their own TLVs. The framing rules are the
+      # part a receiver gets wrong, so each case cuts the nesting at a
+      # different level.
+      [:prefix_sid_tlv,    'Prefix-SID TLV overruns',        :attribute_discard, 5, '8669 6',
+        -> { Fault.value(Prefix_sid.new(Prefix_sid::Label_index.new(100)), '01ffff00') }],
+      [:prefix_sid_label_index, 'Label-Index TLV length not 7', :attribute_discard, 5, '8669 3.1',
+        -> { Fault.value(Prefix_sid.new(Prefix_sid::Label_index.new(100)),
+                         '010006' + '000000000064') }],
+      [:pmsi_length,       'PMSI_TUNNEL shorter than 5',     :treat_as_withdraw, 5, '6514 5',
+        -> { Fault.truncate(Pmsi_tunnel.new(:ingress_replication, '10.0.0.1'), 4) }],
+      [:tunnel_encap_tlv,  'tunnel TLV overruns',            :treat_as_withdraw, 5, '9012 13',
+        -> { Fault.value(Tunnel_encap.new(:tunnel_type => :vxlan,
+                                          :egress_endpoint => '10.0.0.1'), '0008ffff') }],
+      [:tunnel_encap_sub_tlv, 'sub-TLV overruns its TLV',    :treat_as_withdraw, 5, '9012 13',
+        -> { Tunnel_encap.new(Tunnel_encap::Tunnel.new(:vxlan,
+               Tunnel_encap::Egress_endpoint.new('10.0.0.1')).length!(4)) }],
     ].freeze
 
     class << self

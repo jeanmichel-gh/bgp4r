@@ -102,6 +102,27 @@ class TestFault < Test::Unit::TestCase
     assert_equal '4001010040010100', Fault.wire(:duplicate_attr).unpack1('H*')
   end
 
+  # The faults in attributes that carry TLVs, each cutting the nesting at
+  # a different level. The hex is pinned so a change to any of the three
+  # attributes that moved these octets would show up here.
+  def test_nested_attribute_faults
+    { :prefix_sid_tlv         => 'c0280401ffff00',
+      :prefix_sid_label_index => 'c02809010006000000000064',
+      :pmsi_length            => 'c0160400060000',
+      :tunnel_encap_tlv       => 'c017040008ffff',
+      :tunnel_encap_sub_tlv   => 'c0171000080004060a0000000000010a000001',
+    }.each do |name, hex|
+      assert_equal hex, Fault.wire(name).unpack1('H*'), name.to_s
+    end
+    # RFC 9012 section 13: the TLV length says 4, but its one sub-TLV
+    # needs 12, so the TLV does not end on its last sub-TLV.
+    pa = Path_attribute.new(Fault.wire(:tunnel_encap_sub_tlv).is_packed, :as4byte => true)
+    assert_match(/sub-TLV type 6 runs past TLV type 8/, Attr.strongest(pa.errors).reason)
+    # RFC 8669 section 6 discards the attribute rather than withdrawing.
+    ps = Path_attribute.new(Fault.wire(:prefix_sid_tlv).is_packed, :as4byte => true)
+    assert_equal :attribute_discard, ps.action
+  end
+
   def test_catalog_names_are_unique
     names = Fault::CATALOG.collect(&:first)
     assert_equal names.size, names.uniq.size
