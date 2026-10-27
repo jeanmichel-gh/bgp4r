@@ -414,3 +414,77 @@ end
 
 `examples/unit-testing/` has working two peer tests that predate the
 fault layer and still show the shape.
+
+## Annex: running the fault matrix in containers
+
+Everything above runs the matrix by hand against a router you started
+yourself. `lab/topologies/fault-matrix` does the same run in one
+command, with GoBGP as the router, so it can go in CI.
+
+```
+docker compose -f lab/topologies/fault-matrix/compose.yml up --build \
+  --abort-on-container-exit --exit-code-from matrix
+echo "exit: $?"
+```
+
+The exit status is 0 when every answer agrees with the catalog. The
+matrix runs once and exits, which is why the run is in the foreground
+with `--abort-on-container-exit`. To read the results as JSON, copy them
+out after the run and take the topology down:
+
+```
+docker compose -f lab/topologies/fault-matrix/compose.yml cp \
+  matrix:/tmp/fault-matrix.json .
+docker compose -f lab/topologies/fault-matrix/compose.yml down
+```
+
+The addresses are fixed, because `lab/fault_matrix.rb` only listens and
+hangs up on any peer but the one given to `--peer`. The matrix is AS
+65001 on 10.30.0.1 and the router is AS 65002 on 10.30.0.2.
+
+Two variables are optional:
+
+| Variable | What it does |
+|---|---|
+| `GOBGP_IMAGE` | the router image, to pin a version or swap the router |
+| `FAULT_SETTLE` | seconds to wait after each fault, 2 by default |
+
+A full run is roughly two to four minutes at the default settle. Raise
+`FAULT_SETTLE` if a slower machine reports faults with no session.
+
+### The test
+
+```
+LAB_REQUIRE_DOCKER=1 ruby -I. test/functional/lab/fault_matrix_test.rb
+```
+
+`test/functional/lab/fault_matrix_test.rb` runs the topology and asserts
+the session level answers: the two cases that must reset do reset, with
+NOTIFICATION subcodes 2 and 1, and no other case resets. It also fails
+if any fault got no session at all, because that means the harness lost
+the router rather than that the router answered. Without Docker the test
+is omitted, unless `LAB_REQUIRE_DOCKER=1` is set, as in CI.
+
+### What it does not cover
+
+The topology does not read the router's RIB, so it cannot tell
+treat-as-withdraw from attribute-discard. Both keep the session up, and
+only the RIB separates them. That is why the test asserts session
+outcomes alone: those hold for any conformant router, with no router
+specific command in the assertions.
+
+Adding the RIB would need the `gobgp` CLI inside the matrix container,
+which means either copying the binary between images or mounting the
+Docker socket. Until then, use `--rib-command` by hand, as in the
+sections above, and read the router's own log for anything that matters.
+
+### Two things worth knowing
+
+The matrix binds TCP 179 as a non-root user. That works because Docker
+sets `net.ipv4.ip_unprivileged_port_start=0` in a container's own
+network namespace. With `--network host` the host setting applies
+instead, and the bind fails.
+
+The results are copied out of a container that has already exited.
+`docker compose cp` resolves the service to its container either way, so
+it does not matter that the matrix finished.
