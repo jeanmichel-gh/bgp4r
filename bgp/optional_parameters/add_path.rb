@@ -1,5 +1,5 @@
 #--
-# Copyright 2010 Jean-Michel Esnault.
+# Copyright 2010, 2026 Jean-Michel Esnault.
 # All rights reserved.
 # See LICENSE.txt for permissions.
 #
@@ -92,6 +92,16 @@ module BGP::OPT_PARM::CAP
       s <<  "\n    Add-path Extension (#{CAP_ADD_PATH}), length: #{encode.size}"
       s = s.join("\n  ")
       super + (s + (['']+@af.to_a.collect { |e| address_family_to_s(*e)}).join("\n        "))
+    end
+
+    # Which address families, and which direction. That is what a peer
+    # acts on, and the capability's name alone does not say it.
+    def to_s_brief
+      families = @af.to_a.sort.collect { |af, sr|
+        afi, safi = af
+        "#{IANA.afi?(afi) || afi}, #{IANA.safi?(safi) || safi} #{send_recv_to_s(sr)}"
+      }
+      families.empty? ? 'Add-path' : "Add-path #{families.join('; ')}"
     end
 
     private

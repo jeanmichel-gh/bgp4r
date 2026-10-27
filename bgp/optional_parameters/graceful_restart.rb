@@ -1,5 +1,5 @@
 #--
-# Copyright 2010 Jean-Michel Esnault.
+# Copyright 2010, 2026 Jean-Michel Esnault.
 # All rights reserved.
 # See LICENSE.txt for permissions.
 #
@@ -64,7 +64,13 @@ class Graceful_restart < BGP::OPT_PARM::Capability
     s = s.join("\n  ")
     super + (s + (['']+@tuples.collect { |af| address_family(*af)}).join("\n        "))
   end
-  
+
+  # The restart time is what a peer acts on, so the brief form keeps it
+  # rather than the capability's name alone.
+  def to_s_brief
+    "Graceful Restart #{@restart_time}s"
+  end
+
   def method_missing(name, *args, &block)
     if name.to_s =~ /^(.+)_forwarding_state_(.+)/
       state = $2

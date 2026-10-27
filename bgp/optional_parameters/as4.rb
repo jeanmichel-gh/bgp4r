@@ -1,5 +1,5 @@
 #--
-# Copyright 2008, 2009 Jean-Michel Esnault.
+# Copyright 2008, 2009, 2026 Jean-Michel Esnault.
 # All rights reserved.
 # See LICENSE.txt for permissions.
 #
@@ -46,6 +46,12 @@ class As4 < OPT_PARM::Capability
 
   def to_s
     super + "\n    Capability(#{CAP_AS4}): 4-octet AS number: " + @as.to_s
+  end
+
+  # The AS number is the whole of this capability, and a revision that
+  # advertises or removes it says nothing without it.
+  def to_s_brief
+    "AS4 #{@as}"
   end
 
   def to_hash
