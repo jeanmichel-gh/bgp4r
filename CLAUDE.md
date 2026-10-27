@@ -73,7 +73,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. A `lab` job runs the Compose topologies.
 
-Baseline on 2026-10-27: 740 tests, 18201 assertions, all passing. Line coverage of `bgp/` from the unit suite: 95.0%.
+Baseline on 2026-10-27: 760 tests, 18289 assertions, all passing. Line coverage of `bgp/` from the unit suite: 95.6%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -117,13 +117,16 @@ Found while fixing other bugs, not fixed yet. Verified against master on
 Smaller things:
 
 * `Extended_community#initialize` slices the String it is given, because `parse` starts with `s.slice!(0,2)`. The caller's String comes back 2 octets shorter, so the same packed String builds correctly once and raises `TypeError: no implicit conversion of nil into Integer` from `pack` on every build after that. `ruby -I. -e 'require "bgp/path_attributes/extended_community"; w = ["0002000100000001"].pack("H*"); 2.times { puts BGP::Extended_community.new(w).to_shex }'` prints `0002000100000001` then raises. `Extended_communities#parse` wants the slicing, for its own 8 octet loop, so a fix belongs in the single community path.
+* `IPAddr#mlen` never returns for a /0 prefix. `_mlen_` in `bgp/common.rb` shifts the mask right until it finds a set bit, and an all zero mask has none, so the loop spins forever. A default route is ordinary in BGP, so this hangs anything that builds one: `ruby -I. -e 'require "bgp/common"; p IPAddr.new("0.0.0.0/0").mlen'` never finishes, and neither does `::/0`. The loop needs a floor at length 0. Found while writing coverage tests for `common.rb`, which is why none of them use a /0.
+* `Base_nlri#parse` has never worked, so `Nlri.new(wire)` and `Withdrawn.new(wire)` raise instead of parsing. `parse` loops `add(s)` over the whole packed String, and `add`'s String branch hands that String to `Prefix.new`, which gives it to `IPAddr.new`. `ruby -I. -e 'require "bgp/nlris/nlris"; BGP::Nlri.new(["086508660867"].pack("H*"))'` raises `IPAddr::InvalidAddressError`. `new_ntop` is the route that works, and it consumes the String one prefix at a time. Only a zero length field gets through `parse`, which is why `test/unit/nlris/nlri_test.rb` reaches every line of it but the loop body.
+* Dead code in `bgp/common.rb`. `IPAddr#netmask` sits under `unless method_defined?(:netmask)` and ipaddr has had a compatible `netmask` since Ruby 2.5, so those lines never run on any Ruby bgp4r supports; `test_netmask_comes_from_the_standard_library` asserts the standard library is the one answering. The `else` branch of the `RUBY_VERSION.split('.').join[0,2] > "18"` test in `String#hexlify` is for Ruby 1.8 and cannot run either. Both are the only uncovered lines left in the file.
 
 Lab and conformance:
 
 * The GoBGP column in `docs/protocol-testing.md` was measured on 3.23 by hand, and holds for 4.10 too: the containerized test asserts every one of the 18 rows and passes on both. `GOBGP_IMAGE` switches versions without an edit. The FRR and BIRD columns are still from 8.4.4 and 2.14 run natively, and only the session level outcomes there, since BIRD gives no usable RIB answer over a loopback session.
 * `lab/conformance/gobgpd.conf` and `lab/topologies/fault-matrix/gobgp.toml` are written in the 3.23 style and GoBGP 4 reads them unchanged. Every key is still in the 4.x config structs under the same `mapstructure` name, and 4.x registers `mapstructure.StringToNetIPAddrHookFunc` so the address fields still decode from TOML strings. No schema work is needed; an earlier version of this entry said otherwise and was wrong.
 * `lab/topologies/fault-matrix` exits 1, and that is the right answer: GoBGP discards the malformed tunnel encapsulation attribute and installs the route where RFC 9012 section 13 asks for treat-as-withdraw. Both cases are asserted as a known divergence in `test/functional/lab/fault_matrix_test.rb`; see the comment on `TUNNEL_ENCAP` there. It is not an old bug since fixed: 3.23 does it, and a CI run on 4.10 does it too, so it is worth reporting upstream.
-* Lowest coverage (unit suite): `orfs/prefix_orf.rb` 79%, `common.rb` 82%, `nlris/nlri.rb` 83%, `messages/route_refresh.rb` 83%, `optional_parameters/capability.rb` 86%.
+* Lowest coverage (unit suite): `orfs/prefix_orf.rb` 79%, `messages/route_refresh.rb` 83%, `optional_parameters/capability.rb` 86%, `optional_parameters/route_refresh.rb` 88%, `optional_parameters/dynamic.rb` 88%.
 
 ## Attribute work left
 

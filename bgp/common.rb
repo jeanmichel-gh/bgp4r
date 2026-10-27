@@ -38,7 +38,7 @@ class IPAddr
     elsif arg.is_a?(Integer)
       IPAddr.new_ntoh([arg].pack('N'))
     elsif arg.is_a?(Array) and arg[0].is_a?(Integer)
-      IPAddr.new_ntoh([arg].pack('C*'))
+      IPAddr.new_ntoh(arg.pack('C*'))
     else
       IPAddr.new(arg)
     end
