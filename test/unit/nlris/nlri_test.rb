@@ -132,6 +132,101 @@ class Nlri_Test < Test::Unit::TestCase
     assert_equal('0000', w.to_shex(true))
   end
 
+  def test_wire_bytes_parse_every_prefix_in_the_field
+    # RFC 4271 section 4.3 packs the 2-tuples <length, prefix> one after the
+    # other with nothing between them, so parse has to keep reading until
+    # the field is used up. These three /8s used to raise
+    # IPAddr::InvalidAddressError, because parse handed the whole String to
+    # Prefix.new instead of reading one tuple at a time.
+    s = '086508660867'
+    nlri = Nlri.new([s].pack('H*'))
+    assert_equal(3, nlri.size)
+    assert_equal(['101.0.0.0/8', '102.0.0.0/8', '103.0.0.0/8'], nlri.to_ary)
+    assert_equal(s, nlri.to_shex)
+    w = Withdrawn.new([s].pack('H*'))
+    assert_equal(3, w.size)
+    assert_equal({:withdrawns=>['101.0.0.0/8', '102.0.0.0/8', '103.0.0.0/8']},
+                 w.to_hash)
+    assert_equal(s, w.to_shex)
+  end
+
+  def test_a_default_route_is_one_octet_and_the_next_prefix_follows_it
+    # RFC 4271 section 4.3: a length of zero is a prefix that matches all IP
+    # addresses, and the Prefix sub-field carries no octet at all. So the
+    # tuple is its length octet alone, and a /0 ahead of another prefix
+    # catches an off by one in the loop.
+    nlri = Nlri.new('0.0.0.0/0', '101.0.0.0/8', '20.0.0.0/15')
+    assert_equal('00' + '0865' + '0f1400', nlri.to_shex)
+    assert_equal(nlri.to_ary, Nlri.new(nlri.encode.is_packed).to_ary)
+    assert_equal(nlri.to_shex, Nlri.new(nlri.encode.is_packed).to_shex)
+    w = Withdrawn.new('10.0.0.0/8', '0.0.0.0/0')
+    assert_equal('080a' + '00', w.to_shex)
+    assert_equal(['10.0.0.0/8', '0.0.0.0/0'],
+                 Withdrawn.new(w.encode.is_packed).to_ary)
+    # new_ntop reads the same field the same way.
+    assert_equal(['0.0.0.0/0', '101.0.0.0/8'],
+                 Withdrawn.new_ntop(['000865'].pack('H*')).to_ary)
+  end
+
+  def test_the_three_build_paths_agree_on_both_collections
+    # Field values, a hash, and wire bytes, on Nlri and on Withdrawn.
+    [Nlri, Withdrawn].each do |klass|
+      from_values = klass.new('0.0.0.0/0', '101.0.0.0/8', '20.0.0.0/15', '10.1.2.3/32')
+      key = from_values.to_hash.keys.first
+      from_hash = klass.new(*from_values.to_hash[key])
+      from_wire = klass.new(from_values.encode.is_packed)
+      assert_equal(4, from_wire.size)
+      assert_equal(from_values.to_shex, from_hash.to_shex)
+      assert_equal(from_values.to_shex, from_wire.to_shex)
+      assert_equal(from_values.to_ary, from_wire.to_ary)
+      assert_equal(from_values.to_hash, from_wire.to_hash)
+    end
+  end
+
+  def test_wire_bytes_of_the_extended_encoding
+    # RFC 7911 section 3 prepends a four octet Path Identifier to each
+    # tuple. parse reads that form when it is asked to.
+    ext = Nlri.new([100, '77.0.0.0/17'], [101, '78.0.0.0/8'], [102, '0.0.0.0/0'])
+    assert_equal('00000064114d0000' + '00000065084e' + '0000006600', ext.to_shex)
+    assert_equal(ext.to_ary, Nlri.new(ext.encode.is_packed, true).to_ary)
+    assert_equal(ext.to_shex, Nlri.new(ext.encode.is_packed, true).to_shex)
+    assert_equal(3, Withdrawn.new(ext.encode.is_packed, true).size)
+  end
+
+  def test_wire_bytes_of_another_family_take_the_afi
+    # The default is IPv4: RFC 4271 section 3 defines the IP address of the
+    # section 4.3 fields as an IP version 4 address, and that is the only
+    # family these two fields ever carry. The collection itself holds
+    # whatever family it was built from, so reading back the bytes it
+    # encodes needs the family named.
+    v6 = Nlri.new('2000::/16', '2001:db8::/32', '::/0')
+    assert_equal('102000' + '2020010db8' + '00', v6.to_shex)
+    assert_equal(v6.to_ary, Nlri.new(v6.encode.is_packed, nil, 2).to_ary)
+    assert_equal(v6.to_shex, Nlri.new_ntop(v6.encode, nil, 2).to_shex)
+    assert_equal(['2000::/16'], Withdrawn.new(['102000'].pack('H*'), nil, 2).to_ary)
+  end
+
+  def test_a_truncated_field_reads_what_arrived
+    # A short field is not refused. Prefix.new_ntop zero fills the octets
+    # the length asked for and that were not sent, and the loop still ends,
+    # because the tuple takes at least the length octet.
+    assert_equal(['0.0.0.0/8'], Nlri.new(['08'].pack('H*')).to_ary)
+    assert_equal(['101.0.0.0/8', '20.0.0.0/15'],
+                 Nlri.new(['08650f14'].pack('H*')).to_ary)
+  end
+
+  def test_a_family_whose_prefix_is_not_consumed_stops_instead_of_looping
+    # Prefix.new_ntop does not remove an NSAP prefix from the String it
+    # reads, so reading tuple after tuple would read the same octets for
+    # ever. parse gives up on the rest of the field instead. A known issue,
+    # listed in CLAUDE.md.
+    nsap = Nlri.new('49.0001.0001.0001.00', '49.0002.0002.0002.00')
+    assert_equal(2, nsap.size)
+    parsed = Nlri.new(nsap.encode.is_packed, nil, 3)
+    assert_equal(1, parsed.size)
+    assert_equal(nsap.nlris[0].to_s, parsed.nlris[0].to_s)
+  end
+
   def test_to_hash_round_trips
     # Each collection names its own key, and what comes out goes back in.
     nlri = Nlri.new('20.0.0.0/15', '20.0.0.0/16', '20.0.0.0/24', '10.1.2.3/32')
