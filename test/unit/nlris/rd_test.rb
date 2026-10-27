@@ -43,6 +43,52 @@ class Rd_Test < Test::Unit::TestCase
     assert_equal('0001010101010001', Rd.new(['0001010101010001'].pack('H*')).to_shex)
     assert_equal('0002000000010101', Rd.new(['0002000000010101'].pack('H*')).to_shex)
   end
+  # RFC 4364 section 4.2 type 1: a 4 octet IPv4 administrator and a
+  # 2 octet assigned number. The three argument form names the type.
+  def test_type_1_with_an_explicit_encoding_type
+    rd = Rd.new('10.0.0.1', 65535, 1)
+    assert_equal 1, rd.encoding_type?
+    assert_equal '10.0.0.1', rd.admin.to_s
+    assert_equal 65535, rd.assign
+    assert_equal '00010a000001ffff', rd.to_shex
+    assert_equal 'RD=10.0.0.1:65535', rd.to_s(false)
+    assert_equal({:rd=>['10.0.0.1', 65535]}, rd.to_hash)
+    assert_equal rd.to_shex, Rd.new(rd.encode).to_shex
+  end
+  def test_explicit_encoding_types_match_the_inferred_ones
+    assert_equal Rd.new(1, 1).to_shex, Rd.new(1, 1, 0).to_shex
+    assert_equal Rd.new('1.1.1.1', 1).to_shex, Rd.new('1.1.1.1', 1, 1).to_shex
+    assert_equal 0, Rd.new(1, 1).encoding_type?
+    assert_equal 1, Rd.new('1.1.1.1', 1).encoding_type?
+    assert_equal 2, Rd.new(1, '1.1.1.1').encoding_type?
+    assert_equal 0, Rd.new.encoding_type?
+  end
+  def test_built_from_another_rd
+    # Rd.new(Rd) goes through encode and parse, so the copy is byte for
+    # byte what the original puts on the wire.
+    [Rd.new(1, 1), Rd.new('1.1.1.1', 1), Rd.new(65536, 1, 2), Rd.new].each do |rd|
+      copy = Rd.new(rd)
+      assert_equal rd.to_shex, copy.to_shex
+      assert_equal rd.encoding_type?, copy.encoding_type?
+      assert_equal rd.to_s(false), copy.to_s(false)
+      assert_equal rd.to_hash, copy.to_hash
+    end
+  end
+  def test_terse_to_s
+    assert_equal 'RD=1:1', Rd.new(1, 1).to_s(false)
+    assert_equal 'RD=1.1.1.1:1', Rd.new('1.1.1.1', 1).to_s(false)
+    assert_equal 'RD=1:1', Rd.new(1, 1, 2).to_s(false)
+    assert_equal 'RD=65536:1', Rd.new(65536, 1, 2).to_s(false)
+  end
+  def test_zero_rd
+    # The all zero RD, which an MP_REACH next hop carries ahead of the
+    # address (RFC 4364 section 4.3.2).
+    rd = Rd.new
+    assert_equal '0000000000000000', rd.to_shex
+    assert_equal({:rd=>[0, 0]}, rd.to_hash)
+    assert_equal 'RD=0:0', rd.to_s(false)
+    assert_equal 64, rd.bit_length
+  end
   def test_unknown_type_raises_quietly
     out, $stdout = $stdout, StringIO.new
     assert_raise(ArgumentError) { Rd.new(['0003000000010001'].pack('H*')) }

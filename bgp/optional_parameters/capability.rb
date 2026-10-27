@@ -109,7 +109,10 @@ module BGP::OPT_PARM
     when CAP_EXTENDED_NEXTHOP
       CAP::Extended_nexthop.new(s)
     when CAP_DYNAMIC
-      CAP::Dynamic.new(s)
+      # RFC 5492 section 4 and RFC 5291: the Dynamic Capability
+      # capability carries no value, so CAP::Dynamic takes the code,
+      # not the wire bytes, exactly as CAP::Route_refresh does above.
+      CAP::Dynamic.new(code)
     else
       Capability::Unknown.new(s)
     end
