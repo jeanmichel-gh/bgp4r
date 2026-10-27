@@ -62,6 +62,32 @@ class Extended_community_Test < Test::Unit::TestCase
     assert_raise(ArgumentError) { Extended_community.new(-1) }
   end
 
+  # The other two Integer paths. They used to wrap silently while new
+  # refused, so the same value gave a community through one door and an
+  # error through another.
+  def test_every_integer_path_refuses_an_out_of_range_value
+    [->(n) { Extended_community.new(n) },
+     ->(n) { Extended_community.factory(n) },
+     ->(n) { Extended_community::Unknown.new(n) },
+    ].each do |build|
+      assert_raise(ArgumentError, "2**64 through #{build}")     { build.call(2**64) }
+      assert_raise(ArgumentError, "-1 through #{build}")        { build.call(-1) }
+      assert_equal 'ffffffffffffffff', build.call(2**64 - 1).to_shex, build.to_s
+      assert_equal '0000000000000000', build.call(0).to_shex, build.to_s
+    end
+    assert_equal 0x000200ff00deadbe, Extended_community.factory(0x000200ff00deadbe).to_i
+  end
+
+  # Refusing an unrepresentable Integer takes nothing away from negative
+  # testing, which is what the conventions require of a constructor that
+  # refuses anything: the octet form still builds a community no RFC
+  # defines. The attribute level routes are covered in
+  # extended_communities_test.rb and fault_test.rb.
+  def test_octets_still_build_anything
+    assert_equal 'ffff0000deadbeef', Extended_community.factory(['ffff0000deadbeef'].pack('H*')).to_shex
+    assert_equal 'ffffffffffffffff', Extended_community::Unknown.new('ffffffffffffffff').to_shex
+  end
+
   # RFC 4360 section 2: the low 2 bits of the type octet say which
   # structure the community has, so exactly one predicate is true.
   def test_structure_predicates

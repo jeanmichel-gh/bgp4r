@@ -205,9 +205,32 @@ module BGP
     include ATTR::XTENDED_COMMUNITY
     include Comparable
 
+    # The largest value the Integer form can hold: RFC 4360 section 2
+    # makes an extended community 8 octets.
+    MAX_VALUE = 0xffffffffffffffff
+
+    # The 8 octets of an Integer form.
+    #
+    # A value outside 0..MAX_VALUE cannot be represented in 8 octets, and
+    # format('%16.16x') gives 17 digits for one too large and a leading
+    # '..' for a negative, either of which packs into a different
+    # community than the caller asked for. Sending the wrong community in
+    # silence is worse than refusing, which is the narrow case the
+    # conventions in CLAUDE.md allow a constructor to refuse. It takes
+    # nothing away from negative testing: a malformed extended community
+    # of any length still comes from wire bytes, from Attr::Raw, or from
+    # the BGP::Fault helpers.
+    def self.octets(n)
+      unless n.is_a?(Integer) and (0..MAX_VALUE).include?(n)
+        raise ArgumentError,
+          "invalid extended community #{n.inspect}, expected 0 to #{MAX_VALUE}"
+      end
+      [format('%16.16x', n)].pack('H*')
+    end
+
     def self.factory(_s)
       if _s.is_a?(Integer)
-        s = [format("%16.16x",_s)].pack('H*')
+        s = octets(_s)
       else
         s = _s
       end
@@ -253,11 +276,7 @@ module BGP
         # octets as one number, the form to_i gives back. A number outside
         # that range has no 8 octet form: refuse it rather than wrap it
         # into a different community.
-        unless (0..0xffffffffffffffff).include?(args[0])
-          raise ArgumentError,
-            "invalid extended community #{args[0]}, expected 0 to #{0xffffffffffffffff}"
-        end
-        parse([format("%16.16x", args[0])].pack('H*'))
+        parse(Extended_community.octets(args[0]))
       elsif args.empty?
         @type, @subtype, @global, @local = 0,0,0,0
       else
@@ -416,7 +435,7 @@ module BGP
       elsif args.size==1 and args[0].is_a?(String)
         @raw = [args[0].delete(' ')].pack('H16')
       elsif args.size==1 and args[0].is_a?(Integer)
-        @raw = [format("%16.16x",args[0])].pack('H*')
+        @raw = Extended_community.octets(args[0])
       else
         raise ArgumentError, "invalid arg #{args.inspect}"
       end
