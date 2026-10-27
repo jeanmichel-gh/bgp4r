@@ -181,6 +181,10 @@ module BGP
         parse(args[0])
       elsif args[0].is_a?(self.class) and args[0].respond_to?(:encode)
         parse(args[0].encode, *args[1..-1])
+      elsif args[0].is_a?(Hash) and args[0].has_key?(:communities)
+        # The hash to_hash returns. A hash with no :communities key,
+        # {:tail=>'02'} for one, goes to add like any other value.
+        add(*args[0][:communities])
       else
         add(*args)
       end
@@ -188,7 +192,7 @@ module BGP
 
     def add(*args)
       @communities ||=[]
-      args.flatten.each do |arg|
+      take_tail(args.flatten).each do |arg|
         if arg.is_a?(String) and arg.strip =~ /[\s,]/
           arg.split(/[\s,]+/).reject(&:empty?).each { |v| @communities << Community.new(v) }
         elsif arg.is_a?(Community)
@@ -210,9 +214,11 @@ module BGP
     end
     
     # Numbers, not names: "65535:65281" for no_export. The hash rebuilds
-    # the same bytes through new_hash or Path_attribute.new.
+    # the same bytes through new, new_hash or Path_attribute.new. Octets
+    # kept past the last whole community come back as a {:tail=>hex}
+    # entry (Attr::TAIL_KEY).
     def to_hash
-      { :communities=> @communities.collect { |comm| comm.to_s } }
+      { :communities=> @communities.collect { |comm| comm.to_s } + [tail_entry].compact }
     end
 
     # Well known names in this attribute, as Symbols.
@@ -235,7 +241,7 @@ module BGP
     end
 
     def sort
-      Communities.new(to_a.sort)
+      Communities.new(*to_a.sort, *[tail_entry].compact)
     end
 
     def sort!

@@ -99,7 +99,9 @@ module BGP
         parse(args[0])
       elsif args[0].is_a?(self.class)
         parse(args[0].encode)
-      elsif args.size == 1 and args[0].is_a?(Hash)
+      elsif args.size == 1 and args[0].is_a?(Hash) and args[0].has_key?(:large_communities)
+        # A hash with no :large_communities key, {:tail=>'05'} for one,
+        # goes to add like any other value.
         add(*[args[0][:large_communities]].flatten.compact)
       else
         add(*args)
@@ -109,7 +111,7 @@ module BGP
     # Adds values: strings, space or comma separated strings, [ga, ld1,
     # ld2] arrays, or Large_community objects. Returns self.
     def add(*args)
-      args.each do |arg|
+      take_tail(args).each do |arg|
         if arg.is_a?(Array) and arg.size == 3 and arg.all? { |p| p.is_a?(Integer) }
           @communities << Large_community.new(arg)
         elsif arg.is_a?(Array)
@@ -146,16 +148,20 @@ module BGP
     end
 
     # Without duplicates, as a receiver keeps it (RFC 8092 section 6).
+    # Kept octets are not a duplicate of anything, so they stay.
     def uniq
-      Large_communities.new(*@communities.uniq)
+      Large_communities.new(*@communities.uniq, *[tail_entry].compact)
     end
 
     def to_s(method=:default)
       super(large_communities, method)
     end
 
+    # The values, plus a {:tail=>hex} entry when octets were kept
+    # (Attr::TAIL_KEY), so the hash of a malformed attribute round trips
+    # byte for byte through new.
     def to_hash
-      { :large_communities => @communities.collect(&:to_s) }
+      { :large_communities => @communities.collect(&:to_s) + [tail_entry].compact }
     end
 
     def encode

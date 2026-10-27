@@ -30,20 +30,52 @@ module BGP
 
     class << self
       def new_hash(*args)
-        raise unless args[0].is_a?(Hash)
         o = new
-        args.each do |arg|
-          arg.keys.each do |comm|
+        o.add(*communities_from_hash(args.size == 1 ? args[0] : args))
+        o
+      end
+
+      # True for every hash shape communities_from_hash takes: a bare
+      # hash of community names such as {:route_target=>[1,2]}, the hash
+      # to_hash returns, and the list of one key hashes it holds under
+      # :extended_communities.
+      #
+      # new used to take none of them, while the registration built with
+      # new_hash, so Path_attribute.new took a hash that the
+      # extended_communities= setter refused. Both go through here now.
+      def hash_form?(arg)
+        case arg
+        when Hash
+          return true if arg.has_key?(:extended_communities)
+          ! arg.empty? and arg.keys.all? { |k| HASH_BUILDERS.has_key?(k) or k == Attr::TAIL_KEY }
+        when Array
+          ! arg.empty? and arg.all? { |e| hash_form?(e) }
+        else
+          false
+        end
+      end
+
+      # The communities a hash describes, in order. A {:tail=>hex} entry
+      # is passed through for add to keep.
+      def communities_from_hash(arg)
+        arg = [arg] if arg.is_a?(Hash)
+        raise ArgumentError, "invalid argument #{arg.inspect}" unless arg.is_a?(Array)
+        out = []
+        arg.each do |h|
+          raise ArgumentError, "invalid extended community #{h.inspect}" unless h.is_a?(Hash)
+          h.each do |comm, v|
             if comm == :extended_communities
-              o = new_hash(*args[0][:extended_communities])
-              next
+              out.concat(communities_from_hash([v].flatten(1)))
+            elsif comm == Attr::TAIL_KEY
+              out << { comm=> v }
+            else
+              build = HASH_BUILDERS[comm]
+              raise ArgumentError, "unknown extended community #{comm.inspect}" unless build
+              out << build.call(v)
             end
-            build = HASH_BUILDERS[comm]
-            raise ArgumentError, "unknown extended community #{comm.inspect}" unless build
-            o << build.call(arg[comm])
           end
         end
-        o
+        out
       end
     end
 
@@ -80,6 +112,8 @@ module BGP
         return
       elsif args[0].is_a?(self.class)
         parse(args[0].encode, *args[1..-1])
+      elsif self.class.hash_form?(args[0])
+        add(*self.class.communities_from_hash(args[0]))
       else
         add(*args)
       end
@@ -88,7 +122,7 @@ module BGP
 
     def add(*args)
       @communities ||=[]
-      args.flatten.each do |arg|
+      take_tail(args.flatten).each do |arg|
         if arg.is_a?(String) and arg.split(' ').size>1
           arg.split.each { |v| @communities << Extended_community.factory(v) }
         elsif arg.is_a?(String) and arg.split(',').size>1
@@ -103,8 +137,11 @@ module BGP
     end
     alias << add
 
+    # The communities, plus a {:tail=>hex} entry when octets were kept
+    # (Attr::TAIL_KEY), so the hash of a malformed attribute round trips
+    # byte for byte through new.
     def to_hash
-      {:extended_communities=> @communities.collect  { |c| c.to_hash }}
+      {:extended_communities=> @communities.collect  { |c| c.to_hash } + [tail_entry].compact}
     end
 
     def extended_communities
@@ -199,7 +236,7 @@ module BGP
     end
 
     def sort
-      Extended_communities.new(*to_arr.sort)
+      Extended_communities.new(*to_arr.sort, *[tail_entry].compact)
     end
 
     def sort!
@@ -213,7 +250,12 @@ module BGP
 
   end
 
-  Attr.register(ATTR::EXTENDED_COMMUNITY, Extended_communities, :extended_communities, :extended_community) { |v| Extended_communities.new_hash(*v) }
+  # The value goes to new_hash whole, not splatted: a splatted Hash
+  # arrives as its pairs, so Path_attribute.new used to refuse the bare
+  # {:route_target=>[1,2]} that new_hash itself takes. A list of
+  # community hashes, the shape to_hash returns, reads the same either
+  # way.
+  Attr.register(ATTR::EXTENDED_COMMUNITY, Extended_communities, :extended_communities, :extended_community) { |v| Extended_communities.new_hash(v) }
 
 end
 

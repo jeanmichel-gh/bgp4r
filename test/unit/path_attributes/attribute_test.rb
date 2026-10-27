@@ -258,4 +258,29 @@ class Attr_override_Test < Test::Unit::TestCase
     assert_equal('60010100', Origin.new(:igp, flags: 0x6).to_shex)
   end
 
+  # The octets an attribute keeps when parsing cannot interpret them
+  # travel through the hash forms as one {:tail=>hex} entry, so sort,
+  # sort! and to_hash keep them. The helpers are shared by every
+  # attribute that keeps a tail.
+  def test_tail_entry
+    assert(Attr.tail_entry?(:tail=>'0102'))
+    assert(! Attr.tail_entry?(:tail=>'0102', :color=>1))
+    assert(! Attr.tail_entry?(:color=>1))
+    assert(! Attr.tail_entry?('0102'))
+    assert(! Attr.tail_entry?(nil))
+  end
+
+  def test_take_tail
+    com = Communities.new('1:1')
+    assert_nil(com.tail)
+    assert_nil(com.tail_entry)
+    assert_equal(['1:1', 2], com.take_tail(['1:1', {:tail=>'0102'}, 2]))
+    assert_equal('0102', com.tail.unpack1('H*'))
+    assert_equal({:tail=>'0102'}, com.tail_entry)
+    # The last entry wins, and nothing is checked: any octets go.
+    com.take_tail([{:tail=>'ff'}, {:tail=>'00ff'}])
+    assert_equal({:tail=>'00ff'}, com.tail_entry)
+    assert_equal('c0080600010001' + '00ff', com.to_shex)
+  end
+
 end

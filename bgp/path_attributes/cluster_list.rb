@@ -60,7 +60,9 @@ module BGP
         parse(args[0])
       elsif args[0].is_a?(self.class)
         parse(args[0].encode, *args[1..-1])
-      elsif args[0].is_a?(Hash)
+      elsif args[0].is_a?(Hash) and args[0].has_key?(:cluster_list)
+        # A hash with no :cluster_list key, {:tail=>'02'} for one, goes
+        # to add like any other value.
         add(*args[0][:cluster_list])
       else
         add(*args)
@@ -69,7 +71,7 @@ module BGP
 
     def add(*args)
       @cluster_ids ||=[]
-      args.flatten.each do |arg|
+      take_tail(args.flatten).each do |arg|
         if arg.is_a?(String) and arg.split(' ').size>1
           arg.split.each { |v| @cluster_ids << Id.new(v) }
         elsif arg.is_a?(String) and arg.split(',').size>1
@@ -111,11 +113,14 @@ module BGP
     end
 
     def sort
-      Cluster_list.new(to_ary.sort)
+      Cluster_list.new(*to_ary.sort, *[tail_entry].compact)
     end
     
+    # The CLUSTER_IDs, plus a {:tail=>hex} entry when octets were kept
+    # (Attr::TAIL_KEY), so the hash of a malformed attribute round trips
+    # byte for byte through new.
     def to_hash
-      {:cluster_list=>@cluster_ids.collect { |c| c.to_s  }}
+      {:cluster_list=>@cluster_ids.collect { |c| c.to_s  } + [tail_entry].compact}
     end
       
     def sort!

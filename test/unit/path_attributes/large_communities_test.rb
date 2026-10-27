@@ -113,6 +113,40 @@ class TestLargeCommunities < Test::Unit::TestCase
     assert_equal [[32, 4, :treat_as_withdraw]], pa.errors.collect { |f| [f.type, f.subcode, f.action] }
   end
 
+  # to_hash and uniq used to drop the kept octets, so a malformed
+  # attribute came back byte for byte through encode but not through a
+  # hash. The tail travels as a {:tail=>hex} entry at the end of the
+  # list, which new takes back.
+  def test_to_hash_and_uniq_keep_trailing_octets
+    one = '000000010000000200000003'
+    { 'c0200d' + one + '00'       => ['1:2:3', {:tail=>'00'}],
+      'c02019' + one * 2 + 'aa'   => ['1:2:3', '1:2:3', {:tail=>'aa'}],
+      'c02002' + 'ffff'           => [{:tail=>'ffff'}],
+    }.each do |hex, list|
+      lc = Large_communities.new(wire(hex))
+      assert_equal({:large_communities=>list}, lc.to_hash, hex)
+      assert_equal hex, Large_communities.new(lc.to_hash).to_shex, hex
+      assert_equal lc.to_hash, Large_communities.new(lc.to_hash).to_hash, hex
+      assert_equal hex, Path_attribute.new(Path_attribute.new(wire(hex)).to_hash).to_shex, hex
+      # Keeping the octets does not change what Path_attribute#errors says.
+      assert_equal [[32, 5, :treat_as_withdraw]],
+                   Path_attribute.new(wire(hex)).errors.collect { |f| [f.type, f.subcode, f.action] }, hex
+    end
+    # A duplicate goes, the kept octets stay.
+    lc = Large_communities.new(wire('c02019' + one * 2 + 'aa'))
+    assert_equal 'c0200d' + one + 'aa', lc.uniq.to_shex
+    assert_equal ['1:2:3', {:tail=>'aa'}], lc.uniq.to_hash[:large_communities]
+  end
+
+  # The hash of a well formed attribute is the plain list it was.
+  def test_a_well_formed_hash_is_unchanged
+    lc = Large_communities.new('64496:4294967295:2')
+    assert_nil lc.tail
+    assert_equal({:large_communities=>['64496:4294967295:2']}, lc.to_hash)
+    assert_equal({:large_communities=>['64496:4294967295:2']}, lc.uniq.to_hash)
+    assert_equal lc.encode, Large_communities.new(lc.to_hash).encode
+  end
+
   def test_to_s
     assert_equal "[OTcr] (32) Large Communities: [c0200c0000fbf0fffffff...] '64496:4294967295:2'",
                  Large_communities.new(wire('c0200c' + RFC)).to_s(:brief)
