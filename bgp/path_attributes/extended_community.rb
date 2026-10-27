@@ -156,6 +156,13 @@ module BGP
       when FLOAT
         "#{[@global].pack('g').unpack('g')[0]}"
       else
+        # Not dead code, although it reads that way. community_structure
+        # is @type & 3 when @type is an Integer, so the branches above,
+        # with the FLOAT remap, cover every Integer type. A type that is
+        # not an Integer but answers | and & escapes all of them:
+        # Opaque.new takes the type octet it is given, and true | 3 is
+        # true. Such a community cannot be encoded at all, so saying so
+        # beats an empty value.
         raise RuntimeError, "bogus type: #{@type}"
       end
       
@@ -194,6 +201,10 @@ module BGP
       when FLOAT
         [0,@global].pack('ng')
       else
+        # Reached the same way as the else of value, by a type that is
+        # not an Integer. Without it encode would raise TypeError from
+        # pack on that same type, saying nothing about where it came
+        # from. Every Integer type encodes, bogus ones included.
         raise RuntimeError, "bogus type: #{@type}"
       end
     end

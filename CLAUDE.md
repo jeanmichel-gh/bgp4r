@@ -73,7 +73,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. A `lab` job runs the Compose topologies.
 
-Baseline on 2026-10-27: 731 tests, 18128 assertions, all passing. Line coverage of `bgp/` from the unit suite: 94.8%.
+Baseline on 2026-10-27: 734 tests, 18154 assertions, all passing. Line coverage of `bgp/` from the unit suite: 95.0%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -116,10 +116,8 @@ Found while fixing other bugs, not fixed yet. Verified against master on
 
 Smaller things:
 
-* `Path_attribute` has no `respond_to_missing?`, so `pa.respond_to?(:as_path_sequence=)` is false even though the call works.
 * `Link_bandwidth#is_two_octet_asn?` is true, because the structure predicates read the low 2 bits of the type while the private `community_structure` maps that type and subtype to `FLOAT`. Two notions of structure in one file.
 * `Link_bandwidth.new` takes one argument, the bandwidth. A natural looking `Link_bandwidth.new(asn, bandwidth)` raises `ArgumentError: invalid arg [64, 4, 100, 1000, 0]`, which reports the internal argument list rather than what the caller passed.
-* The `else raise RuntimeError, "bogus type"` branches in `Extended_community#value` and `#_encoded_value_` are unreachable.
 * The unit suite sometimes prints a `ClosedQueueError` backtrace from `bgp/neighbor/neighbor.rb` on a background thread. Timing dependent, no test fails.
 
 Lab and conformance:

@@ -136,6 +136,32 @@ class Extended_community_Test < Test::Unit::TestCase
                  [non_transitive.is_two_octet_asn?, non_transitive.is_ipv4_addr?, non_transitive.is_opaque?])
   end
 
+  # Any Integer type encodes, whether or not it means anything, because
+  # negative testing needs it to. @type & 3 is one of the four
+  # structures for every Integer, so the else branches of value and
+  # _encoded_value_ never see one.
+  def test_a_bogus_integer_type_still_encodes
+    # Through the structured path: type 0xf0 becomes 0xf3, an opaque.
+    ec = Opaque.new(0xf0, 0x99, '0a0000010064')
+    assert_equal('f3990a0000010064', ec.to_shex)
+    assert_equal('Opaque: 0a0000010064', ec.to_s)
+    # Through the wire form: an unassigned type and subtype come back
+    # byte for byte as an Unknown.
+    wire = Extended_community.factory(['ff99000000000000'].pack('H*'))
+    assert_equal(Extended_community::Unknown, wire.class)
+    assert_equal('ff99000000000000', wire.to_shex)
+  end
+
+  # The one way past those else branches is a type that is not an
+  # Integer. Opaque.new takes the type octet it is given, and true | 3
+  # is true, which no structure matches. Both branches say so, rather
+  # than showing an empty value or failing inside pack.
+  def test_a_type_that_is_not_an_integer_says_so
+    ec = Opaque.new(true, 0x0a, '0a0000010064')
+    assert_match(/bogus type/, assert_raise(RuntimeError) { ec.to_s }.message)
+    assert_match(/bogus type/, assert_raise(RuntimeError) { ec.encode }.message)
+  end
+
   def test_compare
     rt = Route_target.new(0xff,0xdeadbe)
     op = Opaque.new(ATTR::XTENDED_COMMUNITY::NON_TRANSITIVE, 10,"0a0000010064")
