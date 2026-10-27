@@ -73,7 +73,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. A `lab` job runs the Compose topologies.
 
-Baseline on 2026-10-27: 736 tests, 18167 assertions, all passing. Line coverage of `bgp/` from the unit suite: 95.0%.
+Baseline on 2026-10-27: 738 tests, 18193 assertions, all passing. Line coverage of `bgp/` from the unit suite: 95.0%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -116,7 +116,7 @@ Found while fixing other bugs, not fixed yet. Verified against master on
 
 Smaller things:
 
-* `Link_bandwidth` fills the 2 octet global administrator with 0 and drops it when parsing, so the advertising speaker's AS, which draft-ietf-idr-link-bandwidth puts there, cannot be set or read back. Carrying it means changing the `FLOAT` branches of `parse`, `value`, `value2` and `_encoded_value_` together, since `Extended_community.new(wire)` takes the same path.
+* `Extended_community#initialize` slices the String it is given, because `parse` starts with `s.slice!(0,2)`. The caller's String comes back 2 octets shorter, so the same packed String builds correctly once and raises `TypeError: no implicit conversion of nil into Integer` from `pack` on every build after that. `ruby -I. -e 'require "bgp/path_attributes/extended_community"; w = ["0002000100000001"].pack("H*"); 2.times { puts BGP::Extended_community.new(w).to_shex }'` prints `0002000100000001` then raises. `Extended_communities#parse` wants the slicing, for its own 8 octet loop, so a fix belongs in the single community path.
 * The unit suite sometimes prints a `ClosedQueueError` backtrace from `bgp/neighbor/neighbor.rb` on a background thread. Timing dependent, no test fails.
 
 Lab and conformance:

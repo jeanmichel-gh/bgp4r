@@ -76,7 +76,12 @@ module BGP
           @global = s.unpack1('H12')
         end
       when FLOAT
-        _, @global = s.unpack('ng')
+        # draft-ietf-idr-link-bandwidth, on RFC 4360 section 3.1: the 2
+        # octet global administrator is the advertising speaker's AS, the
+        # 4 octet local administrator the bandwidth. The AS used to be
+        # read into nothing and written back as 0, so wire bytes that
+        # carried one came back changed.
+        @global, @local = s.unpack('ng')
       end
     end
     
@@ -165,7 +170,9 @@ module BGP
       when OPAQUE
         "#{@global}"
       when FLOAT
-        "#{[@global].pack('g').unpack('g')[0]}"
+        # The same AS:value form as TWO_OCTET_AS, which is what this
+        # community is, only its local administrator is a float.
+        "#{@global}:#{bandwidth}"
       else
         # Not dead code, although it reads that way. community_structure
         # is @type & 3 when @type is an Integer, so the branches above,
@@ -181,11 +188,19 @@ module BGP
 
     def value2
       case community_structure
-      when FLOAT ; @global
+      when FLOAT ; [@global, bandwidth]
       when IPV4_ADDR ;  ["#{IPAddr.create(@global)}",@local]
-      else 
+      else
         [@global, @local]
       end
+    end
+
+    # draft-ietf-idr-link-bandwidth: the local administrator is an IEEE
+    # 754 single precision number, so what comes back is what the 4
+    # octets hold, not the Integer a caller may have passed. That is the
+    # value the hash form carries, so the hash encodes the same octets.
+    def bandwidth
+      [@local].pack('g').unpack1('g')
     end
 
     def community_structure
@@ -210,7 +225,9 @@ module BGP
           [@global].pack('H12')
         end
       when FLOAT
-        [0,@global].pack('ng')
+        # RFC 4360 section 3.1 and draft-ietf-idr-link-bandwidth: a
+        # 2 octet AS, then the bandwidth as an IEEE 754 single.
+        [@global, @local].pack('ng')
       else
         # Reached the same way as the else of value, by a type that is
         # not an Integer. Without it encode would raise TypeError from
@@ -386,25 +403,46 @@ module BGP
   class Link_bandwidth < Extended_community
     # draft-ietf-idr-link-bandwidth, on RFC 4360 section 3.1: the 2 octet
     # global administrator is the advertising speaker's AS and the 4 octet
-    # local administrator is the bandwidth. This class fills the AS field
-    # with 0, so the one argument is the bandwidth and a second has nowhere
-    # to go. Say that with what the caller passed. Any other count used to
-    # reach Extended_community#initialize with the wrong number of
-    # arguments and report its own list, "invalid arg [64, 4, 100, 1000, 0]"
-    # for two and "invalid argument [64, 4, 0]" for none, which named
-    # nothing the caller had written.
+    # local administrator is the bandwidth. Both are carried, so two
+    # arguments are the AS and the bandwidth. One is the bandwidth alone,
+    # with the AS left at 0, the form callers and tests already use. Any
+    # other count has nowhere to go, so say so with what the caller
+    # passed; it used to reach Extended_community#initialize with the
+    # wrong number of arguments and report its own list, "invalid arg
+    # [64, 4, 100, 1000, 0]" for two and "invalid argument [64, 4, 0]"
+    # for none, which named nothing the caller had written.
     def initialize(*args)
       if args[0].is_a?(String) and args[0].is_packed?
-        super(*args)
-      elsif args.size == 1
-        super(NON_TRANSITIVE | TWO_OCTET_AS, LINK_BANDWIDTH, args[0], 0)
+        return super(*args)
+      end
+      # An assignment hands its right hand side over as one Array:
+      # ec.link_bandwidth = 100, 1000 arrives as [[100, 1000]].
+      # Route_target flattens for the same reason.
+      args = args.flatten
+      case args.size
+      when 1 ; asn, bw = 0, args[0]
+      when 2 ; asn, bw = args
       else
         raise ArgumentError,
-          "invalid link bandwidth #{args.inspect}, expected one argument, the bandwidth"
+          "invalid link bandwidth #{args.inspect}, expected one argument, " +
+          "the bandwidth, or two, the AS and the bandwidth"
       end
-    end
-    def value2
-      @global
+      # RFC 4360 section 3.1 gives the global administrator 2 octets, and
+      # pack('n') would quietly send a different AS. A value that cannot
+      # be represented at all is the narrow case the conventions in
+      # CLAUDE.md allow a constructor to refuse: nothing is taken away
+      # from negative testing, since a link bandwidth with any octets in
+      # it still comes from wire bytes, Attr::Raw or the BGP::Fault
+      # helpers. Refusing a String here also keeps it away from the IPv4
+      # address remapping of the parent constructor, which would turn the
+      # community into something that is not a link bandwidth at all.
+      unless asn.is_a?(Integer) and (0..0xffff).include?(asn)
+        raise ArgumentError, "invalid AS #{asn.inspect}, expected 0 to 65535"
+      end
+      unless bw.is_a?(Numeric)
+        raise ArgumentError, "invalid bandwidth #{bw.inspect}, expected a number"
+      end
+      super(NON_TRANSITIVE | TWO_OCTET_AS, LINK_BANDWIDTH, asn, bw)
     end
   end
 

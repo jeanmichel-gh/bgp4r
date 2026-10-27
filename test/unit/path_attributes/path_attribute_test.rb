@@ -365,7 +365,7 @@ class Path_attribute_Test < Test::Unit::TestCase # :nodoc:
     assert_equal("c020202", pa.cluster_list.to_ary[1].to_s(16))
     assert_equal("Route target: 10.0.0.1:1311", pa.extended_communities.route_target.to_s)
     assert_equal("Ospf domain id: 2.2.2.2:0", pa.extended_communities.ospf_domain_id.to_s)
-    assert_equal("Link bandwidth: 100000000.0", pa.extended_communities.link_bandwidth.to_s)
+    assert_equal("Link bandwidth: 0:100000000.0", pa.extended_communities.link_bandwidth.to_s)
   end
 
   # method_missing caught 'med=' and its body was commented out, so

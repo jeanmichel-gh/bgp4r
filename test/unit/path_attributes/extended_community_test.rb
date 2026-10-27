@@ -219,13 +219,51 @@ class Extended_community_Test < Test::Unit::TestCase
     assert_equal("Bgp data collect: 100:100", Bgp_data_collect.new(['0008006400000064'].pack('H*')).to_s)
   end
   
+  # to_s names the AS as well as the bandwidth, the AS:value form of
+  # every other 2 octet AS specific community. It used to print the
+  # bandwidth alone, which said nothing about an AS the community
+  # carried.
   def test_link_bandwidth
     assert_equal('40040000461c4000', Link_bandwidth.new(10_000).to_shex)
-    assert_equal('Link bandwidth: 10000.0', Link_bandwidth.new(10_000).to_s)
-    assert_equal('Link bandwidth: 10000.0', Link_bandwidth.new(['04040000461c4000'].pack('H*')).to_s)
+    assert_equal('Link bandwidth: 0:10000.0', Link_bandwidth.new(10_000).to_s)
+    assert_equal('Link bandwidth: 0:10000.0', Link_bandwidth.new(['04040000461c4000'].pack('H*')).to_s)
     assert_equal('400400004cbebc20', Link_bandwidth.new(99_999_999).to_shex)
-    assert_equal('Link bandwidth: 100000000.0', Link_bandwidth.new(99_999_999).to_s)
-    assert_equal('Link bandwidth: 100000000.0', Link_bandwidth.new(['040400004cbebc20'].pack('H*')).to_s)
+    assert_equal('Link bandwidth: 0:100000000.0', Link_bandwidth.new(99_999_999).to_s)
+    assert_equal('Link bandwidth: 0:100000000.0', Link_bandwidth.new(['040400004cbebc20'].pack('H*')).to_s)
+    assert_equal('Link bandwidth: 65000:10000.0', Link_bandwidth.new(65_000, 10_000).to_s)
+  end
+
+  # draft-ietf-idr-link-bandwidth, on RFC 4360 section 3.1: the 2 octet
+  # global administrator is the advertising speaker's AS. It used to be
+  # filled with 0 and dropped when parsing, so 40040064447a0000 came back
+  # as 40040000447a0000 and the AS could neither be set nor read back.
+  # Bytes in, different bytes out, by every route into the class.
+  def test_link_bandwidth_carries_the_global_administrator
+    # AS 100, 1000 bytes per second. Fresh octets each time: parse slices
+    # the string it is given.
+    wire = ->{ ['40040064447a0000'].pack('H*') }
+    assert_equal('40040064447a0000', Link_bandwidth.new(wire.call).to_shex)
+    assert_equal('40040064447a0000', Extended_community.new(wire.call).to_shex)
+    assert_equal('40040064447a0000', Extended_community.factory(wire.call).to_shex)
+    assert_equal('40040064447a0000', Extended_community.new(0x40040064447a0000).to_shex)
+    # From field values, and read back.
+    lb = Link_bandwidth.new(100, 1000)
+    assert_equal('40040064447a0000', lb.to_shex)
+    assert_equal('Link bandwidth: 100:1000.0', lb.to_s)
+    assert_equal({:link_bandwidth=>[100, 1000.0]}, lb.to_hash)
+    # From that hash.
+    assert_equal('40040064447a0000', Link_bandwidth.new(*lb.to_hash[:link_bandwidth]).to_shex)
+    # The one argument form leaves the AS at 0, as before.
+    assert_equal('40040000447a0000', Link_bandwidth.new(1000).to_shex)
+    assert_equal([0, 1000.0], Link_bandwidth.new(1000).to_hash[:link_bandwidth])
+    # An AS above 65535 has no 2 octet form. pack would send a different
+    # one in silence.
+    err = assert_raise(ArgumentError) { Link_bandwidth.new(70_000, 1000) }
+    assert_equal('invalid AS 70000, expected 0 to 65535', err.message)
+    err = assert_raise(ArgumentError) { Link_bandwidth.new('1.1.1.1', 1000) }
+    assert_equal('invalid AS "1.1.1.1", expected 0 to 65535', err.message)
+    err = assert_raise(ArgumentError) { Link_bandwidth.new(100, 'x') }
+    assert_equal('invalid bandwidth "x", expected a number', err.message)
   end
 
   # draft-ietf-idr-link-bandwidth: the link bandwidth community takes the
@@ -250,22 +288,23 @@ class Extended_community_Test < Test::Unit::TestCase
                                   Route_target.new('1.1.1.1', 100).is_float?])
   end
 
-  # The one argument is the bandwidth. Any other count used to report the
-  # argument list Link_bandwidth builds for its parent, which named
-  # nothing the caller had written.
+  # One argument is the bandwidth, two are the AS and the bandwidth. Any
+  # other count used to report the argument list Link_bandwidth builds
+  # for its parent, which named nothing the caller had written.
   def test_link_bandwidth_argument_count
-    err = assert_raise(ArgumentError) { Link_bandwidth.new(100, 1000) }
-    assert_equal('invalid link bandwidth [100, 1000], expected one argument, the bandwidth',
-                 err.message)
+    message = 'invalid link bandwidth %s, expected one argument, the bandwidth, ' +
+              'or two, the AS and the bandwidth'
     err = assert_raise(ArgumentError) { Link_bandwidth.new(100, 1000, 2000) }
-    assert_equal('invalid link bandwidth [100, 1000, 2000], expected one argument, the bandwidth',
-                 err.message)
+    assert_equal(format(message, '[100, 1000, 2000]'), err.message)
     err = assert_raise(ArgumentError) { Link_bandwidth.new }
-    assert_equal('invalid link bandwidth [], expected one argument, the bandwidth',
-                 err.message)
-    # The one argument form and the wire form are untouched.
+    assert_equal(format(message, '[]'), err.message)
+    # The one argument form and the wire form are untouched, and two
+    # arguments are now the AS and the bandwidth.
     assert_equal('40040000461c4000', Link_bandwidth.new(10_000).to_shex)
     assert_equal('04040000461c4000', Link_bandwidth.new(['04040000461c4000'].pack('H*')).to_shex)
+    assert_equal('40040064461c4000', Link_bandwidth.new(100, 10_000).to_shex)
+    # An assignment hands both over as one Array.
+    assert_equal('40040064461c4000', Link_bandwidth.new([100, 10_000]).to_shex)
   end
 
   def test_color
