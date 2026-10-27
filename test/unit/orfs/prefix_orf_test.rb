@@ -116,7 +116,7 @@ class Prefix_orf_Test < Test::Unit::TestCase
   end
 
   # RFC 5292 section 2: Match is PERMIT (0) or DENY (1); the common part of
-  # RFC 5291 section 5 carries Action in the top two bits.
+  # RFC 5291 section 4 carries Action in the top two bits.
   def test_prefix_entry_action_and_match_accessors
     e = Prefix_entry.new(:prefix=>'10.0.0.0/8')
     assert_equal(0, e.action_to_i)
@@ -160,6 +160,101 @@ class Prefix_orf_Test < Test::Unit::TestCase
     back = Prefix_entry.new(e.encode.is_packed, 2)
     assert_equal('seq  10    add 2011:1::/32 permit', back.to_s)
     assert_equal(e.encode, back.encode)
+  end
+
+  # RFC 5291 section 4: "When the Action component of an ORF entry specifies
+  # REMOVE-ALL, the entry consists of only the common part." So the entry is
+  # one octet, and the Match field means nothing in it.
+  def test_remove_all_entry
+    e = Prefix_entry.remove_all
+    assert_equal(Prefix_entry::REMOVE_ALL, e.action_to_i)
+    assert_equal('remove all', e.action_to_s)
+    assert_equal('80', e.to_shex)
+    assert_equal('remove all', e.to_s)
+    assert_equal({:action=>2, :match=>0}, e.to_hash)
+    # all three build paths
+    assert_equal(e.encode, Prefix_entry.new(e.to_hash).encode)
+    assert_equal(e.encode, Prefix_entry.new(e.encode.is_packed).encode)
+    # one octet consumed, so the entries after it stay in step
+    orf = Prefix_orf.new([Prefix_entry.remove_all,
+                          Prefix_entry.add_and_permit(10, '10.0.0.0/8')])
+    assert_equal('40000a' + '80' + '000000000a0000080a', orf.to_shex)
+    back = Prefix_orf.new(orf.encode)
+    assert_equal(2, back.entries.size)
+    assert_equal(orf.encode, back.encode)
+    assert_equal('remove all', back.entries[0].to_s)
+    assert_equal('seq  10    add 10.0.0.0/8 permit', back.entries[1].to_s)
+  end
+
+  # Action is two bits, so 0 to 3 all fit the field and all encode. 3 has no
+  # RFC 5291 meaning, which is not a reason to refuse it.
+  def test_prefix_entry_action_accepts_any_value_the_field_holds
+    assert_equal('c0000000000000080a', Prefix_entry.new(:action=>3, :prefix=>'10.0.0.0/8').to_shex)
+    e = Prefix_entry.new(:prefix=>'10.0.0.0/8')
+    e.action = 3
+    assert_equal(3, e.action_to_i)
+    assert_equal('c0000000000000080a', e.to_shex)
+    # the three the RFC names, as a number and as a symbol
+    assert_equal([0, 1, 2], [:add, :remove, :remove_all].collect { |s| e.action = s ; e.action_to_i })
+    assert_equal([0, 1, 2], (0..2).collect { |i| e.action = i ; e.action_to_i })
+    e.action = 3
+    # what it cannot hold is refused, with a message, rather than ignored
+    err = assert_raise(RuntimeError) { e.action = 4 }
+    assert_equal('invalid action: 4', err.message)
+    assert_raise(RuntimeError) { e.action = -1 }
+    assert_raise(RuntimeError) { e.action = :drop }
+    assert_raise(RuntimeError) { Prefix_entry.new(:action=>:drop, :prefix=>'10.0.0.0/8') }
+    assert_equal(3, e.action_to_i)
+    # match= says what it refused too
+    err = assert_raise(RuntimeError) { e.match = 2 }
+    assert_equal('invalid match: 2', err.message)
+  end
+
+  # The hash a caller passes to new is the caller's.
+  def test_prefix_entry_does_not_write_into_the_hash_it_is_given
+    h = {:prefix=>'10.0.0.0/8'}
+    Prefix_entry.new(h)
+    assert_equal({:prefix=>'10.0.0.0/8'}, h)
+    assert_equal('00000000000000080a', Prefix_entry.new({:prefix=>'10.0.0.0/8'}.freeze).to_shex)
+  end
+
+  # RFC 5292 section 2: the fields of an entry, named, and back again.
+  def test_prefix_entry_to_hash
+    e = Prefix_entry.new(1, 1, 5, 16, 24, '172.16.0.0/12')
+    assert_equal({:action=>1, :match=>1, :seqn=>5, :min=>16, :max=>24, :prefix=>'172.16.0.0/12'},
+                 e.to_hash)
+    assert_equal(e.encode, Prefix_entry.new(e.to_hash).encode)
+    v6 = Prefix_entry.new(0, 0, 10, 0, 0, '2011:1::/32')
+    assert_equal('2011:1::/32', v6.to_hash[:prefix])
+    assert_equal(v6.encode, Prefix_entry.new(v6.to_hash).encode)
+  end
+
+  def test_prefix_orf_to_hash
+    orf = Prefix_orf.new([Prefix_entry.add_and_permit(10, '10.0.0.0/8'),
+                          Prefix_entry.remove_and_deny(20, '20.0.0.0/8')])
+    h = orf.to_hash
+    assert_equal(BGP::ORF::PREFIX, h[:type])
+    assert_equal(2, h[:entries].size)
+    assert_equal(orf.encode, Prefix_orf.new(h).encode)
+    # the Cisco type octet round trips as well
+    orf.cisco_prefix_entry_type
+    assert_equal(130, orf.to_hash[:type])
+    assert_equal(orf.encode, Prefix_orf.new(orf.to_hash).encode)
+    # entries already built are taken as they are
+    assert_equal(orf.encode, Prefix_orf.new(:type=>130, :entries=>orf.entries).encode)
+    assert_equal('400000', Prefix_orf.new({}).to_shex)
+  end
+
+  # RFC 5292 section 2: a prefix is read in the address family of the ORF, and
+  # the ORF gets it from the ROUTE-REFRESH message that carries it.
+  def test_prefix_orf_parses_in_the_afi_it_is_given
+    orf = Prefix_orf.new([Prefix_entry.new(0, 0, 10, 0, 0, '2011:1::/32')])
+    assert_equal('40000c000000000a00002020110001', orf.to_shex)
+    back = Prefix_orf.new(orf.encode, 2)
+    assert_equal('seq  10    add 2011:1::/32 permit', back.entries[0].to_s)
+    assert_equal(orf.encode, back.encode)
+    assert_equal(orf.encode, Prefix_orf.new(back, 2).encode)
+    assert_equal('2011:1::/32', Prefix_orf.new(back, 2).entries[0].to_hash[:prefix])
   end
 
   def test_prefix_orf_add_refuses_anything_but_a_prefix_entry
