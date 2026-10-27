@@ -77,14 +77,43 @@ end
 
 class Orf
   # RFC 5291 section 4: an ORF is an ORF Type octet, a two octet Length of
-  # ORFs and the entries. The AFI comes from the message carrying the ORF.
+  # ORF entries and the entries. The AFI comes from the message carrying
+  # the ORF.
   def self.factory(s, afi=1)
     type, len = s.unpack('Cn')
+    # Fewer than three octets cannot hold an ORF header, so there is no
+    # Length of ORF entries to trust and no type to dispatch on. Keep what
+    # is left rather than reading a length that is not there.
+    return Orf::Unknown.new(s.slice!(0,s.size).is_packed, afi) if len.nil?
     case type
-    when ORF::PREFIX 
+    when ORF::PREFIX, ORF::PREFIX_CISCO
+      # RFC 5292 section 3 assigns 64 to the Address Prefix ORF. 130 is the
+      # vendor code point of the RFC 5291 section 7 range that bgp4r sends
+      # from Prefix_orf#cisco_prefix_entry_type; no RFC covers it. The
+      # layout behind it is the prefix ORF's, Prefix_orf#_parse_ reads it
+      # already and keeps whatever type octet it finds, so read it as a
+      # prefix ORF. An operator then sees the entries of what bgp4r sent,
+      # and encode gives back the same octets, type 130 included.
       Prefix_orf.new(s.slice!(0,len+3).is_packed, afi)
     else
-      raise RuntimeError, "orf type #{type} not implemented"
+      # Any other ORF Type keeps its octets and writes them back. Raising
+      # here took down the parse of the whole ROUTE-REFRESH, and RFC 5291
+      # section 7 leaves the types 128 to 255 to vendors, so an ORF with no
+      # class of its own is a thing that arrives, not a thing to refuse.
+      Orf::Unknown.new(s.slice!(0,len+3).is_packed, afi)
+    end
+  end
+
+  # The hash form names the ORF Type too, so the type picks the class there
+  # as it does on the wire. Without this, every hash became a Prefix_orf and
+  # the hash of an ORF Type bgp4r does not implement did not round trip: its
+  # entry octets went missing.
+  def self.from_hash(h)
+    case h[:type]
+    when nil, ORF::PREFIX, ORF::PREFIX_CISCO
+      Prefix_orf.new(h)
+    else
+      Orf::Unknown.new(h)
     end
   end
 end
@@ -110,7 +139,7 @@ class Orf_route_refresh < Message
       self.safi = args[0][:safi] if args[0][:safi]
       self.when = args[0][:when] if args[0][:when]
       [args[0][:orfs]].flatten.compact.each do |orf|
-        add(orf.is_a?(Hash) ? Prefix_orf.new(orf) : orf)
+        add(orf.is_a?(Hash) ? Orf.from_hash(orf) : orf)
       end
     else
       @afi, @safi, *orfs = args
@@ -202,9 +231,21 @@ class Orf_route_refresh < Message
     @orfs.collect { |orf| orf.to_s}.join("\n")
   end
   
+  # RFC 5291 section 4: the message carries ORFs, so this takes ORFs. An ORF
+  # whose type, action or entries no RFC allows still goes on the wire; what
+  # is refused here is only something that is not an ORF at all. That is a
+  # caller mistake, not a protocol choice, and no field of the message can
+  # hold it. Dropping it to no effect built a message with no ORF, which is
+  # 24 octets a router takes and ignores, and the caller heard nothing: the
+  # same silent wrong answer new(afi,safi,orf) gave before #101, and the
+  # constructor hands its third and later arguments straight to here.
   def add(*args)
     @orfs ||=[]
-    args.each {  |arg| @orfs << arg if arg.is_a?(Orf) }
+    args.each do |arg|
+      raise ArgumentError, "invalid argument: #{arg.inspect}, expected an ORF" unless arg.is_a?(Orf)
+      @orfs << arg
+    end
+    self
   end
   alias << add
   

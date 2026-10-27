@@ -155,23 +155,91 @@ class Orf_route_refresh_Test < Test::Unit::TestCase
     assert_match(/seq  20 remove 20.0.0.0\/8 deny/, back.to_s)
   end
 
-  def test_add_keeps_only_orfs
+  # Replaces test_add_keeps_only_orfs, which pinned the dropping. An ORF whose
+  # type, action or entries no RFC allows still goes on the wire; something
+  # that is not an ORF at all is a caller mistake with no field to go in, and
+  # dropping it built a message with no ORF that a router takes and ignores.
+  def test_add_refuses_anything_that_is_not_an_orf
     rr = Orf_route_refresh.new(1, 1)
-    rr.add('not an orf', 42, nil)
+    err = assert_raise(ArgumentError) { rr.add('not an orf') }
+    assert_equal('invalid argument: "not an orf", expected an ORF', err.message)
+    assert_raise(ArgumentError) { rr.add(42) }
+    assert_raise(ArgumentError) { rr << nil }
+    # an ORF entry is not an ORF either
+    assert_raise(ArgumentError) { rr << Prefix_entry.add_and_permit(10, '10.0.0.0/8') }
+    # the constructor hands its third and later arguments to add, so a typo
+    # there is heard about rather than silently a message with no ORF
+    assert_raise(ArgumentError) { Orf_route_refresh.new(1, 1, 'not an orf') }
     assert_equal(0, rr.orfs.size)
     # RFC 5291 section 4: the When-to-refresh octet belongs to the message,
     # not to an ORF, so it is there even when no ORF is. That makes the
     # message 24 octets, one more than a plain ROUTE-REFRESH, which is how
     # the receiver tells the two apart.
     assert_equal('ffffffffffffffffffffffffffffffff0018050001000101', rr.to_shex)
+    # an ORF of a type no RFC describes is still an ORF, and still goes in
+    rr << BGP::Orf::Unknown.new(0x41, ['aabb'].pack('H*'))
+    assert_equal(1, rr.orfs.size)
+    assert_equal('ffffffffffffffffffffffffffffffff001d050001000101410002aabb', rr.to_shex)
   end
 
+  # Replaces test_an_orf_type_that_is_not_implemented, which pinned the raise.
   # RFC 5291 section 4: the ORF Type octet. Only the Address Prefix ORF of
-  # RFC 5292, type 64, is implemented, so any other type is refused on parse.
-  def test_an_orf_type_that_is_not_implemented
+  # RFC 5292, type 64, has a class of its own. Any other type keeps its type
+  # octet and its entry octets and writes them back, instead of raising and
+  # taking the parse of the whole message with it.
+  def test_an_orf_type_that_is_not_implemented_keeps_its_octets
     s = ('ff' * 16) + '001d' + '05' + '0001' + '00' + '01' + '01' + '41' + '0002' + 'aabb'
-    err = assert_raise(RuntimeError) { Message.factory([s].pack('H*')) }
-    assert_equal('orf type 65 not implemented', err.message)
+    rr = Message.factory([s].pack('H*'))
+    assert_equal(Orf_route_refresh, rr.class)
+    assert_equal(1, rr.orfs.size)
+    assert_equal(BGP::Orf::Unknown, rr.orfs[0].class)
+    assert_equal(0x41, rr.orfs[0].type)
+    assert_equal('aabb', rr.orfs[0].value.unpack('H*')[0])
+    assert_equal(s, rr.to_shex)
+    assert_match(/ORF type 65, 2 entry octets: \[aabb\]/, rr.to_s)
+    # the hash of the message round trips through new, the unknown ORF too
+    assert_equal({:type=>0x41, :value=>'aabb'}, rr.to_hash[:orfs][0])
+    assert_equal(s, Orf_route_refresh.new(rr.to_hash).to_shex)
+    assert_equal(s, Orf_route_refresh.new(rr).to_shex)
+    # and it does not stop the ORFs after it from being read
+    s2 = ('ff' * 16) + '0029' + '05' + '0001' + '00' + '01' + '01' +
+         '41' + '0002' + 'aabb' + '400009000000000a0000080a'
+    back = Message.factory([s2].pack('H*'))
+    assert_equal([BGP::Orf::Unknown, Prefix_orf], back.orfs.collect { |orf| orf.class })
+    assert_equal(s2, back.to_shex)
+    assert_match(/seq  10    add 10.0.0.0\/8 permit/, back.to_s)
+  end
+
+  # 130 is a vendor code point of the range RFC 5291 section 7 leaves to
+  # vendors and IANA does not assign, so no RFC describes it. bgp4r sends it
+  # from Prefix_orf#cisco_prefix_entry_type, and has to be able to read its
+  # own message back: an operator who cannot look at what they just sent has
+  # no test tool. The layout behind 130 is RFC 5292's, so it reads as a
+  # prefix ORF and the type octet is kept.
+  def test_a_cisco_style_prefix_orf_reads_back
+    orf = Prefix_orf.new(Prefix_entry.add_and_permit(10, '10.0.0.0/8'))
+    orf.cisco_prefix_entry_type
+    rr = Orf_route_refresh.new(1, 1, orf)
+    assert_equal('ffffffffffffffffffffffffffffffff0024050001000101' +
+                 '820009000000000a0000080a', rr.to_shex)
+    back = Orf_route_refresh.new(rr.encode)
+    assert_equal(Prefix_orf, back.orfs[0].class)
+    assert_equal(BGP::ORF::PREFIX_CISCO, back.orfs[0].type)
+    assert_equal(1, back.orfs[0].entries.size)
+    assert_equal('seq  10    add 10.0.0.0/8 permit', back.orfs[0].entries[0].to_s)
+    assert_equal(rr.to_shex, back.to_shex)
+    assert_equal(rr.to_hash, back.to_hash)
+    # the hash form picks the class off the type octet as well
+    assert_equal(rr.to_shex, Orf_route_refresh.new(rr.to_hash).to_shex)
+    assert_equal(rr.to_shex, Message.factory([rr.to_shex].pack('H*')).to_shex)
+    # RFC 5292 section 2: the entries are read in the AFI of the message, 130
+    # or 64 alike
+    v6 = Prefix_orf.new(Prefix_entry.new(0, 0, 10, 0, 0, '2011:1::/32'))
+    v6.cisco_prefix_entry_type
+    v6rr = Orf_route_refresh.new(2, 1, v6)
+    v6back = Message.factory([v6rr.to_shex].pack('H*'))
+    assert_match(/seq  10    add 2011:1::\/32 permit/, v6back.to_s)
+    assert_equal(v6rr.to_shex, v6back.to_shex)
   end
 
   # RFC 5291 section 4: the When-to-refresh octet sits between the SAFI and
