@@ -73,7 +73,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. A `lab` job runs the Compose topologies.
 
-Baseline on 2026-10-26: 697 tests, 17860 assertions, all passing. Line coverage of `bgp/` from the unit suite: 94.8%.
+Baseline on 2026-10-26: 701 tests, 17878 assertions, all passing. Line coverage of `bgp/` from the unit suite: 94.8%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -104,6 +104,7 @@ There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Cove
 * Cite the RFC section in a comment when you implement or fix wire format logic.
 * Do not delete or weaken existing tests to make a change pass.
 * If you find a bug you are not fixing, list it in the PR description.
+* Keep this file true in the same pull request that makes it false. If your change fixes something under "Known issues to work on", delete that entry. If it adds or removes tests, update the baseline counts above. Nobody reconciles this file later, and a stale entry is worse than no entry: it sends the next reader after work that no longer exists. Both halves of this have already happened here, once to seven entries at once, and once to a fix that landed without removing its own entry.
 
 ## Known issues to work on
 
@@ -114,7 +115,6 @@ Found while fixing other bugs, not fixed yet. Verified against master on
 Silent wrong answers, the worst kind here, since the library exists to
 send exact octets:
 
-* `As_path.new` with a bare segment hash drops its argument and builds an empty path: `As_path.new(:set => [1,2], :sequence => [3,4]).to_shex` is `400200`. Use `As_path.new_hash` for that shape. The fix is to accept the hash, the same shape `new_hash` takes, rather than to refuse it. It has to be fixed together with `test_9` in `test/unit/path_attributes/path_attribute_test.rb`, which passes only because of it: that test asserts two path attribute sets encode identically while their AS_PATHs differ, `11 12 13` against `11 12 14`, and in segment order. Correct the test, do not preserve it.
 * `Extended_community.factory` and `Extended_community::Unknown` build their 8 octets from an Integer with no range check, so a value outside `0..0xffffffffffffffff` wraps into a different community than the caller asked for. The constructor was fixed in #76; these two paths were not. This is the narrow case the convention above allows a constructor to refuse, because the value cannot be represented in the field at all. It does not restrict negative testing: a malformed extended community of any length is still built from wire bytes, from `Attr::Raw`, or with `Fault.value`.
 
 Round trips that do not:
