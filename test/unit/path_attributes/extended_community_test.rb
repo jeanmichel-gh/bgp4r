@@ -51,6 +51,17 @@ class Extended_community_Test < Test::Unit::TestCase
     assert_equal(rt.to_i, Extended_community.new(rt.to_i).to_i)
   end
 
+  # An Integer outside the 8 octets has no community to stand for. It used
+  # to wrap into a valid looking one instead of being refused.
+  def test_new_with_an_out_of_range_integer
+    assert_equal('ffffffffffffffff', Extended_community.new(2**64 - 1).to_shex)
+    assert_equal(2**64 - 1, Extended_community.new(2**64 - 1).to_i)
+    e = assert_raise(ArgumentError) { Extended_community.new(2**64) }
+    assert_match(/#{2**64}/, e.message)
+    assert_match(/#{2**64 - 1}/, e.message)
+    assert_raise(ArgumentError) { Extended_community.new(-1) }
+  end
+
   # RFC 4360 section 2: the low 2 bits of the type octet say which
   # structure the community has, so exactly one predicate is true.
   def test_structure_predicates
@@ -88,6 +99,11 @@ class Extended_community_Test < Test::Unit::TestCase
     ec.instance_of?(Extended_community)
     assert_equal('430a0a0000010064', ec.to_shex)
     assert_equal('Opaque: 0a0000010064', ec.to_s)
+    # From its wire bytes too. parse used to keep the Array unpack returns,
+    # so to_s showed it and encode raised TypeError.
+    wire = Opaque.new(['030a0a0000010064'].pack('H*'))
+    assert_equal('Opaque: 0a0000010064', wire.to_s)
+    assert_equal('030a0a0000010064', wire.to_shex)
   end
 
   def test_route_target
