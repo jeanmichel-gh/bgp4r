@@ -234,6 +234,74 @@ class Common_Test < Test::Unit::TestCase
     assert_equal('2014:aa:bb:cc::10/126', ip1 ^ 4)
     assert_equal('2014:aa:bb:cc::14/126', ip1 ^ 5)
   end
+  def test_ipaddr_arithmetic_is_refused_past_the_top_of_the_family
+    # An IPv4 address is four octets, RFC 791 section 2.3, and an IPv6
+    # address is 128 bits, RFC 4291 section 2. A step past the end is no
+    # address of the family, so both families refuse it the same way.
+    # IPv4 used to wrap through pack('N'): 255.255.255.0/24 ^ 1 answered
+    # 0.0.0.0/24, and 0.0.0.0/0 ^ 1 answered itself. IPv6 used to raise
+    # IPAddr::AddressFamilyError from a 17 octet string.
+    e = assert_raise(IPAddr::InvalidAddressError) { IPAddr.new('255.255.255.0/24') ^ 1 }
+    assert_match(/255\.255\.255\.0\/24/, e.message)
+    assert_match(/0\.0\.0\.0\.\.255\.255\.255\.255/, e.message)
+    assert_raise(IPAddr::InvalidAddressError) { IPAddr.new('255.255.0.0/16') ^ 1 }
+    assert_raise(IPAddr::InvalidAddressError) { IPAddr.new('0.0.0.0/0') ^ 1 }
+    v6 = 'ffff:ffff:ffff:ffff:ffff:ffff:ffff:fffc/126'
+    e6 = assert_raise(IPAddr::InvalidAddressError) { IPAddr.new(v6) ^ 1 }
+    assert_match(/::\.\.ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff/, e6.message)
+    assert_raise(IPAddr::InvalidAddressError) { IPAddr.new('::/0') ^ 1 }
+    # Both families answer with the same class, so a caller can rescue one.
+    assert_kind_of(IPAddr::Error, e)
+    assert_kind_of(IPAddr::Error, e6)
+    assert_kind_of(ArgumentError, e)
+  end
+  def test_ipaddr_arithmetic_is_refused_below_the_floor
+    # Below 0.0.0.0 or :: there is no address either. IPv4 used to wrap, so
+    # 0.0.0.0/24 ^ -1 answered 255.255.255.0/24. IPv6 was worse: format
+    # "%032x" of a negative holds '..', which pack('H*') read as an octet,
+    # so ::/126 ^ -1 answered eeff:ffff:ffff:ffff:ffff:ffff:ffff:fffc/126.
+    assert_raise(IPAddr::InvalidAddressError) { IPAddr.new('0.0.0.0/24') ^ -1 }
+    assert_raise(IPAddr::InvalidAddressError) { IPAddr.new('0.0.0.0/0') ^ -1 }
+    assert_raise(IPAddr::InvalidAddressError) { IPAddr.new('::/126') ^ -1 }
+    assert_raise(IPAddr::InvalidAddressError) { IPAddr.new('::/0') ^ -1 }
+    assert_raise(IPAddr::InvalidAddressError) { IPAddr.new('10.0.0.0/8') ^ -11 }
+  end
+  def test_ipaddr_arithmetic_at_the_edges_still_answers
+    # Everything that fits is unchanged, the last network included.
+    assert_equal('255.255.255.0/24', IPAddr.new('255.255.254.0/24') ^ 1)
+    assert_equal('255.255.255.0/24', IPAddr.new('255.255.255.0/24') ^ 0)
+    assert_equal('255.0.0.0/8', IPAddr.new('0.0.0.0/8') ^ 255)
+    assert_equal('0.0.0.0/0', IPAddr.new('0.0.0.0/0') ^ 0)
+    assert_equal('9.255.255.0/24', IPAddr.new('10.0.0.0/24') ^ -1)
+    assert_equal('ffff:ffff:ffff:ffff:ffff:ffff:ffff:fffc/126',
+                 IPAddr.new('ffff:ffff:ffff:ffff:ffff:ffff:ffff:fff8/126') ^ 1)
+    assert_equal('::/0', IPAddr.new('::/0') ^ 0)
+    assert_equal('2014:aa:bb:cc::/64', IPAddr.new('2014:aa:bb:cd::/64') ^ -1)
+  end
+  def test_nth_network_is_the_named_form_of_the_operator
+    # ^ steps whole networks, which is not what ^ means anywhere else.
+    # nth_network is the same call under a name ipaddr cannot take.
+    ip = IPAddr.new('10.0.0.1/28')
+    assert_equal(ip ^ 1, ip.nth_network(1))
+    assert_equal('10.0.0.16/28', ip.nth_network(1))
+    v6 = IPAddr.new('2014:aa:bb:cc::1/126')
+    assert_equal(v6 ^ 3, v6.nth_network(3))
+    assert_raise(IPAddr::InvalidAddressError) { IPAddr.new('::/0').nth_network(1) }
+  end
+  def test_ipaddr_has_no_xor_of_its_own
+    # CLAUDE.md: do not redefine a standard library method, because a newer
+    # Ruby may add the same name with other behavior, as ipaddr did with +.
+    # ipaddr defines &, |, ~, << and >>, but no ^, so bgp4r's ^ adds an
+    # operator. Ask a Ruby that has not loaded bgp4r, so this fails here if
+    # some ipaddr ever adds ^ and bgp4r starts shadowing it.
+    require 'rbconfig'
+    ruby = File.join(RbConfig::CONFIG['bindir'], RbConfig::CONFIG['ruby_install_name'])
+    out = IO.popen([ruby, '-e', 'require "ipaddr"; print IPAddr.method_defined?(:^)']) { |io| io.read }
+    assert_equal('false', out, 'ipaddr now defines IPAddr#^; bgp4r would be shadowing it')
+    # So the only ^ on IPAddr is this library's.
+    path, = IPAddr.instance_method(:^).source_location
+    assert_match(/bgp\/common\.rb\z/, path.to_s)
+  end
   def test_string_pack
     sbin = ['00'].pack('H*')
     assert_equal '0x0000:  00', sbin.hexlify.join
@@ -259,6 +327,28 @@ class Common_Test < Test::Unit::TestCase
     sbin = ['000102030405060708090a0b0c0d0e0fff'].pack('H*')
     assert_equal(['', '0x0000:  0001 0203 0405 0607 0809 0a0b 0c0d 0e0f', '0x0001:  ff'],
                  sbin.hexlify)
+  end
+  def test_hexlify_has_no_ruby_version_branch
+    # hexlify used to pick between two ways of formatting a trailing odd
+    # octet on `RUBY_VERSION.split('.').join[0,2] > "18"`. The else branch
+    # passed l[-1] straight to format, which was an Integer in Ruby 1.8 and
+    # is a one character String since 1.9, so format cannot take it: the
+    # branch was unreachable and would have raised had it run. The lines are
+    # gone; keep them gone.
+    root = File.expand_path('../..', File.dirname(__FILE__))
+    src = File.read(File.join(root, 'bgp', 'common.rb'))
+    code = src.lines.reject { |l| l =~ /\A\s*#/ }.join
+    assert_no_match(/RUBY_VERSION/, code)
+    # The test it stood on is true on every Ruby bgp4r supports, and on the
+    # Ruby running now.
+    %w{3.3.6 3.4.1 4.0.0}.each { |v| assert_operator(v.split('.').join[0,2], :>, '18') }
+    assert_operator(RUBY_VERSION.split('.').join[0,2], :>, '18')
+    # And the branch would have raised: format rejects the String.
+    assert_raise(ArgumentError) { format('%2.2x', "\xff") }
+    # The reachable branch still formats the odd octet, which is the only
+    # behavior anything depended on.
+    assert_equal(['', '0x0000:  00ff 0a'], ['00ff0a'].pack('H*').hexlify)
+    assert_equal(['', '0x0000:  0a'], ['0a'].pack('H*').hexlify)
   end
   def save_log_state
     [Log.class_variable_get(:@@logger), (Log.class_variable_get(:@@time) if Log.class_variable_defined?(:@@time))]
