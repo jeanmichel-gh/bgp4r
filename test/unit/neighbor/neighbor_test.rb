@@ -279,6 +279,55 @@ class TestBgpNeighbor < Test::Unit::TestCase
       threads.each { |t| assert ! t.alive?, "#{t['name']} still alive after close" }
     }
   end
+  # stop closes the output queue before it sets the state to Idle, so a
+  # message the event thread is still handling can make the FSM answer on a
+  # queue that is already gone. The event thread must survive that: it has
+  # to outlive stop so start works again, and close joins it.
+  #
+  # Driven straight through Neighbor#update, the way IO::Input does, so the
+  # ordering is forced instead of raced: state OpenConfirm, output queue
+  # closed, then a KEEPALIVE arrives.
+  def test_event_thread_survives_a_reply_on_a_closed_output_queue
+    ours, theirs = UNIXSocket.pair
+    n = Neighbor.new(:my_as=> 100, :id=> '1.1.1.1')
+    n.start(:session=> ours, :no_blocking=> true)
+    event_thread = n.instance_variable_get(:@event_thread)
+    updates = Catcher.new(Update)
+    n.add_observer updates
+    n.new_state(:OpenConfirm, 'test')
+    n.instance_variable_get(:@out).close
+    # rcv_keepalive answers with a KEEPALIVE, and has nowhere to put it.
+    n.update(:ev_msg, 4, Keepalive.new.encode)
+    # Before the fix the event thread died on that one, so this never came.
+    n.update(:ev_msg, 2, Update.new(Path_attribute.new(Origin.new(0), As_path.new(100),
+                                                       Next_hop.new('127.0.0.1')),
+                                    Nlri.new('10.0.0.0/8')).encode)
+    assert updates.pop, 'the event thread stopped handling events'
+    assert event_thread.alive?, 'the event thread must outlive a send on a closed queue'
+    assert_nothing_raised { n.close }
+    assert ! event_thread.alive?
+  ensure
+    n.close if n and not n.closed?
+    [ours, theirs].each { |s| s.close unless s.closed? }
+  end
+
+  def test_send_message_on_a_closed_session_raises_session_closed
+    ours, theirs = UNIXSocket.pair
+    n = Neighbor.new(:my_as=> 100, :id=> '1.1.1.1')
+    n.start(:session=> ours, :no_blocking=> true)
+    n.stop
+    e = assert_raise(Neighbor::SessionClosed) { n.send_message Keepalive.new }
+    assert_match(/session closed/, e.message)
+    # A send before start is another thing and must not be taken for it.
+    before = Neighbor.new(:my_as=> 100)
+    e2 = assert_raise(RuntimeError) { before.send_message Keepalive.new }
+    assert ! e2.is_a?(Neighbor::SessionClosed), 'a send before start is not a closed session'
+    before.close
+  ensure
+    n.close if n
+    [ours, theirs].each { |s| s.close unless s.closed? }
+  end
+
   def test_start_stop_start_again
     Timeout::timeout(6) {
       port = start_free_server
