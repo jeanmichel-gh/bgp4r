@@ -55,25 +55,40 @@ module BGP
       [@type, @subtype, _encoded_value_].pack('CCa6')
     end
     
+    # RFC 4360 section 2: an extended community is 8 octets, a 1 octet
+    # type, a 1 octet sub-type, then 6 octets of value. Both fields are
+    # read where they lie. This used to start with s.slice!(0,2), which
+    # handed back the type and the sub-type and left the caller's String
+    # 2 octets shorter. The same wire bytes then built a community once
+    # and raised TypeError from pack on every build after that, and
+    # frozen wire bytes raised FrozenError on the first. Nothing depends
+    # on the String being consumed: Extended_communities#parse does its
+    # own slicing, over its own copy of the attribute value, and hands
+    # each whole 8 octet slice on.
     def parse(s)
-      @type, @subtype = s.slice!(0,2).unpack('CC')
+      @type, @subtype = s.unpack('CC')
+      # byteslice gives nil past the end of a String shorter than the
+      # type and sub-type, where slicing left ''. Short octets still
+      # parse, as they must: a truncated community is one of the things
+      # this library exists to put on the wire.
+      v = s.byteslice(2, 6).to_s
       case community_structure
-      when TWO_OCTET_AS ; @global, @local = s.unpack('nN')
+      when TWO_OCTET_AS ; @global, @local = v.unpack('nN')
       when IPV4_ADDR
-        @global, @local = s.unpack('Nn')
+        @global, @local = v.unpack('Nn')
       when FOUR_OCTET_AS
         # RFC 5668 section 2: 4 octet global admin (AS), 2 octet local admin.
-        @global, @local = s.unpack('Nn')
+        @global, @local = v.unpack('Nn')
       when OPAQUE
         case self
         when Color
-          _,@global = s.unpack('nN')
+          _,@global = v.unpack('nN')
         when Origin_validation_state
-          _,@global = s.unpack('nN')
+          _,@global = v.unpack('nN')
         else
           # unpack returns an Array. Keep the 12 hex digits themselves, the
           # form _encoded_value_ packs back with 'H12'.
-          @global = s.unpack1('H12')
+          @global = v.unpack1('H12')
         end
       when FLOAT
         # draft-ietf-idr-link-bandwidth, on RFC 4360 section 3.1: the 2
@@ -81,7 +96,7 @@ module BGP
         # 4 octet local administrator the bandwidth. The AS used to be
         # read into nothing and written back as 0, so wire bytes that
         # carried one came back changed.
-        @global, @local = s.unpack('ng')
+        @global, @local = v.unpack('ng')
       end
     end
     
