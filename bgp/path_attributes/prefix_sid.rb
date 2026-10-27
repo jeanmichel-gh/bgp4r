@@ -143,6 +143,7 @@ module BGP
         parse(args[0].encode)
       elsif args.size == 1 and args[0].is_a?(Hash)
         h = args[0]
+        take_tail_key(h)
         add Label_index.new(h[:label_index]) if h[:label_index]
         add Originator_srgb.new(*h[:srgb]) if h[:srgb]
         [h[:tlvs]].flatten.compact.each { |t| add Tlv.new(t[:type], [t[:value]].pack('H*')) }
@@ -177,16 +178,21 @@ module BGP
       super(@tlvs.collect(&:to_s).join(', '), method)
     end
 
+    # The TLVs, plus a :tail key (Attr::TAIL_KEY) when octets were kept,
+    # so the hash of a malformed attribute round trips byte for byte
+    # through new. The key sits in the nested hash, where the attributes
+    # that hash a value list carry a {:tail=>hex} entry instead.
     def to_hash
       h = {}
       known, unknown = @tlvs.partition { |t| t.is_a?(Label_index) or t.is_a?(Originator_srgb) }
       known.each { |t| h = h.merge(t.to_hash) }
       h[:tlvs] = unknown.collect(&:to_hash) unless unknown.empty?
+      h = h.merge(tail_entry) if tail
       { :prefix_sid => h }
     end
 
     def encode
-      super(@tlvs.collect(&:encode).join + (@tail || ''))
+      super(@tlvs.collect(&:encode).join + (tail || ''))
     end
 
     private

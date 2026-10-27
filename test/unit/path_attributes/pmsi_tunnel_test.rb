@@ -105,6 +105,29 @@ class TestPmsiTunnel < Test::Unit::TestCase
     assert_equal [], Path_attribute.new(wire('c016050000000000')).errors
   end
 
+  # RFC 6514 section 5: a value too short to hold the fixed part is kept
+  # as it came, and the hash carries it as a :tail key (Attr::TAIL_KEY)
+  # inside the nested hash, so a to_hash round trip is byte for byte on a
+  # malformed attribute too.
+  def test_hash_round_trip_keeps_the_short_value
+    ['', '00', '00000000'].each do |value_hex|
+      hex = format('c016%02x', value_hex.length / 2) + value_hex
+      a = Pmsi_tunnel.new(wire(hex))
+      h = a.to_hash
+      assert_equal hex, a.to_shex
+      assert_equal value_hex, h[:pmsi_tunnel][:tail], h.inspect
+      assert_equal a.encode, Pmsi_tunnel.new(h[:pmsi_tunnel]).encode, h.inspect
+      pa = Path_attribute.new(:origin => :igp, :pmsi_tunnel => h[:pmsi_tunnel])
+      assert_equal a.encode, pa[:pmsi_tunnel].encode
+      assert_equal pa.encode, Path_attribute.new(pa.to_hash).encode
+    end
+  end
+
+  # An attribute with no kept octets hashes as it always has.
+  def test_hash_has_no_tail_key_without_a_short_value
+    assert_equal({:pmsi_tunnel => {:tunnel_type => :no_tunnel}}, Pmsi_tunnel.new(:no_tunnel).to_hash)
+  end
+
   def test_flags_are_checked
     pa = Path_attribute.new(wire('80160900060006400a000001'))
     assert_equal [[22, 4, :treat_as_withdraw]], pa.errors.collect { |f| [f.type, f.subcode, f.action] }

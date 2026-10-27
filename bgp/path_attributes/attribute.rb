@@ -317,6 +317,14 @@ module BGP
       rest
     end
 
+    # Keeps the octets of a hash form's :tail key, for the attributes
+    # that hash under a nested hash rather than a value list, so the
+    # key sits in that hash instead of ending a list. Prefix_sid and
+    # Pmsi_tunnel are the two.
+    def take_tail_key(hash)
+      take_tail([{ TAIL_KEY => hash[TAIL_KEY] }]) unless hash[TAIL_KEY].nil?
+    end
+
     # One registered path attribute class.
     # session is nil, :as4byte or :path_id: the session info that
     # Attr.factory passes to new when it parses wire bytes.
