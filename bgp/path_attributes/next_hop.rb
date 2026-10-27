@@ -27,15 +27,9 @@ module BGP
 
   class Next_hop < Attr
 
-    # class << self
-    #   def new_hash(arg={})
-    #     if arg.has_key?(:next_hop)
-    #       new( arg[:next_hop])
-    #     elsif arg.has_key?(:nexthop)
-    #       new( arg[:nexthop])
-    #     end
-    #   end
-    # end
+    # Both keys this attribute is registered under, :next_hop and its
+    # alias :nexthop.
+    HASH_KEYS = [:next_hop, :nexthop].freeze
 
     def initialize(*args)
       @flags, @type = WELL_KNOWN_MANDATORY, NEXT_HOP
@@ -44,11 +38,9 @@ module BGP
       elsif args[0].is_a?(self.class)
         parse(args[0].encode, *args[1..-1])
       elsif args[0].is_a?(Hash)
-        if args[0].has_key?(:next_hop)
-          @next_hop = IPAddr.create(args[0][:next_hop])
-        elsif arg.has_key?(:nexthop)
-          @next_hop = IPAddr.create(args[0][:nexthop])
-        end
+        key = HASH_KEYS.find { |k| args[0].has_key?(k) }
+        raise ArgumentError, "invalid argument #{args[0].inspect}" unless key
+        @next_hop = IPAddr.create(args[0][key])
       else
         @next_hop = IPAddr.create(*args)
       end

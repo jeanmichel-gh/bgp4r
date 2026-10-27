@@ -175,6 +175,71 @@ class As_path_Test < Test::Unit::TestCase
     assert_equal [5,6], set2.to_hash[:as_path][:confed_sequence]
     assert_equal [7,8], set2.to_hash[:as_path][:confed_set]
   end
+  # to_hash used to merge every segment into one hash, so all but the
+  # last segment of a type was lost and the hash did not round trip.
+  def test_to_hash_keeps_repeated_sequences
+    path = As_path.new(As_path::Sequence.new(1,2), As_path::Sequence.new(3,4))
+    assert_equal({:as_path=>{:segments=>[{:sequence=>[1,2]}, {:sequence=>[3,4]}]}}, path.to_hash)
+    assert_equal('1 2 3 4', path.as_path)
+    assert_equal(path.to_shex, As_path.new(path.to_hash).to_shex)
+    assert_equal(path.to_hash, As_path.new(path.to_hash).to_hash)
+    assert_equal(path.to_shex, As_path.new_hash(path.to_hash[:as_path]).to_shex)
+  end
+  def test_to_hash_keeps_a_set_between_two_sequences
+    path = As_path.new(As_path::Sequence.new(1,2), As_path::Set.new(3), As_path::Sequence.new(4,5))
+    assert_equal({:as_path=>{:segments=>[{:sequence=>[1,2]}, {:set=>[3]}, {:sequence=>[4,5]}]}}, path.to_hash)
+    assert_equal('1 2 {3} 4 5', path.as_path)
+    assert_equal('40021002020001000201010003020200040005', path.to_shex)
+    assert_equal(path.to_shex, As_path.new(path.to_hash).to_shex)
+    assert_equal(path.to_hash, As_path.new(path.to_hash).to_hash)
+  end
+  # RFC 5065 section 3: a path can carry more than one confederation
+  # segment of the same type.
+  def test_to_hash_keeps_repeated_confederation_segments
+    path = As_path.new(As_path::Confed_sequence.new(65001,65002), As_path::Confed_set.new(65003),
+                       As_path::Confed_sequence.new(65004), As_path::Sequence.new(1))
+    assert_equal({:as_path=>{:segments=>[{:confed_sequence=>[65001,65002]}, {:confed_set=>[65003]},
+                                         {:confed_sequence=>[65004]}, {:sequence=>[1]}]}}, path.to_hash)
+    assert_equal('4002120302fde9fdea0401fdeb0301fdec02010001', path.to_shex)
+    assert_equal(path.to_shex, As_path.new(path.to_hash).to_shex)
+    assert_equal(path.to_hash, As_path.new(path.to_hash).to_hash)
+  end
+  def test_to_hash_round_trips_a_path_parsed_from_wire_bytes
+    wire = '40021002020001000201010003020200040005'
+    path = As_path.new([wire].pack('H*').is_packed)
+    assert_equal(wire, path.to_shex)
+    assert_equal(wire, As_path.new(path.to_hash).to_shex)
+    assert_equal(path.to_hash, As_path.new(path.to_hash).to_hash)
+    four_byte = '40021a0202000000010000000201010000000302020000000400000005'
+    path4 = As_path.new([four_byte].pack('H*').is_packed, true)
+    assert_equal(path.to_hash, path4.to_hash)
+    assert_equal(four_byte, As_path.new(path4.to_hash).to_shex(true))
+  end
+  def test_as4_path_to_hash_keeps_repeated_segments
+    path = As4_path.new(As_path::Sequence.new(100,4200000001), As_path::Sequence.new(200))
+    assert_equal({:as_path=>{:segments=>[{:sequence=>[100,4200000001]}, {:sequence=>[200]}]}}, path.to_hash)
+    assert_equal(path.to_shex, As4_path.new(path.to_hash).to_shex)
+    assert_equal(path.to_hash, As4_path.new(path.to_hash).to_hash)
+  end
+  # The one key per segment type hash is still what to_hash returns
+  # while no type repeats, and new_hash still takes it.
+  def test_one_key_per_segment_type_hash_still_works
+    assert_equal({:as_path=>{:sequence=>[1,2]}}, As_path.new_hash(:sequence=>[1,2]).to_hash)
+    old = {:set=>[1,2], :sequence=>[3,4], :confed_sequence=>[5,6], :confed_set=>[7,8]}
+    assert_equal('400218010200010002020200030004030200050006040200070008', As_path.new_hash(old).to_shex)
+    assert_equal({:as_path=>old}, As_path.new_hash(old).to_hash)
+    assert_equal(As_path.new_hash(old).to_shex, As_path.new(:as_path=> old).to_shex)
+    assert_equal('400200', As_path.new_hash({}).to_shex)
+    assert_equal('400200', As_path.new(:as_path=>{}).to_shex)
+    assert_equal('4002040201006f', As_path.new_hash('sequence'=>111).to_shex)
+    assert_equal('4002040201006f', As_path.new(:segments=>[{'sequence'=>111}]).to_shex)
+  end
+  def test_hash_with_an_unknown_segment_type_raises
+    assert_raise(ArgumentError) { As_path.new_hash(:carrier_pigeon=>[1,2]) }
+    assert_raise(ArgumentError) { As_path.new(:as_path=>{:carrier_pigeon=>[1,2]}) }
+    assert_raise(ArgumentError) { As_path.new(:segments=>[{:sequence=>[1], :set=>[2]}]) }
+    assert_raise(ArgumentError) { As_path.new_hash(As_path::Sequence.new(1)) }
+  end
   def test_segments
     path = As_path.new(As_path::Segment.new(:sequence, 1, 2), As_path::Segment.new(:set, 3, 4))
     segs = path.segments
