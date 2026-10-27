@@ -73,7 +73,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. A `lab` job runs the Compose topologies.
 
-Baseline on 2026-10-26: 701 tests, 17878 assertions, all passing. Line coverage of `bgp/` from the unit suite: 94.8%.
+Baseline on 2026-10-26: 706 tests, 17894 assertions, all passing. Line coverage of `bgp/` from the unit suite: 94.8%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -132,7 +132,8 @@ Smaller things:
 
 Lab and conformance:
 
-* The GoBGP configs are written for the 3.23 schema: `lab/conformance/gobgpd.conf` and `lab/topologies/fault-matrix/gobgp.toml`. The fault matrix topology pins GoBGP 3.23 to match them, so the conformance suite only ever tests a router from 2024. Updating both configs to the 4.x schema, then rerunning the matrix to see which verdicts move, is the fix. A rejected key shows up in the router's own log.
+* The results in `docs/protocol-testing.md`, and the GoBGP divergence note above, were measured against GoBGP 3.23 by hand. The topology now runs 4.10, so they want remeasuring against it, which is a run and a write-up rather than a fix. `GOBGP_IMAGE=jauderho/gobgp:v3.23.0` reproduces the old numbers.
+* `lab/conformance/gobgpd.conf` and `lab/topologies/fault-matrix/gobgp.toml` are written in the 3.23 style and GoBGP 4 reads them unchanged. Every key is still in the 4.x config structs under the same `mapstructure` name, and 4.x registers `mapstructure.StringToNetIPAddrHookFunc` so the address fields still decode from TOML strings. No schema work is needed; an earlier version of this entry said otherwise and was wrong.
 * `lab/topologies/fault-matrix` exits 1, and that is the right answer: GoBGP 3.23 discards the malformed tunnel encapsulation attribute and installs the route where RFC 9012 section 13 asks for treat-as-withdraw. Both cases are asserted as a known divergence in `test/functional/lab/fault_matrix_test.rb`. A newer GoBGP may fix it; see the comment on `TUNNEL_ENCAP` there.
 * Lowest coverage (unit suite): `orfs/prefix_orf.rb` 79%, `common.rb` 82%, `nlris/nlri.rb` 83%, `messages/route_refresh.rb` 83%, `optional_parameters/capability.rb` 86%.
 
