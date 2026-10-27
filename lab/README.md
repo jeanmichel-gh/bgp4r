@@ -193,11 +193,15 @@ any conformant router. Telling treat-as-withdraw from attribute-discard
 does need the RIB, and the topology does not read it, so run the matrix
 by hand with `--rib-command` for that.
 
-### Running it without containers
+### Running it without containers, on Linux
 
-The routers do not have to be containers. FRR, BIRD and GoBGP are all
-packaged by Ubuntu, so they can run as plain processes on loopback
-addresses, which is how the results below were produced:
+This route needs Linux. The three routers are Linux daemons, and it also
+relies on all of 127.0.0.0/8 being local, which is true on Linux and not
+on macOS. On a Mac use the topology above instead.
+
+FRR, BIRD and GoBGP are all packaged by Ubuntu, so they can run as plain
+processes on loopback addresses, which is how the results below were
+produced:
 
 ```
 apt-get install -y frr bird2 gobgpd

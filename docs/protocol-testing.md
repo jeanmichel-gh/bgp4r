@@ -33,16 +33,52 @@ cd bgp4r
 ruby test/run_unit.rb
 ```
 
-The router does not have to be a container. FRR, BIRD and GoBGP are all
-packaged by Ubuntu and run fine as plain processes on loopback
-addresses:
+Then you need a router. How you get one depends on your machine, so the
+rest of this section splits in two. Everything after it is the same
+either way.
+
+### On a Mac with Docker
+
+FRR, BIRD and GoBGP are Linux daemons, so on macOS they run in
+containers. The quickest route is the ready made topology, which runs
+the whole fault catalog against GoBGP in one command:
+
+```
+docker compose -f lab/topologies/fault-matrix/compose.yml up --build \
+  --abort-on-container-exit --exit-code-from matrix
+```
+
+The annex at the end of this document covers that run in full. To drive
+a router by hand instead, start it in a container and point bgp4r at its
+address.
+
+One macOS difference worth knowing before you copy a command from the
+Linux path below. `lo0` has only 127.0.0.1 on it, so the extra loopback
+addresses the Linux examples use do not exist until you add them:
+
+```
+sudo ifconfig lo0 alias 127.0.0.2 up     # remove with -alias
+```
+
+That is per address and does not survive a reboot, which is the main
+reason containers are easier here.
+
+### On a Linux VM
+
+FRR, BIRD and GoBGP are all packaged by Ubuntu and run fine as plain
+processes:
 
 ```
 apt-get install -y frr bird2 gobgpd
 ```
 
+All of 127.0.0.0/8 is local on Linux, so several routers can run side by
+side on 127.0.0.2, 127.0.0.3 and 127.0.0.4 with no setup. That is how
+the results later in this document were produced.
+
 `lab/conformance/` has a working config for each, and `lab/README.md`
-explains how to run them side by side.
+explains how to run them side by side. The container topology works here
+too, if Docker is installed.
 
 ## Building messages
 
