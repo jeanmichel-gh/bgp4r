@@ -194,8 +194,16 @@ module BGP
             raise ArgumentError, "at least one arg is not a segment"
           end
           @segments = args.dup
+        elsif ! args.empty? and ! args[0].nil?
+          # No args, or nil, is an empty path to add segments to with <<.
+          # Anything else that reaches here could not be turned into
+          # segments, and silently returning an empty path hides that:
+          # the caller gets an AS_PATH of no segments and no warning.
+          raise ArgumentError,
+            "invalid argument #{args[0].inspect}, expected AS numbers, " \
+            "segments, a hash of segment types or wire bytes"
         end
-        
+
       end
       
       def <<(val)
@@ -282,14 +290,19 @@ module BGP
           o
         end
 
-        # True for a hash new builds from: the hash to_hash returns,
-        # wrapped under the attribute name, or a :segments list. A bare
-        # hash of segment types, which new_hash takes, is not one: new
-        # has always ignored such a hash, and Path_attribute builds
-        # those through new_hash.
+        # True for every hash shape segments_from_hash takes: the hash
+        # to_hash returns, that hash wrapped under the attribute name, a
+        # :segments list, and a bare hash of segment types such as
+        # {:set=>[1,2], :sequence=>[3,4]}.
+        #
+        # The bare shape is the one new used to ignore, silently
+        # building an empty path from it while new_hash built the real
+        # thing. An argument that cannot be turned into bytes is better
+        # refused by segment_from_hash than dropped.
         def hash_form?(arg)
-          arg.is_a?(Hash) and
-            (arg.has_key?(:as_path) or arg.has_key?(:as4_path) or arg.has_key?(:segments))
+          return false unless arg.is_a?(Hash)
+          return true if arg.has_key?(:as_path) or arg.has_key?(:as4_path) or arg.has_key?(:segments)
+          ! arg.empty? and arg.keys.all? { |k| SEGMENT_CLASSES.has_key?(k) }
         end
 
         # The segments a hash describes, in order. Two shapes:

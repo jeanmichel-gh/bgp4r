@@ -278,6 +278,49 @@ class As4_path_Test < Test::Unit::TestCase
     assert_equal 'c0110a020200000064fa56ea01', path.encode(false).unpack1('H*')
     assert_equal path.encode(true), path.encode(false)
   end
+
+  # new used to ignore a bare hash of segment types and build an empty
+  # path from it, while new_hash built the real thing.
+  def test_new_takes_a_bare_segment_hash
+    h = { :set=> [1,2], :sequence=> [3,4] }
+    assert_equal '40020c010200010002020200030004', As_path.new(h).to_shex
+    assert_equal As_path.new_hash(h).to_shex, As_path.new(h).to_shex
+    assert_equal '{1, 2} 3 4', As_path.new(h).as_path
+    # Order of the keys is the order of the segments on the wire.
+    assert_not_equal As_path.new(:set=> [1,2], :sequence=> [3,4]).to_shex,
+                     As_path.new(:sequence=> [3,4], :set=> [1,2]).to_shex
+    # RFC 5065 section 3 confederation segments, and the subclass.
+    c = { :confed_sequence=> [1,2], :confed_set=> [3] }
+    assert_equal As4_path.new_hash(c).to_shex, As4_path.new(c).to_shex
+    assert_equal '(1 2) [3]', As4_path.new(c).as_path
+  end
+
+  def test_the_other_hash_shapes_still_build
+    seq = As_path.new(As_path::Sequence.new(1,2))
+    assert_equal seq.to_shex, As_path.new(seq.to_hash).to_shex
+    assert_equal seq.to_shex, As_path.new(:sequence=> [1,2]).to_shex
+    assert_equal seq.to_shex, As_path.new(:segments=> [{ :sequence=> [1,2] }]).to_shex
+    two = As_path.new(As_path::Sequence.new(1,2), As_path::Sequence.new(3,4))
+    assert_equal two.to_shex, As_path.new(two.to_hash).to_shex
+  end
+
+  # An argument new cannot turn into segments is refused. It used to
+  # return an AS_PATH of no segments with no warning, so a caller who
+  # mistyped sent an empty path and never knew.
+  def test_an_uninterpretable_argument_raises
+    [{ :bogus=> [1,2] }, '1 2', :igp, [1,2], 1.5].each do |arg|
+      assert_raise(ArgumentError, arg.inspect) { As_path.new(arg) }
+    end
+  end
+
+  # No argument, or nil, stays an empty path to add segments to.
+  def test_an_empty_path_is_still_allowed
+    assert_equal '400200', As_path.new.to_shex
+    assert_equal '400200', As_path.new(nil).to_shex
+    path = As_path.new
+    path << As_path::Sequence.new(1,2)
+    assert_equal '400206020200010002', path.to_shex
+  end
 end
 
 #MiniTest::Unit.autorun
