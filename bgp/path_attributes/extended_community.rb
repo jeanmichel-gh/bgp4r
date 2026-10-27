@@ -43,6 +43,31 @@ module BGP
     TRANSITIVE = 0x0    
     NON_TRANSITIVE = 0x40    
 
+    # The hash form key that carries the type octet.
+    #
+    # RFC 4360 section 2: the type octet says things no value says. Its
+    # first two bits are the IANA authority bit and the T bit, which a
+    # community keeps whatever its value is, and its low two bits are
+    # the structure of the value. A build from field values hard codes
+    # the first two and picks the last two from the values, so a
+    # community that arrives with others has nowhere to keep them: the
+    # hash form carried the values but not the octet, and to_hash is
+    # supposed to return a hash that round trips through new.
+    #
+    # So to_hash carries the octet, under this key, beside the value
+    # rather than inside it, and only when a build from the value would
+    # give a different one. A community whose value says all there is to
+    # say has no such key, so the hash of an ordinary community is the
+    # plain one key hash it has always been and the hashes callers write
+    # by hand mean what they always meant. That is how Attr::TAIL_KEY
+    # carries octets a parser could not interpret, and the reason is the
+    # same.
+    #
+    # Nothing is checked, here or in the writer: the octet a caller
+    # gives is the octet that goes on the wire, as everywhere else in
+    # the building path.
+    TYPE_KEY = :type
+
     TWO_OCTET_AS = 0
     IPV4_ADDR = 1
     FOUR_OCTET_AS = 2
@@ -170,11 +195,39 @@ module BGP
       "#{name}: #{value}"
     end
     
+    # The type octet. A hash form carries it under TYPE_KEY when the
+    # value alone cannot reproduce it, and the writer puts it back after
+    # the value has built the community.
+    attr_accessor :type
+
+    # The one key hash form, plus the type octet when the value cannot
+    # reproduce it (TYPE_KEY). Every community hashes through here,
+    # Extended_community::Typed included, so the octet is carried in one
+    # place and the same way.
     def to_hash
-      { self.class.to_s.split('::').last.downcase.to_sym => value2 }
+      h = { hash_key => hash_value }
+      h[TYPE_KEY] = @type unless @type == hash_type
+      h
+    end
+
+    # The type octet a build from the hash value gives back. The default
+    # is the octet this community already has, so a class that does not
+    # say otherwise never carries one and its hash does not change. A
+    # class whose constructor hard codes the octet says so by overriding
+    # this.
+    def hash_type
+      @type
     end
 
     private
+
+    def hash_key
+      self.class.to_s.split('::').last.downcase.to_sym
+    end
+
+    def hash_value
+      value2
+    end
 
     def value
       case community_structure
@@ -316,12 +369,14 @@ module BGP
       elsif args.size==4
         raise  ArgumentError, "This is a base class and should not be instanciated"  if instance_of?(Extended_community)
         @type, @subtype, @global, @local = args
-        if @global.is_a?(String) and @local.is_a?(Integer)
+        case derived_structure(@global, @local)
+        when IPV4_ADDR
           @type |= IPV4_ADDR
           @global = IPAddr.new(@global).to_i
-        elsif four_octet_as_specific?
+        when FOUR_OCTET_AS
           # RFC 5668 section 2: an AS above 65535 needs the 4 octet AS
-          # specific type (0x02), with a 2 octet local admin.
+          # specific type octet (0x02, or 0x42 non-transitive), with a
+          # 4 octet global admin and a 2 octet local admin.
           raise ArgumentError, "local admin #{@local} does not fit in 2 octets" if @local.to_i > 0xffff
           @type |= FOUR_OCTET_AS
         end
@@ -341,9 +396,26 @@ module BGP
 
   class Extended_community
     private
-    def four_octet_as_specific?
-      [ROUTE_TARGET, ROUTE_ORIGIN].include?(@subtype) and
-        @type & 3 == TWO_OCTET_AS and @global.is_a?(Integer) and @global > 0xffff
+    # RFC 4360 section 2: the low two bits of the type octet are the
+    # structure of the value, and a build from field values picks them
+    # from the values themselves. An IPv4 address with a 2 octet local
+    # administrator gives the IPv4 address specific structure; an AS
+    # above 65535 under the route target or route origin sub-types
+    # (RFC 4360 sections 4 and 5) gives the 4 octet AS specific one of
+    # RFC 5668 section 2; anything else the 2 octet AS specific one.
+    #
+    # The constructor sets the type octet with this, and hash_type asks
+    # it again over the values to_hash carries, so the two cannot drift
+    # apart and say different things about the same community.
+    def derived_structure(global, local)
+      if global.is_a?(String) and local.is_a?(Integer)
+        IPV4_ADDR
+      elsif [ROUTE_TARGET, ROUTE_ORIGIN].include?(@subtype) and
+            global.is_a?(Integer) and global > 0xffff
+        FOUR_OCTET_AS
+      else
+        TWO_OCTET_AS
+      end
     end
   end
 
@@ -355,6 +427,15 @@ module BGP
         super(*[0, ROUTE_TARGET, *args].flatten)
       end
     end
+    # RFC 4360 section 4: a route target is transitive, so a build from
+    # values passes 0 and leaves the T bit clear, and the structure bits
+    # come from the values. A non-transitive route target, and a 4 octet
+    # AS specific one (RFC 5668 section 2) whose AS fits in 2 octets,
+    # therefore need their type octet carried: nothing in [100, 1] says
+    # which of the two AS specific forms it came from.
+    def hash_type
+      TRANSITIVE | derived_structure(*hash_value)
+    end
   end
 
   class Route_origin < Extended_community
@@ -364,6 +445,10 @@ module BGP
       else
         super(*[0,ROUTE_ORIGIN,*args].flatten)
       end
+    end
+    # RFC 4360 section 5, and the same two cases as the route target.
+    def hash_type
+      TRANSITIVE | derived_structure(*hash_value)
     end
   end
 
@@ -379,6 +464,15 @@ module BGP
     def value2
       "#{IPAddr.create(@global)}"
     end
+    # RFC 4577 section 4.2.6 lists the types 0x0005, 0x0105 and 0x0205
+    # for the OSPF domain ID. value2 is always an address, the 0x0105
+    # form, so a build from the hash value always gives the IPv4 address
+    # specific structure and a clear T bit. The 0x0005 form loses more
+    # than its type octet in the hash; see "Known issues to work on" in
+    # CLAUDE.md.
+    def hash_type
+      IPV4_ADDR
+    end
   end
 
   class Ospf_router_id < Extended_community
@@ -393,6 +487,11 @@ module BGP
     def value2
       "#{IPAddr.create(@global)}"
     end
+    # The OSPF router ID the same way, and only its IPv4 address
+    # specific type, 0x0107, is in Extended_community::FACTORY.
+    def hash_type
+      IPV4_ADDR
+    end
   end
 
   class Bgp_data_collect < Extended_community
@@ -402,6 +501,10 @@ module BGP
       else
         super(0,BGP_DATA_COLLECT,*args)
       end
+    end
+    # RFC 4384: the 2 octet AS specific community, transitive.
+    def hash_type
+      TRANSITIVE | TWO_OCTET_AS
     end
   end
 
@@ -459,6 +562,12 @@ module BGP
       end
       super(NON_TRANSITIVE | TWO_OCTET_AS, LINK_BANDWIDTH, asn, bw)
     end
+    # draft-ietf-idr-link-bandwidth, on RFC 4360 section 3.1: the link
+    # bandwidth is non-transitive, and the constructor says so for every
+    # build from values.
+    def hash_type
+      NON_TRANSITIVE | TWO_OCTET_AS
+    end
   end
 
   class Color < Opaque
@@ -472,6 +581,11 @@ module BGP
     end
     def value2
       @global
+    end
+    # RFC 9012 section 4.3: the color is a transitive opaque community,
+    # and the constructor passes TRANSITIVE for every build from values.
+    def hash_type
+      TRANSITIVE | OPAQUE
     end
   end
 
@@ -508,6 +622,13 @@ module BGP
     end
     def value2
       @global
+    end
+    # RFC 8097 section 2: the type octet is 0x43, non-transitive, and
+    # the constructor passes NON_TRANSITIVE for every build from values.
+    # One that arrives with the T bit clear, type 0x03, has nowhere else
+    # to keep it.
+    def hash_type
+      NON_TRANSITIVE | OPAQUE
     end
 
   end
@@ -580,11 +701,12 @@ module BGP
     def to_s
       "#{name}: #{value_s}"
     end
-    def to_hash
-      { hash_key => hash_value }
-    end
-    def hash_key
-      self.class.to_s.split('::').last.downcase.to_sym
+    # A Typed community hard codes its type octet, so a build from the
+    # hash value always gives TYPE and one that arrived with anything
+    # else, a cleared or set T bit among them, needs it carried.
+    # Redirect picks its own from the value and says so there.
+    def hash_type
+      self.class::TYPE
     end
     private
     def mac_s(octets)
@@ -716,6 +838,17 @@ module BGP
     TYPE, SUBTYPE = 0x80, 0x08
     LABEL = 'Redirect'
     attr_reader :global, :local
+    # RFC 8955 section 7.4: the type octet follows the shape of the
+    # value, the way build picks it, so the value reproduces it.
+    def hash_type
+      if @global.is_a?(String)
+        0x81
+      elsif @global.is_a?(Integer) and @global > 0xffff
+        0x82
+      else
+        0x80
+      end
+    end
     private
     def build(global, local)
       if global.is_a?(String)
