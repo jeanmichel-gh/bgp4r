@@ -1,5 +1,5 @@
 #--
-# Copyright 2010 Jean-Michel Esnault.
+# Copyright 2010, 2026 Jean-Michel Esnault.
 # All rights reserved.
 # See LICENSE.txt for permissions.
 #
@@ -70,5 +70,130 @@ class Capability_Test < Test::Unit::TestCase
     s = '0207640576616c7565'
     cap = Capability.factory([s].pack('H*'))
     assert_equal(Capability::Unknown, cap.class)
+  end
+  def test_unknown_keeps_the_octets_it_cannot_name
+    cap = Capability.factory(['0207640576616c7565'].pack('H*'))
+    assert_equal(Capability::Unknown, cap.class)
+    assert_equal '0207640576616c7565', cap.to_shex
+    assert_equal({:code=>100}, cap.to_hash)
+    assert_equal 'Option Capabilities Advertisement (2): [0207640576616c7565]', cap.to_s
+  end
+  def test_unknown_refuses_what_it_cannot_parse
+    # Unknown only knows how to read wire bytes, so anything else is
+    # refused rather than silently kept as a capability value.
+    assert_raise(ArgumentError) { Capability::Unknown.new(42) }
+    assert_raise(ArgumentError) { Capability::Unknown.new('0207640576616c7565') }
+  end
+  def test_to_hash
+    assert_equal({:code=>100}, Capability.new(100).to_hash)
+    assert_equal({:code=>100, :capability=>{:as=>100}},
+                 Capability.new(100).to_hash({:as=>100}))
+  end
+  def test_factory_dynamic
+    # RFC 5291 and RFC 5492 section 4: capability code 67, no value.
+    cap = Capability.factory(['02024300'].pack('H*'))
+    assert_instance_of(Dynamic, cap)
+    # The capability came off the wire, so it has to go back on the wire
+    # unchanged. Before this was fixed the factory handed Dynamic the
+    # wire bytes where it wanted the code, and encode raised TypeError.
+    assert_equal '02024300', cap.to_shex
+    assert_equal({:code=>67}, cap.to_hash)
+    assert_equal "Option Capabilities Advertisement (2): [02024300]\n" +
+                 '    Dynamic Capability 67, length: 2', cap.to_s
+  end
+  def test_open_round_trips_a_dynamic_capability
+    # The same bug seen from where it bites: an OPEN that advertises
+    # dynamic capability could not be re-encoded or printed.
+    body = '010400640078010101010402024300'
+    w = ['ff' * 16 + format('%04x', 18 + (body.size / 2)) + body].pack('H*')
+    open = BGP::Open.new(w)
+    assert_instance_of(Dynamic, open.find(Dynamic))
+    assert_equal w.unpack('H*')[0], open.to_shex
+  end
+
+  # RFC 5492 section 4: one Capabilities optional parameter carries one
+  # or more capabilities. Reading only the first used to drop the rest
+  # in silence, 4-octet AS among them.
+  def test_capabilities_parameter_with_two_capabilities
+    s = ['02080200410400000064'].pack('H*')
+    caps = Optional_parameter.factory(s)
+    assert_equal 2, caps.size
+    assert_instance_of(Route_refresh, caps[0])
+    assert_instance_of(As4, caps[1])
+    # Each capability comes back as the one capability parameter bgp4r
+    # sends, so each encodes on its own.
+    assert_equal '02020200', caps[0].to_shex
+    assert_equal '0206410400000064', caps[1].to_shex
+    assert_equal({:code=>65, :capability=>{:as=>100}}, caps[1].to_hash)
+    assert_equal 0, s.size, 'the whole parameter is consumed'
+  end
+  def test_capabilities_parameter_with_four_capabilities
+    s = ['021002000104000100014104000000644300'].pack('H*')
+    caps = Optional_parameter.factory(s)
+    assert_equal [Route_refresh, Mbgp, As4, Dynamic], caps.collect { |c| c.class }
+    assert_equal ['02020200', '0206010400010001', '0206410400000064', '02024300'],
+                 caps.collect { |c| c.to_shex }
+    assert_equal 0, s.size
+  end
+  def test_as4_is_read_when_it_is_not_the_first_capability
+    # The bug this guards: 4-octet AS packed behind another capability
+    # was missed, bgp4r kept the 2-octet default and sent an AS_PATH the
+    # peer could not parse.
+    body = '0104d6e00078010101010a0208' + '0200' + '410400010002'
+    w = ['ff' * 16 + format('%04x', 18 + (body.size / 2)) + body].pack('H*')
+    open = BGP::Open.new(w)
+    assert_equal 2, open.opt_parms.size
+    assert_instance_of(As4, open.find(As4))
+    assert_equal({:as=>65538}, open.find(As4).to_hash[:capability])
+  end
+  def test_capabilities_parameter_stops_at_a_length_past_the_end
+    # A capability whose declared length runs off the end of the
+    # parameter is dropped rather than read as whatever follows it.
+    s = ['0206410600000064'].pack('H*')
+    assert_equal [], Optional_parameter.factory(s)
+    s = ['020141'].pack('H*')
+    assert_equal [], Optional_parameter.factory(s)
+  end
+
+  # RFC 5291: the same capabilities carried in a Dynamic Capability
+  # message have a one octet code and a two octet length, so they encode
+  # and parse through a different branch.
+  def test_dynamic_factory_as4
+    cap = Capability.dynamic_factory(['41000400000064'].pack('H*'))
+    assert_instance_of(BGP::OPT_PARM::DYN_CAP::As4, cap)
+    assert_equal '41000400000064', cap.to_shex
+    assert_equal({:code=>65, :capability=>{:as=>100}}, cap.to_hash)
+  end
+  def test_dynamic_factory_mbgp
+    cap = Capability.dynamic_factory(['01000400010001'].pack('H*'))
+    assert_instance_of(BGP::OPT_PARM::DYN_CAP::Mbgp, cap)
+    assert_equal '01000400010001', cap.to_shex
+  end
+  def test_dynamic_factory_route_refresh
+    cap = Capability.dynamic_factory(['020000'].pack('H*'))
+    assert_instance_of(BGP::OPT_PARM::DYN_CAP::Route_refresh, cap)
+    assert_equal '020000', cap.to_shex
+    cap = Capability.dynamic_factory(['800000'].pack('H*'))
+    assert_instance_of(BGP::OPT_PARM::DYN_CAP::Route_refresh, cap)
+    assert_equal '800000', cap.to_shex
+  end
+  def test_dynamic_factory_orf
+    s = '03001600010001030101020103010001000203010102010301'
+    cap = Capability.dynamic_factory([s].pack('H*'))
+    assert_instance_of(BGP::OPT_PARM::DYN_CAP::Orf, cap)
+    assert_equal s, cap.to_shex
+  end
+  def test_dynamic_factory_add_path
+    cap = Capability.dynamic_factory(['45000400010101'].pack('H*'))
+    assert_instance_of(BGP::OPT_PARM::DYN_CAP::Add_path, cap)
+    assert_equal '45000400010101', cap.to_shex
+    assert_equal true, cap.send?(1, 1)
+    assert_equal false, cap.recv?(1, 1)
+  end
+  def test_dynamic_factory_graceful_restart
+    s = '40000a00780001010100010201'
+    cap = Capability.dynamic_factory([s].pack('H*'))
+    assert_instance_of(BGP::OPT_PARM::DYN_CAP::Graceful_restart, cap)
+    assert_equal s, cap.to_shex
   end
 end
