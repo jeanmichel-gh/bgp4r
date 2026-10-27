@@ -433,7 +433,21 @@ module BGP
       if args.size==1 and args[0].is_a?(String) and args[0].is_packed?
         @raw = args[0].dup
       elsif args.size==1 and args[0].is_a?(String)
-        @raw = [args[0].delete(' ')].pack('H16')
+        # The String form is the 8 octets as hex, spaces allowed. Ruby's
+        # pack('H16') turns anything else into octets of its own choosing
+        # rather than complaining, so 'rt=1:1' used to build
+        # bdd1a10000000000 and 'zzzz' 3333000000000000: a community the
+        # caller did not ask for, with no sign that anything was wrong.
+        # There is no 'rt=1:1' notation here, and inventing a community
+        # from a string that cannot be one is the silent kind of wrong
+        # the conventions single out, so it is refused. Octets of any
+        # shape still go through the wire form, Attr::Raw and BGP::Fault.
+        hex = args[0].delete(' ')
+        unless hex =~ /\A\h{16}\z/
+          raise ArgumentError,
+            "invalid extended community #{args[0].inspect}, expected 16 hex digits"
+        end
+        @raw = [hex].pack('H16')
       elsif args.size==1 and args[0].is_a?(Integer)
         @raw = Extended_community.octets(args[0])
       else

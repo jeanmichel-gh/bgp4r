@@ -78,6 +78,28 @@ class Extended_community_Test < Test::Unit::TestCase
     assert_equal 0x000200ff00deadbe, Extended_community.factory(0x000200ff00deadbe).to_i
   end
 
+  # The String form is the 8 octets as hex. Anything else used to be fed
+  # to pack('H16'), which invents octets rather than complaining, so a
+  # string that cannot be a community built a different one in silence.
+  # There is no 'rt=1:1' notation here.
+  def test_a_string_that_is_not_hex_is_refused
+    { 'rt=1:1' => 'bdd1a10000000000',   # what it used to build
+      'zzzz'   => '3333000000000000',
+      '0002'   => '0002000000000000',   # short hex was zero padded
+      '0002000100000001ff' => nil,      # and long hex truncated
+    }.each_key do |s|
+      e = assert_raise(ArgumentError, s.inspect) { Extended_community.factory(s) }
+      assert_match(/16 hex digits/, e.message, s.inspect)
+      assert_raise(ArgumentError, s.inspect) { Extended_community::Unknown.new(s) }
+    end
+  end
+
+  def test_the_hex_string_form_still_builds
+    assert_equal '0002000100000001', Extended_community.factory('0002000100000001').to_shex
+    assert_equal '0002000100000001', Extended_community.factory('00 02 00 01 00 00 00 01').to_shex
+    assert_equal 'ffffffffffffffff', Extended_community::Unknown.new('ffffffffffffffff').to_shex
+  end
+
   # Refusing an unrepresentable Integer takes nothing away from negative
   # testing, which is what the conventions require of a constructor that
   # refuses anything: the octet form still builds a community no RFC

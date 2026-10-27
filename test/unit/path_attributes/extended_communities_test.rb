@@ -370,4 +370,40 @@ class Extended_communitiesTest < Test::Unit::TestCase
     assert_equal(exc.encode, Extended_communities.new(exc.to_hash).encode)
   end
 
+  # The :extended_communities key goes through the registered builder,
+  # which used to call new_hash and so took only the hash shapes. The
+  # key was narrower than the class: Extended_communities.new took a hex
+  # string and an array of them, and the key refused both. The builder is
+  # the default one now, so the two cannot drift apart again.
+  RT_1_1 = '0002000100000001'
+
+  def test_the_hash_key_takes_every_form_new_takes
+    [RT_1_1,
+     [RT_1_1],
+     { :route_target=> [1,1] },
+     [{ :route_target=> [1,1] }],
+     Route_target.new(1,1),
+    ].each do |v|
+      pa = Path_attribute.new(:extended_communities=> v)
+      assert_equal Extended_communities.new(v).encode, pa[:extended_communities].encode, v.inspect
+      assert_equal 'c01008' + RT_1_1, pa[:extended_communities].to_shex, v.inspect
+    end
+  end
+
+  # The setter and the key are the same builder now, so they agree.
+  def test_the_setter_and_the_key_agree
+    [RT_1_1, [RT_1_1], { :route_target=> [1,1] }].each do |v|
+      pa = Path_attribute.new
+      pa.extended_communities = v
+      assert_equal 'c01008' + RT_1_1, pa.extended_communities.to_shex, v.inspect
+      assert_equal Path_attribute.new(:extended_communities=> v)[:extended_communities].encode,
+                   pa.extended_communities.encode, v.inspect
+    end
+  end
+
+  def test_a_whole_path_attribute_round_trips_from_the_plain_form
+    pa = Path_attribute.new(:extended_communities=> [RT_1_1])
+    assert_equal pa.encode, Path_attribute.new(pa.to_hash).encode
+  end
+
 end

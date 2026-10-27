@@ -73,7 +73,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. A `lab` job runs the Compose topologies.
 
-Baseline on 2026-10-26: 722 tests, 18064 assertions, all passing. Line coverage of `bgp/` from the unit suite: 94.8%.
+Baseline on 2026-10-26: 727 tests, 18096 assertions, all passing. Line coverage of `bgp/` from the unit suite: 94.8%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
