@@ -467,17 +467,76 @@ class Extended_communitiesTest < Test::Unit::TestCase
       assert_equal(hex, Extended_communities.new(ec).to_shex, hex)
       assert_equal(hex, Path_attribute.new(wire.call)[:extended_communities].to_shex, hex)
     end
-    # RFC 5668 section 2: the 4 octet AS specific types, 0x02 and 0x03.
-    # The wire form round trips through the loop. The hash does not, and
-    # did not before this change either: a 4 octet AS specific community
-    # whose AS fits in 2 octets comes back as the 2 octet AS form, so
-    # c010080202000000640001 reads back as c010080002006400000001. Listed
-    # under "Known issues to work on" in CLAUDE.md.
+    # RFC 5668 section 2: the 4 octet AS specific type octet, 0x02, with
+    # the sub-types of RFC 4360 sections 4 and 5, 0x02 and 0x03. The
+    # wire form round trips through the loop, and so does the hash now
+    # that it carries the type octet: a 4 octet AS specific community
+    # whose AS fits in 2 octets used to come back as the 2 octet AS
+    # form, so c010080202000000640001 read back as c010080002006400000001.
     ['c010080202000000640001', 'c010080203000000640001',
      'c010080202fa56ea010001', 'c010080203fa56ea010001'].each do |hex|
-      assert_equal(hex, Extended_communities.new([hex].pack('H*')).to_shex, hex)
+      ec = Extended_communities.new([hex].pack('H*'))
+      assert_equal(hex, ec.to_shex, hex)
+      assert_equal(hex, Extended_communities.new(ec.to_hash).to_shex, hex)
       assert_equal(hex, Path_attribute.new([hex].pack('H*'))[:extended_communities].to_shex, hex)
     end
+  end
+
+  # RFC 4360 section 2: to_hash returns a hash that round trips through
+  # new, and the type octet is one of the eight that has to come back.
+  # The two the known issue listed, and the T bit of every other
+  # community whose constructor hard codes it.
+  def test_a_type_octet_the_values_cannot_reproduce_round_trips_through_the_hash
+    ['c010080202000000640001', # RFC 5668 section 2, 4 octet AS specific
+     'c010084202000000640001',
+     'c010080203000000640001',
+     'c010084203000000640001',
+     'c010080300000000000001', # RFC 8097 section 2 asks for 0x43
+     'c010084002000100000001', # a non-transitive route target
+     'c010084102010101010064',
+     'c010084003000100000001',
+     'c0100800040064447a0000',
+     'c010084105010203040000',
+     'c010084008006400000064',
+     'c01008430b000000000064',
+     'c01008430c000000000008',
+     'c01008c007000000000003',
+     'c010084600000000000005',
+     'c010084602aabbccddeeff',
+     # Two of them in one attribute, with a kept tail behind them.
+     'c010100202000000640001430b000000000064',
+     'c010120202000000640001430b000000000064ffff',
+    ].each do |hex|
+      ec = Extended_communities.new([hex].pack('H*'))
+      assert_equal(hex, ec.to_shex, hex)
+      assert_equal(hex, Extended_communities.new(ec.to_hash).to_shex, hex)
+      assert_equal(hex, Extended_communities.new(ec).to_shex, hex)
+      pa = Path_attribute.new([hex].pack('H*'))
+      assert_equal(hex, pa[:extended_communities].to_shex, hex)
+      assert_equal(hex, Path_attribute.new(pa.to_hash)[:extended_communities].to_shex, hex)
+    end
+  end
+
+  # The type octet is optional, and a hash written by hand says what it
+  # means with it or without it. Without it the community is the one the
+  # values have always built.
+  def test_the_type_octet_is_optional_in_a_hash_written_by_hand
+    assert_equal('c010080002006400000001',
+                 Extended_communities.new(:route_target=> [100, 1]).to_shex)
+    assert_equal('c010080202000000640001',
+                 Extended_communities.new(:route_target=> [100, 1], :type=> 0x02).to_shex)
+    assert_equal('c010080202000000640001',
+                 Path_attribute.new(:extended_communities=>
+                                    { :route_target=> [100, 1], :type=> 0x02 })[:extended_communities].to_shex)
+    assert_equal('c010084300000000000001',
+                 Extended_communities.new(:origin_validation_state=> 1).to_shex)
+    assert_equal('c010080300000000000001',
+                 Extended_communities.new(:origin_validation_state=> 1, :type=> 0x03).to_shex)
+    # Nothing is checked: an octet no RFC asks for goes on the wire.
+    # 0x84 sets the IANA authority bit of RFC 4360 section 2 on a
+    # route target, which no registry has.
+    assert_equal('c010088402006400000001',
+                 Extended_communities.new(:route_target=> [100, 1], :type=> 0x84).to_shex)
   end
 
 end

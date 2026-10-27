@@ -448,6 +448,106 @@ class Extended_community_Test < Test::Unit::TestCase
     assert_equal('0203000100020003', ec.to_shex)
   end
 
+  # RFC 4360 section 2: the type octet is the first of the eight, and it
+  # says things no value can say. A build from values hard codes it, so
+  # the hash form carries it whenever the values alone would give a
+  # different one. Two octets that get lost without it:
+  #
+  # The T bit of RFC 4360 section 2, the second bit of the high order
+  # octet, which a community keeps whatever its value is. A route target
+  # is transitive (section 4), so Route_target.new always clears it; an
+  # origin validation state is non-transitive (RFC 8097 section 2, type
+  # 0x43), so Origin_validation_state.new always sets it. A community
+  # that arrives the other way round has nowhere to keep that bit.
+  #
+  # And the structure bits, the low two of the same octet, which a build
+  # from values picks from the values: RFC 5668 section 2 gives the
+  # 4 octet AS specific community the type octet 0x02, or 0x42 when it
+  # is non-transitive, and its global administrator is 4 octets where
+  # the 2 octet AS specific form of RFC 4360 section 2 has 2. An AS
+  # below 65536 fits either form, so the pair [100, 1] cannot say which
+  # one it came from.
+  def test_to_hash_carries_a_type_octet_the_values_cannot_reproduce
+    [['0202000000640001', {:route_target=>[100, 1], :type=>0x02}],
+     ['4202000000640001', {:route_target=>[100, 1], :type=>0x42}],
+     ['0203000000640001', {:route_origin=>[100, 1], :type=>0x02}],
+     ['4203000000640001', {:route_origin=>[100, 1], :type=>0x42}],
+     ['0300000000000001', {:origin_validation_state=>1, :type=>0x03}],
+     ['4002000100000001', {:route_target=>[1, 1], :type=>0x40}],
+     ['4102010101010064', {:route_target=>['1.1.1.1', 100], :type=>0x41}],
+     ['4003000100000001', {:route_origin=>[1, 1], :type=>0x40}],
+     ['00040064447a0000', {:link_bandwidth=>[100, 1000.0], :type=>0x00}],
+     ['4105010203040000', {:ospf_domain_id=>'1.2.3.4', :type=>0x41}],
+     ['4008006400000064', {:bgp_data_collect=>[100, 100], :type=>0x40}],
+     ['430b000000000064', {:color=>100, :type=>0x43}],
+     ['430c000000000008', {:encapsulation=>:vxlan, :type=>0x43}],
+     ['c007000000000003', {:traffic_action=>{:sample=>true, :terminal=>true}, :type=>0xc0}],
+     ['4600000000000005', {:mac_mobility=>[5, false], :type=>0x46}],
+     ['4602aabbccddeeff', {:es_import=>'aa:bb:cc:dd:ee:ff', :type=>0x46}],
+    ].each do |hex, hash|
+      ec = Extended_community.factory([hex].pack('H*'))
+      assert_equal(hash, ec.to_hash, hex)
+      # The wire form is untouched, and so is the type reader.
+      assert_equal(hex, ec.to_shex, hex)
+      assert_equal(hash[:type], ec.type, hex)
+    end
+  end
+
+  # And where the values do reproduce the type octet, the hash is the
+  # plain one key hash it has always been. That is what callers write by
+  # hand, so nothing here may gain a key: every structure of RFC 4360
+  # section 2, the FLOAT one of draft-ietf-idr-link-bandwidth, the
+  # 4 octet AS specific form with an AS that needs 4 octets, and every
+  # community whose type octet its own constructor already sets.
+  def test_to_hash_keeps_the_plain_form_where_the_values_reproduce_the_type
+    [['0002000100000001', {:route_target=>[1, 1]}],
+     ['0102010101010064', {:route_target=>['1.1.1.1', 100]}],
+     ['0202fa56ea010001', {:route_target=>[4200000001, 1]}],
+     ['0003000100000001', {:route_origin=>[1, 1]}],
+     ['0103010101010064', {:route_origin=>['1.1.1.1', 100]}],
+     ['0203fa56ea010001', {:route_origin=>[4200000001, 1]}],
+     ['40040064447a0000', {:link_bandwidth=>[100, 1000.0]}],
+     ['0105010203040000', {:ospf_domain_id=>'1.2.3.4'}],
+     ['0107010203040000', {:ospf_router_id=>'1.2.3.4'}],
+     ['0008006400000064', {:bgp_data_collect=>[100, 100]}],
+     ['030b000000000064', {:color=>100}],
+     ['4300000000000001', {:origin_validation_state=>1}],
+     ['030c000000000008', {:encapsulation=>:vxlan}],
+     ['8006000a447a0000', {:traffic_rate_bytes=>[10, 1000.0]}],
+     ['800c000a447a0000', {:traffic_rate_packets=>[10, 1000.0]}],
+     ['8007000000000003', {:traffic_action=>{:sample=>true, :terminal=>true}}],
+     ['8008000a00000064', {:redirect=>[10, 100]}],
+     ['8108010101010064', {:redirect=>['1.1.1.1', 100]}],
+     ['8208000100020003', {:redirect=>[65538, 3]}],
+     ['8009000000000020', {:traffic_marking=>32}],
+     ['0600000000000005', {:mac_mobility=>[5, false]}],
+     ['0601000000000640', {:esi_label=>[100, false]}],
+     ['0602aabbccddeeff', {:es_import=>'aa:bb:cc:dd:ee:ff'}],
+     ['0603aabbccddeeff', {:router_mac=>'aa:bb:cc:dd:ee:ff'}],
+     ['ffff000000000000', {:unknown=>'ffff000000000000'}],
+    ].each do |hex, hash|
+      ec = Extended_community.factory([hex].pack('H*'))
+      assert_equal(hash, ec.to_hash, hex)
+      assert_equal(hex, ec.to_shex, hex)
+    end
+  end
+
+  # The type octet is set from the hash form after the values have built
+  # the community, so the writer has to be there and has to check
+  # nothing: an octet no RFC asks for is one of the things this library
+  # exists to put on the wire.
+  def test_the_type_octet_can_be_written
+    rt = Route_target.new(100, 1)
+    assert_equal('0002006400000001', rt.to_shex)
+    rt.type = 0x02
+    assert_equal('0202000000640001', rt.to_shex)
+    assert_equal(0x02, rt.type)
+    # Nothing is checked. 0x82 sets the IANA authority bit of RFC 4360
+    # section 2 on a route target, which no registry has.
+    rt.type = 0x82
+    assert_equal('8202000000640001', rt.to_shex)
+  end
+
 
   # New sub-types: hex, factory, round trip.
   def check_sub_type(klass, hex, text)

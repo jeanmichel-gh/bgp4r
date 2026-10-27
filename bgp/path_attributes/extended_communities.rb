@@ -47,7 +47,9 @@ module BGP
         case arg
         when Hash
           return true if arg.has_key?(:extended_communities)
-          ! arg.empty? and arg.keys.all? { |k| HASH_BUILDERS.has_key?(k) or k == Attr::TAIL_KEY }
+          ! arg.empty? and arg.keys.all? { |k|
+            HASH_BUILDERS.has_key?(k) or k == Attr::TAIL_KEY or
+              k == Extended_community::TYPE_KEY }
         when Array
           ! arg.empty? and arg.all? { |e| hash_form?(e) }
         else
@@ -57,21 +59,34 @@ module BGP
 
       # The communities a hash describes, in order. A {:tail=>hex} entry
       # is passed through for add to keep.
+      #
+      # A :type key (Extended_community::TYPE_KEY) is the type octet of
+      # the community the same hash describes, which to_hash carries
+      # when the value alone cannot reproduce it. It is written over the
+      # octet the value gave, after the value has built the community,
+      # so the build path is the one it has always been and the octet
+      # is the one that arrived. It is optional: a hash without it
+      # builds exactly what it built before.
       def communities_from_hash(arg)
         arg = [arg] if arg.is_a?(Hash)
         raise ArgumentError, "invalid argument #{arg.inspect}" unless arg.is_a?(Array)
         out = []
         arg.each do |h|
           raise ArgumentError, "invalid extended community #{h.inspect}" unless h.is_a?(Hash)
+          type = h[Extended_community::TYPE_KEY]
           h.each do |comm, v|
-            if comm == :extended_communities
+            if comm == Extended_community::TYPE_KEY
+              next
+            elsif comm == :extended_communities
               out.concat(communities_from_hash([v].flatten(1)))
             elsif comm == Attr::TAIL_KEY
               out << { comm=> v }
             else
               build = HASH_BUILDERS[comm]
               raise ArgumentError, "unknown extended community #{comm.inspect}" unless build
-              out << build.call(v)
+              ec = build.call(v)
+              ec.type = type unless type.nil?
+              out << ec
             end
           end
         end
