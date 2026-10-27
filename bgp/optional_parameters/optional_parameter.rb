@@ -62,15 +62,42 @@ module OPT_PARM
       s.slice!(0,len).is_packed
     end
 
+    # The capabilities in the next optional parameter, as an Array. One
+    # parameter can hold more than one capability, so this returns a
+    # list rather than a single object.
     def self.factory(s)
       parm_type, len = s.unpack('CC')
       opt_parm = s.slice!(0,len+2).is_packed
       case parm_type
       when CAPABILITY
-        Capability.factory(opt_parm)
+        capabilities(opt_parm)
       else
         raise RuntimeError, "Optional parameter type '#{parm_type}' not implemented"
       end
+    end
+
+    # RFC 5492 section 4: a Capabilities optional parameter carries one
+    # or more capabilities, each a one octet code, a one octet length,
+    # and that many value octets. GoBGP packs several into one
+    # parameter; bgp4r sends one each. Both have to be read, and reading
+    # only the first used to drop the rest in silence: against a peer
+    # that packed 4-octet AS after another capability, bgp4r missed it,
+    # kept the 2-octet default and sent an AS_PATH the peer could not
+    # parse.
+    #
+    # Each capability is handed to Capability.factory wrapped in a
+    # parameter header of its own, which is the shape that method takes.
+    def self.capabilities(opt_parm)
+      value = opt_parm.byteslice(2, opt_parm.size - 2).to_s
+      caps, i = [], 0
+      while i + 2 <= value.size
+        len = value.getbyte(i + 1)
+        break if i + 2 + len > value.size
+        tlv = value.byteslice(i, 2 + len)
+        caps << Capability.factory(([CAPABILITY, tlv.size].pack('CC') + tlv).is_packed)
+        i += 2 + len
+      end
+      caps
     end
 
   end

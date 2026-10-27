@@ -73,7 +73,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. A `lab` job runs the Compose topologies.
 
-Baseline on 2026-10-26: 701 tests, 17878 assertions, all passing. Line coverage of `bgp/` from the unit suite: 94.8%.
+Baseline on 2026-10-26: 706 tests, 17894 assertions, all passing. Line coverage of `bgp/` from the unit suite: 94.8%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -132,10 +132,8 @@ Smaller things:
 
 Lab and conformance:
 
-* The conformance suite only ever tests GoBGP 3.23, a router from 2024. Moving to 4.x is **not** a config job, which is what this entry used to say. GoBGP 4 reads these configs unchanged: every key in `lab/conformance/gobgpd.conf` and `lab/topologies/fault-matrix/gobgp.toml` is still in the 4.x config structs under the same `mapstructure` name, 4.x registers `mapstructure.StringToNetIPAddrHookFunc` in its viper decode hook so the address fields still decode from TOML strings, and a CI run on 4.10 started the router and got a session for all 18 faults.
-  * What breaks on 4.10 is the RIB read. Every route verdict came back empty, so `test_the_rib_answer_was_usable` fails and the attribute-discard assertions fail with it. `aggregator_length` is only the first name in the sorted list, not a special case.
-  * Not the obvious suspects: 4.x `gobgp` still takes `-u` for the host and still defaults to port 50051, and `gobgpd` still defaults `--api-hosts` to `:50051`. Reading more source did not settle it; the next step is to run it and look. The compose file has the two commands for that.
-  * Candidates worth checking first: whether the router installs the plain baseline route at all under 4.x, and whether `gobgp global rib` still prints the prefix in a form `route_installed?` matches, since it greps stdout for the bare string `203.0.113.0`.
+* The results in `docs/protocol-testing.md`, and the GoBGP divergence note above, were measured against GoBGP 3.23 by hand. The topology now runs 4.10, so they want remeasuring against it, which is a run and a write-up rather than a fix. `GOBGP_IMAGE=jauderho/gobgp:v3.23.0` reproduces the old numbers.
+* `lab/conformance/gobgpd.conf` and `lab/topologies/fault-matrix/gobgp.toml` are written in the 3.23 style and GoBGP 4 reads them unchanged. Every key is still in the 4.x config structs under the same `mapstructure` name, and 4.x registers `mapstructure.StringToNetIPAddrHookFunc` so the address fields still decode from TOML strings. No schema work is needed; an earlier version of this entry said otherwise and was wrong.
 * `lab/topologies/fault-matrix` exits 1, and that is the right answer: GoBGP 3.23 discards the malformed tunnel encapsulation attribute and installs the route where RFC 9012 section 13 asks for treat-as-withdraw. Both cases are asserted as a known divergence in `test/functional/lab/fault_matrix_test.rb`. A newer GoBGP may fix it; see the comment on `TUNNEL_ENCAP` there.
 * Lowest coverage (unit suite): `orfs/prefix_orf.rb` 79%, `common.rb` 82%, `nlris/nlri.rb` 83%, `messages/route_refresh.rb` 83%, `optional_parameters/capability.rb` 86%.
 

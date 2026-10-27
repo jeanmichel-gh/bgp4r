@@ -112,7 +112,8 @@ class Open < Message
       @version, @local_as, @holdtime, bgp_id, _, opt_parms = s.unpack('Cnna4Ca*')
     end
     while opt_parms.size>0
-      @opt_parms << Optional_parameter.factory(opt_parms)
+      # One parameter can carry several capabilities (RFC 5492 section 4).
+      @opt_parms.concat Optional_parameter.factory(opt_parms)
     end
     @bgp_id = IPAddr.new_ntoh(bgp_id)
   end

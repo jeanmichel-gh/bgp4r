@@ -36,39 +36,28 @@
 # build, so it runs on an Apple Silicon Mac without emulation. The old
 # osrg/gobgp image on Docker Hub is amd64 only and years stale.
 #
-# The pin is 3.23.0, the version gobgp.toml next to this file was
-# verified against and the version behind the results in
-# docs/protocol-testing.md. It has a native linux/arm64 build, so it
-# runs on an Apple Silicon Mac without emulation. The old osrg/gobgp
-# image on Docker Hub is amd64 only and years stale; avoid that one.
+# The pin is 4.10.0. It has a native linux/arm64 build, so it runs on
+# an Apple Silicon Mac without emulation. The old osrg/gobgp image on
+# Docker Hub is amd64 only and years stale; avoid that one.
 #
-# 4.10.0 was tried and reverted, and the reason is not the config.
-# GoBGP 4 reads this TOML: every key here is still in the 4.x config
-# structs under the same mapstructure name, 4.x registers mapstructure's
-# StringToNetIPAddrHookFunc so the addresses still decode from strings,
-# and in CI the router started and all 18 faults ran a session. What
-# broke was the RIB read: every route verdict came back empty, so the
-# matrix could not tell treat-as-withdraw from attribute-discard.
+# This used to be 3.23.0, because gobgp.toml was written against 3.23
+# and 4.10 did not work. Neither the config nor the router turned out to
+# be at fault. GoBGP 4 reads this TOML unchanged, and the real problem
+# was in bgp4r: it read only the first capability out of a Capabilities
+# optional parameter. GoBGP packs several into one, so bgp4r missed the
+# 4-octet AS capability, kept the 2-octet default, and sent an AS_PATH
+# that GoBGP rejected with "seg length is short". Every UPDATE became a
+# withdraw before the attribute under test was ever looked at, so the
+# whole run measured that bug instead of the router.
 #
-# The client is not obviously at fault either. 4.x still takes -u for
-# the host and still defaults to port 50051, and gobgpd still defaults
-# --api-hosts to :50051. So the next step is to run it and look, rather
-# than to read more source:
-#
-#   GOBGP_IMAGE=jauderho/gobgp:v4.10.0 \
-#     docker compose -f lab/topologies/fault-matrix/compose.yml up -d router
-#   docker compose -f lab/topologies/fault-matrix/compose.yml run --rm \
-#     --entrypoint sh matrix -c 'gobgp -u 10.30.0.2 global rib; echo "exit $?"'
-#
-# That says whether the client reaches the daemon at all, and what it
-# prints when it does. See the known issue in CLAUDE.md.
-#
-# To try another tag, which needs no edit:
-#   GOBGP_IMAGE=jauderho/gobgp:v4.10.0 docker compose ... up
+# To go back to the version the notes in docs/protocol-testing.md were
+# measured against, or to try another:
+#   GOBGP_IMAGE=jauderho/gobgp:v3.23.0 docker compose ... up
 # To check a tag has arm64 before pulling it:
-#   docker buildx imagetools inspect jauderho/gobgp:v3.23.0
+#   docker buildx imagetools inspect jauderho/gobgp:v4.10.0
 # If a router will not start, its own log names the config key it
-# rejected.
+# rejected. If the routes look wrong rather than the session, read the
+# router's log for what it made of the UPDATE.
 #
 # The image reads its config from /config/gobgp.toml and ships both the
 # daemon and the gobgp client, so this mounts the topology folder at
@@ -80,7 +69,7 @@ name: bgp4r-fault-matrix
 
 services:
   router:
-    image: ${GOBGP_IMAGE:-jauderho/gobgp:v3.23.0}
+    image: ${GOBGP_IMAGE:-jauderho/gobgp:v4.10.0}
     volumes:
       - ./:/config:ro
     networks:
@@ -94,7 +83,7 @@ services:
       target: conformance
       args:
         # Same default as the router above, so one GOBGP_IMAGE moves both.
-        GOBGP_IMAGE: ${GOBGP_IMAGE:-jauderho/gobgp:v3.23.0}
+        GOBGP_IMAGE: ${GOBGP_IMAGE:-jauderho/gobgp:v4.10.0}
     image: bgp4r-conformance
     command:
       - lab/fault_matrix.rb

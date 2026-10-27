@@ -106,4 +106,68 @@ class Open_Test < Test::Unit::TestCase
     open = Open.new(4,0x1ffff, 200, '10.0.0.1')
     assert_match(/my AS 23456/, open.to_s)
   end
+
+  # An OPEN whose Capabilities parameters hold the given capability TLVs.
+  # packed: one parameter with all of them, which RFC 5492 section 4
+  # allows and GoBGP does. Otherwise one parameter each, which bgp4r
+  # sends.
+  def open_with(tlvs, packed: true)
+    parms = if packed
+      caps = tlvs.join
+      '02' + format('%02x', caps.size / 2) + caps
+    else
+      tlvs.collect { |t| '02' + format('%02x', t.size / 2) + t }.join
+    end
+    body = '04' + 'fde9' + '00b4' + '0a1e0002' + format('%02x', parms.size / 2) + parms
+    Open.new(['ff' * 16 + format('%04x', 19 + body.size / 2) + '01' + body].pack('H*').is_packed)
+  end
+
+  ROUTE_REFRESH = '0200'
+  AS4_65001     = '4104' + '0000fde9'
+  MBGP_IPV4     = '0104' + '00010001'
+
+  # RFC 5492 section 4: one Capabilities optional parameter may carry
+  # more than one capability. Reading only the first dropped the rest in
+  # silence. Missing 4-octet AS that way left the 2-octet default on, and
+  # the AS_PATH that follows is unparseable to a peer expecting 4 octets.
+  def test_several_capabilities_in_one_optional_parameter
+    open = open_with([ROUTE_REFRESH, AS4_65001, MBGP_IPV4])
+    assert_equal 3, open.opt_parms.size
+    assert open.find(OPT_PARM::CAP::Route_refresh), 'route refresh'
+    assert open.find(OPT_PARM::CAP::As4), 'the 4-octet AS capability must not be lost'
+    assert open.find(OPT_PARM::CAP::Mbgp), 'mbgp'
+    assert_match(/4-octet AS number: 65001/, open.find(OPT_PARM::CAP::As4).to_s)
+  end
+
+  # Order within the parameter must not matter.
+  def test_capability_order_in_one_parameter_does_not_matter
+    [[AS4_65001, ROUTE_REFRESH], [ROUTE_REFRESH, AS4_65001]].each do |tlvs|
+      open = open_with(tlvs)
+      assert_equal 2, open.opt_parms.size, tlvs.inspect
+      assert open.find(OPT_PARM::CAP::As4), tlvs.inspect
+    end
+  end
+
+  # One capability per parameter, the shape bgp4r sends, still works.
+  def test_one_capability_per_optional_parameter
+    open = open_with([ROUTE_REFRESH, AS4_65001, MBGP_IPV4], :packed => false)
+    assert_equal 3, open.opt_parms.size
+    assert open.find(OPT_PARM::CAP::As4)
+  end
+
+  # A single capability in a single parameter is the old path.
+  def test_one_capability_in_one_parameter
+    open = open_with([AS4_65001])
+    assert_equal 1, open.opt_parms.size
+    assert_match(/4-octet AS number: 65001/, open.find(OPT_PARM::CAP::As4).to_s)
+  end
+
+  # A length that runs past the parameter stops the walk rather than
+  # raising, so a peer cannot crash the parse with a short capability.
+  def test_a_truncated_capability_does_not_raise
+    open = nil
+    assert_nothing_raised { open = open_with([ROUTE_REFRESH, '41ff' + '0000']) }
+    assert open.find(OPT_PARM::CAP::Route_refresh), 'what came before it is kept'
+    assert_nil open.find(OPT_PARM::CAP::As4)
+  end
 end
