@@ -71,19 +71,24 @@ module BGP
         when Origin_validation_state
           _,@global = s.unpack('nN')
         else
-          @global = s.unpack('H12')
+          # unpack returns an Array. Keep the 12 hex digits themselves, the
+          # form _encoded_value_ packs back with 'H12'.
+          @global = s.unpack1('H12')
         end
       when FLOAT
         _, @global = s.unpack('ng')
       end
     end
     
+    # RFC 4360 section 2: the structure of the community is the low 2 bits
+    # of the type octet. Each predicate compares those bits, so a community
+    # answers true to one structure only.
     def is_opaque?
-      @type & OPAQUE > 0
+      @type & 3 == OPAQUE
     end
     
     def is_ipv4_addr?
-      @type & IPV4_ADDR > 0
+      @type & 3 == IPV4_ADDR
     end
     
     def is_two_octet_asn?
@@ -244,7 +249,15 @@ module BGP
           @type |= FOUR_OCTET_AS
         end
       elsif args.size==1 and args[0].is_a?(Integer)
-        parse([s].pack('H*'))
+        # RFC 4360 section 2: a community is 8 octets. An Integer is those
+        # octets as one number, the form to_i gives back. A number outside
+        # that range has no 8 octet form: refuse it rather than wrap it
+        # into a different community.
+        unless (0..0xffffffffffffffff).include?(args[0])
+          raise ArgumentError,
+            "invalid extended community #{args[0]}, expected 0 to #{0xffffffffffffffff}"
+        end
+        parse([format("%16.16x", args[0])].pack('H*'))
       elsif args.empty?
         @type, @subtype, @global, @local = 0,0,0,0
       else
@@ -384,7 +397,8 @@ module BGP
       when 1; :not_found
       when 2; :invalid
       else
-        raise RuntimeError("bogus validation state")
+        # RFC 8097 section 2 defines 0, 1 and 2. Anything else is bogus.
+        raise RuntimeError, "bogus validation state: #{value2}"
       end
     end
     def value2
