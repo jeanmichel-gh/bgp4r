@@ -83,19 +83,26 @@ class Orf_route_refresh_Test < Test::Unit::TestCase
     rr << orf
     rr.afi=1
     rr.safi=1
-    assert_equal('0047050001000140002d000000000a0000080a000000001400000814000000001e0000081e000000002800000828000000003200000832',rr.to_shex[32..-1])
+    # RFC 5291 section 4: AFI (2), Reserved (1), SAFI (1), When-to-refresh (1),
+    # then the ORFs. The When-to-refresh octet is the 01 after the SAFI, and
+    # the message is one octet longer than it is without it: 72, not 71.
+    assert_equal('0048' + '05' + '0001' + '00' + '01' + '01' +
+                 '40002d000000000a0000080a000000001400000814000000001e0000081e000000002800000828000000003200000832',
+                 rr.to_shex[32..-1])
     assert_equal('IPv4', rr.afi)
     assert_equal('Unicast', rr.safi)
     assert_equal(1, rr.orfs.size)
-    assert_match(/RF Route Refresh \(5\), length: 71\nAFI IPv4 \(1\), SAFI Unicast \(1\)/, rr.to_s)
+    assert_match(/RF Route Refresh \(5\), length: 72\nAFI IPv4 \(1\), SAFI Unicast \(1\)/, rr.to_s)
   end
   
   def test_2   
-    s = "ffffffffffffffffffffffffffffffff0047050001000140002d000000000a0000080a000000001400000814000000001e0000081e000000002800000828000000003200000832"
+    s = "ffffffffffffffffffffffffffffffff004805000100010140002d000000000a0000080a000000001400000814000000001e0000081e000000002800000828000000003200000832"
     sbin = [s].pack('H*')
     assert_equal(Orf_route_refresh, Message.factory(sbin).class)
     rr =  Message.factory(sbin)
     assert_equal(s, rr.to_shex)
+    assert_equal(1, rr.orfs.size)
+    assert_equal(Orf_route_refresh::IMMEDIATE, rr.when_to_i)
   end
 
   def test_afi_and_safi_accessors
@@ -128,14 +135,16 @@ class Orf_route_refresh_Test < Test::Unit::TestCase
     assert_equal(rr.orfs[0].encode, copy.orfs[0].encode)
   end
 
-  # RFC 5291 section 5: the message carries a list of ORFs, each with its own
+  # RFC 5291 section 4: the message carries a list of ORFs, each with its own
   # type and length, so more than one ORF rides in one ROUTE-REFRESH.
   def test_more_than_one_orf
     rr = Orf_route_refresh.new(1, 1)
     rr.add(Prefix_orf.new([Prefix_entry.add_and_permit(10, '10.0.0.0/8')]),
            Prefix_orf.new([Prefix_entry.remove_and_deny(20, '20.0.0.0/8')]))
     assert_equal(2, rr.orfs.size)
-    s = 'ffffffffffffffffffffffffffffffff002f0500010001' +
+    # RFC 5291 section 4: one When-to-refresh octet for the message, then an
+    # ORF Type and Length of ORFs per ORF.
+    s = 'ffffffffffffffffffffffffffffffff0030050001000101' +
         '400009000000000a0000080a' + '400009600000001400000814'
     assert_equal(s, rr.to_shex)
     back = Message.factory([s].pack('H*'))
@@ -150,14 +159,125 @@ class Orf_route_refresh_Test < Test::Unit::TestCase
     rr = Orf_route_refresh.new(1, 1)
     rr.add('not an orf', 42, nil)
     assert_equal(0, rr.orfs.size)
-    assert_equal('ffffffffffffffffffffffffffffffff00170500010001', rr.to_shex)
+    # RFC 5291 section 4: the When-to-refresh octet belongs to the message,
+    # not to an ORF, so it is there even when no ORF is. That makes the
+    # message 24 octets, one more than a plain ROUTE-REFRESH, which is how
+    # the receiver tells the two apart.
+    assert_equal('ffffffffffffffffffffffffffffffff0018050001000101', rr.to_shex)
   end
 
-  # RFC 5291 section 5: the ORF Type octet. Only the Address Prefix ORF of
+  # RFC 5291 section 4: the ORF Type octet. Only the Address Prefix ORF of
   # RFC 5292, type 64, is implemented, so any other type is refused on parse.
   def test_an_orf_type_that_is_not_implemented
-    s = ('ff' * 16) + '001c' + '05' + '0001' + '00' + '01' + '41' + '0002' + 'aabb'
+    s = ('ff' * 16) + '001d' + '05' + '0001' + '00' + '01' + '01' + '41' + '0002' + 'aabb'
     err = assert_raise(RuntimeError) { Message.factory([s].pack('H*')) }
     assert_equal('orf type 65 not implemented', err.message)
+  end
+
+  # RFC 5291 section 4: the When-to-refresh octet sits between the SAFI and
+  # the first ORF, and is IMMEDIATE (1) or DEFER (2).
+  def test_when_to_refresh
+    rr = Orf_route_refresh.new(1, 1)
+    rr << Prefix_orf.new([Prefix_entry.add_and_permit(10, '10.0.0.0/8')])
+    # the fifth body octet is the When-to-refresh, and the ORF Type follows it
+    afi, _, safi, w = rr.encode[19..-1].unpack('nCCC')
+    assert_equal([1, 1, Orf_route_refresh::IMMEDIATE], [afi, safi, w])
+    assert_equal(BGP::ORF::PREFIX, rr.encode[24..-1].unpack('C')[0])
+    assert_equal(Orf_route_refresh::IMMEDIATE, rr.when_to_i)
+    assert_equal('immediate (1)', rr.when_to_s)
+    rr.when = :defer
+    assert_equal([Orf_route_refresh::DEFER, 'defer (2)'], [rr.when_to_i, rr.when_to_s])
+    assert_equal(2, rr.encode[19..-1].unpack('nCCC')[3])
+    # what is set is what is read back
+    assert_equal(Orf_route_refresh::DEFER, Orf_route_refresh.new(rr.encode).when_to_i)
+    assert_equal(rr.to_shex, Orf_route_refresh.new(rr.encode).to_shex)
+    rr.when = 1
+    assert_equal('immediate (1)', rr.when_to_s)
+    rr.when = :immediate
+    assert_equal('immediate (1)', rr.when_to_s)
+    assert_match(/when-to-refresh immediate \(1\)/, rr.to_s)
+  end
+
+  # Encoding is never validated: a When-to-refresh the RFC does not define
+  # still goes on the wire, and comes back saying it is bogus.
+  def test_a_when_to_refresh_value_the_rfc_does_not_define
+    rr = Orf_route_refresh.new(1, 1)
+    rr.when = 0x41
+    assert_equal(0x41, rr.encode[19..-1].unpack('nCCC')[3])
+    back = Orf_route_refresh.new(rr.encode)
+    assert_equal(0x41, back.when_to_i)
+    assert_equal('bogus (65)', back.when_to_s)
+    assert_equal(rr.to_shex, back.to_shex)
+  end
+
+  # One octet, so a value it cannot hold is refused rather than truncated.
+  def test_when_to_refresh_refuses_a_value_it_cannot_represent
+    rr = Orf_route_refresh.new(1, 1)
+    assert_raise(ArgumentError) { rr.when = 0x100 }
+    assert_raise(ArgumentError) { rr.when = -1 }
+    assert_raise(ArgumentError) { rr.when = 'defer' }
+  end
+
+  # RFC 5291 section 4: the ORFs ride in the message, so new takes them.
+  def test_orfs_given_to_new
+    orf = Prefix_orf.new([Prefix_entry.add_and_permit(10, '10.0.0.0/8')])
+    rr = Orf_route_refresh.new(1, 1, orf)
+    assert_equal(1, rr.orfs.size)
+    plain = Orf_route_refresh.new(1, 1)
+    plain << Prefix_orf.new([Prefix_entry.add_and_permit(10, '10.0.0.0/8')])
+    assert_equal(plain.to_shex, rr.to_shex)
+    # more than one, listed or in an Array
+    two = Orf_route_refresh.new(1, 1,
+                                Prefix_orf.new([Prefix_entry.add_and_permit(10, '10.0.0.0/8')]),
+                                Prefix_orf.new([Prefix_entry.remove_and_deny(20, '20.0.0.0/8')]))
+    assert_equal(2, two.orfs.size)
+    arr = Orf_route_refresh.new(1, 1,
+                                [Prefix_orf.new([Prefix_entry.add_and_permit(10, '10.0.0.0/8')]),
+                                 Prefix_orf.new([Prefix_entry.remove_and_deny(20, '20.0.0.0/8')])])
+    assert_equal(2, arr.orfs.size)
+    assert_equal(two.to_shex, arr.to_shex)
+  end
+
+  # to_hash round trips through new, so it has to carry the When-to-refresh
+  # and the ORFs and not the AFI and SAFI alone.
+  def test_to_hash_carries_the_when_to_refresh_and_the_orfs
+    rr = Orf_route_refresh.new(1, 1)
+    rr.when = :defer
+    rr << Prefix_orf.new([Prefix_entry.add_and_permit(10, '10.0.0.0/8'),
+                          Prefix_entry.remove_all])
+    h = rr.to_hash
+    assert_equal(2, h[:when])
+    assert_equal(1, h[:orfs].size)
+    assert_equal(BGP::ORF::PREFIX, h[:orfs][0][:type])
+    assert_equal(2, h[:orfs][0][:entries].size)
+    assert_equal(rr.to_shex, Orf_route_refresh.new(h).to_shex)
+    # the ORF objects themselves are taken too
+    assert_equal(rr.to_shex, Orf_route_refresh.new(:afi=>1, :safi=>1, :when=>:defer,
+                                                   :orfs=>rr.orfs).to_shex)
+    # @communities was never assigned, so the reader could only ever raise
+    assert(!rr.respond_to?(:communities))
+  end
+
+  # RFC 5291 section 4: the AFI of the message is the address family the ORF
+  # entries are read in, so an IPv6 ORF has to come back as IPv6.
+  def test_an_ipv6_orf_reads_back_in_the_message_afi
+    rr = Orf_route_refresh.new(2, 1)
+    rr << Prefix_orf.new([Prefix_entry.new(0, 0, 10, 0, 0, '2011:1::/32')])
+    back = Message.factory([rr.to_shex].pack('H*'))
+    assert_equal(Orf_route_refresh, back.class)
+    assert_equal(2, back.afi_to_i)
+    assert_match(/seq  10    add 2011:1::\/32 permit/, back.to_s)
+    assert_equal(rr.to_shex, back.to_shex)
+    assert_equal(rr.to_hash, back.to_hash)
+  end
+
+  # A body too short to hold the When-to-refresh octet carries no ORF either,
+  # so parsing a plain ROUTE-REFRESH as one of these answers rather than raises.
+  def test_parsing_a_plain_route_refresh
+    rr = Orf_route_refresh.new(Route_refresh.new(1, 1).encode)
+    assert_equal([1, 1], [rr.afi_to_i, rr.safi_to_i])
+    assert_equal(0, rr.orfs.size)
+    assert_nil(rr.when_to_i)
+    assert_equal('bogus ()', rr.when_to_s)
   end
 end

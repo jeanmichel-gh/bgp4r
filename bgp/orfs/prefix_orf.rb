@@ -28,6 +28,11 @@ module BGP
   
   class Prefix_entry < Orf::Entry
     
+    # RFC 5291 section 4: Action is the top two bits of the common part.
+    ADD        = 0
+    REMOVE     = 1
+    REMOVE_ALL = 2
+
     def initialize(*args)
       if args[0].is_a?(String) and args[0].is_packed?
         _parse_(*args)
@@ -45,14 +50,20 @@ module BGP
       end
     end
     
+    # RFC 5291 section 4: Action is a two bit field, ADD (0), REMOVE (1) and
+    # REMOVE-ALL (2). 3 has no meaning there but it fits the field and comes
+    # off the wire, so it is kept. A value the two bits cannot hold is
+    # refused, because encoding it would put a different one on the wire.
     def action=(val)
       case val
-      when 0, :add
-        @action=0
-      when 1, :remove
-        @action=1
-      when 2, :remove_all
-        @action=2
+      when :add        ; @action=ADD
+      when :remove     ; @action=REMOVE
+      when :remove_all ; @action=REMOVE_ALL
+      when Integer
+        raise "invalid action: #{val.inspect}" unless (0..3) === val
+        @action=val
+      else
+        raise "invalid action: #{val.inspect}"
       end
     end
     
@@ -81,30 +92,43 @@ module BGP
       end
     end
 
+    # RFC 5291 section 4: Match is one bit, PERMIT (0) or DENY (1), so 2 is
+    # refused rather than truncated.
     def match=(val)
       case val
       when 0, :permit ; @match=0
       when 1, :deny   ; @match=1
       else
-        raise
+        raise "invalid match: #{val.inspect}"
       end
     end
     
     def set(h)
-      self.action = h[:action] ||= 0
-      self.match = h[:match] ||= 0
-      @seqn = h[:seqn] ||= 0
-      @min = h[:min] ||= 0
-      @max = h[:max]  ||= 0
+      # || and not ||=: the caller's hash is not ours to write defaults into.
+      self.action = h[:action] || 0
+      self.match = h[:match] || 0
+      @seqn = h[:seqn] || 0
+      @min = h[:min] || 0
+      @max = h[:max] || 0
       @prefix = BGP::Prefix.new(h[:prefix]) if h[:prefix]
     end
 
     def encode
+      # RFC 5291 section 4: an entry with no type specific part is the common
+      # part alone, which is what a REMOVE-ALL entry is. RFC 5292 section 3
+      # puts Sequence, Minlen, Maxlen and the prefix in the others.
+      return [_first_octet_].pack('C') if @prefix.nil?
       [_first_octet_,@seqn, @min, @max, @prefix.encode(true)].pack('CNCCa*')
     end
     
+    def to_hash
+      h = {:action=> @action, :match=> @match}
+      return h if @prefix.nil?
+      h.merge({:seqn=> @seqn, :min=> @min, :max=> @max, :prefix=> @prefix.to_s})
+    end
+
     def to_s
-       #FIXME unit-test
+       return action_to_s if @prefix.nil?
        s = format("seq %3s %6s %s", @seqn, action_to_s, @prefix)
        s += " ge #{@min}" if @min>0
        s += " le #{@max}" if @max>0
@@ -119,14 +143,22 @@ module BGP
     end
     
     def size
+      # RFC 5291 section 4: a REMOVE-ALL entry is one octet, the common part.
+      return 1 if @prefix.nil?
       @prefix.nbytes+7+1
     end
     
     def _parse_(s, afi=1)
-      o1, @seqn, @min, @max, prefix = s.unpack('CNCCa*')
+      o1 = s.unpack('C')[0]
       @action = o1 >> 6
       @match = (o1 >> 5) & 1
-      @prefix = BGP::Prefix.new_ntop(prefix.is_packed, afi)
+      if @action==REMOVE_ALL
+        # RFC 5291 section 4: a REMOVE-ALL entry has no type specific part.
+        @seqn, @min, @max, @prefix = 0, 0, 0, nil
+      else
+        _, @seqn, @min, @max, prefix = s.unpack('CNCCa*')
+        @prefix = BGP::Prefix.new_ntop(prefix.is_packed, afi)
+      end
       s.slice!(0,size)
     end
 
@@ -136,7 +168,10 @@ module BGP
     def self.remove(*args) ; Prefix_entry.new(1,*args)  ; end
     def self.remove_and_deny(*args) ; Prefix_entry.new(1,1,*args) ; end
     def self.remove_and_permit(*args) ; Prefix_entry.new(1,0,*args) ; end
-    def self.remove_all(*args) ; Prefix_entry.new(2,0) ; end
+    # RFC 5291 section 4: a REMOVE-ALL entry is the common part alone, and
+    # the Match field only means something for ADD and REMOVE, so there is
+    # nothing else to pass.
+    def self.remove_all ; Prefix_entry.new(:action=>REMOVE_ALL, :match=>0) ; end
 
   end
     
@@ -148,9 +183,15 @@ class BGP::Prefix_orf < BGP::Orf
     if args[0].is_a?(String) and args[0].is_packed?
       _parse_(*args)
     elsif args[0].is_a?(self.class) and args[0].respond_to?(:encode)
-      _parse_(args[0].encode)
+      _parse_(args[0].encode, *args[1..-1])
+    elsif args.size==1 and args[0].is_a?(Hash)
+      @type = args[0][:type] || BGP::ORF::PREFIX
+      @entries = []
+      [args[0][:entries]].flatten.compact.each do |e|
+        add(e.is_a?(BGP::Prefix_entry) ? e : BGP::Prefix_entry.new(e))
+      end
     else
-      super(64, *args)
+      super(BGP::ORF::PREFIX, *args)
     end
   end
   
@@ -159,14 +200,20 @@ class BGP::Prefix_orf < BGP::Orf
     super(e)
   end
 
-  def _parse_(s)
+  def _parse_(s, afi=1)
     @entries=[]
     @type, _, entries = s.unpack('Cna*')
     while entries.size>0
-      @entries << BGP::Prefix_entry.new(entries.is_packed)
+      # RFC 5292 section 2: the prefix of an entry is read in the address
+      # family of the ROUTE-REFRESH message that carries the ORF.
+      @entries << BGP::Prefix_entry.new(entries.is_packed, afi)
     end
   end
   
+  def to_hash
+    {:type=> @type, :entries=> @entries.collect { |e| e.to_hash }}
+  end
+
   def cisco_prefix_entry_type
     @type=130
   end  
