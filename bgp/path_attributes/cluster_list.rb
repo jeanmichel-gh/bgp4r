@@ -96,12 +96,18 @@ module BGP
     end
 
     def encode
-      super(@cluster_ids.collect { |comm| comm.encode }.join)
+      super(@cluster_ids.collect { |comm| comm.encode }.join + (@tail || ''))
     end
 
+    # RFC 4456 section 8: a CLUSTER_ID is 4 octets. Octets past the last
+    # whole one are kept, so encode gives back what was received, length
+    # field included. RFC 7606 section 7.10 makes such an attribute
+    # malformed; Path_attribute#errors reports it.
     def parse(s)
-      @flags, @type, len, value=super(s)
-      self << value.unpack("N#{len/4}")
+      @flags, @type, _, value=super(s)
+      whole = value.size / 4 * 4
+      self << value.byteslice(0, whole).unpack('N*')
+      @tail = value.byteslice(whole, value.size - whole).b if value.size > whole
     end
 
     def sort
