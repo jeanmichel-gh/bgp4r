@@ -228,6 +228,46 @@ class Extended_community_Test < Test::Unit::TestCase
     assert_equal('Link bandwidth: 100000000.0', Link_bandwidth.new(['040400004cbebc20'].pack('H*')).to_s)
   end
 
+  # draft-ietf-idr-link-bandwidth: the link bandwidth community takes the
+  # 2 octet AS specific type, but its value is an IEEE 754 single
+  # precision number. That is the FLOAT structure, so is_two_octet_asn?
+  # is false and is_float? is true. The predicates used to read the low 2
+  # bits of the type octet on their own and answer true to both.
+  def test_link_bandwidth_structure_predicates
+    lb = Link_bandwidth.new(10_000)
+    assert_equal('40040000461c4000', lb.to_shex)
+    assert_equal([false, false, false, true],
+                 [lb.is_two_octet_asn?, lb.is_ipv4_addr?, lb.is_opaque?, lb.is_float?])
+    # From its wire bytes, with the transitive bit set, the same answers.
+    wire = Link_bandwidth.new(['04040000461c4000'].pack('H*'))
+    assert_equal([false, false, false, true],
+                 [wire.is_two_octet_asn?, wire.is_ipv4_addr?, wire.is_opaque?, wire.is_float?])
+    # A 2 octet AS specific community that is not a link bandwidth keeps
+    # the answers it had.
+    rt = Route_target.new(10, 20)
+    assert_equal([true, false], [rt.is_two_octet_asn?, rt.is_float?])
+    assert_equal([false, false], [Opaque.new(0, 10, '0a0000010064').is_float?,
+                                  Route_target.new('1.1.1.1', 100).is_float?])
+  end
+
+  # The one argument is the bandwidth. Any other count used to report the
+  # argument list Link_bandwidth builds for its parent, which named
+  # nothing the caller had written.
+  def test_link_bandwidth_argument_count
+    err = assert_raise(ArgumentError) { Link_bandwidth.new(100, 1000) }
+    assert_equal('invalid link bandwidth [100, 1000], expected one argument, the bandwidth',
+                 err.message)
+    err = assert_raise(ArgumentError) { Link_bandwidth.new(100, 1000, 2000) }
+    assert_equal('invalid link bandwidth [100, 1000, 2000], expected one argument, the bandwidth',
+                 err.message)
+    err = assert_raise(ArgumentError) { Link_bandwidth.new }
+    assert_equal('invalid link bandwidth [], expected one argument, the bandwidth',
+                 err.message)
+    # The one argument form and the wire form are untouched.
+    assert_equal('40040000461c4000', Link_bandwidth.new(10_000).to_shex)
+    assert_equal('04040000461c4000', Link_bandwidth.new(['04040000461c4000'].pack('H*')).to_shex)
+  end
+
   def test_color
     assert_equal('030b000000000000', Color.new.to_shex)
     assert_equal('030b000000000000', Color.new(0).to_shex)
