@@ -114,6 +114,15 @@ module BGP::OPT_PARM::CAP
       super({:families => @families.collect { |afi, safi, nh| {:afi=>afi, :safi=>safi, :nexthop_afi=>nh} }})
     end
 
+    # Which NLRI families may take a next hop of which family. That is
+    # the whole content of the capability, so the brief form keeps it.
+    def to_s_brief
+      families = @families.collect { |afi, safi, nh|
+        "#{IANA.afi?(afi) || afi}, #{IANA.safi?(safi) || safi} via #{IANA.afi?(nh) || nh}"
+      }
+      families.empty? ? 'Extended Next Hop' : "Extended Next Hop #{families.join('; ')}"
+    end
+
   end
 end
 

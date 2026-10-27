@@ -79,7 +79,37 @@ module BGP::OPT_PARM
         {:code=> @code, :capability=> h}
       end
     end
-    
+
+    # One line naming the capability, for the revision table a
+    # Capability message prints. The message carries one capability per
+    # revision (draft-ietf-idr-dynamic-cap-19, 16 February 2026,
+    # section 3), and to_s of a capability is several lines, with the
+    # optional parameter header and a hex dump, so it does not fit a
+    # table row.
+    #
+    # The default names the capability after its class and gives its
+    # capability code, which every capability has (RFC 5492 section 4).
+    # It lives here rather than on each capability so that a capability
+    # added later prints without having to remember this method; before
+    # this, only CAP::Mbgp and CAP::Unknown had it and every other
+    # capability raised NoMethodError when a Capability message printed.
+    #
+    # A capability overrides it only when it has something shorter and
+    # more useful to say than its name, the way CAP::Mbgp names its
+    # address family. Display only: nothing here touches the wire.
+    def to_s_brief
+      "#{brief_name} (#{@code})"
+    end
+
+    private
+
+    # The class name without its namespace, so CAP::Route_refresh and
+    # the DYN_CAP class generated from it read the same. The header
+    # shape differs between the two, the capability does not.
+    def brief_name
+      (self.class.name || self.class.to_s).split('::').last.tr('_', ' ')
+    end
+
   end
 end
 

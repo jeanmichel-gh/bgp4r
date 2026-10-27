@@ -254,6 +254,76 @@ class Capability_Test < Test::Unit::TestCase
                  BGP::OPT_PARM::DYN_CAP::Unknown.new(0, ['ff' * 11].pack('H*')).to_shex
     assert_equal 'ff0000', BGP::OPT_PARM::DYN_CAP::Unknown.new(255).to_shex
   end
+  # to_s_brief is the one line form a Capability message prints for the
+  # capability a revision carries. The default is on Capability itself,
+  # so every capability has one. Before this, only Mbgp and Unknown had
+  # it and the message raised NoMethodError on all the rest.
+  def test_to_s_brief_default_names_the_capability_and_its_code
+    assert_equal 'Capability (100)', Capability.new(100).to_s_brief
+    assert_equal 'Route refresh (2)', Route_refresh.new.to_s_brief
+    # The Cisco code shows, so the two forms of the same capability are
+    # told apart.
+    assert_equal 'Route refresh (128)', Route_refresh.new(128).to_s_brief
+    assert_equal 'Dynamic (67)', Dynamic.new.to_s_brief
+    assert_equal 'Orf (3)', Orf.new.to_s_brief
+    # The DYN_CAP class generated from a CAP class reads the same. The
+    # header shape differs between the two, the capability does not.
+    assert_equal 'Route refresh (2)',
+                 BGP::OPT_PARM::DYN_CAP::Route_refresh.new.to_s_brief
+    assert_equal 'Orf (3)', BGP::OPT_PARM::DYN_CAP::Orf.new.to_s_brief
+  end
+  def test_to_s_brief_overrides
+    # A capability overrides the default only where it has something
+    # shorter and more useful to say than its own name.
+    assert_equal 'MBGP IPv4, Unicast', Mbgp.new(1,1).to_s_brief
+    assert_equal 'AS4 100', As4.new(100).to_s_brief
+    assert_equal 'Graceful Restart 120s', Graceful_restart.new(0,120).to_s_brief
+    assert_equal 'Add-path IPv4, Unicast SEND (1)', Add_path.new(:send,1,1).to_s_brief
+    assert_equal 'Add-path IPv4, Unicast SEND (1); IPv6, Unicast RECV (2)',
+                 Add_path.new_array([[:send,1,1],[:recv,2,1]]).to_s_brief
+    assert_equal 'Extended Next Hop IPv4, Unicast via IPv6',
+                 Extended_nexthop.new(1,1,2).to_s_brief
+    assert_equal 'Unknown Capability 100 [76616c7565]',
+                 CAP::Unknown.new(100,'value').to_s_brief
+    # A capability with no address family still prints.
+    assert_equal 'Add-path', Add_path.new.to_s_brief
+    assert_equal 'Extended Next Hop', Extended_nexthop.new(:families=>[]).to_s_brief
+    # An AFI or SAFI IANA does not name falls back to its number, since
+    # building is never validated and any value can be sent.
+    assert_equal 'Add-path 999, 77 SEND (1)', Add_path.new(:send,999,77).to_s_brief
+    assert_equal 'Extended Next Hop 999, 77 via 999',
+                 Extended_nexthop.new(999,77,999).to_s_brief
+  end
+  def test_to_s_brief_moves_no_wire_bytes
+    # Display only. Every capability still encodes what it did before.
+    [[As4.new(100), '0206410400000064'],
+     [Graceful_restart.new(0,120), '020440020078'],
+     [Add_path.new(:send,1,1), '0206450400010101'],
+     [Extended_nexthop.new(1,1,2), '02080506000100010002'],
+     [Route_refresh.new, '02020200'],
+     [Dynamic.new, '02024300']].each do |cap, shex|
+      assert_equal shex, cap.to_shex
+      cap.to_s_brief
+      assert_equal shex, cap.to_shex
+    end
+  end
+  # The three build paths of a capability that got an override still
+  # give the same capability, and the brief form reads the same from
+  # each of them.
+  def test_an_overridden_brief_form_reads_the_same_from_every_build_path
+    from_fields = As4.new(100)
+    from_wire   = As4.new(['0206410400000064'].pack('H*'))
+    from_hash   = Capability.factory(['0206410400000064'].pack('H*'))
+    assert_equal 'AS4 100', from_fields.to_s_brief
+    assert_equal 'AS4 100', from_wire.to_s_brief
+    assert_equal 'AS4 100', from_hash.to_s_brief
+    ext_fields = Extended_nexthop.new(1,1,2)
+    ext_wire   = Extended_nexthop.new(['02080506000100010002'].pack('H*'))
+    ext_hash   = Extended_nexthop.new(ext_fields.to_hash)
+    assert_equal 'Extended Next Hop IPv4, Unicast via IPv6', ext_fields.to_s_brief
+    assert_equal 'Extended Next Hop IPv4, Unicast via IPv6', ext_wire.to_s_brief
+    assert_equal 'Extended Next Hop IPv4, Unicast via IPv6', ext_hash.to_s_brief
+  end
   def test_unknown_refuses_a_code_it_cannot_hold
     # A code that is not an Integer cannot go in the field, and a String
     # that did not come off the wire is not a value either.

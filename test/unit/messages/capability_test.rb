@@ -148,3 +148,107 @@ class TestBgpMessagesCapability < Test::Unit::TestCase
     assert_equal s, built.to_shex
   end
 end
+
+# A Dynamic Capability message carries one capability per revision
+# (draft-ietf-idr-dynamic-cap-19, 16 February 2026, section 3), and
+# Capability::Revision#to_s prints it with to_s_brief. That method was
+# defined on CAP::Mbgp and CAP::Unknown and nowhere else, so printing a
+# message that carried any other capability raised NoMethodError.
+#
+# The capability classes are found from the code rather than listed, so
+# a capability added later is covered too: a class with no sample here
+# fails these tests instead of going untested.
+class TestBgpMessagesCapabilityBrief < Test::Unit::TestCase
+  include BGP::OPT_PARM
+
+  # Wire bytes of each sample, measured before to_s_brief was added.
+  # This is a display fix, so none of them may move, and the set of
+  # keys is the set of capability classes the library can carry.
+  WIRE = {
+    'BGP::OPT_PARM::CAP::Add_path'              => '0206450400010101',
+    'BGP::OPT_PARM::CAP::As4'                   => '0206410400000064',
+    'BGP::OPT_PARM::CAP::Dynamic'               => '02024300',
+    'BGP::OPT_PARM::CAP::Extended_nexthop'      => '02080506000100010002',
+    'BGP::OPT_PARM::CAP::Graceful_restart'      => '020440020078',
+    'BGP::OPT_PARM::CAP::Mbgp'                  => '0206010400010001',
+    'BGP::OPT_PARM::CAP::Orf'                   => '0209030700010001014001',
+    'BGP::OPT_PARM::CAP::Route_refresh'         => '02020200',
+    'BGP::OPT_PARM::CAP::Unknown'               => '0207640576616c7565',
+    'BGP::OPT_PARM::Capability::Unknown'        => '0207640576616c7565',
+    'BGP::OPT_PARM::DYN_CAP::Add_path'          => '45000400010101',
+    'BGP::OPT_PARM::DYN_CAP::As4'               => '41000400000064',
+    'BGP::OPT_PARM::DYN_CAP::Dynamic'           => '430000',
+    'BGP::OPT_PARM::DYN_CAP::Extended_nexthop'  => '050006000100010002',
+    'BGP::OPT_PARM::DYN_CAP::Graceful_restart'  => '4000020078',
+    'BGP::OPT_PARM::DYN_CAP::Mbgp'              => '01000400010001',
+    'BGP::OPT_PARM::DYN_CAP::Orf'               => '03000700010001014001',
+    'BGP::OPT_PARM::DYN_CAP::Route_refresh'     => '020000',
+    'BGP::OPT_PARM::DYN_CAP::Unknown'           => '64000576616c7565',
+  }
+
+  # Every subclass of Capability, however deep. The DYN_CAP classes are
+  # generated from the CAP ones in capabilities.rb, so they are here
+  # without being named.
+  def capability_classes
+    found, queue = [], [BGP::OPT_PARM::Capability]
+    until queue.empty?
+      queue.shift.subclasses.each { |kl| found << kl ; queue << kl }
+    end
+    found
+  end
+
+  # One sample of each capability. The case is on the class name
+  # without its namespace, so a CAP class and the DYN_CAP class
+  # generated from it share an entry.
+  def sample_of(kl)
+    case kl.name.split('::').last
+    when 'Mbgp'             then kl.new(1, 1)
+    when 'As4'              then kl.new(100)
+    when 'Route_refresh'    then kl.new
+    when 'Dynamic'          then kl.new
+    when 'Graceful_restart' then kl.new(0, 120)
+    when 'Add_path'         then kl.new(:send, 1, 1)
+    when 'Extended_nexthop' then kl.new(1, 1, 2)
+    when 'Orf'              then kl.new.tap { |o| o.add(kl::Entry.new(1, 1, [64, 1])) }
+    when 'Unknown'
+      # Capability::Unknown reads the optional parameter header, so it
+      # only builds from wire bytes. CAP::Unknown takes field values.
+      if kl == BGP::OPT_PARM::Capability::Unknown
+        kl.new(['0207640576616c7565'].pack('H*'))
+      else
+        kl.new(100, 'value')
+      end
+    else
+      flunk "no sample of #{kl}: add one, so that its to_s_brief is tested"
+    end
+  end
+
+  def test_the_capability_classes_are_found_from_the_code
+    assert_equal WIRE.keys.sort, capability_classes.collect { |kl| kl.name }.sort,
+                 'a capability class was added or removed: give it a sample and its wire bytes'
+  end
+
+  def test_every_capability_class_prints_in_a_capability_message
+    capability_classes.each do |kl|
+      cap, brief, out = sample_of(kl), nil, nil
+      assert_nothing_raised("#{kl} has no brief form") { brief = cap.to_s_brief }
+      assert_equal 1, brief.lines.size, "#{kl}: the brief form is one line"
+      assert_not_equal '', brief.strip, "#{kl}: the brief form says nothing"
+      msg = BGP::Capability.new(BGP::Capability::Revision.advertise(10, cap))
+      assert_nothing_raised("#{kl} does not print") { out = msg.to_s }
+      assert_match(/^  0x00000010  Advertise      \(0x00\)  #{Regexp.escape(brief)}$/,
+                   out, "#{kl}: the message does not show the brief form")
+    end
+  end
+
+  def test_printing_moves_no_wire_bytes
+    capability_classes.each do |kl|
+      cap = sample_of(kl)
+      assert_equal WIRE[kl.name], cap.to_shex, "#{kl}: wire bytes"
+      cap.to_s_brief
+      cap.to_s
+      BGP::Capability.new(BGP::Capability::Revision.advertise(10, cap)).to_s
+      assert_equal WIRE[kl.name], cap.to_shex, "#{kl}: printing moved the wire bytes"
+    end
+  end
+end
