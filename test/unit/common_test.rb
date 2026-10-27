@@ -39,6 +39,19 @@ class Common_Test < Test::Unit::TestCase
       [@hex4].pack('H*')
     end
   end
+  # IPAddr#mlen used to never return for a prefix of length 0, so a plain
+  # call to it would wedge the whole suite rather than fail one test. Run
+  # it in a thread and give up on it, so the bug coming back reads as a
+  # failure here.
+  def mlen_within(seconds, *addresses)
+    values = nil
+    t = Thread.new { values = addresses.collect { |a| IPAddr.new(a).mlen } }
+    assert(t.join(seconds),
+           "IPAddr#mlen did not return within #{seconds}s for #{addresses.inspect}")
+    values
+  ensure
+    t.kill if t
+  end
   def test_array_pack_returns_a_packed_string
     s = [1,2,3].pack('C*')
     assert(s.is_packed?)
@@ -82,6 +95,39 @@ class Common_Test < Test::Unit::TestCase
     assert(IPAddr.method_defined?(:netmask))
     path, = IPAddr.instance_method(:netmask).source_location
     assert_no_match(/bgp\/common\.rb\z/, path.to_s)
+  end
+  def test_common_defines_no_netmask_of_its_own
+    # common.rb used to carry a copy of #netmask under an
+    # `unless method_defined?(:netmask)` guard that is false on every Ruby
+    # bgp4r supports, so the body never ran. The lines are gone; keep them
+    # gone. test_netmask_comes_from_the_standard_library above is what
+    # would notice a Ruby that drops the method.
+    root = File.expand_path('../..', File.dirname(__FILE__))
+    src = File.read(File.join(root, 'bgp', 'common.rb'))
+    assert_no_match(/def\s+netmask/, src)
+    assert_no_match(/method_defined\?\(:netmask\)/, src)
+  end
+  def test_ipaddr_mlen_of_a_zero_length_prefix
+    # RFC 4271 section 4.3: a default route is a length of 0 and no prefix
+    # octets. The mask has no set bit, so _mlen_ floors at 0 rather than
+    # shifting zero forever.
+    assert_equal([0, 0], mlen_within(10, '0.0.0.0/0', '::/0'))
+    # Memoized, so the second call answers 0 too and does not re-run.
+    assert_equal(0, IPAddr.new('0.0.0.0/0').mlen)
+    v6 = IPAddr.new('::/0')
+    assert_equal(0, v6.mlen)
+    assert_equal(0, v6.mlen)
+  end
+  def test_ipaddr_mlen_of_a_full_length_prefix
+    assert_equal([32, 32, 32], mlen_within(10, '10.0.0.1', '10.0.0.1/32', '255.255.255.255/32'))
+    assert_equal([128, 128, 128], mlen_within(10, '::1', '2011:1:18::1', '2011:1:18::1/128'))
+  end
+  def test_ipaddr_mlen_agrees_with_the_standard_library_prefix
+    # Every length, to pin that the floor at 0 moved nothing else.
+    assert_equal((0..32).to_a, mlen_within(20, *(0..32).collect { |l| "10.1.2.3/#{l}" }))
+    assert_equal((0..128).to_a, mlen_within(20, *(0..128).collect { |l| "2011:1:18::1/#{l}" }))
+    (0..32).each { |l| assert_equal(IPAddr.new("10.1.2.3/#{l}").prefix, IPAddr.new("10.1.2.3/#{l}").mlen) }
+    (0..128).each { |l| assert_equal(IPAddr.new("2011:1:18::1/#{l}").prefix, IPAddr.new("2011:1:18::1/#{l}").mlen) }
   end
   def test_my_caller_splits_a_caller_line_on_the_path_separator
     assert_equal(['', 'usr', 'lib', 'bgp', 'common.rb:20'],

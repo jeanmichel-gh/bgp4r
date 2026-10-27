@@ -152,6 +152,69 @@ class Prefix_Test < Test::Unit::TestCase
     assert_raise(ArgumentError) { pfx.ipv4? }
   end
 
+  # Prefix#mlen used to never return for a /0, because IPAddr#mlen shifted
+  # an all zero mask looking for a set bit, so a plain call wedged the whole
+  # suite rather than failing one test. Build, encode and parse inside a
+  # thread this can give up on, and touch mlen on each object there so it is
+  # memoized. The assertions below then run on warm objects and cannot hang,
+  # and the bug coming back reads as a failure here.
+  def default_route(arg, afi, seconds = 10)
+    built = nil
+    t = Thread.new do
+      pfx = Prefix.new(arg)
+      pfx.mlen
+      back = Prefix.new_ntop(pfx.encode, afi)
+      back.mlen
+      rebuilt = Prefix.new(pfx.to_hash)
+      rebuilt.mlen
+      built = [pfx, back, rebuilt]
+    end
+    assert(t.join(seconds), "Prefix#mlen did not return within #{seconds}s for #{arg}")
+    built
+  ensure
+    t.kill if t
+  end
+  def test_default_route_round_trips
+    # RFC 4271 section 4.3: a prefix is a length octet followed by only the
+    # octets that length needs, so a default route is one zero octet.
+    pfx, back, rebuilt = default_route('0.0.0.0/0', 1)
+    assert_equal(0, pfx.mlen)
+    assert_equal(0, pfx.nbytes)
+    assert_equal('0.0.0.0/0', pfx.to_s)
+    assert_equal('IPv4=0.0.0.0/0', pfx.to_s_with_afi)
+    assert_equal(1, pfx.afi)
+    assert_equal('00', pfx.to_shex)
+    assert_equal('0.0.0.0/0', back.to_s)
+    assert_equal(pfx.to_shex, back.to_shex)
+    assert_equal({:prefix=>'0.0.0.0/0'}, pfx.to_hash)
+    assert_equal(pfx.to_hash, rebuilt.to_hash)
+  end
+  def test_default_route_round_trips_inet6
+    pfx, back, rebuilt = default_route('::/0', 2)
+    assert_equal(0, pfx.mlen)
+    assert_equal(0, pfx.nbytes)
+    assert_equal('::/0', pfx.to_s)
+    assert_equal('IPv6=::/0', pfx.to_s_with_afi)
+    assert_equal(2, pfx.afi)
+    assert_equal('00', pfx.to_shex)
+    assert_equal('::/0', back.to_s)
+    assert_equal(pfx.to_shex, back.to_shex)
+    assert_equal({:prefix=>'::/0'}, pfx.to_hash)
+    assert_equal(pfx.to_hash, rebuilt.to_hash)
+  end
+  def test_new_ntop_consumes_only_the_length_octet_of_a_default_route
+    # new_ntop slices what it read off the caller's String, so a default
+    # route in a run of prefixes leaves the next one in place.
+    s = ['00080a'].pack('H*')
+    first, second = nil, nil
+    t = Thread.new { first = Prefix.new_ntop(s, 1) ; first.mlen ; second = Prefix.new_ntop(s, 1) }
+    assert(t.join(10), 'Prefix.new_ntop did not return within 10s for a default route')
+    assert_equal('0.0.0.0/0', first.to_s)
+    assert_equal('10.0.0.0/8', second.to_s)
+    assert_equal('', s)
+  ensure
+    t.kill if t
+  end
   def test_new_ntop_unknown_afi_says_so
     s = ['0a0a'].pack('H*')
     [[:new_ntop, 25], [:new_ntop, :ipx], [:new_ntop_extended, 25]].each do |meth, afi|

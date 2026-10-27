@@ -34,7 +34,11 @@ class Prefix
       case afi
       when IANA::AFI::IPv4, :ipv4
         s = arg.dup
-        s +=([0]*3).pack('C*')
+        # RFC 4271 section 4.3 gives a prefix one length octet and only the
+        # octets the length needs, so pad to the four the unpack wants. Four
+        # zeros, not three: a length of 0, the default route, carries no
+        # prefix octets at all, and three left nlri one element short.
+        s +=([0]*4).pack('C*')
         plen, *nlri = s.unpack('CC4')
         arg.slice!(0,1+(plen+7)/8)
         pfx = nlri.collect { |n| n.to_s }.join('.') + "/" + plen .to_s
