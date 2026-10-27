@@ -78,23 +78,16 @@ class IPAddr
   
   private :_generate_network_inc_
 
-  # Stdlib IPAddr has had a compatible #netmask since Ruby 2.5.
-  # Only define ours when it is missing, to avoid a redefinition warning.
-  unless method_defined?(:netmask)
-    def netmask
-      if ipv4?
-        [@mask_addr].pack('N').unpack('C4').collect { |x| x.to_s}.join('.')
-      else
-        format('%032x', @mask_addr).scan(/..../).join(':')
-      end
-    end
-  end
-  
   private 
   
   def _mlen_
     m = @mask_addr
     len =  ipv6? ? 128 : 32
+    # A prefix of length 0, the default route, has an all zero mask. There
+    # is no set bit for the loop below to stop on, so it would shift zero
+    # forever. Answer the floor of 0 here instead. RFC 4271 section 4.3
+    # encodes a default route as a length octet of 0 and no prefix octets.
+    return 0 if m == 0
     loop do
       break if m & 1 > 0
       m = m >> 1
