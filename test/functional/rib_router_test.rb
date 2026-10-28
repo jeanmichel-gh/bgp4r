@@ -278,6 +278,66 @@ class RibRouterTest < Test::Unit::TestCase
     assert_equal('127.0.0.1', u.path_attribute[BGP::Next_hop].next_hop)
   end
 
+  # A prefix of our own, advertised to both kinds of peer at once, which is
+  # the only place the two AS_PATH rules of RFC 4271 section 5.1.2 can be
+  # seen disagreeing on the same route: "its own AS number in a path
+  # segment, of type AS_SEQUENCE" to an external peer, and "an empty AS_PATH
+  # attribute" to an internal one.
+  def test_a_prefix_we_originate_reaches_both_kinds_of_peer
+    int_side, int_port = listener('0.0.0.1', '127.0.0.4')
+    ext_side, ext_port = listener('0.0.0.1', '127.0.0.3')
+    @rib = BGP::Rib::Table.new(:local_as => RR_AS, :router_id => '0.0.0.1')
+    @rib.attach(int_side)
+    @rib.attach(ext_side)
+    router = @rib.advertise
+
+    _int, int_heard = client(RR_AS, '0.0.0.4', int_port)
+    _ext, ext_heard = client(RIGHT_AS, '0.0.0.3', ext_port)
+    assert(wait_for { int_side.is_established? && ext_side.is_established? })
+    assert(wait_for { @rib.drain })
+
+    @rib.originate('10.1.0.0/16')
+    assert(wait_for { @rib.drain && int_heard.updates.size == 1 && ext_heard.updates.size == 1 },
+           "internal #{int_heard.updates.size}, external #{ext_heard.updates.size}")
+
+    inside = int_heard.updates.first
+    assert_equal(['10.1.0.0/16'], inside.nlri.to_ary)
+    assert(inside.path_attribute[BGP::As_path].segments.empty?,
+           'an empty AS_PATH to an internal peer')
+    assert_equal('127.0.0.1', inside.path_attribute[BGP::Next_hop].next_hop,
+                 'and our own address, section 5.1.3')
+    assert_equal(100, inside.path_attribute[BGP::Local_pref].to_i)
+
+    outside = ext_heard.updates.first
+    assert_equal(['10.1.0.0/16'], outside.nlri.to_ary)
+    segs = outside.path_attribute[BGP::As_path].segments
+    assert_equal(1, segs.size)
+    assert_equal([RR_AS], segs.first.as, 'our AS alone to an external peer')
+    assert_equal('127.0.0.1', outside.path_attribute[BGP::Next_hop].next_hop)
+    assert(!outside.path_attribute.has?(BGP::Local_pref))
+    assert_equal(2, router.sent)
+    assert_equal([], router.skipped)
+  end
+
+  def test_withdrawing_a_prefix_we_originated_reaches_the_peer
+    ext_side, ext_port = listener('0.0.0.1', '127.0.0.3')
+    @rib = BGP::Rib::Table.new(:local_as => RR_AS, :router_id => '0.0.0.1')
+    @rib.attach(ext_side)
+    @rib.advertise
+
+    _ext, ext_heard = client(RIGHT_AS, '0.0.0.3', ext_port)
+    assert(wait_for { ext_side.is_established? })
+    assert(wait_for { @rib.drain })
+
+    @rib.originate('10.1.0.0/16')
+    assert(wait_for { @rib.drain && ext_heard.updates.size == 1 })
+    @rib.withdraw(@rib.local_peer, '10.1.0.0/16')
+    assert(wait_for { @rib.drain && ext_heard.updates.size == 2 },
+           "the peer got #{ext_heard.updates.size}")
+    assert_equal(['10.1.0.0/16'], ext_heard.updates.last.withdrawn.to_ary)
+    assert_equal([], @rib.originated)
+  end
+
   # A withdrawal crosses the router too, which is the half that is easy to
   # leave out: a peer that is told about a route and never told it went
   # holds it for ever.

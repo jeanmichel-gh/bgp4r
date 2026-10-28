@@ -442,4 +442,124 @@ class TestBgpRibExport < Test::Unit::TestCase
     assert_equal(:non_client_to_non_client, e.for(route(I1), I2).reason,
                  'a reflector with no clients reflects nothing')
   end
+
+  # Originating a route, RFC 4271 sections 5.1.1, 5.1.2 and 5.1.3. The
+  # attributes are the ones Table#originate builds: an empty AS_PATH, and a
+  # NEXT_HOP placeholder the export step replaces.
+
+  LOCAL = BGP::Rib::LocalPeer.new(:local_as => LOCAL_AS, :router_id => OURS)
+
+  def originated(prefix = '10.1.0.0/16')
+    pa = BGP::Path_attribute.new(BGP::Origin.new(0), BGP::As_path.new,
+                                 BGP::Next_hop.new(OURS))
+    BGP::Rib::Route.new(prefix, pa, LOCAL)
+  end
+
+  def test_a_local_peer_is_us
+    assert(LOCAL.local?)
+    assert(LOCAL.ibgp?, 'in our own AS')
+    assert(originated.local?)
+    assert(!route(E1).local?)
+  end
+
+  # "the originating speaker includes its own AS number in a path segment,
+  # of type AS_SEQUENCE, in the AS_PATH attribute of all UPDATE messages
+  # sent to an external peer", and it is "the only entry the path segment,
+  # and this path segment will be the only segment in the AS_PATH".
+  def test_an_originated_route_carries_only_our_as_to_an_external_peer
+    res = @export.for(originated, E1, :next_hop => '10.0.0.1')
+    assert(res.advertise?)
+    segs = res.path_attribute[BGP::As_path].segments
+    assert_equal(1, segs.size, 'the only segment')
+    assert_equal(BGP::As_path::SEQUENCE, segs.first.seg_type)
+    assert_equal([LOCAL_AS], segs.first.as, 'the only entry')
+  end
+
+  # "the originating speaker includes an empty AS_PATH attribute in all
+  # UPDATE messages sent to internal peers", and "An empty AS_PATH attribute
+  # is one whose length field contains the value zero."
+  def test_an_originated_route_carries_an_empty_as_path_to_an_internal_peer
+    res = @export.for(originated, I1, :next_hop => '10.0.0.1')
+    assert(res.advertise?)
+    assert(res.path_attribute.has?(BGP::As_path), 'the attribute is there')
+    assert(res.path_attribute[BGP::As_path].segments.empty?, 'and carries nothing')
+    assert_equal('empty', res.path_attribute[BGP::As_path].as_path)
+  end
+
+  # Section 5.1.3: announcing a locally originated route to an internal
+  # peer, where the route "is directly connected to the speaker", the
+  # speaker "SHOULD use its own IP address for the NEXT_HOP attribute". So
+  # unlike a route we learned, this one gets ours toward either kind of peer,
+  # and the attribute says what Result#next_hop says.
+  def test_an_originated_route_carries_our_next_hop_to_either_kind_of_peer
+    [[E1, '10.0.0.1'], [I1, '10.0.0.1']].each do |peer, hop|
+      res = @export.for(originated, peer, :next_hop => hop)
+      assert_equal(hop, res.next_hop, "to #{peer}")
+      assert_equal(hop, res.path_attribute[BGP::Next_hop].next_hop,
+                   "the attribute agrees, to #{peer}")
+    end
+  end
+
+  def test_an_originated_route_needs_a_next_hop_even_for_an_internal_peer
+    e = assert_raise(ArgumentError) { @export.for(originated, I1) }
+    assert_match(/a route we originated/, e.message)
+  end
+
+  # Section 5.1.3: "A route originated by a BGP speaker SHALL NOT be
+  # advertised to a peer using an address of that peer as NEXT_HOP."
+  def test_an_originated_route_is_not_sent_with_the_peers_own_address
+    res = @export.for(originated, E1, :next_hop => E1.address)
+    assert(!res.advertise?)
+    assert_equal(:next_hop_is_the_peers_address, res.reason)
+  end
+
+  # The rule only binds a route we originated, so a route learned from one
+  # peer may still reach another whose address happens to be its next hop.
+  def test_the_rule_is_only_about_routes_we_originated
+    attrs = [BGP::Origin.new(0), BGP::Next_hop.new(I1.address), BGP::Local_pref.new(100)]
+    res = @export.for(route(I1, '10.1.0.0/16', attrs), I2)
+    rr = BGP::Rib::Export.new(:local_as => LOCAL_AS, :router_id => OURS, :route_reflector => true)
+    assert_equal(:ibgp_to_ibgp, res.reason, 'stopped for another reason entirely')
+    assert(rr.for(route(I1, '10.1.0.0/16', attrs), I2).advertise?)
+  end
+
+  # Our own route goes to an internal peer without reflection: the base
+  # IBGP rule is about re-advertising what another internal peer sent, and
+  # ours came from nobody.
+  def test_an_originated_route_reaches_an_internal_peer_without_reflection
+    res = @export.for(originated, I1, :next_hop => '10.0.0.1')
+    assert(res.advertise?)
+    assert_equal(:ibgp, res.reason)
+    assert(!res.path_attribute.has?(BGP::Originator_id), 'and is not reflection')
+    assert(!res.path_attribute.has?(BGP::Cluster_list))
+  end
+
+  # A reflector does not reflect its own route either.
+  def test_a_reflector_does_not_reflect_its_own_route
+    res = reflector.for(originated, I1, :next_hop => '10.0.0.1')
+    assert(res.advertise?)
+    assert(!res.path_attribute.has?(BGP::Originator_id))
+    assert(!res.path_attribute.has?(BGP::Cluster_list))
+  end
+
+  # Section 5.1.5 still applies: an internal peer gets a LOCAL_PREF and an
+  # external one does not.
+  def test_local_pref_on_an_originated_route
+    assert_equal(BGP::Rib::Decision::DEFAULT_LOCAL_PREF,
+                 @export.for(originated, I1, :next_hop => '10.0.0.1')
+                        .path_attribute[BGP::Local_pref].to_i)
+    assert(!@export.for(originated, E1, :next_hop => '10.0.0.1')
+                   .path_attribute.has?(BGP::Local_pref))
+  end
+
+  # A script may originate a route carrying NO_EXPORT, and the communities
+  # still decide, since those are about the route and not about who sent it.
+  def test_the_communities_still_apply_to_a_route_we_originated
+    pa = BGP::Path_attribute.new(BGP::Origin.new(0), BGP::As_path.new,
+                                 BGP::Next_hop.new(OURS),
+                                 BGP::Communities.new(:no_export))
+    r = BGP::Rib::Route.new('10.1.0.0/16', pa, LOCAL)
+    assert_equal(:no_export, @export.for(r, E1, :next_hop => '10.0.0.1').reason)
+    assert(@export.for(r, I1, :next_hop => '10.0.0.1').advertise?)
+  end
 end
