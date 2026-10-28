@@ -118,6 +118,75 @@ A plan that spans more than one session lives here, as phases with their
 status, so the next reader can see the direction without reconstructing it.
 Update the status in the pull request that moves a phase.
 
+### Phase 0, before the RIB work resumes. In progress
+
+Fixing the existing path attribute bugs came first, deliberately, and that is
+substantially done: 19 were fixed on 2026-10-27. Two audits that evening
+compared bgp4r against the IANA registries and the current RFCs, code point by
+code point. The verdict: bgp4r is not dangerously behind, because every unknown
+attribute, community, TLV and capability round trips byte for byte, so a real
+router's traffic cannot break it. What it is behind on is meaning, and the
+breadth gap is concentrated in one limit (below).
+
+The audits found something worse than any gap: five things bgp4r already
+implements are wrong against the RFC they claim. A wrong implementation is
+worse than a missing one, because it gives a confident wrong answer. These come
+before phase 2, in this order. Each is verified against the RFC text, with the
+reproduction one liners in "Known issues to work on".
+
+1. **ADD-PATH Send and Receive are inverted.** RFC 7911 section 4: value 1 is
+   able to receive, value 2 is able to send. `CAP::Add_path#_send_recv` maps
+   `:send` to 1 and `:recv` to 2, and `Neighbor::Base_Capabilities#_path_id?`
+   is inverted to match, so it cancels between two bgp4r speakers and is
+   backwards against any router. **Do this one first: phase 2's peer adapter
+   calls that predicate.** No lab topology exercises add-path against GoBGP,
+   which is why it was never caught; add one.
+2. **A valid attribute bgp4r cannot decode is reported as malformed.**
+   `Path_attribute#decode_attribute` files "bgp4r could not decode it" as an
+   `Attr::Finding`, so `parse_wire` raises `Malformed_attribute` under
+   `:strict` on a perfectly valid EVPN or flowspec UPDATE. bgp4r invents a
+   protocol error out of its own coverage and gives a wrong verdict about a
+   correct router, which for a conformance tool is the worst failure there is.
+   Smallest diff on this list. "Could not decode" is not a protocol error and
+   must not be one.
+3. **ROUTE-REFRESH drops the subtype octet.** RFC 7313 section 3.2 redefines
+   the Reserved octet as Message Subtype: 0 normal, 1 BoRR, 2 EoRR, 255
+   reserved. `Route_refresh#parse` discards it and `encode` writes 0, so a
+   BoRR goes in as `00010101` and comes out `00010001`. The only place bgp4r
+   silently loses octets, which breaks its own round trip rule. Capability 70
+   for the feature is missing too.
+4. **NOTIFICATION error code 7 is the wrong registry.** RFC 7313 section 5
+   registers code 7 as "ROUTE-REFRESH Message Error", subcode 1 "Invalid
+   Message Length". bgp4r names it "CAPABILITY Message Error" with the
+   subcodes of the expired dynamic capability draft.
+5. **RFC 9072 extended OPEN is half done.** The outer header is right; each
+   inner optional parameter still uses a one octet length where section 2
+   wants two. Self consistent, wrong on the wire. Nothing in the tree cites
+   RFC 9072.
+
+Then, cheap and worth doing while there: **the BGP Role capability, code 9**
+(RFC 9234 section 4), about two hours. The OTC attribute already exists with
+its length check, and section 4.2 says a peer that sends no capability falls
+back to the local Role, so OTC is usable today; the capability buys the Role
+Mismatch and strict mode tests. GoBGP does not implement Role, so no current
+lab topology can exercise it.
+
+Also in phase 0: the stale citations the audits found. Eight wrong RFC 9012
+section numbers in `tunnel_encap.rb`, where `Encapsulation` and
+`Egress_endpoint` cite each other's sections. `draft-ietf-idr-link-bandwidth`
+became **RFC 10005** in June 2026, cited as a draft in six comments, and its
+units are bytes per second, which no comment says. **RFC 3107 is obsoleted by
+RFC 8277**, so the verbatim RFC 3107 text in `nlris/nlri.rb` is stale and
+`0x800000` is no longer a label but a Compatibility field of no significance
+(RFC 8277 section 2.4). `IANA::SAFI::ENCASPSULATION_SAFI` is a typo and SAFI 7
+is marked obsolete. `Pmsi_tunnel`'s "the rest are reserved" is stale by five
+flag bits and five tunnel types. And two wrong citations in this file's own
+"Attribute work left": the Tunnel Encapsulation sub-TLV shapes are **five, at
+RFC 9012 sections 3.2.1 to 3.2.5**, not eight at 3.1.1 to 3.1.8, and there is
+no section 3.1.6; the SR Policy sub-TLVs belong to **RFC 9830**, not RFC 9256,
+and the Prefix-SID sub-TLV type 11 is RFC 9012 section 3.7, so not outside
+work at all.
+
 ### RIB and FIB, five phases
 
 The design follows RFC 4271 section 9:
@@ -180,11 +249,24 @@ Decisions already taken that constrain the later phases:
 * Dump the RIB to JSON, as the lab speaker dumps its state, so a test and a
   person can both see why a route won.
 
-### Before the RIB work resumes
+### Deliberately not in phase 0
 
-Fixing the existing path attribute bugs came first, deliberately, and that is
-substantially done: 19 were fixed on 2026-10-27. What remains is under "Known
-issues to work on" and "Attribute work left" below.
+Breadth, because it is a month and phases 2 and 3 are worth more. Recorded so
+the decision is not re-litigated from scratch:
+
+* **MP_REACH and MP_UNREACH read and write only SAFIs 1, 2, 4, 128 and 129.**
+  That one limit blocks EVPN, flowspec, BGP-LS, RT-constrain, MCAST-VPN, VPLS
+  and SR Policy together, so it is the single lever if breadth is ever wanted.
+  `Mp_reach.new(:afi=>25, :safi=>70, ...)` raises today.
+* BGP-LS (attribute 29, AFI 16388, SAFI 71 and 72, RFC 9552), EVPN (SAFI 70,
+  RFC 7432, plus 14 unnamed EVPN extended communities), flowspec NLRI (SAFI
+  133 and 134, RFC 8955 and RFC 8956, where all five traffic filtering
+  communities are implemented but the rule cannot be sent), ATTR_SET
+  (attribute 128, RFC 6368), RT-constrain (SAFI 132), MCAST-VPN (SAFI 5).
+* Coverage as measured: 22 of 34 live path attribute code points, 29 of 115
+  extended community sub-type code points, 8 of 22 live capability code
+  points. The attribute figure reads worse than it is: FRR's `bgpd.h` defines
+  exactly bgp4r's 22 plus two.
 
 ## Known issues to work on
 
