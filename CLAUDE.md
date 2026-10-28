@@ -74,7 +74,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. A `lab` job runs the Compose topologies.
 
-Baseline on 2026-10-27: 912 tests, 20004 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.0%.
+Baseline on 2026-10-27: 918 tests, 20040 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.0%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -82,6 +82,7 @@ There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Cove
 
 * **Building and encoding are never validated, and that is a feature.** This library is used for negative testing: it has to put bytes on the wire that no RFC allows, so a real router can be watched handling them. Any attribute, any length, any combination, any flags. Never add a check to a constructor, to `encode`, or to `to_hash` that refuses something merely invalid. Removing that ability breaks the main reason the library exists.
   * Validation lives in exactly one place, `bgp/path_attributes/validation.rb`, and runs only when parsing what was received. It is reported through `Path_attribute#errors` and raised only under the `:strict` receive policy. Add a rule there, with its RFC section, never in the attribute.
+  * `Path_attribute#errors` means what the peer got wrong, and nothing else. A valid attribute bgp4r cannot decode is bgp4r's coverage gap, not a protocol error: RFC 7606 section 7 says attribute by attribute what makes one malformed, and a reader's missing code is on none of those lists. Those go in `Path_attribute#undecoded` as `Attr::Gap`, which `:strict` never raises on. Do not put a fact about bgp4r in `errors`; a conformance tool that calls its own gap a protocol error gives a confident wrong verdict about a correct router.
   * A constructor may refuse an input it cannot represent at all, such as an Integer too large for the field it goes in, because the alternative is silently sending a different value. It must never refuse a combination that is simply wrong by the RFC. Where a constructor does refuse, the octet level routes stay open and must keep working: wire bytes, `Attr::Raw`, and the `BGP::Fault` helpers.
   * `lab/fault_matrix.rb` and `BGP::Fault::CATALOG` depend on all of this. `docs/protocol-testing.md` is the guide to it.
 * When parsing cannot interpret trailing octets, keep them and write them back, so `encode` returns byte for byte what arrived. `prefix_sid.rb` keeps a `@tail`, `pmsi_tunnel.rb` keeps a value too short to read in its own `@tail`, and `communities.rb`, `cluster_list.rb`, `extended_communities.rb`, `large_communities.rb` and `ipv6_extended_communities.rb` all keep a tail. Report the fault in `validation.rb`; do not drop the octets.
@@ -134,14 +135,27 @@ worse than a missing one, because it gives a confident wrong answer. These come
 before phase 2, in this order. Each is verified against the RFC text, with the
 reproduction one liners in "Known issues to work on".
 
-1. **ADD-PATH Send and Receive are inverted.** RFC 7911 section 4: value 1 is
-   able to receive, value 2 is able to send. `CAP::Add_path#_send_recv` maps
-   `:send` to 1 and `:recv` to 2, and `Neighbor::Base_Capabilities#_path_id?`
-   is inverted to match, so it cancels between two bgp4r speakers and is
-   backwards against any router. **Do this one first: phase 2's peer adapter
-   calls that predicate.** No lab topology exercises add-path against GoBGP,
-   which is why it was never caught; add one.
-2. **A valid attribute bgp4r cannot decode is reported as malformed.**
+1. **ADD-PATH Send and Receive were inverted. Done**, in #115. RFC 7911
+   section 4: value 1 is able to receive, value 2 is able to send, and
+   `CAP::Add_path#_send_recv` had it the other way. The diagnosis first
+   recorded here was wrong: `Neighbor::Base_Capabilities#_path_id?` was **not**
+   inverted. It already implemented RFC 7911 section 5's pair rule correctly
+   in terms of the symbols, and `add_path_cap.rb` needed comments only. The
+   one lying method was `has?`, and it lied about both halves, which is
+   exactly why two bgp4r speakers cancelled out and nobody noticed. Section 5:
+   to send multiple paths a speaker must have advertised 2 or 3 and received 1
+   or 3 from the peer. No lab topology exercises add-path against GoBGP, which
+   is why this survived; that topology is the recorded follow up under "Lab
+   and conformance", with the four pieces it needs.
+2. **A valid attribute bgp4r cannot decode was reported as malformed. Done**,
+   in #116: a decoder that raises now files an `Attr::Gap` in
+   `Path_attribute#undecoded`, and `errors` keeps meaning what the peer got
+   wrong. `Attr::Gap` carries no `action` or `subcode`, so `Malformed_attribute`
+   structurally cannot take one. The two channels are independent, because
+   `Attr::Check.attribute` runs on the raw octets before the decoder, so an
+   attribute that is both undecodable and malformed gets an entry in each and
+   still raises under `:strict`.
+   The bug was:
    `Path_attribute#decode_attribute` files "bgp4r could not decode it" as an
    `Attr::Finding`, so `parse_wire` raises `Malformed_attribute` under
    `:strict` on a perfectly valid EVPN or flowspec UPDATE. bgp4r invents a
@@ -280,6 +294,14 @@ written as the RFC 7911 section 5 pair rule, which is why the two errors
 cancelled between two bgp4r speakers, and it now carries that quote as a
 comment. Phase 2's peer adapter can ask `path_id_send?` and `path_id_recv?`.
 (This note belongs in the phase 0 list, which is not on master yet.)
+
+**Done**: a valid attribute bgp4r cannot decode is no longer reported as
+malformed. `Path_attribute#decode_attribute` filed "bgp4r could not decode it"
+as an `Attr::Finding`, so `:strict` raised `Malformed_attribute` on a correct
+EVPN or flowspec UPDATE. It now files an `Attr::Gap` in
+`Path_attribute#undecoded`, which `errors` and `:strict` never see. This was
+item 2 of the phase 0 list, which is on an open pull request and not yet on
+master; move the status there when the two meet.
 
 ## Known issues to work on
 
