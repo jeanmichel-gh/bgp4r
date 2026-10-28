@@ -51,10 +51,14 @@ module BGP
     # Every rule below was read in the RFC rather than recalled. What is
     # deliberately not here: confederations (RFC 5065), so a route whose
     # leftmost AS_PATH segment is a confederation segment is treated as the
-    # RFC 4271 section 5.1.2 AS_SET case; locally originated routes, since
-    # every Route has a peer it was learned from; and the route reflector
-    # client and non-client matrix of RFC 4456 section 6, which needs
-    # per-peer configuration the speaker holds, not Export.
+    # RFC 4271 section 5.1.2 AS_SET case; and locally originated routes,
+    # since every Route has a peer it was learned from.
+    #
+    # One thing RFC 4456 section 6 does not cover: a route from an EBGP
+    # peer. Appendix B records that "the reference to EBGP routes/peers are
+    # removed" from the document, so such a route goes to every internal
+    # peer under the ordinary rules and is not reflection, which is why it
+    # gets no ORIGINATOR_ID and no CLUSTER_LIST.
     class Export
 
       # path_attribute and next_hop are nil when the route is not sent.
@@ -72,9 +76,11 @@ module BGP
       # :ibgp_to_ibgp is the base IBGP rule RFC 4456 section 4 describes as
       #   the model it changes: IBGP speakers "will not re-advertise these
       #   IBGP learned routes to other IBGP speakers".
+      # :non_client_to_non_client is a reflector obeying RFC 4456 section 6,
+      #   which reflects a non-client's route to clients only. See clients?.
       # :policy is the caller's block returning nil.
       REFUSALS = %i[back_to_sender no_advertise no_export no_export_sub_confed
-                    ibgp_to_ibgp policy].freeze
+                    ibgp_to_ibgp non_client_to_non_client policy].freeze
 
       attr_reader :local_as, :router_id, :cluster_id, :default_local_pref
 
@@ -85,21 +91,51 @@ module BGP
       #   BGP speaker sends to other internal peers".
       # route_reflector: true lets an IBGP learned route go to an internal
       #   peer, with the RFC 4456 section 8 attributes added.
+      # clients: the addresses of our route reflection clients, as Strings or
+      #   Peers. With none, every internal peer is treated as a client, which
+      #   is the single cluster case and the one a script usually wants. See
+      #   client? for what the list changes.
       # cluster_id: ours as a route reflector; defaults to router_id.
       # policy: a block taking (route, peer, path_attribute) and returning
       #   the attributes to send, a changed copy, or nil to refuse. It runs
       #   last, after every rule here.
       def initialize(local_as:, router_id:, default_local_pref: Decision::DEFAULT_LOCAL_PREF,
-                     route_reflector: false, cluster_id: nil, policy: nil)
+                     route_reflector: false, clients: nil, cluster_id: nil, policy: nil)
         @local_as = Integer(local_as)
         @router_id = IPAddr.new(router_id.to_s).to_s
         @default_local_pref = default_local_pref
         @route_reflector = route_reflector ? true : false
         @cluster_id = IPAddr.new((cluster_id || @router_id).to_s).to_s
         @policy = policy
+        # A Hash rather than a Set, so this needs no require: Ruby keeps
+        # moving standard libraries to bundled gems (see Conventions).
+        @clients = nil
+        unless clients.nil?
+          @clients = {}
+          Array(clients).each { |c| @clients[address_of(c)] = true }
+        end
       end
 
       def route_reflector? ; @route_reflector ; end
+
+      # True when peer is one of our route reflection clients.
+      #
+      # With no client list, every internal peer is one. RFC 4456 section 6
+      # says "The Clients will be configured to maintain IBGP session only
+      # with the RR in their cluster", so a speaker whose internal peers are
+      # all clients is the ordinary single cluster, and it needs no list.
+      # Give one as soon as some internal peers are not clients: section 6
+      # also has "Each RR would be configured with other RRs as Non-Client
+      # peers (thus all the RRs will be fully meshed)", and those are the
+      # peers the list is for.
+      def client?(peer)
+        return false unless peer.ibgp?
+        return true if @clients.nil?
+        @clients.key?(address_of(peer))
+      end
+
+      # The client addresses, or nil when every internal peer is a client.
+      def clients ; @clients && @clients.keys ; end
 
       # next_hop: our address on the session with peer. RFC 4271 section
       #   5.1.3: toward a peer one IP hop away "the BGP speaker SHOULD use
@@ -146,8 +182,26 @@ module BGP
             return :no_export_sub_confed if c.has_no_export_sub_confed?
           end
         end
-        return :ibgp_to_ibgp if route.peer.ibgp? and peer.ibgp? and !@route_reflector
+        if route.peer.ibgp? and peer.ibgp?
+          # RFC 4456 section 4, the model reflection changes.
+          return :ibgp_to_ibgp unless @route_reflector
+          # Section 6, the two rules it gives, as one condition. "A route
+          # from a Non-Client IBGP peer: Reflect to all the Clients", so a
+          # non-client's route goes only to a client. "A route from a Client
+          # peer: Reflect to all the Non-Client peers and also to the Client
+          # peers", so a client's route goes to either kind. What is left
+          # over is non-client to non-client, and those are expected to be
+          # fully meshed and to have the route already.
+          unless client?(route.peer) or client?(peer)
+            return :non_client_to_non_client
+          end
+        end
         nil
+      end
+
+      # A Peer or an address, as the address.
+      def address_of(peer)
+        peer.respond_to?(:address) ? peer.address : IPAddr.new(peer.to_s).to_s
       end
 
       # A copy, so the route keeps the attributes it was received with.

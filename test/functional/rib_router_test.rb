@@ -220,6 +220,36 @@ class RibRouterTest < Test::Unit::TestCase
     assert_equal(1, router.sent)
   end
 
+  # RFC 4456 section 6: "A route from a Non-Client IBGP peer: Reflect to all
+  # the Clients." Two internal peers that are neither of our clients get
+  # nothing from each other, because other reflectors are fully meshed and
+  # have the route already. The reflector test above names no clients, so
+  # every internal peer is one; here the list names an address that is
+  # neither of them.
+  def test_a_reflector_sends_a_non_clients_route_to_no_other_non_client
+    a_side, a_port = listener('0.0.0.1', '127.0.0.4')
+    b_side, b_port = listener('0.0.0.1', '127.0.0.5')
+    @rib = BGP::Rib::Table.new(:local_as => RR_AS, :router_id => '0.0.0.1')
+    @rib.attach(a_side)
+    @rib.attach(b_side)
+    reflector = BGP::Rib::Export.new(:local_as => RR_AS, :router_id => '0.0.0.1',
+                                     :route_reflector => true,
+                                     :clients => ['127.0.0.9'])
+    router = @rib.advertise(:export => reflector)
+
+    a, = client(RR_AS, '0.0.0.4', a_port)
+    _b, b_heard = client(RR_AS, '0.0.0.5', b_port)
+    assert(wait_for { a_side.is_established? && b_side.is_established? })
+    assert(wait_for { @rib.drain })
+
+    a.send_update ibgp_update('10.1.0.0/16', '10.4.4.4')
+    assert(wait_for { @rib.drain && @rib.loc_rib.size == 1 }, 'the reflector took it')
+    assert(@rib.drain)
+    assert_equal([], b_heard.updates, 'and sent it to no other non-client')
+    assert(router.skipped.map(&:last).include?(:non_client_to_non_client))
+    assert_equal(0, router.sent)
+  end
+
   # A reflected route must not carry the reflection attributes out of the
   # AS: both are optional non-transitive and exist to avoid loops inside it.
   def test_the_reflection_attributes_do_not_leave_the_as
