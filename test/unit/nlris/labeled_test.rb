@@ -57,4 +57,58 @@ class TestBgpNlrisLabeled < Test::Unit::TestCase
     assert_raise(ArgumentError) { lb.path_id }
   end
 
+
+  # A withdrawal as RFC 8277 section 2.4 asks for it: the label of a
+  # withdrawn route is replaced by a Compatibility field that "SHOULD be
+  # set to 0x800000", whose Bottom of Stack bit is 0. bgp4r could not read
+  # one at all. Label_stack#parse took that bit as "another entry follows",
+  # read on into the prefix octets and off the end, and raised
+  # NoMethodError on nil; a peer withdrawing a labeled route could stop
+  # bgp4r reading the UPDATE.
+  #
+  # The length octet counts the label field and the prefix: 24 bits of
+  # Compatibility field and 8 of 10.0.0.0/8 is 32, 0x20.
+  def test_a_withdrawal_carrying_the_compatibility_field_is_read_and_written_back
+    hex = '20' + '800000' + '0a'
+    lb = BGP::Labeled.new([hex].pack('H*').is_packed, 1, 4)
+    assert_equal('10.0.0.0/8', lb.to_hash[:prefix])
+    assert_equal(hex, lb.to_shex)
+  end
+
+  # And an ordinary labeled route is untouched, with one label or two.
+  def test_an_ordinary_labeled_route_still_round_trips
+    { '30' + '000641' + '0a0000'            => 'Label Stack=100 (bottom) 10.0.0.0/24',
+      '48' + '000640' + '000651' + '0a0000' => 'Label Stack=100,101 (bottom) 10.0.0.0/24',
+    }.each do |hex, text|
+      lb = BGP::Labeled.new([hex].pack('H*').is_packed, 1, 4)
+      assert_equal(text, lb.to_s, hex)
+      assert_equal(hex, lb.to_shex, hex)
+    end
+  end
+
+  # What the Bottom of Stack bit is for, and why reading a withdrawal
+  # properly needs to know it is one. RFC 8277 section 2.2 says the bit
+  # "MUST be set to one on transmission" so that a reader can find the end
+  # of the stack; with it clear, these octets are ambiguous, and the only
+  # thing the format offers is the bit. So a label whose bit is clear
+  # followed by three octets of prefix reads as two labels and an empty
+  # prefix, and the Compatibility field of a withdrawal, which is 0x800000
+  # with the bit clear, reads the same way whenever the prefix is three
+  # octets or more.
+  #
+  # Both come back byte for byte, which is what this pull request fixed, so
+  # nothing is corrupted on the way out and a capture can be sent again.
+  # Reading the Compatibility field as a Compatibility field needs the
+  # knowledge that the NLRI came from MP_UNREACH_NLRI, which Labeled is not
+  # given; that half is in CLAUDE.md under "Known issues to work on".
+  def test_a_bit_clear_entry_before_a_prefix_is_ambiguous_and_still_round_trips
+    { '30' + '000640' + '0a0000' => 'Label Stack=100,40960 (bottom) 0.0.0.0/0',
+      '30' + '800000' + '0a0000' => 'Label Stack=524288,40960 (bottom) 0.0.0.0/0',
+    }.each do |hex, text|
+      lb = BGP::Labeled.new([hex].pack('H*').is_packed, 1, 4)
+      assert_equal(text, lb.to_s, hex)
+      assert_equal(hex, lb.to_shex, hex)
+    end
+  end
+
 end
