@@ -56,6 +56,29 @@ class TestBgpRibRoute < Test::Unit::TestCase
     assert r.frozen?
   end
 
+  # An IPAddr keeps its prefix length. IPAddr#to_s drops it, so reading the
+  # length back off to_s made every IPAddr a host route: '10.0.0.0/8'
+  # became '10.0.0.0/32', which is a different destination in every RIB
+  # here. A String and a BGP::Prefix both carry their length in to_s.
+  def test_an_ipaddr_prefix_keeps_its_length
+    assert_equal('10.0.0.0/8', Route.normalize(IPAddr.new('10.0.0.0/8')))
+    assert_equal('10.0.0.0/8', Route.normalize(IPAddr.new('10.1.2.3/8')),
+                 'and its host bits are cleared, as IPAddr itself does')
+    assert_equal('2001:db8::/32', Route.normalize(IPAddr.new('2001:db8::/32')))
+    assert_equal('10.1.2.3/32', Route.normalize(IPAddr.new('10.1.2.3')),
+                 'no length given is a host route, which is right')
+  end
+
+  # The three ways of naming one destination agree, which is what makes a
+  # lookup find what an announcement stored.
+  def test_the_three_spellings_of_one_destination_agree
+    %w[10.0.0.0/8 2001:db8::/32].each do |text|
+      assert_equal(Route.normalize(text), Route.normalize(IPAddr.new(text)))
+      assert_equal(Route.normalize(text), Route.normalize(BGP::Prefix.new(text)))
+      assert_equal(text, Route.new(IPAddr.new(text), nil, peer).prefix)
+    end
+  end
+
   def test_attributes
     pa = Path_attribute.new(Origin.new(1), Next_hop.new('10.0.0.2'), Multi_exit_disc.new(20),
                             Local_pref.new(200), Originator_id.new('9.9.9.9'),

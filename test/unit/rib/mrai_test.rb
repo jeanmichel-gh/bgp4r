@@ -320,18 +320,16 @@ class TestBgpRibMrai < Test::Unit::TestCase
 
   # The prefix is normalized the way every other RIB key is, through
   # Route.normalize, so the same destination written two ways is one window
-  # and not two. Host bits are masked off and an IPv6 prefix is compressed.
-  #
-  # Route.normalize does not do this for an IPAddr, which it turns into a
-  # /32, so nothing here passes one. That is a bug in Route and is filed
-  # under "Known issues to work on" rather than worked around here.
+  # and not two. Host bits are masked off, an IPv6 prefix is compressed, and
+  # an IPAddr names the same destination as its String spelling.
   def test_a_prefix_is_normalized
     m = mrai(:ebgp => 30)
     m.sent(ebgp, '10.0.0.0/8')
     assert(m.hold?(ebgp, '10.1.2.3/8'), 'the host bits are not part of the destination')
+    assert(m.hold?(ebgp, IPAddr.new('10.0.0.0/8')), 'nor is how it was written')
     m.hold(ebgp, '10.1.2.3/8', :item)
     assert_equal(1, m.pending_count)
-    assert_equal(:item, m.pending(ebgp, '10.0.0.0/8'))
+    assert_equal(:item, m.pending(ebgp, IPAddr.new('10.0.0.0/8')))
 
     m.sent(ebgp, '2011:0001::/32')
     assert(m.hold?(ebgp, '2011:1::/32'), 'one IPv6 destination written two ways')

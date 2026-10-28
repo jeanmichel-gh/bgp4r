@@ -106,9 +106,18 @@ module BGP
         freeze
       end
 
-      # "a.b.c.d/len" or "x::/len", with the host bits cleared.
+      # "a.b.c.d/len" or "x::/len", with the host bits cleared. This is the
+      # key every RIB in bgp/rib/ uses, so two spellings of one destination
+      # have to come out the same here or they are two destinations.
+      #
+      # An IPAddr is used as it stands rather than through to_s, because
+      # IPAddr#to_s drops the prefix length. IPAddr.new('10.0.0.0/8').to_s
+      # is '10.0.0.0', so reading the length back off that gave /32: a host
+      # route, silently, for every caller that passed an IPAddr. A String
+      # and a BGP::Prefix both carry their length in to_s, which is why
+      # this went unnoticed.
       def self.normalize(prefix)
-        ip = IPAddr.new(prefix.to_s)
+        ip = prefix.is_a?(IPAddr) ? prefix : IPAddr.new(prefix.to_s)
         "#{ip}/#{ip.prefix}"
       end
 

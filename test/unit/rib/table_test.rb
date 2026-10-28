@@ -63,6 +63,20 @@ class TestBgpRibTable < Test::Unit::TestCase
     assert_equal([:added, :replaced, :withdrawn], @changes.map(&:type), 'listeners see the same changes')
   end
 
+  # A destination named by an IPAddr is the same destination named by a
+  # String. Route.normalize read the length off IPAddr#to_s, which drops
+  # it, so an IPAddr announcement landed on a /32 and a /8 lookup missed
+  # it. Nothing raised; the route was simply not there.
+  def test_a_prefix_given_as_an_ipaddr_is_the_same_destination
+    r = route(E1, IPAddr.new('10.1.0.0/16'))
+    assert_equal([:added], @rib.announce(r).map(&:type))
+    assert_same(r, @rib.best('10.1.0.0/16'), 'found by its String spelling')
+    assert_same(r, @rib.best(IPAddr.new('10.1.0.0/16')))
+    assert_equal(1, @rib.candidates('10.1.0.0/16').size)
+    assert_equal([:withdrawn], @rib.withdraw(E1, IPAddr.new('10.1.0.0/16')).map(&:type),
+                 'and withdrawn by either')
+  end
+
   def test_withdraw_unknown_changes_nothing
     assert_equal([], @rib.withdraw(E1, '10.1.0.0/16'))
     assert_equal([], @changes)
