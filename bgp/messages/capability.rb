@@ -1,5 +1,5 @@
 #--
-# Copyright 2010 Jean-Michel Esnault.
+# Copyright 2010, 2026 Jean-Michel Esnault.
 # All rights reserved.
 # See LICENSE.txt for permissions.
 #
@@ -21,6 +21,9 @@
 #++
 
 require 'bgp/messages/message'
+# For BGP::OPT_PARM::Capability and the DYN_CAP classes. Revision#parse
+# has always called dynamic_factory without saying so.
+require 'bgp/optional_parameters/capabilities'
 
 module BGP::OPT_PARM
   module CAP
@@ -67,6 +70,16 @@ module BGP
           @o1 |= 1     if action_bit      == :remove
           @o1 &= ~1    if action_bit      == :advertise
           @seqn = seqn
+          # A revision carries a capability (draft-ietf-idr-dynamic-cap-19
+          # section 3), so this takes one. A capability whose code, length
+          # or value no RFC allows still goes on the wire; what is refused
+          # here is only something that is not a capability at all. It used
+          # to be kept, and then encode raised NoMethodError on #encode and
+          # to_s on #to_s_brief, a long way from the call that did it.
+          unless cap.is_a?(BGP::OPT_PARM::Capability)
+            raise ArgumentError,
+                  "invalid capability: #{cap.inspect}, expected a BGP::OPT_PARM::Capability"
+          end
           @cap = cap
         elsif args.size==1 && args[0].is_a?(String)
           parse args[0]
@@ -147,8 +160,25 @@ module BGP
       end
     end
 
+    # draft-ietf-idr-dynamic-cap-19 section 3: the message carries
+    # revisions, so this takes revisions. A revision whose action, sequence
+    # number or capability no draft allows still goes on the wire; what is
+    # refused here is only something that is not a revision at all. That is
+    # a caller mistake, not a protocol choice, and no field of the message
+    # can hold it. Dropping it to no effect built a message with no
+    # revision in it, 19 octets of header a router takes and ignores, and
+    # the caller heard nothing. Same shape, and the same fix, as
+    # Orf_route_refresh#add in #101; the constructor hands its arguments
+    # straight to here.
     def add(*revisions)
-      [revisions].flatten.find_all { |r| r.is_a?(Capability::Revision)}.each { |r| @tuples << r }
+      [revisions].flatten.each do |r|
+        unless r.is_a?(Capability::Revision)
+          raise ArgumentError,
+                "invalid argument: #{r.inspect}, expected a Capability::Revision"
+        end
+        @tuples << r
+      end
+      self
     end
     
     alias << add
