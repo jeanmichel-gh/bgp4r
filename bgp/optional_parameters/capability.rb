@@ -200,7 +200,11 @@ module BGP::OPT_PARM
     when CAP_MBGP
       CAP::Mbgp.new(s)
     when CAP_ROUTE_REFRESH, CAP_ROUTE_REFRESH_CISCO
-      CAP::Route_refresh.new(code)
+      # RFC 2918 section 3: code 2, and "Capability Length field of this
+      # capability is zero"; 128 is the pre-standard Cisco code. It takes
+      # the wire bytes rather than the code, so value octets no RFC allows
+      # are kept and written back instead of silently dropped.
+      CAP::Route_refresh.new(s)
     when CAP_ORF,CAP_ORF_CISCO
       CAP::Orf.new(s)
     when CAP_GR
@@ -214,10 +218,10 @@ module BGP::OPT_PARM
       CAP::Role.new(s)
     when CAP_DYNAMIC
       # RFC 5492 section 4 and draft-ietf-idr-dynamic-cap-19 section 9:
-      # the Dynamic Capability capability is code 67 and carries no
-      # value, so CAP::Dynamic takes the code, not the wire bytes,
-      # exactly as CAP::Route_refresh does above.
-      CAP::Dynamic.new(code)
+      # the Dynamic Capability capability is code 67 and carries no value.
+      # Like CAP::Route_refresh above it takes the wire bytes, so value
+      # octets that arrive anyway are kept rather than dropped.
+      CAP::Dynamic.new(s)
     when CAP_ENHANCED_ROUTE_REFRESH
       # RFC 7313 section 3.1: code 70, "The Capability Length field of
       # this capability is zero." It takes the wire bytes rather than the
@@ -239,7 +243,7 @@ module BGP::OPT_PARM
       when CAP_MBGP
         DYN_CAP::Mbgp.new(s)
       when CAP_ROUTE_REFRESH, CAP_ROUTE_REFRESH_CISCO
-        DYN_CAP::Route_refresh.new(code)
+        DYN_CAP::Route_refresh.new(s)
       when CAP_ORF,CAP_ORF_CISCO
         DYN_CAP::Orf.new(s)
       when CAP_ADD_PATH
