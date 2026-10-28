@@ -37,12 +37,29 @@ module BGP
     #   # => [[:withdraw, peer, '10.0.0.0/8', nil],
     #   #     [:announce, #<Route 192.168.1.0/24 ...>]]
     #
-    # This reads the NLRI and Withdrawn Routes fields of RFC 4271 section
-    # 4.3, which carry IPv4 unicast. MP_REACH_NLRI and MP_UNREACH_NLRI (RFC
-    # 4760) are path attributes and are not read here yet, so an UPDATE whose
-    # only reachability is in them yields no operations. That is the next
-    # piece of phase 2, not a silent gap: unreachable? says when it happens.
+    # Four fields carry reachability and all four are read: the NLRI and
+    # Withdrawn Routes fields of RFC 4271 section 4.3, which are IPv4
+    # unicast, and the MP_REACH_NLRI and MP_UNREACH_NLRI attributes of RFC
+    # 4760 sections 3 and 4, which name their own address family.
+    #
+    # Of the families bgp4r can parse, two go in a table: see MP_SAFIS.
+    # An UPDATE carrying one of the others yields no operations and is
+    # reported by unreachable?, so the gap says so rather than looking like
+    # an UPDATE that carried nothing.
     class PeerAdapter
+
+      # The SAFIs read out of MP_REACH_NLRI and MP_UNREACH_NLRI: the ones
+      # whose NLRI is a bare prefix, IANA SAFI 1 unicast and 2 multicast.
+      #
+      # The other three bgp4r parses are left out because the prefix is not
+      # the whole key. SAFI 4 carries a label with it (RFC 8277 section 2),
+      # and SAFI 128 and 129 a Route Distinguisher (RFC 4364 section 4.2),
+      # so two routes that differ only in their label or RD would collide:
+      # BGP::Rib::Route keys on the prefix and the add-path Path Identifier
+      # and has nowhere to put either. Carrying them needs a Route that
+      # does, which is a change to the decision process and to every show
+      # command, not a change here.
+      MP_SAFIS = [IANA::SAFI::UNICAST, IANA::SAFI::MULTICAST].freeze
 
       attr_reader :neighbor, :sink
 
@@ -87,27 +104,48 @@ module BGP
       # such an UPDATE can only have meant. Two announcements of one prefix
       # need no ordering rule, because the second implicitly withdraws the
       # first (RFC 4271 section 3.1) and AdjRibIn#announce already does that.
+      # Both withdrawal fields come before both announcement fields, for the
+      # reason above. An UPDATE may carry the section 4.3 fields and the MP
+      # attributes at once, and they are different address families, so the
+      # order between the two withdrawal fields cannot matter.
       def operations(update, peer = self.peer)
         return [] unless peer
         ops = []
         each_prefix(update.withdrawn) do |prefix, path_id|
           ops << [:withdraw, peer, prefix, path_id]
         end
+        each_mp_prefix(update, BGP::Mp_unreach) do |prefix, path_id|
+          ops << [:withdraw, peer, prefix, path_id]
+        end
         each_prefix(update.nlri) do |prefix, path_id|
-          ops << [:announce, Route.new(prefix, update.path_attribute, peer, path_id: path_id)]
+          ops << announce(prefix, path_id, update, peer)
+        end
+        each_mp_prefix(update, BGP::Mp_reach) do |prefix, path_id|
+          ops << announce(prefix, path_id, update, peer)
         end
         ops
       end
 
-      # True when this UPDATE carries reachability bgp4r's table cannot read
-      # yet, which today means MP_REACH_NLRI or MP_UNREACH_NLRI (RFC 4760
-      # section 3) and nothing in the section 4.3 fields. A caller that wants
-      # to know what it is missing can ask; operations just returns nothing.
+      # True when this UPDATE carries reachability in an address family that
+      # does not go in a table, which means an MP_REACH_NLRI or
+      # MP_UNREACH_NLRI whose SAFI is not in MP_SAFIS. operations returns
+      # nothing for it; this is how a caller can tell that apart from an
+      # UPDATE that genuinely carried nothing, such as the End-of-RIB marker
+      # of RFC 4724 section 2.
       def unreachable?(update)
-        return false if present?(update.nlri) or present?(update.withdrawn)
-        pa = update.path_attribute
-        return false unless pa
-        pa.has?(BGP::Mp_reach) or pa.has?(BGP::Mp_unreach)
+        [BGP::Mp_reach, BGP::Mp_unreach].any? do |klass|
+          mp = mp_attribute(update, klass)
+          mp and !MP_SAFIS.include?(mp.safi)
+        end
+      end
+
+      # The AFI and SAFI pairs this UPDATE carried that are not read, as
+      # [afi, safi], for a caller that wants to log what it is missing.
+      def unread_families(update)
+        [BGP::Mp_reach, BGP::Mp_unreach].filter_map do |klass|
+          mp = mp_attribute(update, klass)
+          [mp.afi, mp.safi] if mp and !MP_SAFIS.include?(mp.safi)
+        end.uniq
       end
 
       # RFC 4271 section 9.1.2: the routes a peer sent are no longer
@@ -156,6 +194,32 @@ module BGP
       def each_prefix(field)
         return unless present?(field)
         field.nlris.each { |p| yield p.to_hash[:prefix], p.path_id }
+      end
+
+      def announce(prefix, path_id, update, peer)
+        [:announce, Route.new(prefix, update.path_attribute, peer, :path_id => path_id)]
+      end
+
+      # The MP_REACH_NLRI or MP_UNREACH_NLRI attribute of this UPDATE, or nil.
+      def mp_attribute(update, klass)
+        pa = update.path_attribute
+        return nil unless pa and pa.has?(klass)
+        pa[klass]
+      end
+
+      # Yields each prefix of one MP attribute, when its SAFI is one that
+      # goes in a table. The Path Identifier is in the hash rather than on
+      # the object for a prefix built from a hash, so read it from there,
+      # the way each_prefix reads the prefix itself.
+      def each_mp_prefix(update, klass)
+        mp = mp_attribute(update, klass)
+        return unless mp and MP_SAFIS.include?(mp.safi)
+        nlris = mp.nlris
+        return unless nlris
+        Array(nlris).each do |p|
+          h = p.to_hash
+          yield h[:prefix], h[:path_id]
+        end
       end
     end
 

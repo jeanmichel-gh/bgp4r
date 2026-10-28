@@ -81,7 +81,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. A `lab` job runs the Compose topologies.
 
-Baseline on 2026-10-27: 988 tests, 20411 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.1%.
+Baseline on 2026-10-27: 998 tests, 20434 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.2%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -292,9 +292,9 @@ thirteen bugs still open are under "Known issues to work on": every one is
 either display only or needs a design decision rather than a patch, which is
 why none of them blocked this phase.
 
-The next work is **RIB phase 2, the peer adapter**. `Neighbor#rcv_update` is
-still an empty hook, so nothing feeds the table from a live session, and
-everything phase 1 built is unreachable from a real peer until it does.
+Phase 2, the peer adapter, came next and is **Done**: a table is fed from a
+live session now. The next work is **phase 3, the Adj-RIB-Out and the export
+rules**.
 
 ### RIB and FIB, five phases
 
@@ -321,11 +321,11 @@ Neighbor ◀──UPDATE── Adj-RIB-Out (per peer) ◀───────�
    model check: after every random step the table must equal a full recompute,
    and `RIB_MODEL_STEPS` makes it longer. That check caught all six bugs
    planted against it.
-2. **The peer adapter and `rib.attach`, with loopback tests. In progress**,
-   three PRs rather than the two first estimated, because the locking is a
-   topic of its own and is worth landing before anything depends on it.
-   `Neighbor#rcv_update` is still an empty hook, so nothing feeds the table
-   from a live session.
+2. **The peer adapter and `rib.attach`, with loopback tests. Done**, in
+   #122, #123 and #124: three PRs rather than the two first estimated,
+   because the locking was a topic of its own and was worth landing before
+   anything depended on it. `rib.attach(neighbor)` feeds a table from a
+   live session, over IPv4 and IPv6, with add-path.
    1. **`Table` made thread safe. Done**, in #122. One reentrant lock around
       every method, so several sessions can feed one table while a console
       thread reads it. The lock has to be reentrant: `announce` calls
@@ -364,14 +364,31 @@ Neighbor ◀──UPDATE── Adj-RIB-Out (per peer) ◀───────�
       * `test/functional/rib_feed_test.rb` is the proof over a real socket,
         and it is named in `.github/workflows/test.yml`, which lists each
         functional test by hand.
-   3. **MP_REACH, MP_UNREACH and add-path path identifiers. Not started.**
-      `PeerAdapter#unreachable?` answers true for an UPDATE whose only
-      reachability is in those attributes, so the gap reports itself rather
-      than looking like an UPDATE that carried nothing. The add-path half
-      needs no work in the adapter: it already carries each prefix's Path
-      Identifier (RFC 7911 section 3) into the `Route`, and what is untested
-      is a session that negotiated add-path, which is the GoBGP topology
-      recorded under "Lab and conformance".
+   3. **MP_REACH, MP_UNREACH and add-path path identifiers. Done**, in #124.
+      All four reachability fields are read now: the two of RFC 4271 section
+      4.3 and the MP_REACH_NLRI and MP_UNREACH_NLRI attributes of RFC 4760
+      sections 3 and 4. Both withdrawal fields are applied before both
+      announcement fields.
+      * **Only SAFI 1 and 2 go in a table**, `PeerAdapter::MP_SAFIS`. The
+        other three bgp4r parses are left out because the prefix is not the
+        whole key: SAFI 4 carries a label with it (RFC 8277 section 2) and
+        SAFI 128 and 129 a Route Distinguisher (RFC 4364 section 4.2), so
+        two routes differing only in label or RD would collide.
+        `BGP::Rib::Route` keys on the prefix and the Path Identifier and has
+        nowhere to put either. Carrying them is a change to `Route`, the
+        decision process and every show command, so it is its own piece of
+        work and not a line in the adapter.
+      * The gap reports itself rather than looking like an UPDATE that
+        carried nothing: `PeerAdapter#unreachable?` answers true for an
+        unread family and `#unread_families` says which, as `[afi, safi]`.
+      * Add-path needed nothing in the adapter, which already carried each
+        prefix's Path Identifier (RFC 7911 section 3) into the `Route`. What
+        it needed was a test: `test_add_path_puts_two_paths_to_one_prefix_in_the_table`
+        negotiates the capability on both sides of a loopback session, sends
+        two paths to one prefix, checks both reach the Adj-RIB-In with their
+        Identifiers, and withdraws one by Path Identifier to see the other
+        take over. Before this nothing had carried a Path Identifier into a
+        RIB over a session.
 3. **Adj-RIB-Out, the export rules and the speaker's router mode. Not
    started**, about 3 PRs, with route reflector and transit lab topologies.
    The rules: do not send an iBGP learned route to another iBGP peer unless we
@@ -453,7 +470,7 @@ Lab and conformance:
 * The GoBGP column in `docs/protocol-testing.md` was measured on 3.23 by hand, and holds for 4.10 too: the containerized test asserts every one of the 18 rows and passes on both. `GOBGP_IMAGE` switches versions without an edit. The FRR and BIRD columns are still from 8.4.4 and 2.14 run natively, and only the session level outcomes there, since BIRD gives no usable RIB answer over a loopback session.
 * `lab/conformance/gobgpd.conf` and `lab/topologies/fault-matrix/gobgp.toml` are written in the 3.23 style and GoBGP 4 reads them unchanged. Every key is still in the 4.x config structs under the same `mapstructure` name, and 4.x registers `mapstructure.StringToNetIPAddrHookFunc` so the address fields still decode from TOML strings. No schema work is needed; an earlier version of this entry said otherwise and was wrong.
 * `lab/topologies/fault-matrix` exits 1, and that is the right answer: GoBGP discards the malformed tunnel encapsulation attribute and installs the route where RFC 9012 section 13 asks for treat-as-withdraw. Both cases are asserted as a known divergence in `test/functional/lab/fault_matrix_test.rb`; see the comment on `TUNNEL_ENCAP` there. It is not an old bug since fixed: 3.23 does it, and a CI run on 4.10 does it too, so it is worth reporting upstream.
-* No lab topology exercises add-path against a real router, which is why the inverted Send/Receive field survived: `test/functional/add_path_test.rb` runs bgp4r against bgp4r, where an inverted field cancels. The fix now has tests that write the field value itself on one side, in `test/unit/optional_parameters/add_path_test.rb`, `test/unit/neighbor/add_path_cap_test.rb` and `test/functional/add_path_test.rb`, so the direction is pinned without a second implementation. A GoBGP topology is still worth having and is four pieces, none of which exists: `Neighbor#capability` takes no `:add_path` symbol, so `lab/speaker.rb`'s `add_capability` cannot name it; an announce block has no way to give a prefix a Path Identifier, since `build_update` calls `Nlri.new` with plain prefix strings; `Lab::Recorder#record_routes` keys received routes by prefix alone, so two paths for one prefix overwrite each other and the state file cannot show a Path Identifier arrived; and GoBGP needs `add-paths` with `send-max` in its config. Do it as its own pull request, with a `lab/topologies/add-path` and a Compose test beside the other three.
+* No lab topology exercises add-path against a real router, which is why the inverted Send/Receive field survived: `test/functional/add_path_test.rb` runs bgp4r against bgp4r, where an inverted field cancels. The fix now has tests that write the field value itself on one side, in `test/unit/optional_parameters/add_path_test.rb`, `test/unit/neighbor/add_path_cap_test.rb` and `test/functional/add_path_test.rb`, so the direction is pinned without a second implementation. #124 added the other half that was missing, `test_add_path_puts_two_paths_to_one_prefix_in_the_table` in `test/functional/rib_feed_test.rb`: a loopback session that negotiates the capability, carries two paths to one prefix into a RIB with their Path Identifiers, and withdraws one of them by Identifier. That is still bgp4r against bgp4r. A GoBGP topology is still worth having and is four pieces, none of which exists: `Neighbor#capability` takes no `:add_path` symbol, so `lab/speaker.rb`'s `add_capability` cannot name it; an announce block has no way to give a prefix a Path Identifier, since `build_update` calls `Nlri.new` with plain prefix strings; `Lab::Recorder#record_routes` keys received routes by prefix alone, so two paths for one prefix overwrite each other and the state file cannot show a Path Identifier arrived; and GoBGP needs `add-paths` with `send-max` in its config. Do it as its own pull request, with a `lab/topologies/add-path` and a Compose test beside the other three.
 * Lowest coverage (unit suite): `neighbor/neighbor.rb` 89%, `path_attributes/origin.rb` 91%, `messages/update.rb` 92%, `optional_parameters/graceful_restart.rb` 92%, `path_attributes/mp_unreach.rb` 93%.
 
 ## Attribute work left
