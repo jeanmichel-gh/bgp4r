@@ -23,9 +23,10 @@ bgp/rib/                 routes and the decision process (RFC 4271 section 9); r
                          peer_feed.rb applies them on one worker thread; rib.attach(neighbor)
                          export.rb decides what goes to a peer and what its attributes become,
                          adj_rib_out.rb records what was sent, update_builder.rb packs
-                         prefixes into UPDATEs, router.rb joins them and sends;
-                         rib.advertise; show.rb prints the Loc-RIB the way a router
-                         would, rib.show; see "Where the work is going"
+                         prefixes into UPDATEs, mrai.rb paces them per destination,
+                         router.rb joins them and sends; rib.advertise; show.rb prints
+                         the Loc-RIB the way a router would, rib.show;
+                         see "Where the work is going"
 bgp/misc/                extras: route_generator.rb (many prefixes packed in UPDATEs), live_feed.rb (a client for an old public BGP feed)
 docs/                    protocol-testing.md: using bgp4r to test a router
 examples/                runnable scripts
@@ -90,7 +91,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. A `lab` job runs the Compose topologies.
 
-Baseline on 2026-10-28: 1146 tests, 20846 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.3%.
+Baseline on 2026-10-28: 1189 tests, 21234 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.3%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -401,17 +402,18 @@ Neighbor ◀──UPDATE── Adj-RIB-Out (per peer) ◀───────�
         RIB over a session.
 3. **Adj-RIB-Out, the export rules and the speaker's router mode. Done
    except for part 7**, which is blocked on a Docker daemon and not on the
-   code. Six pull requests, #125 to #130, where three were first estimated:
-   the UPDATE building turned out to be a topic of its own, the same way the
-   locking was in phase 2, and three export rules that part 1 had recorded
-   as "not in it" were worth doing rather than leaving as gaps.
+   code. Seven pull requests, #125 to #130 and #133, where three were first
+   estimated: the UPDATE building turned out to be a topic of its own, the
+   same way the locking was in phase 2, three export rules that part 1 had
+   recorded as "not in it" were worth doing rather than leaving as gaps, and
+   the MinRouteAdvertisement interval could not be written until section 9
+   of RFC 4271 became readable.
 
    `rib.attach(neighbor)` then `rib.advertise` is a router: it takes routes
    from its peers, decides, and advertises the result with the export rules
-   applied. `rib.originate(prefix)` adds prefixes of its own. What is left
-   on this phase is a second implementation's opinion of it, and the
-   MinRouteAdvertisement interval, which needs a section of RFC 4271 that
-   could not be read here.
+   applied. `rib.originate(prefix)` adds prefixes of its own, and
+   `rib.advertise(mrai: ...)` paces what goes out. What is left on this
+   phase is a second implementation's opinion of it.
    1. **The export rules and `AdjRibOut`, pure. Done**, in #125. Nothing
       calls them yet; part 2 wires them to a session.
       * `bgp/rib/export.rb` is a pure function like `Decision#best`:
@@ -508,10 +510,9 @@ Neighbor ◀──UPDATE── Adj-RIB-Out (per peer) ◀───────�
         another AS (RFC 4271 section 5.1.4), so a MED-only change leaves the
         attributes this peer would get identical and the Adj-RIB-Out says
         so. `test_a_change_the_peer_cannot_see_is_not_sent` pins it.
-      * Still not here: the MinRouteAdvertisement interval of RFC 4271
-        section 9.2.1.1, so a change goes out as soon as it is decided.
-        See the note under "Decisions already taken" on why that one is
-        awkward to do here.
+      * The MinRouteAdvertisement interval landed later, in part 8, once
+        section 9 could be read. Until then a change went out as soon as
+        it was decided, which is the interval set to 0.
    4. **Route reflection and transit, over loopback. Done**, in #128.
       `test/functional/rib_router_test.rb` runs three speakers: one Table
       with two Neighbors is what makes a router, since a Neighbor holds one
@@ -605,6 +606,54 @@ Neighbor ◀──UPDATE── Adj-RIB-Out (per peer) ◀───────�
       loopback tests above is a second implementation's opinion: that GoBGP
       accepts our reflected route, and its CLUSTER_LIST and ORIGINATOR_ID,
       rather than only that bgp4r agrees with itself.
+   8. **The MinRouteAdvertisement interval. Done**, in #133, once section 9
+      of RFC 4271 could be read. `bgp/rib/mrai.rb` holds the rules of
+      section 9.2.1.1 and is pure, like `Export` and `UpdateBuilder`, with
+      an injected clock, so every rule is tested by moving time rather than
+      by sleeping. `Router` owns the one thread that acts on it.
+      * **Off by default**, which is what the recorded decision asked for.
+        `Mrai.suggested` asks for section 10's suggested values, 30 seconds
+        on eBGP and 5 on iBGP, with its jitter factor of 0.75 to 1.0 picked
+        fresh each time a window is armed. Off is right for this library: a
+        script driving a router through a sequence of UPDATEs wants each one
+        on the wire when it says so, and 30 seconds of silence reads as a
+        bug in the device under test.
+      * The value is per peer and the window is per destination, which is
+        what the section says in its first paragraph. Section 9.2.1.1 calls
+        a timer per destination "unwarranted overhead" and allows any
+        technique that keeps the interval at or above the value and gives
+        "a constant upper bound on the interval". This keeps one deadline
+        per destination inside its window and one timer per Router, and the
+        bound is the interval itself.
+      * Both of the section's choices for internal peers are reachable,
+        since the two values are separate: `ibgp: 5` with `ebgp: 30` is its
+        option (a), and `ibgp: 0` is option (b), because an interval of 0
+        never holds anything.
+      * Withdrawals are paced too, because the section says "an
+        advertisement and/or withdrawal of routes to a particular
+        destination".
+      * **Every decision about a destination must end in a hold, an arm or
+        a drop.** That is `Mrai#drop`, and it is the bug this part nearly
+        shipped: an announcement waiting inside its window, for a prefix
+        that then changed back to what the peer already has, would have
+        gone out at the end of the window and left the peer holding
+        something the Adj-RIB-Out said it did not have. Two tests pin it.
+      * **At most one flush is outstanding at a time.** The sending happens
+        on the feed's worker thread, so from the moment a window ends until
+        the worker gets through it the deadline is still in the past, and
+        without that guard the pacer queued another flush on every turn of
+        its loop: 99,255 of them in the test that now bounds it. It showed
+        up as a drain timing out behind the backlog, not as a wrong route,
+        which is why `Router#flush_requests` exists.
+      * `plan` was restructured so the Adj-RIB-Out is written in one place,
+        `commit`, reached both by an item sent at once and by one that
+        waited. Before this it was written as the decision was made, which
+        would have recorded a held UPDATE as sent.
+      * Not here, and its own piece of work: MinASOriginationIntervalTimer,
+        RFC 4271 section 9.2.1.2, which paces UPDATEs "that report changes
+        within the advertising BGP speaker's own autonomous systems" and so
+        applies to what `rib.originate` announces rather than per
+        destination. Section 10 suggests 15 seconds for it.
 4. **FIB adapters, and the show commands. In progress.**
    1. **The show commands. Done for IOS and Junos**, in #132.
       `bgp/rib/show.rb`, reached as `rib.show`, `rib.show(:junos)` and
@@ -649,17 +698,20 @@ Decisions already taken that constrain the later phases:
 * Loc-RIB and FIB are separate. The Loc-RIB runs anywhere; the FIB is an
   adapter and optional.
 * No policy language. Import and export take a Ruby block.
-* The MRAI timer (RFC 4271 section 9.2.1.1) is a setting, defaulting to 0 in
-  tests. The "oldest route wins" tie break is skipped or optional, so tests do
-  not depend on timing. As of #127 there is no timer at all: a change goes out
-  as soon as it is decided, which is the 0 case, and the setting is the piece
-  still to add. It needs section 9.2.1.1 read first, and **section 9 could
-  not be reached** from the sandbox this work was done in: both fetchable
-  sources of RFC 4271 truncate the document around page 55. That is why
-  nothing in #125 to #130 cites a section 9 rule, why the "not back to the
-  peer it came from" rule in `Export` is marked as not an RFC rule rather
-  than given a citation, and why the timer was not attempted. Open 9.2.1.1
-  before writing it.
+* The MRAI timer (RFC 4271 section 9.2.1.1) is a setting, defaulting to 0,
+  so no test depends on timing. Done in part 8 of phase 3. **Section 9 of
+  RFC 4271 is readable now**: it was attached to the session on 2026-10-28
+  and is the whole RFC, where both fetchable web sources truncate the
+  document around page 55. That truncation is why nothing in #125 to #130
+  cites a section 9 rule and why the timer waited. Anything written against
+  section 9 before that date was written from memory and is suspect; the
+  audit of those citations is its own piece of work.
+  Two things that paragraph used to imply and should not: "oldest route
+  wins" is **not** one of section 9.1.2.2's tie breaks, which are a) to g)
+  with no age among them, so it is vendor behaviour and bgp4r does not have
+  it; and the "not back to the peer it came from" rule in `Export` is
+  marked as not an RFC rule because RFC 4271 genuinely has no such rule,
+  which was checked across the whole document and not just section 9.
 * A full table is about a million IPv4 prefixes, so share identical attribute
   sets keyed by their encoded bytes rather than one object per route. Measure
   with `routegen`, do not guess.
@@ -693,6 +745,8 @@ Found while fixing other bugs, not fixed yet. Verified against master on
 
 Smaller things:
 
+* `BGP::Rib::Route.normalize` turns an `IPAddr` into a host route, so a prefix passed as one is a different destination from the same prefix passed as a String. It is `IPAddr.new(prefix.to_s)`, and `IPAddr#to_s` drops the prefix length: `ruby -I. -e 'require "bgp/rib"; p BGP::Rib::Route.normalize("10.0.0.0/8"); p BGP::Rib::Route.normalize(IPAddr.new("10.0.0.0/8"))'` prints `"10.0.0.0/8"` and `"10.0.0.0/32"`. Every RIB key goes through this method, so an `IPAddr` given to `announce`, `withdraw`, `best`, `originate` or `rib.show` silently names the wrong destination, and nothing raises. `IPAddr#prefix` is what the String branch already uses two lines later, so the fix is to read the length off the object rather than its `to_s`. Found while giving `Mrai` the same keys as the rest of the RIB; `mrai_test.rb` says why it passes no `IPAddr`.
+* `BGP::Rib::Route#neighbor_as` applies an IBGP-only rule to eBGP routes, so the MED comparison of RFC 4271 section 9.1.2.2 c) can group routes that should not be compared. Section c) defines `neighborAS` as "the neighbor AS from which the route was received", and gives the local AS only for a route "learned via IBGP" whose AS_PATH is empty or begins with an AS_SET. `neighbor_as` returns `@peer.local_as` for that AS_PATH shape whatever kind of peer sent it, so an eBGP peer's route with a leading AS_SET is treated as coming from our own AS: `ruby -I. -e 'require "bgp/rib"; pr=BGP::Rib::Peer.new(:address=>"10.0.0.2", :remote_as=>65002, :router_id=>"2.2.2.2", :local_as=>65001); p [pr.ebgp?, BGP::Rib::Route.new("10.0.0.0/8", BGP::Path_attribute.new(BGP::As_path.new(:set=>[4,5])), pr).neighbor_as]'` prints `[true, 65001]` where c) wants 65002. `test/unit/rib/route_test.rb:109` pins the current answer, so the test moves with the fix. Found by the section 9 citation audit on 2026-10-28, which could read the section for the first time.
 * A truncated ORF does not round trip byte for byte. `Orf.factory` reads the three octet header of RFC 5291 section 4 and trusts the Length of ORF entries: fewer than three octets left has no length to read, and a length longer than the octets left is not checked. Either way the octets are kept rather than dropped, but `encode` writes the real length back, so one trailing octet comes out as three: `ruby -I. -e 'require "bgp4r"; s=["ff"*16+"0018"+"05"+"0001"+"00"+"01"+"01"+"41"].pack("H*"); puts BGP::Message.factory(s).to_shex'` prints a message of 0x1b octets, not the 0x18 that went in. There is no way to re-encode an octet that is not a whole ORF, so this needs a decision, not a patch: either `Orf::Unknown` keeps the raw octets beside the fields it parsed, or the leftover belongs to the message and not to an ORF at all. Found while making an unimplemented ORF Type keep its octets.
 * `test/unit/neighbor/neighbor_test.rb` includes `BGP`, `BGP::OPT_PARM::CAP` and `BGP::TestHelpers` into `Object`, at the top level and not inside the test class. Every test file `test/run_unit.rb` loads after it sees those names, and `BGP::OPT_PARM::CAP` wins over `BGP` for the ones they share, so a bare `Orf` in a later file means the ORF capability and not `BGP::Orf`. `Route_refresh` and `Dynamic` are the same shape. A test passes on its own and fails in the suite, which is a long way to go to find a missing two words. `test/unit/orfs/orf_test.rb` writes `BGP::Orf` in full and says why. Moving the three includes inside `Neighbor_Test` is the fix.
 * The hash form of four `Extended_community::Typed` shapes drops reserved octets that the wire form keeps. A Typed community parsed from the wire keeps its 6 value octets in `@raw`, so `encode` gives them back, but `hash_value` carries only the fields its RFC defines, so a build from the hash writes the reserved ones as 0: `ruby -I. -e 'require "bgp/path_attributes/extended_communities"; ec=BGP::Extended_community.factory(["030cffffffff0008"].pack("H*")); puts BGP::Extended_communities.new(ec.to_hash).communities[0].to_shex'` prints `030c000000000008`. `Encapsulation` loses its 4 reserved octets (RFC 9012 section 4.1), `Traffic_marking` the 42 bits above the DSCP (RFC 8955 section 7.5), `Mac_mobility` its reserved octet and the 7 flag bits above sticky (RFC 7432 section 7.7), and `Esi_label` its 2 reserved octets and the low 4 bits of the label field (RFC 7432 section 7.5). `Traffic_action` is the one that does not: it carries a `:bits` key whenever a bit outside S and T is set, which is the shape a fix wants. Found by the sweep in `test_every_wire_form_the_factory_knows_survives_its_own_hash`, which sets those fields to 0 for that reason.

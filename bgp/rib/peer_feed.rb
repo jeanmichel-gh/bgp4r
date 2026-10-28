@@ -115,6 +115,7 @@ module BGP
       # Detaches every neighbor and stops the worker. The table keeps what
       # it holds; detach is what removes a peer's routes.
       def stop(timeout = DEFAULT_TIMEOUT)
+        @table.router&.stop
         neighbors.each { |n| @lock.synchronize { @adapters.delete(n) }&.detach }
         worker = @lock.synchronize { w = @worker ; @worker = nil ; w }
         return self unless worker
@@ -167,6 +168,8 @@ module BGP
           @table.router&.session_up(work[1])
         when :session_down
           @table.router&.session_down(work[1])
+        when :mrai
+          @table.router&.flush_mrai
         when :sync
           work[1] << true
         else

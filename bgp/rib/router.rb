@@ -23,6 +23,7 @@
 require 'bgp/rib/export'
 require 'bgp/rib/adj_rib_out'
 require 'bgp/rib/update_builder'
+require 'bgp/rib/mrai'
 
 module BGP
   module Rib
@@ -40,11 +41,14 @@ module BGP
     # One attach, both directions. Turning this on makes a bgp4r speaker a
     # router rather than a listener, so it is off until asked for.
     #
-    # Three things set it going. A session reaching Established gets the
-    # whole Loc-RIB, which is the RFC 4271 section 9.2 initial advertisement
-    # in the only form bgp4r has: everything we have, once. A Loc-RIB change
-    # goes to every peer. A session leaving Established empties its
-    # Adj-RIB-Out, because the peer keeps nothing across a session.
+    # Three things set it going, and they are the three Phase 3 events of
+    # RFC 4271 section 9.1.3. A session reaching Established gets the whole
+    # Loc-RIB, which is event c), "when a new BGP speaker connection has
+    # been established", in the only form bgp4r has: everything we have,
+    # once. A Loc-RIB change goes to every peer, which is a) for a learned
+    # route and b) for one Table#originate announced. The sending itself is
+    # section 9.2. A session leaving Established empties its Adj-RIB-Out,
+    # because the peer keeps nothing across a session.
     #
     # Everything happens on the feed's one worker thread, never on the
     # table's lock and never on a neighbour's event dispatch thread: the
@@ -52,14 +56,28 @@ module BGP
     # the listener would hold the table lock, and a send on the event thread
     # would stall the session that thread runs.
     #
-    # Not here, and each is its own piece of work: the MinRouteAdvertisement
-    # interval of RFC 4271 section 9.2.1.1, so a change goes out as soon as
-    # it is decided; the route reflector client and non-client matrix of RFC
-    # 4456 section 6, which needs per-peer configuration; and routes we
-    # originate ourselves, since every Route is learned from a peer.
+    # Rate limiting is the MinRouteAdvertisementIntervalTimer of RFC 4271
+    # section 9.2.1.1, and it is off unless asked for:
+    #
+    #   rib.advertise(mrai: BGP::Rib::Mrai.suggested)   # the RFC's 30s and 5s
+    #   rib.advertise(mrai: { ebgp: 10, ibgp: 0 })      # or your own
+    #
+    # Mrai holds the rules and the arithmetic. What lives here is the one
+    # thread that acts on them: it sleeps until the earliest window with
+    # something waiting for it ends, then hands the work to the feed, so
+    # the held UPDATEs are built and sent on the same worker thread as
+    # every other UPDATE. With no interval set there is no such thread and
+    # nothing is ever held, which is the behaviour this class had before
+    # the timer existed.
+    #
+    # Not here, and its own piece of work: MinASOriginationIntervalTimer,
+    # RFC 4271 section 9.2.1.2, which paces UPDATEs "that report changes
+    # within the advertising BGP speaker's own autonomous systems" and so
+    # applies to what Table#originate announces rather than per
+    # destination. Section 10 suggests 15 seconds for it.
     class Router
 
-      attr_reader :table, :export
+      attr_reader :table, :export, :mrai
 
       # table, feed: the Table and its PeerFeed.
       # export: an Export, or nil to build one from the table's own local AS
@@ -69,16 +87,30 @@ module BGP
       #   route over an IPv4 session needs an IPv6 next hop (RFC 4760 section
       #   3), and nothing on the session says what ours is, so without one
       #   those routes are not advertised and skipped is why.
-      def initialize(table, feed, export: nil, next_hops: {})
+      # mrai: an Mrai, or a Hash of its options, for the rate limiting of
+      #   RFC 4271 section 9.2.1.1. The default holds nothing.
+      def initialize(table, feed, export: nil, next_hops: {}, mrai: nil)
         @table = table
         @feed = feed
         @export = export || Export.new(:local_as => table.local_as, :router_id => table.router_id)
         @next_hops = {}
         next_hops.each { |afi, address| @next_hops[Integer(afi)] = address.to_s }
+        @mrai = case mrai
+                when nil   then Mrai.new
+                when Hash  then Mrai.new(**mrai)
+                else mrai
+                end
         @out = {}        # Peer => AdjRibOut
         @lock = Mutex.new
         @skipped = {}   # [prefix, peer] => the last reason it was not advertised
         @sent = 0
+        @held = 0
+        @flush_requests = 0
+        # Its own lock, not @lock: Mrai takes none of its own and is read by
+        # the pacer thread while the worker thread changes it. Keeping it
+        # off @lock means neither thread can nest the two.
+        @mrai_lock = Mutex.new
+        @wake = ConditionVariable.new
       end
 
       # Starts advertising to every peer the table is attached to, and to any
@@ -87,10 +119,44 @@ module BGP
         return self if @lock.synchronize { s = @started ; @started = true ; s }
         @table.on_change { |change| @feed << [:advertise, [change]] }
         @feed.adapters.each { |adapter| watch(adapter) }
+        start_pacer unless @mrai.off?
         self
       end
 
       def started? ; @lock.synchronize { !!@started } ; end
+
+      # Stops the pacer thread. Called by PeerFeed#stop, and by a test that
+      # wants no thread left behind. Anything still held is dropped unsent,
+      # which is what stopping means.
+      def stop(timeout = 1)
+        thread = @lock.synchronize { t = @pacer ; @pacer = nil ; t }
+        return self unless thread
+        # The flag is set under the lock the pacer waits on, and in the same
+        # critical section as the broadcast. Setting it anywhere else races:
+        # a thread that had not reached its wait yet would miss the
+        # broadcast, wait with no deadline, and have to be killed.
+        @mrai_lock.synchronize { @stopping = true ; @wake.broadcast }
+        thread.join(timeout) or thread.kill
+        self
+      end
+
+      def pacing? ; !!@lock.synchronize { @pacer } ; end
+
+      # How many UPDATEs the interval of section 9.2.1.1 has suppressed:
+      # each time a change replaced one already waiting for the same
+      # destination, which is the "last route selected" rule saving a
+      # message.
+      def held ; @mrai_lock.synchronize { @held } ; end
+
+      # How many flushes the pacer thread has asked the worker for. At most
+      # one is ever outstanding, so this grows with the number of windows
+      # that ended and not with the number of turns of the pacer's loop.
+      def flush_requests ; @mrai_lock.synchronize { @flush_requests } ; end
+
+      # What is waiting for its window to end, as [peer, prefix].
+      def waiting
+        @mrai_lock.synchronize { @mrai.pending_keys }
+      end
 
       # Watches one adapter's session, so the peer gets the table when it
       # comes up and loses its Adj-RIB-Out when it goes down. Called by start
@@ -140,11 +206,41 @@ module BGP
         run_changes(changes, :only => adapter)
       end
 
-      # The peer keeps nothing across a session, so neither do we.
+      # The peer keeps nothing across a session, so neither do we. That
+      # includes its intervals: a window armed by the old session must not
+      # delay the first UPDATE of the new one, and an item waiting for one
+      # is about a session that is gone.
       def session_down(adapter)
         peer = adapter.peer
         return unless peer
         @lock.synchronize { @out[peer] }&.flush
+        @mrai_lock.synchronize { @mrai.forget(peer) }
+      end
+
+      # Sends what the interval of RFC 4271 section 9.2.1.1 was holding and
+      # whose window has now ended. Called on the feed's worker thread,
+      # which the pacer thread asks to do it.
+      def flush_mrai
+        due = @mrai_lock.synchronize do
+          # The flush the pacer asked for is being done now, so it may ask
+          # again. Signalling lets it work out its next deadline from what
+          # is left rather than from what was there when it asked.
+          @flush_pending = false
+          @wake.signal
+          @mrai.due
+        end
+        return if due.empty?
+        by_peer = {}
+        due.each { |(peer, _prefix, item)| (by_peer[peer] ||= []) << item }
+        by_peer.each do |peer, items|
+          adapter = @feed.adapters.find { |a| a.peer == peer }
+          # The session went away while these waited. Its Adj-RIB-Out has
+          # been flushed already, so dropping them is right.
+          next unless adapter && adapter.neighbor.is_established?
+          announce, withdraw = commit(adj_rib_out(peer), peer, items)
+          next if announce.empty? && withdraw.empty?
+          send_messages(adapter, announce, withdraw)
+        end
       end
 
       # Runs the export side for these Loc-RIB changes. only: one adapter,
@@ -179,21 +275,61 @@ module BGP
       # keeps one best route.
       def plan(changes, adapter, peer)
         out = adj_rib_out(peer)
+        ready = []
+        changes.each do |change|
+          item = item_for(change, adapter, peer, out)
+          # Nothing to send for this destination, so nothing may be left
+          # waiting for it either. See Mrai#drop.
+          next drop(peer, change.prefix) if item.nil?
+          next ready << item unless hold?(peer, change.prefix)
+          hold(peer, change.prefix, item)
+        end
+        commit(out, peer, ready)
+      end
+
+      # What this peer should be sent for one Loc-RIB change, as one of the
+      # builder's tuples, or nil when the answer is nothing. It reads the
+      # Adj-RIB-Out and does not write it, because the write records what
+      # went out and this may still be held.
+      def item_for(change, adapter, peer, out)
+        route = change.new
+        result = route ? export_for(route, peer, adapter) : nil
+        if result.nil? || !result.advertise?
+          # Either the prefix lost its best route, or export refused it.
+          # Both mean the peer must not keep what it has, and for the
+          # refusal that is a MUST: RFC 4271 section 9.1.3, "If a route in
+          # Loc-RIB is excluded from a particular Adj-RIB-Out, the
+          # previously advertised route in that Adj-RIB-Out MUST be
+          # withdrawn from service by means of an UPDATE message".
+          note_skip(change.prefix, peer, result && result.reason)
+          return nil unless out[change.prefix]
+          return UpdateBuilder::Withdraw.new(change.prefix)
+        end
+        # RFC 4271 section 9.2: "A BGP speaker SHOULD NOT advertise a given
+        # feasible BGP route from its Adj-RIB-Out if it would produce an
+        # UPDATE message containing the same BGP route as was previously
+        # advertised."
+        return nil if out.current?(change.prefix, result.path_attribute)
+        UpdateBuilder::Announce.new(change.prefix, result.path_attribute, result.next_hop)
+      end
+
+      # Records these items as sent and splits them for the builder. This is
+      # the one place the Adj-RIB-Out is written and the one place a
+      # destination's interval is armed, so an item takes the same path
+      # whether it went out at once or waited for its window.
+      def commit(out, peer, items)
         announce = []
         withdraw = []
-        changes.each do |change|
-          route = change.new
-          result = route ? export_for(route, peer, adapter) : nil
-          if result.nil? || !result.advertise?
-            # Either the prefix lost its best route, or export refused it.
-            # Both mean the peer must not keep what it has.
-            note_skip(change.prefix, peer, result && result.reason)
-            withdraw << UpdateBuilder::Withdraw.new(change.prefix) if out.withdraw(change.prefix)
-            next
+        items.each do |item|
+          case item
+          when UpdateBuilder::Withdraw
+            out.withdraw(item.prefix)
+            withdraw << item
+          else
+            out.advertise(item.prefix, item.path_attribute)
+            announce << item
           end
-          next if out.advertise(change.prefix, result.path_attribute) == :same
-          announce << UpdateBuilder::Announce.new(change.prefix, result.path_attribute,
-                                                 result.next_hop)
+          arm(peer, item.prefix)
         end
         [announce, withdraw]
       end
@@ -238,6 +374,68 @@ module BGP
       def note_skip(prefix, peer, reason)
         return unless reason
         @lock.synchronize { @skipped[[prefix, peer]] = reason }
+      end
+
+      # The Mrai calls, each under its own lock. Short on purpose: the
+      # pacer thread reads the same object.
+      def hold?(peer, prefix) ; @mrai_lock.synchronize { @mrai.hold?(peer, prefix) } ; end
+
+      def hold(peer, prefix, item)
+        @mrai_lock.synchronize do
+          @held += 1 if @mrai.hold(peer, prefix, item)
+          @wake.signal
+        end
+      end
+
+      # Arms this destination's window, and forgets anything that was
+      # waiting for it, since this is what that item was waiting to be.
+      def arm(peer, prefix)
+        @mrai_lock.synchronize { @mrai.drop(peer, prefix) ; @mrai.sent(peer, prefix) }
+      end
+
+      def drop(peer, prefix) ; @mrai_lock.synchronize { @mrai.drop(peer, prefix) } ; end
+
+      # Called holding @lock.
+      def start_pacer
+        return if @pacer
+        @pacer = Thread.new { pace }
+        @pacer['name'] = 'BGP RIB MRAI'
+        @pacer
+      end
+
+      # Sleeps until the earliest window with something waiting for it
+      # ends, then asks the feed to flush. It does not send anything
+      # itself: the UPDATEs are built and written on the feed's worker
+      # thread, like every other UPDATE, so there is still only one thread
+      # talking to the sessions.
+      # At most one flush is in flight at a time. Without that this spins:
+      # the work is done by the worker thread, so from the moment a window
+      # ends until the moment the worker gets to it, the deadline is still
+      # in the past and every turn of this loop would queue another flush.
+      # That is a hot loop and a queue filling faster than the worker can
+      # empty it, which starves every other work item behind it.
+      def pace
+        loop do
+          due = @mrai_lock.synchronize do
+            next false if @stopping
+            delay = @mrai.next_deadline
+            if delay && delay <= 0 && !@flush_pending
+              @flush_requests += 1
+              next (@flush_pending = true)
+            end
+            # Nothing is due, or a flush is already on its way. A deadline
+            # in the future is how long to sleep; nil means nothing is
+            # waiting at all, so sleep until a hold or a flush signals.
+            @wake.wait(@mrai_lock, delay && delay > 0 ? delay : nil)
+            false
+          end
+          break if @mrai_lock.synchronize { @stopping }
+          # Only a real deadline reaches the feed. A hold wakes this thread
+          # so it can shorten its sleep, not so it can flush: without that
+          # every held change would cost a round trip through the worker to
+          # find nothing due.
+          @feed << [:mrai] if due
+        end
       end
     end
 
