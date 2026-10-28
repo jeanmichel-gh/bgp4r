@@ -35,7 +35,15 @@ class Notification < Message
   # The IANA "BGP Error (Notification) Codes" registry. Codes 10 to 255 are
   # unassigned, and a code or subcode with no entry here reads "Undefined",
   # which is the honest answer for a code point IANA has not given a name.
+  #
+  # Value 0 is named in the error code registry and in five of the six
+  # subcode registries, and was in none of them here: every one of those
+  # read "Undefined", which was less than this table knew. Each is below
+  # beside the others of its registry.
   @code_to_s=Hash.new("Undefined")
+  # The error code registry names 0 "Reserved" and gives no reference for
+  # it. A NOTIFICATION carrying it is not a code bgp4r has yet to learn.
+  @code_to_s[[0]]    = "Reserved"
   @code_to_s[[1]]    = "Header Error"
   @code_to_s[[2]]    = "OPEN msg error"
   @code_to_s[[3]]    = "UPDATE msg error"
@@ -50,9 +58,15 @@ class Notification < Message
   @code_to_s[[7]]    = "ROUTE-REFRESH Message Error"
   @code_to_s[[8]]    = "Send Hold Timer Expired"       # RFC 9687 section 9
   @code_to_s[[9]]    = "Loss of LSDB Synchronization"  # RFC 9815 section 8.6
+  # Subcode 0 of the Message Header, OPEN and UPDATE registries is
+  # "Unspecific", which IANA references to RFC Errata 4493 rather than to a
+  # section of RFC 4271. The registry is what was read here, not the
+  # erratum, which is not fetchable from this sandbox.
+  @code_to_s[[1,0]]  = "Unspecific"
   @code_to_s[[1,1]]  = "Connection Not Synchronized"
   @code_to_s[[1,2]]  = "Bad Message Length"
   @code_to_s[[1,3]]  = "Bad Message Type"    
+  @code_to_s[[2,0]]  = "Unspecific"
   @code_to_s[[2,1]]  = "Unsupported Version Number"
   @code_to_s[[2,2]]  = "Bad Peer AS"                    
   @code_to_s[[2,3]]  = "Bad BGP Identifier"             
@@ -75,6 +89,7 @@ class Notification < Message
   @code_to_s[[2,9]]  = "Deprecated"
   @code_to_s[[2,10]] = "Deprecated"
   @code_to_s[[2,11]] = "Role Mismatch"
+  @code_to_s[[3,0]]  = "Unspecific"
   @code_to_s[[3,1]]  = "Malformed Attribute List"
   @code_to_s[[3,2]]  = "Unrecognized Well-known Attribute"  
   @code_to_s[[3,3]]  = "Missing Well-known Attribute"       
@@ -86,10 +101,21 @@ class Notification < Message
   @code_to_s[[3,9]]  = "Optional Attribute Error"           
   @code_to_s[[3,10]] = "Invalid Network Field"             
   @code_to_s[[3,11]] = "Malformed AS_PATH"
-  # RFC 6608 section 3: the three Finite State Machine Error subcodes.
+  # Code 4, Hold Timer Expired, has no subcode registry at all, so there is
+  # nothing to name under it and its subcode octet reads "Undefined". That
+  # is deliberate rather than a gap: the IANA BGP Parameters page lists a
+  # subcode registry for codes 1, 2, 3, 5, 6 and 7 and none for 4.
+  #
+  # RFC 6608 section 3: the four Finite State Machine Error subcodes. It
+  # lists "0 - Unspecified Error" with the three below it, and IANA
+  # references the whole registry to RFC 6608.
+  @code_to_s[[5,0]]  = "Unspecified Error"
   @code_to_s[[5,1]]  = "Receive Unexpected Message in OpenSent State"
   @code_to_s[[5,2]]  = "Receive Unexpected Message in OpenConfirm State"
   @code_to_s[[5,3]]  = "Receive Unexpected Message in Established State"
+  # The Cease registry names 0 "Reserved" and gives no reference for it,
+  # the same way the error code registry does.
+  @code_to_s[[6,0]]  = "Reserved"
   @code_to_s[[6,1]]  = "Maximum Number of Prefixes Reached"
   @code_to_s[[6,2]]  = "Administrative Shutdown"
   @code_to_s[[6,3]]  = "Peer De-configured"
@@ -109,6 +135,7 @@ class Notification < Message
   # Malformed Capability Value and Unsupported Capability Code, come from
   # the expired dynamic capability draft; against code 7 they name code
   # points IANA leaves unassigned.
+  @code_to_s[[7,0]]  = "Reserved"
   @code_to_s[[7,1]]  = "Invalid Message Length"
 
   def initialize(*args)
