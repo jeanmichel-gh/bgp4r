@@ -74,7 +74,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. A `lab` job runs the Compose topologies.
 
-Baseline on 2026-10-27: 950 tests, 20268 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.1%.
+Baseline on 2026-10-27: 956 tests, 20296 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.1%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -180,10 +180,27 @@ reproduction one liners in "Known issues to work on".
    6608 FSM subcodes and Cease subcodes 9 and 10. The section 5 length check
    itself is receive side and applies only once the peer has advertised
    capability 70, so it goes with `rcv_route_refresh` in RIB phase 2.
-5. **RFC 9072 extended OPEN is half done.** The outer header is right; each
-   inner optional parameter still uses a one octet length where section 2
-   wants two. Self consistent, wrong on the wire. Nothing in the tree cites
-   RFC 9072.
+5. **RFC 9072 extended OPEN was half done. Done**, in #119. The audit was
+   right. Section 2, Figure 2 "Extended Parameters Format": "The rules for
+   encoding Optional Parameters are unchanged with respect to those given in
+   [RFC4271], except that the Parameter Length field is extended to be a
+   two-octet unsigned integer." The outer header was already right; each
+   inner parameter wrote and read a one octet length, which was self
+   consistent and wrong on the wire, and made bgp4r raise "Optional
+   parameter type '6' not implemented" on a conformant extended OPEN. The
+   form belongs to the message and not to the parameter, so `Open#encode`
+   decides it and passes `extended:` down to every parameter's `encode`.
+   `Open#extended?` and `extended=` go with it: section 2 says "an
+   implementation MUST accept an OPEN message that uses the encoding of
+   this specification" even below 256 octets, so a message read in the
+   extended form is written back in it, and the form can be asked for with
+   any parameter list. Two more things came out of reading the RFC: only the
+   Non-Ext OP Type octet decides on receipt, since the Non-Ext OP Len.
+   before it "MUST be ignored on receipt once the use of the extended
+   format is determined positively", where bgp4r required 255 in both; and
+   the capability inside keeps the one octet code and length of RFC 5492
+   section 4, because RFC 9072 widens the parameter header and nothing
+   else.
 
 **The BGP Role capability, code 9. Done**, in #118, the cheap one taken while
 there. It is defined in RFC 9234 section **4.1**, not section 4
@@ -321,6 +338,8 @@ Smaller things:
 * The NOTIFICATION subcode registries are still short of IANA in one place, display only. Subcode 0 is named in every one of them and in none of them here: "Unspecific" for codes 1, 2 and 3 (RFC Errata 4493), "Unspecified Error" for code 5 (RFC 6608), "Reserved" for codes 6 and 7. `Notification.code_to_s` answers "Undefined" for each, which is honest but less than it knows. Note that `code_to_s(0)` for the code itself is pinned to "Undefined" by `test_1`, where IANA says Reserved. Found by the registry sweep that fixed code 7. The other half of this entry, OPEN Message Error subcodes 8, 9, 10 and 11, landed with the BGP Role capability in #118.
 
 * `Neighbor#capability` names only five capabilities, so the two added since cannot be asked for by symbol. Its `case` has `:route_refresh`, `:mbgp`, `:as4`, `:gr` and `:extended_nexthop`, and anything else raises `ArgumentError`, so `neighbor.capability(:role, :customer)` and `neighbor.capability(:enhanced_route_refresh)` both fail and a script has to pass the object: `neighbor.capability(BGP::OPT_PARM::CAP::Role.new(:customer))` works, which is the other branch of the same method. `lab/speaker.rb`'s `add_capability` only names capabilities, so neither can be put in a lab topology, the same four-piece problem the add-path entry below describes. Not a wrong answer, just a shorter list than the library has. Found while adding capability 9.
+
+* A truncated optional parameter header in an OPEN raises instead of being kept. `Open#parse` walks the parameters while any octet is left and `Optional_parameter.factory` unpacks a header out of what it finds, so a leftover shorter than the header has a nil Length: `ruby -I. -e 'require "bgp4r"; BGP::Message.factory(["ff"*16+"001c"+"01"+"04"+"0064"+"00b4"+"0a000001"+"01"+"41"].pack("H*"))'` raises `NoMethodError: undefined method '+' for nil`. The extended form of RFC 9072 section 2 has the same hole two octets wider, since its header is three octets. Per the rule on octets that cannot be interpreted, the leftover should be kept and written back, which needs somewhere in `Open` to keep it rather than a check in the factory. Found while widening the parameter length for RFC 9072.
 
 * A String administrator in the three argument form of `Rd.new` takes `encode` down. Types 0 and 2 pack the administrator as an Integer, so an address String reaches `pack` as it was given: `ruby -I. -e 'require "bgp/nlris/rd"; BGP::Rd.new("1.1.1.1",1,0).encode'` raises `TypeError: no implicit conversion of String into Integer`. The two argument form reads a String administrator as the type 1 form and never gets there, and a named type 1 builds an `IPAddr` first, so only a named type 0 or 2, or a type the RFC does not define, hits this. Either those branches read the String the way type 1 does, or the constructor says the administrator of that type is an Integer. Found while carrying the encoding type through the hash form.
 

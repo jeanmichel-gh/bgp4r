@@ -51,11 +51,11 @@ class Graceful_restart < BGP::OPT_PARM::Capability
   end
 
 
-  def encode
+  def encode(extended: false)
     s = []
     s << [(@restart_state << 12) + @restart_time].pack('n')
     s << @tuples.collect { |af| af.pack('nCC') }
-    super s.join
+    super s.join, :extended => extended
   end
   def to_s
     s = []

@@ -25,8 +25,13 @@
 #        |             Optional Parameters (variable)                    |
 #        |                                                               |
 #        +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-# 
-# 
+#
+#    RFC 9072 section 2 replaces that one octet Opt Parm Len, and the one
+#    octet Parameter Length inside each optional parameter, with two octet
+#    fields when the Optional Parameters run past 255 octets. Open#encode
+#    and Open#parse have the detail.
+#
+#
 require 'bgp/messages/message'
 require 'bgp/optional_parameters/capability'
 require 'ipaddr'
@@ -59,11 +64,51 @@ class Open < Message
     @opt_parms << arg
   end
 
+  # True when this OPEN carries the extended Optional Parameters Length
+  # of RFC 9072 section 2 rather than the one octet length of RFC 4271.
+  # parse sets it, so a message read in the extended form is written
+  # back in it whatever its size: section 2 says "an implementation MUST
+  # accept an OPEN message that uses the encoding of this specification"
+  # even when the parameters are 255 octets or fewer. The writer is
+  # there so that form can be sent with any parameter list at all.
+  def extended?
+    @extended ? true : false
+  end
+
+  attr_writer :extended
+
+  # RFC 9072 section 2, Figure 1 "Extended Encoding OPEN Format": when
+  # the Optional Parameters run past 255 octets, the one octet Optional
+  # Parameters Length becomes a Non-Ext OP Len. octet, which "SHOULD be
+  # set to 255 on transmission", and a Non-Ext OP Type octet of 255,
+  # which is the type code the document "reserves ... as the 'Extended
+  # Length'". After them comes the two octet Extended Optional
+  # Parameters Length, "an unsigned integer indicating the total length
+  # of the Optional Parameters field in octets".
+  #
+  # Each parameter inside changes with it. Figure 2 "Extended Parameters
+  # Format" in the same section: "The rules for encoding Optional
+  # Parameters are unchanged with respect to those given in [RFC4271],
+  # except that the Parameter Length field is extended to be a
+  # two-octet unsigned integer." bgp4r wrote the one octet length there,
+  # which was self consistent and wrong on the wire, so it is passed
+  # down now.
+  #
+  # The form depends on the size and the size depends on the form, so
+  # the RFC 4271 encoding is measured first. It is one octet per
+  # parameter shorter than the extended one, so if it already runs past
+  # 255 octets only the extended form can carry it.
   def encode
-    opt_parms = @opt_parms.compact.collect { |cap| cap.encode }.join
+    parms = @opt_parms.compact
+    extended = extended?
+    opt_parms = parms.collect { |cap| cap.encode(:extended => extended) }.join
+    if !extended and opt_parms.size>255
+      extended = true
+      opt_parms = parms.collect { |cap| cap.encode(:extended => true) }.join
+    end
     s  = [@version, _my_encoded_as_, @holdtime, @bgp_id.hton].pack("Cnna4")
-    s += if opt_parms.size>255
-      [0xffff, opt_parms.size, opt_parms].pack("nna*")
+    s += if extended
+      [0xff, 0xff, opt_parms.size, opt_parms].pack("CCna*")
     else
       [opt_parms.size, opt_parms].pack("Ca*")
     end
@@ -106,14 +151,23 @@ class Open < Message
   
   def parse(_s)
     s = super(_s)
-    if s[9,2].unpack('CC') == [255,255]
-      @version, @local_as, @holdtime, bgp_id, _, _, opt_parms = s.unpack('Cnna4nna*')
+    # The octet after the one octet Optional Parameters Length is the
+    # Non-Ext OP Type of RFC 9072 section 2, Figure 1, and "On receipt,
+    # a value of 255 for this field is the indication that the extended
+    # format is in use". That octet alone decides: the Non-Ext OP Len.
+    # before it "MUST be ignored on receipt once the use of the extended
+    # format is determined positively", so a peer that writes something
+    # other than the recommended 255 there is still read correctly.
+    # bgp4r used to require 255 in both.
+    @extended = s.getbyte(10) == 255
+    if @extended
+      @version, @local_as, @holdtime, bgp_id, _, _, _, opt_parms = s.unpack('Cnna4CCna*')
     else
       @version, @local_as, @holdtime, bgp_id, _, opt_parms = s.unpack('Cnna4Ca*')
     end
     while opt_parms.size>0
       # One parameter can carry several capabilities (RFC 5492 section 4).
-      @opt_parms.concat Optional_parameter.factory(opt_parms)
+      @opt_parms.concat Optional_parameter.factory(opt_parms, :extended => @extended)
     end
     @bgp_id = IPAddr.new_ntoh(bgp_id)
   end

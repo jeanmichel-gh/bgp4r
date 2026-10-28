@@ -122,8 +122,8 @@ module BGP::OPT_PARM::CAP
 
     # RFC 9234 section 4.1: one octet, the Role. A value of another size
     # received from the wire is written back as it came.
-    def encode
-      super(@value || [@role].pack('C'))
+    def encode(extended: false)
+      super(@value || [@role].pack('C'), :extended => extended)
     end
 
     def parse(s)

@@ -88,8 +88,8 @@ module BGP::OPT_PARM::CAP
       @families.include?([IANA.afi(afi), IANA.safi(safi), IANA.afi(nexthop_afi)])
     end
 
-    def encode
-      super(@families.collect { |t| t.pack('nnn') }.join)
+    def encode(extended: false)
+      super(@families.collect { |t| t.pack('nnn') }.join, :extended => extended)
     end
 
     def parse(s)

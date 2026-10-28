@@ -95,10 +95,10 @@ module BGP::OPT_PARM::CAP
       end
     end
 
-    def encode
+    def encode(extended: false)
       s = []
       s << @af.to_a.sort.collect { |e|  e.flatten.pack('nCC')  }
-      super s.join
+      super s.join, :extended => extended
     end
 
     def to_s

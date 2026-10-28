@@ -55,8 +55,24 @@ module OPT_PARM
       @parm_type=parm_type
     end
 
-    def encode(value)
-      [@parm_type, value.size, value].pack('CCa*')
+    # A one octet Parameter Type and a one octet Parameter Length
+    # (RFC 4271 section 4.2), or the same type octet and a two octet
+    # length when the enclosing OPEN uses the extended form of RFC 9072
+    # section 2, Figure 2 "Extended Parameters Format": "The rules for
+    # encoding Optional Parameters are unchanged with respect to those
+    # given in [RFC4271], except that the Parameter Length field is
+    # extended to be a two-octet unsigned integer."
+    #
+    # Which form is in use is a property of the enclosing OPEN and not
+    # of the parameter, so Open#encode decides and passes it down. A
+    # parameter encoded on its own is in the RFC 4271 form, as it has
+    # always been.
+    def encode(value, extended: false)
+      if extended
+        [@parm_type, value.size, value].pack('Cna*')
+      else
+        [@parm_type, value.size, value].pack('CCa*')
+      end
     end
 
     def parse(s)
@@ -64,15 +80,27 @@ module OPT_PARM
       s.slice!(0,len).is_packed
     end
 
+    # The size of the parameter header: two octets, or three in the
+    # RFC 9072 section 2 extended form, where the Parameter Length is
+    # two octets.
+    def self.header_size(extended)
+      extended ? 3 : 2
+    end
+
     # The capabilities in the next optional parameter, as an Array. One
     # parameter can hold more than one capability, so this returns a
     # list rather than a single object.
-    def self.factory(s)
-      parm_type, len = s.unpack('CC')
-      opt_parm = s.slice!(0,len+2).is_packed
+    #
+    # extended is true when the enclosing OPEN carries the RFC 9072
+    # section 2 Extended Optional Parameters Length, in which case this
+    # parameter's Length field is two octets wide, not one.
+    def self.factory(s, extended: false)
+      hdr = header_size(extended)
+      parm_type, len = extended ? s.unpack('Cn') : s.unpack('CC')
+      opt_parm = s.slice!(0,len+hdr).is_packed
       case parm_type
       when CAPABILITY
-        capabilities(opt_parm)
+        capabilities(opt_parm, :extended => extended)
       else
         raise RuntimeError, "Optional parameter type '#{parm_type}' not implemented"
       end
@@ -89,8 +117,15 @@ module OPT_PARM
     #
     # Each capability is handed to Capability.factory wrapped in a
     # parameter header of its own, which is the shape that method takes.
-    def self.capabilities(opt_parm)
-      value = opt_parm.byteslice(2, opt_parm.size - 2).to_s
+    # That wrapper is always the RFC 4271 two octet header, whatever the
+    # enclosing OPEN used, because it never reaches the wire: the
+    # capability objects read it back through Optional_parameter#parse,
+    # and Open#encode applies the form the message needs again when it
+    # writes them out. Only the real parameter header this method skips
+    # grows to three octets in the extended form.
+    def self.capabilities(opt_parm, extended: false)
+      hdr = header_size(extended)
+      value = opt_parm.byteslice(hdr, opt_parm.size - hdr).to_s
       caps, i = [], 0
       while i + 2 <= value.size
         len = value.getbyte(i + 1)
