@@ -24,11 +24,13 @@ require "test/unit"
 require 'bgp4r'
 require 'test/helpers/server'
 require 'timeout'
-include BGP
-include BGP::OPT_PARM::CAP
-include BGP::TestHelpers
 
-
+# These three are included into the test class and nowhere else. At the top
+# level they went into Object, so every test file the suite loaded after
+# this one saw those names too, and BGP::OPT_PARM::CAP won the ones it
+# shares with BGP: a bare Orf meant the ORF capability rather than
+# BGP::Orf, and the same for Route_refresh and Dynamic. A test written that
+# way passed on its own and failed in the suite.
 class TestBgpNeighbor < Test::Unit::TestCase
   include BGP
   include BGP::OPT_PARM::CAP
@@ -468,9 +470,15 @@ class TestBgpNeighbor < Test::Unit::TestCase
     assert_equal('ffffffffffffffffffffffffffffffff005d0104006400b4000000024002060104000100010206010400010002020601040001008002060104000200810206010400030080020601040003000102020200020280000206410400000064', n.open.to_shex)
   end
 
+  # BGP::Update in full, and it has to be: a nested class does not see the
+  # include in the class around it, so this resolved Update only through
+  # the top level include that used to be in this file. Worse, a NameError
+  # here is invisible, because Neighbor logs an exception from an observer
+  # rather than raising it, so the test failed as "server received no
+  # UPDATE" and said nothing about the name.
   class UpdateCatcher
     def initialize; @q = Queue.new; end
-    def update(msg); @q << msg if msg.is_a?(Update); end
+    def update(msg); @q << msg if msg.is_a?(BGP::Update); end
     def pop(secs=3)
       Timeout.timeout(secs) { @q.pop }
     rescue Timeout::Error
@@ -495,6 +503,26 @@ class TestBgpNeighbor < Test::Unit::TestCase
     got = catcher.pop
     assert got, "server received no UPDATE"
     got.path_attribute
+  end
+
+  # The guard for what this file used to do. Three includes at the top level
+  # of a test file go into Object, so every file the suite loads after it
+  # sees those names, and BGP::OPT_PARM::CAP wins the ones it shares with
+  # BGP: a bare Orf then means the ORF capability and not BGP::Orf, and a
+  # bare Route_refresh the capability and not the message. A test written
+  # that way passes on its own and fails in the suite, which is a long way
+  # to go to find two missing words.
+  #
+  # run_unit.rb requires every test file before any test runs, so this
+  # assertion catches a top level include in any file in the suite, not
+  # only in this one.
+  def test_no_test_file_leaks_bgp_names_into_object
+    [BGP, BGP::OPT_PARM::CAP, BGP::TestHelpers].each do |m|
+      assert !Object.include?(m),
+             "#{m} is included into Object, so its names leak into every " \
+             'test file the suite loads after whichever one included it. ' \
+             'Include it into the test class instead.'
+    end
   end
 
   def test_auto_as4_default_and_setter
