@@ -178,21 +178,30 @@ module BGP
 
       # The neighboring AS used to decide which MEDs compare (RFC 4271
       # section 9.1.2.2 c): the first AS of the leftmost AS_SEQUENCE, after
-      # any confederation segments. An AS_PATH that is empty or starts with
-      # an AS_SET gives our own AS.
+      # any confederation segments.
       #
-      # That last case is wider here than in the RFC. Section 9.1.2.2 c)
-      # defines neighborAS as "the neighbor AS from which the route was
-      # received", and gives the local AS only "If the route is learned via
-      # IBGP" and the other speaker originated or aggregated it. This
-      # returns the local AS for that AS_PATH shape whatever kind of peer
-      # sent it, so an eBGP peer's route with a leading AS_SET is grouped
-      # as if it came from our own AS. Filed under "Known issues to work
-      # on" in CLAUDE.md rather than changed here, because route_test.rb
-      # pins the current answer and the fix moves that test.
+      # When there is no such AS, because the AS_PATH is empty or starts
+      # with an AS_SET, the answer is the peer's own AS. That one
+      # expression covers both of the section's cases, because an internal
+      # peer's remote AS *is* the local AS:
+      #
+      # c) defines neighborAS as "a function that returns the neighbor AS
+      # from which the route was received", which for an external peer is
+      # the AS on the far side of the session. It then says that for a
+      # route "learned via IBGP" whose other speaker originated it, or
+      # aggregated it where "the AS_PATH attribute of the aggregate route
+      # is either empty or begins with an AS_SET, it is the local AS". For
+      # an internal peer remote_as equals local_as by definition, so
+      # reading the peer rather than the table gives the local AS there and
+      # the sending AS on an external session.
+      #
+      # This used to return local_as outright, which is right for an
+      # internal peer and wrong for an external one: an eBGP route with a
+      # leading AS_SET was grouped for MED comparison as though it had come
+      # from our own AS.
       def neighbor_as
         seg = as_path_segments.find { |s| ![As_path::CONFED_SEQUENCE, As_path::CONFED_SET].include?(s.seg_type) }
-        return @peer.local_as unless seg && seg.seg_type == As_path::SEQUENCE && !seg.as.empty?
+        return @peer.remote_as unless seg && seg.seg_type == As_path::SEQUENCE && !seg.as.empty?
         seg.as.first
       end
 

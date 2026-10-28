@@ -118,6 +118,43 @@ class TestBgpRibDecision < Test::Unit::TestCase
     assert_wins(route(EBGP_A, med: 50), route(EBGP_B, med: 10), :router_id)
   end
 
+  # Two external peers in different ASes, each sending an AS_PATH that
+  # begins with an AS_SET, so neither path names the AS it came from.
+  # Section 9.1.2.2 c) still answers "the neighbor AS from which the route
+  # was received" for an external peer, so these are two neighbor ASes and
+  # their MEDs are not compared. The router ID decides: 2.2.2.2 beats
+  # 3.3.3.3.
+  #
+  # Before this was fixed both routes reported the local AS, so they looked
+  # like one neighbor AS and the lower MED won, which is a wrong best route
+  # and not just a wrong label.
+  def test_med_is_not_compared_across_ases_when_the_path_starts_with_an_as_set
+    set_path = As_path.new(As_path::Segment.new(:set, 4, 5))
+    a = Route.new('10.1.0.0/16', Path_attribute.new(Origin.new(0), Next_hop.new(EBGP_A.address),
+                                                    set_path, Multi_exit_disc.new(50)), EBGP_A)
+    b = Route.new('10.1.0.0/16', Path_attribute.new(Origin.new(0), Next_hop.new(EBGP_B.address),
+                                                    set_path, Multi_exit_disc.new(10)), EBGP_B)
+    assert_equal(65002, a.neighbor_as)
+    assert_equal(65003, b.neighbor_as)
+    assert_wins(a, b, :router_id)
+  end
+
+  # The same shape between two internal peers is c)'s IBGP case, where the
+  # answer is the local AS for both, so they are one neighbor AS and the
+  # MEDs do compare.
+  def test_med_compares_between_internal_peers_whose_paths_start_with_an_as_set
+    set_path = As_path.new(As_path::Segment.new(:set, 4, 5))
+    i1 = peer('10.0.0.11', LOCAL_AS, '0.0.0.11')
+    i2 = peer('10.0.0.12', LOCAL_AS, '0.0.0.12')
+    routes = [[i1, 10], [i2, 50]].map do |p, med|
+      Route.new('10.1.0.0/16',
+                Path_attribute.new(Origin.new(0), Next_hop.new(p.address), set_path,
+                                   Local_pref.new(100), Multi_exit_disc.new(med)), p)
+    end
+    assert_equal([LOCAL_AS, LOCAL_AS], routes.map(&:neighbor_as))
+    assert_wins(routes[0], routes[1], :med)
+  end
+
   def test_always_compare_med
     assert_wins(route(EBGP_B, med: 10), route(EBGP_A, med: 50), :med, decision(always_compare_med: true))
   end
