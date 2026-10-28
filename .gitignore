@@ -1,0 +1,9 @@
+# Scratch worktrees the agent tooling creates inside the repo. Not bgp4r
+# source: each one is a whole checkout. See "Rules for agents" in CLAUDE.md.
+.claude/worktrees/
+
+# gem build and bundler output
+pkg/
+*.gem
+.bundle/
+vendor/bundle/
