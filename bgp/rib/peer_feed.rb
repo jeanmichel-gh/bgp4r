@@ -75,7 +75,7 @@ module BGP
       end
 
       # Stops feeding from neighbor and removes what it had sent, the way a
-      # session going down would (RFC 4271 section 9.1.2). Returns the
+      # session going down would (RFC 4271 section 6). Returns the
       # adapter, or nil when that neighbor was not attached.
       def detach(neighbor)
         adapter = @lock.synchronize { @adapters.delete(neighbor) }

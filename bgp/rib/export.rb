@@ -73,9 +73,13 @@ module BGP
       #   it was learned from, because that peer has it already.
       # :no_advertise, :no_export, :no_export_sub_confed are RFC 1997,
       #   "Well-known Communities", which has no numbered sections.
-      # :ibgp_to_ibgp is the base IBGP rule RFC 4456 section 4 describes as
-      #   the model it changes: IBGP speakers "will not re-advertise these
-      #   IBGP learned routes to other IBGP speakers".
+      # :ibgp_to_ibgp is RFC 4271 section 9.2, where the rule is normative
+      #   and carries the exception this implements: a speaker "SHALL NOT
+      #   re-distribute the routing information contained in that UPDATE
+      #   message to other internal peers (unless the speaker acts as a BGP
+      #   Route Reflector)". RFC 4456 section 4 describes the same model it
+      #   changes: IBGP speakers "will not re-advertise these IBGP learned
+      #   routes to other IBGP speakers".
       # :non_client_to_non_client is a reflector obeying RFC 4456 section 6,
       #   which reflects a non-client's route to clients only. See clients?.
       # :policy is the caller's block returning nil.

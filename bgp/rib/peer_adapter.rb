@@ -148,8 +148,10 @@ module BGP
         end.uniq
       end
 
-      # RFC 4271 section 9.1.2: the routes a peer sent are no longer
-      # available once the session is not Established. Asks the sink to
+      # RFC 4271 section 6: closing a BGP connection means "the associated
+      # Adj-RIB-In has been cleared", and section 8.2.2 "deletes all routes
+      # associated with this connection", so the routes a peer sent are no
+      # longer available once the session is not Established. Asks the sink to
       # remove them and forgets the Peer, so the next session builds a new
       # one from the next OPEN.
       def state_change(now, was)

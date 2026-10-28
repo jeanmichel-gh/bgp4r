@@ -105,7 +105,13 @@ module BGP
       # Every message is measured once it is built, so an error in the
       # arithmetic above shows up here rather than as an oversized message
       # on the wire. One prefix that cannot fit on its own is the only case
-      # that can reach this, since a prefix is never split.
+      # that can reach this, since a prefix is never split, and it is the
+      # case RFC 4271 section 9.2 rules on: when "a single route doesn't
+      # fit into the message, the BGP speaker MUST not advertise the route
+      # to its peers and MAY choose to log an error locally". Raising is how
+      # that reaches Router#send_messages, which logs it and records it in
+      # skipped rather than sending anything. Section 4, cited in the
+      # message below, is where the 4096 octet limit itself comes from.
       def checked(msg, batch)
         size = msg.encode(@info).bytesize
         return msg if size <= @max_size

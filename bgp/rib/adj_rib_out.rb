@@ -36,7 +36,10 @@ module BGP
     # :same means the peer already has exactly these attributes and the
     # UPDATE can be left unsent, and withdraw answers nil for a prefix the
     # peer never had, so no withdrawal is sent for it either. Suppressing
-    # those is the whole reason to keep this.
+    # those is the whole reason to keep this, and the first half of it is
+    # RFC 4271 section 9.2: a speaker "SHOULD NOT advertise a given
+    # feasible BGP route from its Adj-RIB-Out if it would produce an UPDATE
+    # message containing the same BGP route as was previously advertised".
     #
     # Attributes are compared by their encoded octets, not by object
     # identity, because Export builds a new Path_attribute every time it
