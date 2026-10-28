@@ -145,6 +145,97 @@ class TestBgpRibTable < Test::Unit::TestCase
     [11, 23, 42].each { |seed| model_check(seed, steps) }
   end
 
+  # Thread safety. A Table takes one reentrant lock, so several sessions can
+  # feed it while another thread reads it.
+
+  # synchronize must keep a feeder out for as long as the block runs, which
+  # is the whole point of offering it: a read of several things sees one
+  # state. Without the lock the announce lands while the block is running.
+  def test_synchronize_keeps_a_feeder_out
+    started = Queue.new
+    feeder = nil
+    @rib.synchronize do
+      feeder = Thread.new do
+        started << true
+        @rib.announce(route(E1, '10.9.0.0/16'))
+      end
+      started.deq                       # the thread is running
+      sleep 0.05                        # and has had time to get in, if it could
+      assert_nil(@rib.best('10.9.0.0/16'), 'the feeder got in while the lock was held')
+      assert_equal(0, @rib.loc_rib.size)
+    end
+    feeder.join
+    assert_not_nil(@rib.best('10.9.0.0/16'), 'the feeder got in once the lock was free')
+  end
+
+  # The lock is reentrant for the thread that holds it, so a listener may
+  # call back into the table. A plain Mutex#synchronize would deadlock here,
+  # which is why Table#sync checks Mutex#owned? first.
+  def test_a_listener_may_call_back_into_the_table
+    seen = []
+    @rib.on_change do |c|
+      # Every one of these takes the lock again on this thread.
+      seen << [c.prefix, @rib.best(c.prefix), @rib.candidates(c.prefix).size, @rib.peers.size]
+    end
+    a = route(E1, '10.1.0.0/16')
+    @rib.announce(a)
+    assert_equal([['10.1.0.0/16', a, 1, 1]], seen)
+    @rib.withdraw(E1, '10.1.0.0/16')
+    assert_equal(['10.1.0.0/16', nil, 0, 1], seen.last)
+  end
+
+  # A listener may also announce, which is the shape an export rule takes.
+  def test_a_listener_may_change_the_table
+    @rib.on_change do |c|
+      @rib.announce(route(E2, '10.2.0.0/16')) if c.prefix == '10.1.0.0/16' && c.new
+    end
+    @rib.announce(route(E1, '10.1.0.0/16'))
+    assert_not_nil(@rib.best('10.2.0.0/16'), 'the listener\'s own announce landed')
+    assert_equal(%w[10.1.0.0/16 10.2.0.0/16], @changes.map(&:prefix).sort)
+  end
+
+  # Several threads feeding one table must lose nothing. Each thread owns its
+  # own prefixes and peer, so the expected end state is exact.
+  def test_many_threads_feeding_one_table
+    peers = (2..9).map do |i|
+      Peer.new(address: "10.0.0.#{i}", remote_as: 65000 + i, router_id: "#{i}.#{i}.#{i}.#{i}", local_as: LOCAL_AS)
+    end
+    per_peer = 40
+    peers.map.with_index do |peer, i|
+      Thread.new do
+        per_peer.times { |n| @rib.announce(route(peer, "10.#{i + 100}.#{n}.0/24")) }
+      end
+    end.each(&:join)
+
+    expected = peers.size * per_peer
+    assert_equal(expected, @rib.loc_rib.size)
+    assert_equal(expected, @changes.size, 'no change was lost')
+    assert_equal(expected, @changes.map(&:prefix).uniq.size, 'and none was counted twice')
+    assert_equal(peers.sort_by(&:address), @rib.peers.sort_by(&:address))
+    peers.each_with_index do |peer, i|
+      assert_equal(per_peer, @rib.adj_rib_in(peer).size)
+      assert_equal(peer, @rib.best("10.#{i + 100}.0.0/24").peer)
+    end
+  end
+
+  # The same prefix from every thread, so they contend on one decision. One
+  # route wins and the Loc-RIB holds exactly one, whatever the interleaving.
+  def test_threads_contending_on_one_prefix
+    peers = (2..9).map do |i|
+      Peer.new(address: "10.0.0.#{i}", remote_as: 65000 + i, router_id: "#{i}.#{i}.#{i}.#{i}", local_as: LOCAL_AS)
+    end
+    peers.map { |peer| Thread.new { 20.times { @rib.announce(route(peer, '10.1.0.0/16')) } } }.each(&:join)
+
+    assert_equal(1, @rib.loc_rib.size)
+    assert_equal(peers.size, @rib.candidates('10.1.0.0/16').size, 'one path per peer')
+    # Router ID is the last tie break here (RFC 4271 section 9.1.2.2 f), and
+    # every route is otherwise equal, so the lowest wins.
+    assert_equal('2.2.2.2', @rib.best('10.1.0.0/16').router_id)
+    peers.map { |peer| Thread.new { @rib.peer_down(peer) } }.each(&:join)
+    assert_equal(0, @rib.loc_rib.size)
+    assert_equal([], @rib.candidates('10.1.0.0/16'))
+  end
+
   private
 
   def model_check(seed, steps)
