@@ -29,6 +29,24 @@ module ::BGP
 
   class Message
 
+    # RFC 4271 section 4: "The maximum message size is 4096 octets. All
+    # implementations are required to support this maximum message size."
+    # Section 4.1 says it again of the header's Length field, which "MUST
+    # always be at least 19 and no greater than 4096".
+    #
+    # This is a property of a BGP message, so it lives here and every
+    # caller reads it from here. It used to be written out in
+    # bgp/rib/update_builder.rb and bgp/misc/route_generator.rb with its
+    # own constant in each, which is how one of them goes stale.
+    #
+    # RFC 8654 raises the limit to 65535 when both speakers negotiate the
+    # BGP Extended Message capability, which bgp4r does not do. Whoever
+    # adds that capability changes the limit per session rather than here:
+    # UpdateBuilder already takes max_size for exactly that.
+    unless const_defined? :MAX_SIZE
+      MAX_SIZE = 4096
+    end
+
     unless const_defined? :OPEN
       OPEN          = 1
       UPDATE        = 2

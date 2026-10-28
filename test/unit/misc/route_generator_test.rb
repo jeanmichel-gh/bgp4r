@@ -340,4 +340,12 @@ class TestBgpRouteGenerator < Test::Unit::TestCase
     assert_raise(ArgumentError) { RouteGenerator.new('11.0.0.0/24', 1, 1, pa, path_id: nil, colour: 1) }
     assert_equal(0xffffffff, RouteGenerator.new("11.0.0.0/24", 1, 1, pa, path_id: 0xffffffff).path_id)
   end
+
+  # The 4096 octet limit is RFC 4271 section 4 and belongs to a BGP
+  # message, so it is defined once on BGP::Message and read from there.
+  # This file used to carry its own copy of the number.
+  def test_the_message_limit_comes_from_bgp_message
+    assert_equal BGP::Message::MAX_SIZE, BGP::RouteGenerator::MAX_MESSAGE_SIZE
+  end
+
 end

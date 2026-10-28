@@ -91,7 +91,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. A `lab` job runs the Compose topologies.
 
-Baseline on 2026-10-28: 1202 tests, 21304 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.3%.
+Baseline on 2026-10-28: 1205 tests, 21309 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.3%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -475,10 +475,10 @@ Neighbor ◀──UPDATE── Adj-RIB-Out (per peer) ◀───────�
         for every prefix added, and a full table is about a million. Every
         finished message is measured once, so a slip in the arithmetic
         raises rather than putting an oversized message on the wire.
-      * The 4096 and its citation now appear twice, here and in
-        `bgp/misc/route_generator.rb`, which packs prefixes the same way for
-        a different reason. The right home is probably `BGP::Message`; see
-        "Known issues to work on".
+      * The 4096 is `BGP::Message::MAX_SIZE`, defined once there and read
+        from here and from `bgp/misc/route_generator.rb`, which packs
+        prefixes the same way for a different reason. It started as a copy
+        in each and was moved in #139.
    3. **Router mode. Done**, in #127. `bgp/rib/router.rb` is the only part
       of the export side that is not pure, and all it does is join the pure
       ones: a Loc-RIB change goes through `Export#for`, is diffed against
@@ -764,8 +764,6 @@ Smaller things:
 * `Capability#add` drops anything that is not a `Capability::Revision`, with no error, so a typo is silently a Capability message with no revision in it: `ruby -I. -e 'require "bgp4r"; m=BGP::Capability.new; m << "not a revision"; p m.encode.size'` prints `19`, the header alone. Same shape as `Orf_route_refresh#add` above. `Capability::Revision` takes the other side of it: it accepts any object as its capability, so `BGP::Capability::Revision.advertise(10,"x").to_s` raises `NoMethodError` on `to_s_brief`, which is a capability method. `test_capability_revision_o1` builds revisions around a String for that reason and never prints them.
 
 * The NOTIFICATION subcode registries are still short of IANA in one place, display only. Subcode 0 is named in every one of them and in none of them here: "Unspecific" for codes 1, 2 and 3 (RFC Errata 4493), "Unspecified Error" for code 5 (RFC 6608), "Reserved" for codes 6 and 7. `Notification.code_to_s` answers "Undefined" for each, which is honest but less than it knows. Note that `code_to_s(0)` for the code itself is pinned to "Undefined" by `test_1`, where IANA says Reserved. Found by the registry sweep that fixed code 7. The other half of this entry, OPEN Message Error subcodes 8, 9, 10 and 11, landed with the BGP Role capability in #118.
-
-* The 4096 octet message limit of RFC 4271 section 4 is written out twice, in `bgp/rib/update_builder.rb` and in `bgp/misc/route_generator.rb`, each with its own constant and the same citation. `bgp/io.rb` has it a third time, in a comment. It is a property of a BGP message, so the right home is a constant on `BGP::Message`, with both callers reading it from there. Nothing is wrong today; two copies of a number is how one of them goes stale. RFC 8654 raises the limit when both speakers negotiate extended messages, which bgp4r does not do, and whoever adds that capability has to find every copy. Found while writing the UPDATE builder.
 
 * `Neighbor#capability` names only five capabilities, so the two added since cannot be asked for by symbol. Its `case` has `:route_refresh`, `:mbgp`, `:as4`, `:gr` and `:extended_nexthop`, and anything else raises `ArgumentError`, so `neighbor.capability(:role, :customer)` and `neighbor.capability(:enhanced_route_refresh)` both fail and a script has to pass the object: `neighbor.capability(BGP::OPT_PARM::CAP::Role.new(:customer))` works, which is the other branch of the same method. `lab/speaker.rb`'s `add_capability` only names capabilities, so neither can be put in a lab topology, the same four-piece problem the add-path entry below describes. Not a wrong answer, just a shorter list than the library has. Found while adding capability 9.
 

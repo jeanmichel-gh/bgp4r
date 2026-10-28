@@ -288,4 +288,16 @@ class TestBgpRibUpdateBuilder < Test::Unit::TestCase
       assert_equal(m.encode(@info), back.encode(@info), "#{m.class} did not round trip")
     end
   end
+
+  # The 4096 octet limit is RFC 4271 section 4 and belongs to a BGP
+  # message, so it is defined once on BGP::Message and read from there.
+  # This file used to carry its own copy of the number, which is how one of
+  # two copies goes stale.
+  def test_the_message_limit_comes_from_bgp_message
+    assert_equal BGP::Message::MAX_SIZE, BGP::Rib::UpdateBuilder::MAX_MESSAGE_SIZE
+    assert_equal BGP::Message::MAX_SIZE, BGP::Rib::UpdateBuilder.new.max_size
+    # max_size is the per session override RFC 8654 would need.
+    assert_equal 9000, BGP::Rib::UpdateBuilder.new(:max_size => 9000).max_size
+  end
+
 end
