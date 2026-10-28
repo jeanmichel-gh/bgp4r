@@ -74,7 +74,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. A `lab` job runs the Compose topologies.
 
-Baseline on 2026-10-27: 918 tests, 20040 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.0%.
+Baseline on 2026-10-27: 936 tests, 20151 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.0%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -163,16 +163,23 @@ reproduction one liners in "Known issues to work on".
    correct router, which for a conformance tool is the worst failure there is.
    Smallest diff on this list. "Could not decode" is not a protocol error and
    must not be one.
-3. **ROUTE-REFRESH drops the subtype octet.** RFC 7313 section 3.2 redefines
-   the Reserved octet as Message Subtype: 0 normal, 1 BoRR, 2 EoRR, 255
-   reserved. `Route_refresh#parse` discards it and `encode` writes 0, so a
-   BoRR goes in as `00010101` and comes out `00010001`. The only place bgp4r
-   silently loses octets, which breaks its own round trip rule. Capability 70
-   for the feature is missing too.
-4. **NOTIFICATION error code 7 is the wrong registry.** RFC 7313 section 5
-   registers code 7 as "ROUTE-REFRESH Message Error", subcode 1 "Invalid
-   Message Length". bgp4r names it "CAPABILITY Message Error" with the
-   subcodes of the expired dynamic capability draft.
+3. **ROUTE-REFRESH dropped the subtype octet. Done**, in #117. RFC 7313
+   section 3.2 redefines the Reserved octet as Message Subtype: 0 normal, 1
+   BoRR, 2 EoRR, 255 reserved. `Route_refresh` now carries it, with `NORMAL`,
+   `BORR`, `EORR`, `subtype`, `subtype=` and `subtype_to_s`, shaped on how
+   `Orf_route_refresh` carries RFC 5291's When-to-refresh. A subtype the RFC
+   does not define still builds and encodes. Capability 70 is now
+   `CAP::Enhanced_route_refresh`; it is defined in section **3.1**, not
+   section 4 as this list first said. Section 4 is Operation.
+4. **NOTIFICATION error code 7 named the wrong registry. Done**, in #117.
+   RFC 7313 section 5 defines it and section 6 allocates it: "ROUTE-REFRESH
+   Message Error", subcode 1 "Invalid Message Length". The four subcodes of
+   the expired dynamic capability draft are gone. #117 also found OPEN Message
+   Error subcode 7 repeating subcode 4's name, where RFC 5492 section 5 makes
+   it "Unsupported Capability", and filled in error codes 8 and 9, the RFC
+   6608 FSM subcodes and Cease subcodes 9 and 10. The section 5 length check
+   itself is receive side and applies only once the peer has advertised
+   capability 70, so it goes with `rcv_route_refresh` in RIB phase 2.
 5. **RFC 9072 extended OPEN is half done.** The outer header is right; each
    inner optional parameter still uses a one octet length where section 2
    wants two. Self consistent, wrong on the wire. Nothing in the tree cites
@@ -282,27 +289,6 @@ the decision is not re-litigated from scratch:
   points. The attribute figure reads worse than it is: FRR's `bgpd.h` defines
   exactly bgp4r's 22 plus two.
 
-Phase 0 item 1, **ADD-PATH Send and Receive are inverted: done**. RFC 7911
-section 4 gives the field value 1 for able to receive and value 2 for able to
-send, and `CAP::Add_path` had them the other way round, so bgp4r was backwards
-against any real router and only self consistent against itself. Fixed in
-`bgp/optional_parameters/add_path.rb`: `_send_recv` now maps `:recv` to 1 and
-`:send` to 2, and `has?` reads 1 and 3 for recv and 2 and 3 for send. The
-caller facing symbols still mean what they say, so `add(:send, 1, 1)` encodes
-`02`. `Neighbor::Base_Capabilities#_path_id?` needed no change: it was already
-written as the RFC 7911 section 5 pair rule, which is why the two errors
-cancelled between two bgp4r speakers, and it now carries that quote as a
-comment. Phase 2's peer adapter can ask `path_id_send?` and `path_id_recv?`.
-(This note belongs in the phase 0 list, which is not on master yet.)
-
-**Done**: a valid attribute bgp4r cannot decode is no longer reported as
-malformed. `Path_attribute#decode_attribute` filed "bgp4r could not decode it"
-as an `Attr::Finding`, so `:strict` raised `Malformed_attribute` on a correct
-EVPN or flowspec UPDATE. It now files an `Attr::Gap` in
-`Path_attribute#undecoded`, which `errors` and `:strict` never see. This was
-item 2 of the phase 0 list, which is on an open pull request and not yet on
-master; move the status there when the two meet.
-
 ## Known issues to work on
 
 Found while fixing other bugs, not fixed yet. Verified against master on
@@ -318,6 +304,9 @@ Smaller things:
 * An NSAP prefix whose Length field says more than 152 bits does not round trip, because `Nsap.new_nsap` clamps any length above 152 to 152 and nothing keeps the one that arrived: `ruby -I. -e 'require "bgp/nlris/prefix"; p BGP::Prefix.new_ntop(["a04900000000000000000000000000000000000000"].pack("H*"),3).to_shex'` prints `"9849000000000000000000000000000000000000"`, 20 octets for the 21 it was given, with the length octet down from 160 to 152. The build path clamps the same way: `BGP::Prefix.new("49.0001/160").mlen` is 152. The field still reads on, since `new_ntop` consumes `1+(plen+7)/8` octets whatever the length says, and `Prefix#syntactically_correct?` answers true, because the overflow never reaches the IPv4 and IPv6 route that records it. An NSAP address is 20 octets, so 160 is the length that fits it and 152 looks like an off by one; `Nsap#mlen` defaults to 160 and `Nsap#encode` handles it, only `new_nsap` refuses. Found while making `new_ntop` consume an NSAP prefix.
 * `CAP::Mbgp` names no address family when IANA has no name for the AFI or the SAFI. Both `to_s` and `to_s_brief` interpolate `IANA.afi?` and `IANA.safi?`, which return nil: `ruby -I. -e 'require "bgp4r"; p BGP::OPT_PARM::CAP::Mbgp.new(999,77).to_s_brief'` prints `"MBGP , "`, and `to_s` prints `AFI  (999), SAFI  (77)`. Building is never validated, so any AFI or SAFI can be sent, and a Capability message then shows a row that names nothing. The default `to_s_brief` on `Capability` and the `Add_path` and `Extended_nexthop` overrides fall back to the number instead; `Mbgp` was left as it stood, since its brief form is pinned by tests. Found while giving every capability a brief form.
 * `Capability#add` drops anything that is not a `Capability::Revision`, with no error, so a typo is silently a Capability message with no revision in it: `ruby -I. -e 'require "bgp4r"; m=BGP::Capability.new; m << "not a revision"; p m.encode.size'` prints `19`, the header alone. Same shape as `Orf_route_refresh#add` above. `Capability::Revision` takes the other side of it: it accepts any object as its capability, so `BGP::Capability::Revision.advertise(10,"x").to_s` raises `NoMethodError` on `to_s_brief`, which is a capability method. `test_capability_revision_o1` builds revisions around a String for that reason and never prints them.
+
+* A capability with no value is built from its code and not from its wire bytes, so value octets that arrive are dropped and only two of its three build paths work. `Capability.factory` hands `CAP::Route_refresh` and `CAP::Dynamic` the capability code rather than the octets, since neither capability has a value to read. A peer that sends one with a value gets no complaint and no record of it: `ruby -I. -e 'require "bgp4r"; p BGP::OPT_PARM::Capability.factory(["0203020141"].pack("H*")).to_shex'` prints `"02020200"`, losing the `41`. Handed the wire bytes directly, both classes put the String in `@code`, so `BGP::OPT_PARM::CAP::Route_refresh.new(["02020200"].pack("H*")).encode` raises `TypeError: no implicit conversion of String into Integer` and `CAP::Dynamic`'s `to_hash` carries `{:code=>"\x02\x02C\x00"}`. `CAP::Enhanced_route_refresh` is the same zero length shape done the other way, taking the wire bytes and keeping any value in a `@value` it writes back, and the factory hands it the octets; the fix is to give these two the same treatment. Found while adding capability 70.
+* The NOTIFICATION subcode registries are still short of IANA in two places, both display only. Subcode 0 is named in every one of them and in none of them here: "Unspecific" for codes 1, 2 and 3 (RFC Errata 4493), "Unspecified Error" for code 5 (RFC 6608), "Reserved" for codes 6 and 7. And OPEN Message Error subcodes 8, 9 and 10 are Deprecated and 11 is "Role Mismatch", all RFC 9234; 11 belongs with the BGP Role capability, which is listed under "Attribute work left". `Notification.code_to_s` answers "Undefined" for each, which is honest but less than it knows. Note that `code_to_s(0)` for the code itself is pinned to "Undefined" by `test_1`, where IANA says Reserved. Found by the registry sweep that fixed code 7.
 
 * A String administrator in the three argument form of `Rd.new` takes `encode` down. Types 0 and 2 pack the administrator as an Integer, so an address String reaches `pack` as it was given: `ruby -I. -e 'require "bgp/nlris/rd"; BGP::Rd.new("1.1.1.1",1,0).encode'` raises `TypeError: no implicit conversion of String into Integer`. The two argument form reads a String administrator as the type 1 form and never gets there, and a named type 1 builds an `IPAddr` first, so only a named type 0 or 2, or a type the RFC does not define, hits this. Either those branches read the String the way type 1 does, or the constructor says the administrator of that type is an Integer. Found while carrying the encoding type through the hash form.
 

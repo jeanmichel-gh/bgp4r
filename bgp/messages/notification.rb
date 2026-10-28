@@ -32,6 +32,9 @@ class Notification < Message
     @code_to_s[args]
   end
 
+  # The IANA "BGP Error (Notification) Codes" registry. Codes 10 to 255 are
+  # unassigned, and a code or subcode with no entry here reads "Undefined",
+  # which is the honest answer for a code point IANA has not given a name.
   @code_to_s=Hash.new("Undefined")
   @code_to_s[[1]]    = "Header Error"
   @code_to_s[[2]]    = "OPEN msg error"
@@ -39,7 +42,14 @@ class Notification < Message
   @code_to_s[[4]]    = "Hold Timer Expired"
   @code_to_s[[5]]    = "Finite State Machine Error"
   @code_to_s[[6]]    = "Cease"
-  @code_to_s[[7]]    = "CAPABILITY Message Error"
+  # RFC 7313 section 5 and section 6: IANA allocated code 7 as
+  # "ROUTE-REFRESH Message Error" and created the "BGP ROUTE-REFRESH
+  # Message Error subcodes" registry for it. bgp4r named it "CAPABILITY
+  # Message Error" with the subcodes of the expired dynamic capability
+  # draft, which IANA never registered against code 7.
+  @code_to_s[[7]]    = "ROUTE-REFRESH Message Error"
+  @code_to_s[[8]]    = "Send Hold Timer Expired"       # RFC 9687 section 9
+  @code_to_s[[9]]    = "Loss of LSDB Synchronization"  # RFC 9815 section 8.6
   @code_to_s[[1,1]]  = "Connection Not Synchronized"
   @code_to_s[[1,2]]  = "Bad Message Length"
   @code_to_s[[1,3]]  = "Bad Message Type"    
@@ -49,7 +59,11 @@ class Notification < Message
   @code_to_s[[2,4]]  = "Unsupported Optional Parameter" 
   @code_to_s[[2,5]]  = "[Deprecated]"                   
   @code_to_s[[2,6]]  = "Unacceptable Hold Time"         
-  @code_to_s[[2,7]]  = "Unsupported Optional Parameter"
+  # RFC 5492 section 5: "The value of this Subcode is 7." Subcode 7 used to
+  # repeat the name of subcode 4, and the two are different errors: RFC 4271
+  # section 6.2 sends 4 for an Optional Parameter Type it does not
+  # recognize, RFC 5492 sends 7 for a capability carried inside one.
+  @code_to_s[[2,7]]  = "Unsupported Capability"
   @code_to_s[[3,1]]  = "Malformed Attribute List"
   @code_to_s[[3,2]]  = "Unrecognized Well-known Attribute"  
   @code_to_s[[3,3]]  = "Missing Well-known Attribute"       
@@ -61,6 +75,10 @@ class Notification < Message
   @code_to_s[[3,9]]  = "Optional Attribute Error"           
   @code_to_s[[3,10]] = "Invalid Network Field"             
   @code_to_s[[3,11]] = "Malformed AS_PATH"
+  # RFC 6608 section 3: the three Finite State Machine Error subcodes.
+  @code_to_s[[5,1]]  = "Receive Unexpected Message in OpenSent State"
+  @code_to_s[[5,2]]  = "Receive Unexpected Message in OpenConfirm State"
+  @code_to_s[[5,3]]  = "Receive Unexpected Message in Established State"
   @code_to_s[[6,1]]  = "Maximum Number of Prefixes Reached"
   @code_to_s[[6,2]]  = "Administrative Shutdown"
   @code_to_s[[6,3]]  = "Peer De-configured"
@@ -69,11 +87,19 @@ class Notification < Message
   @code_to_s[[6,6]]  = "Other Configuration Change"
   @code_to_s[[6,7]]  = "Connection Collision Resolution"
   @code_to_s[[6,8]]  = "Out of Resources"
-  @code_to_s[[7,1]]  = "Unknown Sequence Number"
-  @code_to_s[[7,2]]  = "Invalid Capability Length"
-  @code_to_s[[7,3]]  = "Malformed Capability Value"
-  @code_to_s[[7,4]]  = "Unsupported Capability Code"
-  
+  # The IANA "BGP Cease NOTIFICATION message subcodes" registry adds these
+  # two to the eight of RFC 4486, referencing the RFC named on each.
+  @code_to_s[[6,9]]  = "Hard Reset"  # RFC 8538
+  @code_to_s[[6,10]] = "BFD Down"    # RFC 9384
+  # RFC 7313 section 6 created the "BGP ROUTE-REFRESH Message Error
+  # subcodes" registry: 0 Reserved, 1 "Invalid Message Length", 2 to 255
+  # unassigned. Section 5 is what sends subcode 1. The four names that used
+  # to be here, Unknown Sequence Number, Invalid Capability Length,
+  # Malformed Capability Value and Unsupported Capability Code, come from
+  # the expired dynamic capability draft; against code 7 they name code
+  # points IANA leaves unassigned.
+  @code_to_s[[7,1]]  = "Invalid Message Length"
+
   def initialize(*args)
     @msg_type=NOTIFICATION
     if args.size==1  and args[0].is_a?(String) and args[0].is_packed?

@@ -1,6 +1,7 @@
 
 require 'bgp/optional_parameters/capability'
 require 'bgp/optional_parameters/dynamic'
+require 'bgp/optional_parameters/enhanced_route_refresh'
 require 'bgp/optional_parameters/graceful_restart'
 require 'bgp/optional_parameters/mbgp'
 require 'bgp/optional_parameters/optional_parameter'
