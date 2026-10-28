@@ -690,8 +690,13 @@ class Extended_community_Test < Test::Unit::TestCase
   def test_traffic_marking
     assert_equal('800900000000002e', Traffic_marking.new(46).to_shex)
     check_sub_type(Traffic_marking, '800900000000002e', 'Traffic marking: DSCP 46')
-    # Reserved bits are ignored on decode and kept on the wire.
-    check_sub_type(Traffic_marking, '80090000000000ee', 'Traffic marking: DSCP 46')
+    # Reserved bits are ignored on decode and kept on the wire. RFC 8955
+    # section 7.5 asks for both: they "MUST be set to 0 on encoding and
+    # MUST be ignored during decoding". to_s names them now, so what
+    # encode would write is visible; it used to print the DSCP alone,
+    # which read as though the two forms were the same community.
+    check_sub_type(Traffic_marking, '80090000000000ee',
+                   'Traffic marking: DSCP 46, bits 0x0000000000ee')
     assert_raise(ArgumentError) { Traffic_marking.new(64) }
   end
 
@@ -709,6 +714,88 @@ class Extended_community_Test < Test::Unit::TestCase
     assert_equal('0601010000003e80', Esi_label.new(1000, single_active: true).to_shex)
     check_sub_type(Esi_label, '0601010000003e80', 'ESI Label: label 1000, single-active')
     assert_raise(ArgumentError) { Esi_label.new(0x100000) }
+  end
+
+  # The reserved fields of these four. encode always kept them, because a
+  # Typed community parsed from the wire keeps its 6 value octets, but
+  # hash_value carried only the fields each RFC defines, so a build from
+  # the hash wrote them as 0 and the community came back different. They
+  # carry a :bits entry now, all 48 bits of the value, which is what
+  # Traffic_action has always done with the 46 above its own two.
+  #
+  # Which bits are reserved, each read in its RFC: RFC 9012 section 4.1
+  # gives Encapsulation 4 reserved octets and a 2 octet tunnel type; RFC
+  # 8955 section 7.5 puts the DSCP in "the 6 least significant bits of the
+  # Extended Community value"; RFC 7432 section 7.7 gives MAC Mobility a
+  # Flags octet whose "low-order bit ... is defined as the "Sticky/static"
+  # flag", one reserved octet and a 4 octet sequence number; RFC 7432
+  # section 7.5 gives ESI Label a Flags octet whose low-order bit is
+  # Single-Active, two reserved octets and a 3 octet label field.
+  def test_a_typed_community_keeps_its_reserved_bits_through_its_hash
+    [['030cffffffff0008', Encapsulation,
+      { :encapsulation=> { :tunnel_type=> :vxlan, :bits=> 0xffffffff0008 } },
+      'Encapsulation: vxlan, bits 0xffffffff0008'],
+     ['8009ffffffffffe0', Traffic_marking,
+      { :traffic_marking=> { :dscp=> 32, :bits=> 0xffffffffffe0 } },
+      'Traffic marking: DSCP 32, bits 0xffffffffffe0'],
+     ['0600ffff00000005', Mac_mobility,
+      { :mac_mobility=> { :sequence=> 5, :sticky=> true, :bits=> 0xffff00000005 } },
+      'MAC Mobility: sequence 5, sticky, bits 0xffff00000005'],
+     ['0601ffffff00064f', Esi_label,
+      { :esi_label=> { :label=> 100, :single_active=> true, :bits=> 0xffffff00064f } },
+      'ESI Label: label 100, single-active, bits 0xffffff00064f'],
+     # The class the other four take the shape from.
+     ['8007ffffffffffff', Traffic_action,
+      { :traffic_action=> { :sample=> true, :terminal=> true, :bits=> 0xffffffffffff } },
+      'Traffic action: sample, terminal, bits 0xffffffffffff'],
+    ].each do |hex, klass, hash, text|
+      ec = Extended_community.factory([hex].pack('H*'))
+      assert_equal(klass, ec.class, hex)
+      assert_equal(hash, ec.to_hash, hex)
+      assert_equal(text, ec.to_s, hex)
+      # The hash it gives back builds the same octets, which is what
+      # to_hash owes. Through the list of communities is the other half of
+      # this, and it is in extended_communities_test.rb, where the sweep
+      # over every wire form the factory knows sets all of these bits.
+      value = ec.to_hash.values.first
+      assert_equal(hex, klass.new(**value).to_shex, hex)
+      assert_equal(hex, klass.new(value).to_shex, hex)
+      # And the bits on their own are enough, since the named fields are
+      # read back out of them.
+      assert_equal(hex, klass.new(:bits=> value[:bits]).to_shex, hex)
+    end
+  end
+
+  # With the reserved bits clear, which is what every one of these RFCs
+  # asks an encoder for, the hash is the plain shape it has always been:
+  # no :bits entry, and no Hash where there was a value or a list.
+  def test_a_typed_community_with_no_reserved_bits_hashes_as_it_always_did
+    { '030c000000000008' => { :encapsulation=> :vxlan },
+      '8009000000000020' => { :traffic_marking=> 32 },
+      '0600010000000005' => { :mac_mobility=> [5, true] },
+      '0601010000000640' => { :esi_label=> [100, true] },
+      '8007000000000003' => { :traffic_action=> { :sample=> true, :terminal=> true } },
+    }.each do |hex, hash|
+      ec = Extended_community.factory([hex].pack('H*'))
+      assert_equal(hash, ec.to_hash, hex)
+    end
+    # And a build from values writes the reserved fields as 0, as the RFCs
+    # ask, so nothing here changes what bgp4r sends of its own accord.
+    assert_equal('030c000000000008', Encapsulation.new(:vxlan).to_shex)
+    assert_equal('8009000000000020', Traffic_marking.new(32).to_shex)
+    assert_equal('0600010000000005', Mac_mobility.new(5, sticky: true).to_shex)
+    assert_equal('0601010000000640', Esi_label.new(100, single_active: true).to_shex)
+  end
+
+  # 48 bits is the whole value field. More than that cannot be represented
+  # at all, so it is refused rather than written as its low 6 octets.
+  def test_a_bits_value_wider_than_the_value_field_is_refused
+    # Every one of the 48 fits.
+    assert_equal('0601ffffffffffff', Esi_label.new(:bits=> 0xffffffffffff).to_shex)
+    [Encapsulation, Traffic_marking, Mac_mobility, Esi_label, Traffic_action].each do |klass|
+      e = assert_raise(ArgumentError, klass.to_s) { klass.new(:bits=> 0x1000000000000) }
+      assert_match(/bits/, e.message)
+    end
   end
 
   # RFC 7432 section 7.6 and RFC 9135 section 8.1

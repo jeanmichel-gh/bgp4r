@@ -111,8 +111,11 @@ module BGP
       :traffic_action          => ->(v) { Traffic_action.new(v) },
       :redirect                => ->(v) { Redirect.new(*v) },
       :traffic_marking         => ->(v) { Traffic_marking.new(v) },
-      :mac_mobility            => ->(v) { Mac_mobility.new(v[0], sticky: v[1]) },
-      :esi_label               => ->(v) { Esi_label.new(v[0], single_active: v[1]) },
+      # These two hash as a list of their named fields, and as a Hash when
+      # the community also carries reserved bits, which the list has
+      # nowhere to put. Both forms go to the one constructor.
+      :mac_mobility            => ->(v) { v.is_a?(Hash) ? Mac_mobility.new(v) : Mac_mobility.new(v[0], sticky: v[1]) },
+      :esi_label               => ->(v) { v.is_a?(Hash) ? Esi_label.new(v) : Esi_label.new(v[0], single_active: v[1]) },
       :es_import               => ->(v) { Es_import.new(v) },
       :router_mac              => ->(v) { Router_mac.new(v) },
     }.freeze
