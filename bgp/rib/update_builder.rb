@@ -21,6 +21,9 @@
 #++
 
 require 'bgp/rib/route'
+# For BGP::Message::MAX_SIZE. route.rb pulls it in transitively today, but
+# the dependency belongs here, where the constant is read.
+require 'bgp/messages/message'
 
 module BGP
   module Rib
@@ -50,12 +53,11 @@ module BGP
     # applies a received UPDATE in, so a prefix in both ends up announced.
     class UpdateBuilder
 
-      # RFC 4271 section 4: "The maximum message size is 4096 octets." The
-      # same limit and citation are in bgp/misc/route_generator.rb, which
-      # packs prefixes the same way for a different reason. RFC 8654 raises
-      # it when both speakers negotiate extended messages, which is what
-      # max_size is for; bgp4r does not negotiate that capability.
-      MAX_MESSAGE_SIZE = 4096
+      # The message limit of RFC 4271 section 4, read from the one place it
+      # is defined. RFC 8654 raises it when both speakers negotiate
+      # extended messages, which is what max_size is for; bgp4r does not
+      # negotiate that capability.
+      MAX_MESSAGE_SIZE = BGP::Message::MAX_SIZE
 
       # One prefix to advertise. path_attribute is what Export returned, so
       # it carries no MP_REACH_NLRI; next_hop is what Export chose.

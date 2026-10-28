@@ -52,8 +52,9 @@ module BGP
   # path_attribute is not changed. Other attributes, NEXT_HOP included, are
   # kept as given.
   class RouteGenerator
-    # RFC 4271 section 4: a BGP message is at most 4096 octets.
-    MAX_MESSAGE_SIZE = 4096
+    # The message limit of RFC 4271 section 4, read from the one place it
+    # is defined.
+    MAX_MESSAGE_SIZE = BGP::Message::MAX_SIZE
 
     # RFC 7911 section 3: the Path Identifier is four octets.
     MAX_PATH_ID = 0xffffffff

@@ -63,4 +63,13 @@ class Message_Test < Test::Unit::TestCase
   ensure
     $stdout = out
   end
+
+  # RFC 4271 section 4: "The maximum message size is 4096 octets." This is
+  # the one place the number is written, and the callers that need it read
+  # it from here rather than repeating it. Each of them checks that in its
+  # own test file.
+  def test_the_message_size_limit
+    assert_equal 4096, BGP::Message::MAX_SIZE
+  end
+
 end

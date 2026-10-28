@@ -36,7 +36,7 @@ module BGP
     # caller sending many UPDATEs to a slow peer waits instead of filling
     # memory. Closing the queue wakes a waiting caller with ClosedQueueError.
     class Output < SizedQueue
-      # At most 4096 octets per BGP message (RFC 4271 section 4): about 1 MB.
+      # At most BGP::Message::MAX_SIZE octets per message: about 1 MB.
       DEFAULT_MAX = 256
 
       include Observable
