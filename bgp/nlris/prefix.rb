@@ -54,6 +54,10 @@ class Prefix
       when IANA::AFI::NSAP, :nsap
         s = arg.dup
         plen, o1, r = s.unpack('CH2H*')
+        # A Length field wider than the twenty octets of an NSAP address
+        # keeps the rest, the same way the two branches above do. Before
+        # this those octets were dropped and the Length came back clamped.
+        tail = kept_tail(arg, plen, Nsap::MAX_MLEN / 8)
         # RFC 4271 section 4.3: a tuple is its length octet plus the
         # (length+7)/8 octets the prefix and its trailing bits take, which
         # is what encode writes. Consume them, as the two branches above
@@ -96,6 +100,11 @@ class Prefix
     end
     if pfx =~ /^49\./
       @pfx = Nsap.new_nsap(pfx)
+      # The Length field as it arrived, when the twenty octets of an NSAP
+      # address cannot hold it, so encode writes back what came in. Same
+      # job as the rescue in new_ipaddr does for IPv4 and IPv6.
+      given = pfx.to_s.split('/')[1].to_i
+      @mlen = given if given > Nsap::MAX_MLEN
     else
       @pfx = new_ipaddr(pfx)
     end

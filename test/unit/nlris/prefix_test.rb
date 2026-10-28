@@ -74,6 +74,40 @@ class Prefix_Test < Test::Unit::TestCase
     assert_equal(2, pfx.afi)
     assert_equal('IPv6=2011:13:11::/128', pfx.to_s_with_afi)
   end
+  # The twenty octets of an NSAP address, Length 160. The ceiling in
+  # Nsap.new_nsap used to be 152, so this came back as twenty octets
+  # total instead of twenty-one: the Length octet dropped to 152 and the
+  # twentieth prefix octet went with it.
+  def test_an_nsap_prefix_of_the_full_160_bits_round_trips
+    wire = ['a0' + '49' + '00' * 19].pack('H*')
+    pfx = BGP::Prefix.new_ntop(wire.dup, 3)
+    assert_equal(160, pfx.mlen)
+    assert_equal(wire.unpack1('H*'), pfx.to_shex)
+    assert_equal(21, pfx.encode.bytesize, 'a Length octet and twenty prefix octets')
+  end
+
+  # A Length wider than the address keeps the octets past the twenty, the
+  # way an over-wide IPv4 or IPv6 Length does, and reports the Length it
+  # was given rather than a clamped one.
+  def test_an_nsap_prefix_wider_than_its_address_keeps_the_rest
+    wire = ['c8' + '49' + '01' * 24].pack('H*')   # Length 200, 25 octets
+    pfx = BGP::Prefix.new_ntop(wire.dup, 3)
+    assert_equal(200, pfx.mlen, 'the Length as it arrived')
+    assert_equal(wire.unpack1('H*'), pfx.to_shex, 'byte for byte')
+    assert_equal('0101010101', pfx.tail.unpack1('H*'), 'the five octets past the twenty')
+  end
+
+  # And the consumption stays right, so reading one prefix after another
+  # still works when the first one is over-wide.
+  def test_an_over_wide_nsap_prefix_consumes_its_own_octets
+    s = ['c8' + '49' + '01' * 24].pack('H*') + ['2049000100'].pack('H*')
+    first = BGP::Prefix.new_ntop(s, 3)
+    assert_equal(200, first.mlen)
+    second = BGP::Prefix.new_ntop(s, 3)
+    assert_equal(32, second.mlen, 'the next prefix was read, not the first one again')
+    assert_equal('', s, 'and both were consumed')
+  end
+
   def test_nsap
     pfx =  Prefix.new('49.0001.0002.0003')
     assert_equal('9849000100020003000000000000000000000000', pfx.to_shex )

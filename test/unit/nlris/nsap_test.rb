@@ -84,10 +84,27 @@ class Nsap_Test < Test::Unit::TestCase
   def test_new_nsap
     nsap = Nsap.new_nsap('49.0102.0304.0506.0608.0910.1112.1314.1516.1718.ff')
     assert_equal('49.0102.0304.0506.0608.0910.1112.1314.1516.1718.00', nsap.to_s)
-    assert_equal(152, nsap.mlen)
+    assert_equal(152, nsap.mlen, 'the default when no length is given')
+    # A /160 is the whole twenty octet address and is not clamped. The
+    # ceiling used to be 152, nineteen octets, so this came back a /152
+    # with its twentieth octet masked away. The assertions below moved
+    # with that fix.
     nsap = Nsap.new_nsap('49.0102.0304.0506.0608.0910.1112.1314.1516.1718.ff/160')
-    assert_equal('49.0102.0304.0506.0608.0910.1112.1314.1516.1718.00', nsap.to_s)
-    assert_equal(152, nsap.mlen)
+    assert_equal('49.0102.0304.0506.0608.0910.1112.1314.1516.1718.ff', nsap.to_s)
+    assert_equal(160, nsap.mlen)
+    assert_equal('49010203040506060809101112131415161718ff',
+                 nsap.encode.unpack1('H*'), 'all twenty octets')
+  end
+
+  # 160 is the whole address, so it is the ceiling and it has one home.
+  def test_max_mlen_is_the_twenty_octets_of_an_nsap_address
+    assert_equal(160, BGP::Nsap::MAX_MLEN)
+    assert_equal(20, BGP::Nsap::MAX_MLEN / 8)
+    # A Length above it is still clamped here, because this class holds
+    # twenty octets and nothing more. Prefix keeps the rest; see
+    # prefix_test.rb.
+    nsap = BGP::Nsap.new_nsap('49.0102.0304.0506.0608.0910.1112.1314.1516.1718.ff/200')
+    assert_equal(160, nsap.mlen)
   end
   
   def test_iso_ip_mapped
