@@ -128,18 +128,139 @@ class TestBgpRibPeerAdapter < Test::Unit::TestCase
     assert_equal([], @sink.work, 'nothing is queued for an empty UPDATE')
   end
 
-  # MP_REACH_NLRI and MP_UNREACH_NLRI are path attributes (RFC 4760 section
-  # 3) and are not read yet. unreachable? is how a caller tells that apart
-  # from an UPDATE that genuinely carried nothing.
-  def test_mp_reach_is_not_read_yet_but_is_reported
+  # MP_REACH_NLRI and MP_UNREACH_NLRI, RFC 4760 sections 3 and 4. The two
+  # SAFIs whose NLRI is a bare prefix are read; the rest are reported. See
+  # PeerAdapter::MP_SAFIS for why the others are not.
+
+  def mp_reach(afi, safi, nexthop, *nlris)
+    BGP::Path_attribute.new(BGP::Origin.new(0), BGP::As_path.new(65002),
+                            BGP::Mp_reach.new(:afi => afi, :safi => safi,
+                                              :nexthop => [nexthop], :nlris => nlris))
+  end
+
+  def test_mp_reach_ipv6_unicast_becomes_announcements
+    peer_opened
+    u = BGP::Update.new(mp_reach(2, 1, '2011:1::1', '2011:1::/32', '2011:2::/32'))
+    ops = @adapter.operations(u)
+    assert_equal([:announce, :announce], ops.map(&:first))
+    assert_equal(%w[2011:1::/32 2011:2::/32], ops.map { |o| o[1].prefix })
+    assert_equal('2011:1::1', ops[0][1].next_hop, 'the next hop comes from MP_REACH')
+    assert_equal(2, ops[0][1].afi)
+    assert(!@adapter.unreachable?(u))
+    assert_equal([], @adapter.unread_families(u))
+  end
+
+  def test_mp_unreach_becomes_withdrawals
+    peer_opened
+    pa = BGP::Path_attribute.new(BGP::Mp_unreach.new(:afi => 2, :safi => 1,
+                                                     :nlris => ['2011:1::/32']))
+    assert_equal([[:withdraw, @adapter.peer, '2011:1::/32', nil]],
+                 @adapter.operations(BGP::Update.new(pa)))
+  end
+
+  # IANA SAFI 2. Its NLRI is a bare prefix too, so it reads the same way.
+  def test_mp_reach_multicast_is_read
+    peer_opened
+    u = BGP::Update.new(mp_reach(1, 2, '10.0.0.1', '10.1.0.0/16'))
+    assert_equal(['10.1.0.0/16'], @adapter.operations(u).map { |o| o[1].prefix })
+  end
+
+  # IPv4 unicast can arrive either way. Both are read.
+  def test_ipv4_unicast_through_mp_reach_is_read
+    peer_opened
+    u = BGP::Update.new(mp_reach(1, 1, '10.0.0.1', '10.1.0.0/16'))
+    assert_equal(['10.1.0.0/16'], @adapter.operations(u).map { |o| o[1].prefix })
+  end
+
+  # SAFI 4 carries a label with the prefix (RFC 8277 section 2) and 128 a
+  # Route Distinguisher (RFC 4364 section 4.2). A Route keys on the prefix
+  # and the Path Identifier, so two routes differing only in label or RD
+  # would collide. Reported, not half read.
+  def test_a_labeled_family_is_reported_rather_than_half_read
     peer_opened
     pa = BGP::Path_attribute.new(BGP::Origin.new(0),
-                                 BGP::Mp_reach.new(:afi => 2, :safi => 1,
-                                                   :nexthop => ['2011:1::1'],
-                                                   :nlris => ['2011:1::/32']))
+                                 BGP::Mp_reach.new(:afi => 1, :safi => 4,
+                                                   :nexthop => ['10.0.0.1'],
+                                                   :nlris => [{ :prefix => '10.1.0.0/16', :label => 101 }]))
+    u = BGP::Update.new(pa)
+    assert_equal([], @adapter.operations(u), 'nothing is invented for it')
+    assert(@adapter.unreachable?(u), 'and the gap reports itself')
+    assert_equal([[1, 4]], @adapter.unread_families(u))
+  end
+
+  def test_an_unread_family_in_mp_unreach_is_reported_too
+    peer_opened
+    pa = BGP::Path_attribute.new(
+           BGP::Mp_unreach.new(:afi => 1, :safi => 128,
+                               :nlris => [{ :rd => [100, 200], :prefix => '10.1.0.0/16', :label => 101 }]))
     u = BGP::Update.new(pa)
     assert_equal([], @adapter.operations(u))
-    assert(@adapter.unreachable?(u), 'the reachability is in an attribute bgp4r does not read here')
+    assert(@adapter.unreachable?(u))
+    assert_equal([[1, 128]], @adapter.unread_families(u))
+  end
+
+  # Both withdrawal fields before both announcement fields. The two families
+  # are different, so the order between the withdrawals cannot matter.
+  def test_all_four_reachability_fields_in_one_update
+    peer_opened
+    pa = BGP::Path_attribute.new(BGP::Origin.new(0), BGP::Next_hop.new('10.0.0.2'),
+                                 BGP::As_path.new(65002),
+                                 BGP::Mp_reach.new(:afi => 2, :safi => 1,
+                                                   :nexthop => ['2011:1::1'],
+                                                   :nlris => ['2011:1::/32']),
+                                 BGP::Mp_unreach.new(:afi => 2, :safi => 1,
+                                                     :nlris => ['2011:9::/32']))
+    u = BGP::Update.new(BGP::Withdrawn.new('10.9.0.0/16'), pa, BGP::Nlri.new('10.1.0.0/16'))
+    ops = @adapter.operations(u)
+    assert_equal([:withdraw, :withdraw, :announce, :announce], ops.map(&:first))
+    assert_equal(%w[10.9.0.0/16 2011:9::/32], ops[0, 2].map { |o| o[2] })
+    assert_equal(%w[10.1.0.0/16 2011:1::/32], ops[2, 2].map { |o| o[1].prefix })
+  end
+
+  # The add-path Path Identifier of RFC 7911 section 3 travels into the
+  # Route, which is what lets one peer hold several paths to one prefix.
+  def test_path_identifiers_travel_into_the_route
+    peer_opened
+    u = BGP::Update.new(path_attribute,
+                        BGP::Nlri.new({ :path_id => 7, :nlri => '10.1.0.0/16' },
+                                      { :path_id => 9, :nlri => '10.1.0.0/16' }))
+    ops = @adapter.operations(u)
+    assert_equal([7, 9], ops.map { |o| o[1].path_id })
+    assert_equal([['10.1.0.0/16', 7], ['10.1.0.0/16', 9]], ops.map { |o| o[1].key },
+                 'the same prefix, two paths')
+  end
+
+  def test_path_identifiers_travel_through_mp_reach_too
+    peer_opened
+    pa = BGP::Path_attribute.new(
+           BGP::Origin.new(0), BGP::As_path.new(65002),
+           BGP::Mp_reach.new(:afi => 2, :safi => 1, :path_id => true,
+                             :nexthop => ['2011:1::1'],
+                             :nlris => [{ :path_id => 7, :prefix => '2011:1::/32' }]))
+    ops = @adapter.operations(BGP::Update.new(pa))
+    assert_equal([7], ops.map { |o| o[1].path_id })
+  end
+
+  def test_a_path_identifier_in_mp_unreach
+    peer_opened
+    pa = BGP::Path_attribute.new(
+           BGP::Mp_unreach.new(:afi => 2, :safi => 1, :path_id => true,
+                               :nlris => [{ :path_id => 7, :prefix => '2011:1::/32' }]))
+    assert_equal([[:withdraw, @adapter.peer, '2011:1::/32', 7]],
+                 @adapter.operations(BGP::Update.new(pa)))
+  end
+
+  # The real path: an UPDATE built, encoded, and parsed back from its octets,
+  # since that is the only form a session ever hands the adapter.
+  def test_an_update_parsed_from_its_own_wire_bytes
+    peer_opened
+    info = BGP::Update::Info.new(true)
+    sent = BGP::Update.new(mp_reach(2, 1, '2011:1::1', '2011:1::/32'))
+    back = BGP::Message.factory(sent.encode(info), info)
+    assert_kind_of(BGP::Update, back)
+    ops = @adapter.operations(back)
+    assert_equal(['2011:1::/32'], ops.map { |o| o[1].prefix })
+    assert_equal('2011:1::1', ops[0][1].next_hop)
   end
 
   def test_an_update_reaches_the_sink

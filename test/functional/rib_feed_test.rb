@@ -38,21 +38,25 @@ class RibFeedTest < Test::Unit::TestCase
   SERVER_AS = 100
   CLIENT_AS = 200
 
-  def setup
-    @port = start_server
-    # The table is attached before the session, so it sees it come up and
-    # go down. @s is the server side Neighbor the helper built.
+  def teardown
+    @rib.feed.stop if @rib
+    @c.close if @c
+    stop_server
+  end
+
+  # Brings up a session with the table attached before it, so the table sees
+  # it come up and go down. cap, when given, is advertised by both sides.
+  # @s is the server side Neighbor the helper built.
+  def session(cap = nil)
+    @port = start_server(0, cap)
     @rib = BGP::Rib.new(:local_as => SERVER_AS, :router_id => '0.0.0.1')
     @changes = []
     @rib.on_change { |c| @changes << c }
     @adapter = @rib.attach(@s)
     @c = BGP::Neighbor.new(4, CLIENT_AS, 180, '0.0.0.2', '127.0.0.1', '127.0.0.1')
-  end
-
-  def teardown
-    @rib.feed.stop if @rib
-    @c.close if @c
-    stop_server
+    @c.add_cap cap if cap
+    @c.start :port => @port
+    assert(wait_for { @s.is_established? }, 'the session came up')
   end
 
   def path_attribute(as = CLIENT_AS, local_pref: nil)
@@ -73,9 +77,7 @@ class RibFeedTest < Test::Unit::TestCase
   end
 
   def test_updates_from_a_live_session_reach_the_table
-    @c.start :port => @port
-    assert(wait_for { @s.is_established? }, 'the session came up')
-
+    session
     @c.send_update BGP::Update.new(path_attribute,
                                    BGP::Nlri.new('10.1.0.0/16', '10.2.0.0/16'))
     assert(wait_for { @rib.drain && @rib.loc_rib.size == 2 }, "loc-rib: #{@rib.loc_rib.size}")
@@ -93,8 +95,7 @@ class RibFeedTest < Test::Unit::TestCase
   end
 
   def test_a_withdrawal_from_a_live_session_reaches_the_table
-    @c.start :port => @port
-    assert(wait_for { @s.is_established? })
+    session
     @c.send_update BGP::Update.new(path_attribute, BGP::Nlri.new('10.1.0.0/16'))
     assert(wait_for { @rib.drain && @rib.loc_rib.size == 1 })
 
@@ -107,8 +108,7 @@ class RibFeedTest < Test::Unit::TestCase
   # ignored. Table#import does it, and this is the first time a real eBGP
   # session has exercised it.
   def test_local_pref_from_this_ebgp_peer_is_dropped
-    @c.start :port => @port
-    assert(wait_for { @s.is_established? })
+    session
     @c.send_update BGP::Update.new(path_attribute(:local_pref => 300),
                                    BGP::Nlri.new('10.1.0.0/16'))
     assert(wait_for { @rib.drain && @rib.loc_rib.size == 1 })
@@ -123,8 +123,7 @@ class RibFeedTest < Test::Unit::TestCase
   # calls stop without notifying the message observers. That is the whole
   # reason Neighbor#on_state_change exists.
   def test_the_routes_go_when_the_session_drops
-    @c.start :port => @port
-    assert(wait_for { @s.is_established? })
+    session
     @c.send_update BGP::Update.new(path_attribute, BGP::Nlri.new('10.1.0.0/16', '10.2.0.0/16'))
     assert(wait_for { @rib.drain && @rib.loc_rib.size == 2 })
 
@@ -133,5 +132,63 @@ class RibFeedTest < Test::Unit::TestCase
     assert(wait_for { @rib.drain && @rib.loc_rib.empty? }, "loc-rib: #{@rib.loc_rib.size}")
     assert_equal([:withdrawn, :withdrawn], @changes.last(2).map(&:type))
     assert(@rib.adj_rib_in(@rib.peers.first).empty?, 'the Adj-RIB-In was emptied')
+  end
+
+  # IPv6 unicast over a real session, which travels in MP_REACH_NLRI and
+  # MP_UNREACH_NLRI (RFC 4760 sections 3 and 4) rather than the RFC 4271
+  # section 4.3 fields. The next hop comes out of the attribute.
+  def test_ipv6_through_mp_reach_and_mp_unreach
+    session
+    pa = BGP::Path_attribute.new(BGP::Origin.new(0), BGP::As_path.new(CLIENT_AS),
+                                 BGP::Mp_reach.new(:afi => 2, :safi => 1,
+                                                   :nexthop => ['2011:1::1'],
+                                                   :nlris => ['2011:1::/32', '2011:2::/32']))
+    @c.send_update BGP::Update.new(pa)
+    assert(wait_for { @rib.drain && @rib.loc_rib.size == 2 }, "loc-rib: #{@rib.loc_rib.size}")
+    best = @rib.best('2011:1::/32')
+    assert_equal('2011:1::1', best.next_hop)
+    assert_equal(2, best.afi)
+    assert_equal('200', best.as_path)
+
+    unreach = BGP::Path_attribute.new(BGP::Mp_unreach.new(:afi => 2, :safi => 1,
+                                                          :nlris => ['2011:1::/32']))
+    @c.send_update BGP::Update.new(unreach)
+    assert(wait_for { @rib.drain && @rib.loc_rib.size == 1 }, 'one went')
+    assert_nil(@rib.best('2011:1::/32'))
+    assert_not_nil(@rib.best('2011:2::/32'), 'the other stayed')
+  end
+
+  # Two paths to one prefix from one peer, which is what add-path is for
+  # (RFC 7911). Until now nothing had carried a Path Identifier into a RIB
+  # over a session: test/functional/add_path_test.rb only checks that the
+  # capability negotiates. Both sides advertise send and receive here, so
+  # the server parses the Path Identifier off the wire.
+  def test_add_path_puts_two_paths_to_one_prefix_in_the_table
+    cap = BGP::OPT_PARM::CAP::Add_path.new(:send_and_receive, 1, 1)
+    session(cap)
+    assert(@s.session_info.recv_inet_unicast?, 'the server can receive multiple paths')
+
+    pa1 = BGP::Path_attribute.new(BGP::Origin.new(0), BGP::Next_hop.new('10.0.0.1'),
+                                  BGP::As_path.new(CLIENT_AS))
+    pa2 = BGP::Path_attribute.new(BGP::Origin.new(0), BGP::Next_hop.new('10.0.0.2'),
+                                  BGP::As_path.new(CLIENT_AS, 65010))
+    @c.send_update BGP::Update.new(pa1, BGP::Nlri.new(:path_id => 7, :nlri => '10.1.0.0/16'))
+    @c.send_update BGP::Update.new(pa2, BGP::Nlri.new(:path_id => 9, :nlri => '10.1.0.0/16'))
+    assert(wait_for { @rib.drain && @rib.candidates('10.1.0.0/16').size == 2 },
+           "candidates: #{@rib.candidates('10.1.0.0/16').size}")
+
+    peer = @adapter.peer
+    assert_equal([7, 9], @rib.adj_rib_in(peer).paths('10.1.0.0/16').map(&:path_id).sort,
+                 'both Path Identifiers arrived')
+    assert_equal(1, @rib.loc_rib.size, 'one best route, as always')
+    # The shorter AS_PATH wins (RFC 4271 section 9.1.2.2 a), which is path 7.
+    assert_equal(7, @rib.best('10.1.0.0/16').path_id)
+
+    # Withdrawing one path leaves the other, which is the whole point: a
+    # withdrawal keyed on the prefix alone would take both.
+    @c.send_update BGP::Update.new(BGP::Withdrawn.new(:path_id => 7, :nlri => '10.1.0.0/16'))
+    assert(wait_for { @rib.drain && @rib.candidates('10.1.0.0/16').size == 1 },
+           "candidates: #{@rib.candidates('10.1.0.0/16').size}")
+    assert_equal(9, @rib.best('10.1.0.0/16').path_id, 'the other path took over')
   end
 end
