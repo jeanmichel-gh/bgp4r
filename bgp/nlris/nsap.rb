@@ -14,10 +14,21 @@ module BGP
 
 class Nsap
   
+  # The bits of a 20 octet NSAP address, which is as much as this class
+  # holds: @nsap is always exactly 20 octets and encode writes
+  # (mlen+7)/8 of them. A Length field wider than this is kept by
+  # Prefix, which carries the octets past the twenty in its @tail and
+  # reports the Length it was given.
+  MAX_MLEN = 160
+
   def self.new_nsap(s)
     pfx,len = s.split('/')
+    # The ceiling used to be 152, which is 19 octets, so a /160 prefix
+    # came back as a /152 and lost its twentieth octet. 160 is what the
+    # rest of the class is built around: Nsap#mlen defaults to it and
+    # prefix_mask_bits masks against it.
     len ||= 152
-    new [pfx, (len.to_i > 152 ? 152 : len)].join('/')
+    new [pfx, (len.to_i > MAX_MLEN ? MAX_MLEN : len)].join('/')
   end
   def self.new_ntoh(s)
     o1, r = s.unpack('H2H*')
