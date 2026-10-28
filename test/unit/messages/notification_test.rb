@@ -102,6 +102,36 @@ class Notification_Test < Test::Unit::TestCase
     assert_equal('Unsupported Capability', BGP::Notification.code_to_s(2, 7))
   end
 
+  # RFC 9234 section 7: IANA "has marked values 8-10 as "Deprecated"" in
+  # the "OPEN Message Error subcodes" registry and registered 11 as "Role
+  # Mismatch". Section 4.2 is what sends 11, when the two Roles are not a
+  # correct pair or, under strict mode, when the peer advertised no BGP
+  # Role capability.
+  def test_open_message_error_subcode_11_is_role_mismatch
+    assert_equal('Deprecated', BGP::Notification.code_to_s(2, 8))
+    assert_equal('Deprecated', BGP::Notification.code_to_s(2, 9))
+    assert_equal('Deprecated', BGP::Notification.code_to_s(2, 10))
+    assert_equal('Role Mismatch', BGP::Notification.code_to_s(2, 11))
+    assert_equal('Undefined', BGP::Notification.code_to_s(2, 12))
+    assert_equal('Notification (3), length: 21: ' \
+                 'OPEN msg error (2), Role Mismatch (11) ',
+                 BGP::Notification.new(2, 11).to_s)
+  end
+
+  # The notification a speaker sends on a Role mismatch, with the OPEN it
+  # refused in the Data field. bgp4r sends it when a script says to; it
+  # does not compare the two Roles itself, which is session state.
+  def test_a_role_mismatch_carries_the_open_it_refused
+    open = BGP::Open.new(4, 100, 200, '10.0.0.1',
+                         BGP::OPT_PARM::CAP::Role.new(:customer))
+    notif = BGP::Notification.new(2, 11, open.encode)
+    back = BGP::Message.factory(notif.encode)
+    assert_equal(BGP::Notification, back.class)
+    assert_equal(notif.to_shex, back.to_shex)
+    assert_equal(open.to_shex,
+                 BGP::Message.factory(back.to_hash[:data].is_packed).to_shex)
+  end
+
   # The BGP Error (Notification) Codes registry, checked code point by code
   # point while fixing code 7. 8 is RFC 9687, 9 is RFC 9815, and 10 to 255
   # are unassigned.

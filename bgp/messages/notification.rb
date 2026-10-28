@@ -64,6 +64,17 @@ class Notification < Message
   # section 6.2 sends 4 for an Optional Parameter Type it does not
   # recognize, RFC 5492 sends 7 for a capability carried inside one.
   @code_to_s[[2,7]]  = "Unsupported Capability"
+  # RFC 9234 section 7: "Due to improper use of the values 8, 9, and 10,
+  # IANA has marked values 8-10 as "Deprecated"" in the "OPEN Message Error
+  # subcodes" registry, and registered 11 as "Role Mismatch". Section 4.2
+  # is what sends 11: two Roles that do not form one of its three pairs,
+  # or, under its strict mode, a peer that advertised no BGP Role
+  # capability. bgp4r names the subcode and sends it when a script says
+  # to; it does not compare the Roles itself.
+  @code_to_s[[2,8]]  = "Deprecated"
+  @code_to_s[[2,9]]  = "Deprecated"
+  @code_to_s[[2,10]] = "Deprecated"
+  @code_to_s[[2,11]] = "Role Mismatch"
   @code_to_s[[3,1]]  = "Malformed Attribute List"
   @code_to_s[[3,2]]  = "Unrecognized Well-known Attribute"  
   @code_to_s[[3,3]]  = "Missing Well-known Attribute"       

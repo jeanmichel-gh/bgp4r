@@ -34,6 +34,7 @@ module OPT_PARM
     CAP_ROUTE_REFRESH = 2
     CAP_ORF = 3
     CAP_EXTENDED_NEXTHOP = 5 # RFC 8950 section 4
+    CAP_ROLE = 9 # RFC 9234 section 4.1
     CAP_GR  = 64
     CAP_AS4 = 65
     CAP_DYNAMIC = 67

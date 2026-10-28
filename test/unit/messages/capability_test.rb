@@ -174,6 +174,8 @@ class TestBgpMessagesCapabilityBrief < Test::Unit::TestCase
     'BGP::OPT_PARM::CAP::Graceful_restart'      => '020440020078',
     'BGP::OPT_PARM::CAP::Mbgp'                  => '0206010400010001',
     'BGP::OPT_PARM::CAP::Orf'                   => '0209030700010001014001',
+    # RFC 9234 section 4.1: capability code 9, one octet, the Role.
+    'BGP::OPT_PARM::CAP::Role'                  => '0203090103',
     'BGP::OPT_PARM::CAP::Route_refresh'         => '02020200',
     'BGP::OPT_PARM::CAP::Unknown'               => '0207640576616c7565',
     'BGP::OPT_PARM::Capability::Unknown'        => '0207640576616c7565',
@@ -185,6 +187,7 @@ class TestBgpMessagesCapabilityBrief < Test::Unit::TestCase
     'BGP::OPT_PARM::DYN_CAP::Graceful_restart'  => '4000020078',
     'BGP::OPT_PARM::DYN_CAP::Mbgp'              => '01000400010001',
     'BGP::OPT_PARM::DYN_CAP::Orf'               => '03000700010001014001',
+    'BGP::OPT_PARM::DYN_CAP::Role'              => '09000103',
     'BGP::OPT_PARM::DYN_CAP::Route_refresh'     => '020000',
     'BGP::OPT_PARM::DYN_CAP::Unknown'           => '64000576616c7565',
   }
@@ -212,6 +215,7 @@ class TestBgpMessagesCapabilityBrief < Test::Unit::TestCase
     when 'Enhanced_route_refresh' then kl.new
     when 'Graceful_restart' then kl.new(0, 120)
     when 'Add_path'         then kl.new(:send, 1, 1)
+    when 'Role'             then kl.new(:customer)
     when 'Extended_nexthop' then kl.new(1, 1, 2)
     when 'Orf'              then kl.new.tap { |o| o.add(kl::Entry.new(1, 1, [64, 1])) }
     when 'Unknown'
