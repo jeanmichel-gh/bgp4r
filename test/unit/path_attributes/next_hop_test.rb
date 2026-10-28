@@ -52,4 +52,14 @@ class Next_hop_Test < Test::Unit::TestCase
     assert_equal(next_hop.to_shex, Next_hop.new(next_hop.to_hash).to_shex)
     assert_equal(next_hop.to_hash, Next_hop.new(next_hop.to_hash).to_hash)
   end
+  # An Integer address is packed into four octets, so one that does not fit
+  # is refused by IPAddr.create rather than truncated. It used to come back
+  # as a different address: 2**32+1 became 0.0.0.1.
+  def test_an_integer_that_does_not_fit_is_refused
+    assert_raise(ArgumentError) { BGP::Next_hop.new(2**32) }
+    assert_raise(ArgumentError) { BGP::Next_hop.new(-1) }
+    assert_equal('255.255.255.255', BGP::Next_hop.new(0xffffffff).next_hop,
+                 'and the top of the range is still fine')
+  end
+
 end

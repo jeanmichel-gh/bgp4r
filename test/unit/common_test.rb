@@ -87,6 +87,33 @@ class Common_Test < Test::Unit::TestCase
     assert_equal('0a000001', IPAddr.create('10.0.0.1').to_shex)
     assert_equal('20010db8000000000000000000000001', IPAddr.create('2001:db8::1').to_shex)
   end
+  # An Integer is packed into four octets, so one that does not fit is
+  # refused rather than truncated. pack('N') keeps the low 32 bits, so
+  # 2**32+1 used to come back as 0.0.0.1 and -1 as 255.255.255.255, and a
+  # path attribute built that way carried an address nobody asked for.
+  def test_ipaddr_create_refuses_an_integer_that_does_not_fit
+    [2**32, 2**32 + 1, 2**128, -1, -2**31].each do |n|
+      e = assert_raise(ArgumentError, "#{n} should be refused") { IPAddr.create(n) }
+      assert_match(/does not fit the four octets/, e.message)
+    end
+  end
+
+  # Refusing the Integer form leaves every other route open, which is what
+  # the conventions require of a constructor that refuses anything: the
+  # octet level has to keep working.
+  def test_ipaddr_create_still_takes_every_other_form
+    assert_equal('ffffffff', IPAddr.create(["ffffffff"].pack('H*').is_packed).to_shex,
+                 'four wire octets, whatever they say')
+    assert_equal('ffffffff', IPAddr.create([255, 255, 255, 255]).to_shex)
+    assert_equal('255.255.255.255', IPAddr.create('255.255.255.255').to_s)
+    assert_equal(0, IPAddr.create(0).to_i, 'and the ends of the range itself')
+    assert_equal(0xffffffff, IPAddr.create(0xffffffff).to_i)
+    # IPv6 was never reachable through the Integer form and still is not,
+    # which is what the error message says.
+    assert(IPAddr.create('2011:1::1').ipv6?)
+    assert(IPAddr.create([0x20, 0x11] + [0] * 13 + [1]).ipv6?)
+  end
+
   def test_netmask_comes_from_the_standard_library
     # ipaddr has had a compatible #netmask since Ruby 2.5, so the copy in
     # common.rb is guarded out on every Ruby bgp4r supports and never runs.
