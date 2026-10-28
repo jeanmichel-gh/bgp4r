@@ -74,7 +74,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. A `lab` job runs the Compose topologies.
 
-Baseline on 2026-10-27: 906 tests, 19939 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.0%.
+Baseline on 2026-10-27: 912 tests, 20004 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.0%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -268,6 +268,19 @@ the decision is not re-litigated from scratch:
   points. The attribute figure reads worse than it is: FRR's `bgpd.h` defines
   exactly bgp4r's 22 plus two.
 
+Phase 0 item 1, **ADD-PATH Send and Receive are inverted: done**. RFC 7911
+section 4 gives the field value 1 for able to receive and value 2 for able to
+send, and `CAP::Add_path` had them the other way round, so bgp4r was backwards
+against any real router and only self consistent against itself. Fixed in
+`bgp/optional_parameters/add_path.rb`: `_send_recv` now maps `:recv` to 1 and
+`:send` to 2, and `has?` reads 1 and 3 for recv and 2 and 3 for send. The
+caller facing symbols still mean what they say, so `add(:send, 1, 1)` encodes
+`02`. `Neighbor::Base_Capabilities#_path_id?` needed no change: it was already
+written as the RFC 7911 section 5 pair rule, which is why the two errors
+cancelled between two bgp4r speakers, and it now carries that quote as a
+comment. Phase 2's peer adapter can ask `path_id_send?` and `path_id_recv?`.
+(This note belongs in the phase 0 list, which is not on master yet.)
+
 ## Known issues to work on
 
 Found while fixing other bugs, not fixed yet. Verified against master on
@@ -291,6 +304,7 @@ Lab and conformance:
 * The GoBGP column in `docs/protocol-testing.md` was measured on 3.23 by hand, and holds for 4.10 too: the containerized test asserts every one of the 18 rows and passes on both. `GOBGP_IMAGE` switches versions without an edit. The FRR and BIRD columns are still from 8.4.4 and 2.14 run natively, and only the session level outcomes there, since BIRD gives no usable RIB answer over a loopback session.
 * `lab/conformance/gobgpd.conf` and `lab/topologies/fault-matrix/gobgp.toml` are written in the 3.23 style and GoBGP 4 reads them unchanged. Every key is still in the 4.x config structs under the same `mapstructure` name, and 4.x registers `mapstructure.StringToNetIPAddrHookFunc` so the address fields still decode from TOML strings. No schema work is needed; an earlier version of this entry said otherwise and was wrong.
 * `lab/topologies/fault-matrix` exits 1, and that is the right answer: GoBGP discards the malformed tunnel encapsulation attribute and installs the route where RFC 9012 section 13 asks for treat-as-withdraw. Both cases are asserted as a known divergence in `test/functional/lab/fault_matrix_test.rb`; see the comment on `TUNNEL_ENCAP` there. It is not an old bug since fixed: 3.23 does it, and a CI run on 4.10 does it too, so it is worth reporting upstream.
+* No lab topology exercises add-path against a real router, which is why the inverted Send/Receive field survived: `test/functional/add_path_test.rb` runs bgp4r against bgp4r, where an inverted field cancels. The fix now has tests that write the field value itself on one side, in `test/unit/optional_parameters/add_path_test.rb`, `test/unit/neighbor/add_path_cap_test.rb` and `test/functional/add_path_test.rb`, so the direction is pinned without a second implementation. A GoBGP topology is still worth having and is four pieces, none of which exists: `Neighbor#capability` takes no `:add_path` symbol, so `lab/speaker.rb`'s `add_capability` cannot name it; an announce block has no way to give a prefix a Path Identifier, since `build_update` calls `Nlri.new` with plain prefix strings; `Lab::Recorder#record_routes` keys received routes by prefix alone, so two paths for one prefix overwrite each other and the state file cannot show a Path Identifier arrived; and GoBGP needs `add-paths` with `send-max` in its config. Do it as its own pull request, with a `lab/topologies/add-path` and a Compose test beside the other three.
 * Lowest coverage (unit suite): `neighbor/neighbor.rb` 89%, `path_attributes/origin.rb` 91%, `messages/update.rb` 92%, `optional_parameters/graceful_restart.rb` 92%, `path_attributes/mp_unreach.rb` 93%.
 
 ## Attribute work left

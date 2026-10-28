@@ -48,6 +48,10 @@ module BGP::OPT_PARM::CAP
       end
     end
     
+    # sr is what *we* can do for this family: :recv, :send or
+    # :send_and_recv. The symbols say what the sender of the capability can
+    # do, which is how RFC 7911 section 4 defines the field, and _send_recv
+    # turns them into the field's values.
     def add(sr, _afi,_safi)
       @af[[afi(_afi), safi(_safi)]] = _send_recv(sr)
     end
@@ -60,24 +64,34 @@ module BGP::OPT_PARM::CAP
       end
     end
     
-    # 0001 01 01
-    # 0002 80 02
-    # 0002 01 03
+    # 0001 01 01   IPv4 unicast, the sender can receive multiple paths
+    # 0002 80 02   VPN IPv6, the sender can send multiple paths
+    # 0002 01 03   IPv6 unicast, the sender can do both
 
+    # Can the sender of this capability send multiple paths for the family?
     def send? afi, safi
       has? :send, afi, safi
     end
 
+    # Can the sender of this capability receive multiple paths for it?
     def recv? afi, safi
       has? :recv, afi, safi
     end
 
+    # RFC 7911 section 4: the Send/Receive field says whether the sender of
+    # the capability is "able to receive multiple paths from its peer (value
+    # 1)", "able to send multiple paths to its peer (value 2), or (c) both
+    # (value 3)". So 1 and 3 answer recv?, and 2 and 3 answer send?.
+    #
+    # Any other value is simply not this capability: section 4 says the
+    # receiver SHOULD treat it as not understood and ignore it, so both
+    # questions answer false and nothing refuses to build or encode it.
     def has?(sr, afi, safi)
       case sr
-      when :recv
-        @af.has_key?([afi,safi]) && (2..3) ===  @af[[afi,safi]]
+      when :recv, :receive
+        @af.has_key?([afi,safi]) && (@af[[afi,safi]] == 1 or @af[[afi,safi]] == 3)
       when :send
-        @af.has_key?([afi,safi]) && (@af[[afi,safi]] == 1 or @af[[afi,safi]] ==3)
+        @af.has_key?([afi,safi]) && (2..3) === @af[[afi,safi]]
       end
     end
 
@@ -111,11 +125,15 @@ module BGP::OPT_PARM::CAP
       "AFI #{IANA.afi?(afi)} (#{afi}), SAFI #{IANA.safi?(safi)} (#{safi}), #{send_recv_to_s(sr)}"
     end
 
+    # RFC 7911 section 4: value 1 is "able to receive multiple paths from its
+    # peer", value 2 is "able to send multiple paths to its peer", value 3 is
+    # both. An Integer goes through untouched, so any value, 0 or 4 or 255,
+    # still builds and encodes.
     def _send_recv(val)
       case val
-      when :send, 1                                          ; 1
-      when :recv, :receive, 2                                ; 2
-      when :send_and_recv, :send_recv, :send_and_receive, 3  ; 3
+      when :recv, :receive                                ; 1
+      when :send                                          ; 2
+      when :send_and_recv, :send_recv, :send_and_receive  ; 3
       else
         val
       end
@@ -123,8 +141,8 @@ module BGP::OPT_PARM::CAP
 
     def send_recv_to_s(val)
       case val
-      when 1 ; 'SEND (1)'
-      when 2 ; 'RECV (2)'
+      when 1 ; 'RECV (1)'
+      when 2 ; 'SEND (2)'
       when 3 ; 'SEND_AND_RECV (3)'
       else
         'bogus'

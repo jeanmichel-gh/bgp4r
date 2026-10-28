@@ -39,10 +39,16 @@ module BGP
         !!(s && p && s.has?(afi, safi, nexthop_afi) && p.has?(afi, safi, nexthop_afi))
       end
 
+      # Will this session carry a Path Identifier in what the peer sends us
+      # for the family? True only when we said we can receive multiple paths
+      # and the peer said it can send them.
       def path_id_recv? afi, safi
         path_id? :recv, afi, safi
       end
       
+      # May this session carry a Path Identifier in what we send the peer for
+      # the family? True only when we said we can send multiple paths and the
+      # peer said it can receive them.
       def path_id_send? afi, safi
         path_id? :send, afi, safi
       end
@@ -60,6 +66,18 @@ module BGP
       
       private
 
+      # RFC 7911 section 5: "For a BGP speaker to be able to send multiple
+      # paths to its peer, that BGP speaker MUST advertise the ADD-PATH
+      # Capability with the Send/Receive field set to either 2 or 3, and MUST
+      # receive from its peer the ADD-PATH Capability with the Send/Receive
+      # field set to either 1 or 3, for the corresponding <AFI, SAFI>."
+      #
+      # So it is never one side's capability that decides a direction, it is
+      # the pair, and each side is read for the opposite half: whether we may
+      # send Path Identifiers depends on what the peer said it can receive,
+      # and whether to expect them depends on what the peer said it can send.
+      # Our own capability is read for the matching half of the same rule
+      # applied the other way round.
       def _path_id?(speaker, peer, sr, afi, safi)
         return false unless speaker and peer
         case sr

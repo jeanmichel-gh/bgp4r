@@ -189,8 +189,10 @@ class Capability_Test < Test::Unit::TestCase
     cap = Capability.dynamic_factory(['45000400010101'].pack('H*'))
     assert_instance_of(BGP::OPT_PARM::DYN_CAP::Add_path, cap)
     assert_equal '45000400010101', cap.to_shex
-    assert_equal true, cap.send?(1, 1)
-    assert_equal false, cap.recv?(1, 1)
+    # RFC 7911 section 4: a Send/Receive field of 1 says the sender is able
+    # to receive multiple paths, not to send them.
+    assert_equal false, cap.send?(1, 1)
+    assert_equal true, cap.recv?(1, 1)
   end
   def test_dynamic_factory_graceful_restart
     s = '40000a00780001010100010201'
@@ -278,8 +280,9 @@ class Capability_Test < Test::Unit::TestCase
     assert_equal 'MBGP IPv4, Unicast', Mbgp.new(1,1).to_s_brief
     assert_equal 'AS4 100', As4.new(100).to_s_brief
     assert_equal 'Graceful Restart 120s', Graceful_restart.new(0,120).to_s_brief
-    assert_equal 'Add-path IPv4, Unicast SEND (1)', Add_path.new(:send,1,1).to_s_brief
-    assert_equal 'Add-path IPv4, Unicast SEND (1); IPv6, Unicast RECV (2)',
+    # RFC 7911 section 4: :send is value 2, :recv is value 1.
+    assert_equal 'Add-path IPv4, Unicast SEND (2)', Add_path.new(:send,1,1).to_s_brief
+    assert_equal 'Add-path IPv4, Unicast SEND (2); IPv6, Unicast RECV (1)',
                  Add_path.new_array([[:send,1,1],[:recv,2,1]]).to_s_brief
     assert_equal 'Extended Next Hop IPv4, Unicast via IPv6',
                  Extended_nexthop.new(1,1,2).to_s_brief
@@ -290,7 +293,7 @@ class Capability_Test < Test::Unit::TestCase
     assert_equal 'Extended Next Hop', Extended_nexthop.new(:families=>[]).to_s_brief
     # An AFI or SAFI IANA does not name falls back to its number, since
     # building is never validated and any value can be sent.
-    assert_equal 'Add-path 999, 77 SEND (1)', Add_path.new(:send,999,77).to_s_brief
+    assert_equal 'Add-path 999, 77 SEND (2)', Add_path.new(:send,999,77).to_s_brief
     assert_equal 'Extended Next Hop 999, 77 via 999',
                  Extended_nexthop.new(999,77,999).to_s_brief
   end
@@ -298,7 +301,7 @@ class Capability_Test < Test::Unit::TestCase
     # Display only. Every capability still encodes what it did before.
     [[As4.new(100), '0206410400000064'],
      [Graceful_restart.new(0,120), '020440020078'],
-     [Add_path.new(:send,1,1), '0206450400010101'],
+     [Add_path.new(:send,1,1), '0206450400010102'],
      [Extended_nexthop.new(1,1,2), '02080506000100010002'],
      [Route_refresh.new, '02020200'],
      [Dynamic.new, '02024300']].each do |cap, shex|
