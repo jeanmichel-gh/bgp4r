@@ -119,7 +119,7 @@ A plan that spans more than one session lives here, as phases with their
 status, so the next reader can see the direction without reconstructing it.
 Update the status in the pull request that moves a phase.
 
-### Phase 0, before the RIB work resumes. In progress
+### Phase 0, before the RIB work resumes. Done
 
 Fixing the existing path attribute bugs came first, deliberately, and that is
 substantially done: 19 were fixed on 2026-10-27. Two audits that evening
@@ -272,6 +272,22 @@ against the document before anything was written, and six of the seven held:
   9012 sections 3.2.1 to 3.2.5, there is no section 3.1.6, the SR Policy
   sub-TLVs are RFC 9830 and not RFC 9256, and the Prefix-SID sub-TLV type 11
   is RFC 9012 section 3.7.
+
+That is all of phase 0. Eight pull requests, #113 to #120: two recorded this
+plan, four fixed the five wrong implementations, since #117 took items 3 and 4
+together, one added the BGP Role capability and one swept the citations.
+Nothing bgp4r implements is now known to disagree with the RFC it cites. The
+tests went from 727 to 956 across the day and coverage from 94.8% to 97.1%.
+
+What phase 0 did not do is breadth, deliberately, and the reasons are under
+"Deliberately not in phase 0" below so the decision is not re-litigated. The
+thirteen bugs still open are under "Known issues to work on": every one is
+either display only or needs a design decision rather than a patch, which is
+why none of them blocked this phase.
+
+The next work is **RIB phase 2, the peer adapter**. `Neighbor#rcv_update` is
+still an empty hook, so nothing feeds the table from a live session, and
+everything phase 1 built is unreachable from a real peer until it does.
 
 ### RIB and FIB, five phases
 
