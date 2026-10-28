@@ -22,7 +22,8 @@ bgp/rib/                 routes and the decision process (RFC 4271 section 9); r
                          peer_adapter.rb turns a Neighbor's UPDATEs into table operations,
                          peer_feed.rb applies them on one worker thread; rib.attach(neighbor)
                          export.rb decides what goes to a peer and what its attributes become,
-                         adj_rib_out.rb records what was sent; see "Where the work is going"
+                         adj_rib_out.rb records what was sent, update_builder.rb packs
+                         prefixes into UPDATEs; see "Where the work is going"
 bgp/misc/                extras: route_generator.rb (many prefixes packed in UPDATEs), live_feed.rb (a client for an old public BGP feed)
 docs/                    protocol-testing.md: using bgp4r to test a router
 examples/                runnable scripts
@@ -82,7 +83,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. A `lab` job runs the Compose topologies.
 
-Baseline on 2026-10-28: 1050 tests, 20561 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.2%.
+Baseline on 2026-10-28: 1077 tests, 20628 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.2%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -391,7 +392,9 @@ Neighbor ◀──UPDATE── Adj-RIB-Out (per peer) ◀───────�
         take over. Before this nothing had carried a Path Identifier into a
         RIB over a session.
 3. **Adj-RIB-Out, the export rules and the speaker's router mode. In
-   progress**, three PRs.
+   progress**, four PRs rather than the three first estimated: the UPDATE
+   building is a topic of its own, the same way the locking was in phase 2,
+   and it is worth landing before the wiring depends on it.
    1. **The export rules and `AdjRibOut`, pure. Done**, in #125. Nothing
       calls them yet; part 2 wires them to a session.
       * `bgp/rib/export.rb` is a pure function like `Decision#best`:
@@ -432,13 +435,35 @@ Neighbor ◀──UPDATE── Adj-RIB-Out (per peer) ◀───────�
         peer never had, so the sender can leave both messages unsent.
         Attributes are compared by their encoded octets in the 4-octet AS
         form, because `Export` builds a new `Path_attribute` every run.
-   2. **Wiring it to the session. Not started.** The speaker's router mode:
+   2. **The UPDATE builder. Done**, in #126. `bgp/rib/update_builder.rb`
+      turns the tuples the export step produces into UPDATE messages, and
+      is pure like `Export`: it reads tuples and returns messages, so the
+      packing is testable on its own.
+      * Prefixes that share a path attribute set, a next hop and an address
+        family travel in one UPDATE, which is the whole economy of BGP. The
+        grouping key is the **encoded** attributes, as `AdjRibOut` compares
+        them, because `Export` builds a new `Path_attribute` every run.
+      * IPv4 unicast uses the RFC 4271 section 4.3 fields; every other
+        family uses MP_REACH_NLRI and MP_UNREACH_NLRI (RFC 4760 sections 3
+        and 4), where the next hop travels inside the attribute, so
+        `Next_hop` is removed from the copy. This is where
+        `Export::Result#next_hop` is used.
+      * **The packing is arithmetic, not measurement.** RFC 4271 section 4
+        caps a message at 4096 octets, and section 4.3 gives a prefix as
+        1+(length+7)/8 octets, 4 more with a Path Identifier (RFC 7911
+        section 3). Measuring instead would mean re-encoding the message
+        for every prefix added, and a full table is about a million. Every
+        finished message is measured once, so a slip in the arithmetic
+        raises rather than putting an oversized message on the wire.
+      * The 4096 and its citation now appear twice, here and in
+        `bgp/misc/route_generator.rb`, which packs prefixes the same way for
+        a different reason. The right home is probably `BGP::Message`; see
+        "Known issues to work on".
+   3. **Wiring it to the session. Not started.** The speaker's router mode:
       run export over the Loc-RIB changes, diff against each Adj-RIB-Out,
-      and send UPDATEs, packing prefixes that share attributes into one
-      message the way `route_generator.rb` already does. This is where
-      `Result#next_hop` becomes an MP_REACH_NLRI, and where the MRAI timer
-      setting lands.
-   3. **Route reflector and transit lab topologies. Not started.**
+      hand what is left to the builder, and send. This is where the MRAI
+      timer setting lands.
+   4. **Route reflector and transit lab topologies. Not started.**
 4. **FIB adapters and the Linux lab test. Not started**, about 2 PRs. The FIB
    is the kernel routing table and is a separate, optional adapter: Linux
    only, so it runs in a container, with a dedicated routing table, routes
@@ -499,6 +524,8 @@ Smaller things:
 
 * A capability with no value is built from its code and not from its wire bytes, so value octets that arrive are dropped and only two of its three build paths work. `Capability.factory` hands `CAP::Route_refresh` and `CAP::Dynamic` the capability code rather than the octets, since neither capability has a value to read. A peer that sends one with a value gets no complaint and no record of it: `ruby -I. -e 'require "bgp4r"; p BGP::OPT_PARM::Capability.factory(["0203020141"].pack("H*")).to_shex'` prints `"02020200"`, losing the `41`. Handed the wire bytes directly, both classes put the String in `@code`, so `BGP::OPT_PARM::CAP::Route_refresh.new(["02020200"].pack("H*")).encode` raises `TypeError: no implicit conversion of String into Integer` and `CAP::Dynamic`'s `to_hash` carries `{:code=>"\x02\x02C\x00"}`. `CAP::Enhanced_route_refresh` is the same zero length shape done the other way, taking the wire bytes and keeping any value in a `@value` it writes back, and the factory hands it the octets; the fix is to give these two the same treatment. Found while adding capability 70.
 * The NOTIFICATION subcode registries are still short of IANA in one place, display only. Subcode 0 is named in every one of them and in none of them here: "Unspecific" for codes 1, 2 and 3 (RFC Errata 4493), "Unspecified Error" for code 5 (RFC 6608), "Reserved" for codes 6 and 7. `Notification.code_to_s` answers "Undefined" for each, which is honest but less than it knows. Note that `code_to_s(0)` for the code itself is pinned to "Undefined" by `test_1`, where IANA says Reserved. Found by the registry sweep that fixed code 7. The other half of this entry, OPEN Message Error subcodes 8, 9, 10 and 11, landed with the BGP Role capability in #118.
+
+* The 4096 octet message limit of RFC 4271 section 4 is written out twice, in `bgp/rib/update_builder.rb` and in `bgp/misc/route_generator.rb`, each with its own constant and the same citation. `bgp/io.rb` has it a third time, in a comment. It is a property of a BGP message, so the right home is a constant on `BGP::Message`, with both callers reading it from there. Nothing is wrong today; two copies of a number is how one of them goes stale. RFC 8654 raises the limit when both speakers negotiate extended messages, which bgp4r does not do, and whoever adds that capability has to find every copy. Found while writing the UPDATE builder.
 
 * `Neighbor#capability` names only five capabilities, so the two added since cannot be asked for by symbol. Its `case` has `:route_refresh`, `:mbgp`, `:as4`, `:gr` and `:extended_nexthop`, and anything else raises `ArgumentError`, so `neighbor.capability(:role, :customer)` and `neighbor.capability(:enhanced_route_refresh)` both fail and a script has to pass the object: `neighbor.capability(BGP::OPT_PARM::CAP::Role.new(:customer))` works, which is the other branch of the same method. `lab/speaker.rb`'s `add_capability` only names capabilities, so neither can be put in a lab topology, the same four-piece problem the add-path entry below describes. Not a wrong answer, just a shorter list than the library has. Found while adding capability 9.
 
