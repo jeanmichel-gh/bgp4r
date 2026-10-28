@@ -116,7 +116,8 @@ class TestBgpRibPeerFeed < Test::Unit::TestCase
     assert_equal([:added, :withdrawn], @changes.map(&:type))
   end
 
-  # RFC 4271 section 9.1.2: the routes a peer sent go when its session does.
+  # RFC 4271 section 6: the routes a peer sent go when its session does,
+  # because closing a connection clears the Adj-RIB-In.
   def test_a_session_going_down_removes_its_routes
     n = neighbor
     @rib.attach(n)

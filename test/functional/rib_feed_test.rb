@@ -117,7 +117,7 @@ class RibFeedTest < Test::Unit::TestCase
                  'but the Adj-RIB-In keeps the route as it was received')
   end
 
-  # RFC 4271 section 9.1.2: the routes a peer sent are gone once the session
+  # RFC 4271 section 6: the routes a peer sent are gone once the session
   # is. The client just closes its socket, so the server learns of it the
   # way it would from any peer that went away: a connection reset, which
   # calls stop without notifying the message observers. That is the whole

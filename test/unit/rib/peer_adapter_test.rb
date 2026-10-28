@@ -279,8 +279,10 @@ class TestBgpRibPeerAdapter < Test::Unit::TestCase
     assert_equal([], @sink.work)
   end
 
-  # RFC 4271 section 9.1.2: a session that is no longer Established has no
-  # routes. The adapter asks for peer_down once, and forgets the Peer, so
+  # RFC 4271 section 8.2.2: every event that leaves Established "deletes
+  # all routes associated with this connection", so a session that is no
+  # longer Established has no routes. The adapter asks for peer_down once,
+  # and forgets the Peer, so
   # the next session builds a new one from the next OPEN.
   def test_leaving_established_asks_for_peer_down
     peer_opened

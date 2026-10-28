@@ -123,8 +123,15 @@ module BGP
         end
       end
 
-      # Removes every route from peer, as when its session goes down
-      # (RFC 4271 section 9.1.2). Returns the Loc-RIB changes.
+      # Removes every route from peer, as when its session goes down. RFC
+      # 4271 section 6: closing a connection means "the associated
+      # Adj-RIB-In has been cleared", then "Entries in the Loc-RIB
+      # associated with the remote peer are marked as invalid" and "The
+      # local system recalculates its best routes for the destinations of
+      # the routes marked as invalid". Returning the changes is the rest of
+      # that sentence: the speaker advertises "either withdraws for the
+      # routes marked as invalid, or the new best routes", which is what
+      # Router#run_changes does with them. Returns the Loc-RIB changes.
       def peer_down(peer)
         sync do
           ribin = @adj_in[peer]

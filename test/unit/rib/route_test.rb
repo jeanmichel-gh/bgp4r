@@ -108,7 +108,13 @@ class TestBgpRibRoute < Test::Unit::TestCase
   def test_neighbor_as
     # RFC 4271 section 9.1.2.2 c): the first AS of the path, else our AS.
     assert_equal(65002, Route.new('10.0.0.0/8', Path_attribute.new(As_path.new(65002, 3)), peer).neighbor_as)
+    # peer('10.0.0.3', 65001) is internal, and an empty AS_PATH on an IBGP
+    # route is one of the two cases c) gives the local AS for.
     assert_equal(65001, Route.new('10.0.0.0/8', Path_attribute.new(As_path.new), peer('10.0.0.3', 65001)).neighbor_as)
+    # This one is not. peer is external, and c) scopes the AS_SET case to a
+    # route "learned via IBGP", so it would answer 65002 here. This pins
+    # what bgp4r does, which is wider, and is filed under "Known issues to
+    # work on"; the entry says this assertion moves with the fix.
     assert_equal(65001, Route.new('10.0.0.0/8', Path_attribute.new(path([:set, 4, 5])), peer).neighbor_as)
     confed = Path_attribute.new(path([:confed_sequence, 65010], [:sequence, 7, 8]))
     assert_equal(7, Route.new('10.0.0.0/8', confed, peer).neighbor_as)

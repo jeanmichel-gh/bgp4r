@@ -554,8 +554,12 @@ class Path_attribute_Test < Test::Unit::TestCase # :nodoc:
     assert_kind_of(Attr::Raw, Attr::Unknown.new(0xc, 99, 0, 'x'))
   end
 
-  # B7: RFC 4271 section 5 and 9.1.2.2. An unrecognized optional
-  # transitive attribute passed on has its Partial bit set.
+  # B7: RFC 4271 section 5 and the preamble of section 9, which says "If an
+  # optional transitive attribute is unrecognized, the Partial bit (the
+  # third high-order bit) in the attribute flags octet is set to 1, and the
+  # attribute is retained for propagation to other BGP speakers". Section
+  # 9.1.2.2, cited here before, is tie breaking and says nothing about
+  # attribute flags.
   def test_unknown_partial
     a = Attr.factory(['c0ff0401020304'].pack('H*'))
     assert_equal(false, a.partial?)

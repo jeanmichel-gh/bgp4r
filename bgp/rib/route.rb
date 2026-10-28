@@ -169,8 +169,18 @@ module BGP
 
       # The neighboring AS used to decide which MEDs compare (RFC 4271
       # section 9.1.2.2 c): the first AS of the leftmost AS_SEQUENCE, after
-      # any confederation segments. A route whose AS_PATH is empty or starts
-      # with an AS_SET came from our own AS.
+      # any confederation segments. An AS_PATH that is empty or starts with
+      # an AS_SET gives our own AS.
+      #
+      # That last case is wider here than in the RFC. Section 9.1.2.2 c)
+      # defines neighborAS as "the neighbor AS from which the route was
+      # received", and gives the local AS only "If the route is learned via
+      # IBGP" and the other speaker originated or aggregated it. This
+      # returns the local AS for that AS_PATH shape whatever kind of peer
+      # sent it, so an eBGP peer's route with a leading AS_SET is grouped
+      # as if it came from our own AS. Filed under "Known issues to work
+      # on" in CLAUDE.md rather than changed here, because route_test.rb
+      # pins the current answer and the fix moves that test.
       def neighbor_as
         seg = as_path_segments.find { |s| ![As_path::CONFED_SEQUENCE, As_path::CONFED_SET].include?(s.seg_type) }
         return @peer.local_as unless seg && seg.seg_type == As_path::SEQUENCE && !seg.as.empty?
