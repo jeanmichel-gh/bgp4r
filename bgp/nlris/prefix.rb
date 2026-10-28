@@ -31,6 +31,7 @@ class Prefix
   
   class << self
     def new_ntop(arg, afi=1, path_id=nil)
+      tail = nil
       case afi
       when IANA::AFI::IPv4, :ipv4
         s = arg.dup
@@ -40,31 +41,55 @@ class Prefix
         # prefix octets at all, and three left nlri one element short.
         s +=([0]*4).pack('C*')
         plen, *nlri = s.unpack('CC4')
+        tail = kept_tail(arg, plen, 4)
         arg.slice!(0,1+(plen+7)/8)
         pfx = nlri.collect { |n| n.to_s }.join('.') + "/" + plen .to_s
       when IANA::AFI::IPv6, :ipv6
         s = arg.dup
         s +=([0]*16).pack('C*')
         plen, *nlri = s.unpack('Cn8')
+        tail = kept_tail(arg, plen, 16)
         arg.slice!(0,1+(plen+7)/8)
         pfx = nlri.collect { |n| n.to_s(16) }.join(':') + "/" + plen .to_s
       when IANA::AFI::NSAP, :nsap
         s = arg.dup
         plen, o1, r = s.unpack('CH2H*')
+        # RFC 4271 section 4.3: a tuple is its length octet plus the
+        # (length+7)/8 octets the prefix and its trailing bits take, which
+        # is what encode writes. Consume them, as the two branches above
+        # do. Without this the caller's String came back untouched, so
+        # anything reading one prefix after another read these for ever.
+        arg.slice!(0,1+(plen+7)/8)
         pfx = [o1, r.scan(/..../).collect { |x| r.slice!(0,4)}, r].flatten.join('.').chomp('.')  + "/" + plen .to_s
       else
         raise unknown_afi(afi)
       end
-      path_id ? new(path_id, pfx) : new(pfx)
+      prefix = path_id ? new(path_id, pfx) : new(pfx)
+      prefix.tail = tail if tail
+      prefix
+    end
+
+    private
+
+    # The prefix octets past the ones the address family holds, zero
+    # filled to the (length+7)/8 the Length field asks for (RFC 4271
+    # section 4.3). nil when the length fits, which is every prefix an
+    # RFC allows, so an ordinary prefix carries nothing extra.
+    def kept_tail(arg, plen, fits)
+      want = (plen+7)/8
+      return nil if want <= fits
+      t = arg.byteslice(1+fits, want-fits) || String.new
+      t + ([0]*(want-fits-t.size)).pack('C*')
     end
   end
 
   def initialize(*args)
-    @path_id=nil
+    @path_id, @tail, @mlen = nil, nil, nil
     if args.size>1 and args[0].is_a?(Integer)
       @path_id, pfx, _ = args
     elsif args.size==1 and args[0].is_a?(Hash)
       @path_id = args[0][:path_id]
+      @tail = [args[0][:tail]].pack('H*') if args[0][:tail]
       pfx = args[0][:prefix]
     else
       pfx, _ = args
@@ -72,7 +97,7 @@ class Prefix
     if pfx =~ /^49\./
       @pfx = Nsap.new_nsap(pfx)
     else
-      @pfx = IPAddr.new(pfx)
+      @pfx = new_ipaddr(pfx)
     end
   end
   [:iso, :ipv4, :ipv6].each do |afi|
@@ -83,15 +108,33 @@ class Prefix
   end
   
   attr_reader :path_id
-  
+
+  # The prefix octets a Length field too wide for its address family
+  # left over. nil for every prefix an RFC allows. See new_ipaddr.
+  attr_reader :tail
+
   def path_id=(val)
     @path_id=val
   end
-  
+
+  def tail=(val)
+    @tail=val
+  end
+
+  # False when the Length field is wider than the address family holds.
+  # RFC 7606 section 5.3 calls that a syntactically incorrect NLRI field,
+  # and RFC 4271 section 6.3 answers one with the Invalid Network Field
+  # subcode. Parsing reports the fault here and keeps the octets rather
+  # than raising. Nothing in bgp4r acts on it: the nlris layer takes no
+  # receive policy and has no errors list, the way Path_attribute does.
+  def syntactically_correct?
+    @mlen.nil?
+  end
+
   def extended?
     !@path_id.nil?
   end
-  
+
   def afi
     @afi ||= if self.ipv4? 
       1
@@ -119,11 +162,13 @@ class Prefix
   end
   
   def to_hash
-    if extended?
-      {:prefix=> pfx_to_s}.merge({:path_id=>@path_id})
-    else
-      {:prefix=> pfx_to_s}
-    end
+    h = {:prefix=> pfx_to_s}
+    h[:path_id] = @path_id if extended?
+    # A kept tail travels with the hash, so what to_hash returns still
+    # round trips through new byte for byte. No tail, no key, so an
+    # ordinary prefix hashes as it always has.
+    h[:tail] = @tail.unpack1('H*') if @tail
+    h
   end
   
   def nexthop
@@ -151,8 +196,10 @@ class Prefix
     ipv4? || ipv6?
   end
   
+  # The length the Length field carries, which is the one the prefix was
+  # given even when its family cannot hold it (RFC 4271 section 4.3).
   def mlen
-    @pfx.mlen
+    @mlen || @pfx.mlen
   end
   alias :bit_length :mlen
   
@@ -163,13 +210,29 @@ class Prefix
     [@pfx,mlen.to_s].join('/')
   end
   
-  private 
-  
+  private
+
+  # RFC 4271 section 4.3 makes the Length field the length in bits of the
+  # prefix and puts no ceiling on it, so a received length can be wider
+  # than its address family. RFC 7606 section 5.3 calls such a field
+  # syntactically incorrect, but receiving is where that is reported, not
+  # raised, so keep the length here and hand IPAddr the widest mask its
+  # family holds. Building is never checked either: a length no RFC
+  # allows has to be sendable.
+  def new_ipaddr(pfx)
+    IPAddr.new(pfx)
+  rescue IPAddr::InvalidPrefixError
+    addr, mlen = pfx.to_s.split('/')
+    @mlen = mlen.to_i
+    IPAddr.new(addr)
+  end
+
   def __encode__(len=true, include_path_id=true)
+    octets = @tail ? @pfx.hton + @tail : @pfx.hton
     s = if len
-      [mlen, @pfx.hton].pack("Ca#{nbytes}")
+      [mlen, octets].pack("Ca#{nbytes}")
     else
-      [@pfx.hton].pack("a#{nbytes}")
+      [octets].pack("a#{nbytes}")
     end
     if extended? and include_path_id
       [@path_id, s].pack('Na*')

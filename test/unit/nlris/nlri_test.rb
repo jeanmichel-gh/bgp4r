@@ -215,16 +215,58 @@ class Nlri_Test < Test::Unit::TestCase
                  Nlri.new(['08650f14'].pack('H*')).to_ary)
   end
 
-  def test_a_family_whose_prefix_is_not_consumed_stops_instead_of_looping
-    # Prefix.new_ntop does not remove an NSAP prefix from the String it
-    # reads, so reading tuple after tuple would read the same octets for
-    # ever. parse gives up on the rest of the field instead. A known issue,
-    # listed in CLAUDE.md.
+  def test_every_nsap_prefix_in_the_field_is_read
+    # Prefix.new_ntop used to leave an NSAP prefix in the String it read,
+    # so parse saw no progress and gave up on the rest of the field. Every
+    # NSAP prefix but the first was dropped. The tuple is its length octet
+    # plus (length+7)/8 prefix octets (RFC 4271 section 4.3), which is what
+    # encode writes, so that is what new_ntop now consumes.
     nsap = Nlri.new('49.0001.0001.0001.00', '49.0002.0002.0002.00')
     assert_equal(2, nsap.size)
     parsed = Nlri.new(nsap.encode.is_packed, nil, 3)
-    assert_equal(1, parsed.size)
-    assert_equal(nsap.nlris[0].to_s, parsed.nlris[0].to_s)
+    assert_equal(2, parsed.size)
+    assert_equal(nsap.to_ary, parsed.to_ary)
+    assert_equal(nsap.to_shex, parsed.to_shex)
+  end
+
+  def test_parse_still_gives_up_rather_than_loop_on_a_prefix_it_cannot_consume
+    # The no progress guard stays as a backstop. An infinite loop on
+    # received octets is worse than dropping the rest of a field, and afi
+    # is a parameter, so a family added later could forget its slice. No
+    # real family reaches it any more, so stand one in. Run it in a thread
+    # the test can give up on, so the guard going missing reads as a
+    # failure here rather than wedging the suite.
+    nlri, parsed = Nlri.new, nil
+    singleton = Prefix.singleton_class
+    singleton.send(:alias_method, :__real_new_ntop, :new_ntop)
+    singleton.send(:define_method, :new_ntop) { |*_| new('10.0.0.0/8') }
+    t = Thread.new { parsed = nlri.parse(['080a080b'].pack('H*'), nil, 1) }
+    begin
+      assert(t.join(10), 'Base_nlri#parse did not return within 10s')
+      assert_equal(1, parsed.size)
+    ensure
+      t.kill
+      singleton.send(:alias_method, :new_ntop, :__real_new_ntop)
+      singleton.send(:remove_method, :__real_new_ntop)
+    end
+  end
+
+  def test_a_bad_length_octet_does_not_take_down_the_rest_of_the_field
+    # RFC 4271 section 4.3 puts no ceiling on the Length field, and RFC
+    # 7606 section 5.3 calls a length over 32 a syntactically incorrect
+    # NLRI field. One such octet used to raise IPAddr::InvalidPrefixError
+    # out of the whole parse. The octets are kept and the field reads on.
+    s = '210102030405' + '0865'
+    nlri = Nlri.new([s].pack('H*'))
+    assert_equal(2, nlri.size)
+    assert_equal(['1.2.3.4/33', '101.0.0.0/8'], nlri.to_ary)
+    assert_equal(s, nlri.to_shex)
+    assert_equal(false, nlri.syntactically_correct?)
+    assert_equal(true, Nlri.new('101.0.0.0/8').syntactically_correct?)
+    w = Withdrawn.new([s].pack('H*'))
+    assert_equal(2, w.size)
+    assert_equal(s, w.to_shex)
+    assert_equal(false, w.syntactically_correct?)
   end
 
   def test_to_hash_round_trips
