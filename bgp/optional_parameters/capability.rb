@@ -203,6 +203,9 @@ module BGP::OPT_PARM
       CAP::Add_path.new(s)
     when CAP_EXTENDED_NEXTHOP
       CAP::Extended_nexthop.new(s)
+    when CAP_ROLE
+      # RFC 9234 section 4.1: code 9, one octet, the speaker's BGP Role.
+      CAP::Role.new(s)
     when CAP_DYNAMIC
       # RFC 5492 section 4 and draft-ietf-idr-dynamic-cap-19 section 9:
       # the Dynamic Capability capability is code 67 and carries no
@@ -235,6 +238,8 @@ module BGP::OPT_PARM
         DYN_CAP::Orf.new(s)
       when CAP_ADD_PATH
         DYN_CAP::Add_path.new(s)
+      when CAP_ROLE
+        DYN_CAP::Role.new(s)
       when CAP_GR
         DYN_CAP::Graceful_restart.new(s)
       when CAP_ENHANCED_ROUTE_REFRESH

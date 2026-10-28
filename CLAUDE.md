@@ -74,7 +74,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. A `lab` job runs the Compose topologies.
 
-Baseline on 2026-10-27: 936 tests, 20151 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.0%.
+Baseline on 2026-10-27: 950 tests, 20268 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.1%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -185,12 +185,24 @@ reproduction one liners in "Known issues to work on".
    wants two. Self consistent, wrong on the wire. Nothing in the tree cites
    RFC 9072.
 
-Then, cheap and worth doing while there: **the BGP Role capability, code 9**
-(RFC 9234 section 4), about two hours. The OTC attribute already exists with
-its length check, and section 4.2 says a peer that sends no capability falls
-back to the local Role, so OTC is usable today; the capability buys the Role
-Mismatch and strict mode tests. GoBGP does not implement Role, so no current
-lab topology can exercise it.
+**The BGP Role capability, code 9. Done**, in #118, the cheap one taken while
+there. It is defined in RFC 9234 section **4.1**, not section 4
+as this list first said; section 4 is BGP Role and section 4.2 is Role
+Correctness. Section 4.1 gives code 9, a length of one octet, and Table 1,
+"Predefined BGP Role Values": 0 Provider, 1 RS, 2 RS-Client, 3 Customer, 4
+Peer, 5 to 255 unassigned. `CAP::Role` carries it through all three build
+paths, and a Role the RFC does not define still builds and encodes. The
+reading recorded here was right: section 4.2 says a speaker that advertised a
+Role and received none SHOULD proceed, and then "The locally configured BGP
+Role is used for the procedures described in Section 5", which is why the OTC
+attribute was already usable. The capability buys Role Correctness, whose
+three pairs are Provider with Customer, RS with RS-Client and Peer with Peer,
+and the strict mode that requires the peer's Role. OPEN Message Error subcode
+11, "Role Mismatch", is named in `notification.rb` now, with 8, 9 and 10 as
+Deprecated, all from RFC 9234 section 7. Comparing the two Roles is session
+state and belongs with the OPEN handling, not with a capability that never
+validates. GoBGP does not implement Role, so no lab topology can exercise it
+and it is unit tested only.
 
 Also in phase 0: the stale citations the audits found. Eight wrong RFC 9012
 section numbers in `tunnel_encap.rb`, where `Encapsulation` and
@@ -306,7 +318,9 @@ Smaller things:
 * `Capability#add` drops anything that is not a `Capability::Revision`, with no error, so a typo is silently a Capability message with no revision in it: `ruby -I. -e 'require "bgp4r"; m=BGP::Capability.new; m << "not a revision"; p m.encode.size'` prints `19`, the header alone. Same shape as `Orf_route_refresh#add` above. `Capability::Revision` takes the other side of it: it accepts any object as its capability, so `BGP::Capability::Revision.advertise(10,"x").to_s` raises `NoMethodError` on `to_s_brief`, which is a capability method. `test_capability_revision_o1` builds revisions around a String for that reason and never prints them.
 
 * A capability with no value is built from its code and not from its wire bytes, so value octets that arrive are dropped and only two of its three build paths work. `Capability.factory` hands `CAP::Route_refresh` and `CAP::Dynamic` the capability code rather than the octets, since neither capability has a value to read. A peer that sends one with a value gets no complaint and no record of it: `ruby -I. -e 'require "bgp4r"; p BGP::OPT_PARM::Capability.factory(["0203020141"].pack("H*")).to_shex'` prints `"02020200"`, losing the `41`. Handed the wire bytes directly, both classes put the String in `@code`, so `BGP::OPT_PARM::CAP::Route_refresh.new(["02020200"].pack("H*")).encode` raises `TypeError: no implicit conversion of String into Integer` and `CAP::Dynamic`'s `to_hash` carries `{:code=>"\x02\x02C\x00"}`. `CAP::Enhanced_route_refresh` is the same zero length shape done the other way, taking the wire bytes and keeping any value in a `@value` it writes back, and the factory hands it the octets; the fix is to give these two the same treatment. Found while adding capability 70.
-* The NOTIFICATION subcode registries are still short of IANA in two places, both display only. Subcode 0 is named in every one of them and in none of them here: "Unspecific" for codes 1, 2 and 3 (RFC Errata 4493), "Unspecified Error" for code 5 (RFC 6608), "Reserved" for codes 6 and 7. And OPEN Message Error subcodes 8, 9 and 10 are Deprecated and 11 is "Role Mismatch", all RFC 9234; 11 belongs with the BGP Role capability, which is listed under "Attribute work left". `Notification.code_to_s` answers "Undefined" for each, which is honest but less than it knows. Note that `code_to_s(0)` for the code itself is pinned to "Undefined" by `test_1`, where IANA says Reserved. Found by the registry sweep that fixed code 7.
+* The NOTIFICATION subcode registries are still short of IANA in one place, display only. Subcode 0 is named in every one of them and in none of them here: "Unspecific" for codes 1, 2 and 3 (RFC Errata 4493), "Unspecified Error" for code 5 (RFC 6608), "Reserved" for codes 6 and 7. `Notification.code_to_s` answers "Undefined" for each, which is honest but less than it knows. Note that `code_to_s(0)` for the code itself is pinned to "Undefined" by `test_1`, where IANA says Reserved. Found by the registry sweep that fixed code 7. The other half of this entry, OPEN Message Error subcodes 8, 9, 10 and 11, landed with the BGP Role capability in #118.
+
+* `Neighbor#capability` names only five capabilities, so the two added since cannot be asked for by symbol. Its `case` has `:route_refresh`, `:mbgp`, `:as4`, `:gr` and `:extended_nexthop`, and anything else raises `ArgumentError`, so `neighbor.capability(:role, :customer)` and `neighbor.capability(:enhanced_route_refresh)` both fail and a script has to pass the object: `neighbor.capability(BGP::OPT_PARM::CAP::Role.new(:customer))` works, which is the other branch of the same method. `lab/speaker.rb`'s `add_capability` only names capabilities, so neither can be put in a lab topology, the same four-piece problem the add-path entry below describes. Not a wrong answer, just a shorter list than the library has. Found while adding capability 9.
 
 * A String administrator in the three argument form of `Rd.new` takes `encode` down. Types 0 and 2 pack the administrator as an Integer, so an address String reaches `pack` as it was given: `ruby -I. -e 'require "bgp/nlris/rd"; BGP::Rd.new("1.1.1.1",1,0).encode'` raises `TypeError: no implicit conversion of String into Integer`. The two argument form reads a String administrator as the type 1 form and never gets there, and a named type 1 builds an `IPAddr` first, so only a named type 0 or 2, or a type the RFC does not define, hits this. Either those branches read the String the way type 1 does, or the constructor says the administrator of that type is an Integer. Found while carrying the encoding type through the hash form.
 
@@ -326,7 +340,6 @@ request that added the attribute:
 * Tunnel Encapsulation (23): the eight per tunnel type Encapsulation sub-TLV shapes, RFC 9012 sections 3.1.1 to 3.1.8. The attribute keeps their octets, so a test can still build any of them by hand.
 * Tunnel Encapsulation: the SR Policy sub-TLVs, types 12 to 15, 20 and 128 to 130, from RFC 9256, and the Prefix-SID sub-TLV, type 11.
 * Prefix-SID (40): the SRv6 TLVs of RFC 9252, and the RFC 8669 section 4.1 rule for labeled unicast.
-* RFC 9234 section 4: the BGP Role capability. Only the OTC attribute is implemented.
 * No check for a missing well known mandatory attribute. That needs `Update`, not `Path_attribute`, because it depends on whether the message carries NLRI.
 * The external peer rules for LOCAL_PREF, ORIGINATOR_ID and CLUSTER_LIST, and the RFC 7311 section 3.2 AIGP checks. bgp4r does not know whether a peer is external where the checks run.
 * Not started: BGP-LS, ATTR_SET, BGPsec_Path.
