@@ -21,7 +21,8 @@ bgp/neighbor/            the BGP finite state machine and TCP session (neighbor.
 bgp/rib/                 routes and the decision process (RFC 4271 section 9); require 'bgp/rib'
                          peer_adapter.rb turns a Neighbor's UPDATEs into table operations,
                          peer_feed.rb applies them on one worker thread; rib.attach(neighbor)
-                         phase 2 of five; see "Where the work is going"
+                         export.rb decides what goes to a peer and what its attributes become,
+                         adj_rib_out.rb records what was sent; see "Where the work is going"
 bgp/misc/                extras: route_generator.rb (many prefixes packed in UPDATEs), live_feed.rb (a client for an old public BGP feed)
 docs/                    protocol-testing.md: using bgp4r to test a router
 examples/                runnable scripts
@@ -81,7 +82,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. A `lab` job runs the Compose topologies.
 
-Baseline on 2026-10-27: 998 tests, 20434 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.2%.
+Baseline on 2026-10-28: 1050 tests, 20561 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.2%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -389,14 +390,55 @@ Neighbor ◀──UPDATE── Adj-RIB-Out (per peer) ◀───────�
         Identifiers, and withdraws one by Path Identifier to see the other
         take over. Before this nothing had carried a Path Identifier into a
         RIB over a session.
-3. **Adj-RIB-Out, the export rules and the speaker's router mode. Not
-   started**, about 3 PRs, with route reflector and transit lab topologies.
-   The rules: do not send an iBGP learned route to another iBGP peer unless we
-   are a route reflector (RFC 4456); toward eBGP prepend our AS, set the next
-   hop to ourselves, strip LOCAL_PREF and do not pass MED beyond the
-   neighbouring AS; honour NO_EXPORT and NO_ADVERTISE (RFC 1997); pack
-   prefixes sharing attributes into one UPDATE, which `route_generator.rb`
-   already does.
+3. **Adj-RIB-Out, the export rules and the speaker's router mode. In
+   progress**, three PRs.
+   1. **The export rules and `AdjRibOut`, pure. Done**, in #125. Nothing
+      calls them yet; part 2 wires them to a session.
+      * `bgp/rib/export.rb` is a pure function like `Decision#best`:
+        `Export#for(route, peer)` returns a `Result` with the attributes to
+        send, the next hop chosen, and a reason. It holds no Adj-RIB-Out and
+        sends nothing, so the whole policy is testable with no session.
+      * **Reachability is deliberately not in the result.** The attributes
+        never carry MP_REACH_NLRI or MP_UNREACH_NLRI, because which prefixes
+        go in which UPDATE is the sender's job and it packs prefixes that
+        share attributes into one message. `Result#next_hop` is there so the
+        sender can build MP_REACH_NLRI, which is also why it is filled for
+        IPv4 routes where the attribute already carries it.
+      * The rules, each read in the RFC rather than recalled: AS_PATH
+        prepending in all four cases of RFC 4271 section 5.1.2, including
+        the 255 AS overflow and the AS_SET case; NEXT_HOP per section 5.1.3,
+        ours toward an external peer and untouched toward an internal one;
+        LOCAL_PREF per section 5.1.5, never to an external peer and always
+        to an internal one, so a route out of another AS gets the default
+        here; MED per section 5.1.4, not propagated to another neighbouring
+        AS; NO_ADVERTISE, NO_EXPORT and NO_EXPORT_SUBCONFED from RFC 1997,
+        whose sections are **unnumbered**, so cite it by name; the base IBGP
+        rule as RFC 4456 **section 4** describes it, with a
+        `route_reflector` option and the ORIGINATOR_ID and CLUSTER_LIST
+        handling of **section 8**.
+      * `next_hop:` is required for an external peer and raises without it.
+        Export cannot know our address on a session, and the alternative to
+        raising is sending a next hop that is not ours, which is how a route
+        becomes a black hole. The refusals are checked first, so a route
+        that is not going to that peer never needs one.
+      * Not in it: confederations (RFC 5065), so a leftmost confederation
+        segment is treated as the section 5.1.2 AS_SET case; locally
+        originated routes, since every `Route` has a peer; and the route
+        reflector client and non-client matrix of RFC 4456 section 6, which
+        needs per-peer configuration the speaker holds.
+      * `bgp/rib/adj_rib_out.rb` records what was sent, keyed by prefix and
+        Path Identifier like the Adj-RIB-In. `advertise` answers `:new`,
+        `:changed` or `:same`, and `withdraw` answers nil for a prefix the
+        peer never had, so the sender can leave both messages unsent.
+        Attributes are compared by their encoded octets in the 4-octet AS
+        form, because `Export` builds a new `Path_attribute` every run.
+   2. **Wiring it to the session. Not started.** The speaker's router mode:
+      run export over the Loc-RIB changes, diff against each Adj-RIB-Out,
+      and send UPDATEs, packing prefixes that share attributes into one
+      message the way `route_generator.rb` already does. This is where
+      `Result#next_hop` becomes an MP_REACH_NLRI, and where the MRAI timer
+      setting lands.
+   3. **Route reflector and transit lab topologies. Not started.**
 4. **FIB adapters and the Linux lab test. Not started**, about 2 PRs. The FIB
    is the kernel routing table and is a separate, optional adapter: Linux
    only, so it runs in a container, with a dedicated routing table, routes
