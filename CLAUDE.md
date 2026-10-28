@@ -19,6 +19,7 @@ bgp/optional_parameters/ OPEN capabilities (4-byte AS, add-path, graceful restar
 bgp/orfs/                outbound route filtering
 bgp/neighbor/            the BGP finite state machine and TCP session (neighbor.rb)
 bgp/rib/                 routes and the decision process (RFC 4271 section 9); require 'bgp/rib'
+                         phase 1 of five; see "Where the work is going"
 bgp/misc/                extras: route_generator.rb (many prefixes packed in UPDATEs), live_feed.rb (a client for an old public BGP feed)
 docs/                    protocol-testing.md: using bgp4r to test a router
 examples/                runnable scripts
@@ -108,7 +109,82 @@ There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Cove
 * Cite the RFC section in a comment when you implement or fix wire format logic. Open the RFC and check the section number against its text; do not write one from memory. Six citations in this file and in the code were found wrong on 2026-10-27. One of them, "RFC 5291 section 5" for the ROUTE-REFRESH and ORF layout, is section 4, and it had been copied forward into two pull requests before anyone read the RFC. Another called 0x02 and 0x03 extended community types when they are sub-types. A wrong citation is worse than none, because it reads as verified and sends the next person to the wrong page.
 * Do not delete or weaken existing tests to make a change pass.
 * If you find a bug you are not fixing, list it in the PR description.
+* A plan that spans more than one session goes under "Where the work is going" as phases with their status, before the work starts. A plan that lives only in a chat is lost the moment the context is: the RIB plan below had to be recovered from a transcript because nothing in this file recorded it, or recorded that phase 1 was finished.
 * Keep this file true in the same pull request that makes it false. If your change fixes something under "Known issues to work on", delete that entry. If it adds or removes tests, update the baseline counts above. Nobody reconciles this file later, and a stale entry is worse than no entry: it sends the next reader after work that no longer exists. Both halves of this have already happened here, once to seven entries at once, and once to a fix that landed without removing its own entry.
+
+## Where the work is going
+
+A plan that spans more than one session lives here, as phases with their
+status, so the next reader can see the direction without reconstructing it.
+Update the status in the pull request that moves a phase.
+
+### RIB and FIB, five phases
+
+The design follows RFC 4271 section 9:
+
+```
+Neighbor ──UPDATE──▶ Adj-RIB-In (per peer) ──import──▶ Decision ──▶ Loc-RIB ──▶ FIB adapter
+                                                                      │
+                                               export ◀───────────────┘
+                                                    │
+Neighbor ◀──UPDATE── Adj-RIB-Out (per peer) ◀───────┘
+```
+
+1. **Route, Adj-RIB-In, the decision process and Loc-RIB. Done**, in #52 and
+   #53. No networking. `bgp/rib/` holds `route.rb`, `adj_rib_in.rb`,
+   `decision.rb`, `loc_rib.rb` and `table.rb`, with a test file each: 60
+   tests. `Decision#best` is a pure function returning the winner, the step
+   that decided it, and why each other route lost. It drops routes from the
+   whole set at each step, so arrival order never changes the answer and the
+   MED comparison cannot cycle (RFC 3345). Loop checks run before it: our AS
+   in the AS_PATH, our ORIGINATOR_ID, our cluster ID in the CLUSTER_LIST.
+   Import drops LOCAL_PREF from an eBGP peer (RFC 4271 section 5.1.5), then an
+   optional Ruby block may change or reject a route. `table_test.rb` carries a
+   model check: after every random step the table must equal a full recompute,
+   and `RIB_MODEL_STEPS` makes it longer. That check caught all six bugs
+   planted against it.
+2. **The peer adapter and `rib.attach`, with loopback tests. Not started**,
+   about 2 PRs. `Neighbor#rcv_update` is still an empty hook, so nothing feeds
+   the table from a live session. It has to cover NLRI, withdrawn routes,
+   MP_REACH, MP_UNREACH and add-path, call `peer_down` when a session drops,
+   and feed the table from one worker thread. `BGP::Rib::Table` is documented
+   as not thread safe and phase 2 is where that is resolved.
+3. **Adj-RIB-Out, the export rules and the speaker's router mode. Not
+   started**, about 3 PRs, with route reflector and transit lab topologies.
+   The rules: do not send an iBGP learned route to another iBGP peer unless we
+   are a route reflector (RFC 4456); toward eBGP prepend our AS, set the next
+   hop to ourselves, strip LOCAL_PREF and do not pass MED beyond the
+   neighbouring AS; honour NO_EXPORT and NO_ADVERTISE (RFC 1997); pack
+   prefixes sharing attributes into one UPDATE, which `route_generator.rb`
+   already does.
+4. **FIB adapters and the Linux lab test. Not started**, about 2 PRs. The FIB
+   is the kernel routing table and is a separate, optional adapter: Linux
+   only, so it runs in a container, with a dedicated routing table, routes
+   marked `proto bgp`, removed on exit, and never with `--network host`. This
+   phase also carries the show commands: IOS, IOS-XR and Junos style output
+   for routes and the Loc-RIB. The decision result already holds what they
+   need, including the Junos "Inactive reason" line.
+5. **FRR as a reference in the lab. Not started.**
+
+Decisions already taken that constrain the later phases:
+
+* Loc-RIB and FIB are separate. The Loc-RIB runs anywhere; the FIB is an
+  adapter and optional.
+* No policy language. Import and export take a Ruby block.
+* The MRAI timer (RFC 4271 section 9.2.1.1) is a setting, defaulting to 0 in
+  tests. The "oldest route wins" tie break is skipped or optional, so tests do
+  not depend on timing.
+* A full table is about a million IPv4 prefixes, so share identical attribute
+  sets keyed by their encoded bytes rather than one object per route. Measure
+  with `routegen`, do not guess.
+* Dump the RIB to JSON, as the lab speaker dumps its state, so a test and a
+  person can both see why a route won.
+
+### Before the RIB work resumes
+
+Fixing the existing path attribute bugs came first, deliberately, and that is
+substantially done: 19 were fixed on 2026-10-27. What remains is under "Known
+issues to work on" and "Attribute work left" below.
 
 ## Known issues to work on
 
