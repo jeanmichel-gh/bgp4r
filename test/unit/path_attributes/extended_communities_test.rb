@@ -529,8 +529,13 @@ class Extended_communitiesTest < Test::Unit::TestCase
   # low 2 octets were set, which the address form dropped.
   #
   # The reserved fields of the RFC 8955, RFC 7432 and RFC 9012 shapes are
-  # 0 here, as those RFCs ask. Four of those classes lose them in the
-  # hash when they are not; see "Known issues to work on" in CLAUDE.md.
+  # set here, every bit of them, which is the harder half: encode always
+  # kept them, because a parsed community keeps its 6 value octets, but
+  # hash_value carried only the fields each RFC defines, so a build from
+  # the hash wrote them as 0 and four of these came back different. They
+  # carry a :bits entry now, all 48 bits of the value, the way
+  # Traffic_action always has. The forms with those fields at 0, which is
+  # what the RFCs ask an encoder for, are in the list above.
   def test_every_wire_form_the_factory_knows_survives_its_own_hash
     forms = [
       ['0002', '000100000001'], # RFC 4360 section 4, 2 octet AS specific
@@ -547,16 +552,16 @@ class Extended_communitiesTest < Test::Unit::TestCase
       ['0008', '006400000064'], # RFC 4384
       ['030b', '000000000064'], # RFC 9012 section 4.3
       ['0300', '000000000001'], # RFC 8097 section 2
-      ['030c', '000000000008'], # RFC 9012 section 4.1
+      ['030c', 'ffffffff0008'], # RFC 9012 section 4.1, 4 reserved octets set
       ['8006', '000a447a0000'], # RFC 8955 section 7.1
       ['800c', '000a447a0000'], # RFC 8955 section 7.2
-      ['8007', '000000000003'], # RFC 8955 section 7.3
+      ['8007', 'ffffffffffff'], # RFC 8955 section 7.3, all 46 reserved bits set
       ['8008', '000a00000064'], # RFC 8955 section 7.4
       ['8108', '010101010064'],
       ['8208', '000100020003'],
-      ['8009', '000000000020'], # RFC 8955 section 7.5
-      ['0600', '000000000005'], # RFC 7432 section 7.7
-      ['0601', '000000000640'], # RFC 7432 section 7.5
+      ['8009', 'ffffffffffe0'], # RFC 8955 section 7.5, 42 reserved bits set
+      ['0600', 'ffff00000005'], # RFC 7432 section 7.7, flags and reserved octet set
+      ['0601', 'ffffff00064f'], # RFC 7432 section 7.5, flags, reserved and low 4 bits set
       ['0602', 'aabbccddeeff'], # RFC 7432 section 7.6
       ['0603', 'aabbccddeeff'], # RFC 9135 section 8.1
       # RFC 4360 sections 2 and 4, RFC 7606 section 7.14: a type the
@@ -587,6 +592,27 @@ class Extended_communitiesTest < Test::Unit::TestCase
   # The type octet is optional, and a hash written by hand says what it
   # means with it or without it. Without it the community is the one the
   # values have always built.
+  # A hash written by hand can carry the reserved bits of these four, the
+  # way one written by to_hash does. Two of them hash as a list of their
+  # named fields and as a Hash when there are reserved bits to carry, so
+  # HASH_BUILDERS takes either.
+  def test_a_hash_written_by_hand_can_carry_reserved_bits
+    { { :encapsulation=> { :tunnel_type=> :vxlan, :bits=> 0xffffffff0008 } } => 'c01008030cffffffff0008',
+      { :traffic_marking=> { :dscp=> 32, :bits=> 0xffffffffffe0 } }          => 'c010088009ffffffffffe0',
+      { :mac_mobility=> { :sequence=> 5, :sticky=> true, :bits=> 0xffff00000005 } } => 'c010080600ffff00000005',
+      { :esi_label=> { :label=> 100, :single_active=> true, :bits=> 0xffffff00064f } } => 'c010080601ffffff00064f',
+      # The plain forms, unchanged: a value, and a list.
+      { :encapsulation=> :vxlan }          => 'c01008030c000000000008',
+      { :traffic_marking=> 32 }            => 'c010088009000000000020',
+      { :mac_mobility=> [5, true] }        => 'c010080600010000000005',
+      { :esi_label=> [100, true] }         => 'c010080601010000000640',
+    }.each do |hash, hex|
+      assert_equal(hex, Extended_communities.new(hash).to_shex, hash.inspect)
+      assert_equal(hex, Path_attribute.new(:extended_communities=> hash)[:extended_communities].to_shex,
+                   hash.inspect)
+    end
+  end
+
   def test_the_type_octet_is_optional_in_a_hash_written_by_hand
     assert_equal('c010080002006400000001',
                  Extended_communities.new(:route_target=> [100, 1]).to_shex)

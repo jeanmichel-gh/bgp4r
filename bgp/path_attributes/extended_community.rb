@@ -750,6 +750,40 @@ module BGP
       self.class::TYPE
     end
     private
+    # All 48 bits of the value field, from the octets that arrived when
+    # this community was parsed and from the octets a build would write
+    # otherwise.
+    def value_bits
+      high, low = (@raw || value_octets).unpack('nN')
+      (high << 32) | low
+    end
+    # True when the value carries a bit outside the fields this community
+    # reads, which on a received community is a reserved bit the peer set.
+    # DEFINED_BITS says which bits the class reads, each with its RFC; a
+    # class without one reads all 48 and so never has any.
+    def undefined_bits?
+      mask = self.class.const_defined?(:DEFINED_BITS) ? self.class::DEFINED_BITS : ~0
+      (value_bits & ~mask) > 0
+    end
+    # A hash that gave all 48 bits of the value: keep them as the value
+    # octets and read the named fields back out of them, which is what the
+    # wire path does. encode prefers these octets over value_octets, so the
+    # community comes back byte for byte.
+    #
+    # The reserved bits are why this exists. encode kept them, because a
+    # parsed community keeps its 6 octets, but hash_value carried only the
+    # fields its RFC defines, so a build from the hash wrote them as 0 and
+    # the hash did not round trip. Four classes did that.
+    def keep_bits(bits)
+      check('bits', bits, 0xffffffffffff)
+      @raw = [bits >> 32, bits & 0xffffffff].pack('nN').b
+      parse_value(@raw)
+    end
+    # to_s names the reserved bits too, so what encode would write is
+    # visible rather than only the fields the class reads.
+    def with_bits(s)
+      undefined_bits? ? s + format(', bits 0x%012x', value_bits) : s
+    end
     def mac_s(octets)
       octets.unpack('C6').collect { |b| format('%02x', b) }.join(':')
     end
@@ -774,13 +808,26 @@ module BGP
     LABEL = 'Encapsulation'
     # RFC 9012 tunnel types. Any other number from 0 to 65535 works too.
     TUNNEL_TYPES = { :l2tpv3 => 1, :gre => 2, :vxlan => 8, :nvgre => 9, :mpls_in_gre => 11 }
+    # RFC 9012 section 4.1, Figure 14: Reserved (2 octets), Reserved (2
+    # octets), Tunnel Type (2 octets), and "The last two octets of the
+    # Value field encode a tunnel type". So the tunnel type is the low 16
+    # bits and the 32 above it are the 4 reserved octets. The RFC does not
+    # say what they are to be set to, so a build writes 0 and a community
+    # that arrived with them set carries them in its hash.
+    DEFINED_BITS = 0xffff
     attr_reader :tunnel_type
     def tunnel_name
       TUNNEL_TYPES.key(@tunnel_type)
     end
     private
-    def build(tunnel_type)
-      @tunnel_type = TUNNEL_TYPES[tunnel_type] || check('tunnel type', tunnel_type, 0xffff)
+    # The hash value, which is the tunnel type on its own or a Hash of it
+    # and the reserved bits, arrives either as one argument or spelled out
+    # as keywords.
+    def build(arg = nil, tunnel_type: nil, bits: nil)
+      arg, bits = arg[:tunnel_type], arg[:bits] if arg.is_a?(Hash)
+      arg = tunnel_type if arg.nil?
+      return keep_bits(bits) if bits
+      @tunnel_type = TUNNEL_TYPES[arg] || check('tunnel type', arg, 0xffff)
     end
     def value_octets
       [0, @tunnel_type].pack('Nn')
@@ -789,10 +836,11 @@ module BGP
       @tunnel_type = v.unpack('Nn')[1]
     end
     def value_s
-      (tunnel_name || @tunnel_type).to_s
+      with_bits((tunnel_name || @tunnel_type).to_s)
     end
     def hash_value
-      tunnel_name || @tunnel_type
+      name = tunnel_name || @tunnel_type
+      undefined_bits? ? { :tunnel_type=> name, :bits=> value_bits } : name
     end
   end
 
@@ -834,6 +882,10 @@ module BGP
     TYPE, SUBTYPE = 0x80, 0x07
     LABEL = 'Traffic action'
     SAMPLE, TERMINAL = 0x02, 0x01
+    # The two bits section 7.3 defines. The 46 above them are reserved,
+    # and this class has always carried them, which is where the other
+    # four got the shape.
+    DEFINED_BITS = SAMPLE | TERMINAL
     def sample?
       (@bits & SAMPLE) > 0
     end
@@ -862,12 +914,12 @@ module BGP
       s = []
       s << 'sample' if sample?
       s << 'terminal' if terminal?
-      s << format('bits 0x%012x', @bits) if (@bits & ~(SAMPLE | TERMINAL)) > 0
+      s << format('bits 0x%012x', @bits) if undefined_bits?
       s.empty? ? 'none' : s.join(', ')
     end
     def hash_value
       h = { :sample => sample?, :terminal => terminal? }
-      h[:bits] = @bits if (@bits & ~(SAMPLE | TERMINAL)) > 0
+      h[:bits] = @bits if undefined_bits?
       h
     end
   end
@@ -929,10 +981,20 @@ module BGP
   class Traffic_marking < Extended_community::Typed
     TYPE, SUBTYPE = 0x80, 0x09
     LABEL = 'Traffic marking'
+    # RFC 8955 section 7.5 marks "the corresponding value encoded in the 6
+    # least significant bits of the Extended Community value", so the 42
+    # bits above the DSCP are the reserved ones. The section says they
+    # "MUST be set to 0 on encoding and MUST be ignored during decoding":
+    # a build writes 0, and a community that arrived with them set is read
+    # for its DSCP and keeps them, rather than losing them in its hash.
+    DEFINED_BITS = 0x3f
     attr_reader :dscp
     private
-    def build(dscp)
-      @dscp = check('DSCP', dscp, 63)
+    def build(arg = nil, dscp: nil, bits: nil)
+      arg, bits = arg[:dscp], arg[:bits] if arg.is_a?(Hash)
+      arg = dscp if arg.nil?
+      return keep_bits(bits) if bits
+      @dscp = check('DSCP', arg, 63)
     end
     def value_octets
       [0, 0, @dscp].pack('NCC')
@@ -941,10 +1003,10 @@ module BGP
       @dscp = v.getbyte(5) & 0x3f
     end
     def value_s
-      "DSCP #{@dscp}"
+      with_bits("DSCP #{@dscp}")
     end
     def hash_value
-      @dscp
+      undefined_bits? ? { :dscp=> @dscp, :bits=> value_bits } : @dscp
     end
   end
 
@@ -953,13 +1015,22 @@ module BGP
   class Mac_mobility < Extended_community::Typed
     TYPE, SUBTYPE = 0x06, 0x00
     LABEL = 'MAC Mobility'
+    # RFC 7432 section 7.7: "The low-order bit of the Flags octet is
+    # defined as the "Sticky/static" flag", one reserved octet follows it,
+    # and the Sequence Number is 4 octets. The sticky bit is bit 40 of the
+    # value and the sequence its low 32, so the reserved ones are the 7
+    # flag bits above sticky and the whole reserved octet.
+    DEFINED_BITS = (1 << 40) | 0xffffffff
     attr_reader :sequence
     def sticky?
       @sticky
     end
     private
-    def build(sequence, sticky: false)
-      @sequence, @sticky = check('sequence number', sequence, 0xffffffff), sticky ? true : false
+    def build(arg = nil, sequence: nil, sticky: false, bits: nil)
+      arg, sticky, bits = arg[:sequence], arg[:sticky], arg[:bits] if arg.is_a?(Hash)
+      arg = sequence if arg.nil?
+      return keep_bits(bits) if bits
+      @sequence, @sticky = check('sequence number', arg, 0xffffffff), sticky ? true : false
     end
     def value_octets
       [@sticky ? 1 : 0, 0, @sequence].pack('CCN')
@@ -969,10 +1040,11 @@ module BGP
       @sticky = (flags & 1) > 0
     end
     def value_s
-      "sequence #{@sequence}" + (@sticky ? ', sticky' : '')
+      with_bits("sequence #{@sequence}" + (@sticky ? ', sticky' : ''))
     end
     def hash_value
-      [@sequence, @sticky]
+      return [@sequence, @sticky] unless undefined_bits?
+      { :sequence=> @sequence, :sticky=> @sticky, :bits=> value_bits }
     end
   end
 
@@ -982,13 +1054,23 @@ module BGP
   class Esi_label < Extended_community::Typed
     TYPE, SUBTYPE = 0x06, 0x01
     LABEL = 'ESI Label'
+    # RFC 7432 section 7.5: "The low-order bit of the Flags octet is
+    # defined as the "Single-Active" bit", then two reserved octets, then
+    # the 3 octet ESI Label field. The section does not say where the
+    # label sits inside that field; bgp4r reads it as the high 20 bits,
+    # which is the MPLS label of RFC 5462 section 2, so the low 4 bits go
+    # with the two reserved octets and the 7 flag bits above single-active.
+    DEFINED_BITS = (1 << 40) | (0xfffff << 4)
     attr_reader :label
     def single_active?
       @single_active
     end
     private
-    def build(label, single_active: false)
-      @label, @single_active = check('MPLS label', label, 0xfffff), single_active ? true : false
+    def build(arg = nil, label: nil, single_active: false, bits: nil)
+      arg, single_active, bits = arg[:label], arg[:single_active], arg[:bits] if arg.is_a?(Hash)
+      arg = label if arg.nil?
+      return keep_bits(bits) if bits
+      @label, @single_active = check('MPLS label', arg, 0xfffff), single_active ? true : false
     end
     def value_octets
       field = @label << 4
@@ -1000,10 +1082,11 @@ module BGP
       @label = ((high << 16) | low) >> 4
     end
     def value_s
-      "label #{@label}" + (@single_active ? ', single-active' : '')
+      with_bits("label #{@label}" + (@single_active ? ', single-active' : ''))
     end
     def hash_value
-      [@label, @single_active]
+      return [@label, @single_active] unless undefined_bits?
+      { :label=> @label, :single_active=> @single_active, :bits=> value_bits }
     end
   end
 
