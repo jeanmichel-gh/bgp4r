@@ -1,5 +1,5 @@
 #--
-# Copyright 2008, 2009, 2010 Jean-Michel Esnault.
+# Copyright 2008, 2009, 2010, 2026 Jean-Michel Esnault.
 # All rights reserved.
 # See LICENSE.txt for permissions.
 #
@@ -25,8 +25,48 @@ require 'bgp4r'
 
 class Notification_Test < Test::Unit::TestCase
   include BGP
+  # Value 0 of the error code registry and of five of the six subcode
+  # registries. Every one of these read "Undefined" before, which is the
+  # answer for a code point IANA has not named, and these are named.
+  #
+  # "Unspecific" for the Message Header, OPEN and UPDATE subcodes, which
+  # IANA references to RFC Errata 4493; "Unspecified Error" for the Finite
+  # State Machine subcodes, RFC 6608 section 3, which lists "0 -
+  # Unspecified Error" above the three bgp4r already had; "Reserved" for
+  # the error codes, for Cease, and for the ROUTE-REFRESH subcodes of RFC
+  # 7313 section 6.
+  def test_value_zero_is_named_in_every_registry_that_names_it
+    assert_equal('Reserved', Notification.code_to_s(0))
+    assert_equal('Unspecific', Notification.code_to_s(1, 0))
+    assert_equal('Unspecific', Notification.code_to_s(2, 0))
+    assert_equal('Unspecific', Notification.code_to_s(3, 0))
+    assert_equal('Unspecified Error', Notification.code_to_s(5, 0))
+    assert_equal('Reserved', Notification.code_to_s(6, 0))
+    assert_equal('Reserved', Notification.code_to_s(7, 0))
+    # Code 4, Hold Timer Expired, has no subcode registry at all, so there
+    # is nothing to name under it. IANA lists a subcode registry for 1, 2,
+    # 3, 5, 6 and 7 and none for 4.
+    assert_equal('Undefined', Notification.code_to_s(4, 0))
+    # And a code point IANA leaves unassigned still reads Undefined, which
+    # is what this table says when it does not know a name.
+    assert_equal('Undefined', Notification.code_to_s(10))
+    assert_equal('Undefined', Notification.code_to_s(255))
+    assert_equal('Undefined', Notification.code_to_s(7, 2))
+    assert_equal('Undefined', Notification.code_to_s(6, 11))
+    assert_equal('Undefined', Notification.code_to_s(5, 4))
+    # A NOTIFICATION that carries one says so rather than reading as a
+    # code bgp4r has yet to learn.
+    assert_equal('Notification (3), length: 21: Cease (6), Reserved (0) ',
+                 Notification.new(6, 0).to_s)
+    assert_equal('Notification (3), length: 21: ' \
+                 'Finite State Machine Error (5), Unspecified Error (0) ',
+                 Notification.new(5, 0).to_s)
+  end
+
   def test_1
-    assert_equal('Undefined', Notification.code_to_s(0))
+    # The error code registry names 0 "Reserved"; this used to pin
+    # "Undefined", which was less than the table knew.
+    assert_equal('Reserved', Notification.code_to_s(0))
     assert_equal('Header Error', Notification.code_to_s(1))
     assert_equal('OPEN msg error', Notification.code_to_s(2))
     assert_equal('UPDATE msg error', Notification.code_to_s(3))
