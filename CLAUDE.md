@@ -74,7 +74,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. A `lab` job runs the Compose topologies.
 
-Baseline on 2026-10-27: 956 tests, 20296 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.1%.
+Baseline on 2026-10-27: 961 tests, 20328 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.1%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -314,12 +314,28 @@ Neighbor ◀──UPDATE── Adj-RIB-Out (per peer) ◀───────�
    model check: after every random step the table must equal a full recompute,
    and `RIB_MODEL_STEPS` makes it longer. That check caught all six bugs
    planted against it.
-2. **The peer adapter and `rib.attach`, with loopback tests. Not started**,
-   about 2 PRs. `Neighbor#rcv_update` is still an empty hook, so nothing feeds
-   the table from a live session. It has to cover NLRI, withdrawn routes,
-   MP_REACH, MP_UNREACH and add-path, call `peer_down` when a session drops,
-   and feed the table from one worker thread. `BGP::Rib::Table` is documented
-   as not thread safe and phase 2 is where that is resolved.
+2. **The peer adapter and `rib.attach`, with loopback tests. In progress**,
+   three PRs rather than the two first estimated, because the locking is a
+   topic of its own and is worth landing before anything depends on it.
+   `Neighbor#rcv_update` is still an empty hook, so nothing feeds the table
+   from a live session.
+   1. **`Table` made thread safe. Done**, in #122. One reentrant lock around
+      every method, so several sessions can feed one table while a console
+      thread reads it. The lock has to be reentrant: `announce` calls
+      `adj_rib_in`, and `decide` runs the `on_change` listeners while holding
+      it, so a listener may read or change the table. `Mutex#owned?` does it
+      without requiring `monitor`. `Table#synchronize` is public, because
+      `decision`, `loc_rib` and the `AdjRibIn` that `adj_rib_in` returns are
+      the objects themselves and have no lock of their own.
+   2. **The adapter, `rib.attach` and the worker thread. Not started.** IPv4
+      unicast only: the NLRI and Withdrawn Routes fields of RFC 4271 section
+      4.3. It needs a `Peer` built from what `rcv_open` learned, which means
+      readers for `@rmt_as` and `@rmt_bgp_id`, and a session-down signal,
+      which the FSM does not give today: `:ev_conn_reset` calls `stop`
+      without notifying observers, so nothing downstream can see a session
+      drop and call `peer_down`.
+   3. **MP_REACH, MP_UNREACH and add-path path identifiers. Not started**,
+      with the loopback tests against the test server.
 3. **Adj-RIB-Out, the export rules and the speaker's router mode. Not
    started**, about 3 PRs, with route reflector and transit lab topologies.
    The rules: do not send an iBGP learned route to another iBGP peer unless we
