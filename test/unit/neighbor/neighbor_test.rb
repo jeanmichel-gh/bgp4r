@@ -470,6 +470,104 @@ class TestBgpNeighbor < Test::Unit::TestCase
     assert_equal('ffffffffffffffffffffffffffffffff005d0104006400b4000000024002060104000100010206010400010002020601040001008002060104000200810206010400030080020601040003000102020200020280000206410400000064', n.open.to_shex)
   end
 
+  # The guard on Neighbor::CAPABILITIES. Every capability bgp4r implements
+  # has to have a name, because the names used to live inside a case in
+  # capability and a second list in method_missing, and both fell behind the
+  # library: Role, Enhanced Route Refresh, ADD-PATH, ORF and Dynamic
+  # Capability could not be asked for by name at all.
+  #
+  # CAP::Unknown is left out on purpose. It is what the factory builds for a
+  # capability code bgp4r does not implement, so it is read off the wire and
+  # carries its own code; there is nothing for a name to say.
+  def test_every_capability_bgp4r_implements_has_a_name
+    found, queue = [], [BGP::OPT_PARM::Capability]
+    until queue.empty?
+      queue.shift.subclasses.each { |kl| found << kl ; queue << kl }
+    end
+    implemented = found.select { |kl| kl.name.to_s.start_with?('BGP::OPT_PARM::CAP::') } -
+                  [BGP::OPT_PARM::CAP::Unknown]
+    # So a walk that found nothing cannot pass this test by default.
+    assert_operator implemented.size, :>=, 10
+    implemented.each do |kl|
+      assert BGP::Neighbor::CAPABILITIES.value?(kl),
+             "#{kl} has no name in Neighbor::CAPABILITIES, so no script and no " +
+             "lab topology can ask for it"
+    end
+  end
+
+  # Each name builds its own capability. The code is in the octets: 0x02 is
+  # the optional parameter type, then its length, then the capability code.
+  def test_each_capability_name_builds_its_own_capability
+    { [:route_refresh]           => ['Route_refresh', '02020200'],
+      [:rr]                      => ['Route_refresh', '02020200'],
+      [:enhanced_route_refresh]  => ['Enhanced_route_refresh', '02024600'],
+      [:mbgp, :ipv4, :unicast]   => ['Mbgp', '0206010400010001'],
+      [:mbgp_ipv6_unicast]       => ['Mbgp', '0206010400020001'],
+      [:as4]                     => ['As4', '0206410400000064'],
+      [:four_byte_as]            => ['As4', '0206410400000064'],
+      [:graceful_restart, 0, 180] => ['Graceful_restart', '0204400200b4'],
+      [:extended_nexthop]        => ['Extended_nexthop', '02080506000100010002'],
+      [:add_path, 1, 1, 3]       => ['Add_path', '0206450400010301'],
+      [:role, :customer]         => ['Role', '0203090103'],
+      [:orf]                     => ['Orf', '02020300'],
+      [:dynamic]                 => ['Dynamic', '02024300'],
+    }.each do |args, (klass, hex)|
+      n = BGP::Neighbor.new(4, 100, 180, '0.0.0.2')
+      n.capability(*args)
+      cap = n.instance_eval { @opt_parms }.last
+      assert_equal "BGP::OPT_PARM::CAP::#{klass}", cap.class.to_s, args.inspect
+      assert_equal hex, cap.to_shex, args.inspect
+      # A String name too, since a lab topology reads its names out of YAML.
+      m = BGP::Neighbor.new(4, 100, 180, '0.0.0.2')
+      m.capability(args[0].to_s, *args[1..-1])
+      assert_equal hex, m.instance_eval { @opt_parms }.last.to_shex, args.inspect
+    end
+  end
+
+  # The capability_<name> form used to run down four regular expressions
+  # matched as substrings, and "enhanced_route_refresh" contains
+  # "route_refresh": it built capability 2 where 70 was asked for, said
+  # nothing, and the OPEN went out with the wrong capability in it. Both
+  # forms go through the one table now.
+  def test_the_capability_name_form_does_not_build_a_different_capability
+    n = BGP::Neighbor.new(4, 100, 180, '0.0.0.2')
+    n.capability_enhanced_route_refresh
+    cap = n.instance_eval { @opt_parms }.last
+    assert_equal BGP::OPT_PARM::CAP::Enhanced_route_refresh, cap.class
+    assert_equal '02024600', cap.to_shex
+    n.capability_add_path 1, 1, 3
+    assert_equal '0206450400010301', n.instance_eval { @opt_parms }.last.to_shex
+    n.add_capability_role :customer
+    assert_equal '0203090103', n.instance_eval { @opt_parms }.last.to_shex
+  end
+
+  # A name no capability answers to says so, and says it in the right way:
+  # an unknown name through method_missing is still a NoMethodError, where a
+  # capability class refusing the arguments it was given is the
+  # ArgumentError it raised. Those two used to be the same answer, so
+  # capability_role with no Role to send would have read as a missing
+  # method.
+  def test_an_unknown_capability_name_says_so
+    n = BGP::Neighbor.new(4, 100, 180, '0.0.0.2')
+    e = assert_raise(BGP::Neighbor::UnknownCapability) { n.capability :nonesuch }
+    assert_match(/nonesuch/, e.message)
+    assert_match(/route_refresh/, e.message, 'the message lists the names')
+    # Still an ArgumentError, so a caller that rescues one still catches it.
+    assert_kind_of ArgumentError, e
+    # An address family nothing names, and a method of Mbgp that is no
+    # address family: the form this replaced sent both to Mbgp.send.
+    assert_raise(BGP::Neighbor::UnknownCapability) { n.capability 'mbgp_nonesuch' }
+    assert_raise(BGP::Neighbor::UnknownCapability) { n.capability 'mbgp_factory' }
+    assert_raise(NoMethodError) { n.capability_nonesuch }
+    assert_raise(NoMethodError) { n.capability_mbgp_factory }
+    # Role takes a Role, so this is a missing argument and not a missing
+    # method.
+    e = assert_raise(ArgumentError) { n.capability_role }
+    assert_match(/number of arguments/, e.message)
+    # Neither form put anything in the OPEN.
+    assert_equal 0, n.instance_eval { @opt_parms }.size
+  end
+
   # BGP::Update in full, and it has to be: a nested class does not see the
   # include in the class around it, so this resolved Update only through
   # the top level include that used to be in this file. Worse, a NameError

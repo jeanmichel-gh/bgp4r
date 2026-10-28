@@ -239,14 +239,25 @@ module Lab
       n
     end
 
-    def add_capability(n, name)
-      case name.to_s
-      when 'as4_byte'          then n.capability :as4_byte
-      when 'route_refresh'     then n.capability :route_refresh
-      when 'mbgp_ipv4_unicast' then n.capability :mbgp, :ipv4, :unicast
-      when 'mbgp_ipv6_unicast' then n.capability :mbgp, :ipv6, :unicast
-      else raise ArgumentError, "unknown capability #{name.inspect} for #{@address}"
-      end
+    # One capability from a topology. Either a name on its own, or a one key
+    # Hash of a name and the arguments that follow it:
+    #
+    #   capabilities: [as4_byte, route_refresh, mbgp_ipv6_unicast]
+    #   capabilities: [{role: customer}, {add_path: [1, 1, 3]}]
+    #
+    # Neighbor#capability knows every name bgp4r implements, so this
+    # forwards rather than keeping a list of its own. The list here was four
+    # names long and six behind the library, which is why no topology could
+    # exercise ADD-PATH or Role against a real router.
+    def add_capability(n, spec)
+      name, args = spec.is_a?(Hash) ? spec.first : [spec, []]
+      # YAML gives strings, and a capability takes its arguments as symbols
+      # or numbers: role: customer is :customer, add_path: [1, 1, 3] is
+      # three Integers.
+      args = Array(args).collect { |a| a.is_a?(String) ? a.to_sym : a }
+      n.capability(name.to_s, *args)
+    rescue ArgumentError => e
+      raise ArgumentError, "capability #{name.inspect} for #{@address}: #{e.message}"
     end
 
     # Send each announce block of the speaker as one UPDATE.

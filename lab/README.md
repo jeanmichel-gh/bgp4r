@@ -73,7 +73,12 @@ neighbors:
     hold_time: 30           # optional, default 90
     retry: 2                # optional, seconds between connect attempts
     capabilities: [as4_byte, route_refresh]   # optional, default [as4_byte]
-                            # also mbgp_ipv4_unicast, mbgp_ipv6_unicast
+                            # any name Neighbor#capability takes: route_refresh,
+                            # enhanced_route_refresh, as4_byte, graceful_restart,
+                            # extended_nexthop, add_path, role, orf, dynamic,
+                            # mbgp, and mbgp_<afi>_<safi> such as mbgp_ipv6_unicast.
+                            # One key per capability that needs arguments:
+                            #   capabilities: [{role: customer}, {add_path: [1, 1, 3]}]
     record: routes          # optional. routes keeps every route received.
                             # count keeps counters and times only.
 
