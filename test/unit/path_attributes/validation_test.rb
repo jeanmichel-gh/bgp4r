@@ -160,6 +160,21 @@ class TestAttrCheck < Test::Unit::TestCase
     assert_equal 'attribute 1: x (treat_as_withdraw)', f.to_s
   end
 
+  # A Gap says bgp4r could not read an attribute, which is not a thing
+  # a peer did wrong: RFC 7606 section 7 says what makes each attribute
+  # malformed and a reader's missing code is not on any of those lists.
+  # So it is not a Finding and carries nothing the RFC 7606 machinery
+  # could act on.
+  def test_gap_is_not_a_finding
+    g = Attr::Gap.new(14, 'cannot parse nexthop for safi 70', ArgumentError, nil)
+    assert_equal 'attribute 14: bgp4r could not decode it: cannot parse nexthop for safi 70', g.to_s
+    assert_equal 'attribute ?: bgp4r could not decode it: x', Attr::Gap.new(nil, 'x', nil, nil).to_s
+    assert_not_kind_of Attr::Finding, g
+    assert !g.respond_to?(:action)
+    assert !g.respond_to?(:subcode)
+    assert !g.respond_to?(:notification)
+  end
+
   def test_malformed_attribute
     e = Malformed_attribute.new([Attr::Finding.new(6, 5, DISCARD, 'a'), Attr::Finding.new(1, 6, TAW, 'b')])
     assert_equal [1, 6, TAW], [e.type, e.subcode, e.action]

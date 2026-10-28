@@ -45,6 +45,32 @@ module BGP
       end
     end
 
+    # One attribute bgp4r itself could not decode, kept as an Attr::Raw.
+    #
+    # This is not a protocol error and deliberately not a Finding. RFC
+    # 7606 section 7 lists, attribute by attribute, what makes one
+    # malformed, and "the receiver has no code for this address family"
+    # is on none of those lists. The four approaches of RFC 7606 section
+    # 2 are all answers to a peer's mistake, and RFC 4271 section 5 has a
+    # receiver accept an attribute it does not recognize rather than
+    # complain about it. So a Gap never reaches Path_attribute#errors,
+    # and the :strict policy never raises on one: bgp4r's coverage is
+    # bgp4r's business, and a conformance tool that calls its own gap a
+    # protocol error gives a wrong verdict about a correct router.
+    #
+    # It carries no action, no subcode and no notification, so it cannot
+    # be fed to Attr.strongest or to Malformed_attribute by accident.
+    #
+    # type       the attribute type code
+    # reason     what the decoder raised, in its own words
+    # error      the exception class it raised
+    # attribute  the Attr::Raw that holds the octets
+    Gap = Struct.new(:type, :reason, :error, :attribute) do
+      def to_s
+        "attribute #{type || '?'}: bgp4r could not decode it: #{reason}"
+      end
+    end
+
     # The RFC 7606 section 3 (h) order: the strongest action wins.
     ACTIONS = [:attribute_discard, :treat_as_withdraw, :session_reset]
 

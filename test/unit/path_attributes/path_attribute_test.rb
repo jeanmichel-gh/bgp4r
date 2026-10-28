@@ -576,6 +576,16 @@ class Path_attribute_Test < Test::Unit::TestCase # :nodoc:
   def wire(hex) [hex.delete(' ')].pack('H*') end
   GOOD = '40010100 4002060201fa56ea01 4003040a000001'
 
+  # A correct MP_REACH for EVPN: AFI 25, SAFI 70 (RFC 7432 section 7),
+  # flags 0x80 as MP_REACH must have, a 4 octet next hop, the reserved
+  # octet, then one Inclusive Multicast Ethernet Tag route, route type 3
+  # with a 17 octet value: an 8 octet RD, a 4 octet Ethernet Tag ID, an
+  # address length of 32 and a 4 octet address (RFC 7432 section 7.3).
+  # bgp4r has no decoder for SAFI 70, so this is a valid attribute it
+  # cannot read.
+  EVPN = '800e1c 0019 46 04 0a000001 00 ' +
+         '03 11 00010a0000010064 00000064 20 0a000001'
+
   # B9: flags were never checked.
   def test_flags_error_is_reported
     pa = Path_attribute.new(wire('c0010100 4002060201fa56ea01 4003040a000001'), true)
@@ -627,6 +637,80 @@ class Path_attribute_Test < Test::Unit::TestCase # :nodoc:
     assert_equal 4, e.findings.size
     assert_instance_of Path_attribute, e.path_attribute
     assert_nothing_raised { Path_attribute.new(wire(GOOD), :as4byte=>true, :policy=>:strict) }
+  end
+
+  # A valid attribute bgp4r cannot decode is bgp4r's gap, not a protocol
+  # error. RFC 7606 section 7 lists per attribute what makes one
+  # malformed and "the receiver has no code for this address family" is
+  # on none of those lists, so errors stays empty and :strict does not
+  # raise. The octets are kept and the caller can still see that the
+  # attribute came back as an Attr::Raw, and why.
+  def test_an_attribute_bgp4r_cannot_decode_is_not_a_protocol_error
+    pa = nil
+    assert_nothing_raised { pa = Path_attribute.new(wire(EVPN), :policy=>:strict) }
+    assert_equal [], pa.errors
+    assert_nil pa.action
+    assert_equal 1, pa.undecoded.size
+    g = pa.undecoded.first
+    assert_instance_of BGP::Attr::Gap, g
+    assert_equal ATTR::MP_REACH, g.type
+    assert_match(/safi 70/, g.reason)
+    assert_match(/^attribute 14: bgp4r could not decode it: /, g.to_s)
+    assert_kind_of Class, g.error
+    assert_instance_of Attr::Raw, pa.attributes.first
+    assert_same pa.attributes.first, g.attribute
+    assert_equal EVPN.delete(' '), pa.encode.unpack1('H*')
+  end
+
+  # A gap carries nothing the RFC 7606 machinery could act on, so it
+  # cannot be mistaken for a Finding or raised on by accident.
+  def test_a_gap_is_not_an_rfc_7606_finding
+    g = Path_attribute.new(wire(EVPN)).undecoded.first
+    assert_not_kind_of BGP::Attr::Finding, g
+    assert !g.respond_to?(:action)
+    assert !g.respond_to?(:subcode)
+    assert !g.respond_to?(:notification)
+  end
+
+  # The boundary case. The decoder raising does not say whether the
+  # attribute is bgp4r's gap or the peer's fault, so bgp4r does not
+  # guess: it reports the gap as a gap, and validation.rb, which is the
+  # only judge of malformed and runs on the octets whether the decoder
+  # succeeds or not, reports the malformation as an error. Here the next
+  # hop length of 255 does not fit the attribute, which is malformed
+  # with a session reset (RFC 7606 section 7.11), and the EVPN next hop
+  # is also one bgp4r cannot read. Both are reported, and :strict raises
+  # on the error.
+  def test_an_attribute_that_is_both_undecodable_and_malformed
+    hex = '800e08 0019 46 ff 0a000001'
+    pa = Path_attribute.new(wire(hex))
+    assert_equal [[14, 9, :session_reset]], pa.errors.collect { |f| [f.type, f.subcode, f.action] }
+    assert_equal 1, pa.undecoded.size
+    assert_equal 14, pa.undecoded.first.type
+    assert_equal hex.delete(' '), pa.encode.unpack1('H*')
+    e = assert_raise(Malformed_attribute) { Path_attribute.new(wire(hex), :policy=>:strict) }
+    assert_equal :session_reset, e.action
+  end
+
+  # A genuinely malformed attribute bgp4r can decode is untouched by
+  # all this: still a finding, still raises under :strict.
+  def test_a_malformed_attribute_still_raises_under_strict
+    pa = Path_attribute.new(wire('40010100 c008050102030405'), true)
+    assert_equal [[8, 5, :treat_as_withdraw]], pa.errors.collect { |f| [f.type, f.subcode, f.action] }
+    assert_equal [], pa.undecoded
+    e = assert_raise(Malformed_attribute) {
+      Path_attribute.new(wire('40010100 c008050102030405'), :as4byte=>true, :policy=>:strict)
+    }
+    assert_equal :treat_as_withdraw, e.action
+  end
+
+  # undecoded is empty on all three build paths when nothing is left
+  # undecoded, and under :raw, where nothing was asked to decode.
+  def test_undecoded_is_empty_when_nothing_was_left_undecoded
+    assert_equal [], Path_attribute.new(wire(GOOD), true).undecoded
+    assert_equal [], Path_attribute.new(Origin.new(0), Next_hop.new('1.1.1.1')).undecoded
+    assert_equal [], Path_attribute.new(:origin=>:igp, :next_hop=>'1.1.1.1').undecoded
+    assert_equal [], Path_attribute.new(wire(EVPN), :policy=>:raw).undecoded
   end
 
   def test_raw_policy_keeps_every_octet

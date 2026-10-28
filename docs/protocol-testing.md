@@ -251,6 +251,29 @@ f.reason                  # "flags 0xc0, the Optional and Transitive bits must b
 f.notification            # a Notification, code 3, ready to send
 ```
 
+`errors` means what the peer got wrong. An attribute bgp4r itself
+cannot decode, such as a correct MP_REACH for an address family it has
+no code for, is not one of those: it is kept as an `Attr::Raw`, its
+octets round trip, and it is reported in `undecoded` instead. RFC 7606
+section 7 says attribute by attribute what makes one malformed, and a
+reader's missing code is on none of those lists, so `:strict` never
+raises on one.
+
+```ruby
+pa = Path_attribute.new(evpn_mp_reach, :policy => :strict)   # does not raise
+pa.errors                 # []
+g = pa.undecoded.first    # an Attr::Gap
+g.type                    # 14
+g.reason                  # "cannot parse nexthop for safi 70"
+g.error                   # the exception class the decoder raised
+g.attribute               # the Attr::Raw holding the octets
+```
+
+An attribute can be in both lists. The decoder raising does not say
+whether the attribute is bgp4r's gap or the peer's fault, so bgp4r does
+not guess: the checks run on the octets either way, and anything really
+wrong with them is a finding in `errors`.
+
 Strict mode raises after the whole list is parsed, so the error carries
 every finding:
 

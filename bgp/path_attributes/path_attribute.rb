@@ -37,9 +37,10 @@ module BGP
     #
     #   :lenient  the default: decode as before and list problems in
     #             errors. An attribute bgp4r cannot decode is kept as
-    #             Attr::Raw instead of raising.
+    #             Attr::Raw and listed in undecoded, not in errors.
     #   :strict   the same, then raise Malformed_attribute when errors is
-    #             not empty
+    #             not empty. undecoded is bgp4r's own coverage, not a
+    #             peer's mistake, so it never raises.
     #   :raw      decode the headers only: every attribute is an Attr::Raw,
     #             so encode gives back the octets received
     #
@@ -49,7 +50,7 @@ module BGP
     POLICIES = [:lenient, :strict, :raw]
 
     def initialize(*args)
-      @errors = []
+      @errors, @gaps = [], []
       if args.size <= 2 and args[0].is_a?(String) and args[0].is_packed?
         parse_wire(*args)
       elsif args.size ==1 and args[0].is_a?(Hash)
@@ -140,10 +141,23 @@ module BGP
       [@attributes.compact.collect { |x| as4byte ? x.encode4 : x.encode }.join + (@tail || '')].pack('a*')
     end
 
-    # Problems found when these attributes were parsed from wire bytes,
-    # as Attr::Finding objects. Empty for attributes built from values.
+    # What the peer got wrong: problems found when these attributes were
+    # parsed from wire bytes, as Attr::Finding objects. Empty for
+    # attributes built from values. An attribute bgp4r could not decode
+    # is not one of these, see undecoded.
     def errors
       @errors ||= []
+    end
+
+    # What bgp4r could not read: one Attr::Gap per attribute whose
+    # decoder raised, so the attribute came back as an Attr::Raw. Its
+    # octets are kept and encode gives them back. This is bgp4r's own
+    # coverage and not a protocol error, so these are never in errors
+    # and :strict never raises on them. An attribute can appear here and
+    # in errors both; validation.rb is the only judge of malformed and
+    # runs on the octets whether the decoder succeeds or not.
+    def undecoded
+      @gaps ||= []
     end
 
     # The strongest RFC 7606 action among errors (section 3 (h)), or nil.
@@ -251,7 +265,7 @@ module BGP
       as4byte, _ = Attr.session_args(arg)
       policy = Attr.policy_of(arg)
       raise ArgumentError, "unknown receive policy #{policy.inspect}, use #{POLICIES.inspect}" unless POLICIES.include?(policy)
-      @attributes, @errors, seen = [], [], {}
+      @attributes, @errors, @gaps, seen = [], [], [], {}
       while s.size > 0
         bytes, cut = Attr::Check.next_attribute(s)
         if cut
@@ -269,12 +283,21 @@ module BGP
       raise Malformed_attribute.new(@errors, self) if policy == :strict and not @errors.empty?
     end
 
+    # A decoder that raises is a gap in bgp4r, not a fault in the peer:
+    # a valid EVPN or flowspec MP_REACH reaches here only because bgp4r
+    # has no code for that address family. So it is recorded as an
+    # Attr::Gap, which errors and :strict never see. Anything really
+    # wrong with the octets is found by validation.rb instead, which
+    # already ran on them (RFC 7606 section 7).
     def decode_attribute(bytes, arg, policy)
       return Attr::Raw.new(bytes) if policy == :raw
       Attr.factory(bytes.dup.is_packed, arg)
     rescue StandardError => e
-      @errors << Attr::Finding.new(bytes.getbyte(1), nil, nil, "bgp4r could not decode it: #{e.message}")
-      Attr::Raw.new(bytes)
+      # The type code first: Attr::Raw.new consumes the octets it parses.
+      type = bytes.getbyte(1)
+      raw = Attr::Raw.new(bytes)
+      @gaps << Attr::Gap.new(type, e.message, e.class, raw)
+      raw
     end
 
     # An attribute cut short. Kept so that encode gives the same octets:
