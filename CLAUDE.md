@@ -19,7 +19,9 @@ bgp/optional_parameters/ OPEN capabilities (4-byte AS, add-path, graceful restar
 bgp/orfs/                outbound route filtering
 bgp/neighbor/            the BGP finite state machine and TCP session (neighbor.rb)
 bgp/rib/                 routes and the decision process (RFC 4271 section 9); require 'bgp/rib'
-                         phase 1 of five; see "Where the work is going"
+                         peer_adapter.rb turns a Neighbor's UPDATEs into table operations,
+                         peer_feed.rb applies them on one worker thread; rib.attach(neighbor)
+                         phase 2 of five; see "Where the work is going"
 bgp/misc/                extras: route_generator.rb (many prefixes packed in UPDATEs), live_feed.rb (a client for an old public BGP feed)
 docs/                    protocol-testing.md: using bgp4r to test a router
 examples/                runnable scripts
@@ -57,6 +59,11 @@ Route generator over loopback: `examples/routegen` against the test server, with
 ruby -I. test/functional/routegen_test.rb
 ```
 
+A table fed by a real session over loopback, the whole path from socket to Loc-RIB:
+```
+ruby -I. test/functional/rib_feed_test.rb
+```
+
 Lab tests (the Compose ones skip without Docker):
 ```
 ruby test/run_lab.rb
@@ -74,7 +81,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. A `lab` job runs the Compose topologies.
 
-Baseline on 2026-10-27: 961 tests, 20328 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.1%.
+Baseline on 2026-10-27: 988 tests, 20411 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.1%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -327,15 +334,44 @@ Neighbor ◀──UPDATE── Adj-RIB-Out (per peer) ◀───────�
       without requiring `monitor`. `Table#synchronize` is public, because
       `decision`, `loc_rib` and the `AdjRibIn` that `adj_rib_in` returns are
       the objects themselves and have no lock of their own.
-   2. **The adapter, `rib.attach` and the worker thread. Not started.** IPv4
-      unicast only: the NLRI and Withdrawn Routes fields of RFC 4271 section
-      4.3. It needs a `Peer` built from what `rcv_open` learned, which means
-      readers for `@rmt_as` and `@rmt_bgp_id`, and a session-down signal,
-      which the FSM does not give today: `:ev_conn_reset` calls `stop`
-      without notifying observers, so nothing downstream can see a session
-      drop and call `peer_down`.
-   3. **MP_REACH, MP_UNREACH and add-path path identifiers. Not started**,
-      with the loopback tests against the test server.
+   2. **The adapter, `rib.attach` and the worker thread. Done**, in #123.
+      IPv4 unicast only: the NLRI and Withdrawn Routes fields of RFC 4271
+      section 4.3. `bgp/rib/peer_adapter.rb` translates and nothing else,
+      so `PeerAdapter#operations` can be tested with no session, table or
+      thread; `bgp/rib/peer_feed.rb` holds the queue, the one worker and the
+      adapters, and `Table#attach`, `#detach` and `#drain` reach it.
+      * The adapter listens as an **observer**, not through `rcv_update`.
+        `rcv_update` is a hook for a subclass to override, and a table is
+        handed a `Neighbor` it did not build. `dispatch_event` notifies the
+        observers after the `rcv_` hook, so an observer sees every message.
+        `Neighbor#rcv_update` is therefore still empty, and that is now by
+        choice rather than for want of a caller.
+      * The worker is not what makes the table safe, since #122 did that.
+        It keeps the decision process off the event dispatch thread, which
+        also runs the session: stall that thread and the peer stops getting
+        KEEPALIVEs and the session dies on a holdtime expiry (RFC 4271
+        section 4.4). It also means a read right after feeding can be early,
+        which is what `Table#drain` is for.
+      * Two things `Neighbor` was missing. `attr_reader :rmt_as,
+        :rmt_bgp_id, :rmt_version` for what the peer's OPEN said, and
+        `:my_as, :remote_addr, :local_addr` for our own side, none of which
+        had readers. And `Neighbor#on_state_change`, because the message
+        observers cannot see a session drop: `:ev_conn_reset` calls `stop`
+        without notifying anyone, and `stop` is called directly too, so the
+        only thing every path shares is `new_state` going to `:Idle`. The
+        listeners run outside `@mutex` and an exception from one is logged,
+        never raised, so nothing outside can kill the FSM.
+      * `test/functional/rib_feed_test.rb` is the proof over a real socket,
+        and it is named in `.github/workflows/test.yml`, which lists each
+        functional test by hand.
+   3. **MP_REACH, MP_UNREACH and add-path path identifiers. Not started.**
+      `PeerAdapter#unreachable?` answers true for an UPDATE whose only
+      reachability is in those attributes, so the gap reports itself rather
+      than looking like an UPDATE that carried nothing. The add-path half
+      needs no work in the adapter: it already carries each prefix's Path
+      Identifier (RFC 7911 section 3) into the `Route`, and what is untested
+      is a session that negotiated add-path, which is the GoBGP topology
+      recorded under "Lab and conformance".
 3. **Adj-RIB-Out, the export rules and the speaker's router mode. Not
    started**, about 3 PRs, with route reflector and transit lab topologies.
    The rules: do not send an iBGP learned route to another iBGP peer unless we

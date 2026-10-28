@@ -22,6 +22,7 @@
 
 require 'bgp/rib/adj_rib_in'
 require 'bgp/rib/loc_rib'
+require 'bgp/rib/peer_feed'
 
 module BGP
   module Rib
@@ -151,6 +152,27 @@ module BGP
 
       def best(prefix) ; sync { @loc_rib.best(prefix) } ; end
       def result(prefix) ; sync { @loc_rib.result(prefix) } ; end
+
+      # Feeding from live sessions. The PeerFeed holds one worker thread and
+      # is built on the first attach, so a table nobody attached to costs no
+      # thread. See PeerFeed and PeerAdapter.
+      #
+      #   rib.attach(neighbor)
+      #   neighbor.start
+      #   rib.drain
+      #   rib.best('10.0.0.0/8')
+      def attach(neighbor) ; feed.attach(neighbor) ; end
+
+      # Stops feeding from neighbor and removes the routes it sent.
+      def detach(neighbor) ; feed.detach(neighbor) ; end
+
+      # Waits for what the sessions have already sent to reach the table,
+      # since the worker runs behind them. True, or false on timeout.
+      def drain(timeout = PeerFeed::DEFAULT_TIMEOUT)
+        @feed ? @feed.drain(timeout) : true
+      end
+
+      def feed ; sync { @feed ||= PeerFeed.new(self) } ; end
 
       private
 
