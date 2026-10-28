@@ -23,7 +23,8 @@ bgp/rib/                 routes and the decision process (RFC 4271 section 9); r
                          peer_feed.rb applies them on one worker thread; rib.attach(neighbor)
                          export.rb decides what goes to a peer and what its attributes become,
                          adj_rib_out.rb records what was sent, update_builder.rb packs
-                         prefixes into UPDATEs; see "Where the work is going"
+                         prefixes into UPDATEs, router.rb joins them and sends;
+                         rib.advertise; see "Where the work is going"
 bgp/misc/                extras: route_generator.rb (many prefixes packed in UPDATEs), live_feed.rb (a client for an old public BGP feed)
 docs/                    protocol-testing.md: using bgp4r to test a router
 examples/                runnable scripts
@@ -83,7 +84,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. A `lab` job runs the Compose topologies.
 
-Baseline on 2026-10-28: 1077 tests, 20628 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.2%.
+Baseline on 2026-10-28: 1098 tests, 20720 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.2%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -459,10 +460,43 @@ Neighbor ◀──UPDATE── Adj-RIB-Out (per peer) ◀───────�
         `bgp/misc/route_generator.rb`, which packs prefixes the same way for
         a different reason. The right home is probably `BGP::Message`; see
         "Known issues to work on".
-   3. **Wiring it to the session. Not started.** The speaker's router mode:
-      run export over the Loc-RIB changes, diff against each Adj-RIB-Out,
-      hand what is left to the builder, and send. This is where the MRAI
-      timer setting lands.
+   3. **Router mode. Done**, in #127. `bgp/rib/router.rb` is the only part
+      of the export side that is not pure, and all it does is join the pure
+      ones: a Loc-RIB change goes through `Export#for`, is diffed against
+      the peer's `AdjRibOut`, and what is left goes to `UpdateBuilder` and
+      out. `rib.attach(neighbor)` then `rib.advertise` makes a bgp4r
+      speaker a router rather than a listener, so it is off until asked for.
+      * Three things set it going: a session reaching Established gets the
+        whole Loc-RIB, a Loc-RIB change goes to every peer, and a session
+        leaving Established empties its Adj-RIB-Out, because the peer keeps
+        nothing across a session.
+      * Everything runs on the feed's one worker thread. The `on_change`
+        listener only queues the change: a send inside the listener would
+        hold the table's lock, and a send on a neighbour's event dispatch
+        thread would stall the session that thread runs.
+      * **No Path Identifier is ever sent**, whatever a route arrived with.
+        One is the sender's to allocate (RFC 7911 section 3) and may only go
+        on a session that negotiated add-path in that direction. This
+        advertises the one best route per prefix, so there is nothing for an
+        Identifier to tell apart, and forwarding the one a route arrived
+        with would put four octets the peer is not expecting in front of
+        every prefix: a corrupt UPDATE, not a wrong route. The first draft
+        of this file did exactly that.
+      * An address family with no next hop of ours is skipped, not raised
+        and not guessed. `Export` will not invent our address, and an IPv6
+        route over an IPv4 session has no next hop of the right family (RFC
+        4760 section 3), so `advertise(next_hops: {2 => '...'})` is how one
+        is given. `Router#skipped` says what was not advertised and why,
+        keyed by prefix and peer, because a route silently not advertised
+        is the hardest kind of bug to see from outside.
+      * A change the peer cannot see sends nothing. MED does not cross into
+        another AS (RFC 4271 section 5.1.4), so a MED-only change leaves the
+        attributes this peer would get identical and the Adj-RIB-Out says
+        so. `test_a_change_the_peer_cannot_see_is_not_sent` pins it.
+      * Still not here: the MinRouteAdvertisement interval of RFC 4271
+        section 9.2.1.1, so a change goes out as soon as it is decided.
+        That is the next piece, with the route reflector client matrix of
+        RFC 4456 section 6 and routes we originate ourselves.
    4. **Route reflector and transit lab topologies. Not started.**
 4. **FIB adapters and the Linux lab test. Not started**, about 2 PRs. The FIB
    is the kernel routing table and is a separate, optional adapter: Linux
@@ -480,7 +514,9 @@ Decisions already taken that constrain the later phases:
 * No policy language. Import and export take a Ruby block.
 * The MRAI timer (RFC 4271 section 9.2.1.1) is a setting, defaulting to 0 in
   tests. The "oldest route wins" tie break is skipped or optional, so tests do
-  not depend on timing.
+  not depend on timing. As of #127 there is no timer at all: a change goes out
+  as soon as it is decided, which is the 0 case, and the setting is the piece
+  still to add.
 * A full table is about a million IPv4 prefixes, so share identical attribute
   sets keyed by their encoded bytes rather than one object per route. Measure
   with `routegen`, do not guess.

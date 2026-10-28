@@ -23,6 +23,7 @@
 require 'bgp/rib/adj_rib_in'
 require 'bgp/rib/loc_rib'
 require 'bgp/rib/peer_feed'
+require 'bgp/rib/router'
 
 module BGP
   module Rib
@@ -173,6 +174,23 @@ module BGP
       end
 
       def feed ; sync { @feed ||= PeerFeed.new(self) } ; end
+
+      # Router mode: advertise the Loc-RIB to the peers this table is
+      # attached to. Off until asked for, because a table that only listens
+      # is the normal use and a router is the other one.
+      #
+      #   rib.attach(neighbor)   # receive from it
+      #   rib.advertise          # and advertise to it
+      #
+      # Options go to Router.new: export, next_hops. Returns the Router,
+      # the same one on a second call.
+      def advertise(**options)
+        r = sync { @router ||= Router.new(self, feed, **options) }
+        r.start
+      end
+
+      # The Router, or nil when router mode was never turned on.
+      def router ; sync { @router } ; end
 
       private
 
