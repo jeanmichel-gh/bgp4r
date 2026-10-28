@@ -301,8 +301,9 @@ either display only or needs a design decision rather than a patch, which is
 why none of them blocked this phase.
 
 Phase 2, the peer adapter, came next and is **Done**: a table is fed from a
-live session now. The next work is **phase 3, the Adj-RIB-Out and the export
-rules**.
+live session. So is phase 3, the export side, apart from one part blocked on
+a Docker daemon. The next work is **phase 4, the FIB adapters and the show
+commands**, and the show commands half of it needs no container.
 
 ### RIB and FIB, five phases
 
@@ -397,10 +398,19 @@ Neighbor ◀──UPDATE── Adj-RIB-Out (per peer) ◀───────�
         Identifiers, and withdraws one by Path Identifier to see the other
         take over. Before this nothing had carried a Path Identifier into a
         RIB over a session.
-3. **Adj-RIB-Out, the export rules and the speaker's router mode. In
-   progress**, four PRs rather than the three first estimated: the UPDATE
-   building is a topic of its own, the same way the locking was in phase 2,
-   and it is worth landing before the wiring depends on it.
+3. **Adj-RIB-Out, the export rules and the speaker's router mode. Done
+   except for part 7**, which is blocked on a Docker daemon and not on the
+   code. Six pull requests, #125 to #130, where three were first estimated:
+   the UPDATE building turned out to be a topic of its own, the same way the
+   locking was in phase 2, and three export rules that part 1 had recorded
+   as "not in it" were worth doing rather than leaving as gaps.
+
+   `rib.attach(neighbor)` then `rib.advertise` is a router: it takes routes
+   from its peers, decides, and advertises the result with the export rules
+   applied. `rib.originate(prefix)` adds prefixes of its own. What is left
+   on this phase is a second implementation's opinion of it, and the
+   MinRouteAdvertisement interval, which needs a section of RFC 4271 that
+   could not be read here.
    1. **The export rules and `AdjRibOut`, pure. Done**, in #125. Nothing
       calls them yet; part 2 wires them to a session.
       * `bgp/rib/export.rb` is a pure function like `Decision#best`:
