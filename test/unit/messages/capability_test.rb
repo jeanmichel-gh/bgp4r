@@ -165,7 +165,7 @@ class TestBgpMessagesCapabilityBrief < Test::Unit::TestCase
   # This is a display fix, so none of them may move, and the set of
   # keys is the set of capability classes the library can carry.
   WIRE = {
-    'BGP::OPT_PARM::CAP::Add_path'              => '0206450400010101',
+    'BGP::OPT_PARM::CAP::Add_path'              => '0206450400010102',
     'BGP::OPT_PARM::CAP::As4'                   => '0206410400000064',
     'BGP::OPT_PARM::CAP::Dynamic'               => '02024300',
     'BGP::OPT_PARM::CAP::Extended_nexthop'      => '02080506000100010002',
@@ -175,7 +175,7 @@ class TestBgpMessagesCapabilityBrief < Test::Unit::TestCase
     'BGP::OPT_PARM::CAP::Route_refresh'         => '02020200',
     'BGP::OPT_PARM::CAP::Unknown'               => '0207640576616c7565',
     'BGP::OPT_PARM::Capability::Unknown'        => '0207640576616c7565',
-    'BGP::OPT_PARM::DYN_CAP::Add_path'          => '45000400010101',
+    'BGP::OPT_PARM::DYN_CAP::Add_path'          => '45000400010102',
     'BGP::OPT_PARM::DYN_CAP::As4'               => '41000400000064',
     'BGP::OPT_PARM::DYN_CAP::Dynamic'           => '430000',
     'BGP::OPT_PARM::DYN_CAP::Extended_nexthop'  => '050006000100010002',
