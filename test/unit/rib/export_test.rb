@@ -355,4 +355,91 @@ class TestBgpRibExport < Test::Unit::TestCase
     assert(!@export.route_reflector?)
     assert(reflector.route_reflector?)
   end
+
+  # RFC 4456 section 6, the client and non-client matrix. Two more internal
+  # peers, so there is a non-client to refuse a route to.
+  NC1 = BGP::Rib::Peer.new(:address => '10.0.0.6', :remote_as => LOCAL_AS,
+                           :router_id => '6.6.6.6', :local_as => LOCAL_AS)
+  NC2 = BGP::Rib::Peer.new(:address => '10.0.0.7', :remote_as => LOCAL_AS,
+                           :router_id => '7.7.7.7', :local_as => LOCAL_AS)
+
+  # I1 and I2 are the clients; NC1 and NC2 are other reflectors.
+  def clustered
+    BGP::Rib::Export.new(:local_as => LOCAL_AS, :router_id => OURS,
+                         :route_reflector => true,
+                         :clients => [I1.address, I2.address])
+  end
+
+  def test_who_is_a_client
+    e = clustered
+    assert(e.client?(I1))
+    assert(e.client?(I2))
+    assert(!e.client?(NC1))
+    assert(!e.client?(E1), 'an external peer is never a client')
+    assert_equal(%w[10.0.0.4 10.0.0.5], e.clients.sort)
+  end
+
+  # "A route from a Client peer: Reflect to all the Non-Client peers and
+  # also to the Client peers."
+  def test_a_clients_route_goes_to_clients_and_non_clients
+    e = clustered
+    assert_equal(:ibgp, e.for(route(I1), I2).reason, 'to another client')
+    assert_equal(:ibgp, e.for(route(I1), NC1).reason, 'and to a non-client')
+  end
+
+  # "A route from a Non-Client IBGP peer: Reflect to all the Clients."
+  def test_a_non_clients_route_goes_only_to_clients
+    e = clustered
+    assert_equal(:ibgp, e.for(route(NC1), I1).reason, 'to a client')
+    res = e.for(route(NC1), NC2)
+    assert(!res.advertise?)
+    assert_equal(:non_client_to_non_client, res.reason,
+                 'the other reflectors are fully meshed and have it already')
+  end
+
+  # With no list every internal peer is a client, which is the single
+  # cluster case: section 6 says "The Clients will be configured to
+  # maintain IBGP session only with the RR in their cluster".
+  def test_with_no_client_list_every_internal_peer_is_a_client
+    e = reflector
+    assert(e.client?(I1))
+    assert(e.client?(NC1))
+    assert_nil(e.clients)
+    assert_equal(:ibgp, e.for(route(NC1), NC2).reason, 'so nothing is refused for being a non-client')
+  end
+
+  # Section 6 does not cover a route from an external peer: Appendix B says
+  # "the reference to EBGP routes/peers are removed". So it goes to every
+  # internal peer under the ordinary rules, and is not reflection.
+  def test_an_external_route_reaches_a_non_client_and_is_not_reflected
+    e = clustered
+    res = e.for(route(E1), NC1)
+    assert(res.advertise?)
+    assert(!res.path_attribute.has?(BGP::Originator_id))
+    assert(!res.path_attribute.has?(BGP::Cluster_list))
+  end
+
+  def test_a_client_may_be_given_as_a_peer_rather_than_an_address
+    e = BGP::Rib::Export.new(:local_as => LOCAL_AS, :router_id => OURS,
+                             :route_reflector => true, :clients => [I1])
+    assert(e.client?(I1))
+    assert(!e.client?(I2))
+  end
+
+  # A client list without route_reflector changes nothing: the base rule
+  # still stops an internal route at an internal peer.
+  def test_a_client_list_alone_is_not_reflection
+    e = BGP::Rib::Export.new(:local_as => LOCAL_AS, :router_id => OURS,
+                             :clients => [I1.address, I2.address])
+    assert_equal(:ibgp_to_ibgp, e.for(route(I1), I2).reason)
+  end
+
+  def test_an_empty_client_list_means_no_clients_at_all
+    e = BGP::Rib::Export.new(:local_as => LOCAL_AS, :router_id => OURS,
+                             :route_reflector => true, :clients => [])
+    assert(!e.client?(I1))
+    assert_equal([], e.clients)
+    assert_equal(:non_client_to_non_client, e.for(route(I1), I2).reason,
+                 'a reflector with no clients reflects nothing')
+  end
 end

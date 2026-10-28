@@ -89,7 +89,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. A `lab` job runs the Compose topologies.
 
-Baseline on 2026-10-28: 1098 tests, 20720 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.2%.
+Baseline on 2026-10-28: 1106 tests, 20743 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.2%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -431,10 +431,10 @@ Neighbor ◀──UPDATE── Adj-RIB-Out (per peer) ◀───────�
         becomes a black hole. The refusals are checked first, so a route
         that is not going to that peer never needs one.
       * Not in it: confederations (RFC 5065), so a leftmost confederation
-        segment is treated as the section 5.1.2 AS_SET case; locally
-        originated routes, since every `Route` has a peer; and the route
-        reflector client and non-client matrix of RFC 4456 section 6, which
-        needs per-peer configuration the speaker holds.
+        segment is treated as the section 5.1.2 AS_SET case; and locally
+        originated routes, since every `Route` has a peer. The route
+        reflector client matrix of RFC 4456 section 6 was left out here and
+        landed in #129.
       * `bgp/rib/adj_rib_out.rb` records what was sent, keyed by prefix and
         Path Identifier like the Adj-RIB-In. `advertise` answers `:new`,
         `:changed` or `:same`, and `withdraw` answers nil for a prefix the
@@ -500,8 +500,7 @@ Neighbor ◀──UPDATE── Adj-RIB-Out (per peer) ◀───────�
         so. `test_a_change_the_peer_cannot_see_is_not_sent` pins it.
       * Still not here: the MinRouteAdvertisement interval of RFC 4271
         section 9.2.1.1, so a change goes out as soon as it is decided.
-        That is the next piece, with the route reflector client matrix of
-        RFC 4456 section 6 and routes we originate ourselves.
+        See the note under part 6 on why that one is awkward to do here.
    4. **Route reflection and transit, over loopback. Done**, in #128.
       `test/functional/rib_router_test.rb` runs three speakers: one Table
       with two Neighbors is what makes a router, since a Neighbor holds one
@@ -526,7 +525,28 @@ Neighbor ◀──UPDATE── Adj-RIB-Out (per peer) ◀───────�
         given them, so each listener gets its own 127.0.0.x.
       * Named in `.github/workflows/test.yml`, which lists each functional
         test by hand.
-   5. **The Compose topologies against GoBGP. Not started**, and blocked
+   5. **The route reflector client matrix. Done**, in #129, RFC 4456
+      section 6, whose two rules are quoted in `Export#refuse`. "A route
+      from a Non-Client IBGP peer: Reflect to all the Clients", so a
+      non-client's route goes only to a client; "A route from a Client
+      peer: Reflect to all the Non-Client peers and also to the Client
+      peers", so a client's route goes to either. What is left over is
+      non-client to non-client, refused as `:non_client_to_non_client`,
+      because those peers are fully meshed and have the route already.
+      * `Export.new(clients: [...])` takes the addresses, and with **no**
+        list every internal peer is a client. That is the single cluster
+        case, which section 6 describes as "The Clients will be configured
+        to maintain IBGP session only with the RR in their cluster", and it
+        keeps `route_reflector: true` on its own behaving as it did before
+        #129. A list is wanted as soon as some internal peers are other
+        reflectors, which section 6 calls Non-Client peers and expects to be
+        fully meshed.
+      * Section 6 says nothing about a route from an **external** peer:
+        Appendix B records that "the reference to EBGP routes/peers are
+        removed" from the document. So such a route reaches every internal
+        peer under the ordinary rules and is not reflection, which is why it
+        gets no ORIGINATOR_ID and no CLUSTER_LIST. There is a test for it.
+   6. **The Compose topologies against GoBGP. Not started**, and blocked
       on a Docker daemon rather than on the code: the sandbox this was
       written in has the client and `docker compose` but no daemon, so the
       five `lab/topologies/fault-matrix` Compose tests are omitted there
@@ -555,6 +575,12 @@ Decisions already taken that constrain the later phases:
   not depend on timing. As of #127 there is no timer at all: a change goes out
   as soon as it is decided, which is the 0 case, and the setting is the piece
   still to add.
+* The MRAI timer is recorded above as the next export piece, and it needs
+  RFC 4271 section 9.2.1.1 read before it is written. Section 9 could not be
+  reached from the sandbox this work was done in: both fetchable sources of
+  RFC 4271 truncate the document around page 55, which is why nothing in
+  #125 to #129 cites a section 9 rule and why the timer was not attempted.
+  Whoever picks it up should open section 9.2.1.1 first.
 * A full table is about a million IPv4 prefixes, so share identical attribute
   sets keyed by their encoded bytes rather than one object per route. Measure
   with `routegen`, do not guess.
