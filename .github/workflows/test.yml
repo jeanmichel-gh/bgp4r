@@ -48,6 +48,9 @@ jobs:
       - name: Functional test (routegen over loopback)
         run: bundle exec ruby -I. test/functional/routegen_test.rb
         timeout-minutes: 3
+      - name: Functional test (RIB fed by a loopback session)
+        run: bundle exec ruby -I. test/functional/rib_feed_test.rb
+        timeout-minutes: 2
       - name: Lab speaker over loopback
         run: bundle exec ruby -I. test/functional/lab/speaker_test.rb
         timeout-minutes: 3

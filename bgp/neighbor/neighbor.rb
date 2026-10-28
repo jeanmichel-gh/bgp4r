@@ -421,11 +421,62 @@ module BGP
       # close was called; nothing handles events any more.
     end
     
+    # What the peer said in its OPEN (RFC 4271 section 4.2), or nil before
+    # one arrived: its Autonomous System number, its BGP Identifier and its
+    # Version. They are what names this peer to anything downstream, such as
+    # a BGP::Rib::Table, which needs the AS to tell an internal peer from an
+    # external one and the Identifier for the last tie break of the decision
+    # process (RFC 4271 section 9.1.2.2 f). rcv_open sets them and nothing
+    # clears them, so they still read after the session goes down.
+    attr_reader :rmt_as, :rmt_bgp_id, :rmt_version
+
+    # Our own side of the session, as configured: the local Autonomous
+    # System number and the two addresses. They had no readers, so a script
+    # that was handed a Neighbor could not ask what it was. my_as is the
+    # other half of what names a peer, since a peer in our own AS is an
+    # internal one (RFC 4271 section 1.1).
+    attr_reader :my_as, :remote_addr, :local_addr
+
+    # Runs block on every state change, with the new state and the old one.
+    #
+    #   neighbor.on_state_change { |now, was| puts "#{was} -> #{now}" }
+    #
+    # This is how something outside the FSM learns a session dropped. The
+    # message observers cannot be used for it: :ev_conn_reset calls stop
+    # without notifying anyone, and stop is also called directly, so the
+    # only thing every path has in common is the state going to :Idle.
+    #
+    # The block runs on whichever thread changed the state, which for a
+    # reset or a holdtime expiry is the event dispatch thread. Do not block
+    # it: that thread handles the session. An exception from the block is
+    # logged and swallowed, because a listener must not be able to kill the
+    # FSM.
+    def on_state_change(&block)
+      (@state_listeners ||= []) << block
+      self
+    end
+
     def new_state(state, txt='')
       log_info "#{txt} old state #{@state} new state #{state}"
+      was = nil
       @mutex.synchronize do
+        was = @state
         @state = state
         @state_cv.broadcast
+      end
+      # Outside the mutex: a listener that reads the state, or waits on it,
+      # would deadlock on a Mutex that is not reentrant.
+      notify_state_change(state, was) unless was == state
+    end
+
+    def notify_state_change(now, was)
+      return unless defined?(@state_listeners) and @state_listeners
+      @state_listeners.each do |block|
+        begin
+          block.call(now, was)
+        rescue => e
+          log_warn "on_state_change listener raised #{e.class}: #{e.message}"
+        end
       end
     end
     
