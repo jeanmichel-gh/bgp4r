@@ -97,6 +97,14 @@ module OPT_PARM
     def self.factory(s, extended: false)
       hdr = header_size(extended)
       parm_type, len = extended ? s.unpack('Cn') : s.unpack('CC')
+      # RFC 4271 section 4.2 gives an optional parameter a 1 octet
+      # Parameter Type and a 1 octet Parameter Length, and RFC 9072
+      # section 2 widens the length to two, so fewer octets than that are
+      # not a parameter: there is no Length to read and len is nil. nil
+      # says so and leaves the octets where they are, for Open to keep as
+      # its tail. len+hdr used to raise NoMethodError here and take the
+      # parse of the whole OPEN with it.
+      return nil if len.nil?
       opt_parm = s.slice!(0,len+hdr).is_packed
       case parm_type
       when CAPABILITY

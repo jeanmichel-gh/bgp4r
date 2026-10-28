@@ -45,6 +45,22 @@ class Open < Message
   AS_TRANS=23456
   
   attr_reader :version, :local_as, :holdtime, :opt_parms
+
+  # Octets at the end of the Optional Parameters field that are not a
+  # parameter. RFC 4271 section 4.2 gives a parameter a 1 octet Parameter
+  # Type and a 1 octet Parameter Length, and RFC 9072 section 2 widens the
+  # length to two, so fewer octets than that cannot be one and nothing
+  # holds them but the message. Kept and written back, the same rule and
+  # the same :tail key as an attribute that keeps octets it cannot
+  # interpret, and as Orf_route_refresh keeps a leftover of its own.
+  attr_reader :tail
+
+  # The Optional Parameters Length that arrived, when it is not the number
+  # of octets that followed it. parse reads the parameters to the end of
+  # the message body and never used this field, so a peer that sent the
+  # wrong length had it quietly corrected by encode. nil on a message
+  # built from values, which always writes its own.
+  attr_reader :declared_opt_parm_len
   
   def initialize(*args)
     @opt_parms=[]
@@ -101,16 +117,19 @@ class Open < Message
   def encode
     parms = @opt_parms.compact
     extended = extended?
-    opt_parms = parms.collect { |cap| cap.encode(:extended => extended) }.join
+    opt_parms = parms.collect { |cap| cap.encode(:extended => extended) }.join + @tail.to_s
     if !extended and opt_parms.size>255
       extended = true
-      opt_parms = parms.collect { |cap| cap.encode(:extended => true) }.join
+      opt_parms = parms.collect { |cap| cap.encode(:extended => true) }.join + @tail.to_s
     end
+    # The length that arrived when it did not agree with the octets, so a
+    # malformed OPEN a negative test captured can be sent again.
+    len = @declared_opt_parm_len || opt_parms.size
     s  = [@version, _my_encoded_as_, @holdtime, @bgp_id.hton].pack("Cnna4")
     s += if extended
-      [0xff, 0xff, opt_parms.size, opt_parms].pack("CCna*")
+      [0xff, 0xff, len, opt_parms].pack("CCna*")
     else
-      [opt_parms.size, opt_parms].pack("Ca*")
+      [len, opt_parms].pack("Ca*")
     end
     super s
   end
@@ -121,9 +140,13 @@ class Open < Message
   
   def to_s
     msg = self.encode
+    notes = []
+    notes << "Optional Parameters Length says #{@declared_opt_parm_len}" if @declared_opt_parm_len
+    notes << "#{@tail.size} octet#{@tail.size==1 ? '' : 's'} that is not a parameter: " \
+             "[#{@tail.unpack('H*')[0]}]" if @tail
     "Open Message (#{OPEN}), length: #{msg.size}\n" +
     "  Version #{@version}, my AS #{_my_encoded_as_}, Holdtime #{@holdtime}s, ID #{@bgp_id}" +
-    ([""] + @opt_parms.compact.collect { |cap| cap.to_s } + [""]).join("\n  ") +
+    ([""] + @opt_parms.compact.collect { |cap| cap.to_s } + notes + [""]).join("\n  ") +
     msg.hexlify.join("\n") + "\n"
   end
   
@@ -135,11 +158,15 @@ class Open < Message
      @opt_parms.find { |a| a.is_a?(klass) }
   end
   
+  # No leftover and no disagreeing length means neither key, so the hash of
+  # an ordinary OPEN is the one it has always been.
   def to_hash
     h = {:version => @version, :my_as => @local_as, :holdtime => @holdtime, :bgp_id => bgp_id }
     unless @opt_parms.empty?
       h[:capabilities] =  @opt_parms.collect { |opt| opt.to_hash }
     end
+    h[:tail] = @tail.unpack('H*')[0] if @tail
+    h[:opt_parm_len] = @declared_opt_parm_len if @declared_opt_parm_len
     h
   end
   
@@ -161,13 +188,26 @@ class Open < Message
     # bgp4r used to require 255 in both.
     @extended = s.getbyte(10) == 255
     if @extended
-      @version, @local_as, @holdtime, bgp_id, _, _, _, opt_parms = s.unpack('Cnna4CCna*')
+      @version, @local_as, @holdtime, bgp_id, _, _, declared, opt_parms = s.unpack('Cnna4CCna*')
     else
-      @version, @local_as, @holdtime, bgp_id, _, opt_parms = s.unpack('Cnna4Ca*')
+      @version, @local_as, @holdtime, bgp_id, declared, opt_parms = s.unpack('Cnna4Ca*')
     end
+    # RFC 4271 section 4.2: "Optional Parameters Length ... indicates the
+    # total length of the Optional Parameters field in octets". The
+    # parameters are read to the end of the message body rather than to
+    # this length, since the message header length already bounds them, so
+    # it is only kept here when it disagrees with what followed it.
+    @declared_opt_parm_len = declared if declared != opt_parms.size
     while opt_parms.size>0
       # One parameter can carry several capabilities (RFC 5492 section 4).
-      @opt_parms.concat Optional_parameter.factory(opt_parms, :extended => @extended)
+      parms = Optional_parameter.factory(opt_parms, :extended => @extended)
+      if parms.nil?
+        # Not a whole parameter header left, so not a parameter: keep the
+        # rest as it is.
+        @tail = opt_parms.slice!(0, opt_parms.size)
+        break
+      end
+      @opt_parms.concat parms
     end
     @bgp_id = IPAddr.new_ntoh(bgp_id)
   end
