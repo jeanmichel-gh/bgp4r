@@ -196,7 +196,7 @@ class BGP::Prefix_orf < BGP::Orf
   end
   
   def add(e)
-    raise ArgumentError, "invalid argument" unless e.is_a?(BGP::Prefix_entry)
+    raise ArgumentError, "invalid argument: #{e.inspect}, expected a #{BGP::Prefix_entry}" unless e.is_a?(BGP::Prefix_entry)
     super(e)
   end
 
@@ -214,9 +214,13 @@ class BGP::Prefix_orf < BGP::Orf
     {:type=> @type, :entries=> @entries.collect { |e| e.to_hash }}
   end
 
+  # The vendor code point of the RFC 5291 section 7 range, 130. No RFC
+  # describes it; it is the type octet bgp4r sends for a Cisco style prefix
+  # ORF. Orf.factory reads it back as a prefix ORF, since only the type
+  # octet differs from RFC 5292's 64.
   def cisco_prefix_entry_type
-    @type=130
-  end  
+    @type=BGP::ORF::PREFIX_CISCO
+  end
 
 end
 
