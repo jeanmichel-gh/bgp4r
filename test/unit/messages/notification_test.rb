@@ -30,11 +30,15 @@ class Notification_Test < Test::Unit::TestCase
     assert_equal('Header Error', Notification.code_to_s(1))
     assert_equal('OPEN msg error', Notification.code_to_s(2))
     assert_equal('UPDATE msg error', Notification.code_to_s(3))
-    assert_equal('CAPABILITY Message Error', Notification.code_to_s(7))
+    # RFC 7313 section 5 and section 6: code 7 is "ROUTE-REFRESH Message
+    # Error" and its only assigned subcode is 1, "Invalid Message Length".
+    # These three lines pinned the name and two subcodes of the expired
+    # dynamic capability draft, which IANA never registered against code 7.
+    assert_equal('ROUTE-REFRESH Message Error', Notification.code_to_s(7))
     assert_equal('Connection Not Synchronized', Notification.code_to_s(1,1))
     assert_equal('Unrecognized Well-known Attribute', Notification.code_to_s(3,2))
-    assert_equal('Invalid Capability Length', Notification.code_to_s(7,2))
-    assert_equal('Malformed Capability Value', Notification.code_to_s(7,3))
+    assert_equal('Invalid Message Length', Notification.code_to_s(7,1))
+    assert_equal('Undefined', Notification.code_to_s(7,3))
     notif = BGP::Notification.new(1,1)
     assert_match(/^(ff){16}0015030101$/, notif.to_shex)
     assert_equal(notif.encode, Notification.new(notif).encode)
@@ -45,5 +49,81 @@ class Notification_Test < Test::Unit::TestCase
     m = Message.factory([s].pack('H*'))
     assert_equal(Notification, m.class)
     assert_equal(m.encode, Notification.new(m).encode)
+  end
+
+  # RFC 7313 section 5 and section 6: IANA allocated error code 7 with the
+  # name "ROUTE-REFRESH Message Error" and created the "BGP ROUTE-REFRESH
+  # Message Error subcodes" registry, in which 0 is Reserved and 1 is
+  # "Invalid Message Length". bgp4r named code 7 "CAPABILITY Message Error"
+  # with four subcodes of the expired dynamic capability draft, which IANA
+  # never registered and no RFC defines.
+  def test_error_code_7_is_the_route_refresh_message_error_registry
+    assert_equal('ROUTE-REFRESH Message Error', BGP::Notification.code_to_s(7))
+    assert_equal('Invalid Message Length', BGP::Notification.code_to_s(7, 1))
+    # the four draft subcodes are gone, so a code point IANA leaves
+    # unassigned reads as undefined rather than naming something
+    assert_equal('Undefined', BGP::Notification.code_to_s(7, 2))
+    assert_equal('Undefined', BGP::Notification.code_to_s(7, 3))
+    assert_equal('Undefined', BGP::Notification.code_to_s(7, 4))
+    assert_equal('Notification (3), length: 21: ' \
+                 'ROUTE-REFRESH Message Error (7), Invalid Message Length (1) ',
+                 BGP::Notification.new(7, 1).to_s)
+  end
+
+  # RFC 7313 section 5: a BoRR or an EoRR whose length is not 4 octets
+  # beyond the fixed header draws this NOTIFICATION, and "The Data field of
+  # the NOTIFICATION message MUST contain the complete ROUTE-REFRESH
+  # message." bgp4r names the error and carries the octets; it does not
+  # detect the condition, which is receive side validation and needs the
+  # session to know the peer sent capability 70.
+  def test_a_route_refresh_message_error_carries_the_whole_route_refresh
+    borr = BGP::Route_refresh.new(1, 1, :borr).encode
+    notif = BGP::Notification.new(7, 1, borr)
+    assert_equal(borr, notif.to_hash[:data])
+    # the complete ROUTE-REFRESH, its 19 octet header included
+    assert_equal(23, notif.to_hash[:data].size)
+    assert_equal(('ff' * 16) + '002c' + '03' + '07' + '01' +
+                 ('ff' * 16) + '00170500010101', notif.to_shex)
+    back = BGP::Message.factory(notif.encode)
+    assert_equal(BGP::Notification, back.class)
+    assert_equal(notif.to_shex, back.to_shex)
+    assert_equal(BGP::Route_refresh.new(1, 1, :borr).to_shex,
+                 BGP::Message.factory(back.to_hash[:data].is_packed).to_shex)
+  end
+
+  # RFC 5492 section 5: the Unsupported Capability subcode of the OPEN
+  # Message Error, "The value of this Subcode is 7." bgp4r had subcode 7
+  # repeating the name of subcode 4, Unsupported Optional Parameter, which
+  # is a different error: RFC 4271 section 6.2 sends 4 for an optional
+  # parameter type it does not recognize, RFC 5492 sends 7 for a capability
+  # inside one.
+  def test_open_message_error_subcode_7_is_unsupported_capability
+    assert_equal('Unsupported Optional Parameter', BGP::Notification.code_to_s(2, 4))
+    assert_equal('Unsupported Capability', BGP::Notification.code_to_s(2, 7))
+  end
+
+  # The BGP Error (Notification) Codes registry, checked code point by code
+  # point while fixing code 7. 8 is RFC 9687, 9 is RFC 9815, and 10 to 255
+  # are unassigned.
+  def test_the_error_code_registry_is_complete
+    assert_equal('Send Hold Timer Expired', BGP::Notification.code_to_s(8))
+    assert_equal('Loss of LSDB Synchronization', BGP::Notification.code_to_s(9))
+    assert_equal('Undefined', BGP::Notification.code_to_s(10))
+  end
+
+  # The subcode registries of the codes bgp4r already named. RFC 6608
+  # defines the three Finite State Machine Error subcodes; RFC 8538 adds
+  # Cease subcode 9 and RFC 9384 subcode 10.
+  def test_the_subcode_registries_of_the_other_codes
+    assert_equal('Receive Unexpected Message in OpenSent State',
+                 BGP::Notification.code_to_s(5, 1))
+    assert_equal('Receive Unexpected Message in OpenConfirm State',
+                 BGP::Notification.code_to_s(5, 2))
+    assert_equal('Receive Unexpected Message in Established State',
+                 BGP::Notification.code_to_s(5, 3))
+    assert_equal('Undefined', BGP::Notification.code_to_s(5, 4))
+    assert_equal('Hard Reset', BGP::Notification.code_to_s(6, 9))
+    assert_equal('BFD Down', BGP::Notification.code_to_s(6, 10))
+    assert_equal('Undefined', BGP::Notification.code_to_s(6, 11))
   end
 end

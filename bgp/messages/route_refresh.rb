@@ -1,17 +1,20 @@
 #  Route-REFRESH Message
-#  
+#
 #     The ROUTE-REFRESH message is a new BGP message type defined as
 #     follows:
-#  
+#
 #            Type: 5 - ROUTE-REFRESH
-#  
+#
 #            Message Format: One <AFI, SAFI> encoded as
-#  
+#
 #                    0       7      15      23      31
 #                    +-------+-------+-------+-------+
 #                    |      AFI      | Res.  | SAFI  |
 #                    +-------+-------+-------+-------+
-#  
+#
+#     RFC 7313 section 3.2 redefines that Reserved octet as the Message
+#     Subtype. See Route_refresh#subtype.
+#
 
 
 require 'bgp/messages/message'
@@ -20,6 +23,16 @@ module BGP
 
 class Route_refresh < Message
   attr_reader :afi, :safi
+
+  # RFC 7313 section 3.2: the Reserved field of the RFC 2918 ROUTE-REFRESH
+  # message "is redefined as the 'Message Subtype'", with 0 a normal route
+  # refresh request with or without ORF, 1 the demarcation of the beginning
+  # of a route refresh operation (BoRR), 2 the demarcation of the ending of
+  # one (EoRR), and 255 Reserved.
+  NORMAL = 0
+  BORR   = 1
+  EORR   = 2
+
   def initialize(*args)
     @msg_type=ROUTE_REFRESH
     if args.size==1  and args[0].is_a?(String) and args[0].is_packed?
@@ -29,8 +42,45 @@ class Route_refresh < Message
     elsif args.size==1 and args[0].is_a?(Hash)
       self.afi = args[0][:afi] if args[0][:afi]
       self.safi = args[0][:safi] if args[0][:safi]
+      self.subtype = args[0][:subtype] unless args[0][:subtype].nil?
     else
-      @afi, @safi=args
+      @afi, @safi, subtype = args
+      self.subtype = subtype unless subtype.nil?
+    end
+  end
+  
+  # The Message Subtype as it goes on the wire. nil until encode defaults it
+  # to NORMAL, as @afi and @safi are.
+  def subtype
+    @subtype
+  end
+
+  # RFC 7313 section 3.2: the Message Subtype is one octet. Any value a
+  # single octet holds still encodes, so a router can be watched handling a
+  # subtype the RFC does not define, 255 and the unassigned values included.
+  # A value the octet cannot hold is refused, because the alternative is
+  # silently sending a different subtype.
+  def subtype=(val)
+    case val
+    when :normal ; @subtype=NORMAL
+    when :borr   ; @subtype=BORR
+    when :eorr   ; @subtype=EORR
+    when Integer
+      raise ArgumentError, "invalid argument" unless (0..0xff) === val
+      @subtype=val
+    else
+      raise ArgumentError, "invalid argument: #{val.inspect}"
+    end
+  end
+
+  def subtype_to_s
+    case @subtype
+    when nil, NORMAL ; 'normal (0)'
+    when BORR        ; 'BoRR (1)'
+    when EORR        ; 'EoRR (2)'
+    when 0xff        ; 'reserved (255)'
+    else
+      "bogus (#{@subtype})"
     end
   end
   
@@ -48,20 +98,31 @@ class Route_refresh < Message
     # default to ipv4 and unicast when not set
     @afi ||=1
     @safi ||=1
-    super([@afi, 0, @safi].pack('nCC'))
+    # RFC 7313 section 3.2: the octet between the AFI and the SAFI is the
+    # Message Subtype, and a normal route refresh request is subtype 0,
+    # which is the value the Reserved octet of RFC 2918 always carried. It
+    # used to be written as a literal 0 whatever arrived, so a BoRR went in
+    # as 00010101 and came out 00010001: the one place bgp4r dropped octets.
+    @subtype ||= NORMAL
+    super([@afi, @subtype, @safi].pack('nCC'))
   end
   
   def parse(s)
-    @afi, _, @safi= super(s).unpack('nCC')
+    @afi, @subtype, @safi= super(s).unpack('nCC')
   end
   
+  # A normal route refresh request is subtype 0, so its hash is the plain
+  # one it has always been and still round trips: encode defaults the
+  # subtype to NORMAL. A BoRR or an EoRR, or any other subtype, names it.
   def to_hash
-    {:afi=> @afi, :safi=> @safi}
+    h = {:afi=> @afi, :safi=> @safi}
+    h[:subtype] = @subtype if @subtype and @subtype != NORMAL
+    h
   end
   
   def to_s
     msg = self.encode
-    "Route Refresh (#{ROUTE_REFRESH}), length: #{msg.size}\n" +   "AFI #{IANA.afi?(@afi)} (#{@afi}), SAFI #{IANA.safi?(@safi)} (#{@safi})"
+    "Route Refresh (#{ROUTE_REFRESH}), length: #{msg.size}\n" +   "AFI #{IANA.afi?(@afi)} (#{@afi}), SAFI #{IANA.safi?(@safi)} (#{@safi}), subtype #{subtype_to_s}"
   end
 end
 

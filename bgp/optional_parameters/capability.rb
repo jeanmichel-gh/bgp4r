@@ -209,6 +209,12 @@ module BGP::OPT_PARM
       # value, so CAP::Dynamic takes the code, not the wire bytes,
       # exactly as CAP::Route_refresh does above.
       CAP::Dynamic.new(code)
+    when CAP_ENHANCED_ROUTE_REFRESH
+      # RFC 7313 section 3.1: code 70, "The Capability Length field of
+      # this capability is zero." It takes the wire bytes rather than the
+      # code, so value octets no RFC allows are kept and written back
+      # instead of silently dropped.
+      CAP::Enhanced_route_refresh.new(s)
     else
       Capability::Unknown.new(s)
     end
@@ -231,6 +237,8 @@ module BGP::OPT_PARM
         DYN_CAP::Add_path.new(s)
       when CAP_GR
         DYN_CAP::Graceful_restart.new(s)
+      when CAP_ENHANCED_ROUTE_REFRESH
+        DYN_CAP::Enhanced_route_refresh.new(s)
       else
         # draft-ietf-idr-dynamic-cap-19 section 3: here the capability
         # has a one octet code and a two octet length, so the fallback

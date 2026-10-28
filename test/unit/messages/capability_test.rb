@@ -168,6 +168,8 @@ class TestBgpMessagesCapabilityBrief < Test::Unit::TestCase
     'BGP::OPT_PARM::CAP::Add_path'              => '0206450400010102',
     'BGP::OPT_PARM::CAP::As4'                   => '0206410400000064',
     'BGP::OPT_PARM::CAP::Dynamic'               => '02024300',
+    # RFC 7313 section 3.1: capability code 70, with a zero length.
+    'BGP::OPT_PARM::CAP::Enhanced_route_refresh' => '02024600',
     'BGP::OPT_PARM::CAP::Extended_nexthop'      => '02080506000100010002',
     'BGP::OPT_PARM::CAP::Graceful_restart'      => '020440020078',
     'BGP::OPT_PARM::CAP::Mbgp'                  => '0206010400010001',
@@ -178,6 +180,7 @@ class TestBgpMessagesCapabilityBrief < Test::Unit::TestCase
     'BGP::OPT_PARM::DYN_CAP::Add_path'          => '45000400010102',
     'BGP::OPT_PARM::DYN_CAP::As4'               => '41000400000064',
     'BGP::OPT_PARM::DYN_CAP::Dynamic'           => '430000',
+    'BGP::OPT_PARM::DYN_CAP::Enhanced_route_refresh' => '460000',
     'BGP::OPT_PARM::DYN_CAP::Extended_nexthop'  => '050006000100010002',
     'BGP::OPT_PARM::DYN_CAP::Graceful_restart'  => '4000020078',
     'BGP::OPT_PARM::DYN_CAP::Mbgp'              => '01000400010001',
@@ -206,6 +209,7 @@ class TestBgpMessagesCapabilityBrief < Test::Unit::TestCase
     when 'As4'              then kl.new(100)
     when 'Route_refresh'    then kl.new
     when 'Dynamic'          then kl.new
+    when 'Enhanced_route_refresh' then kl.new
     when 'Graceful_restart' then kl.new(0, 120)
     when 'Add_path'         then kl.new(:send, 1, 1)
     when 'Extended_nexthop' then kl.new(1, 1, 2)

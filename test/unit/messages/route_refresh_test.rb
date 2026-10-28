@@ -59,11 +59,110 @@ class Route_refresh_Test < Test::Unit::TestCase
     assert_equal({:afi=>2, :safi=>128}, copy.to_hash)
   end
 
+  # RFC 7313 section 3.2 made the Reserved octet the Message Subtype, so
+  # to_s names it. Without it a BoRR and a normal route refresh request
+  # print the same line, and the operator cannot tell which one arrived.
   def test_to_s
-    assert_equal("Route Refresh (5), length: 23\nAFI IPv4 (1), SAFI Unicast (1)",
+    assert_equal("Route Refresh (5), length: 23\n" +
+                 "AFI IPv4 (1), SAFI Unicast (1), subtype normal (0)",
                  Route_refresh.new(1,1).to_s)
-    assert_equal("Route Refresh (5), length: 23\nAFI IPv6 (2), SAFI Labeled VPN Unicast (128)",
+    assert_equal("Route Refresh (5), length: 23\n" +
+                 "AFI IPv6 (2), SAFI Labeled VPN Unicast (128), subtype normal (0)",
                  Route_refresh.new(2,128).to_s)
+  end
+
+  # RFC 7313 section 3.2: the Reserved field of the RFC 2918 ROUTE-REFRESH
+  # message "is redefined as the 'Message Subtype'". 0 is a normal route
+  # refresh request with or without ORF, 1 the demarcation of the beginning
+  # of a route refresh operation (BoRR), 2 the demarcation of its ending
+  # (EoRR), and 255 is reserved. The octet used to be read into _ and
+  # dropped, and encode wrote 0, so a BoRR went in as 00010101 and came out
+  # 00010001.
+  def test_the_message_subtype_is_kept_and_written_back
+    { 0x00 => BGP::Route_refresh::NORMAL,
+      0x01 => BGP::Route_refresh::BORR,
+      0x02 => BGP::Route_refresh::EORR,
+      0x2a => 0x2a,
+      0xff => 0xff }.each do |octet, subtype|
+      s = ('ff' * 16) + '0017' + '05' + '0001' + ('%02x' % octet) + '01'
+      m = BGP::Message.factory([s].pack('H*'))
+      assert_equal(BGP::Route_refresh, m.class)
+      assert_equal(subtype, m.subtype, "subtype of #{s}")
+      assert_equal(s, m.to_shex, "#{s} does not round trip byte for byte")
+    end
+  end
+
+  # All three build paths carry the subtype: field values, a hash, and the
+  # wire bytes.
+  def test_the_message_subtype_from_every_build_path
+    borr = ('ff' * 16) + '0017' + '05' + '0001' + '01' + '01'
+    assert_equal(borr, BGP::Route_refresh.new(1, 1, 1).to_shex)
+    assert_equal(borr, BGP::Route_refresh.new(1, 1, :borr).to_shex)
+    assert_equal(borr, BGP::Route_refresh.new(:afi=>1, :safi=>1, :subtype=>1).to_shex)
+    assert_equal(borr, BGP::Route_refresh.new(:afi=>1, :safi=>1, :subtype=>:borr).to_shex)
+    assert_equal(borr, BGP::Route_refresh.new([borr].pack('H*')).to_shex)
+    # and through to_hash and back
+    rr = BGP::Route_refresh.new(1, 1, :eorr)
+    assert_equal({:afi=>1, :safi=>1, :subtype=>2}, rr.to_hash)
+    assert_equal(rr.to_shex, BGP::Route_refresh.new(rr.to_hash).to_shex)
+    # a Route_refresh built from another one copies it through its octets,
+    # so the subtype comes along
+    assert_equal(rr.to_shex, BGP::Route_refresh.new(rr).to_shex)
+    assert_equal(2, BGP::Route_refresh.new(rr).subtype)
+    # a normal route refresh is subtype 0, which is what the Reserved octet
+    # always was, so its hash stays the plain one it has always been
+    assert_equal({:afi=>1, :safi=>1}, BGP::Route_refresh.new(1, 1).to_hash)
+    assert_equal({:afi=>1, :safi=>1},
+                 BGP::Route_refresh.new([('ff' * 16) + '00170500010001'].pack('H*')).to_hash)
+  end
+
+  # Encoding is never validated: a subtype the RFC does not define still
+  # goes on the wire, and comes back saying it is bogus. 255 is Reserved and
+  # 42 is Unassigned, and sending either is exactly what this library is for.
+  def test_a_message_subtype_the_rfc_does_not_define
+    rr = BGP::Route_refresh.new(1, 1)
+    rr.subtype = 0x2a
+    assert_equal(0x2a, rr.subtype)
+    assert_equal('bogus (42)', rr.subtype_to_s)
+    assert_equal(('ff' * 16) + '00170500012a01', rr.to_shex)
+    back = BGP::Route_refresh.new(rr.encode)
+    assert_equal(0x2a, back.subtype)
+    assert_equal(rr.to_shex, back.to_shex)
+    rr.subtype = 0xff
+    assert_equal('reserved (255)', rr.subtype_to_s)
+    assert_equal(('ff' * 16) + '0017050001ff01', rr.to_shex)
+  end
+
+  # One octet, so a value it cannot hold is refused rather than truncated,
+  # the way Orf_route_refresh#when= refuses one.
+  def test_the_message_subtype_refuses_a_value_it_cannot_represent
+    rr = BGP::Route_refresh.new(1, 1)
+    assert_raise(ArgumentError) { rr.subtype = 0x100 }
+    assert_raise(ArgumentError) { rr.subtype = -1 }
+    assert_raise(ArgumentError) { rr.subtype = 'borr' }
+    assert_raise(ArgumentError) { rr.subtype = nil }
+  end
+
+  def test_the_message_subtype_names_itself
+    assert_equal('normal (0)', BGP::Route_refresh.new(1, 1).subtype_to_s)
+    assert_equal('BoRR (1)', BGP::Route_refresh.new(1, 1, :borr).subtype_to_s)
+    assert_equal('EoRR (2)', BGP::Route_refresh.new(1, 1, :eorr).subtype_to_s)
+    assert_equal("Route Refresh (5), length: 23\n" +
+                 "AFI IPv4 (1), SAFI Unicast (1), subtype BoRR (1)",
+                 BGP::Route_refresh.new(1, 1, :borr).to_s)
+  end
+
+  # RFC 7313 section 4: a BoRR and an EoRR are ROUTE-REFRESH messages of
+  # four octets beyond the fixed header, so Message.factory reads them as a
+  # plain Route_refresh and not as an Orf_route_refresh.
+  def test_a_borr_and_an_eorr_are_plain_route_refresh_messages
+    [:borr, :eorr].each do |subtype|
+      rr = BGP::Route_refresh.new(1, 1, subtype)
+      assert_equal(23, rr.encode.size)
+      back = BGP::Message.factory(rr.encode)
+      assert_equal(BGP::Route_refresh, back.class)
+      assert_equal(rr.to_shex, back.to_shex)
+    end
   end
 end
 
