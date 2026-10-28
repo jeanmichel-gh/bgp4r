@@ -250,6 +250,26 @@ Operation section.
 
 =======
 
+NOTE, 2026: everything below is RFC 3107, which RFC 8277 obsoletes. It is
+kept because it is the text the labeled NLRI code was written from, not
+because it is current. Read RFC 8277 instead. What changed that matters
+here:
+
+  - The 3 bits between the label value and the Bottom of Stack bit were
+    the EXP field in RFC 3032; RFC 5462 renamed them Traffic Class, and
+    RFC 8277 section 2.2 calls the field Rsrv, to be set to zero on
+    transmission and ignored on reception. bgp4r calls it exp.
+  - RFC 8277 section 2.2 says the S bit MUST be 1 on transmission and
+    MUST be ignored on reception. Section 2.3 has it 0 on every label of
+    a multi-label stack but the last.
+  - The 0x800000 in the last paragraph below is no longer a label. RFC
+    8277 section 2.4 replaces the Label field of a withdrawal with a
+    Compatibility field, whose "value of this field is of no
+    significance": it SHOULD be set to 0x800000 on transmission, for
+    backward compatibility with the text below, and MUST be ignored on
+    reception. Some implementations send 0x000000. bgp4r still reads it
+    as a label; see "Known issues to work on" in CLAUDE.md.
+
 RFC 3107          Carrying Label Information in BGP-4           May 2001
 
 

@@ -174,9 +174,12 @@ module BGP
 
     end
 
-    # RFC 9012 section 3.1: the Encapsulation sub-TLV, whose shape
-    # depends on the tunnel type of its TLV. bgp4r keeps the octets and
-    # does not read the fields, so any tunnel type can be built.
+    # RFC 9012 section 3.2, "Encapsulation Sub-TLVs for Particular Tunnel
+    # Types (Type Code 1)": the Encapsulation sub-TLV, whose shape depends
+    # on the tunnel type of its TLV. Sections 3.2.1 to 3.2.5 give the five
+    # shapes, for VXLAN, NVGRE, L2TPv3, GRE and MPLS-in-GRE. bgp4r keeps
+    # the octets and does not read the fields, so any tunnel type can be
+    # built.
     class Encapsulation < Sub_tlv
       def initialize(octets = ''.b, value: nil)
         super(ENCAPSULATION, value || octets)
@@ -219,41 +222,47 @@ module BGP
       end
     end
 
-    # RFC 9012 section 3.4.1: a 2 octet Ethernet protocol type.
+    # RFC 9012 section 3.4.1, "Protocol Type Sub-TLV (Type Code 2)": a
+    # 2 octet Ethernet protocol type.
     class Protocol_type < Int_sub_tlv
       TYPE, SIZE, NAME, KEY = PROTOCOL_TYPE, 2, 'Protocol type', :protocol_type
       alias protocol_type to_i
     end
 
-    # RFC 9012 section 3.4.4: the one octet DS field of the outer header.
+    # RFC 9012 section 3.3.1, "DS Field (Type Code 7)": the one octet DS
+    # field of the outer header. It is an Outer Encapsulation sub-TLV, so
+    # it sits under section 3.3 and not with the tunnel selection ones.
     class Ds_field < Int_sub_tlv
       TYPE, SIZE, NAME, KEY = DS_FIELD, 1, 'DS field', :ds_field
       alias ds_field to_i
     end
 
-    # RFC 9012 section 3.4.5: the 2 octet outer UDP destination port.
-    # Section 13 makes a zero port malformed; building allows it.
+    # RFC 9012 section 3.3.2, "UDP Destination Port (Type Code 8)": the
+    # 2 octet outer UDP destination port. Section 13 makes a zero port
+    # malformed; building allows it.
     class Udp_dest_port < Int_sub_tlv
       TYPE, SIZE, NAME, KEY = UDP_DEST_PORT, 2, 'UDP destination port', :udp_dest_port
       alias port to_i
     end
 
-    # RFC 9012 section 3.4.2: one octet, 1 or 2. Section 13 makes any
-    # other value malformed; building allows it.
+    # RFC 9012 section 3.5, "Embedded Label Handling Sub-TLV (Type Code
+    # 9)": one octet, 1 or 2. Section 13 makes any other value malformed;
+    # building allows it.
     class Embedded_label_handling < Int_sub_tlv
       TYPE, SIZE, NAME, KEY = EMBEDDED_LABEL_HANDLING, 1, 'Embedded label handling', :embedded_label_handling
       alias handling to_i
     end
 
-    # RFC 9012 section 3.4.3: a Color Extended Community, 8 octets. The
-    # first two are 0x030b, then 2 octets of flags, then the 4 octet
-    # colour value.
+    # RFC 9012 section 3.4.2, "Color Sub-TLV (Type Code 4)": a Color
+    # Extended Community, 8 octets. The first two are 0x030b, then
+    # 2 octets of flags, then the 4 octet colour value. The community
+    # itself is section 4.3.
     class Color < Sub_tlv
       HEADER = 0x030b
 
       attr_reader :color_flags
 
-      # RFC 9012 section 3.4.3: a Color sub-TLV that is not 8 octets, or
+      # RFC 9012 section 3.4.2: a Color sub-TLV that is not 8 octets, or
       # whose first two octets are not 0x030b, is treated as
       # unrecognized, so bgp4r keeps it as a plain Sub_tlv.
       def self.shaped?(value)
@@ -284,9 +293,11 @@ module BGP
       end
     end
 
-    # RFC 9012 section 3.2: reserved (4 octets), address family
-    # (2 octets), then the address. The length is 6 with family 0, where
-    # the egress endpoint is the next hop, 10 for IPv4 and 22 for IPv6.
+    # RFC 9012 section 3.1, "The Tunnel Egress Endpoint Sub-TLV (Type
+    # Code 6)": reserved (4 octets), address family (2 octets), then the
+    # address. The length is 6 with family 0, where the egress endpoint is
+    # the next hop, 10 for IPv4 and 22 for IPv6. Section 3.1.1 gives the
+    # rules for validating the address subfield.
     class Egress_endpoint < Sub_tlv
       IPV4, IPV6 = 1, 2
 
@@ -320,8 +331,10 @@ module BGP
       end
     end
 
-    # RFC 9012 section 3.3: a stack of 4 octet MPLS label stack entries
-    # (RFC 3032 section 2.1), so the length is a multiple of 4. Building
+    # RFC 9012 section 3.6, "MPLS Label Stack Sub-TLV (Type Code 10)": a
+    # stack of 4 octet MPLS label stack entries (RFC 3032 section 2.1, as
+    # updated by RFC 5462, which renamed EXP to Traffic Class), so the
+    # length is a multiple of 4. Building
     # from label values sets the Bottom of Stack bit on the last entry
     # and leaves TC and TTL zero; pass value: to write other octets.
     class Mpls_label_stack < Sub_tlv

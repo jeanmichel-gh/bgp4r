@@ -215,7 +215,7 @@ class Extended_communitiesTest < Test::Unit::TestCase
     assert_equal(hex, Path_attribute.new(pa.to_hash).to_shex)
   end
 
-  # draft-ietf-idr-link-bandwidth, on RFC 4360 section 3.1: the 2 octet
+  # RFC 10005 section 2, on RFC 4360 section 3.1: the 2 octet
   # global administrator is the advertising speaker's AS. It was filled
   # with 0 and dropped when parsing, so an attribute that carried one
   # came back without it, and to_hash gave the bandwidth alone, with
@@ -437,7 +437,7 @@ class Extended_communitiesTest < Test::Unit::TestCase
   # factory. Extended_community#parse no longer consumes what it is
   # given, which the collection never needed, so the loop and every
   # community it builds stay byte for byte what they were. One attribute
-  # per structure, the FLOAT one of draft-ietf-idr-link-bandwidth
+  # per structure, the FLOAT one of RFC 10005
   # included, plus an attribute whose odd octets are kept as a tail.
   def test_the_collection_loop_still_reads_whole_communities
     [['c010100002000100000001400400004cbebc20',
@@ -539,7 +539,7 @@ class Extended_communitiesTest < Test::Unit::TestCase
       ['0003', '000100000001'], # RFC 4360 section 5
       ['0103', '010101010064'],
       ['0203', '000000640001'],
-      ['0004', '0064447a0000'], # draft-ietf-idr-link-bandwidth
+      ['0004', '0064447a0000'], # RFC 10005 section 2
       ['0005', '000100000001'], # RFC 4577 section 4.2.6
       ['0105', '010203040009'],
       ['0205', '000100020003'],

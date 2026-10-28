@@ -116,17 +116,17 @@ module BGP
           @global = v.unpack1('H12')
         end
       when FLOAT
-        # draft-ietf-idr-link-bandwidth, on RFC 4360 section 3.1: the 2
-        # octet global administrator is the advertising speaker's AS, the
-        # 4 octet local administrator the bandwidth. The AS used to be
-        # read into nothing and written back as 0, so wire bytes that
+        # RFC 10005 section 2, on RFC 4360 section 3.1: the 2 octet global
+        # administrator is the advertising speaker's AS, the 4 octet local
+        # administrator the bandwidth, in bytes per second. The AS used to
+        # be read into nothing and written back as 0, so wire bytes that
         # carried one came back changed.
         @global, @local = v.unpack('ng')
       end
     end
     
     # RFC 4360 section 2: the structure of the community is the low 2 bits
-    # of the type octet, and draft-ietf-idr-link-bandwidth is the one
+    # of the type octet, and the RFC 10005 link bandwidth is the one
     # exception. community_structure is the single place that works it out,
     # and parse, value, value2 and _encoded_value_ all read it, so the
     # predicates read it too rather than the type octet again. A community
@@ -143,8 +143,8 @@ module BGP
       community_structure == TWO_OCTET_AS
     end  
     
-    # draft-ietf-idr-link-bandwidth, on RFC 4360 section 3.1: the link
-    # bandwidth community takes the 2 octet AS specific type, but its local
+    # RFC 10005 section 2, on RFC 4360 section 3.1: the link bandwidth
+    # community takes the 2 octet AS specific type, but its local
     # administrator is an IEEE 754 single precision number, not an integer.
     # That is the FLOAT structure, and this is its predicate.
     def is_float?
@@ -263,10 +263,10 @@ module BGP
       end
     end
 
-    # draft-ietf-idr-link-bandwidth: the local administrator is an IEEE
-    # 754 single precision number, so what comes back is what the 4
-    # octets hold, not the Integer a caller may have passed. That is the
-    # value the hash form carries, so the hash encodes the same octets.
+    # RFC 10005 section 2: the local administrator is an IEEE 754 single
+    # precision number, in bytes per second, so what comes back is what
+    # the 4 octets hold, not the Integer a caller may have passed. That is
+    # the value the hash form carries, so the hash encodes the same octets.
     def bandwidth
       [@local].pack('g').unpack1('g')
     end
@@ -293,8 +293,8 @@ module BGP
           [@global].pack('H12')
         end
       when FLOAT
-        # RFC 4360 section 3.1 and draft-ietf-idr-link-bandwidth: a
-        # 2 octet AS, then the bandwidth as an IEEE 754 single.
+        # RFC 4360 section 3.1 and RFC 10005 section 2: a 2 octet AS, then
+        # the bandwidth as an IEEE 754 single.
         [@global, @local].pack('ng')
       else
         # Reached the same way as the else of value, by a type that is
@@ -555,9 +555,11 @@ module BGP
   end
   
   class Link_bandwidth < Extended_community
-    # draft-ietf-idr-link-bandwidth, on RFC 4360 section 3.1: the 2 octet
-    # global administrator is the advertising speaker's AS and the 4 octet
-    # local administrator is the bandwidth. Both are carried, so two
+    # RFC 10005 section 2, on RFC 4360 section 3.1: the 2 octet global
+    # administrator is the advertising speaker's AS and the 4 octet local
+    # administrator is the bandwidth, in bytes per second, not bits. The
+    # 4 octet AS encoding is not supported, so a speaker whose AS does not
+    # fit two octets sends AS_TRANS. Both are carried, so two
     # arguments are the AS and the bandwidth. One is the bandwidth alone,
     # with the AS left at 0, the form callers and tests already use. Any
     # other count has nowhere to go, so say so with what the caller
@@ -598,9 +600,12 @@ module BGP
       end
       super(NON_TRANSITIVE | TWO_OCTET_AS, LINK_BANDWIDTH, asn, bw)
     end
-    # draft-ietf-idr-link-bandwidth, on RFC 4360 section 3.1: the link
-    # bandwidth is non-transitive, and the constructor says so for every
-    # build from values.
+    # RFC 10005 section 2, on RFC 4360 section 3.1: the type octet is 0x00
+    # transitive or 0x40 non-transitive, and IANA names sub-type 0x04
+    # "Link Bandwidth" under both. bgp4r builds the non-transitive one,
+    # and the constructor says so for every build from values. The FACTORY
+    # masks the transitive bit off its key, so a 0x0004 community that
+    # arrives is read as a link bandwidth too.
     def hash_type
       NON_TRANSITIVE | TWO_OCTET_AS
     end
@@ -1025,7 +1030,11 @@ module BGP
     end
   end
 
-  # RFC 9135 section 8.1: the PE's MAC address.
+  # RFC 9135 section 8.1, "EVPN Router's MAC Extended Community": the PE's
+  # MAC address. That is the definition, and IANA gives RFC 9135 as the
+  # reference for EVPN sub-type 0x03. RFC 9012 section 4.2 carries the same
+  # title but defines nothing; it points here and says this community wins
+  # over a MAC in a VXLAN or NVGRE encapsulation sub-TLV.
   class Router_mac < Es_import
     TYPE, SUBTYPE = 0x06, 0x03
     LABEL = "Router's MAC"
@@ -1041,7 +1050,7 @@ module BGP
       [TWO_OCTET_AS,  ROUTE_ORIGIN]     => Route_origin,       # RFC 4360 section 5
       [IPV4_ADDR,     ROUTE_ORIGIN]     => Route_origin,
       [FOUR_OCTET_AS, ROUTE_ORIGIN]     => Route_origin,       # RFC 5668 section 2
-      [TWO_OCTET_AS,  LINK_BANDWIDTH]   => Link_bandwidth,
+      [TWO_OCTET_AS,  LINK_BANDWIDTH]   => Link_bandwidth,    # RFC 10005 section 2
       # RFC 4577 section 4.2.6: the OSPF domain ID's type "is 0005, 0105,
       # or 0205", so all three are here. 0205 is the 4 octet AS specific
       # structure of RFC 5668 section 2, which parse and encode already

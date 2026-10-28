@@ -233,7 +233,7 @@ class Extended_community_Test < Test::Unit::TestCase
     assert_equal('Link bandwidth: 65000:10000.0', Link_bandwidth.new(65_000, 10_000).to_s)
   end
 
-  # draft-ietf-idr-link-bandwidth, on RFC 4360 section 3.1: the 2 octet
+  # RFC 10005 section 2, on RFC 4360 section 3.1: the 2 octet
   # global administrator is the advertising speaker's AS. It used to be
   # filled with 0 and dropped when parsing, so 40040064447a0000 came back
   # as 40040000447a0000 and the AS could neither be set nor read back.
@@ -268,7 +268,7 @@ class Extended_community_Test < Test::Unit::TestCase
     assert_equal('invalid bandwidth "x", expected a number', err.message)
   end
 
-  # draft-ietf-idr-link-bandwidth: the link bandwidth community takes the
+  # RFC 10005 section 2: the link bandwidth community takes the
   # 2 octet AS specific type, but its value is an IEEE 754 single
   # precision number. That is the FLOAT structure, so is_two_octet_asn?
   # is false and is_float? is true. The predicates used to read the low 2
@@ -496,7 +496,7 @@ class Extended_community_Test < Test::Unit::TestCase
   # And where the values do reproduce the type octet, the hash is the
   # plain one key hash it has always been. That is what callers write by
   # hand, so nothing here may gain a key: every structure of RFC 4360
-  # section 2, the FLOAT one of draft-ietf-idr-link-bandwidth, the
+  # section 2, the FLOAT one of RFC 10005, the
   # 4 octet AS specific form with an AS that needs 4 octets, and every
   # community whose type octet its own constructor already sets.
   def test_to_hash_keeps_the_plain_form_where_the_values_reproduce_the_type

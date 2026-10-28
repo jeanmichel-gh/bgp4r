@@ -1,5 +1,5 @@
 #--
-# Copyright 2008-2009, 2011 Jean-Michel Esnault.
+# Copyright 2008-2009, 2011, 2026 Jean-Michel Esnault.
 # All rights reserved.
 # See LICENSE.txt for permissions.
 #
@@ -100,7 +100,15 @@ module IANA
     LABEL_NLRI = 4
     MCAST_VPN = 5
     MULTI_SEGMENT_PW_NLRI = 6
+    # IANA calls SAFI 7 "Encapsulation SAFI (OBSOLETE)", referencing
+    # RFC 9012, which obsoleted RFC 5512 and with it the Encapsulation
+    # SAFI. ENCASPSULATION_SAFI is a typo kept for callers that already
+    # name it; ENCAPSULATION_SAFI is the spelling to use. Both are 7, and
+    # set_h_safis stores a symbol for each, so IANA.safi?(:encapsulation_safi)
+    # and the old :encaspsulation_safi both answer 7. Defining the correct
+    # spelling second makes it the name IANA.safi?(7) prints.
     ENCASPSULATION_SAFI = 7
+    ENCAPSULATION_SAFI = 7
     TUNNEL = 64
     VPLS = 65
     BGP_MDT = 66

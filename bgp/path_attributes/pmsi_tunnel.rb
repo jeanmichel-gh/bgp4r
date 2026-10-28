@@ -40,7 +40,16 @@ module BGP
   # building: a test can send any type with any identifier.
   class Pmsi_tunnel < Attr
 
-    # RFC 6514 section 5.
+    # RFC 6514 section 5 defines tunnel types 0 to 7, and these are they.
+    # IANA's "P-Multicast Service Interface Tunnel (PMSI Tunnel) Tunnel
+    # Types" registry has since assigned five more, which bgp4r does not
+    # name: 8 Transport Tunnel (RFC 7524), 10 Assisted Replication Tunnel
+    # (RFC 9574), 11 BIER (RFC 8556), 12 SR-MPLS P2MP Tree and 13 SRv6
+    # P2MP Tree (both RFC 10018). 9 is unassigned, 0x7b to 0x7e and 0xfb
+    # to 0xfe are experimental, 0x7f is reserved, 0x80 to 0xfa are
+    # reserved for Composite Tunnel and 0xff is the wildcard transport
+    # tunnel type (RFC 8338). An unnamed type still round trips: pass its
+    # number to send it.
     NO_TUNNEL            = 0
     RSVP_TE_P2MP         = 1
     MLDP_P2MP            = 2
@@ -61,7 +70,17 @@ module BGP
       :mldp_mp2mp           => MLDP_MP2MP,
     }
 
-    # The only flag RFC 6514 section 5 defines. The rest are reserved.
+    # The only flag RFC 6514 section 5 defines, and the only one bgp4r
+    # names. RFC 7902 made the field a registry, "P-Multicast Service
+    # Interface (PMSI) Tunnel Attribute Flags", and numbers its 8 bits
+    # left to right 0 to 7, so bit 7 is this one, value 0x01. Five more
+    # entries are assigned above it, and the rest of the octet is not
+    # reserved any more: bit 1 Extension, 0x40 (RFC 7902); bit 2 Leaf
+    # Information Required per-Flow (LIR-pF), 0x20 (RFC 8534); bits 3 to 4
+    # Assisted Replication Type (T), 0x18 (RFC 9574); bit 5 Broadcast and
+    # Multicast (BM), 0x04 (RFC 9574); bit 6 Unknown (U), 0x02 (RFC 9574).
+    # Only bit 0, 0x80, is still unassigned. Pass :flags to set any of
+    # them; nothing is checked when building.
     LEAF_INFO_REQUIRED = 0x01
 
     attr_reader :tunnel_type, :identifier, :pmsi_flags

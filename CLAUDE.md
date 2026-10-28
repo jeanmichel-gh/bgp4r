@@ -221,21 +221,57 @@ state and belongs with the OPEN handling, not with a capability that never
 validates. GoBGP does not implement Role, so no lab topology can exercise it
 and it is unit tested only.
 
-Also in phase 0: the stale citations the audits found. Eight wrong RFC 9012
-section numbers in `tunnel_encap.rb`, where `Encapsulation` and
-`Egress_endpoint` cite each other's sections. `draft-ietf-idr-link-bandwidth`
-became **RFC 10005** in June 2026, cited as a draft in six comments, and its
-units are bytes per second, which no comment says. **RFC 3107 is obsoleted by
-RFC 8277**, so the verbatim RFC 3107 text in `nlris/nlri.rb` is stale and
-`0x800000` is no longer a label but a Compatibility field of no significance
-(RFC 8277 section 2.4). `IANA::SAFI::ENCASPSULATION_SAFI` is a typo and SAFI 7
-is marked obsolete. `Pmsi_tunnel`'s "the rest are reserved" is stale by five
-flag bits and five tunnel types. And two wrong citations in this file's own
-"Attribute work left": the Tunnel Encapsulation sub-TLV shapes are **five, at
-RFC 9012 sections 3.2.1 to 3.2.5**, not eight at 3.1.1 to 3.1.8, and there is
-no section 3.1.6; the SR Policy sub-TLVs belong to **RFC 9830**, not RFC 9256,
-and the Prefix-SID sub-TLV type 11 is RFC 9012 section 3.7, so not outside
-work at all.
+Also in phase 0: the stale citations the audits found. **Done**, in #120,
+comments and one constant, no behaviour change. Every claim was re-read
+against the document before anything was written, and six of the seven held:
+
+* Eight wrong RFC 9012 section numbers in `tunnel_encap.rb`, seven distinct,
+  with `Encapsulation` and `Egress_endpoint` citing each other's sections.
+  Held exactly. The real structure: 3.1 is the Tunnel Egress Endpoint sub-TLV,
+  3.2 the Encapsulation ones, 3.3.1 DS Field, 3.3.2 UDP Destination Port,
+  3.4.1 Protocol Type, 3.4.2 Color, 3.5 Embedded Label Handling, 3.6 MPLS
+  Label Stack, 3.7 Prefix-SID. Only the Protocol Type citation was already
+  right. Each now carries the section's own title, so the next reader can
+  check it without opening the RFC.
+* `draft-ietf-idr-link-bandwidth` became **RFC 10005**, "BGP Link Bandwidth
+  Extended Community", June 2026. Held, except the count: it was cited as a
+  draft **seven** times in `extended_community.rb`, not six, and six more
+  times in the tests. All thirteen now say RFC 10005 section 2. The units are
+  bytes per second, which the RFC puts as "bytes (not bits!) per second", and
+  three comments now say so. Both type octets are indeed assigned, 0x00
+  transitive and 0x40 non-transitive under sub-type 0x04, and bgp4r already
+  read both, because `FACTORY` masks the transitive bit off its key.
+* **RFC 3107 is obsoleted by RFC 8277**. Held. The verbatim RFC 3107 text
+  below `__END__` in `nlris/nlri.rb` now carries a note saying so and listing
+  what changed. `0x800000` is no longer a label: RFC 8277 section 2.4 makes it
+  a Compatibility field whose "value of this field is of no significance",
+  SHOULD be sent as 0x800000 and MUST be ignored on reception. bgp4r still
+  reads it as label 524288 and writes it back as `800001`, which is a
+  behaviour bug and is filed under "Known issues to work on" rather than
+  fixed here.
+* `IANA::SAFI::ENCASPSULATION_SAFI` is a typo and SAFI 7 is obsolete. Held:
+  IANA reads "Encapsulation SAFI (OBSOLETE)", referencing RFC 9012.
+  `ENCAPSULATION_SAFI` is now defined beside it, both 7. Nothing in the tree
+  used the old name, but it stays, so no caller breaks; defining the correct
+  spelling second makes it the one `IANA.safi?(7)` prints.
+* `Pmsi_tunnel`'s "the rest are reserved" was stale. Held. Five more tunnel
+  types are assigned (8, 10, 11, 12, 13; 9 is unassigned), and RFC 7902 turned
+  the flags octet into a registry with five more entries above the RFC 6514
+  bit, so only bit 0 is unassigned and "reserved" was wrong. Both comments now
+  list what is assigned.
+* **The one claim that did not hold**: that `Router_mac` should cite RFC 9012
+  section 4.2 rather than RFC 9135 section 8.1. RFC 9012 section 4.2 carries
+  the title "Router's MAC Extended Community" but defines nothing; its whole
+  body points at EVPN-INTER-SUBNET, which is RFC 9135. RFC 9135 section 8.1
+  is "EVPN Router's MAC Extended Community" and gives the encoding, and IANA
+  names RFC 9135 as the reference for EVPN sub-type 0x03. The citation was
+  already right and was left alone; the comment now says why, so the next
+  audit does not reopen it.
+* The two wrong citations in this file's own "Attribute work left" both held
+  and are corrected there: the Encapsulation sub-TLV shapes are five, at RFC
+  9012 sections 3.2.1 to 3.2.5, there is no section 3.1.6, the SR Policy
+  sub-TLVs are RFC 9830 and not RFC 9256, and the Prefix-SID sub-TLV type 11
+  is RFC 9012 section 3.7.
 
 ### RIB and FIB, five phases
 
@@ -341,6 +377,7 @@ Smaller things:
 
 * A truncated optional parameter header in an OPEN raises instead of being kept. `Open#parse` walks the parameters while any octet is left and `Optional_parameter.factory` unpacks a header out of what it finds, so a leftover shorter than the header has a nil Length: `ruby -I. -e 'require "bgp4r"; BGP::Message.factory(["ff"*16+"001c"+"01"+"04"+"0064"+"00b4"+"0a000001"+"01"+"41"].pack("H*"))'` raises `NoMethodError: undefined method '+' for nil`. The extended form of RFC 9072 section 2 has the same hole two octets wider, since its header is three octets. Per the rule on octets that cannot be interpreted, the leftover should be kept and written back, which needs somewhere in `Open` to keep it rather than a check in the factory. Found while widening the parameter length for RFC 9072.
 
+* The Compatibility field of a withdrawn labeled route is read as a label, and does not round trip. RFC 8277 section 2.4 replaces the Label field of a withdrawal with a Compatibility field, whose "value of this field is of no significance": it SHOULD be sent as 0x800000 and MUST be ignored on reception. `Label#parse` has no idea it is in a withdrawal, so it reads the octets as a label, and `Label#encode` then sets the Bottom of Stack bit the field did not have: `ruby -I. -e 'require "bgp/nlris/label"; l=BGP::Label.new(["800000"].pack("H*")); p l.to_hash; p l.encode.unpack1("H*")'` prints `{:label=>524288, :exp=>0}` and `"800001"`, so the three octets that arrived come back changed. Two separate things are wrong: the S bit is forced on, which breaks the round trip rule for any single label parsed with S clear, and 524288 is not a label at all here. The second needs withdrawal context, which `Label` does not have and `Labeled` does not pass, so it is a `Labeled`/`Withdrawn` change rather than a `Label` one; the first is `encode`'s default `bottom=1`, which `Label_stack#encode` also relies on. Also display only but adjacent: bgp4r calls the 3 bits above the S bit `exp`, where RFC 5462 renamed them Traffic Class and RFC 8277 section 2.2 calls the field Rsrv. Found while replacing the stale RFC 3107 text in `nlris/nlri.rb` with a note that RFC 8277 obsoletes it.
 * A String administrator in the three argument form of `Rd.new` takes `encode` down. Types 0 and 2 pack the administrator as an Integer, so an address String reaches `pack` as it was given: `ruby -I. -e 'require "bgp/nlris/rd"; BGP::Rd.new("1.1.1.1",1,0).encode'` raises `TypeError: no implicit conversion of String into Integer`. The two argument form reads a String administrator as the type 1 form and never gets there, and a named type 1 builds an `IPAddr` first, so only a named type 0 or 2, or a type the RFC does not define, hits this. Either those branches read the String the way type 1 does, or the constructor says the administrator of that type is an Integer. Found while carrying the encoding type through the hash form.
 
 Lab and conformance:
@@ -356,8 +393,8 @@ Lab and conformance:
 RFC sections deliberately not implemented, each noted in the pull
 request that added the attribute:
 
-* Tunnel Encapsulation (23): the eight per tunnel type Encapsulation sub-TLV shapes, RFC 9012 sections 3.1.1 to 3.1.8. The attribute keeps their octets, so a test can still build any of them by hand.
-* Tunnel Encapsulation: the SR Policy sub-TLVs, types 12 to 15, 20 and 128 to 130, from RFC 9256, and the Prefix-SID sub-TLV, type 11.
+* Tunnel Encapsulation (23): the five per tunnel type Encapsulation sub-TLV shapes, RFC 9012 sections 3.2.1 to 3.2.5, for VXLAN, NVGRE, L2TPv3, GRE and MPLS-in-GRE. The attribute keeps their octets, so a test can still build any of them by hand.
+* Tunnel Encapsulation: the SR Policy sub-TLVs, types 12 to 15, 20 and 128 to 130, from RFC 9830, "Advertising Segment Routing Policies in BGP". RFC 9256 is the SR Policy architecture and defines no sub-TLV; IANA gives RFC 9830 as the reference for all eight code points. The Prefix-SID sub-TLV, type 11, is RFC 9012 section 3.7, so it is RFC 9012 work and not outside work like the rest of this entry.
 * Prefix-SID (40): the SRv6 TLVs of RFC 9252, and the RFC 8669 section 4.1 rule for labeled unicast.
 * No check for a missing well known mandatory attribute. That needs `Update`, not `Path_attribute`, because it depends on whether the message carries NLRI.
 * The external peer rules for LOCAL_PREF, ORIGINATOR_ID and CLUSTER_LIST, and the RFC 7311 section 3.2 AIGP checks. bgp4r does not know whether a peer is external where the checks run.
