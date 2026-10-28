@@ -90,6 +90,7 @@ There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Cove
 * `encode` returns wire bytes. `to_hash` returns a hash that round trips through `new`. `to_s` returns the human readable form.
 * Tests check round trips: build, encode, parse back, compare. Use real hex captures from the RFCs or from Wireshark when possible.
 * One test file per source file, same name with `_test.rb`, in the matching folder under `test/unit/`.
+* Write `BGP::` names out in full in a test file. Three top level `include`s in `test/unit/neighbor/neighbor_test.rb` leak into every test file the suite loads after it, and `BGP::OPT_PARM::CAP` wins the names it shares with `BGP`, so a bare `Orf` is the ORF capability and a bare `Route_refresh` is the capability rather than the message. A test written that way passes on its own and fails in the suite. The entry under "Known issues to work on" has the detail and the fix.
 * Two space indent. Match the style of the file you edit.
 * Copyright headers. A new Ruby file or Dockerfile starts with the standard GPL header from `bgp/observable.rb`, with `Copyright <current year> Jean-Michel Esnault.` (a Dockerfile drops the `#--` and `#++` lines). When you change a file that has a header, add the current year to its years if it is missing: `2008, 2009` becomes `2008, 2009, 2026`. Do not add headers to files that never had one. YAML, Markdown and other config files get no header.
 * Keep the library free of runtime gem dependencies. The one exception is `logger`: it ships with Ruby, but Ruby 4.0 made it a bundled gem, so `bgp4r.gemspec` and the `Gemfile` declare it.
@@ -99,11 +100,12 @@ There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Cove
 
 ## Rules for agents
 
-* Work on a branch named `claude/<short-topic>`. Never push to master.
+* Work on a branch named `claude/<short-topic>`. Never push to master. The agent tooling may put its scratch worktrees in `.claude/worktrees/`, which `.gitignore` covers; they are whole checkouts, not bgp4r source, and must never be committed.
+* If `gh pr create` fails with HTTP 403, GitHub's GraphQL API is blocked in that sandbox. Open the pull request with `gh api repos/{owner}/{repo}/pulls --method POST` instead.
 * One topic per pull request. Small diffs.
 * Run the full unit suite before opening a PR. All tests must pass.
 * New behavior needs a test. Bug fixes need a test that failed before the fix.
-* Cite the RFC section in a comment when you implement or fix wire format logic.
+* Cite the RFC section in a comment when you implement or fix wire format logic. Open the RFC and check the section number against its text; do not write one from memory. Six citations in this file and in the code were found wrong on 2026-10-27. One of them, "RFC 5291 section 5" for the ROUTE-REFRESH and ORF layout, is section 4, and it had been copied forward into two pull requests before anyone read the RFC. Another called 0x02 and 0x03 extended community types when they are sub-types. A wrong citation is worse than none, because it reads as verified and sends the next person to the wrong page.
 * Do not delete or weaken existing tests to make a change pass.
 * If you find a bug you are not fixing, list it in the PR description.
 * Keep this file true in the same pull request that makes it false. If your change fixes something under "Known issues to work on", delete that entry. If it adds or removes tests, update the baseline counts above. Nobody reconciles this file later, and a stale entry is worse than no entry: it sends the next reader after work that no longer exists. Both halves of this have already happened here, once to seven entries at once, and once to a fix that landed without removing its own entry.
