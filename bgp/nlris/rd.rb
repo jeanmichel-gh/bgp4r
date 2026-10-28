@@ -35,24 +35,27 @@ module BGP
         @enc_type, @admin, @assign = [0]*3
       elsif args.size==3
         admin, assign, @enc_type = args
-        refuse_an_address_as_an_assigned_number(assign)
+        refuse_a_value_the_field_cannot_hold('encoding type', @enc_type)
         refuse_a_value_too_wide_for_its_field('encoding type', @enc_type, 2)
+        refuse_a_value_the_field_cannot_hold('assigned number', assign)
         case @enc_type
         when 1
-          @admin, @assign = IPAddr.new(admin), assign
+          @admin, @assign = administrator_address(admin), assign
         else
           # Types 0 and 2, and any type RFC 4364 section 4.2 does not
           # define: two Integers in the field widths that type gives them.
+          refuse_a_value_the_field_cannot_hold('administrator', admin)
           refuse_a_value_too_wide_for_its_field('administrator', admin, admin_width)
           @admin, @assign = admin, assign
         end
         refuse_a_value_too_wide_for_its_field('assigned number', assign, assign_width)
       elsif args.size==2
         admin, assign = args
-        refuse_an_address_as_an_assigned_number(assign)
-        if admin.is_a?(String)
-          @admin, @assign, @enc_type = IPAddr.new(admin), assign, 1
+        refuse_a_value_the_field_cannot_hold('assigned number', assign)
+        if admin.is_a?(String) or admin.is_a?(IPAddr)
+          @admin, @assign, @enc_type = administrator_address(admin), assign, 1
         else
+          refuse_a_value_the_field_cannot_hold('administrator', admin)
           @admin, @assign, @enc_type = admin, assign, inferred_encoding_type(admin)
           refuse_a_value_too_wide_for_its_field('administrator', admin, admin_width)
         end
@@ -149,27 +152,71 @@ module BGP
 
     private
 
-    # RFC 4364 section 4.2 makes the assigned number a 4 octet field in
-    # encoding type 0 and a 2 octet field in types 1 and 2. None of them
-    # holds a 32 bit address, so an address String is refused here rather
-    # than kept and silently truncated by encode. Nothing else is checked:
-    # any value that fits its field goes to the wire as given, whatever the
-    # RFC says it should mean, and arbitrary octets still go through
-    # Rd.new(wire).
-    def refuse_an_address_as_an_assigned_number(assign)
-      return unless assign.is_a?(String)
-      raise ArgumentError, "an RD assigned number cannot be the address " +
-        "#{assign.inspect}: RFC 4364 section 4.2 makes it a 2 octet field in " +
-        "encoding types 1 and 2, and a 4 octet field in type 0. Pass an Integer, " +
+    # The three fields encode packs as numbers take a number and nothing
+    # else. RFC 4364 section 4.2 gives the RD a 2 octet type field and a
+    # 6 octet value field, and only one of the three encoding types it
+    # defines reads part of that value as an address: "The Administrator
+    # subfield must contain an Autonomous System number" in type 0, "an IP
+    # address" in type 1, and "a 4-byte Autonomous System number" in type
+    # 2. The assigned number is a number in all three.
+    #
+    # So a value encode cannot pack is refused here, where the message can
+    # name the field, rather than carried to encode. It used to reach
+    # Array#pack, which raised TypeError: "no implicit conversion of String
+    # into Integer", from inside common.rb, naming neither the RD nor the
+    # field and leaving the caller an object that could not be put on the
+    # wire at all. Only an address String was refused before, so nil, an
+    # Array, an IPAddr and a numeric String all got that far.
+    #
+    # Nothing else is checked: any value that fits its field goes to the
+    # wire as given, whatever the RFC says it should mean, and arbitrary
+    # octets still go through Rd.new(wire).
+    def refuse_a_value_the_field_cannot_hold(what, value)
+      return if value.is_a?(Integer)
+      raise ArgumentError, "an RD #{what} cannot be #{value.inspect}: RFC 4364 " +
+        "section 4.2 makes it a number, and encode packs it as one. Encoding " +
+        "type 1 is the one whose administrator is an address. Pass an Integer, " +
         "or build the octets with Rd.new(wire)."
+    end
+
+    # The type 1 administrator, the one field of an RD that holds an
+    # address. RFC 4364 section 4.2: "The Administrator subfield must
+    # contain an IP address", in 4 of the value field's 6 octets, so the
+    # address is IPv4.
+    #
+    # An IPAddr is taken as it stands, and anything else goes through
+    # IPAddr.create, which is how the rest of bgp4r reads an address: wire
+    # bytes, an Integer, an Array of octets, or a String. IPAddr.new cannot
+    # read an IPAddr, so an administrator held as one, which is what
+    # Rd#admin gives back, raised AddressFamilyError, "address family must
+    # be specified", naming nothing the caller could act on.
+    #
+    # An IPv6 address does not fit the 4 octet field, so it is refused the
+    # way an Integer too wide for its own field is. encode wrote all 16
+    # octets of it, which made the RD 20 octets where section 4.2 gives it
+    # 8: not a wrong RD but no RD at all. The Vpn or Labeled NLRI carrying
+    # it went on the wire with a length field that disagreed with its own
+    # octets, so the peer misread that prefix and every prefix after it in
+    # the same field, and to_hash did not round trip either, since parse
+    # reads 8 octets.
+    def administrator_address(admin)
+      address = admin.is_a?(IPAddr) ? admin : IPAddr.create(admin)
+      return address if address.ipv4?
+      raise ArgumentError, "an RD administrator cannot be #{address}: RFC 4364 " +
+        "section 4.2 makes it a 4 octet field in encoding type 1, so the address " +
+        "is IPv4. Build the octets with Rd.new(wire)."
     end
 
     # An Integer too large for the field it goes in cannot be represented at
     # all: encode would put its low octets on the wire and the object would
     # disagree with its own bytes, which is sending a different value
-    # silently. So it is refused, as an address assigned number is. Only
-    # what cannot be represented is refused; a value that fits is never
-    # looked at again.
+    # silently. So it is refused, as a value the field cannot hold at all
+    # is. Only what cannot be represented is refused; a value that fits is
+    # never looked at again.
+    #
+    # Every caller runs refuse_a_value_the_field_cannot_hold first, so the
+    # Integer test below passes by the time this is reached. It stays
+    # because a width is meaningless for anything else.
     def refuse_a_value_too_wide_for_its_field(what, value, octets)
       return unless value.is_a?(Integer)
       return if value >= 0 and value <= (1 << (8*octets)) - 1
