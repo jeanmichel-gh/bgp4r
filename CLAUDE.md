@@ -192,7 +192,7 @@ back to the local Role, so OTC is usable today; the capability buys the Role
 Mismatch and strict mode tests. GoBGP does not implement Role, so no current
 lab topology can exercise it.
 
-Also in phase 0: the stale citations the audits found. **Done**, in #118,
+Also in phase 0: the stale citations the audits found. **Done**, in #120,
 comments and one constant, no behaviour change. Every claim was re-read
 against the document before anything was written, and six of the seven held:
 
