@@ -517,6 +517,73 @@ class Extended_communitiesTest < Test::Unit::TestCase
     end
   end
 
+  # One wire form per entry of Extended_community::FACTORY, transitive
+  # and non-transitive, with every field of the value set, plus a form
+  # the factory does not know, through factory, to_hash, new and encode.
+  # RFC 4360 section 2 makes to_hash owe a hash that round trips, so
+  # every one of them has to come back byte for byte.
+  #
+  # Six failed before the OSPF ID fix, the last of this set that did:
+  # the 0005 and 4005 domain ID, whose two administrator fields were
+  # hashed as one address, and the 0105, 4105, 0107 and 4107 forms whose
+  # low 2 octets were set, which the address form dropped.
+  #
+  # The reserved fields of the RFC 8955, RFC 7432 and RFC 9012 shapes are
+  # 0 here, as those RFCs ask. Four of those classes lose them in the
+  # hash when they are not; see "Known issues to work on" in CLAUDE.md.
+  def test_every_wire_form_the_factory_knows_survives_its_own_hash
+    forms = [
+      ['0002', '000100000001'], # RFC 4360 section 4, 2 octet AS specific
+      ['0102', '010101010064'], # RFC 4360 section 3.2
+      ['0202', '000000640001'], # RFC 5668 section 2
+      ['0003', '000100000001'], # RFC 4360 section 5
+      ['0103', '010101010064'],
+      ['0203', '000000640001'],
+      ['0004', '0064447a0000'], # draft-ietf-idr-link-bandwidth
+      ['0005', '000100000001'], # RFC 4577 section 4.2.6
+      ['0105', '010203040009'],
+      ['0205', '000100020003'],
+      ['0107', '010203040009'],
+      ['0008', '006400000064'], # RFC 4384
+      ['030b', '000000000064'], # RFC 9012 section 4.3
+      ['0300', '000000000001'], # RFC 8097 section 2
+      ['030c', '000000000008'], # RFC 9012 section 4.1
+      ['8006', '000a447a0000'], # RFC 8955 section 7.1
+      ['800c', '000a447a0000'], # RFC 8955 section 7.2
+      ['8007', '000000000003'], # RFC 8955 section 7.3
+      ['8008', '000a00000064'], # RFC 8955 section 7.4
+      ['8108', '010101010064'],
+      ['8208', '000100020003'],
+      ['8009', '000000000020'], # RFC 8955 section 7.5
+      ['0600', '000000000005'], # RFC 7432 section 7.7
+      ['0601', '000000000640'], # RFC 7432 section 7.5
+      ['0602', 'aabbccddeeff'], # RFC 7432 section 7.6
+      ['0603', 'aabbccddeeff'], # RFC 9135 section 8.1
+      # RFC 4360 sections 2 and 4, RFC 7606 section 7.14: a type the
+      # factory does not know keeps its octets as they are.
+      ['ffff', '000000000000'],
+    ]
+    assert_equal(Extended_community::FACTORY.size + 1, forms.size)
+    # RFC 4360 section 2: the T bit is the second bit of the type octet,
+    # and the factory masks it, so each form has two.
+    all = forms.collect { |ts, v|
+      t = ts[0,2].to_i(16)
+      [format('%02x%s%s', t, ts[2,2], v), format('%02x%s%s', t | 0x40, ts[2,2], v)]
+    }.flatten.uniq
+    # One short of 54: 0xff already has the bit set.
+    assert_equal(53, all.size)
+    all.each do |hex|
+      ec = Extended_community.factory([hex].pack('H*'))
+      assert_equal(hex, ec.to_shex, hex)
+      assert_equal(hex, Extended_communities.new(ec.to_hash).communities[0].to_shex, hex)
+      # And through the whole attribute, hash and all.
+      attr_hex = 'c01008' + hex
+      pa = Path_attribute.new([attr_hex].pack('H*'))
+      assert_equal(attr_hex, pa[:extended_communities].to_shex, hex)
+      assert_equal(attr_hex, Path_attribute.new(pa.to_hash)[:extended_communities].to_shex, hex)
+    end
+  end
+
   # The type octet is optional, and a hash written by hand says what it
   # means with it or without it. Without it the community is the one the
   # values have always built.

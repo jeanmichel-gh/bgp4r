@@ -532,6 +532,85 @@ class Extended_community_Test < Test::Unit::TestCase
     end
   end
 
+  # RFC 4577 section 4.2.6: the OSPF domain ID carries the Domain
+  # Identifier in the six octet value field, and its type "is 0005, 0105,
+  # or 0205". Those three type octets give that field the three
+  # structures of RFC 4360 section 3.1, RFC 4360 section 3.2 and RFC 5668
+  # section 2: a 2 octet administrator and a 4 octet one, a 4 octet
+  # address and a 2 octet one, or a 4 octet AS and a 2 octet one.
+  #
+  # value2 read the first field as an address and dropped the second,
+  # which is the 0105 form alone, so under 0005 both fields were lost:
+  # 0005000100000001 hashed as '0.0.0.1' and came back as
+  # 0005000100000000. RFC 4577 does not say the low 2 octets of the 0105
+  # form are zero either, and section 4.2.8.1 reads the whole six as the
+  # identifier, so a 0105 form that arrives with them set lost them too:
+  # 0105010203040009 came back as 0105010203040000.
+  #
+  # The hash carries both fields, except where the second is 0 and the
+  # structure is the IPv4 address specific one, which is every domain ID
+  # bgp4r builds. There the hash is the plain address it has always been,
+  # pinned above.
+  def test_the_hash_of_an_ospf_id_keeps_every_octet_of_its_value
+    [[Ospf_domain_id, '0005000100000001', {:ospf_domain_id=>[1, 1], :type=>0x00}],
+     [Ospf_domain_id, '4005000100000001', {:ospf_domain_id=>[1, 1], :type=>0x40}],
+     [Ospf_domain_id, '0205000100020003', {:ospf_domain_id=>[65538, 3], :type=>0x02}],
+     [Ospf_domain_id, '0105010203040009', {:ospf_domain_id=>['1.2.3.4', 9]}],
+     [Ospf_domain_id, '0105010203040000', {:ospf_domain_id=>'1.2.3.4'}],
+     # Only 0107 is in Extended_community::FACTORY for the router ID,
+     # since RFC 4577 section 4.2.6 gives it that type alone, but the
+     # class takes any octets handed to it and hashes them the same way.
+     [Ospf_router_id, '0007000100000001', {:ospf_router_id=>[1, 1], :type=>0x00}],
+     [Ospf_router_id, '0107010203040009', {:ospf_router_id=>['1.2.3.4', 9]}],
+     [Ospf_router_id, '0107010203040000', {:ospf_router_id=>'1.2.3.4'}],
+    ].each do |klass, hex, hash|
+      ec = klass.new([hex].pack('H*'))
+      assert_equal(hash, ec.to_hash, hex)
+      assert_equal(hex, ec.to_shex, hex)
+      # The build path Extended_communities.communities_from_hash walks:
+      # the value builds the community, then the type octet is written
+      # over the one the value gave. That class is not loaded here, so
+      # the two steps are taken by hand.
+      value = hash.reject { |k,_| k == :type }.values.first
+      rebuilt = klass.new(*Array(value))
+      rebuilt.type = hash[:type] if hash.has_key?(:type)
+      assert_equal(hex, rebuilt.to_shex, hex)
+    end
+  end
+
+  # RFC 4577 section 4.2.6 names 0205 beside 0005 and 0105, so the
+  # factory knows all three. Its structure is the 4 octet AS specific
+  # one of RFC 5668 section 2, which parse and encode already read and
+  # write, so the class needed nothing of its own.
+  def test_the_factory_knows_all_three_ospf_domain_id_types
+    ['0005000100000001', '0105010203040000', '0205000100020003'].each do |hex|
+      ec = Extended_community.factory([hex].pack('H*'))
+      assert_equal(Ospf_domain_id, ec.class, hex)
+      assert_equal(hex, ec.to_shex, hex)
+    end
+    assert_equal('Ospf domain id: 65538:3',
+                 Extended_community.factory(['0205000100020003'].pack('H*')).to_s)
+  end
+
+  # The domain ID takes both administrator fields, so the hash value it
+  # carries builds back. One argument is the domain ID alone, the form
+  # bgp4r has always built, and its local administrator is 0.
+  def test_an_ospf_id_builds_from_one_field_or_two
+    assert_equal('0105010203040000', Ospf_domain_id.new('1.2.3.4').to_shex)
+    assert_equal('0105010203040009', Ospf_domain_id.new('1.2.3.4', 9).to_shex)
+    assert_equal('0107010203040000', Ospf_router_id.new('1.2.3.4').to_shex)
+    assert_equal('0107010203040009', Ospf_router_id.new('1.2.3.4', 9).to_shex)
+    # An Integer first field keeps the type octet the constructor passes,
+    # as it always did, and the 4 octet field it names.
+    assert_equal('0105000000010000', Ospf_domain_id.new(1).to_shex)
+    assert_equal('0105000000010001', Ospf_domain_id.new(1, 1).to_shex)
+    # No argument is the all zero domain ID of RFC 4577 section 4.2.6,
+    # the NULL one, which is what it built before.
+    assert_equal('0105000000000000', Ospf_domain_id.new.to_shex)
+    assert_raise(ArgumentError) { Ospf_domain_id.new(1, 2, 3) }
+    assert_raise(ArgumentError) { Ospf_router_id.new(1, 2, 3) }
+  end
+
   # The type octet is set from the hash form after the values have built
   # the community, so the writer has to be there and has to check
   # nothing: an octet no RFC asks for is one of the things this library
