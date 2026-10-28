@@ -98,7 +98,7 @@ class Graceful_restart < BGP::OPT_PARM::Capability
   private
   
   def address_family(afi, safi, flags)
-    "AFI #{IANA.afi?(afi)} (#{afi}), SAFI #{IANA.safi?(safi)} (#{safi}), #{address_family_flags(flags)}"
+    "AFI #{IANA.afi_s(afi)}, SAFI #{IANA.safi_s(safi)}, #{address_family_flags(flags)}"
   end
   
   def restart_flag

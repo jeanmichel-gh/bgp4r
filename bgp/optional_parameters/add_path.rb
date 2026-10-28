@@ -113,7 +113,7 @@ module BGP::OPT_PARM::CAP
     def to_s_brief
       families = @af.to_a.sort.collect { |af, sr|
         afi, safi = af
-        "#{IANA.afi?(afi) || afi}, #{IANA.safi?(safi) || safi} #{send_recv_to_s(sr)}"
+        "#{IANA.afi_name(afi)}, #{IANA.safi_name(safi)} #{send_recv_to_s(sr)}"
       }
       families.empty? ? 'Add-path' : "Add-path #{families.join('; ')}"
     end
@@ -122,7 +122,7 @@ module BGP::OPT_PARM::CAP
 
     def address_family_to_s(af, sr)
       afi, safi = af
-      "AFI #{IANA.afi?(afi)} (#{afi}), SAFI #{IANA.safi?(safi)} (#{safi}), #{send_recv_to_s(sr)}"
+      "AFI #{IANA.afi_s(afi)}, SAFI #{IANA.safi_s(safi)}, #{send_recv_to_s(sr)}"
     end
 
     # RFC 7911 section 4: value 1 is "able to receive multiple paths from its

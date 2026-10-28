@@ -38,4 +38,14 @@ class TestBgpOptionalParametersGracefulCapRestart < Test::Unit::TestCase
     assert_match(/AFI IPv4 \(1\), SAFI Multicast \(2\)/, gr.to_s)
     assert_match(/Restart Time 120s/, gr.to_s)
   end
+
+  # Same hole here. An address family in this capability is whatever was
+  # added or arrived, and nothing validates it.
+  def test_an_unnamed_address_family_prints_its_number
+    gr = Graceful_restart.new(0, 120)
+    gr.add(999, 77)
+    assert_match(/AFI 999, SAFI 77/, gr.to_s)
+    gr.add(1, 1)
+    assert_match(/AFI IPv4 \(1\), SAFI Unicast \(1\)/, gr.to_s)
+  end
 end

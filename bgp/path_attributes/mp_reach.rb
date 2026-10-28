@@ -183,7 +183,7 @@ module BGP
     end
 
     def mp_reach
-      "\n    AFI #{IANA.afi?(afi)} (#{afi}), SAFI #{IANA.safi?(safi)} (#{safi})" +
+      "\n    AFI #{IANA.afi_s(afi)}, SAFI #{IANA.safi_s(safi)}" +
       "\n    nexthop: " + nexthops +
       (['']+ @nlris.collect { |nlri| nlri.to_s }).join("\n      ")
     end

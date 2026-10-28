@@ -67,11 +67,11 @@ module BGP::OPT_PARM::CAP
 
     def to_s
       super + "\n    Multiprotocol Extensions (#{CAP_MBGP}), length: 4" +
-      "\n      AFI #{IANA.afi?(@afi)} (#{@afi}), SAFI #{IANA.safi?(@safi)} (#{@safi})"
+      "\n      AFI #{IANA.afi_s(@afi)}, SAFI #{IANA.safi_s(@safi)}"
     end
     
     def to_s_brief
-      "MBGP #{IANA.afi?(@afi)}, #{IANA.safi?(@safi)}"
+      "MBGP #{IANA.afi_name(@afi)}, #{IANA.safi_name(@safi)}"
     end
 
     def to_hash

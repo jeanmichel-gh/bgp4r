@@ -86,4 +86,14 @@ class TestBgpOptionalParametersExtendedNexthop < Test::Unit::TestCase
     e = assert_raise(ArgumentError) { Extended_nexthop.new(['0207050500010001 00'.delete(' ')].pack('H*')) }
     assert_match(/multiple of 6/, e.message)
   end
+
+  # The long form used to interpolate a nil for a family IANA does not
+  # name, where to_s_brief already fell back to the number.
+  def test_an_unnamed_address_family_prints_its_number
+    cap = Extended_nexthop.new(999, 77, 888)
+    assert_match(/AFI 999, SAFI 77, Nexthop AFI 888/, cap.to_s)
+    assert_equal('Extended Next Hop 999, 77 via 888', cap.to_s_brief)
+    assert_match(/AFI IPv4 \(1\), SAFI Unicast \(1\), Nexthop AFI IPv6 \(2\)/,
+                 Extended_nexthop.new(1, 1, 2).to_s)
+  end
 end

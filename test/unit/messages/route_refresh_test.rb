@@ -164,8 +164,14 @@ class Route_refresh_Test < Test::Unit::TestCase
       assert_equal(rr.to_shex, back.to_shex)
     end
   end
+  # An AFI or a SAFI IANA has no name for prints its number. afi= takes
+  # any 2 octet value and safi= any octet, as a negative test needs, and
+  # to_s used to interpolate a nil for one the registry does not name.
+  def test_an_unnamed_address_family_prints_its_number
+    assert_match(/AFI 999, SAFI 77/, Route_refresh.new(999, 77).to_s)
+    assert_match(/AFI IPv4 \(1\), SAFI Unicast \(1\)/, Route_refresh.new(1, 1).to_s)
+  end
 end
-
 
 class Orf_route_refresh_Test < Test::Unit::TestCase
   include BGP
@@ -446,5 +452,11 @@ class Orf_route_refresh_Test < Test::Unit::TestCase
     assert_equal(0, rr.orfs.size)
     assert_nil(rr.when_to_i)
     assert_equal('bogus ()', rr.when_to_s)
+  end
+
+  # The ORF form of the message prints a family too, and had the same hole.
+  def test_an_unnamed_address_family_prints_its_number
+    assert_match(/AFI 999, SAFI 77/, Orf_route_refresh.new(999, 77).to_s)
+    assert_match(/AFI IPv4 \(1\), SAFI Unicast \(1\)/, Orf_route_refresh.new(1, 1).to_s)
   end
 end

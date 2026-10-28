@@ -52,7 +52,7 @@ module BGP
     end
 
     def mp_unreach
-      "\n    AFI #{IANA.afi?(afi)} (#{afi}), SAFI #{IANA.safi?(safi)} (#{safi})" +
+      "\n    AFI #{IANA.afi_s(afi)}, SAFI #{IANA.safi_s(safi)}" +
       (['']+ @nlris.collect { |nlri| nlri.to_s }).join("\n      ")
     end
 
