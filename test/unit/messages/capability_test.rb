@@ -46,15 +46,38 @@ class TestBgpMessagesCapabilityRevision < Test::Unit::TestCase
     rev = BGP::Capability::Revision.advertise_ack_request( 10, DYN_CAP::Mbgp.new(1,1))
     assert_equal '400000000a01000400010001', rev.to_shex
   end
+  # The flags octet of draft-ietf-idr-dynamic-cap-19 section 3. These used
+  # to pass the String 'a cap' as the capability, because nothing checked
+  # it, and so could never print or encode the revision they built. A real
+  # capability tests the same four bit patterns and leaves the revision
+  # usable.
   def test_capability_revision_o1
-    r = BGP::Capability::Revision.new :unset, :unset, :advertise, 0, 'a cap'
+    cap = BGP::OPT_PARM::DYN_CAP::Mbgp.new(1, 1)
+    r = BGP::Capability::Revision.new :unset, :unset, :advertise, 0, cap
     assert_equal 0, r.instance_eval { @o1 }
-    r = BGP::Capability::Revision.new :set, :unset, :advertise, 0, 'a cap'
+    r = BGP::Capability::Revision.new :set, :unset, :advertise, 0, cap
     assert_equal 0x80, r.instance_eval { @o1 }
-    r = BGP::Capability::Revision.new :set, :set, :advertise, 0, 'a cap'
+    r = BGP::Capability::Revision.new :set, :set, :advertise, 0, cap
     assert_equal 0xc0, r.instance_eval { @o1 }
-    r = BGP::Capability::Revision.new :unset, :set, :advertise, 0, 'a cap'
+    r = BGP::Capability::Revision.new :unset, :set, :advertise, 0, cap
     assert_equal 0x40, r.instance_eval { @o1 }
+    # And now it prints and encodes, which it could not before.
+    assert_match(/Advertise/, r.to_s)
+    assert_equal 12, r.encode.bytesize
+  end
+
+  # A revision carries a capability. Something that is not one used to be
+  # kept and then raised NoMethodError from encode or to_s, a long way from
+  # the call that did it.
+  def test_a_revision_refuses_something_that_is_not_a_capability
+    e = assert_raise(ArgumentError) { BGP::Capability::Revision.advertise(10, 'x') }
+    assert_match(/expected a BGP::OPT_PARM::Capability/, e.message)
+    assert_raise(ArgumentError) { BGP::Capability::Revision.remove(10, nil) }
+    # Every one of the six class methods goes through the same check.
+    assert_raise(ArgumentError) { BGP::Capability::Revision.advertise_ack_request(1, 42) }
+    assert_raise(ArgumentError) { BGP::Capability::Revision.advertise_ack_response(1, 42) }
+    assert_raise(ArgumentError) { BGP::Capability::Revision.remove_ack_request(1, 42) }
+    assert_raise(ArgumentError) { BGP::Capability::Revision.remove_ack_response(1, 42) }
   end
   def test_capability_revision_factory
     s = '400000000a01000400010001'
@@ -75,6 +98,33 @@ class TestBgpMessagesCapability < Test::Unit::TestCase
     assert_match(/^(ff){16}001f06000000000a01000400010001/, cap_msg.to_shex)
     cap_msg <<  BGP::Capability::Revision.advertise( 20, DYN_CAP::Mbgp.new(1,2))
     assert_match(/^(ff){16}002b06\s*000000000a01000400010001\s*000000001401000400010002/, cap_msg.to_shex)
+  end
+
+  # The message carries revisions, so add takes revisions. Anything else
+  # used to be dropped to no effect, which built a message with no
+  # revision in it: 19 octets of header a router takes and ignores, and
+  # the caller heard nothing. Same shape and same fix as
+  # Orf_route_refresh#add in #101.
+  def test_add_refuses_something_that_is_not_a_revision
+    msg = BGP::Capability.new
+    e = assert_raise(ArgumentError) { msg << 'not a revision' }
+    assert_match(/expected a Capability::Revision/, e.message)
+    assert_raise(ArgumentError) { msg.add(nil) }
+    assert_raise(ArgumentError) { msg.add(DYN_CAP::Mbgp.new(1, 1)) }
+    assert_equal(19, msg.encode.bytesize, 'and the message is still empty')
+    # The constructor hands its arguments straight to add, so it refuses
+    # too. Not a String, though: a single String is the wire bytes build
+    # path and goes to parse, which is the octet level route staying open.
+    assert_raise(ArgumentError) { BGP::Capability.new(42) }
+  end
+
+  # add returns self, so << chains the way the ORF message's does.
+  def test_add_returns_self_so_it_chains
+    msg = BGP::Capability.new
+    assert_same(msg, msg.add(BGP::Capability::Revision.advertise(10, DYN_CAP::Mbgp.new(1, 1))))
+    msg << BGP::Capability::Revision.advertise(20, DYN_CAP::Mbgp.new(1, 2)) <<
+           BGP::Capability::Revision.advertise(30, DYN_CAP::Mbgp.new(1, 1))
+    assert_equal(3, msg.instance_eval { @tuples }.size)
   end
   def test_new_cap_message_with_dyn_caps
     cap_msg = BGP::Capability.new(
