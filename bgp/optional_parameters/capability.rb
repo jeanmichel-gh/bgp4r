@@ -37,8 +37,8 @@ module BGP::OPT_PARM
             raise ArgumentError
           end
         end
-        def encode
-          super @value
+        def encode(extended: false)
+          super @value, :extended => extended
         end
         def parse(s)
           @value = super(s)
@@ -51,11 +51,17 @@ module BGP::OPT_PARM
       super(OPT_PARM::CAPABILITY)
       @code=code
     end
-    def encode(value='')
+    # The capability itself is a one octet code and a one octet length
+    # (RFC 5492 section 4) whatever the optional parameter around it
+    # looks like: RFC 9072 section 2 widens the Parameter Length and
+    # nothing else, so extended goes to the parameter header and stops
+    # there. A DYN_CAP capability has no parameter header at all, since
+    # it travels in a CAPABILITY message and not in an OPEN.
+    def encode(value='', extended: false)
       if self.class.to_s =~ /BGP::OPT_PARM::DYN_CAP/
         [@code,value.size, value].pack("Cna*")
       else
-        super([@code,value.size, value].pack("CCa*"))
+        super([@code,value.size, value].pack("CCa*"), :extended => extended)
       end
     end
     
@@ -156,8 +162,8 @@ module BGP
           end
         end
 
-        def encode
-          super(@value)
+        def encode(extended: false)
+          super(@value, :extended => extended)
         end
 
         def parse(s)

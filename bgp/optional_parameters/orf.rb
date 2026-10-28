@@ -1,5 +1,5 @@
 #--
-# Copyright 2008, 2009 Jean-Michel Esnault.
+# Copyright 2008, 2009, 2026 Jean-Michel Esnault.
 # All rights reserved.
 # See LICENSE.txt for permissions.
 #
@@ -68,8 +68,8 @@ class Orf < BGP::OPT_PARM::Capability
     @entries << entry
   end
 
-  def encode
-    super(@entries.collect { |e| e.encode }.join)
+  def encode(extended: false)
+    super(@entries.collect { |e| e.encode }.join, :extended => extended)
   end
 
   def parse(s)

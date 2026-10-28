@@ -55,8 +55,8 @@ module BGP::OPT_PARM::CAP
       end
     end
 
-    def encode
-      super(@value)
+    def encode(extended: false)
+      super(@value, :extended => extended)
     end
 
     def parse(s)

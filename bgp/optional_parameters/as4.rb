@@ -36,8 +36,8 @@ class As4 < OPT_PARM::Capability
     end
   end
   
-  def encode()
-    super([@as].pack('N'))
+  def encode(extended: false)
+    super([@as].pack('N'), :extended => extended)
   end
 
   def parse(s)

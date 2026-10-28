@@ -1,5 +1,5 @@
 #--
-# Copyright 2008, 2009 Jean-Michel Esnault.
+# Copyright 2008, 2009, 2026 Jean-Michel Esnault.
 # All rights reserved.
 # See LICENSE.txt for permissions.
 #
@@ -160,6 +160,81 @@ class Open_Test < Test::Unit::TestCase
     open = open_with([AS4_65001])
     assert_equal 1, open.opt_parms.size
     assert_match(/4-octet AS number: 65001/, open.find(OPT_PARM::CAP::As4).to_s)
+  end
+
+  # An OPEN in the extended form of RFC 9072 section 2, Figure 1: one
+  # Capabilities parameter carrying MBGP ipv4 unicast, with the two
+  # octet Parameter Length of Figure 2 there.
+  #
+  #   ff..ff 0029 01                 header
+  #   04 0064 00b4 0a000001          version, AS, holdtime, id
+  #   ff                             Non-Ext OP Len.
+  #   ff                             Non-Ext OP Type
+  #   0009                           Extended Opt. Parm. Length
+  #   02 0006 01 04 00010001         the parameter
+  #
+  # bgp4r read the one octet length inside it, so it took the 00 of 0006
+  # for the whole parameter and then the 06 for the next parameter's
+  # type, and raised "Optional parameter type '6' not implemented" on a
+  # message any RFC 9072 speaker may send.
+  EXTENDED_OPEN = 'ff' * 16 + '002901' +
+                  '04' + '0064' + '00b4' + '0a000001' +
+                  'ff' + 'ff' + '0009' +
+                  '02' + '0006' + '01' + '04' + '00010001'
+
+  def test_rfc9072_an_extended_open_from_the_wire
+    open = nil
+    assert_nothing_raised { open = BGP::Message.factory([EXTENDED_OPEN].pack('H*')) }
+    assert_equal 1, open.opt_parms.size
+    assert open.find(OPT_PARM::CAP::Mbgp), 'the capability must not be lost'
+    assert_equal 1, open.find(OPT_PARM::CAP::Mbgp).afi
+    assert open.extended?
+    assert_equal EXTENDED_OPEN, open.to_shex, 'byte for byte'
+  end
+
+  # Section 2: "an implementation MUST accept an OPEN message that uses
+  # the encoding of this specification" even when the Optional
+  # Parameters are 255 octets or fewer, so the form a message arrived in
+  # is the form it is written back in. Nine octets of parameters would
+  # otherwise be downgraded and no longer match what came in.
+  def test_rfc9072_the_extended_form_survives_a_short_parameter_list
+    open = BGP::Message.factory([EXTENDED_OPEN].pack('H*'))
+    assert_equal EXTENDED_OPEN, Open.new(open.encode).to_shex
+    # And it can be asked for, since building is never validated.
+    built = Open.new(4, 100, 180, '10.0.0.1', OPT_PARM::CAP::Mbgp.new(1,1))
+    assert !built.extended?
+    built.extended = true
+    assert_equal EXTENDED_OPEN, built.to_shex
+  end
+
+  # Section 2 on the Non-Ext OP Len. octet: it "MUST NOT be set to 0; it
+  # MUST be ignored on receipt once the use of the extended format is
+  # determined positively", and of the Non-Ext OP Type octet after it:
+  # "On receipt, a value of 255 for this field is the indication that
+  # the extended format is in use." So that second octet alone decides.
+  # bgp4r used to require 255 in both and read this as RFC 4271.
+  def test_rfc9072_only_the_non_ext_op_type_octet_decides
+    open = BGP::Message.factory([EXTENDED_OPEN.sub('ffff0009', '0cff0009')].pack('H*'))
+    assert open.extended?
+    assert open.find(OPT_PARM::CAP::Mbgp)
+    # It is written back with the 255 section 2 recommends on
+    # transmission, which is the one difference from what arrived.
+    assert_equal EXTENDED_OPEN, open.to_shex
+  end
+
+  # The boundary. 255 octets of parameters stay in the RFC 4271 form,
+  # with an Optional Parameters Length of 0xff that must not be taken
+  # for the sentinel, because the octet after it is the parameter type.
+  # One octet more and only the extended form can carry it.
+  def test_rfc9072_the_255_octet_boundary
+    [[251, false], [252, true]].each do |value_size, extended|
+      open = Open.new(4, 100, 180, '10.0.0.1',
+                      OPT_PARM::CAP::Unknown.new(100, 'a' * value_size))
+      assert_equal extended, Open.new(open.encode).extended?, value_size.to_s
+      assert_equal open.to_shex, Open.new(open.encode).to_shex, value_size.to_s
+    end
+    short = Open.new(4, 100, 180, '10.0.0.1', OPT_PARM::CAP::Unknown.new(100, 'a' * 251))
+    assert_match(/0a000001ff02fd64fb6161/, short.to_shex, '255 octets, one octet length')
   end
 
   # A length that runs past the parameter stops the walk rather than

@@ -1,5 +1,5 @@
 #--
-# Copyright 2008, 2009 Jean-Michel Esnault.
+# Copyright 2008, 2009, 2026 Jean-Michel Esnault.
 # All rights reserved.
 # See LICENSE.txt for permissions.
 #
@@ -57,8 +57,8 @@ module BGP::OPT_PARM::CAP
     
     attr_reader :afi, :safi
     
-    def encode
-      super([@afi,0,@safi].pack('nCC'))
+    def encode(extended: false)
+      super([@afi,0,@safi].pack('nCC'), :extended => extended)
     end
 
     def parse(s)
