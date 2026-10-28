@@ -1,5 +1,5 @@
 #--
-# Copyright 2011 Jean-Michel Esnault.
+# Copyright 2011, 2026 Jean-Michel Esnault.
 # All rights reserved.
 # See LICENSE.txt for permissions.
 #
@@ -40,5 +40,29 @@ class TestBgpIana < Test::Unit::TestCase
     assert_equal 5, IANA.safi?(:mcast_vpn)
     assert_equal 64, IANA.safi?(:tunnel)
     assert_equal 65, IANA.safi?(:vpls)
+  end
+  # The display forms. afi? and safi? answer nil for a code point the
+  # registries here do not name, and every printer in bgp4r interpolated
+  # that nil, so an unnamed family came out as nothing at all.
+  def test_the_name_of_a_family_the_registries_do_not_name_is_its_number
+    # The long form, name and number, which is what the printers show.
+    assert_equal 'IPv4 (1)', IANA.afi_s(1)
+    assert_equal 'L2VPN (25)', IANA.afi_s(25)
+    assert_equal 'Unicast (1)', IANA.safi_s(1)
+    assert_equal 'Labeled VPN Unicast (128)', IANA.safi_s(128)
+    # With no name there is no point in the parentheses: the number once.
+    assert_equal '999', IANA.afi_s(999)
+    assert_equal '77', IANA.safi_s(77)
+    assert_equal '0', IANA.afi_s(0)
+    assert_equal '65535', IANA.safi_s(65535)
+    # The brief form is the name or the number, with no parentheses.
+    assert_equal 'IPv4', IANA.afi_name(1)
+    assert_equal 'Unicast', IANA.safi_name(1)
+    assert_equal 999, IANA.afi_name(999)
+    assert_equal 77, IANA.safi_name(77)
+    # And afi? and safi? still answer nil, which is what a caller asking
+    # whether a family has a name needs.
+    assert_nil IANA.afi?(999)
+    assert_nil IANA.safi?(77)
   end
 end

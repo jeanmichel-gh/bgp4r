@@ -39,6 +39,36 @@ module IANA
   def self.afis
     @h_afis ||= AFI.set_h_afis
   end
+  # For display, where afi? and safi? answer nil. An AFI or a SAFI the
+  # registries below do not name used to print as nothing at all, so
+  # "AFI 999, SAFI 77" came out "AFI  (999), SAFI  (77)" and the brief
+  # form of the Multiprotocol capability came out "MBGP , ". Building is
+  # never validated, so any AFI and any SAFI can be sent, which makes an
+  # unnamed one ordinary rather than a corner case: IANA has over 16000
+  # AFI code points unassigned and bgp4r names 25.
+  #
+  # afi_name and safi_name give the name there is, or the number itself,
+  # which is the brief form. afi_s and safi_s add the number in
+  # parentheses, which is the long form every capability and message
+  # prints, and leave the parentheses out where the name would be the
+  # number again. Every named family prints exactly as it did.
+  def self.afi_name(arg)
+    afi?(arg) || arg
+  end
+  def self.safi_name(arg)
+    safi?(arg) || arg
+  end
+  def self.afi_s(arg)
+    name_with_number(afi?(arg), arg)
+  end
+  def self.safi_s(arg)
+    name_with_number(safi?(arg), arg)
+  end
+  def self.name_with_number(name, number)
+    name ? "#{name} (#{number})" : number.to_s
+  end
+  private_class_method :name_with_number
+
   def self.safi?(arg)
     case arg
     when SAFI::UNICAST            ; 'Unicast'

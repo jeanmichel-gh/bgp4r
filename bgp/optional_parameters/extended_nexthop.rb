@@ -106,7 +106,7 @@ module BGP::OPT_PARM::CAP
     def to_s
       super + "\n    Extended Next Hop Encoding (#{CAP_EXTENDED_NEXTHOP}), length: #{@families.size*6}" +
       @families.collect { |afi, safi, nh|
-        "\n      AFI #{IANA.afi?(afi)} (#{afi}), SAFI #{IANA.safi?(safi)} (#{safi}), Nexthop AFI #{IANA.afi?(nh)} (#{nh})"
+        "\n      AFI #{IANA.afi_s(afi)}, SAFI #{IANA.safi_s(safi)}, Nexthop AFI #{IANA.afi_s(nh)}"
       }.join
     end
 
@@ -118,7 +118,7 @@ module BGP::OPT_PARM::CAP
     # the whole content of the capability, so the brief form keeps it.
     def to_s_brief
       families = @families.collect { |afi, safi, nh|
-        "#{IANA.afi?(afi) || afi}, #{IANA.safi?(safi) || safi} via #{IANA.afi?(nh) || nh}"
+        "#{IANA.afi_name(afi)}, #{IANA.safi_name(safi)} via #{IANA.afi_name(nh)}"
       }
       families.empty? ? 'Extended Next Hop' : "Extended Next Hop #{families.join('; ')}"
     end

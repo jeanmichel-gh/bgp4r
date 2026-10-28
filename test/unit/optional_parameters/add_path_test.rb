@@ -108,4 +108,12 @@ class TestBgpOptionalParametersAddPath < Test::Unit::TestCase
     assert_match(/SEND \(2\)/, Add_path.new(:send, 1, 1).to_s)
     assert_match(/SEND_AND_RECV \(3\)/, Add_path.new(:send_and_recv, 1, 1).to_s)
   end
+
+  # Same hole in the long form, where to_s_brief already fell back.
+  def test_an_unnamed_address_family_prints_its_number
+    cap = Add_path.new(:send_and_recv, 999, 77)
+    assert_match(/AFI 999, SAFI 77, SEND_AND_RECV \(3\)/, cap.to_s)
+    assert_match(/999, 77 SEND_AND_RECV/, cap.to_s_brief)
+    assert_match(/AFI IPv4 \(1\), SAFI Unicast \(1\)/, Add_path.new(:send, 1, 1).to_s)
+  end
 end

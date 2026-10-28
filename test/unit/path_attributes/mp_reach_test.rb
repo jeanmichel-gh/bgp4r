@@ -179,7 +179,7 @@ class Mp_reach_Test < Test::Unit::TestCase
   def test_afi_3_safi_1_ipv4_mapped_nexthops_ntoh
     
     # Mp Reach (14), length: 27, Flags [O]: 
-    #     AFI  (3), SAFI Unicast (1)
+    #     AFI NSAP (3), SAFI Unicast (1)
     #     nexthop: 10.0.0.1
     #       49.0001.0002.0003.0004.0005.0006
     #    0x0000:  0003 0108 4700 0601 0a00 0001 0068 4900
@@ -237,7 +237,7 @@ class Mp_reach_Test < Test::Unit::TestCase
   def test_afi_3_safi_1_ipv6_mapped_nexthops_ntoh
 
     # Mp Reach (14), length: 57, Flags [O]: 
-    #     AFI  (3), SAFI Unicast (1)
+    #     AFI NSAP (3), SAFI Unicast (1)
     #     nexthop: 2011::1, 2011::2
     #       49.0001.0002.0003.0004.0005.0006
     #    0x0000:  0003 0126 3500 0020 1100 0000 0000 0000

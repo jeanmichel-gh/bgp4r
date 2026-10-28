@@ -122,7 +122,7 @@ class Route_refresh < Message
   
   def to_s
     msg = self.encode
-    "Route Refresh (#{ROUTE_REFRESH}), length: #{msg.size}\n" +   "AFI #{IANA.afi?(@afi)} (#{@afi}), SAFI #{IANA.safi?(@safi)} (#{@safi}), subtype #{subtype_to_s}"
+    "Route Refresh (#{ROUTE_REFRESH}), length: #{msg.size}\n" +   "AFI #{IANA.afi_s(@afi)}, SAFI #{IANA.safi_s(@safi)}, subtype #{subtype_to_s}"
   end
 end
 
@@ -288,7 +288,7 @@ class Orf_route_refresh < Message
   def to_s
     msg = self.encode
     "ORF Route Refresh (#{ROUTE_REFRESH}), length: #{msg.size}\n" +   
-    "AFI #{IANA.afi?(@afi)} (#{@afi}), SAFI #{IANA.safi?(@safi)} (#{@safi}), when-to-refresh #{when_to_s}:\n" +
+    "AFI #{IANA.afi_s(@afi)}, SAFI #{IANA.safi_s(@safi)}, when-to-refresh #{when_to_s}:\n" +
     @orfs.collect { |orf| orf.to_s}.join("\n")
   end
   
