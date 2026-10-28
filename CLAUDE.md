@@ -67,6 +67,11 @@ A table fed by a real session over loopback, the whole path from socket to Loc-R
 ruby -I. test/functional/rib_feed_test.rb
 ```
 
+Three speakers over loopback, so a route crosses a bgp4r router and comes out with the export rules applied: transit and route reflection.
+```
+ruby -I. test/functional/rib_router_test.rb
+```
+
 Lab tests (the Compose ones skip without Docker):
 ```
 ruby test/run_lab.rb
@@ -497,7 +502,40 @@ Neighbor ◀──UPDATE── Adj-RIB-Out (per peer) ◀───────�
         section 9.2.1.1, so a change goes out as soon as it is decided.
         That is the next piece, with the route reflector client matrix of
         RFC 4456 section 6 and routes we originate ourselves.
-   4. **Route reflector and transit lab topologies. Not started.**
+   4. **Route reflection and transit, over loopback. Done**, in #128.
+      `test/functional/rib_router_test.rb` runs three speakers: one Table
+      with two Neighbors is what makes a router, since a Neighbor holds one
+      session. A route crosses it and comes out the far side with the
+      export rules applied, which is what the recorded plan wanted the
+      Compose topologies to show.
+      * Transit: a route from one external peer reaches another with our AS
+        in front of theirs and our address as the next hop, read off the
+        wire on the far side. Route reflection: an internal peer's route
+        reaches another internal peer only with `route_reflector`, and
+        arrives with the ORIGINATOR_ID and CLUSTER_LIST of RFC 4456 section
+        8 and an unchanged AS_PATH and NEXT_HOP. Neither of those two
+        attributes leaves the AS. Withdrawals cross too, and so does a
+        session dropping, which withdraws its routes from the other peer.
+      * **A peer is identified by its address**, and `PeerAdapter` builds
+        the `Peer` from the Neighbor's configured `remote_addr`, not from
+        the accepted socket. Two listeners both configured 127.0.0.1 are
+        one `Peer` as far as the table is concerned, which collapses the
+        Adj-RIB-Outs into one and makes every route look like it is going
+        back to its sender. All six tests failed that way first. On a real
+        network two peers have two addresses; over loopback they have to be
+        given them, so each listener gets its own 127.0.0.x.
+      * Named in `.github/workflows/test.yml`, which lists each functional
+        test by hand.
+   5. **The Compose topologies against GoBGP. Not started**, and blocked
+      on a Docker daemon rather than on the code: the sandbox this was
+      written in has the client and `docker compose` but no daemon, so the
+      five `lab/topologies/fault-matrix` Compose tests are omitted there
+      too. Writing a GoBGP topology that cannot be run once would be
+      shipping an interop claim nobody has checked, which is the same
+      mistake as an unread RFC citation. What it still buys over the
+      loopback tests above is a second implementation's opinion: that GoBGP
+      accepts our reflected route, and its CLUSTER_LIST and ORIGINATOR_ID,
+      rather than only that bgp4r agrees with itself.
 4. **FIB adapters and the Linux lab test. Not started**, about 2 PRs. The FIB
    is the kernel routing table and is a separate, optional adapter: Linux
    only, so it runs in a container, with a dedicated routing table, routes
