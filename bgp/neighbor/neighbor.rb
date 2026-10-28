@@ -25,6 +25,11 @@ require 'thread'
 require 'bgp/observable'
 require 'bgp/io'
 require 'bgp/neighbor/add_path_cap'
+# CAPABILITIES below names every capability class, so they have to be
+# loaded by the time this file is. The dependency was always here, in the
+# body of capability, and was met only because a caller had required
+# bgp4r.rb first.
+require 'bgp/optional_parameters/capabilities'
 
 module BGP
   class Neighbor
@@ -125,25 +130,54 @@ module BGP
       end
     end
     
-    def capability(*args)
+    # Every capability bgp4r implements, under the names a script or a lab
+    # topology can ask for. A new capability goes in here, not in a case
+    # inside a method: the names used to live in two of them and in
+    # lab/speaker.rb, and all three fell behind the library. By the time
+    # this table replaced them, capability 9 (RFC 9234 Role), capability 70
+    # (RFC 7313 Enhanced Route Refresh), ADD-PATH, ORF and Dynamic
+    # Capability could not be named at all, though bgp4r builds and parses
+    # each of them.
+    #
+    # The duplicated values are the spellings that already worked, kept so
+    # no caller breaks. Each class takes whatever arguments follow the
+    # name, so capability(:mbgp, :ipv4, :unicast) and capability(:role,
+    # :customer) read the same way, and nothing here validates: a Role or
+    # an ORF type no RFC defines still goes on the wire.
+    CAPABILITIES = {
+      :route_refresh          => OPT_PARM::CAP::Route_refresh,
+      :rr                     => OPT_PARM::CAP::Route_refresh,
+      :enhanced_route_refresh => OPT_PARM::CAP::Enhanced_route_refresh,
+      :mbgp                   => OPT_PARM::CAP::Mbgp,
+      :as4                    => OPT_PARM::CAP::As4,
+      :as4_byte               => OPT_PARM::CAP::As4,
+      :as4byte                => OPT_PARM::CAP::As4,
+      :'4byte_as'             => OPT_PARM::CAP::As4,
+      :four_byte_as           => OPT_PARM::CAP::As4,
+      :four_octet_as          => OPT_PARM::CAP::As4,
+      :graceful_restart       => OPT_PARM::CAP::Graceful_restart,
+      :gr                     => OPT_PARM::CAP::Graceful_restart,
+      :extended_nexthop       => OPT_PARM::CAP::Extended_nexthop,
+      :extended_next_hop      => OPT_PARM::CAP::Extended_nexthop,
+      :add_path               => OPT_PARM::CAP::Add_path,
+      :role                   => OPT_PARM::CAP::Role,
+      :orf                    => OPT_PARM::CAP::Orf,
+      :dynamic                => OPT_PARM::CAP::Dynamic,
+    }.freeze
 
-      @opt_parms << if args[0].is_a?(Symbol)
-        case args[0]
-        when :route_refresh, :rr
-          OPT_PARM::CAP::Route_refresh.new(*args[1..-1])
-        when :mbgp
-          OPT_PARM::CAP::Mbgp.new(*args[1..-1])
-        when :as4_byte, :as4byte, :as4
-          OPT_PARM::CAP::As4.new(@my_as)
-        when :gr, :graceful_restart
-          OPT_PARM::CAP::Graceful_restart.new(*args[1..-1])
-        when :extended_nexthop, :extended_next_hop
-          # RFC 8950 section 4. With no family, IPv4 unicast with IPv6 next hops.
-          fam = args[1..-1]
-          OPT_PARM::CAP::Extended_nexthop.new(*(fam.empty? ? [1, 1, 2] : fam))
-        else
-          raise ArgumentError, "Invalid argument #{args.inspect}", caller
-        end        
+    # Add a capability to the OPEN this neighbor sends. Three ways:
+    #
+    #   neighbor.capability :route_refresh
+    #   neighbor.capability :mbgp, :ipv6, :unicast
+    #   neighbor.capability :mbgp_ipv6_unicast
+    #   neighbor.capability :role, :customer
+    #   neighbor.capability BGP::OPT_PARM::CAP::Role.new(:customer)
+    #
+    # A String name works too, since a lab topology reads its names out of
+    # YAML. CAPABILITIES has the names.
+    def capability(*args)
+      @opt_parms << if args[0].is_a?(Symbol) or args[0].is_a?(String)
+        build_capability(args[0], args[1..-1])
       elsif args[0].is_a?(OPT_PARM::Capability)
         args[0]
       else
@@ -151,19 +185,67 @@ module BGP
       end
     end
     alias :add_cap :capability
-    
+
+    # A name no capability answers to. An ArgumentError, so a caller that
+    # rescues ArgumentError still catches it, but a class of its own, so
+    # method_missing can tell it from a capability class refusing the
+    # arguments it was given: capability_role with no Role to send is a
+    # missing argument, not a missing method.
+    class UnknownCapability < ArgumentError ; end
+
+    # One capability from a name and the arguments that follow it. Shared by
+    # capability, by the capability_<name> form method_missing takes, and by
+    # a lab topology, so all three know the same names.
+    def build_capability(name, args=[])
+      name = name.to_s
+      klass = CAPABILITIES[name.to_sym]
+      if klass == OPT_PARM::CAP::As4
+        # The AS is ours, so a caller never passes it.
+        OPT_PARM::CAP::As4.new(@my_as)
+      elsif klass == OPT_PARM::CAP::Extended_nexthop and args.empty?
+        # RFC 8950 section 4. With no family, IPv4 unicast with IPv6 next hops.
+        OPT_PARM::CAP::Extended_nexthop.new(1, 1, 2)
+      elsif klass
+        klass.new(*args)
+      elsif name =~ /\Ambgp_(.+)\z/
+        mbgp_capability($1)
+      else
+        # One name per capability rather than all of them, so the aliases
+        # do not crowd out the list.
+        names = CAPABILITIES.group_by { |_, kl| kl }.collect { |_, pairs| pairs.first.first }
+        raise UnknownCapability,
+              "no capability is named #{name.inspect}. The names are " +
+              "#{names.join(', ')}, and mbgp_<afi>_<safi>.", caller
+      end
+    end
+    private :build_capability
+
+    # mbgp_ipv6_unicast and the rest: the address family is in the name, and
+    # Mbgp's own method_missing reads it through IANA.afi? and IANA.safi?.
+    # The respond_to? test keeps a name like mbgp_factory out of send, which
+    # the method_missing this replaced did not.
+    def mbgp_capability(family)
+      raise UnknownCapability, "no address family is named #{family.inspect}", caller if
+        OPT_PARM::CAP::Mbgp.respond_to?(family)
+      OPT_PARM::CAP::Mbgp.send(family)
+    rescue NoMethodError
+      raise UnknownCapability, "no address family is named #{family.inspect}", caller
+    end
+    private :mbgp_capability
+
     def method_missing(name, *args, &block)
       if name.to_s =~ /^(capability|add_capability)_(.+)$/
-        r = $2.dup
-        @opt_parms << if r =~ /mbgp_(.+)/
-          OPT_PARM::CAP::Mbgp.send $1
-        elsif r =~ /(rr|route_refresh)/
-          OPT_PARM::CAP::Route_refresh.new( *args)
-        elsif r =~ /(4byte_as|as4byte|four_(byte|octet)_as)/
-          OPT_PARM::CAP::As4.new(@my_as)
-        elsif r =~ /(gr|graceful_restart)/
-          OPT_PARM::CAP::Graceful_restart.new( *args)
-        else
+        # The name itself is the capability, so it goes through the one
+        # table too. It used to go through a second, shorter list of four
+        # regular expressions, matched as substrings, and
+        # capability_enhanced_route_refresh contains "route_refresh": it
+        # built capability 2 where 70 was asked for, 02020200 instead of
+        # 02024600, and said nothing. A name that matches no capability
+        # raises NoMethodError now, as it always did for a name the list
+        # did not hold.
+        begin
+          @opt_parms << build_capability($2, args)
+        rescue UnknownCapability
           super
         end
       else
