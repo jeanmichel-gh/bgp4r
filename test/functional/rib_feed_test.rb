@@ -191,4 +191,104 @@ class RibFeedTest < Test::Unit::TestCase
            "candidates: #{@rib.candidates('10.1.0.0/16').size}")
     assert_equal(9, @rib.best('10.1.0.0/16').path_id, 'the other path took over')
   end
+
+  # Router mode over a real session: the first time a bgp4r speaker has
+  # advertised its own Loc-RIB to a peer. The client collects what arrives.
+  class Catcher
+    def updates ; @updates ||= [] ; end
+    def update(m) ; updates << m if m.is_a?(BGP::Update) ; end
+  end
+
+  # A route learned from an internal peer, so the external client may have it.
+  def internal_route(prefix = '10.1.0.0/16', attrs = nil)
+    peer = BGP::Rib::Peer.new(:address => '10.9.9.9', :remote_as => SERVER_AS,
+                              :router_id => '9.9.9.9', :local_as => SERVER_AS)
+    attrs ||= [BGP::Origin.new(0), BGP::Next_hop.new('10.9.9.9'), BGP::Local_pref.new(300)]
+    BGP::Rib::Route.new(prefix, BGP::Path_attribute.new(*attrs), peer)
+  end
+
+  def advertising_session
+    @catcher = Catcher.new
+    @port = start_server
+    @rib = BGP::Rib.new(:local_as => SERVER_AS, :router_id => '0.0.0.1')
+    @changes = []
+    @rib.on_change { |c| @changes << c }
+    @adapter = @rib.attach(@s)
+    @router = @rib.advertise
+    @c = BGP::Neighbor.new(4, CLIENT_AS, 180, '0.0.0.2', '127.0.0.1', '127.0.0.1')
+    @c.add_observer @catcher
+    @c.start :port => @port
+    assert(wait_for { @s.is_established? }, 'the session came up')
+    assert(wait_for { @rib.drain }, 'and the initial advertisement is flushed')
+  end
+
+  def test_a_speaker_advertises_its_loc_rib_over_a_real_session
+    advertising_session
+    @rib.announce(internal_route)
+    assert(wait_for { @rib.drain && @catcher.updates.size == 1 },
+           "the client got #{@catcher.updates.size}")
+
+    u = @catcher.updates.first
+    assert_equal(['10.1.0.0/16'], u.nlri.to_ary)
+    # RFC 4271 section 5.1.2: our AS, prepended. The route came from inside
+    # our AS with an empty AS_PATH, so this is the section's empty case.
+    assert_equal(SERVER_AS.to_s, u.path_attribute[BGP::As_path].as_path)
+    # Section 5.1.3: our address on the session, not the one it arrived with.
+    assert_equal('127.0.0.1', u.path_attribute[BGP::Next_hop].next_hop)
+    # Section 5.1.5: never to an external peer.
+    assert(!u.path_attribute.has?(BGP::Local_pref))
+    assert_equal(1, @router.sent)
+    assert_equal([], @router.skipped)
+  end
+
+  def test_a_withdrawal_reaches_the_peer_over_a_real_session
+    advertising_session
+    @rib.announce(internal_route)
+    assert(wait_for { @rib.drain && @catcher.updates.size == 1 })
+    peer = BGP::Rib::Peer.new(:address => '10.9.9.9', :remote_as => SERVER_AS,
+                              :router_id => '9.9.9.9', :local_as => SERVER_AS)
+    @rib.withdraw(peer, '10.1.0.0/16')
+    assert(wait_for { @rib.drain && @catcher.updates.size == 2 },
+           "the client got #{@catcher.updates.size}")
+    assert_equal(['10.1.0.0/16'], @catcher.updates.last.withdrawn.to_ary)
+  end
+
+  # Prefixes that share attributes travel in one UPDATE, which is what the
+  # builder is for, and this is it happening on a socket.
+  def test_prefixes_sharing_attributes_arrive_in_one_update
+    advertising_session
+    attrs = [BGP::Origin.new(0), BGP::Next_hop.new('10.9.9.9'), BGP::Local_pref.new(300)]
+    @rib.synchronize do
+      %w[10.1.0.0/16 10.2.0.0/16 10.3.0.0/16].each { |p| @rib.announce(internal_route(p, attrs)) }
+    end
+    wanted = %w[10.1.0.0/16 10.2.0.0/16 10.3.0.0/16]
+    arrived = []
+    assert(wait_for do
+      @rib.drain
+      arrived = @catcher.updates.flat_map { |u| u.nlri ? u.nlri.to_ary : [] }
+      arrived.size == wanted.size
+    end, "arrived: #{arrived.inspect}")
+    assert_equal(wanted, arrived.sort)
+    assert(@catcher.updates.size <= 3, 'and not more messages than prefixes')
+  end
+
+  # The Adj-RIB-Out is what stops the same thing going twice.
+  def test_the_same_route_again_sends_nothing
+    advertising_session
+    @rib.announce(internal_route)
+    assert(wait_for { @rib.drain && @catcher.updates.size == 1 })
+    @rib.announce(internal_route)
+    assert(@rib.drain)
+    assert_equal(1, @router.sent, 'nothing changed for this peer')
+  end
+
+  # A route the client itself sent must not come back to it.
+  def test_a_route_from_the_client_is_not_sent_back_to_it
+    advertising_session
+    @c.send_update BGP::Update.new(path_attribute, BGP::Nlri.new('10.7.0.0/16'))
+    assert(wait_for { @rib.drain && @rib.loc_rib.size == 1 }, 'it reached the table')
+    assert(@rib.drain)
+    assert_equal(0, @router.sent)
+    assert_equal([[:back_to_sender]], @router.skipped.map { |s| [s.last] })
+  end
 end

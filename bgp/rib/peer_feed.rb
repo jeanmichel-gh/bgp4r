@@ -66,7 +66,10 @@ module BGP
         @lock.synchronize do
           @adapters[neighbor] ||= begin
             start_worker
-            PeerAdapter.new(neighbor, self)
+            adapter = PeerAdapter.new(neighbor, self)
+            # Router mode, if it is on, watches this session too.
+            @table.router&.watch(adapter)
+            adapter
           end
         end
       end
@@ -158,6 +161,12 @@ module BGP
           end
         when :peer_down
           @table.peer_down(work[1])
+        when :advertise
+          @table.router&.run_changes(work[1])
+        when :session_up
+          @table.router&.session_up(work[1])
+        when :session_down
+          @table.router&.session_down(work[1])
         when :sync
           work[1] << true
         else
