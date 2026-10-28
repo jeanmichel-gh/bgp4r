@@ -24,6 +24,7 @@ require 'bgp/rib/adj_rib_in'
 require 'bgp/rib/loc_rib'
 require 'bgp/rib/peer_feed'
 require 'bgp/rib/router'
+require 'bgp/rib/show'
 
 module BGP
   module Rib
@@ -213,6 +214,16 @@ module BGP
         pa = path_attribute || Path_attribute.new(Origin.new(origin), As_path.new,
                                                   Next_hop.new(router_id))
         announce(Route.new(prefix, pa, local_peer, :path_id => path_id))
+      end
+
+      # The Loc-RIB written out the way a router prints it. See Show: the
+      # output is in the style of those commands and not a copy of them.
+      #
+      #   puts rib.show                        # IOS, show ip bgp
+      #   puts rib.show(:junos)                # Junos, show route detail
+      #   puts rib.show(:junos, '10.0.0.0/8')  # one prefix, and why paths lost
+      def show(style = :ios, prefix = nil)
+        Show.new(self, :style => style).to_s(prefix)
       end
 
       # Every prefix we originated, as the Loc-RIB knows them.

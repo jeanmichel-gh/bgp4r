@@ -24,7 +24,8 @@ bgp/rib/                 routes and the decision process (RFC 4271 section 9); r
                          export.rb decides what goes to a peer and what its attributes become,
                          adj_rib_out.rb records what was sent, update_builder.rb packs
                          prefixes into UPDATEs, router.rb joins them and sends;
-                         rib.advertise; see "Where the work is going"
+                         rib.advertise; show.rb prints the Loc-RIB the way a router
+                         would, rib.show; see "Where the work is going"
 bgp/misc/                extras: route_generator.rb (many prefixes packed in UPDATEs), live_feed.rb (a client for an old public BGP feed)
 docs/                    protocol-testing.md: using bgp4r to test a router
 examples/                runnable scripts
@@ -89,7 +90,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. A `lab` job runs the Compose topologies.
 
-Baseline on 2026-10-28: 1123 tests, 20793 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.2%.
+Baseline on 2026-10-28: 1146 tests, 20846 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.3%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -302,8 +303,8 @@ why none of them blocked this phase.
 
 Phase 2, the peer adapter, came next and is **Done**: a table is fed from a
 live session. So is phase 3, the export side, apart from one part blocked on
-a Docker daemon. The next work is **phase 4, the FIB adapters and the show
-commands**, and the show commands half of it needs no container.
+a Docker daemon. Phase 4's show commands are done for IOS and Junos; what is
+left of that phase is the FIB adapter, which needs a container.
 
 ### RIB and FIB, five phases
 
@@ -604,13 +605,43 @@ Neighbor ◀──UPDATE── Adj-RIB-Out (per peer) ◀───────�
       loopback tests above is a second implementation's opinion: that GoBGP
       accepts our reflected route, and its CLUSTER_LIST and ORIGINATOR_ID,
       rather than only that bgp4r agrees with itself.
-4. **FIB adapters and the Linux lab test. Not started**, about 2 PRs. The FIB
-   is the kernel routing table and is a separate, optional adapter: Linux
-   only, so it runs in a container, with a dedicated routing table, routes
-   marked `proto bgp`, removed on exit, and never with `--network host`. This
-   phase also carries the show commands: IOS, IOS-XR and Junos style output
-   for routes and the Loc-RIB. The decision result already holds what they
-   need, including the Junos "Inactive reason" line.
+4. **FIB adapters, and the show commands. In progress.**
+   1. **The show commands. Done for IOS and Junos**, in #132.
+      `bgp/rib/show.rb`, reached as `rib.show`, `rib.show(:junos)` and
+      `rib.show(:junos, prefix)`. The decision result already held what
+      they needed, including the Junos "Inactive reason" line.
+      * **These are in the style of those commands, not copies.** Two
+        things are reproduced from samples in the vendors' own
+        documentation: the IOS header, legend and column layout, and the
+        Junos detail shape with its Preference, State and Inactive reason
+        lines. Nothing here has been diffed against a real device, so no
+        test anywhere should depend on this text byte for byte.
+      * **IOS-XR is not done**, and that is the honest gap: no sample of
+        its `show bgp` output could be found to check against, and
+        inventing a format while calling it IOS-XR is worse than not
+        having it. The plan named three styles; two are real.
+      * Only three Junos "Inactive reason" strings are Junos's own, from
+        its sample output: Local Preference, IGP metric and the Interior
+        over Exterior one. Every other step prints bgp4r's symbol in
+        snake_case, `router_id` rather than `Router ID`, so an invention
+        cannot be read as a quote from a router. `:med` is deliberately
+        **not** labelled "IGP metric": that reason is the IGP cost to the
+        next hop, which is `:igp_cost`.
+      * Two details came out of the samples rather than from memory. A
+        locally originated route prints `0.0.0.0` as its next hop and a
+        weight of 32768, where a learned route gets 0. And the Junos
+        preference is `170/-(localpref+1)`, which its sample shows as
+        170/-201 for localpref 200.
+      * The column test measures each field at the offset its own heading
+        sits at, so the header is the source of truth. It also pins that
+        the LocPrf column is blank for an external peer's route, which is
+        RFC 4271 section 5.1.5 and `Table#import` showing through.
+   2. **The FIB adapter and the Linux lab test. Not started**, about 2 PRs,
+      and blocked the same way part 7 of phase 3 is: the FIB is the kernel
+      routing table, so it runs in a container, with a dedicated routing
+      table, routes marked `proto bgp`, removed on exit, and never with
+      `--network host`. There is no Docker daemon in the sandbox this was
+      written in.
 5. **FRR as a reference in the lab. Not started.**
 
 Decisions already taken that constrain the later phases:
