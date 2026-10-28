@@ -54,4 +54,61 @@ class Route_refresh_cap_Test < Test::Unit::TestCase
       assert_equal({:code=>code}, cap.to_hash)
     end
   end
+
+  # The capability carries no value, so there is nothing to build from
+  # field values but the code. All three paths have to work even so, and
+  # the wire path used to be the broken one: the factory handed this class
+  # the capability code rather than the octets, and handed the octets
+  # directly it put the String in @code and took encode down.
+  def test_the_three_build_paths
+    from_fields = BGP::OPT_PARM::CAP::Route_refresh.new
+    from_wire   = BGP::OPT_PARM::CAP::Route_refresh.new(['02020200'].pack('H*'))
+    from_hash   = BGP::OPT_PARM::CAP::Route_refresh.new(from_fields.to_hash)
+    [from_fields, from_wire, from_hash].each do |cap|
+      assert_equal '02020200', cap.to_shex
+      assert_equal({ :code => 2 }, cap.to_hash)
+    end
+    # And the Cisco code through each of them.
+    assert_equal '02028000', BGP::OPT_PARM::CAP::Route_refresh.new(128).to_shex
+    assert_equal '02028000', BGP::OPT_PARM::CAP::Route_refresh.new(['02028000'].pack('H*')).to_shex
+    assert_equal '02028000', BGP::OPT_PARM::CAP::Route_refresh.new(:code => 128).to_shex
+  end
+
+  # RFC 2918 section 3 gives the capability a zero length, so a value is
+  # wrong by the RFC. An implementation that sends one still has to be
+  # readable: the octets are kept and written back rather than dropped.
+  def test_a_value_the_rfc_does_not_allow_is_kept
+    wire = '0203' + '02' + '01' + '41'
+    cap = BGP::OPT_PARM::CAP::Route_refresh.new([wire].pack('H*'))
+    assert_equal wire, cap.to_shex, 'byte for byte what arrived'
+    assert_equal({ :code => 2, :value => '41' }, cap.to_hash)
+    assert_equal wire, BGP::OPT_PARM::CAP::Route_refresh.new(cap.to_hash).to_shex
+    assert_match(/length: 3/, cap.to_s)
+    assert_equal '41', cap.value.unpack1('H*')
+  end
+
+  # The factory used to hand this class the capability code, so the 41
+  # above reached nothing and no complaint was made about it either.
+  def test_the_factory_keeps_a_value
+    cap = BGP::OPT_PARM::Capability.factory(['0203020141'].pack('H*'))
+    assert_instance_of BGP::OPT_PARM::CAP::Route_refresh, cap
+    assert_equal '0203020141', cap.to_shex
+    assert_equal({ :code => 2, :value => '41' }, cap.to_hash)
+    cisco = BGP::OPT_PARM::Capability.factory(['02028000'].pack('H*'))
+    assert_instance_of BGP::OPT_PARM::CAP::Route_refresh, cisco
+    assert_equal 128, cisco.to_hash[:code]
+  end
+
+  # draft-ietf-idr-dynamic-cap-19 section 3: in a Capability message the
+  # capability has a one octet code and a two octet length, so the DYN_CAP
+  # class generated from this one writes 02 0000.
+  def test_the_dynamic_factory_keeps_a_value
+    cap = BGP::OPT_PARM::Capability.dynamic_factory(['020000'].pack('H*'))
+    assert_instance_of BGP::OPT_PARM::DYN_CAP::Route_refresh, cap
+    assert_equal '020000', cap.to_shex
+    with_value = BGP::OPT_PARM::Capability.dynamic_factory(['02000141'].pack('H*'))
+    assert_equal '02000141', with_value.to_shex
+    assert_equal({ :code => 2, :value => '41' }, with_value.to_hash)
+  end
+
 end

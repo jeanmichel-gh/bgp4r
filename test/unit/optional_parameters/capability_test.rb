@@ -95,16 +95,20 @@ class Capability_Test < Test::Unit::TestCase
     cap = Capability.factory(['02024300'].pack('H*'))
     assert_instance_of(Dynamic, cap)
     # The capability came off the wire, so it has to go back on the wire
-    # unchanged. Before this was fixed the factory handed Dynamic the
-    # wire bytes where it wanted the code, and encode raised TypeError.
+    # unchanged. This has been broken in both directions. First the
+    # factory handed Dynamic the wire bytes where it wanted the code and
+    # encode raised; the fix then was to pass the code, which worked and
+    # dropped any value octets that arrived. Dynamic now reads the wire
+    # bytes properly and keeps them, which is what dynamic_test.rb
+    # checks.
     assert_equal '02024300', cap.to_shex
     assert_equal({:code=>67}, cap.to_hash)
     assert_equal "Option Capabilities Advertisement (2): [02024300]\n" +
                  '    Dynamic Capability 67, length: 2', cap.to_s
   end
   def test_open_round_trips_a_dynamic_capability
-    # The same bug seen from where it bites: an OPEN that advertises
-    # dynamic capability could not be re-encoded or printed.
+    # The first form of that bug seen from where it bit: an OPEN that
+    # advertises dynamic capability could not be re-encoded or printed.
     body = '010400640078010101010402024300'
     w = ['ff' * 16 + format('%04x', 18 + (body.size / 2)) + body].pack('H*')
     open = BGP::Open.new(w)

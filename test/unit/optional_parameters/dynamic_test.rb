@@ -51,4 +51,38 @@ class Dynamic_capability_Test < Test::Unit::TestCase
     assert_equal '02024300', cap.to_shex
     assert_equal Dynamic.new.to_s, cap.to_s
   end
+
+  # The capability carries no value, so there is nothing to build from
+  # field values but the code. All three paths have to work even so, and
+  # the wire path used to be the broken one: the factory handed this class
+  # the capability code rather than the octets, and handed the octets
+  # directly it put the String in @code, so to_hash carried a String.
+  def test_the_three_build_paths
+    from_fields = BGP::OPT_PARM::CAP::Dynamic.new
+    from_wire   = BGP::OPT_PARM::CAP::Dynamic.new(['02024300'].pack('H*'))
+    from_hash   = BGP::OPT_PARM::CAP::Dynamic.new(from_fields.to_hash)
+    [from_fields, from_wire, from_hash].each do |cap|
+      assert_equal '02024300', cap.to_shex
+      assert_equal({ :code => 67 }, cap.to_hash)
+    end
+  end
+
+  # Nothing is validated on either side: the draft gives the capability no
+  # value, so octets that arrive anyway are kept and written back.
+  def test_a_value_the_draft_does_not_allow_is_kept
+    wire = '0203' + '43' + '01' + 'ff'
+    cap = BGP::OPT_PARM::CAP::Dynamic.new([wire].pack('H*'))
+    assert_equal wire, cap.to_shex, 'byte for byte what arrived'
+    assert_equal({ :code => 67, :value => 'ff' }, cap.to_hash)
+    assert_equal wire, BGP::OPT_PARM::CAP::Dynamic.new(cap.to_hash).to_shex
+    assert_match(/length: 3/, cap.to_s)
+  end
+
+  def test_the_factory_keeps_a_value
+    cap = BGP::OPT_PARM::Capability.factory(['020343 01 ff'.delete(' ')].pack('H*'))
+    assert_instance_of BGP::OPT_PARM::CAP::Dynamic, cap
+    assert_equal '02034301ff', cap.to_shex
+    assert_equal({ :code => 67, :value => 'ff' }, cap.to_hash)
+  end
+
 end
