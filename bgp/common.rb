@@ -32,10 +32,33 @@ require 'logger'
 class IPAddr
   alias encode hton
 
+  # An address from whatever bgp4r has: wire bytes, an Integer, an Array of
+  # octets, or a String.
+  #
+  # An Integer is the IPv4 form and nothing else, because it is packed into
+  # four octets. One outside 0 to 0xffffffff is refused rather than
+  # truncated: pack('N') keeps the low 32 bits, so 2**32+1 used to become
+  # 0.0.0.1 and -1 became 255.255.255.255, and a path attribute built that
+  # way carried an address nobody asked for.
+  #
+  # This is the one case the conventions let a constructor refuse, because
+  # the input cannot be represented at all and the alternative is silently
+  # sending a different value. It refuses nothing that is merely wrong by
+  # an RFC, and every octet level route stays open: wire bytes of any four
+  # or sixteen octets, an Array of octets, and a String address, IPv6
+  # included.
+  IPV4_RANGE = (0..0xffffffff)
+
   def self.create(arg)
     if arg.is_a?(String) and arg.is_packed?
       IPAddr.new_ntoh(arg)
     elsif arg.is_a?(Integer)
+      unless IPV4_RANGE.cover?(arg)
+        raise ArgumentError,
+              "#{arg} does not fit the four octets of an IPv4 address. " \
+              'An Integer here is always IPv4; for anything else pass ' \
+              'wire bytes, an Array of octets, or a String address.'
+      end
       IPAddr.new_ntoh([arg].pack('N'))
     elsif arg.is_a?(Array) and arg[0].is_a?(Integer)
       IPAddr.new_ntoh(arg.pack('C*'))

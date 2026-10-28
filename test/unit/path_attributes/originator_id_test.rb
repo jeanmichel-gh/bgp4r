@@ -1,5 +1,5 @@
 #--
-# Copyright 2008, 2009 Jean-Michel Esnault.
+# Copyright 2008, 2009, 2026 Jean-Michel Esnault.
 # All rights reserved.
 # See LICENSE.txt for permissions.
 #
@@ -35,4 +35,13 @@ class Originator_id_Test < Test::Unit::TestCase
     orig_id1 = Originator_id.new(orig_id)
     assert_equal(orig_id.encode, orig_id1.encode)
   end
+  # An Integer address is packed into four octets, so one that does not fit
+  # is refused by IPAddr.create rather than truncated. It used to come back
+  # as a different address: -1 became 255.255.255.255.
+  def test_an_integer_that_does_not_fit_is_refused
+    assert_raise(ArgumentError) { BGP::Originator_id.new(-1) }
+    assert_raise(ArgumentError) { BGP::Originator_id.new(2**32) }
+    assert_equal('80090400000000', BGP::Originator_id.new(0).to_shex)
+  end
+
 end

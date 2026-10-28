@@ -1,5 +1,5 @@
 #--
-# Copyright 2008, 2009 Jean-Michel Esnault.
+# Copyright 2008, 2009, 2026 Jean-Michel Esnault.
 # All rights reserved.
 # See LICENSE.txt for permissions.
 #
@@ -100,4 +100,18 @@ class Aggregator_Test < Test::Unit::TestCase
     pa = Path_attribute.new(['c007060064 01010101'.delete(' ')].pack('H*'), false)
     assert_equal [100, '1.1.1.1'], [pa[:aggregator].asn, pa[:aggregator].address]
   end
+  # An Integer address is packed into four octets, so one that does not fit
+  # is refused by IPAddr.create rather than truncated. It used to come back
+  # as a different address: the low 32 bits only.
+  # The two argument form takes a String address, so an Integer reaches
+  # IPAddr.create through the hash form and through address=.
+  def test_an_integer_that_does_not_fit_is_refused
+    assert_raise(ArgumentError) { BGP::Aggregator.new(:address => 2**32, :asn => 100) }
+    agg = BGP::Aggregator.new('2.2.2.2', 100)
+    assert_raise(ArgumentError) { agg.address = 2**32 }
+    assert_equal('2.2.2.2', agg.address, 'and the refusal left it alone')
+    agg.address = 0xffffffff
+    assert_equal('255.255.255.255', agg.address)
+  end
+
 end

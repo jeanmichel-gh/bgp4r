@@ -134,4 +134,13 @@ class Cluster_list_Test < Test::Unit::TestCase
     assert_equal({:cluster_list=>['1.1.1.1', '2.2.2.2']}, cl.sort!.to_hash)
     assert_equal(cl.encode, Cluster_list.new(cl.to_hash).encode)
   end
+  # An Integer address is packed into four octets, so one that does not fit
+  # is refused by IPAddr.create rather than truncated. It used to come back
+  # as a different address: the low 32 bits only.
+  def test_an_integer_that_does_not_fit_is_refused
+    assert_raise(ArgumentError) { BGP::Cluster_list.new(2**32) }
+    assert_raise(ArgumentError) { BGP::Cluster_list.new(0x01010101, -1) }
+    assert_equal('800a0401010101', BGP::Cluster_list.new(0x01010101).to_shex)
+  end
+
 end
