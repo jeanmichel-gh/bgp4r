@@ -245,4 +245,104 @@ class Open_Test < Test::Unit::TestCase
     assert open.find(OPT_PARM::CAP::Route_refresh), 'what came before it is kept'
     assert_nil open.find(OPT_PARM::CAP::As4)
   end
+
+  # The whole message, for the two shapes below: version 4, AS 100,
+  # holdtime 180, ID 10.0.0.1, then the Optional Parameters Length and the
+  # parameters. The length is the real one unless declared says otherwise.
+  def open_msg(parms_hex, declared = nil)
+    body = '04' + '0064' + '00b4' + '0a000001' +
+           format('%02x', declared || parms_hex.size / 2) + parms_hex
+    'ff' * 16 + format('%04x', 19 + body.size / 2) + '01' + body
+  end
+
+  # RFC 4271 section 4.2 gives an optional parameter a 1 octet Parameter
+  # Type and a 1 octet Parameter Length, so fewer octets than that are not
+  # a parameter. Optional_parameter.factory read a Length that was not
+  # there and raised NoMethodError on len+hdr, which took the parse of the
+  # whole OPEN with it: a peer could stop bgp4r reading an OPEN by sending
+  # one odd octet. They are the message's now, kept and written back.
+  def test_octets_too_few_for_a_parameter_are_kept_as_the_messages_tail
+    # One octet is the only leftover too short for the two octet header of
+    # RFC 4271 section 4.2: two octets are a whole header, a Parameter
+    # Type and a Parameter Length, however little follows them. The
+    # extended form of RFC 9072 section 2 has a three octet header, so one
+    # or two are short there, which the extended test below covers.
+    { '41' => 1 }.each do |leftover, size|
+      hex = open_msg(leftover)
+      open = Message.factory([hex].pack('H*'))
+      assert_equal(Open, open.class, leftover)
+      assert_equal(0, open.opt_parms.size, leftover)
+      assert_equal(leftover, open.tail.unpack('H*')[0], leftover)
+      assert_equal(hex, open.to_shex, leftover)
+      assert_equal(leftover, open.to_hash[:tail], leftover)
+      assert_match(/#{size} octets? that is not a parameter: \[#{leftover}\]/, open.to_s, leftover)
+    end
+  end
+
+  # A whole capability parameter and then a leftover: both come back.
+  def test_a_parameter_and_a_leftover_both_come_back
+    hex = open_msg('02020200' + '41')
+    open = Message.factory([hex].pack('H*'))
+    assert_equal(1, open.opt_parms.size)
+    assert_equal(OPT_PARM::CAP::Route_refresh, open.opt_parms[0].class)
+    assert_equal('41', open.tail.unpack('H*')[0])
+    assert_equal(hex, open.to_shex)
+  end
+
+  # RFC 4271 section 4.2: the Optional Parameters Length "indicates the
+  # total length of the Optional Parameters field in octets". parse reads
+  # the parameters to the end of the message body, since the message
+  # header length already bounds them, and never looked at this field, so
+  # a peer that sent the wrong length had it quietly corrected by encode.
+  def test_an_optional_parameters_length_that_disagrees_is_kept
+    [0, 0x63, 0xff].each do |declared|
+      hex = open_msg('02020200', declared)
+      open = Message.factory([hex].pack('H*'))
+      assert_equal(1, open.opt_parms.size, declared.to_s)
+      assert_equal(declared, open.declared_opt_parm_len, declared.to_s)
+      assert_equal(hex, open.to_shex, declared.to_s)
+      assert_equal(declared, open.to_hash[:opt_parm_len], declared.to_s)
+      assert_match(/Optional Parameters Length says #{declared}/, open.to_s, declared.to_s)
+    end
+  end
+
+  # An ordinary OPEN has neither, so nothing about it changes: no tail, no
+  # kept length, and the two keys stay out of its hash.
+  def test_an_ordinary_open_has_no_tail_and_no_kept_length
+    hex = open_msg('02020200')
+    open = Message.factory([hex].pack('H*'))
+    assert_nil(open.tail)
+    assert_nil(open.declared_opt_parm_len)
+    assert_equal(false, open.to_hash.key?(:tail))
+    assert_equal(false, open.to_hash.key?(:opt_parm_len))
+    assert_equal(hex, open.to_shex)
+    # And one built from values writes its own length.
+    built = Open.new(4, 100, 180, '10.0.0.1', OPT_PARM::CAP::Route_refresh.new)
+    assert_nil(built.tail)
+    assert_nil(built.declared_opt_parm_len)
+    assert_equal(hex, built.to_shex)
+  end
+
+  # The same hole two octets wider in the RFC 9072 section 2 extended
+  # form, where the Parameter Length is two octets, so a parameter header
+  # is three.
+  def test_the_extended_form_keeps_a_leftover_too
+    # Non-Ext OP Len. 255, Non-Ext OP Type 255, then the 2 octet extended
+    # length, then the parameters.
+    body = '04' + '0064' + '00b4' + '0a000001' + 'ff' + 'ff' + '0005' +
+           '02' + '0002' + '0200' + '41'
+    hex = 'ff' * 16 + format('%04x', 19 + body.size / 2) + '01' + body
+    open = Message.factory([hex].pack('H*'))
+    assert_equal(true, open.extended?)
+    assert_equal(1, open.opt_parms.size)
+    assert_equal('41', open.tail.unpack('H*')[0])
+    assert_equal(hex, open.to_shex)
+    # Two octets are still short of a three octet header there.
+    body2 = '04' + '0064' + '00b4' + '0a000001' + 'ff' + 'ff' + '0002' + '4142'
+    hex2 = 'ff' * 16 + format('%04x', 19 + body2.size / 2) + '01' + body2
+    open2 = Message.factory([hex2].pack('H*'))
+    assert_equal(0, open2.opt_parms.size)
+    assert_equal('4142', open2.tail.unpack('H*')[0])
+    assert_equal(hex2, open2.to_shex)
+  end
 end
