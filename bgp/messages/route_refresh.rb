@@ -142,10 +142,17 @@ class Orf
   # the ORF.
   def self.factory(s, afi=1)
     type, len = s.unpack('Cn')
-    # Fewer than three octets cannot hold an ORF header, so there is no
-    # Length of ORF entries to trust and no type to dispatch on. Keep what
-    # is left rather than reading a length that is not there.
-    return Orf::Unknown.new(s.slice!(0,s.size).is_packed, afi) if len.nil?
+    # RFC 5291 section 4 gives an ORF a 1 octet ORF Type and a 2 octet
+    # Length of ORF entries, so fewer than three octets is not an ORF at
+    # all: there is no Length to trust and no type to dispatch on. nil says
+    # so and leaves the octets where they are, for the caller to keep.
+    #
+    # An Orf cannot hold them, which is why this used to lose them: its own
+    # encode writes a header and entries, so one trailing octet came back
+    # as three and two came back as three with the second one gone. They
+    # are trailing octets of the message body, so Orf_route_refresh keeps
+    # them as its tail, the way an attribute keeps one.
+    return nil if len.nil?
     case type
     when ORF::PREFIX, ORF::PREFIX_CISCO
       # RFC 5292 section 3 assigns 64 to the Address Prefix ORF. 130 is the
@@ -202,6 +209,7 @@ class Orf_route_refresh < Message
       [args[0][:orfs]].flatten.compact.each do |orf|
         add(orf.is_a?(Hash) ? Orf.from_hash(orf) : orf)
       end
+      @tail = [args[0][:tail].to_s].pack('H*') if args[0][:tail]
     else
       @afi, @safi, *orfs = args
       add(*orfs.flatten)
@@ -262,11 +270,19 @@ class Orf_route_refresh < Message
     end
   end
   
+  # Octets at the end of the body that are not an ORF, kept as they are so
+  # that encode writes back what arrived. Fewer than the three octets of an
+  # ORF header cannot be an ORF, and nothing shorter can be made to
+  # re-encode as itself, so they belong to the message. Same rule and same
+  # :tail key as an attribute that keeps octets it cannot interpret.
+  attr_reader :tail
+
   def encode
     # RFC 5291 section 4: AFI, Reserved, SAFI, When-to-refresh, then the
     # ORFs. Default to IMMEDIATE when the caller did not say.
     @when ||= IMMEDIATE
-    super([@afi, 0, @safi, @when, @orfs.collect { |o| o.encode }.join].pack('nCCCa*'))
+    orfs = @orfs.collect { |o| o.encode }.join + @tail.to_s
+    super([@afi, 0, @safi, @when, orfs].pack('nCCCa*'))
   end
   
   def parse(s)
@@ -274,7 +290,13 @@ class Orf_route_refresh < Message
     # and the first ORF. A body too short to hold it carries no ORF either.
     @afi, _, @safi, @when, orfs= super(s).unpack('nCCCa*')
     while orfs and orfs.size>0
-      @orfs << Orf.factory(orfs.is_packed, @afi)
+      orf = Orf.factory(orfs.is_packed, @afi)
+      if orf.nil?
+        # Not three octets left, so not an ORF: keep the rest as it is.
+        @tail = orfs.slice!(0, orfs.size)
+        break
+      end
+      @orfs << orf
     end
   end
   
@@ -282,6 +304,9 @@ class Orf_route_refresh < Message
     h = {:afi=> @afi, :safi=> @safi}
     h[:when] = @when if @when
     h[:orfs] = @orfs.collect { |orf| orf.to_hash } unless @orfs.empty?
+    # No leftover, no key, so the hash of an ordinary message is the one it
+    # has always been.
+    h[:tail] = @tail.unpack('H*')[0] if @tail
     h
   end
   
@@ -289,7 +314,9 @@ class Orf_route_refresh < Message
     msg = self.encode
     "ORF Route Refresh (#{ROUTE_REFRESH}), length: #{msg.size}\n" +   
     "AFI #{IANA.afi_s(@afi)}, SAFI #{IANA.safi_s(@safi)}, when-to-refresh #{when_to_s}:\n" +
-    @orfs.collect { |orf| orf.to_s}.join("\n")
+    (@orfs.collect { |orf| orf.to_s} +
+     (@tail ? ["#{@tail.size} octet#{@tail.size==1 ? '' : 's'} that is not an ORF: " \
+               "[#{@tail.unpack('H*')[0]}]"] : [])).join("\n")
   end
   
   # RFC 5291 section 4: the message carries ORFs, so this takes ORFs. An ORF

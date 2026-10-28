@@ -138,4 +138,54 @@ class Orf_Test < Test::Unit::TestCase
     assert_equal(130, BGP::ORF::PREFIX_CISCO)
   end
 
+
+  # RFC 5291 section 4 gives an ORF a 1 octet ORF Type and a 2 octet Length
+  # of ORF entries, so fewer than three octets is not an ORF: no Length to
+  # trust and no type to dispatch on. The factory used to answer an
+  # Orf::Unknown, which cannot hold them, because its own encode writes a
+  # header and entries: one trailing octet came back as three and two came
+  # back as three with the second one gone. It answers nil now and leaves
+  # the octets for the caller, which is Orf_route_refresh.
+  def test_fewer_than_three_octets_is_not_an_orf
+    ['41', '4142'].each do |hex|
+      s = [hex].pack('H*').is_packed
+      assert_nil(BGP::Orf.factory(s), hex)
+      # And they are still there, for the caller to keep.
+      assert_equal(hex, s.unpack('H*')[0], hex)
+    end
+    # Three is a whole ORF with no entries, and reads as one.
+    orf = BGP::Orf.factory(['410000'].pack('H*').is_packed)
+    assert_equal(BGP::Orf::Unknown, orf.class)
+    assert_equal('410000', orf.to_shex)
+  end
+
+  # A Length of ORF entries longer than the octets that followed it. encode
+  # used to write the length that was really there, so an ORF that said 9
+  # and carried 2 came back saying 2 and the message a negative test had
+  # captured could not be sent again.
+  def test_a_length_longer_than_its_octets_is_kept_and_written_back
+    orf = BGP::Orf.factory(['4100094243'].pack('H*').is_packed)
+    assert_equal(BGP::Orf::Unknown, orf.class)
+    assert_equal(9, orf.declared_len)
+    assert_equal('4100094243', orf.to_shex)
+    assert_match(/Length of ORF entries says 9/, orf.to_s)
+    # Through the hash, which carries the length only because it disagrees.
+    assert_equal({:type=> 0x41, :value=> '4243', :length=> 9}, orf.to_hash)
+    assert_equal('4100094243', BGP::Orf::Unknown.new(orf.to_hash).to_shex)
+    # 65535 is the widest the field holds and goes back as it came.
+    assert_equal('41ffff4243', BGP::Orf.factory(['41ffff4243'].pack('H*').is_packed).to_shex)
+  end
+
+  # An ORF whose Length agrees with its octets has no such key, and an ORF
+  # built from values writes its own length. Those are the ordinary cases
+  # and neither changes.
+  def test_an_orf_whose_length_agrees_carries_no_length
+    orf = BGP::Orf.factory(['4100024243'].pack('H*').is_packed)
+    assert_nil(orf.declared_len)
+    assert_equal({:type=> 0x41, :value=> '4243'}, orf.to_hash)
+    assert_equal('4100024243', orf.to_shex)
+    built = BGP::Orf::Unknown.new(0x41, ['4243'].pack('H*'))
+    assert_nil(built.declared_len)
+    assert_equal('4100024243', built.to_shex)
+  end
 end

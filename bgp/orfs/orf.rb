@@ -72,6 +72,12 @@ module BGP
       @value ||= String.new
     end
 
+    # The Length of ORF entries that arrived, when it is not the number of
+    # entry octets that came with it. Kept so that encode writes back the
+    # length the peer sent rather than the length that is really there, and
+    # nil on an ORF built from values, which always writes its own.
+    attr_reader :declared_len
+
     # RFC 5291 section 4: an ORF is an ORF Type (1 octet), a Length of ORF
     # entries (2 octets) and that many octets of entries. Reading an entry
     # takes the ORF Type, so a subclass that knows the type does that; here
@@ -80,18 +86,26 @@ module BGP
       @entries=[]
       @type, len = s.unpack('Cn')
       # Fewer than three octets is not an ORF header, so there is no Length
-      # of ORF entries to trust and the rest is taken as it stands.
+      # of ORF entries to trust and the rest is taken as it stands. Orf
+      # .factory answers nil for those octets now, so this is the path of a
+      # caller that built an Orf from them directly.
       octets = s.slice!(0, len ? len+3 : s.size)
       @value = octets.size>3 ? octets[3..-1] : String.new
+      # A Length longer than the octets that followed it. encode used to
+      # write the length that was really there, so an ORF that said 9 and
+      # carried 2 came back saying 2, and the message a negative test had
+      # captured could not be sent again.
+      @declared_len = len if len and len != @value.size
       self
     end
 
     def encode
       # RFC 5291 section 4: ORF Type, Length of ORF entries, the entries.
-      # An ORF Type with no class of its own has its entry octets in @value,
-      # and writes them back from there.
-      entries = @entries.empty? ? value : @entries.collect { |e| e.encode }.join
-      [@type, entries.size, entries].pack('Cna*')
+      # Entries this class read, then the octets it could not: an ORF Type
+      # with no class of its own has all of them in @value, and a prefix ORF
+      # whose entry list was cut short has the remainder there.
+      entries = @entries.collect { |e| e.encode }.join + value
+      [@type, @declared_len || entries.size, entries].pack('Cna*')
     end
 
     def to_s
@@ -125,6 +139,7 @@ module BGP
         elsif args.size==1 and args[0].is_a?(Hash)
           @type = args[0][:type].to_i
           @value = [args[0][:value].to_s].pack('H*')
+          @declared_len = args[0][:length].to_i if args[0][:length]
         elsif (1..2).include?(args.size) and args[0].is_a?(Integer)
           @type = args[0]
           @value = args[1].to_s.b
@@ -134,14 +149,21 @@ module BGP
         end
       end
 
+      # :length only when the Length that arrived is not the number of
+      # entry octets, since that is the only time a build from the value
+      # alone would write a different one. An ordinary ORF has no such key,
+      # so its hash is the two it has always been.
       def to_hash
         h = {:type=> @type}
         h[:value] = value.unpack('H*')[0] unless value.empty?
+        h[:length] = @declared_len if @declared_len
         h
       end
 
       def to_s
-        "#{self.class}, ORF type #{@type}, #{value.size} entry octets: [#{value.unpack('H*')[0]}]"
+        s = "#{self.class}, ORF type #{@type}, #{value.size} entry octets: [#{value.unpack('H*')[0]}]"
+        s += ", Length of ORF entries says #{@declared_len}" if @declared_len
+        s
       end
 
     end

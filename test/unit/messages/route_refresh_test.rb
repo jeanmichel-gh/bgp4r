@@ -459,4 +459,54 @@ class Orf_route_refresh_Test < Test::Unit::TestCase
     assert_match(/AFI 999, SAFI 77/, Orf_route_refresh.new(999, 77).to_s)
     assert_match(/AFI IPv4 \(1\), SAFI Unicast \(1\)/, Orf_route_refresh.new(1, 1).to_s)
   end
+
+  # Octets at the end of the body that are too few to be an ORF. RFC 5291
+  # section 4 gives an ORF a 1 octet type and a 2 octet Length, so one or
+  # two octets cannot be one and nothing shorter can be made to re-encode
+  # as itself. They are kept by the message, the way an attribute keeps a
+  # tail it cannot interpret, and written back.
+  #
+  # They used to become an Orf::Unknown, whose encode writes a header: one
+  # octet came back as three, and two came back as three with the second
+  # one gone.
+  def test_octets_too_few_for_an_orf_are_kept_as_the_messages_tail
+    { '41'   => 1,
+      '4142' => 2,
+    }.each do |leftover, size|
+      hex = 'ffffffffffffffffffffffffffffffff' +
+            format('%04x', 19 + 5 + leftover.size / 2) + '05' +
+            '0001' + '00' + '01' + '01' + leftover
+      rr = Message.factory([hex].pack('H*'))
+      assert_equal(Orf_route_refresh, rr.class, leftover)
+      assert_equal(0, rr.orfs.size, leftover)
+      assert_equal(leftover, rr.tail.unpack('H*')[0], leftover)
+      assert_equal(hex, rr.to_shex, leftover)
+      # The hash carries it, so a build from the hash sends the same octets.
+      assert_equal(leftover, rr.to_hash[:tail], leftover)
+      assert_equal(hex, Orf_route_refresh.new(rr.to_hash).to_shex, leftover)
+      # And to_s says what they are rather than printing an ORF that is not
+      # there.
+      assert_match(/#{size} octets? that is not an ORF: \[#{leftover}\]/, rr.to_s, leftover)
+    end
+  end
+
+  # A whole ORF followed by a leftover: both come back.
+  def test_an_orf_and_a_leftover_both_come_back
+    hex = 'ffffffffffffffffffffffffffffffff' + '001e' + '05' +
+          '0001' + '00' + '01' + '01' + '410002aabb' + '41'
+    rr = Message.factory([hex].pack('H*'))
+    assert_equal(1, rr.orfs.size)
+    assert_equal('410002aabb', rr.orfs[0].to_shex)
+    assert_equal('41', rr.tail.unpack('H*')[0])
+    assert_equal(hex, rr.to_shex)
+    assert_equal(hex, Orf_route_refresh.new(rr.to_hash).to_shex)
+  end
+
+  # No leftover, no key and no tail: the ordinary message is untouched.
+  def test_a_message_with_no_leftover_has_no_tail
+    rr = Orf_route_refresh.new(1, 1, Prefix_orf.new(Prefix_entry.add_and_permit(1, '10.0.0.0/8')))
+    assert_nil(rr.tail)
+    assert_equal(false, rr.to_hash.key?(:tail))
+    assert_equal(rr.to_shex, Orf_route_refresh.new(rr.to_hash).to_shex)
+  end
 end

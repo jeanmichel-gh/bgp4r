@@ -270,4 +270,50 @@ class Prefix_orf_Test < Test::Unit::TestCase
     $stdout = out
   end
 
+
+  # A Length of ORF entries longer than what followed it leaves the last
+  # entry cut short. BGP::Prefix.new_ntop then raised
+  # IPAddr::InvalidAddressError and took the parse of the whole
+  # ROUTE-REFRESH with it, which is the worst answer of the three: a peer
+  # could stop bgp4r reading a message by sending one bad length. The
+  # octets are kept now and written back, as everywhere else in bgp4r.
+  def test_an_entry_that_cannot_be_read_keeps_its_octets
+    # Type 64, Length 9, two octets of entry.
+    orf = BGP::Orf.factory(['4000094243'].pack('H*').is_packed)
+    assert_equal(BGP::Prefix_orf, orf.class)
+    assert_equal(0, orf.entries.size)
+    assert_equal('4243', orf.value.unpack('H*')[0])
+    assert_equal(9, orf.declared_len)
+    assert_equal('4000094243', orf.to_shex)
+    assert_equal('4000094243', BGP::Prefix_orf.new(orf.to_hash).to_shex)
+  end
+
+  # The entries it could read, then the octets it could not. Both go back
+  # on the wire, so an operator sees the entries of what arrived and can
+  # send the same message again.
+  def test_the_entries_it_could_read_come_with_the_octets_it_could_not
+    entry = '00' + '00000001' + '18' + '20' + '18c0a801'
+    hex = '400013' + entry + '4000000002'
+    orf = BGP::Orf.factory([hex].pack('H*').is_packed)
+    assert_equal(1, orf.entries.size)
+    assert_equal('4000000002', orf.value.unpack('H*')[0])
+    assert_equal(0x13, orf.declared_len)
+    assert_equal(hex, orf.to_shex)
+    assert_equal(hex, BGP::Prefix_orf.new(orf.to_hash).to_shex)
+    # The entry that did read is a real one, not raw octets.
+    assert_equal('192.168.1.0/24', orf.entries[0].to_hash[:prefix])
+  end
+
+  # A whole prefix ORF has neither key, so its hash is the one it has
+  # always been and a build from values writes its own length.
+  def test_a_whole_prefix_orf_carries_no_leftover_and_no_length
+    hex = '40000b' + '00' + '00000001' + '18' + '20' + '18c0a801'
+    orf = BGP::Orf.factory([hex].pack('H*').is_packed)
+    assert_equal(1, orf.entries.size)
+    assert_equal('', orf.value)
+    assert_nil(orf.declared_len)
+    assert_equal([:type, :entries], orf.to_hash.keys)
+    assert_equal(hex, orf.to_shex)
+    assert_equal(hex, BGP::Prefix_orf.new(orf.to_hash).to_shex)
+  end
 end

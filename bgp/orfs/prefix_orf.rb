@@ -190,6 +190,8 @@ class BGP::Prefix_orf < BGP::Orf
       [args[0][:entries]].flatten.compact.each do |e|
         add(e.is_a?(BGP::Prefix_entry) ? e : BGP::Prefix_entry.new(e))
       end
+      @value = [args[0][:value].to_s].pack('H*') if args[0][:value]
+      @declared_len = args[0][:length].to_i if args[0][:length]
     else
       super(BGP::ORF::PREFIX, *args)
     end
@@ -202,16 +204,41 @@ class BGP::Prefix_orf < BGP::Orf
 
   def _parse_(s, afi=1)
     @entries=[]
-    @type, _, entries = s.unpack('Cna*')
+    @value = String.new
+    @type, len, entries = s.unpack('Cna*')
     while entries.size>0
       # RFC 5292 section 2: the prefix of an entry is read in the address
       # family of the ROUTE-REFRESH message that carries the ORF.
-      @entries << BGP::Prefix_entry.new(entries.is_packed, afi)
+      begin
+        @entries << BGP::Prefix_entry.new(entries.is_packed, afi)
+      rescue StandardError
+        # An entry the octets cannot make: a Length of ORF entries longer
+        # than what followed it leaves the last entry cut short, and
+        # BGP::Prefix.new_ntop then raised IPAddr::InvalidAddressError and
+        # took the parse of the whole ROUTE-REFRESH with it. The octets are
+        # kept here instead and written back by Orf#encode, which is the
+        # rule everywhere else in bgp4r: a reader that cannot interpret
+        # octets keeps them rather than raising or dropping them. Any
+        # failure to read an entry means the same thing, so the rescue is
+        # not narrowed to one class.
+        @value = entries.slice!(0, entries.size)
+        break
+      end
     end
+    # The Length that arrived, when it is not the number of octets the
+    # entries and the leftover add up to. Kept so encode writes it back.
+    present = @entries.collect { |e| e.encode }.join.size + @value.size
+    @declared_len = len if len != present
   end
   
+  # :entries as always, plus what could not be read. No leftover and no
+  # disagreeing Length means neither key, so an ordinary prefix ORF hashes
+  # the way it always has.
   def to_hash
-    {:type=> @type, :entries=> @entries.collect { |e| e.to_hash }}
+    h = {:type=> @type, :entries=> @entries.collect { |e| e.to_hash }}
+    h[:value] = value.unpack('H*')[0] unless value.empty?
+    h[:length] = @declared_len if @declared_len
+    h
   end
 
   # The vendor code point of the RFC 5291 section 7 range, 130. No RFC
