@@ -203,7 +203,9 @@ module BGP
       # worker thread.
       def export_for(route, peer, adapter)
         hop = next_hop_for(route, adapter)
-        if hop.nil? && peer.ebgp?
+        # A route we originated needs one whichever kind of peer it goes to
+        # (RFC 4271 section 5.1.3), so the family check covers it too.
+        if hop.nil? && (peer.ebgp? || route.local?)
           return Export::Result.new(nil, nil, :no_next_hop_for_family)
         end
         @export.for(route, peer, :next_hop => hop)

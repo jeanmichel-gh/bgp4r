@@ -89,7 +89,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. A `lab` job runs the Compose topologies.
 
-Baseline on 2026-10-28: 1106 tests, 20743 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.2%.
+Baseline on 2026-10-28: 1123 tests, 20793 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.2%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -431,10 +431,9 @@ Neighbor ◀──UPDATE── Adj-RIB-Out (per peer) ◀───────�
         becomes a black hole. The refusals are checked first, so a route
         that is not going to that peer never needs one.
       * Not in it: confederations (RFC 5065), so a leftmost confederation
-        segment is treated as the section 5.1.2 AS_SET case; and locally
-        originated routes, since every `Route` has a peer. The route
+        segment is treated as the section 5.1.2 AS_SET case. The route
         reflector client matrix of RFC 4456 section 6 was left out here and
-        landed in #129.
+        landed in #129; originating our own routes landed in #130.
       * `bgp/rib/adj_rib_out.rb` records what was sent, keyed by prefix and
         Path Identifier like the Adj-RIB-In. `advertise` answers `:new`,
         `:changed` or `:same`, and `withdraw` answers nil for a prefix the
@@ -500,7 +499,8 @@ Neighbor ◀──UPDATE── Adj-RIB-Out (per peer) ◀───────�
         so. `test_a_change_the_peer_cannot_see_is_not_sent` pins it.
       * Still not here: the MinRouteAdvertisement interval of RFC 4271
         section 9.2.1.1, so a change goes out as soon as it is decided.
-        See the note under part 6 on why that one is awkward to do here.
+        See the note under "Decisions already taken" on why that one is
+        awkward to do here.
    4. **Route reflection and transit, over loopback. Done**, in #128.
       `test/functional/rib_router_test.rb` runs three speakers: one Table
       with two Neighbors is what makes a router, since a Neighbor holds one
@@ -546,7 +546,45 @@ Neighbor ◀──UPDATE── Adj-RIB-Out (per peer) ◀───────�
         removed" from the document. So such a route reaches every internal
         peer under the ordinary rules and is not reflection, which is why it
         gets no ORIGINATOR_ID and no CLUSTER_LIST. There is a test for it.
-   6. **The Compose topologies against GoBGP. Not started**, and blocked
+   6. **Originating our own routes. Done**, in #130. `rib.originate(prefix)`
+      announces a prefix of ours, and `rib.withdraw(rib.local_peer, prefix)`
+      takes it back. Three RFC 4271 sections give the rules and all three
+      were read: 5.1.1 for ORIGIN, 5.1.2 for AS_PATH, 5.1.3 for NEXT_HOP.
+      * Every `Route` has a peer it came from, so a route we originate gets
+        `BGP::Rib::LocalPeer`, us: in our own AS, carrying our router ID,
+        and answering `local?`. That is instead of a special case in every
+        reader of `route.peer`, which is the decision process, the import
+        step, the Adj-RIB-In and the export rules.
+      * **The empty AS_PATH does the work.** Section 5.1.2 wants an empty
+        AS_PATH toward an internal peer, "one whose length field contains
+        the value zero", and toward an external peer our AS as "the only
+        entry the path segment, and this path segment will be the only
+        segment". Both fall out of originating with an empty AS_PATH
+        attribute: the export step leaves an internal peer's alone, and
+        prepending onto an empty one gives exactly one segment with exactly
+        one AS. No origination branch was needed for either.
+      * Section 5.1.3 did need one. A route we originated carries **our**
+        next hop toward an internal peer too, where a learned route's is
+        left alone: the section says that when the route "is directly
+        connected to the speaker" the speaker "SHOULD use its own IP
+        address for the NEXT_HOP attribute". So `next_hop:` is required for
+        an originated route whichever kind of peer it goes to. The first
+        draft set `Result#next_hop` and left the attribute on its
+        placeholder, so the two disagreed.
+      * Section 5.1.3 also has a SHALL NOT: "A route originated by a BGP
+        speaker SHALL NOT be advertised to a peer using an address of that
+        peer as NEXT_HOP." That is `:next_hop_is_the_peers_address`, and it
+        binds only a route we originated.
+      * Two refusals do not apply to our own route, because both are about
+        a route another peer sent us: `:back_to_sender` and
+        `:ibgp_to_ibgp`. The communities still do, since a script may
+        originate a route carrying NO_EXPORT. A reflector does not reflect
+        its own route either, so no ORIGINATOR_ID and no CLUSTER_LIST.
+      * ORIGIN is the caller's: section 5.1.1 says "The ORIGIN attribute is
+        generated by the speaker that originates the associated routing
+        information" and names no value, so `originate` defaults to 0, IGP,
+        and takes `origin:`.
+   7. **The Compose topologies against GoBGP. Not started**, and blocked
       on a Docker daemon rather than on the code: the sandbox this was
       written in has the client and `docker compose` but no daemon, so the
       five `lab/topologies/fault-matrix` Compose tests are omitted there
@@ -574,13 +612,13 @@ Decisions already taken that constrain the later phases:
   tests. The "oldest route wins" tie break is skipped or optional, so tests do
   not depend on timing. As of #127 there is no timer at all: a change goes out
   as soon as it is decided, which is the 0 case, and the setting is the piece
-  still to add.
-* The MRAI timer is recorded above as the next export piece, and it needs
-  RFC 4271 section 9.2.1.1 read before it is written. Section 9 could not be
-  reached from the sandbox this work was done in: both fetchable sources of
-  RFC 4271 truncate the document around page 55, which is why nothing in
-  #125 to #129 cites a section 9 rule and why the timer was not attempted.
-  Whoever picks it up should open section 9.2.1.1 first.
+  still to add. It needs section 9.2.1.1 read first, and **section 9 could
+  not be reached** from the sandbox this work was done in: both fetchable
+  sources of RFC 4271 truncate the document around page 55. That is why
+  nothing in #125 to #130 cites a section 9 rule, why the "not back to the
+  peer it came from" rule in `Export` is marked as not an RFC rule rather
+  than given a citation, and why the timer was not attempted. Open 9.2.1.1
+  before writing it.
 * A full table is about a million IPv4 prefixes, so share identical attribute
   sets keyed by their encoded bytes rather than one object per route. Measure
   with `routegen`, do not guess.

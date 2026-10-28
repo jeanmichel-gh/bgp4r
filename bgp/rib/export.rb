@@ -79,8 +79,12 @@ module BGP
       # :non_client_to_non_client is a reflector obeying RFC 4456 section 6,
       #   which reflects a non-client's route to clients only. See clients?.
       # :policy is the caller's block returning nil.
+      # :next_hop_is_the_peers_address is RFC 4271 section 5.1.3: "A route
+      #   originated by a BGP speaker SHALL NOT be advertised to a peer
+      #   using an address of that peer as NEXT_HOP."
       REFUSALS = %i[back_to_sender no_advertise no_export no_export_sub_confed
-                    ibgp_to_ibgp non_client_to_non_client policy].freeze
+                    ibgp_to_ibgp non_client_to_non_client
+                    next_hop_is_the_peers_address policy].freeze
 
       attr_reader :local_as, :router_id, :cluster_id, :default_local_pref
 
@@ -150,12 +154,29 @@ module BGP
         # into an exception.
         reason = refuse(route, peer)
         return Result.new(nil, nil, reason) if reason
-        if peer.ebgp? and next_hop.nil?
-          raise ArgumentError, "next_hop is required for the external peer #{peer}: " \
+        if next_hop.nil? and (peer.ebgp? or route.local?)
+          want = route.local? ? 'a route we originated' : "the external peer #{peer}"
+          raise ArgumentError, "next_hop is required for #{want}: " \
                                'RFC 4271 section 5.1.3 wants our address on that session'
         end
 
-        hop = peer.ebgp? ? IPAddr.new(next_hop.to_s).to_s : route.next_hop
+        # Ours for an external peer, and ours for a route we originated
+        # whichever kind of peer it goes to: section 5.1.3 says that when
+        # announcing a locally originated route to an internal peer, if the
+        # route "is directly connected to the speaker" then the speaker
+        # "SHOULD use its own IP address for the NEXT_HOP attribute". A
+        # prefix a script originates is the directly connected case; a
+        # speaker that is really forwarding for some other router can set
+        # the next hop it wants with the policy block.
+        hop = if peer.ebgp? or route.local?
+                IPAddr.new(next_hop.to_s).to_s
+              else
+                route.next_hop
+              end
+        # Section 5.1.3 again, and this one is a SHALL NOT.
+        if route.local? and hop == peer.address
+          return Result.new(nil, nil, :next_hop_is_the_peers_address)
+        end
         pa = attributes(route, peer, hop)
         if @policy
           pa = @policy.call(route, peer, pa)
@@ -167,7 +188,14 @@ module BGP
       private
 
       def refuse(route, peer)
-        return :back_to_sender if route.peer == peer
+        # A route we originated came from nobody, so it was never sent to us
+        # by this peer and the IBGP re-advertisement rule has nothing to say
+        # about it: RFC 4271 section 5.1.2 gives originating its own rules
+        # and they cover both kinds of peer. The communities below still
+        # apply, since a script may originate a route carrying NO_EXPORT.
+        unless route.local?
+          return :back_to_sender if route.peer == peer
+        end
         if route.path_attribute.has?(Communities)
           c = route.path_attribute[Communities]
           # RFC 1997: NO_ADVERTISE routes "MUST NOT be advertised to other
@@ -182,7 +210,7 @@ module BGP
             return :no_export_sub_confed if c.has_no_export_sub_confed?
           end
         end
-        if route.peer.ibgp? and peer.ibgp?
+        if route.peer.ibgp? and peer.ibgp? and !route.local?
           # RFC 4456 section 4, the model reflection changes.
           return :ibgp_to_ibgp unless @route_reflector
           # Section 6, the two rules it gives, as one condition. "A route
@@ -212,7 +240,7 @@ module BGP
         # Reachability belongs to the message, not to this.
         pa.delete(Mp_reach)
         pa.delete(Mp_unreach)
-        peer.ebgp? ? to_external(pa, hop) : to_internal(pa, route)
+        peer.ebgp? ? to_external(pa, hop) : to_internal(pa, route, hop)
         pa
       end
 
@@ -237,12 +265,23 @@ module BGP
         pa.delete(Cluster_list)
       end
 
-      def to_internal(pa, route)
+      def to_internal(pa, route, hop)
         # Section 5.1.2: "the advertising speaker SHALL NOT modify the
-        # AS_PATH attribute". Section 5.1.3: for a route that is not locally
-        # originated the speaker "SHOULD NOT modify the NEXT_HOP attribute".
-        # So neither is touched here.
-        reflect(pa, route) if @route_reflector and route.peer.ibgp?
+        # AS_PATH attribute", and for a route we originated the empty
+        # AS_PATH it already carries is what that section asks for, so it is
+        # not touched either way.
+        #
+        # Section 5.1.3: for a route that is not locally originated the
+        # speaker "SHOULD NOT modify the NEXT_HOP attribute". A route we
+        # originated is the other case in that section and does get ours,
+        # so that the attribute says the same thing Result#next_hop does.
+        # Not a route we originated: reflection is for a route that came
+        # from a client, and ours came from nobody.
+        if route.local?
+          pa.delete(Next_hop)
+          pa << Next_hop.new(hop)
+        end
+        reflect(pa, route) if @route_reflector and route.peer.ibgp? and !route.local?
         # Section 5.1.5: LOCAL_PREF "SHALL be included in all UPDATE
         # messages that a given BGP speaker sends to other internal peers".
         # Import drops it from an external peer's route, so this is where a
