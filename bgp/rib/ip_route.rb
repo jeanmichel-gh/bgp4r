@@ -49,10 +49,22 @@ module BGP
       # a changed one, and re-running it is harmless, which matters for a
       # table that may be re-synced.
       #
-      # proto on a del and not only on a replace, where it reads as a
-      # filter: the kernel removes the route only if it is one this marked
-      # as bgp. Without it a del would take out a route of the same prefix
-      # that something else put there.
+      # **replace takes over a route of the same prefix that something
+      # else owns**, and that is the price of it. Linux holds one route per
+      # prefix in a table whatever the proto: `ip route add` for a prefix
+      # already there answers "File exists" regardless of proto, and
+      # replace overwrites it and marks it proto bgp, after which the flush
+      # on the way out removes it. Measured, not assumed. So a table shared
+      # with another daemon is only safe where the prefixes do not overlap;
+      # give the FIB a table of its own otherwise, which is what table: has
+      # no default for.
+      #
+      # proto on the flush is what protects the rest of a shared table: it
+      # removes the routes this marked and nothing else, and a test proves
+      # that by failing without it. proto on a del is a narrower guard,
+      # since a del names one prefix and the kernel will not hold two
+      # protos for it anyway; it is kept because it costs nothing and makes
+      # the removal name exactly what this owns.
       #
       # dev is optional. The kernel resolves via against its connected
       # routes and picks the device itself, which is what a real FIB
@@ -65,6 +77,18 @@ module BGP
 
         DEFAULT_PROTO = 'bgp'
 
+        # What running one command came to. output is stdout and stderr
+        # together, because the interesting half of an `ip` failure is on
+        # stderr and a caller wants it in the log beside the command.
+        Result = Struct.new(:argv, :status, :output) do
+          def ok? ; status.zero? ; end
+          def command ; argv.join(' ') ; end
+          def to_s
+            ok? ? "ok: #{command}" :
+                  "failed (#{status}): #{command}: #{output.to_s.strip}"
+          end
+        end
+
         attr_reader :table, :proto, :netns, :dev, :bin
 
         # table has no default, deliberately. Every other option here can
@@ -73,14 +97,20 @@ module BGP
         # the number means nobody reaches the main table without naming
         # it. Any table is accepted once named, including the main one:
         # this refuses no value, it just will not pick one.
+        # runner: something that takes an argv Array and answers a Result.
+        # Given one, nothing here runs a process, which is how the unit
+        # tests check what would be run without a kernel, root or iproute2.
+        # It is useful outside the tests too: a runner is where `sudo`, a
+        # remote shell, or a dry run that only logs would go.
         def initialize(table:, proto: DEFAULT_PROTO, netns: nil, dev: nil,
-                       bin: 'ip')
+                       bin: 'ip', runner: nil)
           raise ArgumentError, 'table: is required' if table.nil?
           @table = table.to_s
           @proto = proto.to_s
           @netns = netns
           @dev = dev
           @bin = bin
+          @runner = runner
         end
 
         # The command line for one operation, as an Array for Open3 and
@@ -107,6 +137,12 @@ module BGP
           base_argv(ipv6) + ['route', 'flush'] + table_argv + proto_argv
         end
 
+        # Runs one operation, and the three commands above, each answering
+        # a Result. This is the only part of the FIB side that is not pure.
+        def run(op) ; execute(argv(op)) ; end
+        def show(ipv6: false) ; execute(show_argv(:ipv6 => ipv6)) ; end
+        def flush(ipv6: false) ; execute(flush_argv(:ipv6 => ipv6)) ; end
+
         def to_s
           s = "ip route, table #{@table}, proto #{@proto}"
           s += ", netns #{@netns}" if @netns
@@ -115,6 +151,34 @@ module BGP
         end
 
         private
+
+        # IO.popen rather than Open3, which would read better. Open3 is a
+        # default gem today, and Conventions in CLAUDE.md says to check that
+        # before requiring one, because Ruby keeps moving these to bundled
+        # gems where they fail to load under Bundler unless declared:
+        # `observer` went in 3.4 and `logger` in 4.0. IO.popen is core, needs
+        # no require, and does the whole job in a line, so the library keeps
+        # its one runtime gem.
+        #
+        # The argv Array form never reaches a shell, so a prefix is an
+        # argument and not a string anything has to quote. err: [:child,
+        # :out] folds stderr in, since that is where `ip` says what went
+        # wrong. $? is the child's status after the block.
+        # ::IO and not IO. This file is inside module BGP, and bgp/io.rb
+        # defines BGP::IO, so a bare IO resolves to that one through the
+        # lexical scope and never reaches core Ruby: the error is
+        # "undefined method `popen' for module BGP::IO". Same family as the
+        # const_defined? trap in Conventions.
+        def execute(argv)
+          return @runner.call(argv) if @runner
+          output = ::IO.popen(argv, :err => [:child, :out]) { |io| io.read }
+          Result.new(argv, $?.exitstatus, output.to_s)
+        rescue SystemCallError => e
+          # No iproute2 on the machine at all, which is a failure like any
+          # other rather than an exception the caller has to handle. The
+          # status is one no exiting process produces.
+          Result.new(argv, -1, e.message)
+        end
 
         def install_argv(op)
           argv = base_argv(self.class.ipv6?(op.prefix))
@@ -126,7 +190,8 @@ module BGP
 
         # No via and no dev on a del: the prefix, the table and the proto
         # name the route, and naming a next hop that has since changed
-        # would mean matching nothing.
+        # would mean matching nothing. See the class comment on what the
+        # proto here does and does not buy.
         def remove_argv(op)
           base_argv(self.class.ipv6?(op.prefix)) +
             ['route', 'del', op.prefix.to_s] + table_argv + proto_argv

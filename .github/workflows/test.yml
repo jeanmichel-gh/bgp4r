@@ -139,6 +139,20 @@ jobs:
           LAB_REQUIRE_DOCKER: '1' # fail, don't skip, if compose is missing
           LAB_REQUIRE_GOBGPD: '1' # fail, don't skip, if gobgpd is missing
         run: bundle exec ruby test/run_lab.rb 2>&1 | tee test.log
+      # The FIB test is the one lab test that needs a capability rather
+      # than a binary: creating a network namespace needs CAP_NET_ADMIN, so
+      # it omits itself in the step above, which runs unprivileged. Run it
+      # again under sudo with LAB_REQUIRE_NETNS so it fails rather than
+      # omits, because a conformance claim nothing checks reads as verified
+      # (see "Lab and conformance" in CLAUDE.md for how that bit once).
+      #
+      # sudo drops the environment, so PATH has to be carried in or the
+      # ruby from setup-ruby is not the one that runs.
+      - name: FIB in a network namespace
+        shell: bash
+        run: |
+          sudo -E env "PATH=$PATH" LAB_REQUIRE_NETNS=1 \
+            bundle exec ruby -I. test/functional/lab/fib_test.rb
       - name: Show test failures as an annotation
         if: failure()
         shell: bash

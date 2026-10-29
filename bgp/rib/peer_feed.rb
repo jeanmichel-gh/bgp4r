@@ -89,6 +89,20 @@ module BGP
       def adapters ; @lock.synchronize { @adapters.values } ; end
       def neighbors ; @lock.synchronize { @adapters.keys } ; end
 
+      # Starts the worker without attaching anything. Idempotent.
+      #
+      # The worker starting on the first attach is right for a table that
+      # is fed by sessions, and wrong for one that is not. A FIB fed only by
+      # rib.originate has no peer to attach, and before this there was
+      # nothing to start the thread: the work queued, nobody applied it, and
+      # drain answered true because it returns early when there is no
+      # worker. So rib.install on a table with no peers forwarded nothing
+      # and said nothing, which is why FibInstaller#start calls this.
+      def start
+        @lock.synchronize { start_worker }
+        self
+      end
+
       # Queues one work item. Called from the neighbours' threads.
       def <<(work)
         @queue << work
@@ -170,6 +184,8 @@ module BGP
           @table.router&.session_down(work[1])
         when :mrai
           @table.router&.flush_mrai
+        when :fib
+          @table.fib_installer&.run_changes(work[1])
         when :sync
           work[1] << true
         else
