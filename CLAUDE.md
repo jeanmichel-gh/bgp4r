@@ -122,7 +122,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. A `lab` job runs the Compose topologies, and installs a `gobgpd` release so the native fault matrix runs there too; it pins 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-10-29: PENDING tests, PENDING assertions, all passing. Line coverage of `bgp/` from the unit suite: PENDING.
+Baseline on 2026-10-29: 1343 tests, 22076 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.6%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -342,11 +342,12 @@ why none of them blocked this phase.
 
 Phase 2, the peer adapter, came next and is **Done**: a table is fed from a
 live session. **Phase 3, the export side, is now Done in full**, including
-GoBGP's opinion of it. Phase 4's show commands are done for all three
-styles, and what is left of that phase is the second half of the FIB
-adapter: running the commands the first half plans. It needs a network
-namespace and not a container, which #156 measured; this paragraph said
-container until then and the detailed entry below says what came apart.
+GoBGP's opinion of it. **Phase 4 is Done too**: the show commands in all
+three styles, and the FIB adapter putting the Loc-RIB in a real kernel
+routing table, which needed a network namespace and not a container. This
+paragraph claimed a container until #156 measured otherwise, and the
+detailed entry below says what came apart. What is left of the whole plan
+is phase 5, FRR as a reference in the lab.
 
 ### RIB and FIB, five phases
 
@@ -713,7 +714,8 @@ Neighbor ◀──UPDATE── Adj-RIB-Out (per peer) ◀───────�
         within the advertising BGP speaker's own autonomous systems" and so
         applies to what `rib.originate` announces rather than per
         destination. Section 10 suggests 15 seconds for it.
-4. **FIB adapters, and the show commands. In progress.**
+4. **FIB adapters, and the show commands. Done**, in #132, #157, #156 and
+   #158.
    1. **The show commands. Done**, in #132 for IOS and Junos and in #157
       for IOS-XR, so all three styles the plan named are real.
       `bgp/rib/show.rb`, reached as `rib.show`, `rib.show(:junos)`,
