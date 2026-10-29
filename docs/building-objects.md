@@ -17,9 +17,11 @@ before assuming which three it has. This document is about how the dispatch
 works and where it goes wrong, because an object that comes back slightly
 different costs far more time to diagnose than it should.
 
-Read this with `to-hash-round-trips.md`, which is the inventory of which
-hash forms read back today. This one is the mechanism; that one is the
-record.
+The record of which hash forms read back today is
+`test/unit/to_hash_catalog.rb`, one entry per class with what it loses
+and a reproduction, printed by `rake to_hash:status` and, for what is
+still to fix, `rake to_hash:pending`. This document is the mechanism;
+that catalog is the record, and the suite measures it.
 
 ## How `initialize` dispatches
 
@@ -81,8 +83,9 @@ every `pack` result carries the mark:
 "\x40\x01\x01\x02".is_packed?        # => nil
 ```
 
-`packed?` is an alias of `is_packed?`, and both are in the tree: 64 uses
-of `is_packed?` and one of `packed?`, in `origin.rb`. Grep for both.
+`packed?` is an alias of `is_packed?` and both are in the tree. Nearly
+every use is `is_packed?`; `origin.rb` has the one `packed?`. Grep for
+both.
 
 So octets built by `pack` just work, and octets from anywhere else, a
 literal, a file, a socket read, an `unpack`/`slice` result, do not. An
@@ -146,11 +149,12 @@ the **bare** hash a test writes, `Aggregator.new(:address => ..., :asn =>
 ...)`, while `to_hash` answers the **wrapped** form, `{:aggregator =>
 {...}}`, because `Path_attribute#to_hash` merges one key per attribute
 and `Extended_communities` does the same for its list. Both halves work.
-For 38 of the 97 classes measured, the route that rebuilds the object is
-the owning attribute and not the class itself, and that is by design
-rather than a defect. `to-hash-round-trips.md` has the history and the
-row for each class, and `CLAUDE.md` says not to add a wrapped-form
-branch without a reason beyond symmetry.
+For a large share of the classes measured, the route that rebuilds the
+object is the owning attribute and not the class itself, and that is by
+design rather than a defect. `rake to_hash:status` prints the split, so
+no number for it is written down here. The catalog has the entry for each class and
+`CLAUDE.md` has the history, and says not to add a wrapped-form branch
+without a reason beyond symmetry.
 
 **A path attribute hash is keyed by attribute, through a registry.**
 `Attr.register(ORIGIN, Origin, :origin)` sits under each attribute class
