@@ -166,6 +166,36 @@ class ToHashRoundTripTest < Test::Unit::TestCase
                  'these are in the catalog but no longer answer to_hash')
   end
 
+  # Conventions: if an object can be rebuilt from its own to_hash, a test
+  # must prove it. The catalog is one half of that and this file asserts
+  # it. The other half is an assertion in the class's own test file,
+  # which is where a reader looks, and this is what keeps that half
+  # honest rather than aspirational.
+  #
+  # The match is deliberately loose: a line naming to_hash and a
+  # constructor, in a file that names the class. It is answering "does
+  # anything assert this at all", not policing which file does it, so a
+  # class covered from a neighbouring file still passes. A tighter rule
+  # would fail legitimate tests, and this one has a job only while the
+  # answer is otherwise nothing.
+  def test_every_working_round_trip_is_asserted_in_a_class_test_file
+    files = Dir['test/unit/**/*_test.rb'] - [__FILE__.sub("#{Dir.pwd}/", '')]
+    bodies = files.reject { |f| File.expand_path(f) == __FILE__ }
+                  .collect { |f| [f, File.read(f)] }
+    working = ToHashCatalog::ENTRIES.select { |_, e| [:ok, :ok_alone].include?(e.verdict) }
+    assert(working.size > 20)
+    missing = working.keys.reject do |name|
+      leaf = name.sub('BGP::', '').split('::').last
+      bodies.any? do |_, body|
+        next false unless body =~ /\b#{Regexp.escape(leaf)}\b/
+        body.lines.any? { |l| l.include?('to_hash') && l =~ /\.new(_hash|_ntop\w*)?\(/ }
+      end
+    end
+    assert_equal([], missing.sort,
+                 'these round trips work and no class test file asserts one; ' \
+                 'Conventions requires a test where the round trip works')
+  end
+
   def test_every_class_without_a_recipe_says_why
     assert(!ToHashCatalog::NO_RECIPE.empty?)
     ToHashCatalog::NO_RECIPE.each do |name, reason|
