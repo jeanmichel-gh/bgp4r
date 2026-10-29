@@ -83,20 +83,67 @@ module BGP
     end
   end
   class Label_stack
+
+    # The three octets of the RFC 8277 section 2.4 Compatibility field,
+    # kept whole, on a stack read from a withdrawal. nil on every other
+    # stack, so nothing else here changes shape.
+    #
+    # Section 2.4 puts this where a label would be on a withdrawn route:
+    # "Upon transmission, the Compatibility field SHOULD be set to
+    # 0x800000", and "Upon reception, the value of the Compatibility field
+    # MUST be ignored". Its own S bit is therefore 0, and section 2.2 says
+    # of that bit "This 1-bit field MUST be set to one on transmission and
+    # MUST be ignored on reception" precisely so a reader can find the end
+    # of a stack.
+    #
+    # With the bit clear the octets are ambiguous and the walk below has
+    # only the bit to go on, so it read straight on into the prefix: a
+    # withdrawal of 10.0.0.0/24 came back as two labels and a 0.0.0.0/0
+    # prefix. Nothing in the octets can tell a reader otherwise, so the
+    # only fix is to know the NLRI came from MP_UNREACH_NLRI, which is
+    # where section 2.4 says a withdrawal travels. Mp_unreach#parse passes
+    # that fact down.
+    attr_reader :compatibility
+
+    # Three octets, because section 2.4 shows the field in Figure 4 where
+    # a label goes and says "the length of the Compatibility field must be
+    # subtracted from the length of the NLRI". The section never states a
+    # size in words, so this is the figure's and not a sentence's.
+    COMPATIBILITY_SIZE = 3
+
+    # What section 2.4 asks a sender for: "it is RECOMMENDED by this
+    # document that the Compatibility field be set to 0x800000". Only used
+    # by to_s, since reception must ignore the value, and some
+    # implementations send 0x000000 instead.
+    RECOMMENDED_COMPATIBILITY = "\x80\x00\x00".b
+
+    # The wire path takes the withdrawal fact as a second positional
+    # argument rather than a keyword, because a keyword parameter on
+    # initialize makes Ruby 3 read a bare Hash as keywords and the hash
+    # build path here passes one. Same reason Optional_parameter::Unknown
+    # does it positionally; see Conventions in CLAUDE.md.
     def initialize(*args)
       @label_stack=[]
-      if args.size==1 and args[0].is_a?(String) and args[0].is_packed?
-        parse(args[0])
+      if args.size>=1 and args[0].is_a?(String) and args[0].is_packed?
+        parse(args[0], args[1] ? true : false)
+      elsif args.size==1 and args[0].is_a?(Hash) and args[0][:compatibility]
+        @compatibility = [args[0][:compatibility].to_s].pack('H*')
       elsif args.size==1 and args[0].is_a?(Hash)
         @label_stack = args[0][:labels].collect { |l| Label.new(l) }
       else
         @label_stack = args.collect { |arg| (arg.is_a?(Label) ? arg : Label.new(arg)) }
       end
     end
+
+    # 1 for a Compatibility field, so the 24 bits it occupies come off the
+    # NLRI length the way section 2.4 asks. It is not a label and there is
+    # no label to count, but it is one field of a label's width.
     def size
-      @label_stack.size
+      @compatibility ? 1 : @label_stack.size
     end
+
     def encode
+      return @compatibility if @compatibility
       enc = @label_stack[0..-2].collect { |l| l.encode(0) }
       enc << @label_stack[-1].encode
       enc.join
@@ -113,7 +160,15 @@ module BGP
     # 0x800000", whose Bottom of Stack bit is 0, so the walk read on into
     # the prefix octets and off the end. bgp4r could not read such an
     # UPDATE at all.
-    def parse(s)
+    # withdrawn: the NLRI came from MP_UNREACH_NLRI, so the three octets
+    # where a label would be are the section 2.4 Compatibility field and
+    # the walk must not run. Reading them as a label is what made a
+    # withdrawal unreadable.
+    def parse(s, withdrawn = false)
+      if withdrawn
+        @compatibility = s.slice!(0, COMPATIBILITY_SIZE).b
+        return
+      end
       while s.size>2
         bottom = s[2,1].unpack('C')[0]
         @label_stack << label = Label.new(s)
@@ -121,7 +176,14 @@ module BGP
       end
     end
     def to_s
-      if @label_stack.empty?
+      if @compatibility
+        s = "Compatibility=0x#{@compatibility.unpack1('H*')}"
+        # Section 2.4: "However, some implementations set it to 0x000000."
+        # Worth saying, since a reader comparing two captures will see it.
+        s += ' (not the RECOMMENDED 0x800000)' unless
+          @compatibility == RECOMMENDED_COMPATIBILITY
+        s
+      elsif @label_stack.empty?
         "Label stack:(empty)"
       else
         "Label Stack=#{@label_stack.collect{ |l| l.label }.join(',')} (bottom)"
@@ -130,10 +192,14 @@ module BGP
     def to_ary
       @label_stack.collect { |e| e.label }
     end
+    # :compatibility only on a withdrawal, so every other stack hashes as
+    # the one key it always did and no caller sees a new shape.
     def to_hash
+      return {:compatibility => @compatibility.unpack1('H*')} if @compatibility
       @label_stack.size==1 ? {:label=>@label_stack[0].label} :  {:labels=> to_ary} 
     end
     def bit_length
+      return COMPATIBILITY_SIZE*8 if @compatibility
       @label_stack.compact.size*24
     end
   end

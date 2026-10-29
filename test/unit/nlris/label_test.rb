@@ -112,4 +112,54 @@ class Label_stack_Test < Test::Unit::TestCase
     # A built stack is untouched: 0 above the bottom, 1 on it.
     assert_equal('000640000650000661', Label_stack.new(100, 101, 102).to_shex)
   end
+
+  # RFC 8277 section 2.4: a withdrawn route carries a Compatibility field
+  # where its label would be. "Upon transmission, the Compatibility field
+  # SHOULD be set to 0x800000", and "Upon reception, the value of the
+  # Compatibility field MUST be ignored".
+  #
+  # Its own S bit is therefore 0, where section 2.2 says of that bit
+  # "This 1-bit field MUST be set to one on transmission and MUST be
+  # ignored on reception", so the walk has nothing to stop it and reads on
+  # into the prefix. Nothing in the octets can say otherwise, which is why
+  # the fact is passed in.
+  def test_a_withdrawn_stack_keeps_the_compatibility_field_whole
+    s = ['8000000a0000'].pack('H*').is_packed
+    st = Label_stack.new(s, true)
+    assert_equal('800000', st.compatibility.unpack1('H*'))
+    assert_equal('0a0000', s.unpack1('H*'),
+                 'and the prefix octets are left for Labeled#parse')
+    # One field of a label's width, so the 24 bits come off the NLRI
+    # length the way section 2.4 asks.
+    assert_equal(1, st.size)
+    assert_equal(24, st.bit_length)
+    assert_equal('800000', st.to_shex, 'byte for byte, so it can be sent again')
+    assert_equal('Compatibility=0x800000', st.to_s)
+  end
+
+  # The value MUST be ignored on reception, and section 2.4 says why that
+  # matters: "However, some implementations set it to 0x000000." So any
+  # value is read and kept, and to_s says when it is not the recommended
+  # one rather than treating it as an error.
+  def test_a_compatibility_field_that_is_not_the_recommended_value
+    %w[000000 800001].each do |hex|
+      st = Label_stack.new([hex].pack('H*').is_packed, true)
+      assert_equal(hex, st.to_shex)
+      assert_equal("Compatibility=0x#{hex} (not the RECOMMENDED 0x800000)", st.to_s)
+    end
+  end
+
+  def test_a_withdrawn_stack_round_trips_through_its_hash
+    st = Label_stack.new(['800000'].pack('H*').is_packed, true)
+    assert_equal({ :compatibility => '800000' }, st.to_hash)
+    assert_equal(st.to_shex, Label_stack.new(st.to_hash).to_shex)
+  end
+
+  # No :compatibility key and no change of shape on anything else, which
+  # is the same rule a kept tail follows: see Conventions in CLAUDE.md.
+  def test_an_ordinary_stack_hashes_as_it_always_did
+    assert_nil(Label_stack.new(100).compatibility)
+    assert_equal({ :label => 100 }, Label_stack.new(100).to_hash)
+    assert_equal({ :labels => [100, 101] }, Label_stack.new(100, 101).to_hash)
+  end
 end

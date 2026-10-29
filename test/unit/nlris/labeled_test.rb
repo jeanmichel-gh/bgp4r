@@ -111,4 +111,43 @@ class TestBgpNlrisLabeled < Test::Unit::TestCase
     end
   end
 
+  # The bug this fixes, and the whole reason the withdrawal fact has to be
+  # carried: 0x30 is 48 bits, 24 of label and 24 of prefix, and the three
+  # octets where the label goes are the RFC 8277 section 2.4 Compatibility
+  # field. Section 2.4 on the length: "the length of the Compatibility
+  # field must be subtracted from the length of the NLRI".
+  #
+  # Read as a label the field's clear S bit let the walk run on, so it took
+  # the prefix as a second label and left nothing: the whole NLRI came back
+  # as 'Label Stack=524288,40960 (bottom) 0.0.0.0/0'.
+  def test_a_withdrawn_labeled_nlri_reads_its_prefix
+    hex = '308000000a0000'
+    lb = Labeled.new([hex].pack('H*').is_packed, 1, 4, true)
+    assert_equal('Compatibility=0x800000 10.0.0.0/24', lb.to_s)
+    assert_equal(hex, lb.to_shex, 'byte for byte, so a capture can be sent again')
+    assert_equal({ :compatibility => '800000', :prefix => '10.0.0.0/24' }, lb.to_hash)
+    assert_equal(hex, Labeled.new(lb.to_hash).to_shex, 'and the hash builds it back')
+  end
+
+  # The same octets without that fact, which is what an announcement is.
+  # Nothing in them distinguishes the two, so this is not a second bug to
+  # fix but the reason Mp_unreach has to say which it is: a reader with
+  # only the octets cannot know. Kept as a test so that stays visible.
+  def test_the_same_octets_read_as_an_announcement_differ
+    hex = '308000000a0000'
+    lb = Labeled.new([hex].pack('H*').is_packed, 1, 4)
+    assert_equal('Label Stack=524288,40960 (bottom) 0.0.0.0/0', lb.to_s)
+  end
+
+  # A withdrawal of a VPN prefix: the 8 RD octets of RFC 4364 section 4.2
+  # sit behind the Compatibility field, so 0x70 is 112 bits of 24, 64 and
+  # 24. This is the shape the capture in update_test.rb carries.
+  def test_a_withdrawn_vpn_labeled_nlri
+    hex = '708000010000000100000001' + '0a0101'
+    lb = Labeled.new([hex].pack('H*').is_packed, 1, 128, true)
+    assert_match(/\ACompatibility=0x800001 \(not the RECOMMENDED 0x800000\)/, lb.to_s)
+    assert_match(/10\.1\.1\.0\/24\z/, lb.to_s)
+    assert_equal(hex, lb.to_shex)
+  end
+
 end

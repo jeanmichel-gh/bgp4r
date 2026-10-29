@@ -183,10 +183,41 @@ class Mp_unreach_Test < Test::Unit::TestCase
     
   end
   
+  # The plumbing, end to end. Mp_unreach is the one place that knows an
+  # NLRI is a withdrawal, which is where RFC 8277 section 2.4 says a
+  # withdrawn labeled route travels, so it is the one place that can tell
+  # a Compatibility field from a label.
+  def test_a_labeled_withdrawal_reads_its_prefix
+    mp = Mp_unreach.new(:afi => 1, :safi => 4,
+                        :nlris => [{ :compatibility => '800000',
+                                     :prefix => '10.0.0.0/24' }])
+    back = Attr.factory(mp.encode.is_packed)
+    assert_equal('Compatibility=0x800000 10.0.0.0/24', back.nlris[0].to_s)
+    assert_equal(mp.to_shex, back.to_shex, 'byte for byte')
+    assert_equal({ :mp_unreach => { :safi => 4, :afi => 1,
+                                    :nlris => { :compatibility => '800000',
+                                                :prefix => '10.0.0.0/24' } } },
+                 back.to_hash)
+  end
+
+  # And MP_REACH must not get the same treatment, because an announcement
+  # really does carry a label there. The two attributes are read by the
+  # same code and told apart only by this, so a test holds them apart:
+  # identical label octets, two readings, and the announcement's is the
+  # label.
+  def test_the_same_octets_in_mp_reach_are_a_label
+    reach = Mp_reach.new(:afi => 1, :safi => 4, :nexthop => ['10.0.0.1'],
+                         :nlris => [{ :label => 100, :prefix => '10.0.0.0/24' }])
+    back = Attr.factory(reach.encode.is_packed)
+    assert_equal('Label Stack=100 (bottom) 10.0.0.0/24', back.nlris[0].to_s)
+    assert_equal({ :label => 100 }, back.nlris[0].to_hash.reject { |k, _| k == :prefix })
+    assert_nil(back.nlris[0].to_hash[:compatibility],
+               'no Compatibility field on an announcement')
+  end
+
   private
   
    def attr_len(attr)
      attr.encode[2,1].unpack('C')[0]
    end
-  
 end

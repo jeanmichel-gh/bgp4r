@@ -74,7 +74,11 @@ module BGP
       while value.size>0
         path_id = value.slice!(0,4).unpack('N')[0]  if path_id_flag
         blen = value.slice(0,1).unpack('C')[0]
-        @nlris << self.class.nlri_ntop(value.slice!(0,(blen+7)/8+1), @afi, @safi, path_id)
+        # true: this is MP_UNREACH_NLRI, so a labeled NLRI carries the RFC
+        # 8277 section 2.4 Compatibility field where a label would be.
+        # This is the one place that fact is known.
+        @nlris << self.class.nlri_ntop(value.slice!(0,(blen+7)/8+1), @afi, @safi,
+                                       path_id, true)
       end
       raise RuntimeError, "leftover after parsing: #{value.unpack('H*')}" if value.size>0
     end
