@@ -30,6 +30,34 @@ to do. Breaking a working round trip fails the suite. Closing a gap
 fails it too, so the gap is struck off the record rather than left
 behind reading as verified.
 
+## The requirement that follows from it
+
+**If an object can be rebuilt from its own `to_hash`, a test must prove
+it.** A working round trip is a feature and needs a test like any other
+feature. Where `Klass.new(obj.to_hash)` reproduces the original's wire
+bytes, something has to assert it, in both of these places:
+
+* The class's own test file, which is where a reader looks. Build the
+  object, feed its own hash back to `new`, compare `encode` with the
+  original, and exercise every field the object carries.
+* Its entry in `test/unit/to_hash_catalog.rb`, which is what makes the
+  guarantee hold across the library rather than one class at a time.
+
+The converse is not required, and the asymmetry is the point. The hash
+form is a convenience, not part of the protocol, so a class whose hash
+does not read back is allowed; it gets a row below with what it loses and
+a decision. What is not allowed is a round trip that works with nothing
+saying so, because an untested round trip is a claim rather than a
+feature, and the next person to change the class has nothing to tell them
+they broke it.
+
+Both halves are enforced rather than asked for.
+`test_the_round_trips_that_work_still_work` covers the catalog half, and
+`test_every_working_round_trip_is_asserted_in_a_class_test_file` covers
+the other, so a working round trip that nothing asserts fails the suite.
+All 34 are covered at both levels, which is a measurement and not a
+promise.
+
 The catalog is also why this list cannot go stale. A class that answers
 `to_hash` and appears in neither the catalog nor the exclusions fails
 the suite, so a new class has to be measured and decided rather than
