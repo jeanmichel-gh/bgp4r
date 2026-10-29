@@ -86,7 +86,7 @@ things:
 
 **That is the whole of the "by another route" column.** `to_hash` answers
 the wrapped form because its caller needs the key; `new` reads the bare
-form because that is what its test wrote. Both halves work. 42 of the 96
+form because that is what its test wrote. Both halves work. 38 of the 97
 rows are this, and none of them is a defect, which is why nearly all of
 them are left alone.
 
@@ -129,8 +129,8 @@ hash is complete even though no door exists.
 | **not in its attribute** | Its own `new` does, the other route does not. Worse than it sounds: a hash key inherited from a parent class is the cause, and the attribute then rebuilds a different attribute without saying so. No row reads this today; `As4_path` did until it was fixed. |
 | **no** | No route gives the octets back. Information is gone. |
 
-Of the 96 classes measured: **43 round trip through their own `new`**,
-**38 by another route**, and **15 lose information**. Whether a failing route raises or quietly answers
+Of the 97 classes measured: **45 round trip through their own `new`**,
+**38 by another route**, and **14 lose information**. Whether a failing route raises or quietly answers
 something else is in the table rather than in the verdict, because a
 verdict is meant to say what a person gets. The quiet ones are the
 dangerous half and each one says so.
@@ -173,18 +173,16 @@ not that: `Extended_community` is the partial base class,
 so a subclass is what a test builds, and `OPT_PARM::Capability` is
 likewise the base.
 
-**16 are to be fixed**, in this order. Twelve were, and what they were
+**15 are to be fixed**, in this order. Fourteen were, and what they were
 is under "What has been fixed" below.
 
-First, the two that are quietly wrong, because a confident wrong answer
-is worse than a refusal:
+First, the last one that is wrong wholesale rather than by a field:
+`Path_attribute` collapses two attributes of one type into the last one,
+and loses the tail `parse_wire` keeps. Both silently.
 
-1. `CAP::Orf` builds an empty capability from its own hash, so 26 octets
-   become 4. It is the last of that kind and the biggest of them, because
-   `Orf::Entry` has no `to_hash` at all and its own `new` has an empty
-   Hash branch, so the entries have to be given a hash form first.
-2. `Path_attribute` collapses two attributes of one type into the last
-   one, and loses the tail `parse_wire` keeps.
+The field losses below are quiet too, each dropping one field without
+raising, but each is one field rather than a different object, which is
+why they rank after it.
 
 Second, the cheap ones, where the hash is already complete and only a
 constructor branch is missing: `Notification` and `Vpn`.
@@ -209,9 +207,26 @@ can depend on their contents.
 
 ## What has been fixed
 
-Twelve, all of which rebuilt different octets without raising. The six
-most recent closed the whole prefix SID family and left `CAP::Orf` as
-the only quiet one still standing.
+Fourteen, all of which rebuilt different octets without raising. The
+last two closed the ORF capability, which leaves `Path_attribute` as the
+only one still wrong wholesale rather than by a field.
+
+* **`CAP::Orf`** and **`CAP::Orf::Entry`.** The capability inherited
+  `Capability`'s bare `{:code=>3}`, so every entry was lost, and a Hash
+  fell through to the bare `super` and built a capability with no entries
+  at all: 26 octets became 4. `Capability.from_hash` routes code 3
+  straight back there, so that route answered an empty capability too.
+  `Entry` had no `to_hash` for anything to read and an empty Hash branch,
+  so every field stayed nil and `encode` raised.
+* The same change found a **wire** bug beside the hash one. RFC 5291
+  section 5 Figure 3 gives the capability a Reserved octet and never says
+  what to do with it, and `parse` unpacked it into a throwaway while
+  `encode` wrote 0, so a captured capability could not be sent again:
+  `0001ff0101` came back as `0001000101`. The octet is kept now, and the
+  hash carries it only when it is not 0. **Section 4's "Reserved is a
+  5-bit field. It is set to 0 on transmit and ignored on receipt" is a
+  different field**, in the ORF entry of a ROUTE-REFRESH, and is not a
+  rule about this octet.
 
 * **`Traffic_action`.** Its own `new` read `:sample`, `:terminal` and
   `:bits` off the outer hash, found all three nil, and built a clean
@@ -394,7 +409,8 @@ attributes come back, with the same type codes and the same octets.
 | `OPT_PARM::CAP::Extended_nexthop` | yes | -- | -- |
 | `OPT_PARM::CAP::Graceful_restart` | no | the restart state, the restart time and every address family tuple. The hash is {:code=>64} whatever the capability holds. | fix |
 | `OPT_PARM::CAP::Mbgp` | yes | -- | -- |
-| `OPT_PARM::CAP::Orf` | no | every ORF Entry. The hash is {:code=>3}, and new with a Hash quietly builds an empty capability, so 26 octets become 4. Orf::Entry has no to_hash at all and its own new has an empty Hash branch. | fix |
+| `OPT_PARM::CAP::Orf` | yes | -- | -- |
+| `OPT_PARM::CAP::Orf::Entry` | yes | -- | -- |
 | `OPT_PARM::CAP::Role` | yes | -- | -- |
 | `OPT_PARM::CAP::Route_refresh` | yes | -- | -- |
 | `OPT_PARM::CAP::Unknown` | yes | -- | -- |

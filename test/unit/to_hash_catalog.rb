@@ -768,17 +768,25 @@ module ToHashCatalog
     gr
   end
 
-  ENTRIES['BGP::OPT_PARM::CAP::Orf'] = entry(
-    :lossy,
-    'every ORF Entry. The hash is {:code=>3}, and new with a Hash ' \
-    'quietly builds an empty capability, so 26 octets become 4. ' \
-    "Orf::Entry has no to_hash at all and its own new has an empty " \
-    'Hash branch.',
-    :fix) do
+  # Fixed: the capability inherited Capability's bare {:code=>3}, so
+  # every Entry was lost, and a Hash fell through to the bare super and
+  # built a capability with no entries at all: 26 octets became 4, in
+  # silence. Capability.from_hash routes code 3 straight back here, so
+  # that route answered an empty capability too.
+  ENTRIES['BGP::OPT_PARM::CAP::Orf'] = entry(:ok, nil, nil) do
     orf = BGP::OPT_PARM::CAP::Orf.new
     orf.add(BGP::OPT_PARM::CAP::Orf::Entry.new(1, 1, [1, 1], [2, 1], [3, 1]))
     orf.add(BGP::OPT_PARM::CAP::Orf::Entry.new(1, 2, [1, 1], [2, 1], [3, 1]))
     orf
+  end
+
+  # New here, because the fix above gave Entry a to_hash it never had, and
+  # the completeness guard asked for it the moment it did. Built off the
+  # wire so the RFC 5291 section 5 Reserved octet is set: encode used to
+  # write 0 for it whatever arrived, so a captured capability could not be
+  # sent again. The hash carries it only when it is not 0.
+  ENTRIES['BGP::OPT_PARM::CAP::Orf::Entry'] = entry(:ok, nil, nil) do
+    BGP::OPT_PARM::CAP::Orf::Entry.new(wire('0001ff01014001'))
   end
 
   # Classes with no entry, each with the reason. An abstract base with no
