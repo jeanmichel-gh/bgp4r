@@ -331,8 +331,11 @@ why none of them blocked this phase.
 
 Phase 2, the peer adapter, came next and is **Done**: a table is fed from a
 live session. **Phase 3, the export side, is now Done in full**, including
-GoBGP's opinion of it. Phase 4's show commands are done for IOS and Junos;
-what is left of that phase is the FIB adapter, which needs a container.
+GoBGP's opinion of it. Phase 4's show commands are done for all three
+styles, and what is left of that phase is the second half of the FIB
+adapter: running the commands the first half plans. It needs a network
+namespace and not a container, which #156 measured; this paragraph said
+container until then and the detailed entry below says what came apart.
 
 ### RIB and FIB, five phases
 
