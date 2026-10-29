@@ -160,7 +160,10 @@ module BGP
     end
   end
   class Nlri
-    def self.factory(s, afi, safi, path_id=nil)
+    # withdrawn: see Labeled.new_ntop. It only reaches the labeled SAFIs,
+    # because they are the only ones whose NLRI carries a label for RFC
+    # 8277 section 2.4 to replace.
+    def self.factory(s, afi, safi, path_id=nil, withdrawn=false)
       if afi== 1 and safi==1
         Nlri.new_ntop(s.is_packed, path_id)
       else
@@ -168,7 +171,7 @@ module BGP
         when 1,2
           Prefix.new_ntop(s.is_packed, afi, path_id)
         when 4,128,129
-          Labeled.new_ntop(s.is_packed, afi, safi, path_id)
+          Labeled.new_ntop(s.is_packed, afi, safi, path_id, withdrawn)
         else
           #TODO class Error.....
           raise RuntimeError, "Afi #{afi} Safi #{safi} not supported!"

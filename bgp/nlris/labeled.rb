@@ -2,8 +2,13 @@ require 'bgp/nlris/label'
 module BGP
   class Labeled
 
-    def self.new_ntop(s, afi, safi, path_id=nil)
-      nlri = new(s, afi, safi)
+    # withdrawn: the NLRI came from MP_UNREACH_NLRI, which is where RFC
+    # 8277 section 2.4 says a withdrawal travels, so the three octets
+    # where a label would be are its Compatibility field. Nothing in the
+    # octets says so, which is why it has to be passed in; see the comment
+    # on Label_stack#compatibility.
+    def self.new_ntop(s, afi, safi, path_id=nil, withdrawn=false)
+      nlri = new(s, afi, safi, withdrawn)
       nlri.path_id=path_id if path_id
       nlri
     end
@@ -21,7 +26,13 @@ module BGP
         # TODO: a new_prefix :prefix=>, :labels=>
         #                    :other=> ...
         @prefix = Prefix.new(args[0][:prefix]) # assuming it's a Prefix, which it may not be
-        @labels = Label_stack.new(*args[0][:labels])
+        # A withdrawal hashes a :compatibility key instead of :labels, so
+        # the hash a parsed withdrawal produces builds one back.
+        @labels = if args[0][:compatibility]
+                    Label_stack.new(:compatibility => args[0][:compatibility])
+                  else
+                    Label_stack.new(*args[0][:labels])
+                  end
       else
         @prefix, *labels = args
         @labels = Label_stack.new(*labels)
@@ -54,9 +65,14 @@ module BGP
     def afi
       @prefix.afi
     end  
-    def parse(s, afi=1, safi=1)
+    def parse(s, afi=1, safi=1, withdrawn=false)
       bitlen = s.slice!(0,1).unpack('C')[0]
-      @labels = Label_stack.new(s)
+      @labels = Label_stack.new(s, withdrawn)
+      # RFC 8277 section 2.4 on a withdrawal: "the length of the
+      # Compatibility field must be subtracted from the length of the
+      # NLRI", which is this subtraction with a size of 1. Reading the
+      # field as labels made the walk eat the prefix too and left this at
+      # zero, so the prefix came out 0.0.0.0/0.
       mlen = bitlen - (24*@labels.size)
       prefix = [mlen,s.slice!(0,(mlen+7)/8)].pack("Ca*")
       case safi

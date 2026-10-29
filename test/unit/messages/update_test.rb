@@ -359,12 +359,22 @@ class Update_Test < Test::Unit::TestCase
     assert upd.path_attribute.has_a_mp_unreach_attr?
     mp_unreach = upd.path_attribute[:mp_unreach]
     assert_equal 1, mp_unreach.nlris[0].path_id
-    assert_equal 'Label Stack=524288 (bottom) RD=1:1, ID=1, IPv4=10.1.1.0/24', mp_unreach.nlris[0].to_s
+    # Those three octets are the RFC 8277 section 2.4 Compatibility field,
+    # not a label: this is MP_UNREACH_NLRI, which is where section 2.4
+    # says a withdrawal travels. This test asserted
+    # 'Label Stack=524288 (bottom)' until the reading was fixed, which is
+    # 0x800001 read as a label, and it is the bug rather than a baseline:
+    # with the field read as a label the walk ran on and the prefix came
+    # out wrong too. The value is not the RECOMMENDED 0x800000 here, which
+    # section 2.4 allows for ("However, some implementations set it to
+    # 0x000000") and requires a receiver to ignore either way.
+    assert_equal 'Compatibility=0x800001 (not the RECOMMENDED 0x800000) ' \
+                 'RD=1:1, ID=1, IPv4=10.1.1.0/24', mp_unreach.nlris[0].to_s
     h = {
       :path_attributes=>{
         :mp_unreach=>{
           :safi=>128, :afi=>1, 
-          :nlris=>{:label=>524288, :rd=>[1, 1], :prefix=>"10.1.1.0/24", :path_id=>1}
+          :nlris=>{:compatibility=>"800001", :rd=>[1, 1], :prefix=>"10.1.1.0/24", :path_id=>1}
         }
       }
     }

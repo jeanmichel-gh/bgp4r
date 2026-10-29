@@ -55,20 +55,34 @@ module BGP
         @nlris = [h[:nlris]].flatten.compact.collect do |n|
           path_id = n[:path_id] || @path_id
           prefix = n[:prefix].is_a?(String) ? Prefix.new(n[:prefix]) : n[:prefix]
-          Labeled.new_with_path_id(path_id,prefix, *n[:label])
+          Labeled.new_with_path_id(path_id, prefix, *labels_from(n))
         end
       when 128,129
         @nlris = [h[:nlris]].flatten.compact.collect do |n|
           path_id = n[:path_id] || @path_id
           prefix = n[:prefix].is_a?(Prefix) ? n[:prefix] :  Prefix.new(n[:prefix]) 
           rd = n[:rd].is_a?(Rd) ?  n[:rd] : Rd.new(*n[:rd])
-          Labeled.new_with_path_id(path_id,Vpn.new(prefix,rd), *n[:label]) 
+          Labeled.new_with_path_id(path_id, Vpn.new(prefix,rd), *labels_from(n))
         end
       else
         raise "SAFI #{safi} not implemented!"
       end
       @nexthops = [h[:nexthop]].flatten.collect { |nh| nexthop_klass(afi,safi,nh).new(nh) } if h[:nexthop]
       self
+    end
+
+    # What goes where a labeled NLRI's labels go, from its hash.
+    #
+    # A withdrawal hashes a :compatibility key instead of :label, because
+    # RFC 8277 section 2.4 puts its Compatibility field where the label
+    # would be and its value is not a label. Passing *n[:label] for one of
+    # those splats nil, which built an empty Label_stack and then raised
+    # NoMethodError in encode: the hash of a parsed withdrawal could not
+    # be built back, which is the round trip Conventions asks every class
+    # to keep.
+    def labels_from(n)
+      return [{ :compatibility => n[:compatibility] }] if n[:compatibility]
+      [n[:label]].flatten.compact
     end
     
     def to_hash
@@ -97,11 +111,14 @@ module BGP
       # the Path Identifier already read when add-path is on (RFC 7911
       # section 3). Nlri.factory treats AFI 1 SAFI 1 as a whole plain NLRI
       # field and would read the Path Identifier a second time.
-      def nlri_ntop(s, afi, safi, path_id=nil)
+      # withdrawn is true only from Mp_unreach#parse: RFC 8277 section 2.4
+      # replaces a withdrawn route's label with a Compatibility field, and
+      # nothing in the octets says which it is. See Labeled.new_ntop.
+      def nlri_ntop(s, afi, safi, path_id=nil, withdrawn=false)
         if (afi == 1 || afi == 2) && (safi == 1 || safi == 2)
           Prefix.new_ntop(s.is_packed, afi, path_id)
         else
-          Nlri.factory(s, afi, safi, path_id)
+          Nlri.factory(s, afi, safi, path_id, withdrawn)
         end
       end
 
