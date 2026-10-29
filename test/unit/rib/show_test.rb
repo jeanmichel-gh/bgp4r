@@ -61,7 +61,7 @@ class TestBgpRibShow < Test::Unit::TestCase
   def test_an_unknown_style_is_refused
     e = assert_raise(ArgumentError) { @rib.show(:cisco_nx) }
     assert_match(/unknown style/, e.message)
-    assert_equal(%i[ios junos], BGP::Rib::Show::STYLES)
+    assert_equal(%i[ios junos iosxr], BGP::Rib::Show::STYLES)
   end
 
   def test_an_empty_table_still_prints_its_header
@@ -260,5 +260,141 @@ class TestBgpRibShow < Test::Unit::TestCase
     s = BGP::Rib::Show.new(@rib, :style => :junos)
     assert_equal(:junos, s.style)
     assert_same(@rib, s.table)
+  end
+
+  # IOS-XR. The sample this is written from is named in the comment on
+  # BGP::Rib::Show: Cisco's BGP Configuration Guide for the NCS 5500, IOS XR
+  # release 7.11.x.
+
+  def iosxr(prefix = nil) ; @rib.show(:iosxr, prefix) ; end
+
+  # The row for a prefix, without the nine header lines.
+  def iosxr_rows ; iosxr.lines.map(&:chomp).drop(9) ; end
+
+  def test_an_empty_table_still_prints_its_iosxr_header
+    out = iosxr
+    assert_match(/^BGP router identifier 1\.1\.1\.1, local AS number 65001$/, out)
+    assert_equal(9, out.lines.size, 'the header and nothing else')
+  end
+
+  # Where this differs from IOS rather than being IOS relabelled, and all
+  # three differences are the sample's: the line breaks after "> best" with
+  # "i - internal" below rather than above, stale has a small s where IOS
+  # prints "S Stale", and N for Nexthop-discard has no IOS equivalent.
+  def test_the_iosxr_legend_is_not_the_ios_one
+    out = iosxr
+    assert_match(/^Status codes: s suppressed, d damped, h history, \* valid, > best$/, out)
+    assert_match(/^ +i - internal, r RIB-failure, S stale, N Nexthop-discard$/, out)
+    assert_match(/N Nexthop-discard/, out)
+    assert(!ios.include?('Nexthop-discard'), 'and IOS has no code for it')
+    assert(ios.include?('S Stale'), 'where IOS capitalises stale')
+  end
+
+  # The same discipline as the IOS column test: each field is read at the
+  # offset its own heading sits at, so the header is the source of truth.
+  # The sample's own header and rows agree that Next Hop starts 22 in, which
+  # is what makes the Network column wider here than IOS's.
+  def test_the_iosxr_columns_line_up_under_the_header
+    @rib.announce(route(I1, '10.1.0.0/16', :med => 10, :local_pref => 250))
+    header = iosxr.lines.map(&:chomp)[8]
+    row = iosxr_rows.first
+    assert_equal(22, header.index('Next Hop'), 'measured off the sample')
+    assert_equal('10.1.0.0/16', row[header.index('Network'), 19].strip, 'Network')
+    assert_equal('10.0.0.4', row[header.index('Next Hop'), 17].strip, 'Next Hop')
+    assert_equal('10', row[header.index('Metric'), 6].strip, 'Metric')
+    assert_equal('250', row[header.index('LocPrf'), 6].strip, 'LocPrf')
+    assert_equal('0', row[header.index('Weight'), 6].strip, 'Weight')
+    assert_equal('i', row[header.index('Path')..-1].strip, 'Path')
+  end
+
+  def test_the_iosxr_prefix_is_printed_on_its_first_path_only
+    @rib.announce(route(E1, '10.1.0.0/16', :med => 10))
+    @rib.announce(route(E2, '10.1.0.0/16', :med => 20, :as_path => [65003, 65009]))
+    rows = iosxr_rows
+    assert_equal(2, rows.size)
+    assert_match(/^\*> 10\.1\.0\.0\/16 /, rows[0], 'best, and the prefix')
+    assert_match(/^\* {21}10\.0\.0\.3/, rows[1], 'and blank under it')
+  end
+
+  # A single prefix gets the detail form, because that is what IOS-XR gives
+  # for one.
+  def test_the_iosxr_detail_form
+    @rib.announce(route(E1, '10.1.0.0/16', :med => 10))
+    @rib.announce(route(E2, '10.1.0.0/16', :med => 20, :as_path => [65003, 65009]))
+    out = iosxr('10.1.0.0/16')
+    assert_match(/^BGP routing table entry for 10\.1\.0\.0\/16$/, out)
+    assert_match(/^Paths: \(2 available, best #1\)$/, out)
+    assert_match(/^  Path #1: Received by speaker 0$/, out)
+    assert_match(/^  65002$/, out, 'the AS path on its own line')
+    assert_match(/^    10\.0\.0\.2 from 10\.0\.0\.2 \(2\.2\.2\.2\)$/, out)
+    assert_match(/^      Origin IGP, metric 10, localpref 100, valid, external, best$/, out)
+    assert_match(/^  Path #2: Received by speaker 0$/, out)
+    assert_match(/^  65003 65009$/, out)
+    assert(!out.match?(/Origin IGP, metric 20.*best/), 'only one path is best')
+  end
+
+  # IOS-XR spells the origin out in the detail form where the table form has
+  # a one letter code, and the sample's lower case "incomplete" beside upper
+  # case IGP and EGP is theirs, not a slip here.
+  def test_the_iosxr_detail_spells_the_origin_out
+    @rib.announce(route(E1, '10.1.0.0/16', :origin => 2))
+    assert_match(/^      Origin incomplete, /, iosxr('10.1.0.0/16'))
+    assert_equal({ 0 => 'IGP', 1 => 'EGP', 2 => 'incomplete' },
+                 BGP::Rib::Show::ORIGIN_WORDS)
+  end
+
+  # RFC 7911 section 3. The sample prints 0 because it has no add-path
+  # session, which is also what a route that arrived without an Identifier
+  # gets here.
+  def test_the_iosxr_detail_prints_a_received_path_id
+    pa = BGP::Path_attribute.new(BGP::Origin.new(0), BGP::Next_hop.new(E1.address),
+                                 BGP::As_path.new(65002))
+    @rib.announce(BGP::Rib::Route.new('10.1.0.0/16', pa, E1, :path_id => 7))
+    assert_match(/^      Received Path ID 7$/, iosxr('10.1.0.0/16'))
+    @rib.announce(route(E2, '192.0.2.0/24'))
+    assert_match(/^      Received Path ID 0$/, iosxr('192.0.2.0/24'))
+  end
+
+  # An internal peer's route says internal, and one this speaker originated
+  # says local rather than either.
+  def test_the_iosxr_detail_names_where_a_path_came_from
+    @rib.announce(route(I1, '10.1.0.0/16', :local_pref => 250))
+    assert_match(/localpref 250, valid, internal, best$/, iosxr('10.1.0.0/16'))
+    @rib.originate('203.0.113.0/24')
+    out = iosxr('203.0.113.0/24')
+    assert_match(/valid, local, best$/, out)
+    assert_match(/^  Local$/, out, 'an empty AS_PATH is not printed blank')
+  end
+
+  # group-best and multipath are in the sample and are deliberately absent:
+  # bgp4r installs one best path per prefix and has no multipath, so either
+  # flag would claim something it does not do.
+  def test_the_iosxr_detail_claims_no_multipath
+    @rib.announce(route(E1, '10.1.0.0/16'))
+    out = iosxr('10.1.0.0/16')
+    assert(!out.include?('group-best'))
+    assert(!out.include?('multipath'))
+  end
+
+  # The table form borrows IOS's 0.0.0.0 and 32768 for a locally originated
+  # route, since the IOS-XR sample has none. The detail form borrows nothing
+  # and prints what the Route carries, so the two disagree on purpose.
+  def test_a_local_route_in_both_iosxr_forms
+    @rib.originate('203.0.113.0/24')
+    row = iosxr_rows.first
+    header = iosxr.lines.map(&:chomp)[8]
+    assert_equal('0.0.0.0', row[header.index('Next Hop'), 17].strip)
+    assert_equal('32768', row[header.index('Weight'), 6].strip)
+    assert_match(/^    1\.1\.1\.1 from 1\.1\.1\.1 \(1\.1\.1\.1\)$/,
+                 iosxr('203.0.113.0/24'))
+  end
+
+  # IOS-XR has no line to put a losing reason on, so this prints none. The
+  # Junos style is the one that does.
+  def test_the_iosxr_detail_gives_no_reason_a_path_lost
+    @rib.announce(route(E1, '10.1.0.0/16', :med => 10))
+    @rib.announce(route(E2, '10.1.0.0/16', :med => 20, :as_path => [65003, 65009]))
+    assert(!iosxr('10.1.0.0/16').include?('reason'))
+    assert_match(/Inactive reason/, junos('10.1.0.0/16'), 'where Junos does')
   end
 end

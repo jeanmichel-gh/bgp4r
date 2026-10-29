@@ -229,6 +229,8 @@ module BGP
       #   puts rib.show                        # IOS, show ip bgp
       #   puts rib.show(:junos)                # Junos, show route detail
       #   puts rib.show(:junos, '10.0.0.0/8')  # one prefix, and why paths lost
+      #   puts rib.show(:iosxr)                # IOS-XR, show bgp
+      #   puts rib.show(:iosxr, '10.0.0.0/8')  # one prefix, the detail form
       def show(style = :ios, prefix = nil)
         Show.new(self, :style => style).to_s(prefix)
       end
