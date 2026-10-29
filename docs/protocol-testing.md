@@ -464,27 +464,50 @@ Either takes a few minutes: every case gets its own session.
 
 Run as native processes on loopback, all three at once.
 
-The two GoBGP columns are asserted by the tests above, so they are
-re-measured on every run rather than recorded by hand. The FRR and BIRD
-columns are still hand measurements, and only the session level outcomes:
-BIRD gives no usable RIB answer over a loopback session. Their rows below
+The two GoBGP columns and the FRR one are asserted by the tests above, so
+they are re-measured on every run rather than recorded by hand. The BIRD
+column is still a hand measurement, and only the session level outcomes:
+BIRD gives no usable RIB answer over a loopback session. Its rows below
 are the blanket ones, so a case named on its own row has no separate
-measurement for them.
+measurement for it.
 
 | | GoBGP 4.10.0 | GoBGP 3.23.0 | FRR 8.4.4 | BIRD 2.14 |
 |---|---|---|---|---|
-| treat as withdraw cases | agrees | agrees but one, below | resets, 3/10 | keeps the session |
-| attribute discard cases | agrees | agrees | agrees | keeps the session |
+| treat as withdraw cases | agrees | agrees but one, below | reset 3/10, 8 of 11 | keeps the session |
+| attribute discard cases | agrees | agrees | agrees but one, below | keeps the session |
 | unrecognized well known | reset 3/2 | reset 3/2 | reset 3/10 | keeps the session |
-| attribute overruns the list | agrees | reset 3/5 | - | - |
+| attribute overruns the list | agrees | reset 3/5 | reset 3/5 | - |
 | duplicate MP_REACH | reset 3/1 | reset 3/1 | reset 3/1 | reset 3/1 |
+| duplicate of any other attribute | agrees | agrees | reset 3/1 | - |
 | Prefix-SID TLV overruns | agrees | agrees | agrees | keeps the session |
 | Label-Index length not 7 | no check | no check | agrees | keeps the session |
-| PMSI_TUNNEL too short | agrees | agrees | resets, 3/10 | keeps the session |
+| PMSI_TUNNEL too short | agrees | agrees | reset 3/10 | keeps the session |
 | tunnel TLV overruns | installs the route | installs the route | installs the route | keeps the session |
 | sub-TLV overruns its TLV | discards the attribute | discards the attribute | installs the route | keeps the session |
 
-GoBGP 4.10.0 agrees on 16 of the 18, and 3.23.0 on 15.
+GoBGP 4.10.0 agrees on 16 of the 18, 3.23.0 on 15, and FRR 8.4.4 on 6.
+
+Two rows in the FRR column changed when the hand measurement was replaced
+by the asserted one, and both were the hand measurement's fault rather
+than a change in FRR:
+
+* "attribute discard cases: agrees" was wrong. Four of the five agree; a
+  duplicated attribute resets the session, which is the new row above and
+  the one place the two routers disagree with each other. RFC 7606
+  section 3 bullet (g) splits that case: for MP_REACH_NLRI or
+  MP_UNREACH_NLRI more than once, "then a NOTIFICATION message MUST be
+  sent with the Error Subcode 'Malformed Attribute List'", which is the
+  duplicate MP_REACH row. But "If any other attribute (whether recognized
+  or unrecognized) appears more than once in an UPDATE message, then all
+  the occurrences of the attribute other than the first one SHALL be
+  discarded", and the bullet names no subcode and no reset. FRR sends
+  subcode 1 for a duplicated ORIGIN, which is the treatment (g) reserves
+  for the MP attributes. GoBGP discards the later copy and keeps the
+  route, which is what (g) asks.
+* "attribute overruns the list" was a dash, because the hand measurement
+  skipped it. It is reset 3/5, which is exactly what GoBGP 3.23.0 does and
+  what GoBGP 4 fixed. Two implementations having had the same bug in the
+  same place says that sentence of RFC 7606 section 4 is easy to miss.
 
 ### The one row the two GoBGP versions differ on
 

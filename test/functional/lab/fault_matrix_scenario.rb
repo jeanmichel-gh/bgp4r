@@ -105,16 +105,126 @@ module FaultMatrixScenario
   # could re-run it needed Docker.
   GOBGP_3 = { 'attr_overrun' => 5 }.freeze
 
+  # FRR 8.4.4, measured by fault_matrix_frr_test.rb rather than recorded
+  # by hand, which is the whole reason that test exists.
+  #
+  # **FRR agrees on 6 of the 18 rows, where GoBGP 4.10.0 agrees on 16 and
+  # 3.23.0 on 15.** It is much further from RFC 7606 than either, and in
+  # one specific way: it decides to withdraw, says so in its log, and then
+  # resets the session anyway.
+  #
+  # The route level answers, same two cases as GoBGP. Both break the RFC
+  # 9012 section 13 framing rule, a MUST asking for treat-as-withdraw, and
+  # FRR keeps the route exactly as both GoBGP versions do. Two independent
+  # stacks landing in the same place is worth knowing before reading it as
+  # a bug in either, which is why TUNNEL_ENCAP is shared rather than
+  # repeated here.
+  FRR_8_INSTALLED = TUNNEL_ENCAP
+
+  # The session level answers. Every one of these is a divergence from
+  # what RFC 7606 asks, and each was read in the RFC rather than inferred
+  # from the fact that FRR did it.
+  #
+  # **The eight 10s, and the one that is not a treat-as-withdraw case.**
+  # Subcode 10 is Invalid Network Field (RFC 4271 section 6.3). For the
+  # eight treat-as-withdraw cases RFC 7606 makes that approach a MUST, and
+  # FRR's own log shows it getting there and then falling over: it names
+  # the malformed attribute, says it is treating the UPDATE as a
+  # withdrawal, and then fails to parse the NLRI on that withdraw path and
+  # resets. So this is not a router that disagrees about the approach; it
+  # is a router whose implementation of the approach is broken, which is a
+  # worse failure and a more useful thing to be able to show.
+  #
+  # unknown_wellknown is in this list for a different reason, and it is
+  # the mildest entry: it is a session_reset case, so FRR resetting is
+  # right. RFC 4271 section 6.3 names subcode 2, Unrecognized Well-known
+  # Attribute, and RFC 7606 section 3 does not revisit that case at all.
+  # FRR sends 10 instead, so it resets for the right reason and reports
+  # the wrong one. The catalog's 2 is overridden here rather than dropped,
+  # because merge keeps the assertion that it reset at all.
+  #
+  # **attr_overrun, where FRR 8.4.4 behaves exactly like GoBGP 3.23.0.**
+  # Subcode 5, Attribute Length Error, where RFC 7606 section 4 makes
+  # treat-as-withdraw a MUST; see GOBGP_3 above for that section's text.
+  # GoBGP fixed it in 4.x. Two implementations having had the same bug in
+  # the same place says the sentence is easy to miss, not that the reading
+  # is doubtful.
+  #
+  # **duplicate_attr, the one where the RFC is flatly against FRR.** RFC
+  # 7606 section 3 bullet (g) splits the case in two. For MP_REACH_NLRI or
+  # MP_UNREACH_NLRI appearing more than once, "then a NOTIFICATION message
+  # MUST be sent with the Error Subcode 'Malformed Attribute List'", which
+  # is the duplicate_mp_reach row and is in CATALOG_RESETS as subcode 1.
+  # But for anything else: "If any other attribute (whether recognized or
+  # unrecognized) appears more than once in an UPDATE message, then all
+  # the occurrences of the attribute other than the first one SHALL be
+  # discarded", and the bullet names no subcode and no reset. FRR sends
+  # subcode 1 for a duplicated ORIGIN, which is the treatment that bullet
+  # reserves for the MP attributes. GoBGP keeps the session and the route,
+  # which is what (g) asks. So the catalog is right, GoBGP is right, and
+  # FRR is wrong, and that is worth stating plainly because this is the
+  # one row where the two routers disagree with each other.
+  FRR_8_RESETS = {
+    # treat_as_withdraw cases FRR resets on, all with Invalid Network Field
+    'origin_length'   => 10,
+    'origin_value'    => 10,
+    'origin_flags'    => 10,
+    'next_hop_length' => 10,
+    'med_length'      => 10,
+    'as_path_segment' => 10,
+    'community_length' => 10,
+    'pmsi_length'     => 10,
+    # RFC 7606 section 4, the same row GoBGP 3 got wrong
+    'attr_overrun'    => 5,
+    # RFC 7606 section 3 (g) says discard the later copies, not reset
+    'duplicate_attr'  => 1
+  }.freeze
+
+  # unknown_wellknown is not a divergence: it is a session_reset case and
+  # FRR does reset, so the category is right. Only the reason is wrong.
+  # RFC 4271 section 6.3 names subcode 2, Unrecognized Well-known
+  # Attribute, and RFC 7606 section 3 does not revisit that case at all;
+  # FRR sends 10, Invalid Network Field, the same subcode its broken
+  # withdraw path produces for everything else. So it goes in the subcode
+  # overrides rather than in FRR_8_RESETS, which keeps it out of the
+  # divergence count where the matrix also does not count it.
+  FRR_8_SUBCODES = { 'unknown_wellknown' => 10 }.freeze
+
   # Every name this router is expected to answer differently from the
   # catalog, whether by installing the route or by resetting.
   def expected_divergences
     (installed_divergences + reset_divergences.keys).sort
   end
 
-  # The catalog's own session resets, plus any this router adds.
+  # The catalog's own session resets, plus any this router adds, plus any
+  # whose subcode it reports differently.
   def expected_resets
-    CATALOG_RESETS.merge(reset_divergences)
+    CATALOG_RESETS.merge(reset_divergences).merge(reset_subcode_overrides)
   end
+
+  # A case the catalog already expects to reset, which this router does
+  # reset, but with another subcode. name => subcode.
+  #
+  # Separate from reset_divergences, and the distinction matters: that one
+  # means "resets where the catalog does not expect a reset", and every
+  # name in it is a divergence. This one is a router that gets the
+  # category right and the reason wrong, so the case is not a divergence
+  # and must not be counted as one, or
+  # test_the_only_disagreements_are_the_known_ones disagrees with the
+  # matrix's own verdict column. FRR's unknown_wellknown is the first
+  # instance: see FRR_8_SUBCODES.
+  def reset_subcode_overrides ; {} ; end
+
+  # Categories where this router diverges on every single case, so there
+  # is nothing left to check in the derived test for that category.
+  #
+  # The guards those tests carry exist to catch a divergence list so broad
+  # that the test passes while asserting nothing. For a router that really
+  # does get a whole category wrong, that breadth is the measurement
+  # rather than a mistake, and saying so here is how it gets reviewed
+  # instead of quietly emptying the test. FRR 8.4.4 is the first instance
+  # and it diverges on all 11 treat_as_withdraw cases.
+  def wholesale_divergences ; [] ; end
 
   def result(name)
     results.find { |r| r['name'] == name.to_s } or
@@ -178,6 +288,10 @@ module FaultMatrixScenario
   # gets wrong, which test_the_known_divergences covers.
   def test_the_treat_as_withdraw_cases_dropped_the_route
     names = names_for(:treat_as_withdraw) - expected_divergences
+    if wholesale_divergences.include?(:treat_as_withdraw)
+      assert_equal [], names, 'treat_as_withdraw is declared wholesale, so none may be left'
+      return
+    end
     assert_not_equal [], names, 'the catalog has no treat_as_withdraw case left to check'
     names.each do |name|
       assert_equal false, result(name)['installed'],
@@ -188,6 +302,10 @@ module FaultMatrixScenario
   # RFC 7606 attribute-discard: the attribute goes, the route stays.
   def test_the_attribute_discard_cases_kept_the_route
     names = names_for(:attribute_discard) - expected_divergences
+    if wholesale_divergences.include?(:attribute_discard)
+      assert_equal [], names, 'attribute_discard is declared wholesale, so none may be left'
+      return
+    end
     assert_not_equal [], names, 'the catalog has no attribute_discard case left to check'
     names.each do |name|
       assert_equal true, result(name)['installed'],
