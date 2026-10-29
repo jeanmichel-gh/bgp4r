@@ -31,6 +31,16 @@ class Graceful_restart < BGP::OPT_PARM::Capability
       @restart_state, @restart_time = args
       @tuples = []
       super(OPT_PARM::CAP_GR)
+    elsif args.size==1 and args[0].is_a?(Hash)
+      # Its own hash, and the inner one alone. Neither was read: a Hash
+      # went to parse, which called slice! on it, so this capability had
+      # no hash build path at all.
+      h = args[0]
+      h = h[:capability] if h.key?(:capability)
+      @restart_state, @restart_time = h[:restart_state].to_i, h[:restart_time].to_i
+      @tuples = []
+      super(OPT_PARM::CAP_GR)
+      [h[:families]].flatten.compact.each { |f| add(f[:afi], f[:safi], f[:flags].to_i) }
     else
       parse(*args)
     end
@@ -57,6 +67,23 @@ class Graceful_restart < BGP::OPT_PARM::Capability
     s << @tuples.collect { |af| af.pack('nCC') }
     super s.join, :extended => extended
   end
+  # Everything the capability carries. RFC 4724 section 3, "Graceful
+  # Restart Capability": Restart Flags (4 bits), Restart Time in seconds
+  # (12 bits), then per family Address Family Identifier (16 bits),
+  # Subsequent Address Family Identifier (8 bits) and Flags for Address
+  # Family (8 bits). The key is :restart_state because that is what this
+  # class has always called the Restart Flags field, whose most
+  # significant bit section 3 defines as the Restart State (R).
+  #
+  # It used to inherit Capability's bare {:code=>64}, so the restart
+  # state, the restart time and every family were lost together.
+  def to_hash
+    super.merge(:capability => {
+      :restart_state => @restart_state, :restart_time => @restart_time,
+      :families => @tuples.collect { |afi, safi, flags|
+        { :afi => afi, :safi => safi, :flags => flags } } })
+  end
+
   def to_s
     s = []
     s <<  "\n    Graceful Restart Extension (#{CAP_GR}), length: #{encode.size}"

@@ -102,11 +102,12 @@ construction hash for `to_hash` to match:
 * `Labeled`'s Path Identifier, which is RFC 7911 and later than the class;
 * `Capability::Unknown`'s value octets, kept for the same reason as a tail.
 
-And the three capabilities whose hash is a bare `{:code=>n}` are the
+And the three capabilities whose hash was a bare `{:code=>n}` were the
 clean confirmation: `CAP::Add_path`, `CAP::Graceful_restart` and
-`CAP::Orf` have **no hash-construction test at all**, so no `to_hash` was
-ever written for them and they inherit `Capability`'s. Every capability
-that does round trip has one.
+`CAP::Orf` had **no hash-construction test at all**, so no `to_hash` was
+ever written for them and they inherited `Capability`'s, where every
+capability that did round trip had such a test. All three are fixed now,
+and each got the test it never had.
 
 ## What the verdicts mean
 
@@ -129,8 +130,8 @@ hash is complete even though no door exists.
 | **not in its attribute** | Its own `new` does, the other route does not. Worse than it sounds: a hash key inherited from a parent class is the cause, and the attribute then rebuilds a different attribute without saying so. No row reads this today; `As4_path` did until it was fixed. |
 | **no** | No route gives the octets back. Information is gone. |
 
-Of the 97 classes measured: **45 round trip through their own `new`**,
-**38 by another route**, and **14 lose information**. Whether a failing route raises or quietly answers
+Of the 97 classes measured: **47 round trip through their own `new`**,
+**38 by another route**, and **12 lose information**. Whether a failing route raises or quietly answers
 something else is in the table rather than in the verdict, because a
 verdict is meant to say what a person gets. The quiet ones are the
 dangerous half and each one says so.
@@ -173,7 +174,7 @@ not that: `Extended_community` is the partial base class,
 so a subclass is what a test builds, and `OPT_PARM::Capability` is
 likewise the base.
 
-**15 are to be fixed**, in this order. Fourteen were, and what they were
+**13 are to be fixed**, in this order. Sixteen were, and what they were
 is under "What has been fixed" below.
 
 First, the last one that is wrong wholesale rather than by a field:
@@ -207,9 +208,18 @@ can depend on their contents.
 
 ## What has been fixed
 
-Fourteen, all of which rebuilt different octets without raising. The
-last two closed the ORF capability, which leaves `Path_attribute` as the
-only one still wrong wholesale rather than by a field.
+Sixteen, all of which rebuilt different octets without raising, or could
+not be read back at all. `Path_attribute` is the only one still wrong
+wholesale rather than by a field.
+
+* **`CAP::Add_path`** and **`CAP::Graceful_restart`**, the last two of
+  the three bare `{:code=>n}` capabilities. Add_path lost every RFC 7911
+  section 4 `<AFI, SAFI, Send/Receive>` triple, and Graceful_restart lost
+  the restart state, the restart time and every family together. A Hash
+  fell to a bare `raise` in one and to `parse`, which called `slice!` on
+  it, in the other. Both carry their payload under the `:capability` key
+  now, and `Capability.from_hash`, which refused both codes by name,
+  builds them.
 
 * **`CAP::Orf`** and **`CAP::Orf::Entry`.** The capability inherited
   `Capability`'s bare `{:code=>3}`, so every entry was lost, and a Hash
@@ -402,12 +412,12 @@ attributes come back, with the same type codes and the same octets.
 
 | Class | Round trips | What the hash loses, or what stands in the way | Decision |
 |---|---|---|---|
-| `OPT_PARM::CAP::Add_path` | no | every RFC 7911 section 4 <AFI, SAFI, Send/Receive> tuple. The hash is {:code=>69} whatever the capability holds. | fix |
+| `OPT_PARM::CAP::Add_path` | yes | -- | -- |
 | `OPT_PARM::CAP::As4` | yes | -- | -- |
 | `OPT_PARM::CAP::Dynamic` | yes | -- | -- |
 | `OPT_PARM::CAP::Enhanced_route_refresh` | yes | -- | -- |
 | `OPT_PARM::CAP::Extended_nexthop` | yes | -- | -- |
-| `OPT_PARM::CAP::Graceful_restart` | no | the restart state, the restart time and every address family tuple. The hash is {:code=>64} whatever the capability holds. | fix |
+| `OPT_PARM::CAP::Graceful_restart` | yes | -- | -- |
 | `OPT_PARM::CAP::Mbgp` | yes | -- | -- |
 | `OPT_PARM::CAP::Orf` | yes | -- | -- |
 | `OPT_PARM::CAP::Orf::Entry` | yes | -- | -- |

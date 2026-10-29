@@ -48,4 +48,36 @@ class TestBgpOptionalParametersGracefulCapRestart < Test::Unit::TestCase
     gr.add(1, 1)
     assert_match(/AFI IPv4 \(1\), SAFI Unicast \(1\)/, gr.to_s)
   end
+
+  # It inherited Capability's bare {:code=>64}, so the restart state, the
+  # restart time and every family were lost together, and a Hash went to
+  # parse, which called slice! on it.
+  #
+  # RFC 4724 section 3: Restart Flags (4 bits), Restart Time in seconds
+  # (12 bits), then per family Address Family Identifier (16 bits),
+  # Subsequent Address Family Identifier (8 bits), Flags for Address
+  # Family (8 bits). The most significant bit of Restart Flags is the
+  # Restart State (R), and the most significant bit of Flags for Address
+  # Family is the Forwarding State (F), which is the 0x80 below.
+  def test_to_hash_carries_the_whole_capability_and_reads_back
+    gr = BGP::OPT_PARM::CAP::Graceful_restart.new(0x8, 120)
+    gr.add(1, 1, 0x80)
+    gr.add(2, 128, 0)
+    assert_equal({ :code => 64, :capability => {
+                     :restart_state => 0x8, :restart_time => 120,
+                     :families => [{ :afi => 1, :safi => 1, :flags => 0x80 },
+                                   { :afi => 2, :safi => 128, :flags => 0 }] } },
+                 gr.to_hash)
+    assert_equal(gr.encode, BGP::OPT_PARM::CAP::Graceful_restart.new(gr.to_hash).encode)
+    # Capability.from_hash used to refuse this code by name.
+    assert_equal(gr.encode, BGP::OPT_PARM::Capability.from_hash(gr.to_hash).encode)
+  end
+
+  def test_a_capability_with_no_family_still_round_trips
+    gr = BGP::OPT_PARM::CAP::Graceful_restart.new(0, 0)
+    assert_equal({ :code => 64, :capability => {
+                     :restart_state => 0, :restart_time => 0, :families => [] } },
+                 gr.to_hash)
+    assert_equal(gr.encode, BGP::OPT_PARM::CAP::Graceful_restart.new(gr.to_hash).encode)
+  end
 end
