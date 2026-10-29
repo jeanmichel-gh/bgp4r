@@ -49,20 +49,30 @@ module BGP
     # method, such as the session info of a Neighbor.
     POLICIES = [:lenient, :strict, :raw]
 
+    # Where to_hash puts every occurrence of a type after the first.
+    # The hash is one key per attribute type, so it cannot hold two of
+    # a type under that key: these ride in a list of their own hashes,
+    # and the key is absent unless a type repeats.
+    DUP_KEY = :duplicates
+
     def initialize(*args)
       @errors, @gaps = [], []
       if args.size <= 2 and args[0].is_a?(String) and args[0].is_packed?
         parse_wire(*args)
       elsif args.size ==1 and args[0].is_a?(Hash)
-        @attributes = args[0].collect { |key, value|
-          # Attr::Unknown has no type code of its own, so it is not in
-          # the registry. Its hash value is a list of attributes.
-          next [value].flatten.collect { |h| Attr::Unknown.new(h) } if key == :unknown
-          reg = Attr.by_key(key)
-          raise ArgumentError, "#{key} not implemented" unless reg
-          reg.build(value)
-        # Splice the :unknown lists. Not flatten: Cluster_list has to_ary.
-        }.inject([]) { |a, x| x.instance_of?(Array) ? a + x : a << x }.compact
+        h = args[0].dup
+        # The octets parse_wire kept after the last whole attribute. They
+        # had no key, so a round trip dropped them and encode gave back a
+        # shorter attribute set than arrived: 4001010240 came back as
+        # 40010102. dup so the caller's hash is left alone, and delete so
+        # the key never reaches Attr.by_key, which has nothing for it.
+        @tail = [h.delete(Attr::TAIL_KEY).to_s].pack('H*') if h.key?(Attr::TAIL_KEY)
+        # Every occurrence of a type after the first, which one key per
+        # type cannot hold. Built after the distinct ones, so the list
+        # keeps its own order and no attribute is dropped.
+        dups = h.delete(DUP_KEY)
+        @attributes = _attributes_from_hash_(h)
+        [dups].flatten.compact.each { |d| @attributes += _attributes_from_hash_(d) }
       else
         add(*args)
       end
@@ -244,6 +254,7 @@ module BGP
 
     def to_hash
       h = {}
+      dups = []
       @attributes.each { |att| 
         _h = att.to_hash
         next unless _h
@@ -252,12 +263,45 @@ module BGP
         if _h.key?(:unknown) and h.key?(:unknown)
           _h = _h.merge(:unknown => h[:unknown] + _h[:unknown])
         end
+        # A second attribute of a type the hash already holds. One key
+        # per type cannot hold both and the merge kept the last, so the
+        # earlier one vanished. Every occurrence after the first goes in
+        # its own list instead, which is what :unknown above has always
+        # done for attributes with no key of their own.
+        if (_h.keys - [:unknown]).any? { |k| h.key?(k) }
+          dups << _h
+          next
+        end
         h = h.merge(_h)
       }
+      # Only when a type repeats, so an ordinary set is untouched. Same
+      # rule as :tail and as Typed's :bits.
+      h[DUP_KEY] = dups unless dups.empty?
+      # The kept tail, only when there is one, so an ordinary attribute
+      # set hashes as the plain one-key-per-attribute hash it always did.
+      # Same rule as an attribute's own tail; Attr::TAIL_KEY names it in
+      # one place.
+      h[Attr::TAIL_KEY] = @tail.unpack1('H*') if @tail
       h
     end
     
     private
+
+    # One key per attribute, as a hash build has always been read. Used
+    # for the hash itself and once more for each entry of its DUP_KEY
+    # list, since a duplicate occurrence is built exactly like a first
+    # one.
+    def _attributes_from_hash_(h)
+      h.collect { |key, value|
+        # Attr::Unknown has no type code of its own, so it is not in
+        # the registry. Its hash value is a list of attributes.
+        next [value].flatten.collect { |u| Attr::Unknown.new(u) } if key == :unknown
+        reg = Attr.by_key(key)
+        raise ArgumentError, "#{key} not implemented" unless reg
+        reg.build(value)
+      # Splice the :unknown lists. Not flatten: Cluster_list has to_ary.
+      }.inject([]) { |a, x| x.instance_of?(Array) ? a + x : a << x }.compact
+    end
 
     # Splits the attribute list, checks each attribute, and decodes it
     # as the policy says (RFC 7606 sections 3 and 4).

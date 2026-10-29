@@ -130,8 +130,8 @@ hash is complete even though no door exists.
 | **not in its attribute** | Its own `new` does, the other route does not. Worse than it sounds: a hash key inherited from a parent class is the cause, and the attribute then rebuilds a different attribute without saying so. No row reads this today; `As4_path` did until it was fixed. |
 | **no** | No route gives the octets back. Information is gone. |
 
-Of the 97 classes measured: **47 round trip through their own `new`**,
-**38 by another route**, and **12 lose information**. Whether a failing route raises or quietly answers
+Of the 97 classes measured: **48 round trip through their own `new`**,
+**38 by another route**, and **11 lose information**. Whether a failing route raises or quietly answers
 something else is in the table rather than in the verdict, because a
 verdict is meant to say what a person gets. The quiet ones are the
 dangerous half and each one says so.
@@ -174,43 +174,71 @@ not that: `Extended_community` is the partial base class,
 so a subclass is what a test builds, and `OPT_PARM::Capability` is
 likewise the base.
 
-**13 are to be fixed**, in this order. Sixteen were, and what they were
+**12 are to be fixed**, in this order. Sixteen were, and what they were
 is under "What has been fixed" below.
 
-First, the last one that is wrong wholesale rather than by a field:
-`Path_attribute` collapses two attributes of one type into the last one,
-and loses the tail `parse_wire` keeps. Both silently.
+Each of these drops one field without raising, so each is quiet but is
+one field rather than a different object.
 
-The field losses below are quiet too, each dropping one field without
-raising, but each is one field rather than a different object, which is
-why they rank after it.
-
-Second, the cheap ones, where the hash is already complete and only a
+First, the cheap ones, where the hash is already complete and only a
 constructor branch is missing: `Notification` and `Vpn`.
 
-Third, the real losses, each a field with no key in any hash. These
+Second, the real losses, each a field with no key in any hash. These
 follow a pattern the library already has for exactly this, the
 extra-key-only-when-unusual rule behind `:tail` and `:bits`, so none of
 them has to change the shape of an ordinary hash: `Tunnel_encap::Color`
 flags, `Tunnel_encap::Egress_endpoint` reserved,
 `Tunnel_encap::Mpls_label_stack` TC and TTL, `Tunnel_encap::Tunnel` and
-`Tunnel_encap` tails, `Prefix_sid::Label_index` reserved and flags,
-`Pmsi_tunnel` flags, `Label_stack` Rsrv, `Labeled` Path Identifier,
-`Opaque` type and sub-type, `Capability::Unknown` value octets, and the
-three capabilities whose hash is a bare `{:code=>n}`: `Add_path`,
-`Graceful_restart` and `Orf`.
-
-Those last three were recorded in CLAUDE.md as too expensive to widen,
-on the grounds that it would change the shape every caller and test
-sees. That was measured and is not so. No test in the suite references
-any of the three hashes, and since they carry nothing today, no caller
-can depend on their contents.
+`Tunnel_encap` tails, `Pmsi_tunnel` flags, `Label_stack` Rsrv,
+`Labeled` Path Identifier, `Opaque` type and sub-type, and
+`Capability::Unknown` value octets.
 
 ## What has been fixed
 
-Sixteen, all of which rebuilt different octets without raising, or could
-not be read back at all. `Path_attribute` is the only one still wrong
-wholesale rather than by a field.
+Seventeen, all of which rebuilt different octets without raising, or
+could not be read back at all. No row is wrong wholesale any more; the
+eleven left each lose one field.
+
+* **`Path_attribute`**, which was the wholesale one, with three losses.
+  ATOMIC_AGGREGATE disappearing was the first. The other two:
+
+  * **The kept tail.** `parse_wire` keeps the octets after the last
+    whole attribute so `encode` gives back what arrived. They had no
+    key, so a round trip dropped them and answered a shorter attribute
+    set, silently: `4001010240` came back as `40010102`. It hashes as
+    `:tail` now, only when there is one, and `new` takes the key off a
+    copy of the caller's hash so it never reaches `Attr.by_key`, which
+    has nothing for it, and the caller can build twice from one hash.
+
+  * **Two attributes of one type.** One key per type cannot hold both,
+    so the merge kept the last and the earlier one vanished:
+    `c0080400010001c0080400020002` came back as `c0080400020002`, a
+    whole attribute gone. Every occurrence after the first now rides in
+    a list under `:duplicates`, which is what `:unknown` has always
+    done for attributes that have no key of their own, and `new` builds
+    them after the distinct types:
+
+    ```ruby
+    { :origin => :incomplete, :communities => ['1:1'],
+      :duplicates => [{ :communities => ['2:2'] }] }
+    ```
+
+    A repeat that arrived **before** a type it does not repeat comes
+    back in that order rather than its own, so its octets differ while
+    every attribute survives. That is normalising, not a loss: nothing
+    in BGP gives path attributes an order, and `Path_attribute#<=>`
+    says so itself by sorting each side before it compares. The
+    surviving set is asserted in `path_attribute_test.rb`, since a
+    catalog recipe can only ask for the octets back.
+
+  This one was recorded here as a shape decision and a won't fix, on
+  the grounds that a Hash keyed by type cannot express two of a type or
+  their order. The first half was true and the conclusion did not
+  follow. A hash is an argument to `initialize`: what has to come back
+  is the instance state, and `@attributes` is an array that can hold
+  the repeat perfectly well once the hash has somewhere to put it. The
+  order of two of a type is incidental, and taking byte-exact octets as
+  the bar is what made a readable fix look impossible.
 
 * **`CAP::Add_path`** and **`CAP::Graceful_restart`**, the last two of
   the three bare `{:code=>n}` capabilities. Add_path lost every RFC 7911
@@ -323,7 +351,7 @@ attributes come back, with the same type codes and the same octets.
 | `Origin` | yes | -- | -- |
 | `Originator_id` | by another route | nothing. new has no Hash branch at all, so the hash reaches IPAddr.create. The class has a new_hash that reads it. | won't fix |
 | `Otc` | yes | -- | -- |
-| `Path_attribute` | no | two things. A second attribute of a type already present, because the hash is one key per type, so two Communities collapse into the last one. And the tail parse_wire keeps after the last whole attribute, which has no key. Both silently. | fix |
+| `Path_attribute` | yes | -- | -- |
 
 ### Extended communities
 

@@ -774,6 +774,79 @@ class Path_attribute_Test < Test::Unit::TestCase # :nodoc:
   # their parent's key. And an Attr::Raw came back as 000000, because its
   # new read the three fields off the outer hash where to_hash had put
   # them one level down.
+  # parse_wire keeps the octets after the last whole attribute so encode
+  # gives back what arrived. They had no key, so a round trip through the
+  # hash dropped them and answered a shorter attribute set, in silence.
+  # An ordinary set gains no key, which is the rule an attribute's own
+  # tail already follows.
+  def test_the_kept_tail_round_trips_and_only_then_appears
+    pa = BGP::Path_attribute.new(['4001010240'].pack('H*').is_packed)
+    assert_equal({ :origin => :incomplete, :tail => '40' }, pa.to_hash)
+    assert_equal('4001010240', pa.to_shex)
+    assert_equal(pa.encode, BGP::Path_attribute.new(pa.to_hash).encode)
+    plain = BGP::Path_attribute.new(BGP::Origin.new(2), BGP::Next_hop.new('10.0.0.1'))
+    assert_equal({ :origin => :incomplete, :next_hop => '10.0.0.1' }, plain.to_hash)
+  end
+
+  # One key per attribute type cannot hold two of a type, so a merge
+  # kept the last and the earlier one vanished. Every occurrence after
+  # the first rides in a list under :duplicates now, which is what
+  # :unknown has always done for attributes with no key of their own.
+  def test_two_attributes_of_one_type_round_trip
+    pa = BGP::Path_attribute.new(wire('40010102' + 'c00804' + '00010001' +
+                                      'c00804' + '00020002'))
+    assert_equal({ :origin => :incomplete, :communities => ['1:1'],
+                   :duplicates => [{ :communities => ['2:2'] }] }, pa.to_hash)
+    assert_equal(3, BGP::Path_attribute.new(pa.to_hash).attributes.size)
+    assert_equal(pa.encode, BGP::Path_attribute.new(pa.to_hash).encode)
+  end
+
+  def test_more_than_two_of_a_type_round_trip
+    pa = BGP::Path_attribute.new(BGP::Communities.new('1:1'),
+                                 BGP::Communities.new('2:2'),
+                                 BGP::Communities.new('3:3'))
+    assert_equal([{ :communities => ['2:2'] }, { :communities => ['3:3'] }],
+                 pa.to_hash[:duplicates])
+    assert_equal(pa.encode, BGP::Path_attribute.new(pa.to_hash).encode)
+  end
+
+  # The duplicates are rebuilt after the distinct types, so the octets
+  # come back in that order rather than the order they arrived in. Every
+  # attribute survives, which is what the hash lost before. Nothing in
+  # BGP gives path attributes an order, and Path_attribute#<=> says so
+  # itself by sorting each side before it compares.
+  def test_a_repeat_before_another_type_keeps_every_attribute
+    pa = BGP::Path_attribute.new(wire('c00804' + '00010001' +
+                                      'c00804' + '00020002' + '40010102'))
+    back = BGP::Path_attribute.new(pa.to_hash)
+    assert_equal(pa.attributes.collect { |a| a.to_shex }.sort,
+                 back.attributes.collect { |a| a.to_shex }.sort)
+    assert_equal('c008040001000140010102c0080400020002', back.to_shex)
+  end
+
+  def test_an_ordinary_set_has_no_duplicates_key
+    pa = BGP::Path_attribute.new(BGP::Origin.new(2), BGP::Next_hop.new('10.0.0.1'))
+    assert_equal({ :origin => :incomplete, :next_hop => '10.0.0.1' }, pa.to_hash)
+  end
+
+  # Two unknown attributes are not duplicates of each other: they have
+  # no key of their own, so both belong in the one :unknown list.
+  def test_two_unknown_attributes_still_join_one_list
+    pa = BGP::Path_attribute.new(wire('c01e0400000001' + 'c01e0400000002'))
+    assert_equal(2, pa.to_hash[:unknown].size)
+    assert_nil(pa.to_hash[BGP::Path_attribute::DUP_KEY])
+    assert_equal(pa.encode, BGP::Path_attribute.new(pa.to_hash).encode)
+  end
+
+  # The hash is read, not consumed: new deletes the tail key from a copy,
+  # so a caller can build twice from one hash.
+  def test_building_from_a_hash_leaves_the_hash_alone
+    h = BGP::Path_attribute.new(['4001010240'].pack('H*').is_packed).to_hash
+    first = BGP::Path_attribute.new(h)
+    assert_equal({ :origin => :incomplete, :tail => '40' }, h)
+    assert_equal(first.encode, BGP::Path_attribute.new(h).encode)
+  end
+
   def test_a_round_tripped_attribute_set_is_the_same_set
     pa = BGP::Path_attribute.new(
       BGP::Origin.new(:incomplete),
