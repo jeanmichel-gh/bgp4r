@@ -181,7 +181,14 @@ module BGP
     # the octets and does not read the fields, so any tunnel type can be
     # built.
     class Encapsulation < Sub_tlv
+      # new(octets), new(value: octets), or its own hash. Reading the
+      # hash is new: it went straight through as the value and Sub_tlv
+      # called to_s on it, so the sub-TLV value became the 28 octets of
+      # {:encapsulation=>"01020304"} as Ruby inspects it. On the wire,
+      # with no error. Sub_tlv.from_hash read the same hash correctly all
+      # along, which is why nothing caught it.
       def initialize(octets = ''.b, value: nil)
+        octets = [octets[:encapsulation].to_s].pack('H*') if octets.is_a?(Hash)
         super(ENCAPSULATION, value || octets)
       end
 

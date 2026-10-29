@@ -21,6 +21,8 @@
 #++
 
 require 'bgp/path_attributes/extended_community'
+# The new test checks the collection route as well as the community's own.
+require 'bgp/path_attributes/extended_communities'
 require 'test/unit'
 require 'stringio'
 class Extended_community_Test < Test::Unit::TestCase
@@ -896,6 +898,24 @@ class Extended_community_Test < Test::Unit::TestCase
     assert_equal('0002000100000001', Route_target.new(long).to_shex)
     assert_equal('0002000100000001', Route_target.new(long).to_shex)
     assert_equal('0002000100000001ffff', long.unpack1('H*'))
+  end
+
+  # to_hash nests the fields under the community's own key, which is the
+  # form Extended_communities reads. Traffic_action's own new read only
+  # the outer hash, found :sample, :terminal and :bits all nil, and built
+  # a clean looking community encoding 8007000000000000, losing all 48
+  # value bits with no error. It is the one community whose field
+  # defaults pass their own check, so it is the one that was quiet where
+  # the others raise. RFC 8955 section 7.3.
+  def test_traffic_action_round_trips_through_its_own_new
+    t = BGP::Traffic_action.new(['8007ffffffffffff'].pack('H*'))
+    assert_equal({ :traffic_action => { :sample => true, :terminal => true,
+                                        :bits => 0xffffffffffff } }, t.to_hash)
+    assert_equal('8007ffffffffffff', t.to_shex)
+    assert_equal(t.encode, BGP::Traffic_action.new(t.to_hash).encode)
+    # And through the collection, which is the route that always worked.
+    assert_equal(t.encode,
+                 BGP::Extended_communities.new(:extended_communities => [t.to_hash]).encode[3..])
   end
 
 end

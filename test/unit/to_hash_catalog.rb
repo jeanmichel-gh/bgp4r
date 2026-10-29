@@ -390,16 +390,14 @@ module ToHashCatalog
     'bare hex string. The collection reads the hash.',
     :keep, XTENDED) { BGP::Extended_community::Unknown.new('8077000000000064') }
 
-  # The one in the family whose own new is quietly wrong rather than
-  # loud. Everything else here raises.
-  ENTRIES['BGP::Traffic_action'] = entry(
-    :elsewhere,
-    'nothing through the collection. Its own new reads :sample, ' \
-    ':terminal and :bits off the outer hash, finds all three nil, and ' \
-    'builds a clean looking community encoding 8007000000000000 instead ' \
-    'of 8007ffffffffffff. Silently, where the other Typed classes raise ' \
-    'because their field defaults fail a check.',
-    :fix, XTENDED) { BGP::Traffic_action.new(wire('8007ffffffffffff')) }
+  # Fixed: its own new read :sample, :terminal and :bits off the outer
+  # hash, found all three nil, and built a clean looking community
+  # encoding 8007000000000000, losing all 48 value bits with no error. It
+  # was the one community quiet where the others raise, because its field
+  # defaults pass their own check. It unwraps its own key now.
+  ENTRIES['BGP::Traffic_action'] = entry(:ok, nil, nil, XTENDED) do
+    BGP::Traffic_action.new(wire('8007ffffffffffff'))
+  end
 
   ENTRIES['BGP::Opaque'] = entry(
     :lossy,
@@ -455,15 +453,11 @@ module ToHashCatalog
     BGP::Tunnel_encap::Sub_tlv.new(200, "\x09\x0a".b)
   end
 
-  # Its own new puts Ruby's own inspect text on the wire, which is the
-  # worst answer any class here gives.
-  ENTRIES['BGP::Tunnel_encap::Encapsulation'] = entry(
-    :elsewhere,
-    'nothing through Sub_tlv.from_hash. Its own new takes the hash as ' \
-    'the value octets and calls to_s on it, so the sub-TLV value ' \
-    "becomes the 28 octets of {:encapsulation=>\"01020304\"} as Ruby " \
-    'inspects it. Silently, and on the wire.',
-    :fix, SUB_TLV) do
+  # Fixed: its own new took the hash as the value octets and called to_s
+  # on it, so the sub-TLV value became the 28 octets of
+  # {:encapsulation=>"01020304"} as Ruby inspects it. On the wire, with
+  # no error, while Sub_tlv.from_hash read the same hash correctly.
+  ENTRIES['BGP::Tunnel_encap::Encapsulation'] = entry(:ok, nil, nil, SUB_TLV) do
     BGP::Tunnel_encap::Encapsulation.new([1, 2, 3, 4].pack('C4'))
   end
 
@@ -515,36 +509,34 @@ module ToHashCatalog
     BGP::Tunnel_encap.new(wire('c017' + format('%02x', v.length / 2) + v))
   end
 
-  ENTRIES['BGP::Prefix_sid::Tlv'] = entry(
-    :elsewhere,
-    'nothing. The hash is {:type, :value} and carries both, but nothing ' \
-    'reads it: new(type, value) takes the hash as the type. The other ' \
-    'route here is the two fields handed back by hand, which is what ' \
-    'proves the hash is complete.',
-    :fix,
-    lambda { |h| BGP::Prefix_sid::Tlv.new(h[:type], [h[:value]].pack('H*')).encode }) do
+  # Fixed: nothing read this hash, because new took it as the type and
+  # pack raised. The hash always carried both fields.
+  ENTRIES['BGP::Prefix_sid::Tlv'] = entry(:ok, nil, nil) do
     BGP::Prefix_sid::Tlv.new(9, "\x01\x02\x03".b)
   end
 
-  ENTRIES['BGP::Prefix_sid::Label_index'] = entry(
-    :lossy,
-    'the reserved octet and the flags of RFC 8669 section 3.1. Neither ' \
-    'has a key, so 0a c000 comes back as 00 0000.',
-    :fix) { BGP::Prefix_sid::Label_index.new(wire('0ac00000000064')) }
+  # Fixed: the reserved octet of RFC 8669 section 3.1 and the flags of
+  # sections 3.1 and 3.2 had no key, so a TLV read off the wire came back
+  # zeroed. They go in the value rather than beside it, because
+  # Prefix_sid#to_hash merges the known TLVs into one hash where two
+  # :flags keys would collide, and an ordinary TLV hashes exactly as it
+  # did before.
+  ENTRIES['BGP::Prefix_sid::Label_index'] = entry(:ok, nil, nil) do
+    BGP::Prefix_sid::Label_index.new(wire('0ac00000000064'))
+  end
 
-  ENTRIES['BGP::Prefix_sid::Originator_srgb'] = entry(
-    :lossy,
-    'the flags of RFC 8669 section 3.2. And its own new does not ' \
-    'recognise its own hash: it reads the hash as one range, so ' \
-    'hash[0].to_i is 0 and it builds the range [0, 0]. Silently.',
-    :fix) { BGP::Prefix_sid::Originator_srgb.new(wire('c0de003e800003e8')) }
+  # Fixed with Label_index. Its own new was quiet about it too: it read
+  # the hash as one range, so hash[0].to_i was 0 and it built [0, 0].
+  ENTRIES['BGP::Prefix_sid::Originator_srgb'] = entry(:ok, nil, nil) do
+    BGP::Prefix_sid::Originator_srgb.new(wire('c0de003e800003e8'))
+  end
 
-  ENTRIES['BGP::Prefix_sid'] = entry(
-    :lossy,
-    "the sub-TLVs' reserved and flags fields, as above. Its own new is " \
-    'quiet about it too: given its own full hash it finds no key it ' \
-    'knows and builds an empty attribute, c02800.',
-    :fix, PATH_ATTR) do
+  # Fixed: new read only the inner hash, so given its own to_hash it
+  # found no key it knew and built an empty attribute, c02800, in
+  # silence. It unwraps :prefix_sid now, and the two TLVs above carry
+  # their own fields, so the whole attribute round trips: both TLVs with
+  # reserved and flags set, and the tail of a cut TLV header.
+  ENTRIES['BGP::Prefix_sid'] = entry(:ok, nil, nil, PATH_ATTR) do
     v = '010007' + '0ac00000000064' + '030008' + 'c0de003e800003e8' + '0100'
     BGP::Prefix_sid.new(wire('c028' + format('%02x', v.length / 2) + v))
   end

@@ -176,4 +176,47 @@ class TestPrefixSid < Test::Unit::TestCase
     assert_equal attr_hex('01000100'), a.to_shex
   end
 
+  # The attribute nests everything under :prefix_sid, which is the key
+  # Path_attribute merges, and new read only the inner hash. Given its
+  # own to_hash it found no key it knew and built an empty attribute,
+  # c02800, in silence. The recipe carries both TLVs with the RFC 8669
+  # reserved and flags fields set, and the tail of a cut TLV header.
+  def test_to_hash_round_trips_with_every_field_set
+    v = '010007' + '0ac00000000064' + '030008' + 'c0de003e800003e8' + '0100'
+    wire = ['c028' + format('%02x', v.size / 2) + v].pack('H*').is_packed
+    a = BGP::Prefix_sid.new(wire)
+    assert_equal(a.encode, BGP::Prefix_sid.new(a.to_hash).encode)
+    assert_equal(a.encode, BGP::Path_attribute.new(a.to_hash).encode)
+  end
+
+  # RFC 8669 section 3.1 gives Label-Index a reserved octet and 2 octets
+  # of flags, and section 3.2 gives Originator SRGB 2 octets of flags.
+  # None had a key, so a TLV read off the wire came back zeroed. They go
+  # in the value rather than beside it, because Prefix_sid#to_hash
+  # merges the known TLVs into one hash where two :flags keys would
+  # collide. An ordinary TLV hashes exactly as it always did.
+  def test_a_tlv_with_nothing_unusual_hashes_as_it_always_did
+    assert_equal({ :label_index => 100 }, BGP::Prefix_sid::Label_index.new(100).to_hash)
+    assert_equal({ :srgb => [[16000, 1000]] },
+                 BGP::Prefix_sid::Originator_srgb.new([16000, 1000]).to_hash)
+  end
+
+  def test_a_tlv_carries_its_reserved_and_flags_when_they_arrived_set
+    li = BGP::Prefix_sid::Label_index.new(['0ac00000000064'].pack('H*'))
+    assert_equal({ :label_index => { :index => 100, :flags => 0xc000, :reserved => 0x0a } },
+                 li.to_hash)
+    assert_equal(li.encode, BGP::Prefix_sid::Label_index.new(li.to_hash).encode)
+    srgb = BGP::Prefix_sid::Originator_srgb.new(['c0de003e800003e8'].pack('H*'))
+    assert_equal({ :srgb => { :ranges => [[16000, 1000]], :flags => 0xc0de } }, srgb.to_hash)
+    assert_equal(srgb.encode, BGP::Prefix_sid::Originator_srgb.new(srgb.to_hash).encode)
+  end
+
+  # The keeper for a TLV bgp4r has no shape for. Nothing read its hash:
+  # new took it as the type and pack raised.
+  def test_an_unshaped_tlv_round_trips
+    t = BGP::Prefix_sid::Tlv.new(9, "\x01\x02\x03".b)
+    assert_equal({ :type => 9, :value => '010203' }, t.to_hash)
+    assert_equal(t.encode, BGP::Prefix_sid::Tlv.new(t.to_hash).encode)
+  end
+
 end
