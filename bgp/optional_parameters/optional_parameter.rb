@@ -105,13 +105,29 @@ module OPT_PARM
       # its tail. len+hdr used to raise NoMethodError here and take the
       # parse of the whole OPEN with it.
       return nil if len.nil?
-      opt_parm = s.slice!(0,len+hdr).is_packed
-      case parm_type
-      when CAPABILITY
-        capabilities(opt_parm, :extended => extended)
-      else
-        raise RuntimeError, "Optional parameter type '#{parm_type}' not implemented"
+      # Two kinds of parameter cannot be read as a capability list, and
+      # both are kept rather than dropped, the way an ORF type bgp4r does
+      # not implement has been kept since #101.
+      #
+      # A Parameter Type other than CAPABILITY, which is every type the
+      # IANA "BGP OPEN Optional Parameter Types" registry has: 0
+      # Reserved, 1 Authentication (Deprecated, referencing RFC 4271 and
+      # RFC 5492), 3 to 254 Unassigned, and 255 reserved for the extended
+      # length of RFC 9072. A peer may well send 1, and a negative test
+      # wants to send any of them. This used to raise and take the parse
+      # of the whole OPEN with it, including the parameters that had
+      # already been read.
+      #
+      # And a Parameter Length longer than the octets behind it, whatever
+      # the type says, because there is no value to read. That used to
+      # slice what was there, find no whole capability in it and leave
+      # nothing, so encode wrote an Optional Parameters Length of 0 and
+      # the octets that arrived were gone.
+      if parm_type != CAPABILITY or len > s.size - hdr
+        return [Unknown.new(s.slice!(0, [len + hdr, s.size].min).is_packed, extended)]
       end
+      opt_parm = s.slice!(0,len+hdr).is_packed
+      capabilities(opt_parm, :extended => extended)
     end
 
     # RFC 5492 section 4: a Capabilities optional parameter carries one
@@ -143,6 +159,88 @@ module OPT_PARM
         i += 2 + len
       end
       caps
+    end
+
+    # An optional parameter bgp4r cannot read, kept whole so that encode
+    # gives back what arrived. Shaped on Capability::Unknown, which does
+    # the same one level down, and on Orf::Unknown, which keeps the
+    # Length that arrived as well.
+    #
+    # Builds three ways, like everything else here: from field values
+    # (type, value), from a hash, and from its wire bytes. Those wire
+    # bytes are the RFC 4271 section 4.2 form by default and the RFC 9072
+    # section 2 form when a second argument says so, because the width of
+    # the Parameter Length field belongs to the enclosing OPEN rather
+    # than to the parameter.
+    class Unknown < Optional_parameter
+
+      attr_reader :value, :declared_len
+
+      # The wire build path takes the header form as a second argument,
+      # true for the three octet one of RFC 9072 section 2. A keyword
+      # would read better, but a keyword parameter on initialize makes
+      # Ruby 3 take a bare hash as keywords, and every other class here
+      # builds from a bare hash.
+      def initialize(*args)
+        @value = String.new
+        if (1..2).include?(args.size) and args[0].is_a?(String) and args[0].is_packed?
+          super(nil)
+          parse(args[0], args[1] ? true : false)
+        elsif args.size == 1 and args[0].is_a?(Unknown)
+          super(nil)
+          parse(args[0].encode.is_packed, false)
+        elsif args.size == 1 and args[0].is_a?(Hash)
+          h = args[0]
+          super(h[:type].to_i)
+          @value = [h[:value].to_s].pack('H*')
+          @declared_len = h[:length].to_i if h[:length]
+        elsif (1..2).include?(args.size) and args[0].is_a?(Integer)
+          super(args[0])
+          @value = args[1].to_s.b
+        else
+          raise ArgumentError, "invalid argument: #{args.inspect}, " \
+                               "expected (type, value), wire bytes or a hash"
+        end
+      end
+
+      def parse(s, extended = false)
+        hdr = self.class.header_size(extended)
+        @parm_type, len = extended ? s.unpack('Cn') : s.unpack('CC')
+        @value = s.byteslice(hdr, s.size - hdr).to_s.b
+        # Only kept when it disagrees with the octets that followed it, so
+        # a parameter whose length was right encodes from its value and
+        # carries no extra hash key.
+        @declared_len = len if len != @value.size
+      end
+
+      # The length that arrived when it did not agree with the value, so a
+      # malformed parameter a negative test captured can be sent again.
+      # Optional_parameter#encode always writes the value's own size,
+      # which is right for every other parameter and wrong for this one.
+      def encode(extended: false)
+        len = @declared_len || @value.size
+        [@parm_type, len, @value].pack(extended ? 'Cna*' : 'CCa*')
+      end
+
+      def parm_type ; @parm_type ; end
+
+      # No disagreeing length means no :length key, so the hash of an
+      # ordinary unreadable parameter is the two entries it needs.
+      def to_hash
+        h = { :type => @parm_type }
+        h[:value] = @value.unpack('H*')[0] unless @value.empty?
+        h[:length] = @declared_len if @declared_len
+        h
+      end
+
+      def to_s
+        s = "Unknown Optional Parameter (#{@parm_type}), " \
+            "#{@value.size} value octet#{@value.size == 1 ? '' : 's'}: " \
+            "[#{@value.unpack('H*')[0]}]"
+        s += ", Parameter Length says #{@declared_len}" if @declared_len
+        s
+      end
+
     end
 
   end

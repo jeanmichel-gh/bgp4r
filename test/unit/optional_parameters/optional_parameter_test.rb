@@ -101,4 +101,160 @@ class Optional_parameter_Test < Test::Unit::TestCase
     assert_equal 2, caps[0].safi
     assert_equal 0, s.size
   end
+
+  UNKNOWN = BGP::OPT_PARM::Optional_parameter::Unknown
+
+  # An OPEN carrying these parameter octets, as hex.
+  #
+  # The header is 19 octets and the message Type octet is one of them:
+  # 16 marker, 2 length, 1 type. Then the body, which is version 1,
+  # My Autonomous System 2, Hold Time 2, BGP Identifier 4 and Optional
+  # Parameters Length 1, so 10 before the parameters. Leaving the Type
+  # octet out shifts everything by one and the parser reads the version
+  # as a parameter type, which is a confusing way to fail.
+  def open_with(params_hex)
+    n = params_hex.size / 2
+    'ff' * 16 + ('%04x' % (19 + 10 + n)) + '01' +
+      '04' + '0064' + '00b4' + '0a000001' + ('%02x' % n) + params_hex
+  end
+
+  # The IANA "BGP OPEN Optional Parameter Types" registry has 0 Reserved,
+  # 1 Authentication (Deprecated, referencing RFC 4271 and RFC 5492), 3 to
+  # 254 Unassigned and 255 reserved for the extended length of RFC 9072.
+  # Only 2 is implemented, and every other value used to raise and take
+  # the parse of the whole OPEN with it. A peer may well send 1, and a
+  # negative test wants to send any of them.
+  def test_a_parameter_type_bgp4r_cannot_read_is_kept_whole
+    { 0 => '000401020000', 1 => '010401020000',
+      3 => '030401020000', 254 => 'fe0401020000' }.each do |type, params|
+      hex = open_with(params)
+      open = BGP::Message.factory([hex].pack('H*'))
+      assert_equal hex, open.to_shex, "parameter type #{type} must come back byte for byte"
+      assert_equal 1, open.opt_parms.size
+      parm = open.opt_parms.first
+      assert_instance_of UNKNOWN, parm
+      assert_equal type, parm.parm_type
+      assert_equal '01020000', parm.value.unpack('H*')[0]
+      assert_nil parm.declared_len, 'the length agreed with the octets, so nothing to keep'
+    end
+  end
+
+  # A parameter with no value octets at all is still a parameter, since
+  # the two octet header is all RFC 4271 section 4.2 needs.
+  def test_a_parameter_type_bgp4r_cannot_read_with_no_value
+    hex = open_with('0100')
+    open = BGP::Message.factory([hex].pack('H*'))
+    assert_equal hex, open.to_shex
+    assert_equal '', open.opt_parms.first.value
+    assert_equal({ :type => 1 }, open.opt_parms.first.to_hash,
+                 'no value and no disagreeing length means neither key')
+  end
+
+  # The other half, and it is not about the type. A Parameter Length
+  # longer than the octets behind it cannot be read whatever the type
+  # says, so a Capabilities parameter lands here too. This used to slice
+  # what was there, find no whole capability in it, and leave nothing: the
+  # two octets that arrived were gone and encode wrote an Optional
+  # Parameters Length of 0.
+  def test_a_parameter_length_longer_than_its_octets_is_kept
+    hex = open_with('0209')
+    open = BGP::Message.factory([hex].pack('H*'))
+    assert_equal hex, open.to_shex, 'the octets that arrived come back'
+    parm = open.opt_parms.first
+    assert_instance_of UNKNOWN, parm
+    assert_equal 2, parm.parm_type, 'the type was Capabilities, and is kept'
+    assert_equal '', parm.value
+    assert_equal 9, parm.declared_len
+    assert_equal({ :type => 2, :length => 9 }, parm.to_hash)
+  end
+
+  # The bug that was worse than the recorded one: an unreadable parameter
+  # raised, so it took the readable parameters with it, including any that
+  # had already been parsed.
+  def test_a_parameter_bgp4r_cannot_read_does_not_stop_the_ones_around_it
+    as4 = '020641040000fde8'
+    unknown = '030400000000'
+    [as4 + unknown, unknown + as4].each do |params|
+      hex = open_with(params)
+      open = BGP::Message.factory([hex].pack('H*'))
+      assert_equal hex, open.to_shex
+      assert_equal 2, open.opt_parms.size
+      assert open.has?(BGP::OPT_PARM::CAP::As4),
+             "the 4-octet AS capability must still be read, in #{params}"
+      assert_equal 1, open.opt_parms.count { |p| p.is_a?(UNKNOWN) }
+    end
+  end
+
+  def test_unknown_optional_parameter_builds_three_ways
+    value = ['01020000'].pack('H*')
+    from_values = UNKNOWN.new(1, value)
+    from_hash = UNKNOWN.new(:type => 1, :value => '01020000')
+    from_wire = UNKNOWN.new(from_values.encode.is_packed)
+    assert_equal '010401020000', from_values.encode.unpack('H*')[0]
+    assert_equal from_values.encode, from_hash.encode
+    assert_equal from_values.encode, from_wire.encode
+    assert_equal from_values.to_hash, from_wire.to_hash
+    # And a copy of one, which is the fourth way the other classes take.
+    assert_equal from_values.encode, UNKNOWN.new(from_values).encode
+  end
+
+  # RFC 9072 section 2, Figure 2: in the extended form the Parameter
+  # Length is two octets. The width belongs to the enclosing OPEN, so it
+  # is told to the parameter rather than guessed from the octets.
+  def test_an_unknown_parameter_in_the_extended_form
+    wire = ['03' + '0004' + '01020000'].pack('H*').is_packed
+    parm = UNKNOWN.new(wire, true)
+    assert_equal 3, parm.parm_type
+    assert_equal '01020000', parm.value.unpack('H*')[0]
+    assert_nil parm.declared_len
+    assert_equal wire, parm.encode(:extended => true)
+    # Read as the RFC 4271 form the same octets say something else, which
+    # is why the form is not a property of the parameter.
+    assert_equal 0, UNKNOWN.new(wire).declared_len.to_i
+  end
+
+  def test_unknown_optional_parameter_refuses_what_it_cannot_represent
+    assert_raise(ArgumentError) { UNKNOWN.new(:nope) }
+    assert_raise(ArgumentError) { UNKNOWN.new }
+  end
+
+  # Open#to_s walks every parameter, so this has to work or printing a
+  # captured OPEN raises instead of showing it.
+  def test_unknown_optional_parameter_prints
+    assert_equal 'Unknown Optional Parameter (1), 4 value octets: [01020000]',
+                 UNKNOWN.new(1, ['01020000'].pack('H*')).to_s
+    assert_equal 'Unknown Optional Parameter (3), 1 value octet: [ab]',
+                 UNKNOWN.new(3, ['ab'].pack('H*')).to_s
+    assert_equal 'Unknown Optional Parameter (2), 0 value octets: [], ' \
+                 'Parameter Length says 9',
+                 UNKNOWN.new(['0209'].pack('H*').is_packed).to_s
+    # And through the message that carries it.
+    hex = open_with('0209')
+    assert_match(/Parameter Length says 9/, BGP::Message.factory([hex].pack('H*')).to_s)
+  end
+
+  # Three classes in this namespace are called Unknown, one per level: a
+  # parameter bgp4r cannot read, a capability it cannot read, and the
+  # CAP alias of the second. They must stay three.
+  #
+  # Adding the first one broke the second, because capability.rb guards
+  # its definition with `unless const_defined? :Unknown` and
+  # Module#const_defined? searches the ancestors unless told not to.
+  # Capability is a subclass of Optional_parameter, so the guard went
+  # true, Capability::Unknown was never defined, and every reference to
+  # it resolved up the chain to the parameter level class. Three tests in
+  # two other files failed and none of them mentioned a constant.
+  def test_the_three_unknown_classes_are_distinct
+    unknowns = [BGP::OPT_PARM::Optional_parameter::Unknown,
+                BGP::OPT_PARM::Capability::Unknown,
+                BGP::OPT_PARM::CAP::Unknown]
+    assert_equal 3, unknowns.uniq.size, unknowns.collect(&:name).inspect
+    assert_equal BGP::OPT_PARM::Optional_parameter,
+                 BGP::OPT_PARM::Optional_parameter::Unknown.superclass
+    # The capability level one is a Capability, which is what tells it
+    # apart: its hash is keyed on :code, where the parameter level one
+    # is keyed on :type.
+    assert BGP::OPT_PARM::Capability::Unknown.ancestors
+             .include?(BGP::OPT_PARM::Capability)
+  end
 end
