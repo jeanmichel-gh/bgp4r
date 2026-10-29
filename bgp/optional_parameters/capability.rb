@@ -245,6 +245,47 @@ module BGP::OPT_PARM
       Capability::Unknown.new(s)
     end
   end
+
+  # The same dispatch for a hash rather than wire bytes, so Open can
+  # rebuild from its own to_hash. Capability.factory reads the code out of
+  # the octets; this reads it out of the hash, and hands the whole hash to
+  # the class, which takes either the nested form to_hash writes or the
+  # bare inner hash.
+  #
+  # **Two codes are refused rather than attempted**, because their own
+  # to_hash does not carry what the capability holds: Add_path hashes as
+  # {:code=>69} whatever its RFC 7911 section 4 tuples are, and
+  # Graceful_restart as {:code=>64} whatever its restart time and
+  # families. Building from those would silently produce a different
+  # capability, which is worse than refusing, and that is the one kind of
+  # refusal Conventions allows a constructor: an input it cannot
+  # represent. Widening those two to_hash forms changes the shape every
+  # caller sees, so it is recorded under "Known issues to work on" rather
+  # than decided here.
+  LOSSY_HASH = { CAP_ADD_PATH => 'Add_path', CAP_GR => 'Graceful_restart' }.freeze
+
+  def Capability.from_hash(h)
+    code = h[:code]
+    raise ArgumentError, "no :code in #{h.inspect}" if code.nil?
+    if (name = LOSSY_HASH[code])
+      raise ArgumentError,
+            "CAP::#{name} cannot be built from a hash: its to_hash carries " \
+            "only #{{ :code => code }.inspect} and loses the rest. See " \
+            '"Known issues to work on" in CLAUDE.md.'
+    end
+    case code
+    when CAP_AS4                             then CAP::As4.new(h)
+    when CAP_MBGP                            then CAP::Mbgp.new(h)
+    when CAP_ROUTE_REFRESH                   then CAP::Route_refresh.new(h)
+    when CAP_ROUTE_REFRESH_CISCO             then CAP::Route_refresh.new(h)
+    when CAP_ORF, CAP_ORF_CISCO              then CAP::Orf.new(h)
+    when CAP_EXTENDED_NEXTHOP                then CAP::Extended_nexthop.new(h)
+    when CAP_ROLE                            then CAP::Role.new(h)
+    when CAP_DYNAMIC                         then CAP::Dynamic.new(h)
+    when CAP_ENHANCED_ROUTE_REFRESH          then CAP::Enhanced_route_refresh.new(h)
+    else Capability::Unknown.new(h)
+    end
+  end
 end
 
 module BGP::OPT_PARM

@@ -62,17 +62,55 @@ class Open < Message
   # built from values, which always writes its own.
   attr_reader :declared_opt_parm_len
   
+  # Three ways, like every other class here: from field values, from a
+  # hash, and from wire bytes. The hash path was missing, so `Open.new`
+  # of this message's own `to_hash` fell into the positional branch, took
+  # the Hash as the version and raised IPAddr::AddressFamilyError on a
+  # bgp_id of nil. OPEN was the one message that built two ways, which is
+  # a poor one to leave out: it is the message a session starts with.
   def initialize(*args)
     @opt_parms=[]
     if args.size==1 and args[0].is_a?(String) and args[0].is_packed?
       parse(args[0])
     elsif args[0].is_a?(self.class)
       parse(args[0].encode, *args[1..-1])
+    elsif args.size==1 and args[0].is_a?(Hash)
+      from_hash(args[0])
     else
       @msg_type=OPEN
       @version, @local_as, @holdtime, bgp_id, *@opt_parms=args
       @bgp_id = IPAddr.new(bgp_id)
     end
+  end
+
+  # Every key to_hash writes, read back.
+  #
+  # :capabilities is not only capabilities, so each entry goes through
+  # Optional_parameter.from_hash, which tells a capability's :code from an
+  # Optional_parameter::Unknown's :type. Two capabilities cannot be built
+  # from a hash at all, because their own to_hash drops what they hold,
+  # and that raises there rather than here; see Capability::LOSSY_HASH.
+  #
+  # :tail and :opt_parm_len are what a malformed OPEN arrived with, so a
+  # captured one rebuilt from its hash still encodes byte for byte.
+  # :extended is the RFC 9072 section 2 form, which encode would
+  # otherwise pick from the size alone: a small message read in the
+  # extended form has to be written back in it, because section 2 says
+  # "an implementation MUST accept an OPEN message that uses the encoding
+  # of this specification" whatever its size.
+  def from_hash(h)
+    @msg_type = OPEN
+    @version   = h[:version]
+    @local_as  = h[:my_as]
+    @holdtime  = h[:holdtime]
+    @bgp_id    = IPAddr.new(h[:bgp_id])
+    @opt_parms = [h[:capabilities]].flatten.compact.collect { |e|
+      e.is_a?(Optional_parameter) ? e : Optional_parameter.from_hash(e)
+    }
+    @tail = [h[:tail]].pack('H*') if h[:tail]
+    @declared_opt_parm_len = h[:opt_parm_len] if h[:opt_parm_len]
+    @extended = true if h[:extended]
+    self
   end
 
   def <<(arg)
@@ -167,6 +205,11 @@ class Open < Message
     end
     h[:tail] = @tail.unpack('H*')[0] if @tail
     h[:opt_parm_len] = @declared_opt_parm_len if @declared_opt_parm_len
+    # Only when the message is in the RFC 9072 section 2 extended form,
+    # so an ordinary OPEN hashes as the four or five keys it always did.
+    # Without it the rebuild loses the form, because encode picks it from
+    # the size and a small extended message does not need it.
+    h[:extended] = true if extended?
     h
   end
   

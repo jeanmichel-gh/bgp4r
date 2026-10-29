@@ -161,6 +161,21 @@ module OPT_PARM
       caps
     end
 
+    # One entry of an OPEN's :capabilities list, back into an object.
+    #
+    # That list is not only capabilities since #154: an
+    # Optional_parameter::Unknown hashes into it too, and the two are told
+    # apart by their key. A capability hashes :code, from the RFC 5492
+    # section 4 Capability Code; an unreadable parameter hashes :type,
+    # from the RFC 4271 section 4.2 Parameter Type. Nothing else shares
+    # the list, so this is the whole dispatch.
+    def self.from_hash(h)
+      raise ArgumentError, "not a Hash: #{h.inspect}" unless h.is_a?(Hash)
+      return Unknown.new(h) if h.key?(:type)
+      return Capability.from_hash(h) if h.key?(:code)
+      raise ArgumentError, "neither :type nor :code in #{h.inspect}"
+    end
+
     # An optional parameter bgp4r cannot read, kept whole so that encode
     # gives back what arrived. Shaped on Capability::Unknown, which does
     # the same one level down, and on Orf::Unknown, which keeps the

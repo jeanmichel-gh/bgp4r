@@ -27,9 +27,18 @@ module OPT_PARM
 module CAP
   
 class As4 < OPT_PARM::Capability
+  # Three ways, like everything else: the AS number, a hash, or wire
+  # bytes. The hash path was missing, so a Hash became @as and encode
+  # raised TypeError inside pack. It takes the hash to_hash produces,
+  # {:code=>65, :capability=>{:as=>100}}, and the bare {:as=>100} too,
+  # since a caller writing one by hand has no reason to nest it.
   def initialize(s)
     if s.is_a?(String) and s.is_packed?
       parse(s)
+    elsif s.is_a?(Hash)
+      super(OPT_PARM::CAP_AS4)
+      h = s[:capability] || s
+      @as = h[:as]
     else
       super(OPT_PARM::CAP_AS4)
       @as=s
