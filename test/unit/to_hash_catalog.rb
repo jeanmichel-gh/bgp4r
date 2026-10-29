@@ -25,7 +25,10 @@
 # what has been decided about that.
 #
 # Not a test. to_hash_round_trip_test.rb asserts every declaration here,
-# and docs/to-hash-round-trips.md is the same table for a reader.
+# and rake to_hash:status prints them for a reader. This file is the only
+# record: there is deliberately no document holding a second copy, since
+# the one that did spent four pull requests out of date in its prose
+# while its generated table stayed true.
 #
 # **Every verdict here is declared, not computed.** The test measures and
 # compares. A verdict read off the library would assert nothing: it would
@@ -96,7 +99,7 @@ module ToHashCatalog
   DECISIONS = {
     nil   => 'nothing to decide, the round trip works',
     :fix  => 'to be fixed; cheap enough to be worth it',
-    :keep => 'left as it is, deliberately; the reason is in the document',
+    :keep => 'left as it is, deliberately; the reason is on the entry',
   }.freeze
 
   VERDICT_WORDS = {
