@@ -50,7 +50,8 @@ test/functional/lab/     lab tests: loopback speaker test and one Compose test p
                          fib_test.rb puts the Loc-RIB in a real kernel routing
                          table inside a network namespace, no Docker, needs root;
                          fault_matrix_frr_test.rb runs the same matrix against
-                         FRR's bgpd, standalone on loopback, no Docker and no zebra
+                         FRR's bgpd, standalone on loopback, no Docker and no zebra,
+                         and rib_router_frr_test.rb points our export side at it
 ```
 
 ## Running tests
@@ -123,6 +124,12 @@ group and prefixes a warning to every answer, which broke the first CI
 run of this. A few minutes:
 ```
 ruby -I. test/functional/lab/fault_matrix_frr_test.rb
+```
+
+And bgp4r's export side against FRR, the twin of the GoBGP one, about a
+minute:
+```
+ruby -I. test/functional/lab/rib_router_frr_test.rb
 ```
 
 Do not run `test/functional/live_feed_test.rb`. It connects to a public feed that no longer answers and hangs forever.
@@ -361,8 +368,11 @@ GoBGP's opinion of it. **Phase 4 is Done too**: the show commands in all
 three styles, and the FIB adapter putting the Loc-RIB in a real kernel
 routing table, which needed a network namespace and not a container. This
 paragraph claimed a container until #156 measured otherwise, and the
-detailed entry below says what came apart. What is left of the whole plan
-is phase 5, FRR as a reference in the lab.
+detailed entry below says what came apart. **Phase 5 is Done as well**,
+so the whole RIB and FIB plan is finished: FRR is a reference in the lab
+for both receive, through the RFC 7606 matrix, and send, through our
+export side. What is left in this file is under "Known issues to work
+on", and every one of those needs a decision rather than a patch.
 
 ### RIB and FIB, five phases
 
@@ -931,11 +941,12 @@ Neighbor ◀──UPDATE── Adj-RIB-Out (per peer) ◀───────�
           with `LAB_REQUIRE_NETNS=1` so it fails rather than omits. A
           claim nothing checks reads as verified, which is the lesson
           under "Lab and conformance".
-5. **FRR as a reference in the lab. The conformance half is Done**, in
-   #159, as `test/functional/lab/fault_matrix_frr_test.rb`: the whole RFC
-   7606 matrix against FRR's `bgpd`, no Docker and no zebra, so the FRR
-   column in `docs/protocol-testing.md` is asserted rather than
-   remembered. `LabHelper::Frr` runs the daemon.
+5. **FRR as a reference in the lab. Done**, in #159 and #160, which is
+   the whole plan finished. `LabHelper::Frr` runs FRR's `bgpd` standalone
+   on loopback, no Docker and no zebra, and two tests use it: the RFC 7606
+   matrix in `fault_matrix_frr_test.rb`, so the FRR column in
+   `docs/protocol-testing.md` is asserted rather than remembered, and
+   `rib_router_frr_test.rb`, which points bgp4r's export side at it.
    * **FRR agrees on 6 of the 18 rows**, where GoBGP 4.10.0 agrees on 16
      and 3.23.0 on 15. It is much further from RFC 7606 than either, and
      in one specific way: its own log says `Attribute ORIGIN, parse error
@@ -955,32 +966,39 @@ Neighbor ◀──UPDATE── Adj-RIB-Out (per peer) ◀───────�
      skipped it: it is 3/5, exactly the bug GoBGP 3.23.0 had and GoBGP 4
      fixed.
    * **Four harness facts, each measured rather than assumed**, because
-     each one silently voids the whole run. `bgpd` needs `-S` or it drops
-     to the `frr` user and cannot write into `Dir.mktmpdir`. It needs an
-     address of its own, not the peer's, or every route is rejected under
-     RFC 4271 section 6.3 for a NEXT_HOP equal to the receiving speaker's.
-     **And `vtysh` must be read past its own warning.** Run as any user
-     that is neither root nor in the `frrvty` group, which is exactly what
-     CI does, every answer begins `% Can't open configuration file
-     /etc/frr/vtysh.conf due to 'Permission denied'.` and the real output
-     follows it. `JSON.parse` on the whole thing fails, so `Frr#summary`
-     answered nil forever and `up` raised after its timeout even though
-     the session had established. `Frr#vty_json` takes the JSON from the
-     first brace now. Nothing local showed it, because root reads that
-     file: it took the first CI run of #159 to find, and **the failure
-     reported nothing at all**, because the workflow's annotation step ran
-     `msg=$(grep ...)` under `bash -e` and grep exits 1 when it matches
-     nothing, so the step died before its own `tail` fallback. That now
-     ends in `|| true`.
-     And it needs a **non-loopback** next hop in the test routes:
-     `Frr::NEXT_HOP` is 192.0.2.1, because with 127.0.0.1 FRR keeps the
-     session up and silently drops the route where GoBGP accepts it. The
-     first two measurements here were void for the last two reasons, and
-     what caught both was the scenario's own
+     each one silently voids the whole run.
+     * `bgpd` needs `-S`, or it drops to the `frr` user and cannot write
+       into `Dir.mktmpdir`. There is no `--vty_group` in 8.4.4 either, so
+       `-u root -g root` is not an answer.
+     * It needs **an address of its own**, not the peer's, or every route
+       is rejected under RFC 4271 section 6.3 for a NEXT_HOP equal to the
+       receiving speaker's own address.
+     * It needs a **non-loopback next hop** in the test routes.
+       `Frr::NEXT_HOP` is 192.0.2.1, because with 127.0.0.1 FRR keeps the
+       session up and silently drops the route, where GoBGP accepts it.
+     * **`vtysh` must be read past its own warning.** Run as any user that
+       is neither root nor in the `frrvty` group, which is exactly what CI
+       does, every answer begins `% Can't open configuration file
+       /etc/frr/vtysh.conf due to 'Permission denied'.` with the real
+       output after it. `JSON.parse` on the whole thing fails, so
+       `Frr#summary` answered nil forever and `up` raised after its
+       timeout even though the session had established. `Frr#vty_json`
+       takes the JSON from the first brace now.
+
+     **Those two middle facts are what made the first two measurement runs
+     here void**, and what caught both was the scenario's own
      `test_the_rib_answer_was_usable`, which refuses to score route
      verdicts when the clean baseline route did not install. Without that
-     guard this would have recorded "FRR resets on all 18 cases", which
-     is wrong and would have read as verified.
+     guard this would have recorded "FRR resets on all 18 cases", which is
+     wrong and would have read as verified.
+
+     The `vtysh` one is the fourth because nothing local showed it: root
+     reads that file, and the harness was only ever run as root here. It
+     took the first CI run of #159, and **that failure reported nothing at
+     all**, because the workflow's annotation step ran `msg=$(grep ...)`
+     under `bash -e` and grep exits 1 when it matches nothing, so the step
+     died before reaching its own `tail` fallback. That now ends in
+     `|| true`.
    * Two additions to `fault_matrix_scenario.rb` rather than weakening
      what was there. `reset_subcode_overrides` is for a router that resets
      where the catalog expects a reset but names another subcode, which is
@@ -989,12 +1007,31 @@ Neighbor ◀──UPDATE── Adj-RIB-Out (per peer) ◀───────�
      category it gets wrong in full, so the guard against a divergence
      list that empties a derived test still protects the GoBGP runs while
      FRR's breadth is stated and reviewed instead of quietly passing.
-   * **Not in it**, and the recorded follow up: bgp4r's export side
-     against FRR, the twin of `rib_router_gobgp_test.rb` from phase 3
-     part 7. `LabHelper::Frr` already reads the RIB as JSON
-     (`Frr#rib`, `#path`, `Frr.as_path`, `Frr.next_hop`), so it is a test
-     file and no new harness. Worth having for the same reason that one
-     was: two bgp4r speakers agreeing proves nothing.
+   * **The export side against FRR. Done**, in #160, as
+     `rib_router_frr_test.rb`: the twin of `rib_router_gobgp_test.rb`,
+     three cases and 13 assertions, about a minute. FRR accepts our
+     reflected route and reads both RFC 4456 section 8 attributes back as
+     we meant them, accepts our transit route with our AS prepended and
+     our next hop, and takes a prefix we originate and drops it again.
+     * **So two independent routers now agree with our export side**,
+       which is the point of the lab: two bgp4r speakers agreeing proves
+       only that they agree. After the fault matrix showed how far apart
+       two routers can be on receive, their agreeing here is worth
+       recording rather than assumed.
+     * Two things differ from the GoBGP twin, both FRR's. The next hop
+       cannot be a loopback address, so the transit case passes
+       `advertise(next_hops: {1 => '192.0.2.9'})` rather than letting the
+       router use the session's local address; putting that back makes the
+       case fail with "FRR to install 203.0.113.0/24", which is the same
+       silent drop `Frr::NEXT_HOP` records, found again from another
+       direction. And the two section 8 attributes have to be read from
+       **`Frr#detail`**, the per-prefix form: `show bgp ipv4 unicast json`
+       has no `originatorId` or `clusterList` key at all, so reading them
+       off the table form answers nil however correct the UPDATE was,
+       which is a wrong answer rather than a missing one.
+     * Checked the way the matrix is: each case proved to fail against a
+       broken version, and the whole file run as a non-root user as well
+       as root.
 
 Decisions already taken that constrain the later phases:
 

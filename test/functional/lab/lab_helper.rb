@@ -641,6 +641,27 @@ module LabHelper
       paths.find { |p| p['bestpath'] } || paths.first
     end
 
+    # One prefix in full, which is a different command and a different
+    # shape from the table form above.
+    #
+    # Use this for anything the table form leaves out, and it leaves out
+    # more than it looks: `show bgp ipv4 unicast json` gives an
+    # abbreviated row per path with no `originatorId` and no
+    # `clusterList` key at all, so reading the two RFC 4456 section 8
+    # attributes off it answers nil however correct the UPDATE was. That
+    # is a wrong answer rather than a missing one, which is why this
+    # exists rather than a note somewhere.
+    #
+    # The shapes differ too, so a path from here is not interchangeable
+    # with one from #path: the AS_PATH is a nested `aspath` with
+    # `segments` here and a flat `path` string there, which is why
+    # Frr.as_path reads the table form and this does not feed it.
+    def detail(prefix, family = 'ipv4 unicast')
+      answer = vty_json("show bgp #{family} #{prefix} json") or return nil
+      paths = answer['paths'] or return nil
+      paths.find { |p| p['bestpath'] } || paths.first
+    end
+
     # FRR's JSON names attributes rather than numbering them, where the
     # gobgp client keys them by code point, so there is no shared shape to
     # read them through. These are the ones a test here asks about.
