@@ -309,32 +309,21 @@ module ToHashCatalog
     BGP::Attr::Unknown.new(0xc, 99, 0, 'x')
   end
 
-  # The attribute set itself, and the one loss left of the three it had.
-  # ATOMIC_AGGREGATE disappearing is fixed, and so is the kept tail,
-  # which now rides as :tail under the extra-key-only-when-unusual rule
-  # an attribute's own tail already follows. The recipe carries no tail
-  # for that reason: it isolates the duplicate, and
-  # path_attribute_test.rb asserts the tail.
+  # The attribute set itself, and all three of its losses are closed:
+  # ATOMIC_AGGREGATE disappearing, the kept tail, and two attributes of
+  # one type collapsing into the last. The recipe is the third, since it
+  # was the one that outlived a shape argument: Origin and two
+  # Communities, 1:1 and 2:2, where the hash carries the second
+  # occurrence under DUP_KEY and new builds it after the distinct types.
   #
-  # Origin and two Communities, 1:1 and 2:2. encode gives these octets
-  # back exactly, so the recipe is faithful and the loss is the hash's.
-  #
-  # Won't fix, and this is a shape decision rather than a field that was
-  # left out. A Hash keyed by attribute type cannot hold two of a type
-  # or say which came first, so every way of fixing it costs something
-  # the hash is for: a side channel of the extra occurrences round trips
-  # only when the duplicate was last, and carrying the set as ordered
-  # raw entries is exact but stops that set's hash being readable, which
-  # is the whole reason the hash form exists. The octet level routes are
-  # open and a test that wants two of a type writes the objects:
-  # Path_attribute.new(Communities.new('1:1'), Communities.new('2:2'))
-  # keeps both and keeps their order.
-  ENTRIES['BGP::Path_attribute'] = entry(
-    :lossy,
-    'a second attribute of a type already present, because the hash is ' \
-    'one key per type, so two Communities collapse into the last one. ' \
-    'Silently.',
-    :keep) do
+  # A repeat that arrived before a type it does not repeat comes back in
+  # that same order rather than its own, so its octets differ while
+  # every attribute survives. Nothing in BGP orders path attributes, and
+  # Path_attribute#<=> says so by sorting each side before comparing, so
+  # that is normalising and not a loss. It is measured in
+  # path_attribute_test.rb, which asserts the surviving set, because a
+  # catalog recipe can only ask for the octets back.
+  ENTRIES['BGP::Path_attribute'] = entry(:ok, nil, nil) do
     BGP::Path_attribute.new(wire('40010102' + 'c00804' + '00010001' +
                                  'c00804' + '00020002'))
   end
