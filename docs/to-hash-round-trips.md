@@ -126,12 +126,11 @@ hash is complete even though no door exists.
 |---|---|
 | **yes** | Its own `new` rebuilds the same wire bytes. |
 | **by another route** | Its own `new` does not, the other route does. The hash carries everything, and for most of these the other route is the one that was designed, as the section above explains. |
-| **not in its attribute** | Its own `new` does, the other route does not. Worse than it sounds: a hash key inherited from a parent class is the cause, and the attribute then rebuilds a different attribute without saying so. |
+| **not in its attribute** | Its own `new` does, the other route does not. Worse than it sounds: a hash key inherited from a parent class is the cause, and the attribute then rebuilds a different attribute without saying so. No row reads this today; `As4_path` did until it was fixed. |
 | **no** | No route gives the octets back. Information is gone. |
 
-Of the 96 classes measured: **33 round trip through their own `new`**,
-**42 by another route**, **1 only outside its attribute**, and **20 lose
-information**. Whether a failing route raises or quietly answers
+Of the 96 classes measured: **37 round trip through their own `new`**,
+**41 by another route**, and **18 lose information**. Whether a failing route raises or quietly answers
 something else is in the table rather than in the verdict, because a
 verdict is meant to say what a person gets. The quiet ones are the
 dangerous half and each one says so.
@@ -159,7 +158,7 @@ already, so the octets are the ones the suite has always used.
 
 ## The decisions
 
-**35 are left as they are.** Nearly all of them are the same situation:
+**37 are left as they are.** Nearly all of them are the same situation:
 the class's own `new` will not take its own hash, but the attribute that
 owns it will, and the hash carries everything. That covers 19 of the 21
 extended communities, the four AS_PATH segment classes, five tunnel
@@ -174,7 +173,8 @@ not that: `Extended_community` is the partial base class,
 so a subclass is what a test builds, and `OPT_PARM::Capability` is
 likewise the base.
 
-**28 are to be fixed**, in this order.
+**22 are to be fixed**, in this order. Six were, and what they were is
+under "What has been fixed" below.
 
 First, the ones that are quietly wrong, because a confident wrong answer
 is worse than a refusal and these are the only ones that can put bad
@@ -182,21 +182,14 @@ octets on the wire without saying so:
 
 1. `Tunnel_encap::Encapsulation` writes the 28 octets of a Ruby `inspect`
    string as the sub-TLV value.
-2. `Attr::Raw` and `Attr::Unknown` turn into `000000`, a different
-   attribute entirely.
-3. `As4_aggregator` and `As4_path` come back as their 2-octet
-   namesakes, cutting the AS number, because both inherit the parent's
-   hash key.
-4. `Atomic_aggregate` disappears from a round-tripped `Path_attribute`,
-   because its hash is `{}`.
-5. `Traffic_action`, `Prefix_sid`, `Prefix_sid::Originator_srgb` and
-   `CAP::Orf` each build a clean looking empty or zeroed object.
-6. `Path_attribute` drops `ATOMIC_AGGREGATE`, collapses two attributes
-   of one type into one, and loses its tail.
+2. `Traffic_action`, `Prefix_sid`, `Prefix_sid::Originator_srgb` and
+   `CAP::Orf` each build a clean looking empty or zeroed object from
+   their own full hash.
+3. `Path_attribute` collapses two attributes of one type into the last
+   one, and loses the tail `parse_wire` keeps.
 
 Second, the cheap ones, where the hash is already complete and only a
-constructor branch is missing: `Origin` (one line, and the translation
-it needs is already three lines above), `Notification`, `Vpn`,
+constructor branch is missing: `Notification`, `Vpn`,
 `Prefix_sid::Tlv`.
 
 Third, the real losses, each a field with no key in any hash. These
@@ -217,6 +210,40 @@ sees. That was measured and is not so. No test in the suite references
 any of the three hashes, and since they carry nothing today, no caller
 can depend on their contents.
 
+## What has been fixed
+
+Six of the quiet ones, all of which rebuilt different octets without
+raising. Each has a test in its own file, and the attribute set as a
+whole has `test_a_round_tripped_attribute_set_is_the_same_set` in
+`path_attribute_test.rb`, which is the assertion that matters: the same
+attributes come back, with the same type codes and the same octets.
+
+* **`Origin`.** Its Hash branch assigned the value raw, skipping the
+  Symbol translation the same method already had, so `@origin` held a
+  Symbol and `encode` raised in `pack`. One line. Two things came with
+  it: an ORIGIN the RFC does not define now hashes as its code rather
+  than as `:undefined`, which no route could read back, and `new` takes
+  any octet, where it refused above 2. Conventions is explicit that a
+  constructor must not refuse a value that is merely wrong by the RFC,
+  and the refusal also blocked the round trip for a value read off the
+  wire.
+* **`Atomic_aggregate`.** Its hash was `{}`, which adds no key when
+  `Path_attribute#to_hash` merges it, so the attribute vanished from a
+  round tripped attribute set. It writes `:atomic_aggregate` now, the key
+  the registry had taken all along.
+* **`As4_aggregator`** and **`As4_path`.** Both inherited their parent's
+  hash key, so `Path_attribute` rebuilt the 2 octet `AGGREGATOR` and
+  `AS_PATH` from them and cut the AS numbers: 4200000001 came back as
+  59905. Both write their own key now, and both were already in the
+  registry. `segments_from_hash` already read `:as4_path`, so a build
+  straight from the hash went on working, which is how this stayed
+  hidden.
+* **`Attr::Raw`** and **`Attr::Unknown`.** `new` read `:flags`, `:type`
+  and `:value` off the outer hash, where `to_hash` had put them one level
+  down in a one element `:unknown` list, so all three were nil and
+  `80c802ff00` came back as `000000`. The existing round trip test had
+  unwrapped the list by hand, which is how it passed.
+
 ## The table
 
 ### Path attributes
@@ -225,16 +252,16 @@ can depend on their contents.
 |---|---|---|---|
 | `Aggregator` | by another route | nothing. The fields nest under :aggregator and new reads the inner hash, so Path_attribute is the door. | won't fix |
 | `Aigp` | yes | -- | -- |
-| `As4_aggregator` | no | that it is AS4_AGGREGATOR at all. It inherits Aggregator#to_hash, so its key is :aggregator, and Path_attribute rebuilds a 2 octet AGGREGATOR and cuts AS 4200000001 to 59905. Silently. | fix |
-| `As4_path` | not in its attribute | that it is AS4_PATH, once it goes through an attribute set. The key :as_path is inherited, so Path_attribute rebuilds a type 2 AS_PATH in the 2 octet form and cuts the AS. Silently. | fix |
+| `As4_aggregator` | by another route | nothing. Its own new reads the bare hash Aggregator takes, :asn and :address, so the wrapped form is the attribute set's to read, as with Aggregator itself. | won't fix |
+| `As4_path` | yes | -- | -- |
 | `As_path` | yes | -- | -- |
 | `As_path::Confed_sequence` | by another route | nothing. None of the four segment classes has a Hash branch, so the hash is stored as the one AS number and encode packs a Hash. As_path.segment_from_hash reads it correctly. | won't fix |
 | `As_path::Confed_set` | by another route | nothing. None of the four segment classes has a Hash branch, so the hash is stored as the one AS number and encode packs a Hash. As_path.segment_from_hash reads it correctly. | won't fix |
 | `As_path::Sequence` | by another route | nothing. None of the four segment classes has a Hash branch, so the hash is stored as the one AS number and encode packs a Hash. As_path.segment_from_hash reads it correctly. | won't fix |
 | `As_path::Set` | by another route | nothing. None of the four segment classes has a Hash branch, so the hash is stored as the one AS number and encode packs a Hash. As_path.segment_from_hash reads it correctly. | won't fix |
-| `Atomic_aggregate` | no | itself. to_hash is {}, so a round tripped Path_attribute comes back without ATOMIC_AGGREGATE in it. Silently. The registry has a working :atomic_aggregate key that to_hash never writes. | fix |
-| `Attr::Raw` | by another route | nothing through an attribute set. Its own new reads :flags, :type and :value off the outer hash, where to_hash put them one level down in a one element :unknown list, so all three are nil and 80c802ff00 comes back as 000000. Silently. | fix |
-| `Attr::Unknown` | by another route | nothing through an attribute set. It inherits both to_hash and the Hash branch from Attr::Raw, so c0630178 comes back as 000000 the same silent way. | fix |
+| `Atomic_aggregate` | by another route | nothing. The attribute carries no value, so there is no bare hash for its own new to read and the attribute set is the only route. That route works now; it used to drop the attribute in silence. | won't fix |
+| `Attr::Raw` | yes | -- | -- |
+| `Attr::Unknown` | yes | -- | -- |
 | `Cluster_list` | yes | -- | -- |
 | `Communities` | yes | -- | -- |
 | `Large_communities` | yes | -- | -- |
@@ -243,10 +270,10 @@ can depend on their contents.
 | `Mp_unreach` | by another route | nothing. The same :mp_unreach wrapper as Mp_reach. | won't fix |
 | `Multi_exit_disc` | yes | -- | -- |
 | `Next_hop` | yes | -- | -- |
-| `Origin` | by another route | nothing. to_hash stores the word, {:origin=>:incomplete}, and the Hash branch of new assigns it raw, skipping the Symbol translation new already has three lines above. One line. | fix |
+| `Origin` | yes | -- | -- |
 | `Originator_id` | by another route | nothing. new has no Hash branch at all, so the hash reaches IPAddr.create. The class has a new_hash that reads it. | won't fix |
 | `Otc` | yes | -- | -- |
-| `Path_attribute` | no | three things. ATOMIC_AGGREGATE, because its hash is {}. A second attribute of a type already present, because the hash is one key per type, so two Communities collapse into one. And the tail parse_wire keeps after the last whole attribute, which has no key. | fix |
+| `Path_attribute` | no | two things. A second attribute of a type already present, because the hash is one key per type, so two Communities collapse into the last one. And the tail parse_wire keeps after the last whole attribute, which has no key. Both silently. | fix |
 
 ### Extended communities
 

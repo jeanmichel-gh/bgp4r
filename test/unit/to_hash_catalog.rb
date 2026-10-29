@@ -173,12 +173,13 @@ module ToHashCatalog
   # the attribute set is the door, and it works.
   # ====================================================================
 
-  ENTRIES['BGP::Origin'] = entry(
-    :elsewhere,
-    'nothing. to_hash stores the word, {:origin=>:incomplete}, and the ' \
-    "Hash branch of new assigns it raw, skipping the Symbol translation " \
-    'new already has three lines above. One line.',
-    :fix, PATH_ATTR) { BGP::Origin.new(:incomplete) }
+  # Fixed: the Hash branch assigned the Symbol raw, skipping the
+  # translation the Symbol branch already had, so the class could not read
+  # back its own to_hash. An ORIGIN the RFC does not define now hashes as
+  # its code rather than as :undefined, and any octet builds.
+  ENTRIES['BGP::Origin'] = entry(:ok, nil, nil, PATH_ATTR) do
+    BGP::Origin.new(:incomplete)
+  end
 
   ENTRIES['BGP::Next_hop'] = entry(:ok, nil, nil) { BGP::Next_hop.new('10.0.0.1') }
 
@@ -204,12 +205,16 @@ module ToHashCatalog
 
   # RFC 6793 section 3: AS4_AGGREGATOR is always 4 octets. The hash key
   # is inherited, so the attribute set rebuilds the wrong attribute.
+  # Fixed: it inherited Aggregator's :aggregator key, so Path_attribute
+  # rebuilt a 2 octet AGGREGATOR and cut AS 4200000001 to 59905, in
+  # silence. It writes :as4_aggregator now, which the registry already
+  # read.
   ENTRIES['BGP::As4_aggregator'] = entry(
-    :lossy,
-    'that it is AS4_AGGREGATOR at all. It inherits Aggregator#to_hash, ' \
-    'so its key is :aggregator, and Path_attribute rebuilds a 2 octet ' \
-    'AGGREGATOR and cuts AS 4200000001 to 59905. Silently.',
-    :fix, PATH_ATTR) { BGP::As4_aggregator.new('2.2.2.2', 4200000001) }
+    :elsewhere,
+    'nothing. Its own new reads the bare hash Aggregator takes, ' \
+    ':asn and :address, so the wrapped form is the attribute set\'s to ' \
+    'read, as with Aggregator itself.',
+    :keep, PATH_ATTR) { BGP::As4_aggregator.new('2.2.2.2', 4200000001) }
 
   ENTRIES['BGP::As_path'] = entry(:ok, nil, nil) do
     BGP::As_path.new(BGP::As_path::Sequence.new(1, 2),
@@ -218,14 +223,11 @@ module ToHashCatalog
                      BGP::As_path::Confed_set.new(7, 8))
   end
 
-  # Its own new is fine. The attribute set is not, for the same reason as
-  # As4_aggregator, which is why this verdict exists.
-  ENTRIES['BGP::As4_path'] = entry(
-    :ok_alone,
-    'that it is AS4_PATH, once it goes through an attribute set. The ' \
-    'key :as_path is inherited, so Path_attribute rebuilds a type 2 ' \
-    'AS_PATH in the 2 octet form and cuts the AS. Silently.',
-    :fix, PATH_ATTR) do
+  # Fixed: it inherited As_path's :as_path key, so Path_attribute rebuilt
+  # a type 2 AS_PATH in the 2 octet form and cut the AS numbers, in
+  # silence, while a build straight from the hash went on working.
+  # segments_from_hash already read either key, so :as4_path cost nothing.
+  ENTRIES['BGP::As4_path'] = entry(:ok, nil, nil, PATH_ATTR) do
     BGP::As4_path.new(BGP::As_path::Sequence.new(4200000001, 2),
                       BGP::As_path::Set.new(4200000002))
   end
@@ -243,12 +245,15 @@ module ToHashCatalog
   # RFC 4271 section 4.3 gives it a zero length value, and to_hash is
   # {}, so merging it into an attribute set adds no key and the
   # attribute disappears.
+  # Fixed: to_hash was {}, so merging it added no key and the attribute
+  # vanished from a round tripped attribute set. It now writes the
+  # :atomic_aggregate key the registry had taken all along.
   ENTRIES['BGP::Atomic_aggregate'] = entry(
-    :lossy,
-    'itself. to_hash is {}, so a round tripped Path_attribute comes ' \
-    'back without ATOMIC_AGGREGATE in it. Silently. The registry has a ' \
-    'working :atomic_aggregate key that to_hash never writes.',
-    :fix, PATH_ATTR) { BGP::Atomic_aggregate.new(wire('400600')) }
+    :elsewhere,
+    'nothing. The attribute carries no value, so there is no bare hash ' \
+    'for its own new to read and the attribute set is the only route. ' \
+    'That route works now; it used to drop the attribute in silence.',
+    :keep, PATH_ATTR) { BGP::Atomic_aggregate.new(wire('400600')) }
 
   ENTRIES['BGP::Aigp'] = entry(:ok, nil, nil) do
     BGP::Aigp.new(0x1f2f3f4f5f6f7f8f).add_tlv(9, "\x01\x02")
@@ -291,45 +296,37 @@ module ToHashCatalog
     ])
   end
 
-  ENTRIES['BGP::Attr::Raw'] = entry(
-    :elsewhere,
-    'nothing through an attribute set. Its own new reads :flags, :type ' \
-    'and :value off the outer hash, where to_hash put them one level ' \
-    'down in a one element :unknown list, so all three are nil and ' \
-    '80c802ff00 comes back as 000000. Silently.',
-    :fix, PATH_ATTR) { BGP::Attr::Raw.new(0x8, 200, "\xff\x00") }
+  # Fixed: new read the three fields off the outer hash, where to_hash
+  # had put them one level down in a one element :unknown list, so all
+  # three were nil and 80c802ff00 came back as 000000, a different
+  # attribute, with no error. It unwraps that list now.
+  ENTRIES['BGP::Attr::Raw'] = entry(:ok, nil, nil, PATH_ATTR) do
+    BGP::Attr::Raw.new(0x8, 200, "\xff\x00")
+  end
 
-  ENTRIES['BGP::Attr::Unknown'] = entry(
-    :elsewhere,
-    'nothing through an attribute set. It inherits both to_hash and the ' \
-    'Hash branch from Attr::Raw, so c0630178 comes back as 000000 the ' \
-    'same silent way.',
-    :fix, PATH_ATTR) { BGP::Attr::Unknown.new(0xc, 99, 0, 'x') }
+  # Fixed with Attr::Raw, whose to_hash and Hash branch it inherits.
+  ENTRIES['BGP::Attr::Unknown'] = entry(:ok, nil, nil, PATH_ATTR) do
+    BGP::Attr::Unknown.new(0xc, 99, 0, 'x')
+  end
 
-  # The attribute set itself. Three separate losses, measured.
+  # The attribute set itself. ATOMIC_AGGREGATE disappearing was the
+  # third loss here and is fixed, so the recipe is built from wire bytes
+  # that exercise the two that remain: two attributes of one type, which
+  # the one key per type hash collapses into one, and a trailing octet
+  # after the last whole attribute, which has no key. Both are silent.
+  #
+  # Origin, two Communities 1:1 and 2:2, then one octet of tail. encode
+  # gives these octets back exactly, so the recipe is faithful and the
+  # loss is the hash's alone.
   ENTRIES['BGP::Path_attribute'] = entry(
     :lossy,
-    'three things. ATOMIC_AGGREGATE, because its hash is {}. A second ' \
-    'attribute of a type already present, because the hash is one key ' \
-    'per type, so two Communities collapse into one. And the tail ' \
-    'parse_wire keeps after the last whole attribute, which has no key.',
+    'two things. A second attribute of a type already present, because ' \
+    'the hash is one key per type, so two Communities collapse into the ' \
+    'last one. And the tail parse_wire keeps after the last whole ' \
+    'attribute, which has no key. Both silently.',
     :fix) do
-    BGP::Path_attribute.new(
-      BGP::Origin.new(:incomplete),
-      BGP::As_path.new(BGP::As_path::Sequence.new(65001, 65002)),
-      BGP::Next_hop.new('10.0.0.1'),
-      BGP::Multi_exit_disc.new(0xdeadbeef),
-      BGP::Local_pref.new(200),
-      BGP::Atomic_aggregate.new,
-      BGP::Aggregator.new('10.0.0.1', 65001),
-      BGP::Communities.new('65535:65281', '1:2'),
-      BGP::Cluster_list.new('10.10.10.10', '11.11.11.11'),
-      BGP::Originator_id.new('10.0.0.2'),
-      BGP::Otc.new(64512),
-      BGP::Aigp.new(100),
-      BGP::Large_communities.new('64496:1:1'),
-      BGP::Attr::Raw.new(0xc, 255, "\x01\x02\x03\x04")
-    )
+    BGP::Path_attribute.new(wire('40010102' + 'c00804' + '00010001' +
+                                 'c00804' + '00020002' + '40'))
   end
 
   # ====================================================================

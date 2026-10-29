@@ -85,6 +85,17 @@ class Aggregator_Test < Test::Unit::TestCase
     agg = As4_aggregator.new('2.2.2.2', 4200000001)
     assert_equal 'c01208fa56ea0102020202', agg.encode(false).unpack1('H*')
   end
+  # Its own key. It used to inherit Aggregator's :aggregator, so
+  # Path_attribute rebuilt a 2 octet AGGREGATOR from this hash and cut
+  # the AS number with it: c01208fa56ea0102020202 came back as
+  # c00706ea0102020202 and 4200000001 as 59905, in silence.
+  def test_as4_aggregator_hashes_under_its_own_key
+    agg = BGP::As4_aggregator.new('2.2.2.2', 4200000001)
+    assert_equal({:as4_aggregator=>{:asn=>4200000001, :address=>'2.2.2.2'}}, agg.to_hash)
+    assert_equal(agg.encode, BGP::Path_attribute.new(agg.to_hash).encode)
+    assert_equal(BGP::As4_aggregator,
+                 BGP::Path_attribute.new(agg.to_hash)[:as4_aggregator].class)
+  end
   # B15, RFC 6793 section 3: 4-octet AS numbers on a 4-octet session.
   def test_encode4_is_8_octets
     agg = Aggregator.new('1.1.1.1', 4200000001)

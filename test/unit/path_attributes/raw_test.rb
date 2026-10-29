@@ -53,6 +53,13 @@ class Attr_raw_Test < Test::Unit::TestCase
     h = {:unknown=>[{:flags=>8, :type=>200, :value=>'ff00'}]}
     assert_equal(h, a.to_hash)
     assert_equal(a.to_shex, Attr::Raw.new(h[:unknown][0]).to_shex)
+    # And the whole hash, not just the entry inside it. Unwrapping by
+    # hand was working around the bug: new read :flags, :type and :value
+    # off the outer hash, found all three nil, and built 000000, a
+    # different attribute, with no error at all.
+    assert_equal(a.encode, BGP::Attr::Raw.new(a.to_hash).encode)
+    u = BGP::Attr::Unknown.new(0xc, 99, 0, 'x')
+    assert_equal(u.encode, BGP::Attr::Unknown.new(u.to_hash).encode)
   end
 
   def test_writes_flags_as_given

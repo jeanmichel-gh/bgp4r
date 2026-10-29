@@ -280,6 +280,16 @@ module BGP
       def encode(as4byte=true)
         super(true)
       end
+
+      # Its own key, where it used to inherit As_path's :as_path.
+      # Path_attribute then rebuilt a type 2 AS_PATH from this hash, in
+      # the 2 octet form, and cut the AS numbers with it, silently. The
+      # registry has taken an :as4_path key all along, and
+      # segments_from_hash already reads either key, so a build from this
+      # hash goes on working.
+      def to_hash
+        {:as4_path=> super[:as_path]}
+      end
     end
     
     class As_path

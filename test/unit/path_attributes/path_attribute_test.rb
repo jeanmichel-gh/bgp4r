@@ -764,4 +764,35 @@ class Path_attribute_Test < Test::Unit::TestCase # :nodoc:
                  found.collect { |f| [f.type, f.action] }
   end
 
+  # The assertion that matters for the hash form of an attribute set: the
+  # same attributes come back, with the same type codes and the same
+  # octets. Four attributes used to fail this and none of them raised.
+  #
+  # ATOMIC_AGGREGATE disappeared, because its hash was {} and merging
+  # that adds no key. AS4_AGGREGATOR and AS4_PATH came back as their 2
+  # octet namesakes with the AS numbers cut, because both hashed under
+  # their parent's key. And an Attr::Raw came back as 000000, because its
+  # new read the three fields off the outer hash where to_hash had put
+  # them one level down.
+  def test_a_round_tripped_attribute_set_is_the_same_set
+    pa = BGP::Path_attribute.new(
+      BGP::Origin.new(:incomplete),
+      BGP::As_path.new(BGP::As_path::Sequence.new(65001, 65002)),
+      BGP::Next_hop.new('10.0.0.1'),
+      BGP::Atomic_aggregate.new,
+      BGP::As4_aggregator.new('2.2.2.2', 4200000001),
+      BGP::As4_path.new(BGP::As_path::Sequence.new(4200000001, 2)),
+      BGP::Attr::Raw.new(0xc, 255, "\x01\x02\x03\x04"))
+    types = pa.attributes.collect { |a| a.type }.sort
+    rebuilt = BGP::Path_attribute.new(pa.to_hash)
+    assert_equal(types, rebuilt.attributes.collect { |a| a.type }.sort,
+                 'every attribute comes back, and ATOMIC_AGGREGATE used not to')
+    assert_equal(pa.encode(true).unpack1('H*'), rebuilt.encode(true).unpack1('H*'))
+    # The two 4 octet attributes keep their own class and their own AS
+    # numbers rather than being rebuilt as the 2 octet forms.
+    assert_equal(BGP::As4_aggregator, rebuilt[:as4_aggregator].class)
+    assert_equal(4200000001, rebuilt[:as4_aggregator].asn)
+    assert_equal(BGP::As4_path, rebuilt[:as4_path].class)
+  end
+
 end
