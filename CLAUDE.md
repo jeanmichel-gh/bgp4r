@@ -111,7 +111,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. A `lab` job runs the Compose topologies, and installs a `gobgpd` release so the native fault matrix runs there too; it pins 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-10-28: 1308 tests, 21963 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.6%.
+Baseline on 2026-10-29: 1319 tests, 22003 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.6%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -700,20 +700,58 @@ Neighbor ◀──UPDATE── Adj-RIB-Out (per peer) ◀───────�
         applies to what `rib.originate` announces rather than per
         destination. Section 10 suggests 15 seconds for it.
 4. **FIB adapters, and the show commands. In progress.**
-   1. **The show commands. Done for IOS and Junos**, in #132.
-      `bgp/rib/show.rb`, reached as `rib.show`, `rib.show(:junos)` and
-      `rib.show(:junos, prefix)`. The decision result already held what
-      they needed, including the Junos "Inactive reason" line.
+   1. **The show commands. Done**, in #132 for IOS and Junos and in #157
+      for IOS-XR, so all three styles the plan named are real.
+      `bgp/rib/show.rb`, reached as `rib.show`, `rib.show(:junos)`,
+      `rib.show(:iosxr)` and any of those with a prefix. The decision
+      result already held what they needed, including the Junos "Inactive
+      reason" line.
       * **These are in the style of those commands, not copies.** Two
         things are reproduced from samples in the vendors' own
         documentation: the IOS header, legend and column layout, and the
         Junos detail shape with its Preference, State and Inactive reason
         lines. Nothing here has been diffed against a real device, so no
         test anywhere should depend on this text byte for byte.
-      * **IOS-XR is not done**, and that is the honest gap: no sample of
-        its `show bgp` output could be found to check against, and
-        inventing a format while calling it IOS-XR is worse than not
-        having it. The plan named three styles; two are real.
+      * **IOS-XR was the recorded gap and is closed**, in #157, because
+        the sample that could not be found was found: the "Remove and
+        Replace Private AS Numbers from AS Path in BGP" section of Cisco's
+        BGP Configuration Guide for the NCS 5500, IOS XR release 7.11.x
+        carries both a `show bgp` table and a `show bgp <prefix>` detail.
+        The entry said inventing a format while calling it IOS-XR is worse
+        than not having it, and that still holds; what changed is that
+        there is something to check against.
+        * The legend is where it differs from IOS rather than being IOS
+          relabelled, and all three differences are the sample's: the line
+          breaks after "> best" with "i - internal" below rather than
+          above, stale is spelled with a small s where IOS prints "S
+          Stale", and N for Nexthop-discard has no IOS equivalent at all.
+        * The columns differ too. The sample's own header and rows agree
+          that Next Hop starts 22 characters in, which makes the Network
+          column wider here than IOS's and Next Hop narrower. The column
+          test measures at the heading offsets, as the IOS one does.
+        * A single prefix gets the **detail** form, since that is what
+          IOS-XR gives for one: the entry line, "Paths: (N available, best
+          #1)", and a block per path with the AS path, the next hop and
+          the peer that sent it, the origin spelled out, and the Received
+          Path ID of RFC 7911 section 3.
+        * What is deliberately left out, each because printing it would
+          claim something bgp4r does not have: the header's Table ID, RD
+          version, scan intervals, non-stop routing and the NSR and ISSU
+          sync lines; the detail's Versions block, Last Modified, Local
+          Path ID, version, and whether a path was advertised to a peer,
+          which needs the Adj-RIB-Outs and those belong to a `Router`, not
+          a `Table`; and group-best and multipath, since there is one best
+          path per prefix and no multipath.
+        * **IOS-XR has no line for why a path lost**, so this prints none.
+          `show(:junos, prefix)` is the one with an Inactive reason line to
+          put it on, and a test pins that difference so it is not read as
+          a hole in the IOS-XR style.
+        * The one borrowing: a locally originated route prints 0.0.0.0 and
+          a weight of 32768 in the table form, which came from the **IOS**
+          sample because the IOS-XR one has no local route in it. The
+          detail form borrows nothing and prints what the `Route` carries,
+          so the two forms disagree about a local route's next hop on
+          purpose. If a real device disagrees, that is the line to look at.
       * Only three Junos "Inactive reason" strings are Junos's own, from
         its sample output: Local Preference, IGP metric and the Interior
         over Exterior one. Every other step prints bgp4r's symbol in
