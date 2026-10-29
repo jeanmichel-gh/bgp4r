@@ -26,6 +26,8 @@ bgp/rib/                 routes and the decision process (RFC 4271 section 9); r
                          prefixes into UPDATEs, mrai.rb paces them per destination,
                          router.rb joins them and sends; rib.advertise; show.rb prints
                          the Loc-RIB the way a router would, rib.show;
+                         fib.rb plans what a forwarding table needs and ip_route.rb
+                         builds the iproute2 command for it;
                          see "Where the work is going"
 bgp/misc/                extras: route_generator.rb (many prefixes packed in UPDATEs), live_feed.rb (a client for an old public BGP feed)
 docs/                    protocol-testing.md: using bgp4r to test a router
@@ -109,7 +111,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. A `lab` job runs the Compose topologies, and installs a `gobgpd` release so the native fault matrix runs there too; it pins 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-10-28: 1272 tests, 21847 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.5%.
+Baseline on 2026-10-28: 1308 tests, 21963 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.6%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -728,15 +730,63 @@ Neighbor ◀──UPDATE── Adj-RIB-Out (per peer) ◀───────�
         sits at, so the header is the source of truth. It also pins that
         the LocPrf column is blank for an external peer's route, which is
         RFC 4271 section 5.1.5 and `Table#import` showing through.
-   2. **The FIB adapter and the Linux lab test. Not started**, about 2 PRs.
-      This one does want a container, and not for the reason part 7 of
-      phase 3 was thought to: the FIB is the kernel routing table, so the
-      test needs a network namespace of its own, with a dedicated routing
-      table, routes marked `proto bgp`, removed on exit, and never with
-      `--network host`. A native run would write to the machine's own
-      routing table, which is why a daemonless sandbox does not help here
-      the way it does for a BGP peer. There is no Docker daemon in the
-      sandbox this was written in.
+   2. **The FIB adapter and the Linux lab test. In progress**, 2 PRs, the
+      first done in #156.
+      * **It does not want a container, and the entry here said it did.**
+        What the plan actually asked for is a network namespace of its
+        own, with a dedicated routing table, routes marked `proto bgp` and
+        removed on exit, and `ip netns` gives all of that with no daemon:
+        measured in this sandbox, routes added to table 100 inside a
+        namespace while the host's table 100 stayed empty, and `ip netns
+        del` took the lot with it. The reasoning that reached "container"
+        was that a native run would write to the machine's own routing
+        table, which is true of a native run with no namespace and not of
+        one with a namespace. **That is the third recorded Docker block in
+        this file to come apart on being tried**, after phase 3 part 7 in
+        #151 and add-path in #153, and the lesson is the same each time:
+        probe before recording a block.
+      * **The pure part. Done**, in #156, and nothing calls it yet, the
+        way #125 landed the export rules before anything sent them.
+        `bgp/rib/fib.rb` holds the installed table and plans operations
+        from a Loc-RIB change, the way `Router` plans against an
+        `AdjRibOut`, and `bgp/rib/ip_route.rb` turns one operation into an
+        `ip route` command line without running it. 36 tests, both files
+        at 100% line coverage, no kernel and no iproute2 involved.
+        * **`plan` records nothing and `commit` writes**, which is the
+          `Mrai` lesson from part 8 of phase 3 taken up front: a planner
+          that recorded its own intent would claim a route the kernel went
+          on to refuse. `test_planning_records_nothing` pins it.
+        * `replace` rather than `add`, because it adds a prefix the table
+          does not have and changes the next hop of one it does, so a
+          single action covers a new route and a changed one and
+          re-running it is harmless. `proto` goes on the `del` too, where
+          it reads as a filter, so a removal cannot take out a route of
+          the same prefix that something else owns. Every form was run
+          against iproute2 6.1.0 in a namespace before it was written
+          down, which is also where `ip -n NS` was preferred to `ip netns
+          exec NS ip`.
+        * **It does not resolve a next hop.** A real router resolves the
+          BGP next hop recursively against its IGP; bgp4r has no IGP, so
+          the next hop goes to the kernel as it arrived and the kernel
+          decides whether it can reach it. Said in the class comment as
+          well, because a reader will come looking for it.
+        * `table:` has no default and `IpRoute.new` raises without it. A
+          route in the main table changes where the machine sends its own
+          traffic, so naming it is required; any table is accepted once
+          named, including the main one, so this refuses no value.
+        * One route per prefix and no multipath, because the Loc-RIB has
+          one best route per prefix. ECMP means reading the whole
+          candidate set and is its own piece of work.
+      * **Left for the second PR**: running the commands, `Table#install`
+        to wire it to the feed's worker thread the way `Router` is wired,
+        and the functional test in a namespace. One thing the probe turned
+        up for it: a flush of a routing table that does not exist yet
+        exits 2, so the teardown has to tolerate that rather than treat it
+        as a failure. **IPv6 cannot be tested in this sandbox**:
+        `/proc/sys/net/ipv6` is absent and `ip -6 route add` answers
+        "Operation not supported" on the host as well as in a namespace,
+        so the v6 command building is unit tested and the v6 data path is
+        not.
 5. **FRR as a reference in the lab. Not started.**
 
 Decisions already taken that constrain the later phases:
