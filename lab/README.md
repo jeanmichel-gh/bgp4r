@@ -53,7 +53,7 @@ The speakers run as the non-root user `bgp` and still listen on TCP 179. Docker 
 |---|---|
 | `two-speakers` | eBGP between AS 65001 and AS 65002 on one link. r2 connects, r1 waits. Routes cross both ways with AS_PATH, NEXT_HOP, MED and communities. |
 | `routegen` | A dockerized routegen. gen (AS 65001, 10.20.0.1) connects and sends 10000 generated prefixes. sink (AS 65002, 10.20.0.2) waits, counts them and times them. |
-| `fault-matrix` | Every `BGP::Fault::CATALOG` case sent to GoBGP. matrix (AS 65001, 10.30.0.1) listens, router (AS 65002, 10.30.0.2) connects. It reads the router's RIB with the `gobgp` client, so it scores routes as well as sessions. The matrix runs once and exits, non-zero on any disagreement, which against GoBGP 3.23 means 1. |
+| `fault-matrix` | Every `BGP::Fault::CATALOG` case sent to GoBGP. matrix (AS 65001, 10.30.0.1) listens, router (AS 65002, 10.30.0.2) connects. It reads the router's RIB with the `gobgp` client, so it scores routes as well as sessions. The matrix runs once and exits, non-zero on any disagreement, which against either GoBGP version measured means 1. `test/functional/lab/fault_matrix_native_test.rb` runs the same matrix against a `gobgpd` on loopback, with no container at all. |
 
 ## Node file
 
@@ -186,12 +186,18 @@ docker compose -f lab/topologies/fault-matrix/compose.yml down
 ```
 
 The exit status is 1, which is the expected result and not a failure.
-The matrix exits non-zero on any disagreement with the catalog, and
-against GoBGP 3.23 two cases disagree: both tunnel encapsulation cases.
-RFC 9012 section 13 is a MUST and asks for treat-as-withdraw, while
-GoBGP discards the malformed attribute and installs the route. bgp4r is
-right there and the router is not, so the catalog is left alone and the
-divergence is asserted as such.
+The matrix exits non-zero on any disagreement with the catalog, and two
+cases disagree on both GoBGP versions measured: both tunnel
+encapsulation cases. RFC 9012 section 13 is a MUST and asks for
+treat-as-withdraw, while GoBGP discards the malformed attribute and
+installs the route. bgp4r is right there and the router is not, so the
+catalog is left alone and the divergence is asserted as such.
+
+GoBGP 3.23 disagrees on a third case, `attr_overrun`, which it resets on
+where RFC 7606 section 4 makes treat-as-withdraw a MUST; GoBGP 4 fixed
+that. The expectations are per version, in
+`test/functional/lab/fault_matrix_scenario.rb`, which is also what the
+native test above reads.
 
 Two variables are optional. `GOBGP_IMAGE` pins the router image or swaps
 the router, and it feeds the matrix image too, so the client and the

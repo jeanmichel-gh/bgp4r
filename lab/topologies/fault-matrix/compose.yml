@@ -15,11 +15,14 @@
 #     matrix:/tmp/fault-matrix.json .
 #   docker compose -f lab/topologies/fault-matrix/compose.yml down
 #
-# With GoBGP 3.23 that status is 1, not 0, and the run is still correct.
-# The two tunnel encapsulation cases differ: GoBGP discards the malformed
-# attribute and installs the route where RFC 9012 section 13 asks for
-# treat-as-withdraw. test/functional/lab/fault_matrix_test.rb asserts the
-# per route outcomes instead of the exit status, and explains it there.
+# That status is 1, not 0, on both versions measured, and the run is
+# still correct. The two tunnel encapsulation cases differ: GoBGP
+# discards the malformed attribute and installs the route where RFC 9012
+# section 13 asks for treat-as-withdraw. On GoBGP 3.23 a third case
+# differs as well, attr_overrun, which it resets on. Both are described
+# in test/functional/lab/fault_matrix_scenario.rb, and
+# test/functional/lab/fault_matrix_test.rb asserts the per route outcomes
+# rather than the exit status.
 #
 # The matrix reads the router's RIB, which is what tells treat-as-withdraw
 # from attribute-discard, since both keep the session up. It builds the
@@ -50,9 +53,11 @@
 # withdraw before the attribute under test was ever looked at, so the
 # whole run measured that bug instead of the router.
 #
-# To go back to the version the notes in docs/protocol-testing.md were
-# measured against, or to try another:
+# To run the other version docs/protocol-testing.md records, or to try
+# another:
 #   GOBGP_IMAGE=jauderho/gobgp:v3.23.0 docker compose ... up
+# fault_matrix_test.rb reads GOBGP_IMAGE too, because a 3.x image needs
+# the extra divergence expected. Keep the two in step if this pin moves.
 # To check a tag has arm64 before pulling it:
 #   docker buildx imagetools inspect jauderho/gobgp:v4.10.0
 # If a router will not start, its own log names the config key it
