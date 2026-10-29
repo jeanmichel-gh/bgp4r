@@ -316,4 +316,79 @@ class Prefix_orf_Test < Test::Unit::TestCase
     assert_equal(hex, orf.to_shex)
     assert_equal(hex, BGP::Prefix_orf.new(orf.to_hash).to_shex)
   end
+
+  # The type specific part of an Address Prefix ORF entry, RFC 5292 section
+  # 3: Sequence 1, Minlen 24, Maxlen 32, and 192.168.1.0/24.
+  TAIL = '00000001' + '18' + '20' + '18c0a801'
+
+  def prefix_orf(entries_hex)
+    BGP::Orf.factory([('40%04x' % (entries_hex.size / 2)) + entries_hex]
+                       .pack('H*').is_packed)
+  end
+
+  # RFC 5291 section 4, "Carrying ORF Entries in BGP", gives the common part
+  # of an entry one octet: "Action is a two-bit field", "Match is a one-bit
+  # field", and "Reserved is a 5-bit field. It is set to 0 on transmit and
+  # ignored on receipt."
+  #
+  # bgp4r read Action and Match and wrote the rest as 0, which is right by
+  # the RFC and wrong by bgp4r's own rule that octets which arrived come
+  # back: a capture of a router that sets them could not be sent again.
+  def test_an_entry_keeps_the_reserved_bits_it_arrived_with
+    { '1f' => 0x1f, '3f' => 0x1f, '55' => 0x15, '01' => 0x01 }.each do |first, reserved|
+      hex = '40000b' + first + TAIL
+      orf = prefix_orf(first + TAIL)
+      assert_equal(hex, orf.to_shex, "first octet #{first} must come back")
+      entry = orf.entries.first
+      assert_equal(first.to_i(16), entry.bits, "all 8 bits are kept, not just the reserved 5")
+      assert_equal(reserved, entry.bits & 0x1f)
+      # Action and Match are still read, and still mean what they did.
+      assert_equal(first.to_i(16) >> 6, entry.action_to_i)
+      assert_equal((first.to_i(16) >> 5) & 1, entry.match_to_i)
+    end
+  end
+
+  # The REMOVE-ALL entry is the one octet form, so the reserved bits are the
+  # only thing in it besides Action and Match. It lost them too, and the
+  # entry in CLAUDE.md did not say so: 9f came in and 80 went out.
+  def test_a_remove_all_entry_keeps_the_reserved_bits_too
+    orf = prefix_orf('9f')
+    assert_equal('4000019f', orf.to_shex)
+    entry = orf.entries.first
+    assert_equal(BGP::Prefix_entry::REMOVE_ALL, entry.action_to_i)
+    assert_equal(0x9f, entry.bits)
+    assert_equal({ :action => 2, :match => 0, :bits => 0x9f }, entry.to_hash)
+  end
+
+  # No reserved bit set means no :bits, so an ordinary entry hashes to the
+  # keys it always did.
+  def test_an_ordinary_entry_carries_no_bits_key
+    entry = prefix_orf('00' + TAIL).entries.first
+    assert_nil(entry.bits)
+    assert_equal([:action, :match, :seqn, :min, :max, :prefix], entry.to_hash.keys)
+  end
+
+  def test_the_hash_rebuilds_the_reserved_bits
+    [('1f' + TAIL), ('00' + TAIL), '9f', '80'].each do |entries|
+      entry = prefix_orf(entries).entries.first
+      assert_equal(entry.encode.unpack('H*')[0],
+                   BGP::Prefix_entry.new(entry.to_hash).encode.unpack('H*')[0],
+                   "the hash of #{entries} must rebuild its octets")
+    end
+  end
+
+  # A build from field values still writes them as 0, which is what the RFC
+  # asks an encoder for. Only what arrived is written back.
+  def test_an_entry_built_from_values_writes_the_reserved_bits_as_zero
+    entry = BGP::Prefix_entry.new(0, 1, 1, 24, 32, '192.168.1.0/24')
+    assert_nil(entry.bits)
+    assert_equal('20' + TAIL, entry.encode.unpack('H*')[0], 'match in bit 5, nothing below it')
+  end
+
+  def test_to_s_names_the_reserved_bits
+    assert_match(/, reserved bits 11111\z/, prefix_orf('1f' + TAIL).entries.first.to_s)
+    assert_match(/\Aremove all, reserved bits 11111\z/, prefix_orf('9f').entries.first.to_s)
+    assert_equal('remove all', prefix_orf('80').entries.first.to_s)
+    assert(prefix_orf('00' + TAIL).entries.first.to_s !~ /reserved/)
+  end
 end

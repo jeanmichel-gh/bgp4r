@@ -33,6 +33,26 @@ module BGP
     REMOVE     = 1
     REMOVE_ALL = 2
 
+    # The bits of the common part octet this class reads, which is Action in
+    # bits 7 and 6 and Match in bit 5. RFC 5291 section 4, "Carrying ORF
+    # Entries in BGP": "Action is a two-bit field", "Match is a one-bit
+    # field", and "Reserved is a 5-bit field. It is set to 0 on transmit and
+    # ignored on receipt."
+    #
+    # So writing the reserved bits as 0 is what the RFC asks an encoder for,
+    # and that is still what a build from field values does. Dropping the
+    # ones that arrived is the part that was wrong, by bgp4r's own rule that
+    # octets which came in come back: a capture of a router that sets them
+    # could not be sent again. All 8 bits are kept now, and the hash carries
+    # them only when one outside Action and Match is set, which is the shape
+    # Extended_community::Typed uses for its own reserved fields.
+    DEFINED_BITS = 0xe0
+
+    # All 8 bits of the common part octet, when a reserved one arrived set,
+    # and nil otherwise. Action and Match are read from it as before, and
+    # are reached through action_to_i and match_to_i.
+    attr_reader :bits
+
     def initialize(*args)
       if args[0].is_a?(String) and args[0].is_packed?
         _parse_(*args)
@@ -107,6 +127,7 @@ module BGP
       # || and not ||=: the caller's hash is not ours to write defaults into.
       self.action = h[:action] || 0
       self.match = h[:match] || 0
+      @bits = h[:bits].to_i & 0xff if h[:bits]
       @seqn = h[:seqn] || 0
       @min = h[:min] || 0
       @max = h[:max] || 0
@@ -121,25 +142,40 @@ module BGP
       [_first_octet_,@seqn, @min, @max, @prefix.encode(true)].pack('CNCCa*')
     end
     
+    # No reserved bit set means no :bits key, so the hash of an ordinary
+    # entry is the one it has always been.
     def to_hash
       h = {:action=> @action, :match=> @match}
+      h[:bits] = @bits if @bits
       return h if @prefix.nil?
       h.merge({:seqn=> @seqn, :min=> @min, :max=> @max, :prefix=> @prefix.to_s})
     end
 
     def to_s
-       return action_to_s if @prefix.nil?
-       s = format("seq %3s %6s %s", @seqn, action_to_s, @prefix)
-       s += " ge #{@min}" if @min>0
-       s += " le #{@max}" if @max>0
-       s +=  " #{match_to_s}"
+       s = if @prefix.nil?
+         action_to_s
+       else
+         t = format("seq %3s %6s %s", @seqn, action_to_s, @prefix)
+         t += " ge #{@min}" if @min>0
+         t += " le #{@max}" if @max>0
+         t + " #{match_to_s}"
+       end
+       # += rebinds rather than mutating, so the frozen literal action_to_s
+       # returns is safe here.
+       s += format(", reserved bits %05b", reserved_bits) if @bits
        s
     end
       
     private
     
     def _first_octet_
-      (@action<<6) | ((@match & 0x1) << 5)
+      (@action<<6) | ((@match & 0x1) << 5) | reserved_bits
+    end
+
+    # The reserved bits to write: the ones that arrived, or 0 for an entry
+    # built from field values, which is what RFC 5291 section 4 asks for.
+    def reserved_bits
+      @bits.to_i & ~DEFINED_BITS & 0xff
     end
     
     def size
@@ -152,6 +188,9 @@ module BGP
       o1 = s.unpack('C')[0]
       @action = o1 >> 6
       @match = (o1 >> 5) & 1
+      # Kept only when a reserved bit arrived set, so an ordinary entry has
+      # no @bits and hashes to the keys it always did.
+      @bits = o1 unless (o1 & ~DEFINED_BITS & 0xff).zero?
       if @action==REMOVE_ALL
         # RFC 5291 section 4: a REMOVE-ALL entry has no type specific part.
         @seqn, @min, @max, @prefix = 0, 0, 0, nil
