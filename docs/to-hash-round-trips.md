@@ -64,34 +64,6 @@ the suite, so a new class has to be measured and decided rather than
 quietly joining the library. This document is checked against the
 catalog by the same test, column by column.
 
-## What the verdicts mean
-
-There are two routes a hash can come back by, and a class can fail on
-one and be fine on the other, in both directions.
-
-Its own `new` is one. The other is whatever actually reads these hashes,
-which for most of the library is not the class itself:
-`Path_attribute.new` for a path attribute, `Extended_communities.new`
-for an extended community, `Sub_tlv.from_hash` for a tunnel sub-TLV,
-`As_path.new` for a segment, the same list splatted back for an NLRI
-collection. For a few classes nothing reads the hash at all, and there
-the second route is the fields taken back out by hand, which proves the
-hash is complete even though no door exists.
-
-| Verdict | Meaning |
-|---|---|
-| **yes** | Its own `new` rebuilds the same wire bytes. |
-| **by another route** | Its own `new` does not, the other route does. The hash carries everything, and for most of these the other route is the one that was designed. See "Where these shapes come from". |
-| **not in its attribute** | Its own `new` does, the other route does not. Worse than it sounds: a hash key inherited from a parent class is the cause, and the attribute then rebuilds a different attribute without saying so. |
-| **no** | No route gives the octets back. Information is gone. |
-
-Of the 96 classes measured: **33 round trip through their own `new`**,
-**42 by another route**, **1 only outside its attribute**, and **20 lose
-information**. Whether a failing route raises or quietly answers
-something else is in the table rather than in the verdict, because a
-verdict is meant to say what a person gets. The quiet ones are the
-dangerous half and each one says so.
-
 ## Where these shapes come from
 
 Worth knowing before reading the table, because it explains almost every
@@ -135,6 +107,34 @@ clean confirmation: `CAP::Add_path`, `CAP::Graceful_restart` and
 `CAP::Orf` have **no hash-construction test at all**, so no `to_hash` was
 ever written for them and they inherit `Capability`'s. Every capability
 that does round trip has one.
+
+## What the verdicts mean
+
+There are two routes a hash can come back by, and a class can fail on
+one and be fine on the other, in both directions.
+
+Its own `new` is one. The other is whatever actually reads these hashes,
+which for most of the library is not the class itself:
+`Path_attribute.new` for a path attribute, `Extended_communities.new`
+for an extended community, `Sub_tlv.from_hash` for a tunnel sub-TLV,
+`As_path.new` for a segment, the same list splatted back for an NLRI
+collection. For a few classes nothing reads the hash at all, and there
+the second route is the fields taken back out by hand, which proves the
+hash is complete even though no door exists.
+
+| Verdict | Meaning |
+|---|---|
+| **yes** | Its own `new` rebuilds the same wire bytes. |
+| **by another route** | Its own `new` does not, the other route does. The hash carries everything, and for most of these the other route is the one that was designed, as the section above explains. |
+| **not in its attribute** | Its own `new` does, the other route does not. Worse than it sounds: a hash key inherited from a parent class is the cause, and the attribute then rebuilds a different attribute without saying so. |
+| **no** | No route gives the octets back. Information is gone. |
+
+Of the 96 classes measured: **33 round trip through their own `new`**,
+**42 by another route**, **1 only outside its attribute**, and **20 lose
+information**. Whether a failing route raises or quietly answers
+something else is in the table rather than in the verdict, because a
+verdict is meant to say what a person gets. The quiet ones are the
+dangerous half and each one says so.
 
 ## How the recipes were built
 
