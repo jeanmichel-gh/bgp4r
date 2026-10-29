@@ -402,19 +402,22 @@ class Open_Test < Test::Unit::TestCase
 
   # Two capabilities cannot be rebuilt from a hash, because their own
   # to_hash drops what they hold: Add_path hashes as {:code=>69} whatever
-  # its RFC 7911 section 4 tuples, Graceful_restart as {:code=>64}
-  # whatever its restart time and families. Refused by name rather than
-  # built into something else, which is the one refusal Conventions
-  # allows: an input the class cannot represent. Widening those two
-  # to_hash forms changes the shape every caller sees, so it is a
-  # recorded known issue and not decided here.
-  def test_the_two_lossy_capabilities_are_refused_by_name
-    [[BGP::OPT_PARM::CAP::Add_path.new(3, 1, 1), 'Add_path'],
-     [BGP::OPT_PARM::CAP::Graceful_restart.new(60, [1, 1, 128]), 'Graceful_restart']].each do |cap, name|
+   # Both of these used to be refused by name when rebuilding an OPEN from
+  # its hash, because their own to_hash carried only {:code=>n} and
+  # building from that would have answered a different capability in
+  # silence. Both carry their payload now, so an OPEN carrying either
+  # rebuilds from its own hash, capability and all.
+  def test_an_open_rebuilds_the_two_capabilities_that_used_to_be_refused
+    add_path = BGP::OPT_PARM::CAP::Add_path.new_array([[:send, 1, 1], [:recv, 2, 1]])
+    gr = BGP::OPT_PARM::CAP::Graceful_restart.new(0x8, 120)
+    gr.add(1, 1, 0x80)
+    [add_path, gr].each do |cap|
       o = BGP::Open.new(4, 100, 180, '10.0.0.1', cap)
-      e = assert_raise(ArgumentError) { BGP::Open.new(o.to_hash) }
-      assert_match(/#{name}/, e.message)
-      assert_match(/Known issues/, e.message)
+      assert_equal(o.encode, BGP::Open.new(o.to_hash).encode,
+                   "an OPEN carrying #{cap.class} rebuilds from its own hash")
     end
+    # And both together in one OPEN.
+    o = BGP::Open.new(4, 100, 180, '10.0.0.1', add_path, gr)
+    assert_equal(o.encode, BGP::Open.new(o.to_hash).encode)
   end
 end

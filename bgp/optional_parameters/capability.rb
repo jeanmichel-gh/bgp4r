@@ -252,33 +252,21 @@ module BGP::OPT_PARM
   # the class, which takes either the nested form to_hash writes or the
   # bare inner hash.
   #
-  # **Two codes are refused rather than attempted**, because their own
-  # to_hash does not carry what the capability holds: Add_path hashes as
-  # {:code=>69} whatever its RFC 7911 section 4 tuples are, and
-  # Graceful_restart as {:code=>64} whatever its restart time and
-  # families. Building from those would silently produce a different
-  # capability, which is worse than refusing, and that is the one kind of
-  # refusal Conventions allows a constructor: an input it cannot
-  # represent. Widening those two to_hash forms changes the shape every
-  # caller sees, so it is recorded under "Known issues to work on" rather
-  # than decided here.
-  LOSSY_HASH = { CAP_ADD_PATH => 'Add_path', CAP_GR => 'Graceful_restart' }.freeze
-
+  # Every code with a class of its own is attempted. Add_path and
+  # Graceful_restart used to be refused here, because their to_hash
+  # carried only {:code=>n} and building from that would have answered a
+  # different capability in silence; both carry their payload now.
   def Capability.from_hash(h)
     code = h[:code]
     raise ArgumentError, "no :code in #{h.inspect}" if code.nil?
-    if (name = LOSSY_HASH[code])
-      raise ArgumentError,
-            "CAP::#{name} cannot be built from a hash: its to_hash carries " \
-            "only #{{ :code => code }.inspect} and loses the rest. See " \
-            '"Known issues to work on" in CLAUDE.md.'
-    end
     case code
     when CAP_AS4                             then CAP::As4.new(h)
     when CAP_MBGP                            then CAP::Mbgp.new(h)
     when CAP_ROUTE_REFRESH                   then CAP::Route_refresh.new(h)
     when CAP_ROUTE_REFRESH_CISCO             then CAP::Route_refresh.new(h)
     when CAP_ORF, CAP_ORF_CISCO              then CAP::Orf.new(h)
+    when CAP_ADD_PATH                        then CAP::Add_path.new(h)
+    when CAP_GR                              then CAP::Graceful_restart.new(h)
     when CAP_EXTENDED_NEXTHOP                then CAP::Extended_nexthop.new(h)
     when CAP_ROLE                            then CAP::Role.new(h)
     when CAP_DYNAMIC                         then CAP::Dynamic.new(h)

@@ -41,6 +41,14 @@ module BGP::OPT_PARM::CAP
         add(*args)
       elsif args.size==1 and args[0].is_a?(String)
         parse(*args)
+      elsif args.size==1 and args[0].is_a?(Hash)
+        # Its own hash, and the inner one alone. Neither was read: a Hash
+        # fell to the bare raise below, which is the whole of why this
+        # capability had no hash build path.
+        super(OPT_PARM::CAP_ADD_PATH)
+        h = args[0]
+        h = h[:capability] if h.key?(:capability)
+        [h[:families]].flatten.compact.each { |f| add(f[:send_recv], f[:afi], f[:safi]) }
       elsif args.empty?
         super(OPT_PARM::CAP_ADD_PATH)
       else
@@ -99,6 +107,17 @@ module BGP::OPT_PARM::CAP
       s = []
       s << @af.to_a.sort.collect { |e|  e.flatten.pack('nCC')  }
       super s.join, :extended => extended
+    end
+
+    # One entry per family, which is what RFC 7911 section 4 puts in the
+    # capability: "a BGP speaker that wishes to indicate its support ...
+    # uses the Capabilities Optional Parameter", one <AFI, SAFI,
+    # Send/Receive> triple each. It used to inherit Capability's bare
+    # {:code=>69}, so every triple was lost and the capability could not
+    # be read back at all. The :families shape is CAP::Extended_nexthop's.
+    def to_hash
+      super.merge(:capability => { :families => @af.to_a.sort.collect { |af, sr|
+        { :afi => af[0], :safi => af[1], :send_recv => sr } } })
     end
 
     def to_s

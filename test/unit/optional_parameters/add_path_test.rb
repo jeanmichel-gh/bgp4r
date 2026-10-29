@@ -116,4 +116,25 @@ class TestBgpOptionalParametersAddPath < Test::Unit::TestCase
     assert_match(/999, 77 SEND_AND_RECV/, cap.to_s_brief)
     assert_match(/AFI IPv4 \(1\), SAFI Unicast \(1\)/, Add_path.new(:send, 1, 1).to_s)
   end
+
+  # It inherited Capability's bare {:code=>69}, so every RFC 7911 section
+  # 4 <AFI, SAFI, Send/Receive> triple was lost, and a Hash fell to the
+  # bare raise in new, so nothing could read the capability back.
+  def test_to_hash_carries_every_family_and_reads_back
+    cap = BGP::OPT_PARM::CAP::Add_path.new_array([[:send, 1, 1], [:recv, 2, 1], [3, 1, 128]])
+    assert_equal({ :code => 69, :capability => { :families => [
+                     { :afi => 1, :safi => 1, :send_recv => 2 },
+                     { :afi => 1, :safi => 128, :send_recv => 3 },
+                     { :afi => 2, :safi => 1, :send_recv => 1 }] } },
+                 cap.to_hash)
+    assert_equal(cap.encode, BGP::OPT_PARM::CAP::Add_path.new(cap.to_hash).encode)
+    # Capability.from_hash used to refuse this code by name.
+    assert_equal(cap.encode, BGP::OPT_PARM::Capability.from_hash(cap.to_hash).encode)
+  end
+
+  def test_a_capability_with_no_family_still_round_trips
+    cap = BGP::OPT_PARM::CAP::Add_path.new
+    assert_equal({ :code => 69, :capability => { :families => [] } }, cap.to_hash)
+    assert_equal(cap.encode, BGP::OPT_PARM::CAP::Add_path.new(cap.to_hash).encode)
+  end
 end

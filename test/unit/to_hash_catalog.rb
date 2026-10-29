@@ -749,30 +749,26 @@ module ToHashCatalog
     BGP::OPT_PARM::Capability::Unknown.new(wire('0207640576616c7565'))
   end
 
-  ENTRIES['BGP::OPT_PARM::CAP::Add_path'] = entry(
-    :lossy,
-    'every RFC 7911 section 4 <AFI, SAFI, Send/Receive> tuple. The hash ' \
-    'is {:code=>69} whatever the capability holds.',
-    :fix) do
+  # Fixed: it inherited Capability's bare {:code=>69}, so every RFC 7911
+  # section 4 <AFI, SAFI, Send/Receive> triple was lost, and a Hash fell
+  # to a bare raise in new. Capability.from_hash refused this code by
+  # name; it builds it now.
+  ENTRIES['BGP::OPT_PARM::CAP::Add_path'] = entry(:ok, nil, nil) do
     BGP::OPT_PARM::CAP::Add_path.new_array([[:send, 1, 1], [:recv, 2, 1], [3, 1, 128]])
   end
 
-  ENTRIES['BGP::OPT_PARM::CAP::Graceful_restart'] = entry(
-    :lossy,
-    'the restart state, the restart time and every address family ' \
-    'tuple. The hash is {:code=>64} whatever the capability holds.',
-    :fix) do
+  # Fixed with Add_path, and for the same reason: Capability's bare
+  # {:code=>64} lost the restart state, the restart time and every
+  # family together, and a Hash went to parse, which called slice! on it.
+  # The recipe sets the RFC 4724 section 3 Restart State bit, a restart
+  # time, and a family with the Forwarding State bit set.
+  ENTRIES['BGP::OPT_PARM::CAP::Graceful_restart'] = entry(:ok, nil, nil) do
     gr = BGP::OPT_PARM::CAP::Graceful_restart.new(0x8, 120)
     gr.add(1, 1, 0x80)
     gr.add(2, 128, 0)
     gr
   end
 
-  # Fixed: the capability inherited Capability's bare {:code=>3}, so
-  # every Entry was lost, and a Hash fell through to the bare super and
-  # built a capability with no entries at all: 26 octets became 4, in
-  # silence. Capability.from_hash routes code 3 straight back here, so
-  # that route answered an empty capability too.
   ENTRIES['BGP::OPT_PARM::CAP::Orf'] = entry(:ok, nil, nil) do
     orf = BGP::OPT_PARM::CAP::Orf.new
     orf.add(BGP::OPT_PARM::CAP::Orf::Entry.new(1, 1, [1, 1], [2, 1], [3, 1]))
