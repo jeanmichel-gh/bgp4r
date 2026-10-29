@@ -35,7 +35,12 @@ jobs:
         shell: bash
         run: |
           [ -f test.log ] || exit 0
-          msg=$(grep -E -A15 "^(Failure|Error):|Error\b.*\(LoadError\)|cannot load such file" test.log | head -80)
+          # || true, because grep exits 1 when it matches nothing and
+          # this step runs under bash -e: without it the step dies there
+          # and the tail fallback below never runs, so a failure whose log
+          # has no "Failure:" line is reported as nothing at all. That is
+          # what happened to the first lab run of #159.
+          msg=$(grep -E -A15 "^(Failure|Error):|Error\b.*\(LoadError\)|cannot load such file" test.log | head -80 || true)
           [ -n "$msg" ] || msg=$(tail -40 test.log)
           msg=${msg//'%'/'%25'}; msg=${msg//$'\r'/'%0D'}; msg=${msg//$'\n'/'%0A'}
           echo "::error title=Test output::$msg"
@@ -83,7 +88,12 @@ jobs:
         shell: bash
         run: |
           [ -f test.log ] || exit 0
-          msg=$(grep -E -A15 "^(Failure|Error):|Error\b.*\(LoadError\)|cannot load such file" test.log | head -80)
+          # || true, because grep exits 1 when it matches nothing and
+          # this step runs under bash -e: without it the step dies there
+          # and the tail fallback below never runs, so a failure whose log
+          # has no "Failure:" line is reported as nothing at all. That is
+          # what happened to the first lab run of #159.
+          msg=$(grep -E -A15 "^(Failure|Error):|Error\b.*\(LoadError\)|cannot load such file" test.log | head -80 || true)
           [ -n "$msg" ] || msg=$(tail -40 test.log)
           msg=${msg//'%'/'%25'}; msg=${msg//$'\r'/'%0D'}; msg=${msg//$'\n'/'%0A'}
           echo "::error title=Test output::$msg"
@@ -170,7 +180,12 @@ jobs:
         shell: bash
         run: |
           [ -f test.log ] || exit 0
-          msg=$(grep -E -A15 "^(Failure|Error):|Error\b.*\(LoadError\)|cannot load such file" test.log | head -80)
+          # || true, because grep exits 1 when it matches nothing and
+          # this step runs under bash -e: without it the step dies there
+          # and the tail fallback below never runs, so a failure whose log
+          # has no "Failure:" line is reported as nothing at all. That is
+          # what happened to the first lab run of #159.
+          msg=$(grep -E -A15 "^(Failure|Error):|Error\b.*\(LoadError\)|cannot load such file" test.log | head -80 || true)
           [ -n "$msg" ] || msg=$(tail -40 test.log)
           msg=${msg//'%'/'%25'}; msg=${msg//$'\r'/'%0D'}; msg=${msg//$'\n'/'%0A'}
           echo "::error title=Test output::$msg"

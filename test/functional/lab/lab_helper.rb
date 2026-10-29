@@ -579,9 +579,29 @@ module LabHelper
     end
 
     # A vty command that answers JSON, parsed, or nil.
+    #
+    # The JSON is taken from the first brace rather than from the start of
+    # the output, because vtysh prefixes warnings to it and they are not
+    # JSON. Run as any user who is not root and not in the frrvty group,
+    # which is what CI does, every call begins with:
+    #
+    #   % Can't open configuration file /etc/frr/vtysh.conf due to
+    #   'Permission denied'.
+    #
+    # and the command still answers correctly after it. Parsing the whole
+    # output instead made every call here return nil, so up never saw the
+    # daemon answer and raised after its timeout even though the session
+    # had established. That is what broke the first CI run of this: root
+    # reads that file, so nothing local showed it.
+    #
+    # One more line a non-root run prints, harmless and left alone: bgpd
+    # logs that it could not mkdir under /var/tmp/frr and that "crashlog
+    # and per-thread log buffering unavailable". It is a crash handler, not
+    # anything this needs.
     def vty_json(command)
       out = vty(command) or return nil
-      JSON.parse(out)
+      start = out.index('{') || out.index('[') or return nil
+      JSON.parse(out[start..])
     rescue JSON::ParserError
       nil
     end

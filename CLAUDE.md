@@ -116,7 +116,11 @@ The same matrix against a second implementation, FRR's `bgpd`, also with
 no Docker and no zebra. It needs the FRR package, whose `bgpd` is not on
 `PATH`: `/usr/lib/frr/bgpd` is looked for, and `FRR_BGPD` and `VTYSH`
 name them elsewhere. No root: `bgpd` runs with `-S` so it keeps the
-invoking user, and both ends get ports of their own. A few minutes:
+invoking user, and both ends get ports of their own. Checked as a
+non-root user and not only as root, because the difference is not
+nothing: `vtysh` cannot read `/etc/frr/vtysh.conf` without the `frrvty`
+group and prefixes a warning to every answer, which broke the first CI
+run of this. A few minutes:
 ```
 ruby -I. test/functional/lab/fault_matrix_frr_test.rb
 ```
@@ -950,11 +954,24 @@ Neighbor ◀──UPDATE── Adj-RIB-Out (per peer) ◀───────�
      And "attribute overruns the list" was a dash because the hand run
      skipped it: it is 3/5, exactly the bug GoBGP 3.23.0 had and GoBGP 4
      fixed.
-   * **Three harness facts, each measured rather than assumed**, because
+   * **Four harness facts, each measured rather than assumed**, because
      each one silently voids the whole run. `bgpd` needs `-S` or it drops
      to the `frr` user and cannot write into `Dir.mktmpdir`. It needs an
      address of its own, not the peer's, or every route is rejected under
      RFC 4271 section 6.3 for a NEXT_HOP equal to the receiving speaker's.
+     **And `vtysh` must be read past its own warning.** Run as any user
+     that is neither root nor in the `frrvty` group, which is exactly what
+     CI does, every answer begins `% Can't open configuration file
+     /etc/frr/vtysh.conf due to 'Permission denied'.` and the real output
+     follows it. `JSON.parse` on the whole thing fails, so `Frr#summary`
+     answered nil forever and `up` raised after its timeout even though
+     the session had established. `Frr#vty_json` takes the JSON from the
+     first brace now. Nothing local showed it, because root reads that
+     file: it took the first CI run of #159 to find, and **the failure
+     reported nothing at all**, because the workflow's annotation step ran
+     `msg=$(grep ...)` under `bash -e` and grep exits 1 when it matches
+     nothing, so the step died before its own `tail` fallback. That now
+     ends in `|| true`.
      And it needs a **non-loopback** next hop in the test routes:
      `Frr::NEXT_HOP` is 192.0.2.1, because with 127.0.0.1 FRR keeps the
      session up and silently drops the route where GoBGP accepts it. The
