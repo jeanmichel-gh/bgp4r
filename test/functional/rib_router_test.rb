@@ -27,10 +27,15 @@ require 'bgp/rib'
 
 # Three speakers over loopback, so a route crosses a bgp4r router and comes
 # out the other side with the export rules applied to it. This is the
-# transit case and the route reflector case of RIB phase 3, which the
-# recorded plan wanted as Compose topologies against GoBGP; the protocol
-# behaviour is here, where it can be run with no daemon, and a real router's
-# opinion of it still needs that topology.
+# transit case and the route reflector case of RIB phase 3. The protocol
+# behaviour is here, where it can be run with no router installed at all,
+# and it asserts more than any interop test can, because it reads the
+# UPDATE off the wire.
+#
+# What it cannot tell you is whether anybody else accepts what we send.
+# test/functional/lab/rib_router_gobgp_test.rb does that half, with GoBGP
+# as the far peer and no Docker. Keep the two in step: a rule added here
+# is worth a line there if a real router's opinion of it would differ.
 #
 # One Table with two Neighbors is what makes a router: a Neighbor holds one
 # session, so a speaker with two peers has two of them, both attached to the

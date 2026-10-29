@@ -285,6 +285,49 @@ module LabHelper
       "#{self.class.client} -u #{@local} -p #{@api_port} global rib"
     end
 
+    # The router's RIB, parsed: prefix => array of paths. nil while the
+    # daemon is not answering. An empty RIB answers {}, which is a real
+    # answer and not the same as nil, so a caller can tell "nothing there"
+    # from "could not ask".
+    #
+    # This is what a test asserts a bgp4r UPDATE against, because it is the
+    # router's own reading of what we sent rather than ours.
+    def rib
+      out, status = Open3.capture2e(self.class.client, '-u', @local,
+                                    '-p', @api_port.to_s, 'global', 'rib', '-j')
+      return nil unless status.success?
+      JSON.parse(out)
+    rescue SystemCallError, JSON::ParserError
+      nil
+    end
+
+    # One path out of that RIB for a prefix, or nil. Picks the best path,
+    # since a prefix with one path has that one marked best.
+    def path(prefix)
+      paths = (rib || {})[prefix] or return nil
+      paths.find { |p| p['best'] } || paths.first
+    end
+
+    # A path's attributes keyed by their BGP attribute type code, so an
+    # assertion names the code point the RFC does: 2 AS_PATH, 3 NEXT_HOP,
+    # 5 LOCAL_PREF, 9 ORIGINATOR_ID and 10 CLUSTER_LIST here. The client
+    # prints no attribute bgp4r did not send, so a missing key means the
+    # attribute did not arrive.
+    def self.attrs(path)
+      (path['attrs'] || []).to_h { |a| [a['type'], a] }
+    end
+
+    # A path's AS_PATH as one flat list of AS numbers, in order. RFC 4271
+    # section 4.3 gives AS_PATH as a sequence of segments, and the client
+    # prints them that way, so this is the common case flattened. An empty
+    # AS_PATH, which is what an internal peer gets, has no segments and
+    # answers []. Read the segments themselves when the shape matters, as
+    # it does for telling an AS_SEQUENCE from an AS_SET.
+    def self.as_path(path)
+      segments = (attrs(path)[2] || {})['as_paths'] || []
+      segments.collect { |s| s['asns'] || [] }.flatten
+    end
+
     # The daemon's own log: what it made of each UPDATE, in its words.
     # Cached at down, since the directory goes with it.
     def log
