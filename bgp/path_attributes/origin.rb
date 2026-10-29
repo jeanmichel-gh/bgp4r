@@ -27,6 +27,11 @@ module BGP
   
   class Origin < Attr
 
+    # RFC 4271 section 5.1.1, "ORIGIN is a well-known mandatory
+    # attribute": 0 IGP, 1 EGP, 2 INCOMPLETE. Read by the Symbol branch
+    # and by the Hash one, which is the whole point of naming it once.
+    CODES = { :igp => 0, :egp => 1, :incomplete => 2 }.freeze
+
     def initialize(arg=0)
       @type=ORIGIN
       @flags=WELL_KNOWN_MANDATORY
@@ -35,18 +40,24 @@ module BGP
       elsif arg.is_a?(self.class)
         parse(arg.encode)
       elsif arg.is_a?(Hash) and arg[:origin]
-        @origin = arg[:origin]
-      elsif arg.is_a?(Integer) and (0..2)===arg
+        # to_hash answers what to_sym says, so the value here is usually a
+        # Symbol and has to go through the same translation the Symbol
+        # branch below does. It was assigned raw, which left @origin
+        # holding a Symbol and encode then raised in pack: the class could
+        # not read back its own to_hash at all.
+        @origin = CODES.fetch(arg[:origin], arg[:origin])
+      # RFC 4271 section 4.3 gives ORIGIN a one octet value, so anything
+      # that fits one octet can be built and sent. It used to refuse
+      # above 2, which is the only three section 5.1.1 defines, and
+      # Conventions is explicit that a constructor must not refuse a
+      # value that is merely wrong by the RFC: building one no RFC allows
+      # is the point of this library. It also blocked the round trip,
+      # since an ORIGIN read off the wire with value 5 hashes as 5 and
+      # Path_attribute could not build it back.
+      elsif arg.is_a?(Integer) and (0..255)===arg
         @origin=arg
       elsif arg.is_a?(Symbol)
-        case arg
-        when :igp
-          @origin=0
-        when :egp
-          @origin=1
-        when :incomplete
-          @origin=2
-        end
+        @origin = CODES[arg]
       else
         raise ArgumentError, "invalid argument, #{arg.class} (#{arg})"
       end
@@ -70,8 +81,15 @@ module BGP
       end
     end
     
+    # The Symbol for the three values RFC 4271 section 5.1.1 defines,
+    # which is what every caller and test has always seen. For any other
+    # value, which can only arrive off the wire, the code itself: to_sym
+    # answers :undefined for all of them alike, so a hash saying
+    # :undefined cannot be read back. Same rule as a kept tail, nothing
+    # unusual means nothing new in the hash.
     def to_hash
-      {:origin=> to_sym}
+      sym = to_sym
+      {:origin=> sym == :undefined ? @origin : sym}
     end
 
     def origin

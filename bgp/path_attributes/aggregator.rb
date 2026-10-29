@@ -121,6 +121,14 @@ module BGP
       super(true)
     end
 
+    # Its own key, where it used to inherit Aggregator's :aggregator.
+    # Path_attribute then rebuilt a 2 octet AGGREGATOR from this hash and
+    # cut the AS number with it, silently: AS 4200000001 came back as
+    # 59905. The registry has taken an :as4_aggregator key all along.
+    def to_hash
+      {:as4_aggregator=> super[:aggregator]}
+    end
+
   end
   
   class Aggregator

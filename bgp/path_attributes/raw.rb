@@ -64,6 +64,14 @@ module BGP
           parse(args[0].encode)
         elsif args.size == 1 and args[0].is_a?(Hash)
           h = args[0]
+          # to_hash wraps the three fields in a one element :unknown list,
+          # because that is the key Path_attribute#to_hash merges them
+          # under and Path_attribute.new splices back. Reading only the
+          # outer hash found all three nil, so 80c802ff00 rebuilt as
+          # 000000: a different attribute, with no error. One Raw is one
+          # attribute, so the first entry is the one being built; the list
+          # is Path_attribute's business.
+          h = [h[:unknown]].flatten.first || {} if h.key?(:unknown)
           @flags = h[:flags].to_i
           @type = h[:type].to_i
           @value = [h[:value].to_s].pack('H*')

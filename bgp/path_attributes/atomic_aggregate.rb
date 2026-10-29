@@ -37,8 +37,13 @@ module BGP
         raise ArgumentError, "invalid argument, #{arg.class} #{arg}"
       end
     end
+    # The attribute carries no value, so the hash says only that it is
+    # there. It used to answer {}, which added no key when
+    # Path_attribute#to_hash merged it, so a round tripped attribute set
+    # came back without ATOMIC_AGGREGATE in it and said nothing. The
+    # registry has taken an :atomic_aggregate key all along.
     def to_hash
-      {}
+      {:atomic_aggregate=> true}
     end
 
     private

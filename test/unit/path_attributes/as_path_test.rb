@@ -21,6 +21,8 @@
 #++
 
 require 'bgp/path_attributes/as_path'
+# The new test checks what Path_attribute rebuilds from an As4_path hash.
+require 'bgp/path_attributes/path_attribute'
 require 'test/unit'
 
 class Segment_Test < Test::Unit::TestCase
@@ -170,10 +172,13 @@ class As_path_Test < Test::Unit::TestCase
     set1 << As_path::Confed_set.new(7,8)
     set2 = As4_path.new_hash :set=> [1,2], :sequence=>[3,4], :confed_sequence=>[5,6], :confed_set=>[7,8]
     assert_equal(set1.to_shex, set2.to_shex)    
-    assert_equal [1,2], set2.to_hash[:as_path][:set]
-    assert_equal [3,4], set2.to_hash[:as_path][:sequence]
-    assert_equal [5,6], set2.to_hash[:as_path][:confed_sequence]
-    assert_equal [7,8], set2.to_hash[:as_path][:confed_set]
+    # :as4_path, not :as_path. set2 is an As4_path, and it used to hash
+    # under its parent's key, which made Path_attribute rebuild a 2 octet
+    # AS_PATH from it and cut the AS numbers.
+    assert_equal [1,2], set2.to_hash[:as4_path][:set]
+    assert_equal [3,4], set2.to_hash[:as4_path][:sequence]
+    assert_equal [5,6], set2.to_hash[:as4_path][:confed_sequence]
+    assert_equal [7,8], set2.to_hash[:as4_path][:confed_set]
   end
   # to_hash used to merge every segment into one hash, so all but the
   # last segment of a type was lost and the hash did not round trip.
@@ -217,9 +222,20 @@ class As_path_Test < Test::Unit::TestCase
   end
   def test_as4_path_to_hash_keeps_repeated_segments
     path = As4_path.new(As_path::Sequence.new(100,4200000001), As_path::Sequence.new(200))
-    assert_equal({:as_path=>{:segments=>[{:sequence=>[100,4200000001]}, {:sequence=>[200]}]}}, path.to_hash)
+    assert_equal({:as4_path=>{:segments=>[{:sequence=>[100,4200000001]}, {:sequence=>[200]}]}}, path.to_hash)
     assert_equal(path.to_shex, As4_path.new(path.to_hash).to_shex)
     assert_equal(path.to_hash, As4_path.new(path.to_hash).to_hash)
+  end
+  # Its own key, for the same reason As4_aggregator has one: it used to
+  # inherit As_path's :as_path, so Path_attribute rebuilt a type 2
+  # AS_PATH from this hash, in the 2 octet form, and cut the AS numbers
+  # with it. segments_from_hash reads either key, so a build straight
+  # from the hash went on working and nothing said anything.
+  def test_as4_path_hashes_under_its_own_key
+    path = BGP::As4_path.new(BGP::As_path::Sequence.new(4200000001, 2))
+    assert_equal({:as4_path=>{:sequence=>[4200000001, 2]}}, path.to_hash)
+    assert_equal(path.encode, BGP::Path_attribute.new(path.to_hash).encode)
+    assert_equal(BGP::As4_path, BGP::Path_attribute.new(path.to_hash)[:as4_path].class)
   end
   # The one key per segment type hash is still what to_hash returns
   # while no type repeats, and new_hash still takes it.

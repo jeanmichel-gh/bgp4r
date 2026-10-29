@@ -1,5 +1,5 @@
 #--
-# Copyright 2008, 2009 Jean-Michel Esnault.
+# Copyright 2008, 2009, 2026 Jean-Michel Esnault.
 # All rights reserved.
 # See LICENSE.txt for permissions.
 #
@@ -36,7 +36,11 @@ class Atomic_aggregate_Test < Test::Unit::TestCase
     assert_equal("400600", Atomic_aggregate.new(obj.encode).to_shex)
   end
   def test_2
-    assert_equal({},Atomic_aggregate.new.to_hash)
+    # The attribute carries no value, so the hash says only that it is
+    # there. It used to answer {}, which added no key when
+    # Path_attribute#to_hash merged it, so the attribute vanished from a
+    # round tripped attribute set in silence.
+    assert_equal({:atomic_aggregate=>true},Atomic_aggregate.new.to_hash)
   end
   def test_flags_are_well_known
     assert ! Atomic_aggregate.new.is_optional?
