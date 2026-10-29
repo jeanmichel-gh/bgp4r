@@ -345,4 +345,76 @@ class Open_Test < Test::Unit::TestCase
     assert_equal('4142', open2.tail.unpack('H*')[0])
     assert_equal(hex2, open2.to_shex)
   end
+
+  # OPEN was the one message in bgp4r that built two ways where
+  # Conventions asks for three, and a poor one to leave out: it is the
+  # message a session starts with. Open.new of its own to_hash fell into
+  # the positional branch, took the Hash as the version, and raised
+  # IPAddr::AddressFamilyError on a bgp_id of nil.
+  def test_builds_from_its_own_hash
+    o = BGP::Open.new(4, 100, 180, '10.0.0.1',
+                      BGP::OPT_PARM::CAP::Route_refresh.new,
+                      BGP::OPT_PARM::CAP::As4.new(100),
+                      BGP::OPT_PARM::CAP::Mbgp.ipv4_unicast)
+    r = BGP::Open.new(o.to_hash)
+    assert_equal(o.to_shex, r.to_shex, 'byte for byte')
+    assert_equal(o.to_hash, r.to_hash)
+  end
+
+  # :capabilities is not only capabilities since #154: an
+  # Optional_parameter::Unknown hashes into it keyed on :type where a
+  # capability is keyed on :code, and the rebuild tells them apart.
+  def test_builds_from_a_hash_carrying_an_unreadable_parameter
+    o = BGP::Open.new(4, 100, 180, '10.0.0.1',
+                      BGP::OPT_PARM::Optional_parameter::Unknown.new(1, 'abcd'))
+    assert_equal(1, o.to_hash[:capabilities][0][:type])
+    assert_equal(o.to_shex, BGP::Open.new(o.to_hash).to_shex)
+  end
+
+  # A captured OPEN whose Optional Parameters Length lies: it says 10
+  # where 4 octets follow. The declared length rides in the hash, so the
+  # capture still encodes byte for byte after a round trip through it.
+  def test_a_hash_carries_a_declared_length_that_disagrees
+    hex = 'ff' * 16 + '0021' + '01' + '04' + '0064' + '00b4' + '0a000001' +
+          '0a' + '02020200'
+    o = BGP::Open.new([hex].pack('H*').is_packed)
+    assert_equal(10, o.to_hash[:opt_parm_len])
+    assert_equal(hex, o.to_shex)
+    assert_equal(hex, BGP::Open.new(o.to_hash).to_shex)
+  end
+
+  # RFC 9072 section 2: a message read in the extended form is written
+  # back in it whatever its size, because section 2 says "an
+  # implementation MUST accept an OPEN message that uses the encoding of
+  # this specification". encode picks the form from the size otherwise,
+  # so the hash has to say so or a small extended message loses it.
+  def test_a_hash_carries_the_extended_form
+    o = BGP::Open.new(4, 100, 180, '10.0.0.1', BGP::OPT_PARM::CAP::As4.new(100))
+    o.extended = true
+    assert_equal(true, o.to_hash[:extended])
+    r = BGP::Open.new(o.to_hash)
+    assert(r.extended?)
+    assert_equal(o.to_shex, r.to_shex)
+    # And an ordinary OPEN has no such key, so its hash is what it was.
+    plain = BGP::Open.new(4, 100, 180, '10.0.0.1')
+    assert(!plain.to_hash.key?(:extended))
+  end
+
+  # Two capabilities cannot be rebuilt from a hash, because their own
+  # to_hash drops what they hold: Add_path hashes as {:code=>69} whatever
+  # its RFC 7911 section 4 tuples, Graceful_restart as {:code=>64}
+  # whatever its restart time and families. Refused by name rather than
+  # built into something else, which is the one refusal Conventions
+  # allows: an input the class cannot represent. Widening those two
+  # to_hash forms changes the shape every caller sees, so it is a
+  # recorded known issue and not decided here.
+  def test_the_two_lossy_capabilities_are_refused_by_name
+    [[BGP::OPT_PARM::CAP::Add_path.new(3, 1, 1), 'Add_path'],
+     [BGP::OPT_PARM::CAP::Graceful_restart.new(60, [1, 1, 128]), 'Graceful_restart']].each do |cap, name|
+      o = BGP::Open.new(4, 100, 180, '10.0.0.1', cap)
+      e = assert_raise(ArgumentError) { BGP::Open.new(o.to_hash) }
+      assert_match(/#{name}/, e.message)
+      assert_match(/Known issues/, e.message)
+    end
+  end
 end

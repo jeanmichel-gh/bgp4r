@@ -39,9 +39,17 @@ module BGP::OPT_PARM::CAP
       end
     end
 
+    # Three ways: an AFI and SAFI, a hash, or wire bytes. The hash path
+    # was missing, so a Hash reached IANA.afi and raised TypeError. It
+    # takes the hash to_hash produces, {:code=>1,
+    # :capability=>{:afi=>1, :safi=>1}}, and the bare inner hash too.
     def initialize(afi,safi=nil)
       if safi.nil? and afi.is_a?(String) and afi.is_packed?
         parse(afi)
+      elsif safi.nil? and afi.is_a?(Hash)
+        super(OPT_PARM::CAP_MBGP)
+        h = afi[:capability] || afi
+        self.safi, self.afi = h[:safi], h[:afi]
       else
         super(OPT_PARM::CAP_MBGP)
         self.safi, self.afi = safi, afi

@@ -66,4 +66,17 @@ class Mbgp_cap_Test < Test::Unit::TestCase
     assert_equal('MBGP IPv6, Labeled VPN Unicast', Mbgp.new(2, 128).to_s_brief)
     assert_match(/AFI IPv4 \(1\), SAFI Unicast \(1\)/, Mbgp.new(1, 1).to_s)
   end
+
+  # The third build path, which was missing: a Hash reached IANA.afi and
+  # raised TypeError. Both the nested form to_hash writes and the bare
+  # inner hash are taken.
+  def test_builds_from_its_own_hash
+    [[1, 1], [2, 1], [1, 128], [2, 128]].each do |afi, safi|
+      cap = Mbgp.new(afi, safi)
+      assert_equal({ :code => 1, :capability => { :afi => afi, :safi => safi } },
+                   cap.to_hash)
+      assert_equal(cap.encode, Mbgp.new(cap.to_hash).encode, "#{afi}/#{safi}")
+      assert_equal(cap.encode, Mbgp.new(:afi => afi, :safi => safi).encode)
+    end
+  end
 end

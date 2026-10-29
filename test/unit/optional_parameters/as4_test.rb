@@ -31,4 +31,17 @@ class As4_capability_Test < Test::Unit::TestCase
     cap3 = As4.new(cap1.encode)
     assert_equal(cap2.encode, cap3.encode)
   end
+
+  # The third build path, which was missing: a Hash became @as and encode
+  # raised TypeError inside pack. Both the nested form to_hash writes and
+  # the bare inner hash are taken.
+  def test_builds_from_its_own_hash
+    cap = As4.new(100)
+    assert_equal({ :code => 65, :capability => { :as => 100 } }, cap.to_hash)
+    assert_equal(cap.encode, As4.new(cap.to_hash).encode)
+    assert_equal(cap.encode, As4.new(:as => 100).encode)
+    # A 4-octet AS, which is the whole point of the capability.
+    big = As4.new(0x1_0000)
+    assert_equal(big.encode, As4.new(big.to_hash).encode)
+  end
 end
