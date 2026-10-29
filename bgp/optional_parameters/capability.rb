@@ -28,7 +28,20 @@ module BGP::OPT_PARM
   class Capability < Optional_parameter
     include BGP
 
-    unless const_defined? :Unknown
+    # The second argument matters and its default is the trap. Module
+    # #const_defined? searches the ancestors unless told not to, and
+    # Capability is a subclass of Optional_parameter, so the day
+    # Optional_parameter::Unknown was added this guard went true and
+    # Capability::Unknown was never defined at all. Every reference to it
+    # then resolved up the chain to the parameter level class, which has a
+    # different hash and a different constructor. The guard is here to make
+    # the file safe to require twice, so what it means to ask is whether
+    # this class defines it, which is what false says.
+    #
+    # bgp/path_attributes/path_attribute.rb has the same guard for its own
+    # Unknown. It is correct today because nothing above Path_attribute
+    # defines one, which is luck rather than design.
+    unless const_defined?(:Unknown, false)
       Unknown = Class.new(self) do
         def initialize(s)
           if s.is_a?(String) and s.is_packed?
