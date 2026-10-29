@@ -774,6 +774,29 @@ class Path_attribute_Test < Test::Unit::TestCase # :nodoc:
   # their parent's key. And an Attr::Raw came back as 000000, because its
   # new read the three fields off the outer hash where to_hash had put
   # them one level down.
+  # parse_wire keeps the octets after the last whole attribute so encode
+  # gives back what arrived. They had no key, so a round trip through the
+  # hash dropped them and answered a shorter attribute set, in silence.
+  # An ordinary set gains no key, which is the rule an attribute's own
+  # tail already follows.
+  def test_the_kept_tail_round_trips_and_only_then_appears
+    pa = BGP::Path_attribute.new(['4001010240'].pack('H*').is_packed)
+    assert_equal({ :origin => :incomplete, :tail => '40' }, pa.to_hash)
+    assert_equal('4001010240', pa.to_shex)
+    assert_equal(pa.encode, BGP::Path_attribute.new(pa.to_hash).encode)
+    plain = BGP::Path_attribute.new(BGP::Origin.new(2), BGP::Next_hop.new('10.0.0.1'))
+    assert_equal({ :origin => :incomplete, :next_hop => '10.0.0.1' }, plain.to_hash)
+  end
+
+  # The hash is read, not consumed: new deletes the tail key from a copy,
+  # so a caller can build twice from one hash.
+  def test_building_from_a_hash_leaves_the_hash_alone
+    h = BGP::Path_attribute.new(['4001010240'].pack('H*').is_packed).to_hash
+    first = BGP::Path_attribute.new(h)
+    assert_equal({ :origin => :incomplete, :tail => '40' }, h)
+    assert_equal(first.encode, BGP::Path_attribute.new(h).encode)
+  end
+
   def test_a_round_tripped_attribute_set_is_the_same_set
     pa = BGP::Path_attribute.new(
       BGP::Origin.new(:incomplete),

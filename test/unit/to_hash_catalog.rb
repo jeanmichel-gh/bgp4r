@@ -309,24 +309,34 @@ module ToHashCatalog
     BGP::Attr::Unknown.new(0xc, 99, 0, 'x')
   end
 
-  # The attribute set itself. ATOMIC_AGGREGATE disappearing was the
-  # third loss here and is fixed, so the recipe is built from wire bytes
-  # that exercise the two that remain: two attributes of one type, which
-  # the one key per type hash collapses into one, and a trailing octet
-  # after the last whole attribute, which has no key. Both are silent.
+  # The attribute set itself, and the one loss left of the three it had.
+  # ATOMIC_AGGREGATE disappearing is fixed, and so is the kept tail,
+  # which now rides as :tail under the extra-key-only-when-unusual rule
+  # an attribute's own tail already follows. The recipe carries no tail
+  # for that reason: it isolates the duplicate, and
+  # path_attribute_test.rb asserts the tail.
   #
-  # Origin, two Communities 1:1 and 2:2, then one octet of tail. encode
-  # gives these octets back exactly, so the recipe is faithful and the
-  # loss is the hash's alone.
+  # Origin and two Communities, 1:1 and 2:2. encode gives these octets
+  # back exactly, so the recipe is faithful and the loss is the hash's.
+  #
+  # Won't fix, and this is a shape decision rather than a field that was
+  # left out. A Hash keyed by attribute type cannot hold two of a type
+  # or say which came first, so every way of fixing it costs something
+  # the hash is for: a side channel of the extra occurrences round trips
+  # only when the duplicate was last, and carrying the set as ordered
+  # raw entries is exact but stops that set's hash being readable, which
+  # is the whole reason the hash form exists. The octet level routes are
+  # open and a test that wants two of a type writes the objects:
+  # Path_attribute.new(Communities.new('1:1'), Communities.new('2:2'))
+  # keeps both and keeps their order.
   ENTRIES['BGP::Path_attribute'] = entry(
     :lossy,
-    'two things. A second attribute of a type already present, because ' \
-    'the hash is one key per type, so two Communities collapse into the ' \
-    'last one. And the tail parse_wire keeps after the last whole ' \
-    'attribute, which has no key. Both silently.',
-    :fix) do
+    'a second attribute of a type already present, because the hash is ' \
+    'one key per type, so two Communities collapse into the last one. ' \
+    'Silently.',
+    :keep) do
     BGP::Path_attribute.new(wire('40010102' + 'c00804' + '00010001' +
-                                 'c00804' + '00020002' + '40'))
+                                 'c00804' + '00020002'))
   end
 
   # ====================================================================

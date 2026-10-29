@@ -159,7 +159,7 @@ already, so the octets are the ones the suite has always used.
 
 ## The decisions
 
-**37 are left as they are.** Nearly all of them are the same situation:
+**38 are left as they are.** Nearly all of them are the same situation:
 the class's own `new` will not take its own hash, but the attribute that
 owns it will, and the hash carries everything. That covers 19 of the 21
 extended communities, the four AS_PATH segment classes, five tunnel
@@ -174,43 +174,63 @@ not that: `Extended_community` is the partial base class,
 so a subclass is what a test builds, and `OPT_PARM::Capability` is
 likewise the base.
 
-**13 are to be fixed**, in this order. Sixteen were, and what they were
+**`Path_attribute` is the one left as it is for a different reason**,
+and it is the only row that is wrong wholesale rather than by a field.
+It had three losses. Two are fixed: ATOMIC_AGGREGATE disappearing, and
+the tail `parse_wire` keeps after the last whole attribute, which now
+rides as `:tail` under the extra-key-only-when-unusual rule an
+attribute's own tail already follows. What is left is two attributes of
+one type collapsing into the last one, silently, and that is a shape
+decision rather than a field somebody left out. A Hash keyed by
+attribute type cannot hold two of a type or say which came first, so
+every way of fixing it costs something the hash is for: a side channel
+of the extra occurrences round trips only when the duplicate was
+already last, and carrying the set as ordered raw entries is exact but
+stops that set's hash being readable, which is the whole reason the
+hash form exists. The octet level routes stay open, and a test that
+wants two of a type writes the objects, which works and keeps their
+order:
+
+```ruby
+BGP::Path_attribute.new(BGP::Communities.new('1:1'),
+                        BGP::Communities.new('2:2'))
+```
+
+**12 are to be fixed**, in this order. Sixteen were, and what they were
 is under "What has been fixed" below.
 
-First, the last one that is wrong wholesale rather than by a field:
-`Path_attribute` collapses two attributes of one type into the last one,
-and loses the tail `parse_wire` keeps. Both silently.
+Each of these drops one field without raising, so each is quiet but is
+one field rather than a different object.
 
-The field losses below are quiet too, each dropping one field without
-raising, but each is one field rather than a different object, which is
-why they rank after it.
-
-Second, the cheap ones, where the hash is already complete and only a
+First, the cheap ones, where the hash is already complete and only a
 constructor branch is missing: `Notification` and `Vpn`.
 
-Third, the real losses, each a field with no key in any hash. These
+Second, the real losses, each a field with no key in any hash. These
 follow a pattern the library already has for exactly this, the
 extra-key-only-when-unusual rule behind `:tail` and `:bits`, so none of
 them has to change the shape of an ordinary hash: `Tunnel_encap::Color`
 flags, `Tunnel_encap::Egress_endpoint` reserved,
 `Tunnel_encap::Mpls_label_stack` TC and TTL, `Tunnel_encap::Tunnel` and
-`Tunnel_encap` tails, `Prefix_sid::Label_index` reserved and flags,
-`Pmsi_tunnel` flags, `Label_stack` Rsrv, `Labeled` Path Identifier,
-`Opaque` type and sub-type, `Capability::Unknown` value octets, and the
-three capabilities whose hash is a bare `{:code=>n}`: `Add_path`,
-`Graceful_restart` and `Orf`.
-
-Those last three were recorded in CLAUDE.md as too expensive to widen,
-on the grounds that it would change the shape every caller and test
-sees. That was measured and is not so. No test in the suite references
-any of the three hashes, and since they carry nothing today, no caller
-can depend on their contents.
+`Tunnel_encap` tails, `Pmsi_tunnel` flags, `Label_stack` Rsrv,
+`Labeled` Path Identifier, `Opaque` type and sub-type, and
+`Capability::Unknown` value octets.
 
 ## What has been fixed
 
 Sixteen, all of which rebuilt different octets without raising, or could
-not be read back at all. `Path_attribute` is the only one still wrong
-wholesale rather than by a field.
+not be read back at all. `Path_attribute` is half of a seventeenth: two
+of its three losses are closed and the third is the shape decision
+above.
+
+* **`Path_attribute`'s kept tail.** `parse_wire` keeps the octets after
+  the last whole attribute so `encode` gives back what arrived. They had
+  no key, so a round trip through the hash dropped them and answered a
+  shorter attribute set, silently: `4001010240` came back as
+  `40010102`. It hashes as `:tail` now, only when there is one, and
+  `new` takes the key off a copy of the caller's hash so it never
+  reaches `Attr.by_key`, which has nothing for it. An ordinary
+  attribute set hashes exactly as it always did. The duplicate loss is
+  still there, so the row stays "no".
 
 * **`CAP::Add_path`** and **`CAP::Graceful_restart`**, the last two of
   the three bare `{:code=>n}` capabilities. Add_path lost every RFC 7911
@@ -323,7 +343,7 @@ attributes come back, with the same type codes and the same octets.
 | `Origin` | yes | -- | -- |
 | `Originator_id` | by another route | nothing. new has no Hash branch at all, so the hash reaches IPAddr.create. The class has a new_hash that reads it. | won't fix |
 | `Otc` | yes | -- | -- |
-| `Path_attribute` | no | two things. A second attribute of a type already present, because the hash is one key per type, so two Communities collapse into the last one. And the tail parse_wire keeps after the last whole attribute, which has no key. Both silently. | fix |
+| `Path_attribute` | no | a second attribute of a type already present, because the hash is one key per type, so two Communities collapse into the last one. Silently. | won't fix |
 
 ### Extended communities
 

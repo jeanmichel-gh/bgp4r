@@ -54,7 +54,14 @@ module BGP
       if args.size <= 2 and args[0].is_a?(String) and args[0].is_packed?
         parse_wire(*args)
       elsif args.size ==1 and args[0].is_a?(Hash)
-        @attributes = args[0].collect { |key, value|
+        h = args[0].dup
+        # The octets parse_wire kept after the last whole attribute. They
+        # had no key, so a round trip dropped them and encode gave back a
+        # shorter attribute set than arrived: 4001010240 came back as
+        # 40010102. dup so the caller's hash is left alone, and delete so
+        # the key never reaches Attr.by_key, which has nothing for it.
+        @tail = [h.delete(Attr::TAIL_KEY).to_s].pack('H*') if h.key?(Attr::TAIL_KEY)
+        @attributes = h.collect { |key, value|
           # Attr::Unknown has no type code of its own, so it is not in
           # the registry. Its hash value is a list of attributes.
           next [value].flatten.collect { |h| Attr::Unknown.new(h) } if key == :unknown
@@ -254,6 +261,11 @@ module BGP
         end
         h = h.merge(_h)
       }
+      # The kept tail, only when there is one, so an ordinary attribute
+      # set hashes as the plain one-key-per-attribute hash it always did.
+      # Same rule as an attribute's own tail; Attr::TAIL_KEY names it in
+      # one place.
+      h[Attr::TAIL_KEY] = @tail.unpack1('H*') if @tail
       h
     end
     
