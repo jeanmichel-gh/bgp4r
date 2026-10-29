@@ -48,7 +48,13 @@ module BGP
     class Tlv
       attr_reader :type, :value
 
+      # new(type, octets), or its own hash, {:type=>, :value=>hex}, which
+      # nothing read before: new took the hash as the type and pack
+      # raised.
       def initialize(type, value = ''.b)
+        if type.is_a?(Hash)
+          type, value = type[:type], [type[:value].to_s].pack('H*')
+        end
         @type, @value = type, value.to_s.b
       end
 
@@ -75,7 +81,20 @@ module BGP
     class Label_index < Tlv
       attr_reader :label_index, :flags, :reserved
 
+      # new(index), new(index, flags:, reserved:), the TLV value octets,
+      # or the value of its own hash entry, which is the index alone
+      # ordinarily and {:index=>, :flags=>, :reserved=>} when either of
+      # the other two fields arrived set.
       def initialize(arg, flags: 0, reserved: 0)
+        if arg.is_a?(Hash)
+          # Its own to_hash, outer key and all, as well as the bare value
+          # Prefix_sid hands down.
+          arg = arg[:label_index] if arg.key?(:label_index)
+        end
+        if arg.is_a?(Hash)
+          flags, reserved = arg[:flags].to_i, arg[:reserved].to_i
+          arg = arg[:index]
+        end
         if arg.is_a?(String)
           @reserved, @flags, @label_index = arg.unpack('CnN')
           super(LABEL_INDEX, arg)
@@ -89,8 +108,16 @@ module BGP
         "Label index: #{@label_index}"
       end
 
+      # The index alone, which is what every caller has always seen, and
+      # the three fields when the reserved octet or the flags of RFC 8669
+      # section 3.1 arrived set. They have no key of their own because
+      # Prefix_sid#to_hash merges the known TLVs into one hash, where a
+      # :flags key would collide with Originator_srgb's. Same rule as a
+      # kept tail: nothing unusual, nothing new in the hash.
       def to_hash
-        { :label_index => @label_index }
+        return { :label_index => @label_index } if @flags.to_i.zero? && @reserved.to_i.zero?
+        { :label_index => { :index => @label_index, :flags => @flags,
+                            :reserved => @reserved } }
       end
     end
 
@@ -99,8 +126,20 @@ module BGP
     class Originator_srgb < Tlv
       attr_reader :ranges, :flags
 
-      # new([base, count], [base, count], ...) or the TLV value octets.
+      # new([base, count], [base, count], ...), the TLV value octets, or
+      # the value of its own hash entry: the range list ordinarily, and
+      # {:ranges=>, :flags=>} when the flags arrived set.
       def initialize(*args, flags: 0)
+        if args.size == 1 and args[0].is_a?(Hash) and args[0].key?(:srgb)
+          # The entry is the range list ordinarily, which splats back
+          # into the argument list, and a hash when the flags are set.
+          v = args[0][:srgb]
+          args = v.is_a?(Hash) ? [v] : Array(v)
+        end
+        if args.size == 1 and args[0].is_a?(Hash)
+          flags = args[0][:flags].to_i
+          args = args[0][:ranges]
+        end
         if args.size == 1 and args[0].is_a?(String)
           value = args[0]
           @flags = value.unpack1('n')
@@ -127,8 +166,12 @@ module BGP
         'SRGB: ' + @ranges.collect { |base, count| "#{base}..#{base + count - 1}" }.join(', ')
       end
 
+      # The ranges alone, and both fields when the flags of RFC 8669
+      # section 3.2 arrived set, for the same reason Label_index does it
+      # this way: a sibling :flags key would collide with its.
       def to_hash
-        { :srgb => @ranges }
+        return { :srgb => @ranges } if @flags.to_i.zero?
+        { :srgb => { :ranges => @ranges, :flags => @flags } }
       end
     end
 
@@ -143,10 +186,19 @@ module BGP
         parse(args[0].encode)
       elsif args.size == 1 and args[0].is_a?(Hash)
         h = args[0]
+        # to_hash nests everything under :prefix_sid, which is the key
+        # Path_attribute merges, and this read only the inner hash. Given
+        # its own to_hash it therefore found no key it knew and built an
+        # empty attribute, c02800, in silence.
+        h = h[:prefix_sid] if h.key?(:prefix_sid)
         take_tail_key(h)
         add Label_index.new(h[:label_index]) if h[:label_index]
-        add Originator_srgb.new(*h[:srgb]) if h[:srgb]
-        [h[:tlvs]].flatten.compact.each { |t| add Tlv.new(t[:type], [t[:value]].pack('H*')) }
+        # Splat a range list, hand a hash over whole: Originator_srgb
+        # takes either, and only the hash form carries the flags.
+        if (srgb = h[:srgb])
+          add(srgb.is_a?(Hash) ? Originator_srgb.new(srgb) : Originator_srgb.new(*srgb))
+        end
+        [h[:tlvs]].flatten.compact.each { |t| add Tlv.new(t) }
       else
         add(*args)
       end

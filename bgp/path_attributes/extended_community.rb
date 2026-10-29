@@ -897,6 +897,14 @@ module BGP
     private
     def build(arg = nil, sample: false, terminal: false, bits: nil)
       if arg.is_a?(Hash)
+        # to_hash nests the fields under this community's own key, which
+        # is the form Extended_communities reads. Read it here too.
+        # Reading only the outer hash found :sample, :terminal and :bits
+        # all nil and built a clean looking community encoding
+        # 8007000000000000, losing all 48 value bits with no error. This
+        # is the one community whose field defaults pass their own check,
+        # so it is the one that was quiet where the others raise.
+        arg = arg[hash_key] if arg.key?(hash_key)
         sample, terminal, bits = arg[:sample], arg[:terminal], arg[:bits]
       elsif arg
         raise ArgumentError, "invalid traffic action #{arg.inspect}, use sample: and terminal:"

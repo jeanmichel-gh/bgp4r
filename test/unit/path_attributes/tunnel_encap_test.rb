@@ -359,4 +359,17 @@ class TestTunnelEncap < Test::Unit::TestCase
     assert_equal pa.encode, Path_attribute.new(pa.encode.is_packed).encode
   end
 
+  # RFC 9012 section 3.2: the shape depends on the tunnel type, so bgp4r
+  # keeps the octets and reads no field. Its own new took the hash
+  # straight through as the value and Sub_tlv called to_s on it, so the
+  # sub-TLV value became the 28 octets of {:encapsulation=>"01020304"} as
+  # Ruby inspects it. On the wire, with no error. Sub_tlv.from_hash read
+  # the same hash correctly all along, which is why nothing caught it.
+  def test_encapsulation_round_trips_through_its_own_new
+    e = BGP::Tunnel_encap::Encapsulation.new([1, 2, 3, 4].pack('C4'))
+    assert_equal({ :encapsulation => '01020304' }, e.to_hash)
+    assert_equal(e.encode, BGP::Tunnel_encap::Encapsulation.new(e.to_hash).encode)
+    assert_equal(e.encode, BGP::Tunnel_encap::Sub_tlv.from_hash(e.to_hash).encode)
+  end
+
 end

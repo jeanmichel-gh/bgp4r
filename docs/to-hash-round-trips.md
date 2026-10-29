@@ -129,8 +129,8 @@ hash is complete even though no door exists.
 | **not in its attribute** | Its own `new` does, the other route does not. Worse than it sounds: a hash key inherited from a parent class is the cause, and the attribute then rebuilds a different attribute without saying so. No row reads this today; `As4_path` did until it was fixed. |
 | **no** | No route gives the octets back. Information is gone. |
 
-Of the 96 classes measured: **37 round trip through their own `new`**,
-**41 by another route**, and **18 lose information**. Whether a failing route raises or quietly answers
+Of the 96 classes measured: **43 round trip through their own `new`**,
+**38 by another route**, and **15 lose information**. Whether a failing route raises or quietly answers
 something else is in the table rather than in the verdict, because a
 verdict is meant to say what a person gets. The quiet ones are the
 dangerous half and each one says so.
@@ -173,24 +173,21 @@ not that: `Extended_community` is the partial base class,
 so a subclass is what a test builds, and `OPT_PARM::Capability` is
 likewise the base.
 
-**22 are to be fixed**, in this order. Six were, and what they were is
-under "What has been fixed" below.
+**16 are to be fixed**, in this order. Twelve were, and what they were
+is under "What has been fixed" below.
 
-First, the ones that are quietly wrong, because a confident wrong answer
-is worse than a refusal and these are the only ones that can put bad
-octets on the wire without saying so:
+First, the two that are quietly wrong, because a confident wrong answer
+is worse than a refusal:
 
-1. `Tunnel_encap::Encapsulation` writes the 28 octets of a Ruby `inspect`
-   string as the sub-TLV value.
-2. `Traffic_action`, `Prefix_sid`, `Prefix_sid::Originator_srgb` and
-   `CAP::Orf` each build a clean looking empty or zeroed object from
-   their own full hash.
-3. `Path_attribute` collapses two attributes of one type into the last
+1. `CAP::Orf` builds an empty capability from its own hash, so 26 octets
+   become 4. It is the last of that kind and the biggest of them, because
+   `Orf::Entry` has no `to_hash` at all and its own `new` has an empty
+   Hash branch, so the entries have to be given a hash form first.
+2. `Path_attribute` collapses two attributes of one type into the last
    one, and loses the tail `parse_wire` keeps.
 
 Second, the cheap ones, where the hash is already complete and only a
-constructor branch is missing: `Notification`, `Vpn`,
-`Prefix_sid::Tlv`.
+constructor branch is missing: `Notification` and `Vpn`.
 
 Third, the real losses, each a field with no key in any hash. These
 follow a pattern the library already has for exactly this, the
@@ -212,8 +209,36 @@ can depend on their contents.
 
 ## What has been fixed
 
-Six of the quiet ones, all of which rebuilt different octets without
-raising. Each has a test in its own file, and the attribute set as a
+Twelve, all of which rebuilt different octets without raising. The six
+most recent closed the whole prefix SID family and left `CAP::Orf` as
+the only quiet one still standing.
+
+* **`Traffic_action`.** Its own `new` read `:sample`, `:terminal` and
+  `:bits` off the outer hash, found all three nil, and built a clean
+  looking community encoding `8007000000000000`, losing all 48 value
+  bits. It was the one extended community that was quiet where the others
+  raise, because its field defaults pass their own check.
+* **`Tunnel_encap::Encapsulation`.** Its own `new` took the hash as the
+  value octets and called `to_s` on it, so the sub-TLV value became the
+  28 octets of `{:encapsulation=>"01020304"}` as Ruby inspects it, on the
+  wire. `Sub_tlv.from_hash` read the same hash correctly all along, which
+  is why nothing caught it.
+* **`Prefix_sid`.** Its `new` read only the inner hash, so given its own
+  `to_hash` it found no key it knew and built an empty attribute,
+  `c02800`.
+* **`Prefix_sid::Label_index`** and **`Prefix_sid::Originator_srgb`.**
+  The reserved octet of RFC 8669 section 3.1 and the flags of sections
+  3.1 and 3.2 had no key at all, so a TLV read off the wire came back
+  zeroed, and `Originator_srgb`'s own `new` read its hash as one range
+  and built `[0, 0]`. The fields go **in the value** rather than beside
+  it, because `Prefix_sid#to_hash` merges the known TLVs into one hash
+  where two `:flags` keys would collide. An ordinary TLV hashes exactly
+  as it did: `{:label_index => 100}`, `{:srgb => [[16000, 1000]]}`.
+* **`Prefix_sid::Tlv`.** Nothing read its hash: `new` took it as the
+  type and `pack` raised.
+
+And the first six, each a round trip that gave back a different
+attribute. Each has a test in its own file, and the attribute set as a
 whole has `test_a_round_tripped_attribute_set_is_the_same_set` in
 `path_attribute_test.rb`, which is the assertion that matters: the same
 attributes come back, with the same type codes and the same octets.
@@ -299,7 +324,7 @@ attributes come back, with the same type codes and the same octets.
 | `Route_origin` | by another route | nothing. No individual extended community class has a Hash branch; these hashes are read by Extended_communities through HASH_BUILDERS, which rebuilds this one byte for byte. | won't fix |
 | `Route_target` | by another route | nothing. No individual extended community class has a Hash branch; these hashes are read by Extended_communities through HASH_BUILDERS, which rebuilds this one byte for byte. | won't fix |
 | `Router_mac` | by another route | nothing. No individual extended community class has a Hash branch; these hashes are read by Extended_communities through HASH_BUILDERS, which rebuilds this one byte for byte. | won't fix |
-| `Traffic_action` | by another route | nothing through the collection. Its own new reads :sample, :terminal and :bits off the outer hash, finds all three nil, and builds a clean looking community encoding 8007000000000000 instead of 8007ffffffffffff. Silently, where the other Typed classes raise because their field defaults fail a check. | fix |
+| `Traffic_action` | yes | -- | -- |
 | `Traffic_marking` | by another route | nothing. No individual extended community class has a Hash branch; these hashes are read by Extended_communities through HASH_BUILDERS, which rebuilds this one byte for byte. | won't fix |
 | `Traffic_rate_bytes` | by another route | nothing. No individual extended community class has a Hash branch; these hashes are read by Extended_communities through HASH_BUILDERS, which rebuilds this one byte for byte. | won't fix |
 | `Traffic_rate_packets` | by another route | nothing. No individual extended community class has a Hash branch; these hashes are read by Extended_communities through HASH_BUILDERS, which rebuilds this one byte for byte. | won't fix |
@@ -309,16 +334,16 @@ attributes come back, with the same type codes and the same octets.
 | Class | Round trips | What the hash loses, or what stands in the way | Decision |
 |---|---|---|---|
 | `Pmsi_tunnel` | no | the other seven bits of the flags octet. to_hash writes :flags only when no leaf bit is set, so flags 0x41 hash as :leaf_info_required=>true alone and the RFC 7902 Extension bit is gone: 41 comes back as 01. | fix |
-| `Prefix_sid` | no | the sub-TLVs' reserved and flags fields, as above. Its own new is quiet about it too: given its own full hash it finds no key it knows and builds an empty attribute, c02800. | fix |
-| `Prefix_sid::Label_index` | no | the reserved octet and the flags of RFC 8669 section 3.1. Neither has a key, so 0a c000 comes back as 00 0000. | fix |
-| `Prefix_sid::Originator_srgb` | no | the flags of RFC 8669 section 3.2. And its own new does not recognise its own hash: it reads the hash as one range, so hash[0].to_i is 0 and it builds the range [0, 0]. Silently. | fix |
-| `Prefix_sid::Tlv` | by another route | nothing. The hash is {:type, :value} and carries both, but nothing reads it: new(type, value) takes the hash as the type. The other route here is the two fields handed back by hand, which is what proves the hash is complete. | fix |
+| `Prefix_sid` | yes | -- | -- |
+| `Prefix_sid::Label_index` | yes | -- | -- |
+| `Prefix_sid::Originator_srgb` | yes | -- | -- |
+| `Prefix_sid::Tlv` | yes | -- | -- |
 | `Tunnel_encap` | no | both tails, the attribute level one and the per tunnel one, plus the Egress_endpoint reserved field and the Color flags underneath. 29 value octets rebuild as 26. | fix |
 | `Tunnel_encap::Color` | no | the flags field. color_flags has no key in the hash, so flags 0x1234 come back as 0000 even through Sub_tlv.from_hash. | fix |
 | `Tunnel_encap::Ds_field` | by another route | nothing. Its own new takes the hash where a field value belongs. Sub_tlv.from_hash is the reader and rebuilds it. | won't fix |
 | `Tunnel_encap::Egress_endpoint` | no | the reserved field of RFC 9012 section 3.1. It has no key, so 11223344 comes back as 00000000 by either route. | fix |
 | `Tunnel_encap::Embedded_label_handling` | by another route | nothing. Its own new takes the hash where a field value belongs. Sub_tlv.from_hash is the reader and rebuilds it. | won't fix |
-| `Tunnel_encap::Encapsulation` | by another route | nothing through Sub_tlv.from_hash. Its own new takes the hash as the value octets and calls to_s on it, so the sub-TLV value becomes the 28 octets of {:encapsulation=>"01020304"} as Ruby inspects it. Silently, and on the wire. | fix |
+| `Tunnel_encap::Encapsulation` | yes | -- | -- |
 | `Tunnel_encap::Mpls_label_stack` | no | the TC and TTL octets. The hash is the label numbers only, so a stack read off the wire with TC 5 and TTL 64 comes back with both zeroed: 064a40 becomes 064000. | fix |
 | `Tunnel_encap::Protocol_type` | by another route | nothing. Its own new takes the hash where a field value belongs. Sub_tlv.from_hash is the reader and rebuilds it. | won't fix |
 | `Tunnel_encap::Sub_tlv` | by another route | nothing. Its own new takes the hash where a field value belongs. Sub_tlv.from_hash is the reader and rebuilds it. | won't fix |
