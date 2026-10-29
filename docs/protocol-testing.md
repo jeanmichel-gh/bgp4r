@@ -66,11 +66,19 @@ reason containers are easier here.
 ### On a Linux VM
 
 FRR, BIRD and GoBGP are all packaged by Ubuntu and run fine as plain
-processes:
+processes. One package carries both GoBGP binaries, the daemon and the
+client:
 
 ```
 apt-get install -y frr bird2 gobgpd
+gobgpd --version
 ```
+
+Check that version rather than assuming it. **The GoBGP version changes
+the answers.** Ubuntu 24.04 ships 3.23.0, and GoBGP 3 gets one fault
+matrix case wrong where GoBGP 4 is right, so a distro package quietly
+decides which results you see. "The one row the two GoBGP versions
+differ on" below has the detail.
 
 All of 127.0.0.0/8 is local on Linux, so several routers can run side by
 side on 127.0.0.2, 127.0.0.3 and 127.0.0.4 with no setup. That is how
@@ -79,6 +87,59 @@ the results later in this document were produced.
 `lab/conformance/` has a working config for each, and `lab/README.md`
 explains how to run them side by side. The container topology works here
 too, if Docker is installed.
+
+#### Getting a particular GoBGP
+
+To pin a version, or to get GoBGP 4 where the distro has 3, take the
+release tarball. The project publishes Linux builds only, for 386,
+amd64, arm64 and armv6, which is another reason the Mac path above uses
+containers:
+
+```
+v=4.10.0
+base=https://github.com/osrg/gobgp/releases/download/v$v
+curl -fsSL -O $base/gobgp_${v}_linux_amd64.tar.gz
+curl -fsSL -O $base/gobgp_${v}_checksums.txt
+sha256sum -c --ignore-missing gobgp_${v}_checksums.txt
+tar -xzf gobgp_${v}_linux_amd64.tar.gz gobgp gobgpd
+```
+
+Worth knowing about those four lines:
+
+* The tarball holds `gobgp`, `gobgpd`, a LICENSE and a README, so naming
+  the two binaries leaves the rest out.
+* `gobgp_<version>_checksums.txt` sits beside every tarball, in the
+  format `sha256sum -c` reads. This is a third party binary going
+  straight into `tar`, so check it. `--ignore-missing` is what lets the
+  whole sums file be used when only one tarball was fetched, and it
+  still fails when that one does not match or when nothing in the file
+  was verified at all.
+* The same two lines are the `Install gobgpd` step of the `lab` job in
+  `.github/workflows/test.yml`, which is where CI gets its router.
+
+Two versions can sit side by side, and neither has to be on `PATH`,
+because `GOBGPD` and `GOBGP` tell the test where to look:
+
+```
+GOBGPD=/opt/gobgp4/gobgpd GOBGP=/opt/gobgp4/gobgp \
+  ruby -I. test/functional/lab/fault_matrix_native_test.rb
+```
+
+#### Running one without root
+
+BGP's port 179 is privileged, and GoBGP binds it by default even when it
+only dials out. Two config keys move both ends of the session, and GoBGP
+3 and 4 both honour them:
+
+| Key | What it does |
+|---|---|
+| `[global.config] port` | the port gobgpd listens on |
+| `[neighbors.transport.config] remote-port` | the port it dials, so bgp4r can listen high too |
+
+`LabHelper::Gobgpd` generates a config with both, which is why the
+native test needs neither sudo nor
+`net.ipv4.ip_unprivileged_port_start`. `lab/conformance/gobgpd.conf`
+sets neither, because it is for a hand run on the standard port.
 
 ## Building messages
 
@@ -359,7 +420,7 @@ prints a table.
 
 ```
 ruby lab/fault_matrix.rb --peer 127.0.0.2 --peer-as 65002 \
-  --rib-command 'gobgp global rib' --json gobgp.json
+  --rib-command 'gobgp -u 127.0.0.2 global rib' --json gobgp.json
 ```
 
 ```
@@ -377,25 +438,76 @@ against a probe that cannot answer.
 
 Exit status is 0 when every answer agrees with the catalog.
 
+### Running it from a test
+
+Two tests run the matrix and assert its answers, and the checks they
+share are in `test/functional/lab/fault_matrix_scenario.rb`.
+
+```
+ruby -I. test/functional/lab/fault_matrix_native_test.rb   # needs gobgpd
+ruby -I. test/functional/lab/fault_matrix_test.rb          # needs Docker
+```
+
+The native one starts a `gobgpd` of its own, on ports of its own, so it
+needs neither root nor a container, and it is omitted when the binary is
+not installed. `GOBGPD` and `GOBGP` name the binaries when they are not
+on `PATH`, which is how one machine answers for more than one version:
+
+```
+GOBGPD=/opt/gobgp4/gobgpd GOBGP=/opt/gobgp4/gobgp \
+  ruby -I. test/functional/lab/fault_matrix_native_test.rb
+```
+
+Either takes a few minutes: every case gets its own session.
+
 ## What three implementations do
 
-Run as native processes on loopback, all three at once. The GoBGP column
-was measured on 3.23.0, and 4.10.0 gives the same 18 answers: the
-containerized run asserts every row and passes on both.
+Run as native processes on loopback, all three at once.
 
-| | GoBGP 3.23.0 and 4.10.0 | FRR 8.4.4 | BIRD 2.14 |
-|---|---|---|---|
-| treat as withdraw cases | agrees | resets, 3/10 | keeps the session |
-| attribute discard cases | agrees | agrees | keeps the session |
-| unrecognized well known | reset 3/2 | reset 3/10 | keeps the session |
-| duplicate MP_REACH | reset 3/1 | reset 3/1 | reset 3/1 |
-| Prefix-SID TLV overruns | agrees | agrees | keeps the session |
-| Label-Index length not 7 | no check | agrees | keeps the session |
-| PMSI_TUNNEL too short | agrees | resets, 3/10 | keeps the session |
-| tunnel TLV overruns | installs the route | installs the route | keeps the session |
-| sub-TLV overruns its TLV | discards the attribute | installs the route | keeps the session |
+The two GoBGP columns are asserted by the tests above, so they are
+re-measured on every run rather than recorded by hand. The FRR and BIRD
+columns are still hand measurements, and only the session level outcomes:
+BIRD gives no usable RIB answer over a loopback session. Their rows below
+are the blanket ones, so a case named on its own row has no separate
+measurement for them.
 
-GoBGP agrees on 16 of the 18.
+| | GoBGP 4.10.0 | GoBGP 3.23.0 | FRR 8.4.4 | BIRD 2.14 |
+|---|---|---|---|---|
+| treat as withdraw cases | agrees | agrees but one, below | resets, 3/10 | keeps the session |
+| attribute discard cases | agrees | agrees | agrees | keeps the session |
+| unrecognized well known | reset 3/2 | reset 3/2 | reset 3/10 | keeps the session |
+| attribute overruns the list | agrees | reset 3/5 | - | - |
+| duplicate MP_REACH | reset 3/1 | reset 3/1 | reset 3/1 | reset 3/1 |
+| Prefix-SID TLV overruns | agrees | agrees | agrees | keeps the session |
+| Label-Index length not 7 | no check | no check | agrees | keeps the session |
+| PMSI_TUNNEL too short | agrees | agrees | resets, 3/10 | keeps the session |
+| tunnel TLV overruns | installs the route | installs the route | installs the route | keeps the session |
+| sub-TLV overruns its TLV | discards the attribute | discards the attribute | installs the route | keeps the session |
+
+GoBGP 4.10.0 agrees on 16 of the 18, and 3.23.0 on 15.
+
+### The one row the two GoBGP versions differ on
+
+`attr_overrun` is an ORIGIN whose length field says 20 octets inside an
+18 octet attribute list, so the attribute overruns the list. RFC 7606
+section 4, "Attribute Length Fields", names that as the first of "two
+error cases in which the Total Attribute Length value can be in conflict
+with the enclosed path attributes", where "the length of the last
+encountered path attribute would cause the Total Attribute Length to be
+exceeded". Then: "In either of these cases, an error condition exists and
+the 'treat-as-withdraw' approach MUST be used", unless a more severe
+error dictates a stronger approach, and none does here.
+
+GoBGP 3.23.0 logs `attribute type length is short` and resets with
+subcode 5, Attribute Length Error. GoBGP 4.10.0 treats the UPDATE as a
+withdraw and keeps the session, which is what the RFC asks. So this is a
+GoBGP 3 bug that GoBGP 4 fixed.
+
+This table said "agrees" for both versions until the native test above
+existed. The hand measurement behind it was never re-run, because the
+only harness that could re-run it needed a Docker daemon, and the row was
+wrong for one of the two versions it named. That is the same failure as
+an unread RFC citation: it reads as verified.
 
 FRR identifies each malformed attribute and says "treating as
 withdrawal" in its log, then its withdraw path fails to parse the NLRI

@@ -24,6 +24,7 @@
 #
 # Compose runs a topology from lab/topologies/<name>/compose.yml.
 # Local runs lab/speaker.rb as plain processes on loopback, no Docker.
+# Gobgpd runs a real router the same way, also no Docker.
 
 require 'json'
 require 'open3'
@@ -152,6 +153,145 @@ module LabHelper
       JSON.parse(File.read(@nodes.fetch(node)['state_file']))
     rescue Errno::ENOENT, JSON::ParserError
       nil
+    end
+  end
+
+  # A real router as a plain process on loopback, no Docker. GoBGP is the
+  # one implementation in the lab that needs no privilege and no container
+  # to peer with bgp4r, so a test can have a second implementation's
+  # opinion wherever the binary is installed.
+  #
+  # docs/protocol-testing.md runs one by hand on the standard port, with
+  # lab/conformance/gobgpd.conf. This writes its own config instead, on
+  # ports of its own, for two reasons: a test must not collide with a
+  # daemon somebody is already running, and neither side then needs root
+  # or net.ipv4.ip_unprivileged_port_start to use port 179. GoBGP listens
+  # on 179 by default even when it only dials out, so the generated config
+  # moves that too.
+  #
+  # GOBGPD and GOBGP name the binaries when they are not on PATH.
+  class Gobgpd
+    def self.bin ; ENV['GOBGPD'] || 'gobgpd' ; end
+    def self.client ; ENV['GOBGP'] || 'gobgp' ; end
+
+    # The daemon's own version line, or nil when it is not installed.
+    def self.version
+      out, status = Open3.capture2e(bin, '--version')
+      status.success? ? out.strip : nil
+    rescue SystemCallError
+      nil
+    end
+
+    def self.available? ; !version.nil? ; end
+
+    # The major version, which is what a conformance expectation turns on:
+    # GoBGP 4 fixed a case GoBGP 3 answers with a session reset. nil when
+    # the daemon is missing or its version line does not parse, and a
+    # caller that cannot name the version must not guess at the answers.
+    def self.major
+      v = version or return nil
+      v[/\bversion\s+v?(\d+)\./, 1]&.to_i
+    end
+
+    attr_reader :local, :as, :router_id, :peer, :peer_as, :port
+
+    # local:   address the router speaks from
+    # peer:    address bgp4r listens on, which the router dials
+    # port:    port bgp4r listens on, which the router dials
+    def initialize(local: '127.0.0.2', as: 65002, router_id: '10.0.0.2',
+                   peer: '127.0.0.1', peer_as: 65001, port: nil, ipv6: true)
+      @local, @as, @router_id = local, as, router_id
+      @peer, @peer_as, @ipv6 = peer, peer_as, ipv6
+      @port = port || Local.free_port
+      @listen_port = Local.free_port
+      @api_port = Local.free_port
+      @dir = Dir.mktmpdir('bgp4r-gobgpd')
+    end
+
+    def config
+      families = ['ipv4-unicast']
+      families << 'ipv6-unicast' if @ipv6
+      afi_safis = families.collect { |f|
+        "  [[neighbors.afi-safis]]\n" \
+        "    [neighbors.afi-safis.config]\n" \
+        "      afi-safi-name = \"#{f}\"\n"
+      }.join
+      global = <<~TOML
+        [global.config]
+          as = #{@as}
+          router-id = "#{@router_id}"
+          local-address-list = ["#{@local}"]
+          # Its own listening port, so the daemon needs no privilege. It
+          # only dials out here; GoBGP would still bind 179 without this.
+          port = #{@listen_port}
+
+        [[neighbors]]
+          [neighbors.config]
+            neighbor-address = "#{@peer}"
+            peer-as = #{@peer_as}
+          [neighbors.transport.config]
+            local-address = "#{@local}"
+            # Where bgp4r listens, so our side needs no privilege either.
+            remote-port = #{@port}
+          [neighbors.timers.config]
+            # A caller may give each case its own session, so keep coming back.
+            connect-retry = 2
+            idle-hold-time-after-reset = 0
+      TOML
+      global + afi_safis
+    end
+
+    # Starts the daemon and waits until its API answers, which is the only
+    # signal that it read the config at all. Raises with the daemon's log,
+    # which names the config key it rejected.
+    def up(timeout: 30)
+      path = File.join(@dir, 'gobgpd.conf')
+      File.write(path, config)
+      @log = File.join(@dir, 'gobgpd.log')
+      @pid = Process.spawn(self.class.bin, '-f', path, '--api-hosts', "#{@local}:#{@api_port}",
+                           out: @log, err: [:child, :out])
+      deadline = Time.now + timeout
+      until neighbors
+        raise "gobgpd did not come up in #{timeout}s:\n#{log}" if Time.now > deadline
+        sleep 0.5
+      end
+      self
+    end
+
+    def down
+      @log_text = log
+      if @pid
+        Process.kill('TERM', @pid)
+        Process.wait(@pid)
+      end
+    rescue Errno::ESRCH, Errno::ECHILD
+    ensure
+      @pid = nil
+      FileUtils.rm_rf(@dir)
+    end
+
+    # The client's neighbor table, or nil while the daemon is not answering.
+    def neighbors
+      out, status = Open3.capture2e(self.class.client, '-u', @local,
+                                    '-p', @api_port.to_s, 'neighbor')
+      status.success? ? out : nil
+    rescue SystemCallError
+      nil
+    end
+
+    # What to pass lab/fault_matrix.rb as --rib-command: one argument,
+    # spaces and all, since the matrix runs it through a shell.
+    def rib_command
+      "#{self.class.client} -u #{@local} -p #{@api_port} global rib"
+    end
+
+    # The daemon's own log: what it made of each UPDATE, in its words.
+    # Cached at down, since the directory goes with it.
+    def log
+      return @log_text if @log_text
+      @log ? File.read(@log) : ''
+    rescue Errno::ENOENT
+      ''
     end
   end
 

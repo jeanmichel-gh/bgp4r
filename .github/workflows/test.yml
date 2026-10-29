@@ -92,21 +92,52 @@ jobs:
         timeout-minutes: 2
 
   # The lab topologies in Docker Compose: real containers, real addresses,
-  # TCP 179 bound by the non-root user. See lab/README.md.
+  # TCP 179 bound by the non-root user. See lab/README.md. Plus the fault
+  # matrix against a native gobgpd, which needs no container.
   lab:
     name: lab topologies
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
+    env:
+      # The version the native fault matrix runs against. The Compose
+      # topology pins a 4.x image, so pinning 3.x here measures both, and
+      # they do not answer alike: GoBGP 3 resets on the attr_overrun case
+      # where RFC 7606 section 4 makes treat-as-withdraw a MUST, and GoBGP
+      # 4 fixed it. See GOBGP_3 in test/functional/lab/fault_matrix_scenario.rb.
+      GOBGP_VERSION: 3.23.0
     steps:
       - uses: actions/checkout@v6
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: '3.4'
           bundler-cache: true
+      # For test/functional/lab/fault_matrix_native_test.rb. Two binaries on
+      # PATH, no container: the test puts both ends of the session on ports
+      # of their own, so nothing here needs sudo or
+      # net.ipv4.ip_unprivileged_port_start.
+      #
+      # The checksum is not ceremony. This is a third party binary going
+      # straight into tar, and the release publishes the sums, so check
+      # them. --ignore-missing is what lets the whole file be used when only
+      # the amd64 tarball was fetched, and it still fails when that one does
+      # not match, or when nothing in the file was verified at all.
+      - name: Install gobgpd
+        run: |
+          base=https://github.com/osrg/gobgp/releases/download/v$GOBGP_VERSION
+          tarball=gobgp_${GOBGP_VERSION}_linux_amd64.tar.gz
+          mkdir -p "$RUNNER_TEMP/gobgp"
+          cd "$RUNNER_TEMP/gobgp"
+          curl -fsSL -O "$base/$tarball"
+          curl -fsSL -O "$base/gobgp_${GOBGP_VERSION}_checksums.txt"
+          sha256sum -c --ignore-missing "gobgp_${GOBGP_VERSION}_checksums.txt"
+          tar -xzf "$tarball" gobgp gobgpd
+          echo "$RUNNER_TEMP/gobgp" >> "$GITHUB_PATH"
+          ./gobgpd --version
       - name: Lab tests
         shell: bash
         env:
           LAB_REQUIRE_DOCKER: '1' # fail, don't skip, if compose is missing
+          LAB_REQUIRE_GOBGPD: '1' # fail, don't skip, if gobgpd is missing
         run: bundle exec ruby test/run_lab.rb 2>&1 | tee test.log
       - name: Show test failures as an annotation
         if: failure()
