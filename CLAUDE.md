@@ -26,8 +26,9 @@ bgp/rib/                 routes and the decision process (RFC 4271 section 9); r
                          prefixes into UPDATEs, mrai.rb paces them per destination,
                          router.rb joins them and sends; rib.advertise; show.rb prints
                          the Loc-RIB the way a router would, rib.show;
-                         fib.rb plans what a forwarding table needs and ip_route.rb
-                         builds the iproute2 command for it;
+                         fib.rb plans what a forwarding table needs, ip_route.rb
+                         builds and runs the iproute2 command and fib_installer.rb
+                         joins them on the worker thread; rib.install;
                          see "Where the work is going"
 bgp/misc/                extras: route_generator.rb (many prefixes packed in UPDATEs), live_feed.rb (a client for an old public BGP feed)
 docs/                    protocol-testing.md: using bgp4r to test a router
@@ -45,7 +46,9 @@ test/functional/lab/     lab tests: loopback speaker test and one Compose test p
                          (a gobgpd on loopback, no Docker) assert them;
                          rib_router_gobgp_test.rb points bgp4r's export side at a
                          native gobgpd, so a real router says what it makes of it,
-                         and add_path_gobgp_test.rb does the same for RFC 7911
+                         and add_path_gobgp_test.rb does the same for RFC 7911;
+                         fib_test.rb puts the Loc-RIB in a real kernel routing
+                         table inside a network namespace, no Docker, needs root
 ```
 
 ## Running tests
@@ -83,8 +86,16 @@ Three speakers over loopback, so a route crosses a bgp4r router and comes out wi
 ruby -I. test/functional/rib_router_test.rb
 ```
 
+The Loc-RIB in a real kernel routing table, inside a network namespace of
+its own, so nothing can touch the routing table of the machine it runs on.
+No Docker. It needs root, or any way to get CAP_NET_ADMIN, and omits
+itself without it unless `LAB_REQUIRE_NETNS=1` asks for a failure instead:
+```
+sudo ruby -I. test/functional/lab/fib_test.rb
+```
+
 Lab tests (the Compose ones skip without Docker, the native fault matrix
-without `gobgpd`):
+without `gobgpd`, the FIB one without root):
 ```
 ruby test/run_lab.rb
 ```
@@ -111,7 +122,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. A `lab` job runs the Compose topologies, and installs a `gobgpd` release so the native fault matrix runs there too; it pins 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-10-29: 1319 tests, 22003 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.6%.
+Baseline on 2026-10-29: 1343 tests, 22076 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.6%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -331,11 +342,12 @@ why none of them blocked this phase.
 
 Phase 2, the peer adapter, came next and is **Done**: a table is fed from a
 live session. **Phase 3, the export side, is now Done in full**, including
-GoBGP's opinion of it. Phase 4's show commands are done for all three
-styles, and what is left of that phase is the second half of the FIB
-adapter: running the commands the first half plans. It needs a network
-namespace and not a container, which #156 measured; this paragraph said
-container until then and the detailed entry below says what came apart.
+GoBGP's opinion of it. **Phase 4 is Done too**: the show commands in all
+three styles, and the FIB adapter putting the Loc-RIB in a real kernel
+routing table, which needed a network namespace and not a container. This
+paragraph claimed a container until #156 measured otherwise, and the
+detailed entry below says what came apart. What is left of the whole plan
+is phase 5, FRR as a reference in the lab.
 
 ### RIB and FIB, five phases
 
@@ -702,7 +714,8 @@ Neighbor ◀──UPDATE── Adj-RIB-Out (per peer) ◀───────�
         within the advertising BGP speaker's own autonomous systems" and so
         applies to what `rib.originate` announces rather than per
         destination. Section 10 suggests 15 seconds for it.
-4. **FIB adapters, and the show commands. In progress.**
+4. **FIB adapters, and the show commands. Done**, in #132, #157, #156 and
+   #158.
    1. **The show commands. Done**, in #132 for IOS and Junos and in #157
       for IOS-XR, so all three styles the plan named are real.
       `bgp/rib/show.rb`, reached as `rib.show`, `rib.show(:junos)`,
@@ -771,8 +784,10 @@ Neighbor ◀──UPDATE── Adj-RIB-Out (per peer) ◀───────�
         sits at, so the header is the source of truth. It also pins that
         the LocPrf column is blank for an external peer's route, which is
         RFC 4271 section 5.1.5 and `Table#import` showing through.
-   2. **The FIB adapter and the Linux lab test. In progress**, 2 PRs, the
-      first done in #156.
+   2. **The FIB adapter and the Linux lab test. Done**, 2 PRs as
+      estimated: #156 and #158. `rib.install(table: 100)` puts the Loc-RIB
+      in a forwarding table and keeps it there, `rib.fib` reads back what
+      it believes is in it, and `rib.uninstall` takes its routes out again.
       * **It does not want a container, and the entry here said it did.**
         What the plan actually asked for is a network namespace of its
         own, with a dedicated routing table, routes marked `proto bgp` and
@@ -800,12 +815,27 @@ Neighbor ◀──UPDATE── Adj-RIB-Out (per peer) ◀───────�
         * `replace` rather than `add`, because it adds a prefix the table
           does not have and changes the next hop of one it does, so a
           single action covers a new route and a changed one and
-          re-running it is harmless. `proto` goes on the `del` too, where
-          it reads as a filter, so a removal cannot take out a route of
-          the same prefix that something else owns. Every form was run
-          against iproute2 6.1.0 in a namespace before it was written
-          down, which is also where `ip -n NS` was preferred to `ip netns
-          exec NS ip`.
+          re-running it is harmless. Every form was run against iproute2
+          6.1.0 in a namespace before it was written down, which is also
+          where `ip -n NS` was preferred to `ip netns exec NS ip`.
+        * **What the `proto` filter buys, corrected in #158.** #156 said
+          `proto` on the `del` stops a removal taking out a route of the
+          same prefix that something else owns. That is wrong, and trying
+          to break it is what showed it: removing `proto` from the `del`
+          broke no test, because a `del` names one prefix and the kernel
+          will not hold two protos for it anyway (`ip route add` for a
+          prefix already there answers "File exists" whatever the proto).
+          It is `proto` on the **flush** that protects a shared table, and
+          `test_the_flush_leaves_a_route_bgp4r_did_not_put_there` fails
+          without it. The `del` filter is kept because it costs nothing.
+        * **`replace` takes over a foreign route of the same prefix**,
+          which is the price of using it: it overwrites the route, marks
+          it `proto bgp`, and the flush on the way out then removes it. No
+          filter can prevent that, since by then the route is marked as
+          ours. So a table shared with another daemon is safe only where
+          the prefixes do not overlap, which is another reason `table:`
+          has no default. Measured and asserted in
+          `test_a_foreign_route_of_the_same_prefix_is_taken_over`.
         * **It does not resolve a next hop.** A real router resolves the
           BGP next hop recursively against its IGP; bgp4r has no IGP, so
           the next hop goes to the kernel as it arrived and the kernel
@@ -818,16 +848,74 @@ Neighbor ◀──UPDATE── Adj-RIB-Out (per peer) ◀───────�
         * One route per prefix and no multipath, because the Loc-RIB has
           one best route per prefix. ECMP means reading the whole
           candidate set and is its own piece of work.
-      * **Left for the second PR**: running the commands, `Table#install`
-        to wire it to the feed's worker thread the way `Router` is wired,
-        and the functional test in a namespace. One thing the probe turned
-        up for it: a flush of a routing table that does not exist yet
-        exits 2, so the teardown has to tolerate that rather than treat it
-        as a failure. **IPv6 cannot be tested in this sandbox**:
-        `/proc/sys/net/ipv6` is absent and `ip -6 route add` answers
-        "Operation not supported" on the host as well as in a namespace,
-        so the v6 command building is unit tested and the v6 data path is
-        not.
+      * **Running it, and the kernel's opinion. Done**, in #158.
+        `bgp/rib/fib_installer.rb` is the only impure part and all it does
+        is join the pure ones, the way `Router` does on the export side:
+        `Fib#plan`, then the command, then `Fib#commit`. `rib.install`,
+        `rib.fib`, `rib.fib_installer` and `rib.uninstall` reach it, and
+        `test/functional/lab/fib_test.rb` proves it against a real kernel
+        in a network namespace, 10 tests, no Docker.
+        * **A bug this found: the feed's worker started only on the first
+          `attach`.** So `rib.install` on a table with no peers queued
+          work nobody applied, and `drain` answered true because it
+          returns early when there is no worker: the FIB forwarded nothing
+          and said nothing. A table fed only by `rib.originate` has no
+          peer to attach, and that is a normal FIB use, so
+          `PeerFeed#start` now starts the worker without attaching
+          anything and `FibInstaller#start` calls it. `Router` has the
+          same shape but not the same problem, since a router with no
+          peers has nobody to advertise to.
+        * **A second bug, in the first draft of the runner: `IO` inside
+          `module BGP` is `BGP::IO`.** `bgp/io.rb` defines it, so a bare
+          `IO.popen` never reaches core Ruby and fails with "undefined
+          method `popen' for module BGP::IO". It is `::IO.popen` now. Same
+          family as the `const_defined?` trap in Conventions: a name
+          resolved up the lexical scope to something nearer than intended.
+        * `::IO.popen` and **not** `Open3`, which would read better. Open3
+          is a default gem today, and Conventions says to check that before
+          requiring one, because Ruby keeps moving these to bundled gems:
+          `observer` went in 3.4 and `logger` in 4.0. `IO.popen` is core
+          and does the whole job in a line, so the library keeps its one
+          runtime gem. The argv Array form never reaches a shell.
+        * **An install is committed only on success; a removal always.**
+          `ip route del` exits 2 for a route the table does not have, so
+          the commonest way a removal fails is that the route was already
+          gone, which is the outcome it wanted. Going on believing it is
+          installed would mean never trying again. The failure is still
+          recorded in `FibInstaller#failed`, keyed by prefix, which is
+          what `Router#skipped` is on the export side.
+        * `runner:` on `IpRoute` is the seam that keeps the unit tests
+          free of a kernel, root and iproute2. It is useful outside them
+          too: `sudo`, a remote shell, or a dry run that only logs.
+        * `start` guards against registering a second `on_change`
+          listener, since `uninstall` then `install` would otherwise add
+          one. **That guard is hygiene, not a fix.** Removing it moves no
+          test: the duplicate change comes to nothing, because `Fib#plan`
+          answers nil for an install the FIB already agrees with and nil
+          for a removal of a prefix it no longer holds. It is kept so the
+          work is not queued and thrown away, which matters at a million
+          prefixes. The comment on it first claimed a double removal and a
+          spurious failure, which trying to break it disproved.
+        * `uninstall` flushes both families, because a flush names one and
+          a table can hold both. A flush of a table that does not exist
+          yet exits 2, which is not a failure: there is nothing to flush.
+        * **`Fib`'s `:no_next_hop` branch cannot be reached through a live
+          table.** `Decision#eligible` answers `:next_hop_unreachable` for
+          a route whose next hop is nil and that is in
+          `Decision::INELIGIBLE`, so such a route never becomes a best
+          route and there is no change to plan. The branch stays because
+          `plan` is public and pure, and `fib_test.rb` asserts the real
+          behaviour rather than the unreachable one.
+        * **IPv6 is not exercised against a kernel.** The sandbox this was
+          written in has IPv6 compiled out: `/proc/sys/net/ipv6` is absent
+          and `ip -6 route add` answers "Operation not supported" on the
+          host as much as in a namespace. The v6 command building is unit
+          tested; the v6 data path is not, and that is the one gap here.
+        * CI runs it. The lab job is unprivileged, so the test omits
+          itself there, and a second step runs that one file under `sudo`
+          with `LAB_REQUIRE_NETNS=1` so it fails rather than omits. A
+          claim nothing checks reads as verified, which is the lesson
+          under "Lab and conformance".
 5. **FRR as a reference in the lab. Not started.**
 
 Decisions already taken that constrain the later phases:

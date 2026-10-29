@@ -158,6 +158,78 @@ class TestBgpRibIpRoute < Test::Unit::TestCase
     assert_equal('/usr/sbin/ip', ip.argv(install).first)
   end
 
+  # Running the commands. A runner means nothing here starts a process, and
+  # the cases below that do start one use coreutils rather than iproute2,
+  # so none of this needs root or a routing table.
+
+  def test_a_runner_is_used_instead_of_running_anything
+    seen = []
+    ip = BGP::Rib::Fib::IpRoute.new(:table => 100,
+                                    :runner => lambda { |argv|
+                                      seen << argv
+                                      BGP::Rib::Fib::IpRoute::Result.new(argv, 0, '')
+                                    })
+    assert(ip.run(install).ok?)
+    assert(ip.show.ok?)
+    assert(ip.flush(:ipv6 => true).ok?)
+    assert_equal(3, seen.size)
+    assert_equal(%w[ip route replace], seen[0][0, 3])
+    assert_equal(%w[ip route show], seen[1][0, 3])
+    assert_equal(%w[ip -6 route flush], seen[2][0, 4])
+  end
+
+  # The real path, through IO.popen. /bin/true ignores its arguments and
+  # exits 0, which is enough to prove the command ran and the status was
+  # read back.
+  def test_without_a_runner_it_runs_the_command
+    ip = BGP::Rib::Fib::IpRoute.new(:table => 100, :bin => 'true')
+    result = ip.run(install)
+    assert(result.ok?)
+    assert_equal(0, result.status)
+    assert_equal('true', result.argv.first)
+  end
+
+  def test_a_failing_command_is_a_failed_result
+    ip = BGP::Rib::Fib::IpRoute.new(:table => 100, :bin => 'false')
+    result = ip.run(install)
+    assert(!result.ok?)
+    assert_equal(1, result.status)
+  end
+
+  # stderr is folded into the output, because that is where ip says what
+  # went wrong and a caller wants it in the log beside the command. cat
+  # stands in for ip here: it writes its complaint to stderr and exits 1.
+  def test_the_output_carries_what_the_command_said_on_stderr
+    ip = BGP::Rib::Fib::IpRoute.new(:table => 100, :bin => 'cat')
+    result = ip.run(install)
+    assert(!result.ok?)
+    assert_match(/No such file or directory/, result.output)
+  end
+
+  # No iproute2 on the machine at all is a failed result like any other,
+  # not an exception the caller has to rescue.
+  def test_a_missing_binary_is_a_failure_and_not_an_exception
+    ip = BGP::Rib::Fib::IpRoute.new(:table => 100,
+                                    :bin => '/nonexistent/bin/ip')
+    result = nil
+    assert_nothing_raised { result = ip.run(install) }
+    assert(!result.ok?)
+    assert_equal(-1, result.status, 'a status no exiting process produces')
+    assert_match(/No such file or directory/, result.output)
+  end
+
+  def test_a_result_prints_the_command
+    ok = BGP::Rib::Fib::IpRoute::Result.new(%w[ip route del 192.0.2.0/24], 0, '')
+    assert(ok.ok?)
+    assert_equal('ip route del 192.0.2.0/24', ok.command)
+    assert_equal('ok: ip route del 192.0.2.0/24', ok.to_s)
+    bad = BGP::Rib::Fib::IpRoute::Result.new(%w[ip route del 192.0.2.0/24], 2,
+                                             "RTNETLINK answers: No such process\n")
+    assert(!bad.ok?)
+    assert_equal('failed (2): ip route del 192.0.2.0/24: ' \
+                 'RTNETLINK answers: No such process', bad.to_s)
+  end
+
   def test_to_s
     assert_equal('ip route, table 100, proto bgp',
                  BGP::Rib::Fib::IpRoute.new(:table => 100).to_s)

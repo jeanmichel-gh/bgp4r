@@ -257,6 +257,44 @@ module BGP
       # The Router, or nil when router mode was never turned on.
       def router ; sync { @router } ; end
 
+      # Put the Loc-RIB in a forwarding table and keep it there. Off until
+      # asked for, like router mode, and for the same reason: a table that
+      # only decides is the normal use.
+      #
+      #   rib.install(table: 100)                  # the local routing table
+      #   rib.install(table: 100, netns: 'lab')    # one in a namespace
+      #   rib.fib                                  # what it believes is in
+      #   rib.uninstall                            # and take it out again
+      #
+      # table: is required and has no default, because a route in the main
+      # routing table changes where this machine sends its own traffic.
+      # Options go to Fib::IpRoute: proto, netns, dev, bin, runner. Pass
+      # backend: instead to install somewhere that is not an iproute2
+      # table at all. Returns the FibInstaller, the same one on a second
+      # call.
+      def install(backend: nil, **options)
+        i = sync do
+          @fib_installer ||=
+            FibInstaller.new(self, feed,
+                             :backend => backend || Fib::IpRoute.new(**options))
+        end
+        i.start
+      end
+
+      # The FibInstaller, or nil when nothing was installed.
+      def fib_installer ; sync { @fib_installer } ; end
+
+      # What the forwarding table is believed to hold, or nil when nothing
+      # was installed.
+      def fib ; sync { @fib_installer&.fib } ; end
+
+      # Takes this table's routes back out of the forwarding table. Returns
+      # the results of the commands, or nil when nothing was installed.
+      def uninstall(timeout = PeerFeed::DEFAULT_TIMEOUT)
+        i = sync { @fib_installer }
+        i&.stop(timeout)
+      end
+
       private
 
       # The table's lock, reentrant for the thread that holds it.

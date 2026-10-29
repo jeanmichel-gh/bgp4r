@@ -81,6 +81,13 @@ module BGP
         if next_hop.nil? or next_hop.to_s.empty?
           # A route the Loc-RIB can no longer describe is not a route to
           # keep forwarding on, so an installed one comes out.
+          #
+          # A live table never gets here. Decision#eligible answers
+          # :next_hop_unreachable for a route whose next hop is nil, and
+          # that is in Decision::INELIGIBLE, so such a route never becomes
+          # a best route and there is no change to plan. This stays because
+          # plan is public and pure: anyone may hand it a change, and the
+          # alternative is writing "via" with nothing after it.
           note_skip(prefix, :no_next_hop)
           return removal(prefix)
         end
