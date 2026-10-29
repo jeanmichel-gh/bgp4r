@@ -48,7 +48,9 @@ test/functional/lab/     lab tests: loopback speaker test and one Compose test p
                          native gobgpd, so a real router says what it makes of it,
                          and add_path_gobgp_test.rb does the same for RFC 7911;
                          fib_test.rb puts the Loc-RIB in a real kernel routing
-                         table inside a network namespace, no Docker, needs root
+                         table inside a network namespace, no Docker, needs root;
+                         fault_matrix_frr_test.rb runs the same matrix against
+                         FRR's bgpd, standalone on loopback, no Docker and no zebra
 ```
 
 ## Running tests
@@ -108,6 +110,19 @@ few minutes; the other two take about 30 seconds each:
 ruby -I. test/functional/lab/fault_matrix_native_test.rb
 ruby -I. test/functional/lab/rib_router_gobgp_test.rb
 ruby -I. test/functional/lab/add_path_gobgp_test.rb
+```
+
+The same matrix against a second implementation, FRR's `bgpd`, also with
+no Docker and no zebra. It needs the FRR package, whose `bgpd` is not on
+`PATH`: `/usr/lib/frr/bgpd` is looked for, and `FRR_BGPD` and `VTYSH`
+name them elsewhere. No root: `bgpd` runs with `-S` so it keeps the
+invoking user, and both ends get ports of their own. Checked as a
+non-root user and not only as root, because the difference is not
+nothing: `vtysh` cannot read `/etc/frr/vtysh.conf` without the `frrvty`
+group and prefixes a warning to every answer, which broke the first CI
+run of this. A few minutes:
+```
+ruby -I. test/functional/lab/fault_matrix_frr_test.rb
 ```
 
 Do not run `test/functional/live_feed_test.rb`. It connects to a public feed that no longer answers and hangs forever.
@@ -916,7 +931,70 @@ Neighbor ◀──UPDATE── Adj-RIB-Out (per peer) ◀───────�
           with `LAB_REQUIRE_NETNS=1` so it fails rather than omits. A
           claim nothing checks reads as verified, which is the lesson
           under "Lab and conformance".
-5. **FRR as a reference in the lab. Not started.**
+5. **FRR as a reference in the lab. The conformance half is Done**, in
+   #159, as `test/functional/lab/fault_matrix_frr_test.rb`: the whole RFC
+   7606 matrix against FRR's `bgpd`, no Docker and no zebra, so the FRR
+   column in `docs/protocol-testing.md` is asserted rather than
+   remembered. `LabHelper::Frr` runs the daemon.
+   * **FRR agrees on 6 of the 18 rows**, where GoBGP 4.10.0 agrees on 16
+     and 3.23.0 on 15. It is much further from RFC 7606 than either, and
+     in one specific way: its own log says `Attribute ORIGIN, parse error
+     - treating as withdrawal` and then it sends `3/10 (UPDATE Message
+     Error/Invalid Network Field)`. So it is not a router that disagrees
+     about treat-as-withdraw; it is one whose implementation of it falls
+     over on the withdraw path. All 11 treat-as-withdraw cases.
+   * **Two rows of the hand-measured column were wrong**, and the fault
+     was the hand measurement, not a change in FRR. "attribute discard
+     cases: agrees" missed that a duplicated attribute resets with 3/1,
+     where RFC 7606 section 3 bullet (g) says "all the occurrences of the
+     attribute other than the first one SHALL be discarded" and names no
+     subcode; subcode 1 is what (g) reserves for a duplicated
+     MP_REACH_NLRI or MP_UNREACH_NLRI. That is the one row where GoBGP
+     and FRR disagree with each other, and the RFC is flatly against FRR.
+     And "attribute overruns the list" was a dash because the hand run
+     skipped it: it is 3/5, exactly the bug GoBGP 3.23.0 had and GoBGP 4
+     fixed.
+   * **Four harness facts, each measured rather than assumed**, because
+     each one silently voids the whole run. `bgpd` needs `-S` or it drops
+     to the `frr` user and cannot write into `Dir.mktmpdir`. It needs an
+     address of its own, not the peer's, or every route is rejected under
+     RFC 4271 section 6.3 for a NEXT_HOP equal to the receiving speaker's.
+     **And `vtysh` must be read past its own warning.** Run as any user
+     that is neither root nor in the `frrvty` group, which is exactly what
+     CI does, every answer begins `% Can't open configuration file
+     /etc/frr/vtysh.conf due to 'Permission denied'.` and the real output
+     follows it. `JSON.parse` on the whole thing fails, so `Frr#summary`
+     answered nil forever and `up` raised after its timeout even though
+     the session had established. `Frr#vty_json` takes the JSON from the
+     first brace now. Nothing local showed it, because root reads that
+     file: it took the first CI run of #159 to find, and **the failure
+     reported nothing at all**, because the workflow's annotation step ran
+     `msg=$(grep ...)` under `bash -e` and grep exits 1 when it matches
+     nothing, so the step died before its own `tail` fallback. That now
+     ends in `|| true`.
+     And it needs a **non-loopback** next hop in the test routes:
+     `Frr::NEXT_HOP` is 192.0.2.1, because with 127.0.0.1 FRR keeps the
+     session up and silently drops the route where GoBGP accepts it. The
+     first two measurements here were void for the last two reasons, and
+     what caught both was the scenario's own
+     `test_the_rib_answer_was_usable`, which refuses to score route
+     verdicts when the clean baseline route did not install. Without that
+     guard this would have recorded "FRR resets on all 18 cases", which
+     is wrong and would have read as verified.
+   * Two additions to `fault_matrix_scenario.rb` rather than weakening
+     what was there. `reset_subcode_overrides` is for a router that resets
+     where the catalog expects a reset but names another subcode, which is
+     FRR's `unknown_wellknown`: that is not a divergence and must not be
+     counted as one. `wholesale_divergences` lets a router declare a
+     category it gets wrong in full, so the guard against a divergence
+     list that empties a derived test still protects the GoBGP runs while
+     FRR's breadth is stated and reviewed instead of quietly passing.
+   * **Not in it**, and the recorded follow up: bgp4r's export side
+     against FRR, the twin of `rib_router_gobgp_test.rb` from phase 3
+     part 7. `LabHelper::Frr` already reads the RIB as JSON
+     (`Frr#rib`, `#path`, `Frr.as_path`, `Frr.next_hop`), so it is a test
+     file and no new harness. Worth having for the same reason that one
+     was: two bgp4r speakers agreeing proves nothing.
 
 Decisions already taken that constrain the later phases:
 
@@ -989,7 +1067,7 @@ Smaller things:
 Lab and conformance:
 
 * **GoBGP runs natively, so the fault matrix needs no Docker.** `gobgpd` from a release tarball peers with bgp4r on loopback, and `test/functional/lab/fault_matrix_native_test.rb` runs the whole matrix against it. Both sides get a port of their own, so neither needs root nor `net.ipv4.ip_unprivileged_port_start`: the generated config sets `[global.config] port` and `[neighbors.transport.config] remote-port`, both of which GoBGP 3 and 4 honour. `LabHelper::Gobgpd` writes that config and starts the daemon. This is the harness to reach for before assuming a conformance question is blocked. `docs/protocol-testing.md` has the recipe under "On a Linux VM": how to get a particular version from a release tarball, with its checksum, and the two config keys that keep both ends off port 179. **Check which version you have**, because it changes the answers: Ubuntu 24.04's `gobgpd` package is 3.23.0, and GoBGP publishes Linux builds only.
-* The two GoBGP columns in `docs/protocol-testing.md` are asserted by the two fault matrix tests, so they are re-measured rather than recorded by hand. **The versions do not answer alike, and the column used to claim they did.** GoBGP 3.23.0 resets with subcode 5 on `attr_overrun` where RFC 7606 section 4 makes treat-as-withdraw a MUST; GoBGP 4.10.0 fixed it. So 4.10.0 agrees on 16 of the 18 rows and 3.23.0 on 15. The expectations are per version in `test/functional/lab/fault_matrix_scenario.rb`: the native test asks the binary, and the Compose test reads `GOBGP_IMAGE`, so keep those in step if the pin moves. The FRR and BIRD columns are still from 8.4.4 and 2.14 run natively and measured by hand, and only the session level outcomes there, since BIRD gives no usable RIB answer over a loopback session.
+* The two GoBGP columns and the FRR one in `docs/protocol-testing.md` are asserted by the three fault matrix tests, so they are re-measured rather than recorded by hand. **The versions do not answer alike, and the column used to claim they did.** GoBGP 3.23.0 resets with subcode 5 on `attr_overrun` where RFC 7606 section 4 makes treat-as-withdraw a MUST; GoBGP 4.10.0 fixed it. So 4.10.0 agrees on 16 of the 18 rows, 3.23.0 on 15, and FRR 8.4.4 on 6. The expectations are per router and per version in `test/functional/lab/fault_matrix_scenario.rb`: the native GoBGP test asks the binary, the Compose test reads `GOBGP_IMAGE`, and the FRR test asserts against major 8 only, so keep those in step if a pin moves. **Only the BIRD column is still a hand measurement**, from 2.14, and only the session level outcomes there, since BIRD gives no usable RIB answer over a loopback session. Two rows of the FRR column were wrong when it was asserted in #159, both the hand measurement's fault; see phase 5 above.
 * How that wrong row survived is the lesson, not the row. The table was measured by hand once and never re-run, because the only harness that could re-run it needed a Docker daemon that the sandbox did not have. A conformance claim nothing checks reads as verified, exactly like an unread RFC citation, and this one sat in the docs, in `CLAUDE.md` and in a test's comments at the same time.
 * `lab/conformance/gobgpd.conf` and `lab/topologies/fault-matrix/gobgp.toml` are written in the 3.23 style and GoBGP 4 reads them unchanged. Every key is still in the 4.x config structs under the same `mapstructure` name, and 4.x registers `mapstructure.StringToNetIPAddrHookFunc` so the address fields still decode from TOML strings. No schema work is needed; an earlier version of this entry said otherwise and was wrong.
 * `lab/topologies/fault-matrix` exits 1, and that is the right answer: GoBGP discards the malformed tunnel encapsulation attribute and installs the route where RFC 9012 section 13 asks for treat-as-withdraw. Both cases are asserted as a known divergence; see the comment on `TUNNEL_ENCAP` in `test/functional/lab/fault_matrix_scenario.rb`. It is not an old bug since fixed: 3.23.0 and 4.10.0 both do it, measured natively on each, so it is worth reporting upstream.

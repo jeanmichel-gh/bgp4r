@@ -24,7 +24,8 @@
 #
 # Compose runs a topology from lab/topologies/<name>/compose.yml.
 # Local runs lab/speaker.rb as plain processes on loopback, no Docker.
-# Gobgpd runs a real router the same way, also no Docker.
+# Gobgpd runs a real router the same way, also no Docker, and Frr runs
+# FRR's bgpd standalone for a second opinion.
 
 require 'json'
 require 'open3'
@@ -369,6 +370,287 @@ module LabHelper
     def self.as_path(path)
       segments = (attrs(path)[2] || {})['as_paths'] || []
       segments.collect { |s| s['asns'] || [] }.flatten
+    end
+
+    # The daemon's own log: what it made of each UPDATE, in its words.
+    # Cached at down, since the directory goes with it.
+    def log
+      return @log_text if @log_text
+      @log ? File.read(@log) : ''
+    rescue Errno::ENOENT
+      ''
+    end
+  end
+
+  # FRR's bgpd, run the same way: a second real router on loopback, no
+  # Docker and no zebra. Shaped on Gobgpd above, so a test can hold either.
+  #
+  # Four things about running bgpd standalone, each measured against 8.4.4
+  # rather than recalled, because each one stops it dead:
+  #
+  # **-S**, --skip_runas. bgpd otherwise drops to the `frr` user, and then
+  # cannot write its pid file or vty socket into a directory that user
+  # cannot reach, which `Dir.mktmpdir` under a private /tmp subdirectory
+  # always is: it exits with "Can't create pid lock file (Permission
+  # denied)". Running as the invoking user instead makes any directory
+  # work. There is no --vty_group in 8.4.4 either, so -u root -g root is
+  # not an answer: it fails with "user(root) is not part of vty group
+  # specified(frrvty)".
+  #
+  # **--no_kernel**, so a BGP conformance test cannot touch the routing
+  # table of the machine it runs on. bgpd without zebra installs nothing
+  # anyway, and this says so rather than relying on that.
+  #
+  # **A vty password**, because `show` over the vty answers "Vty password
+  # is not set" without one. It is in the config below; nothing here is
+  # reachable off loopback.
+  #
+  # **No -d**, so the process this holds a pid for is the daemon itself.
+  # With -d bgpd forks and the parent exits, and then there is nothing to
+  # TERM at the end.
+  #
+  # The RIB is read with `vtysh --vty_socket <dir>`, which talks to this
+  # one bgpd through the socket in its own directory and so needs no
+  # system-wide FRR installation to be running.
+  class Frr
+    # The usual path from a distribution package, since bgpd is not on
+    # PATH there. FRR_BGPD and VTYSH name them on a machine that puts them
+    # elsewhere, the way GOBGPD and GOBGP do for GoBGP.
+    PACKAGED = '/usr/lib/frr/bgpd'
+
+    # The next hop to put in a test route for this router, which is **not**
+    # the peer's address the way it can be for GoBGP.
+    #
+    # Measured, one clean route per candidate: with a next hop of
+    # 127.0.0.1 FRR keeps the session up and silently drops the route, so
+    # `show bgp ipv4 unicast` never mentions it. With 192.0.2.1 it keeps
+    # the route and even selects it, with no zebra to resolve the next hop
+    # and nothing else changed. A loopback address is not a next hop
+    # anything can forward to, and FRR filters it where GoBGP does not.
+    #
+    # This matters because the fault matrix reads route verdicts out of
+    # that command. Point it at FRR with the peer's loopback address as
+    # the next hop and the clean baseline route never appears either, so
+    # every route verdict in the run is void: the harness says so rather
+    # than scoring them, which is how this was found.
+    #
+    # 192.0.2.0/24 is RFC 5737 section 3's TEST-NET-1, reserved for
+    # documentation, so it can never collide with anything real.
+    NEXT_HOP = '192.0.2.1'
+
+    def self.bin
+      ENV['FRR_BGPD'] || (File.executable?(PACKAGED) ? PACKAGED : 'bgpd')
+    end
+
+    def self.vtysh ; ENV['VTYSH'] || 'vtysh' ; end
+
+    def self.version
+      out, status = Open3.capture2e(bin, '--version')
+      status.success? ? out.lines.first.to_s.strip : nil
+    rescue SystemCallError
+      nil
+    end
+
+    def self.available? ; !version.nil? ; end
+
+    # The major version, because the answers are not the same on every
+    # one: that is the lesson GOBGP_3 records in fault_matrix_scenario.rb.
+    def self.major
+      v = version or return nil
+      v[/version\s+(\d+)\./, 1]&.to_i
+    end
+
+    attr_reader :local, :as, :router_id, :peer, :peer_as, :port,
+                :listen_port, :vty_port, :dir
+
+    # port:    the port bgp4r listens on, which this router dials.
+    # network: a prefix for it to originate, or nil for none.
+    #
+    # local defaults to 127.0.0.2 and must not be the peer's address, for
+    # the same reason Gobgpd's does. RFC 4271 section 6.3 makes a NEXT_HOP
+    # equal to the receiving speaker's own address an error, subcode 8,
+    # "Invalid NEXT_HOP Attribute". The fault matrix sends its routes with
+    # the peer's address as the next hop, so with both ends on 127.0.0.1
+    # FRR rejects every route including the clean baseline one, and then
+    # every route verdict in the run is meaningless. That is not
+    # hypothetical: the first measurement here was made that way, and it
+    # read as "FRR resets on all 18 cases" until the harness's own
+    # test_the_rib_answer_was_usable said the RIB answer could not be
+    # trusted.
+    def initialize(local: '127.0.0.2', as: 65002, router_id: '10.0.0.2',
+                   peer: '127.0.0.1', peer_as: 65001, port: nil, ipv6: true,
+                   network: nil)
+      @local, @as, @router_id = local, as, router_id
+      @peer, @peer_as, @ipv6 = peer, peer_as, ipv6
+      @network = network
+      @port = port || Local.free_port
+      @listen_port = Local.free_port
+      @vty_port = Local.free_port
+      @dir = Dir.mktmpdir('bgp4r-frr')
+    end
+
+    def config
+      lines = ['hostname bgp4r-lab-frr',
+               'password zebra',
+               # Without these the log is empty, and the log is the whole
+               # point of keeping one: it is the router saying in its own
+               # words what it made of each UPDATE, which is what a
+               # divergence has to be justified from. bgpd writes nothing
+               # to stdout by default, however it was started.
+               'log stdout debugging',
+               'debug bgp updates in',
+               'debug bgp neighbor-events',
+               'router bgp %d' % @as,
+               ' bgp router-id %s' % @router_id,
+               # A lab, not a network. Without the first, FRR refuses to
+               # accept or send anything to an eBGP peer with no policy
+               # configured (RFC 8212, which it implements by default).
+               # The second stops it requiring a matching route in its own
+               # table before originating one with `network`.
+               ' no bgp ebgp-requires-policy',
+               ' no bgp network import-check',
+               ' neighbor %s remote-as %d' % [@peer, @peer_as],
+               # Where bgp4r listens, so our side needs no privilege.
+               ' neighbor %s port %d' % [@peer, @port],
+               # So the connection really comes from @local. Without it
+               # bgpd dials from whatever the route to the peer gives,
+               # which over loopback is 127.0.0.1, and then this router
+               # and its peer share an address: see the note on local in
+               # initialize for what that costs.
+               ' neighbor %s update-source %s' % [@peer, @local],
+               # A caller may give each case its own session, as the fault
+               # matrix does, so keep coming back quickly.
+               ' neighbor %s timers connect 2' % @peer]
+      lines << ' address-family ipv4 unicast'
+      lines << '  network %s' % @network if @network
+      lines << ' exit-address-family'
+      if @ipv6
+        lines << ' address-family ipv6 unicast'
+        lines << '  neighbor %s activate' % @peer
+        lines << ' exit-address-family'
+      end
+      lines.join("\n") + "\n"
+    end
+
+    # Starts bgpd and waits until its vty answers, which is the only
+    # signal it read the config at all. Raises with the log, which names
+    # the line it rejected.
+    def up(timeout: 30)
+      path = File.join(@dir, 'bgpd.conf')
+      File.write(path, config)
+      @log = File.join(@dir, 'bgpd.log')
+      @pid = Process.spawn(self.class.bin,
+                           '-f', path,
+                           '-i', File.join(@dir, 'bgpd.pid'),
+                           '-p', @listen_port.to_s,   # its own BGP port
+                           '-P', @vty_port.to_s,
+                           '-l', @local,
+                           '--vty_socket', @dir,
+                           '-S',             # see the class comment
+                           '--no_kernel',
+                           out: @log, err: [:child, :out])
+      deadline = Time.now + timeout
+      until summary
+        raise "bgpd did not come up in #{timeout}s:\n#{log}" if Time.now > deadline
+        sleep 0.5
+      end
+      self
+    end
+
+    def down
+      @log_text = log
+      if @pid
+        Process.kill('TERM', @pid)
+        Process.wait(@pid)
+      end
+    rescue Errno::ESRCH, Errno::ECHILD
+    ensure
+      @pid = nil
+      FileUtils.rm_rf(@dir)
+    end
+
+    # One vty command, or nil while bgpd is not answering.
+    def vty(command)
+      out, status = Open3.capture2e(self.class.vtysh, '--vty_socket', @dir,
+                                    '-c', command)
+      status.success? ? out : nil
+    rescue SystemCallError
+      nil
+    end
+
+    # A vty command that answers JSON, parsed, or nil.
+    #
+    # The JSON is taken from the first brace rather than from the start of
+    # the output, because vtysh prefixes warnings to it and they are not
+    # JSON. Run as any user who is not root and not in the frrvty group,
+    # which is what CI does, every call begins with:
+    #
+    #   % Can't open configuration file /etc/frr/vtysh.conf due to
+    #   'Permission denied'.
+    #
+    # and the command still answers correctly after it. Parsing the whole
+    # output instead made every call here return nil, so up never saw the
+    # daemon answer and raised after its timeout even though the session
+    # had established. That is what broke the first CI run of this: root
+    # reads that file, so nothing local showed it.
+    #
+    # One more line a non-root run prints, harmless and left alone: bgpd
+    # logs that it could not mkdir under /var/tmp/frr and that "crashlog
+    # and per-thread log buffering unavailable". It is a crash handler, not
+    # anything this needs.
+    def vty_json(command)
+      out = vty(command) or return nil
+      start = out.index('{') || out.index('[') or return nil
+      JSON.parse(out[start..])
+    rescue JSON::ParserError
+      nil
+    end
+
+    def summary ; vty_json('show bgp summary json') ; end
+
+    # The neighbor table, keyed by address, or nil while not answering.
+    def neighbors ; vty_json('show bgp neighbors json') ; end
+
+    def neighbor(address) ; (neighbors || {})[address] ; end
+
+    # True when the session to our peer is up. FRR spells the state
+    # "Established" in its JSON, the same word RFC 4271 section 8.2.2 uses.
+    def established?(address = @peer)
+      n = neighbor(address)
+      n && n['bgpState'] == 'Established'
+    end
+
+    # What to pass lab/fault_matrix.rb as --rib-command: one argument,
+    # spaces and all, since the matrix runs it through a shell. Quoted
+    # because the command itself has spaces in it.
+    def rib_command
+      "#{self.class.vtysh} --vty_socket #{@dir} -c 'show bgp ipv4 unicast'"
+    end
+
+    # The router's RIB: prefix => array of paths, as FRR's own JSON gives
+    # it. nil while not answering, {} for an empty RIB, so a caller can
+    # tell "nothing there" from "could not ask", as Gobgpd#rib does.
+    def rib(family = 'ipv4 unicast')
+      answer = vty_json("show bgp #{family} json") or return nil
+      answer['routes'] || {}
+    end
+
+    # One path for a prefix, best first, or nil.
+    def path(prefix)
+      paths = (rib || {})[prefix] or return nil
+      paths.find { |p| p['bestpath'] } || paths.first
+    end
+
+    # FRR's JSON names attributes rather than numbering them, where the
+    # gobgp client keys them by code point, so there is no shared shape to
+    # read them through. These are the ones a test here asks about.
+    def self.as_path(path)
+      (path['path'] || '').split(/\s+/).reject(&:empty?).collect(&:to_i)
+    end
+
+    def self.next_hop(path)
+      hop = (path['nexthops'] || []).first
+      hop && hop['ip']
     end
 
     # The daemon's own log: what it made of each UPDATE, in its words.
