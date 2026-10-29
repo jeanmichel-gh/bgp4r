@@ -10,7 +10,10 @@ Every class in bgp4r can be built three ways, and most accept a fourth:
 | **another instance** | `Aggregator.new(other)`, which re-parses `other.encode` |
 
 All of them have to produce the same object, and `encode` is the measure of
-that: same octets, same object. This document is about how the dispatch
+that: same octets, same object. The shape is not identical everywhere:
+`Prefix` takes a prefix string rather than octets, because for NLRI the
+wire parsing belongs to the collection that slices them. Check the class
+before assuming which three it has. This document is about how the dispatch
 works and where it goes wrong, because an object that comes back slightly
 different costs far more time to diagnose than it should.
 
@@ -89,17 +92,50 @@ value branches, and what happens next is the class's business:
 ```ruby
 BGP::Origin.new("\x40\x01\x01\x02")
 # ArgumentError: invalid argument, String (@)
-
-BGP::Prefix.new("\x18\xc0\x00\x02")
-# IPAddr::InvalidAddressError: invalid address:
-#   from ipaddr.rb:692:in `in6_addr'
 ```
 
-Neither message mentions the mark. The second one names `IPAddr` and
-points into the standard library, which is a long way from the actual
-mistake. **When a build fails somewhere improbable, check
-`arg.is_packed?` first.** `str.is_packed` marks a String in place and
-returns it, which is the fix.
+The message does not mention the mark. **When a build fails somewhere
+improbable, check `arg.is_packed?` first.** `str.is_packed` marks a
+String in place and returns it, which is the fix. Note the parens if you
+write it on a literal: `(+"...").is_packed`, because `+"...".is_packed`
+applies unary plus to the result.
+
+## Two things the mark does not cover
+
+**Not every class reads wire bytes at all.** `Prefix` has no such
+branch: its String argument is a prefix, `Prefix.new('192.0.0.0/24')`,
+and wire octets are the business of the collection that slices them,
+`Nlri` or `Withdrawn`. So binary handed to `Prefix` dies inside `IPAddr`
+whether it is marked or not:
+
+```ruby
+BGP::Prefix.new(['18c00002'].pack('H*'))
+# IPAddr::InvalidAddressError: invalid address:
+#   from ipaddr.rb:692:in `in6_addr'
+
+BGP::Nlri.new(['18c0000018c00001'].pack('H*'))   # this is the wire route
+```
+
+That error names the standard library and is the furthest a build gets
+from naming its own mistake. Check which of the two levels takes octets
+before concluding anything about the mark.
+
+**A constructor may consume the String it is handed.** `parse` reads
+with `slice!`, so the argument comes back empty:
+
+```ruby
+octets = ['40010102'].pack('H*')
+BGP::Origin.new(octets)
+octets.size            # => 0
+```
+
+Measured: `Origin`, `Aggregator`, `Communities` and `Path_attribute` all
+empty it, and `Nlri` does not, so neither behaviour can be relied on.
+Hand over a `dup` if you need the octets afterwards. This is what makes
+a second build from the same variable fail, and worse, what makes
+`assert_equal(octets, Klass.new(octets).encode)` fail while both sides
+print the same hex, because the left side was emptied before the
+comparison ran. Compare `to_shex`.
 
 ## Building from a hash
 
@@ -181,22 +217,26 @@ proves nothing about them.
 In the order that has actually paid off:
 
 1. **Is the String marked?** `is_packed?`. See above. The error will not
-   tell you.
-2. **Does any key set that field?** If the field only ever arrives by
+   tell you. And check the class takes octets at all: `Prefix` does not,
+   `Nlri` does.
+2. **Was the String already consumed?** A constructor that parsed it
+   emptied it, so the second build from that variable is building from
+   nothing. `dup` it.
+3. **Does any key set that field?** If the field only ever arrives by
    parsing, no hash carries it and no hash can rebuild it. That is the
    shape of every lossy row in the inventory: a field that entered the
    object after its hash shape was settled.
-3. **Which hash is it?** Bare or wrapped. A class whose `new` takes the
+4. **Which hash is it?** Bare or wrapped. A class whose `new` takes the
    bare form will not read its own `to_hash`, and that is often correct
    rather than broken.
-4. **Does the value need the same translation the Symbol branch does?**
+5. **Does the value need the same translation the Symbol branch does?**
    `Origin#to_hash` answers `:incomplete`, and the hash branch assigned it
    raw, which left a Symbol in `@origin` and made `encode` raise in `pack`.
    A hash branch that skips a setter other branches use is a common bug.
-5. **Does a merge collapse two of something?** One key per type cannot
+6. **Does a merge collapse two of something?** One key per type cannot
    hold two attributes of a type, which silently kept the last. Two
    unknown attributes have the same problem and solve it with a list.
-6. **Is it `const_defined?` reaching a parent's class?** `const_defined?`
+7. **Is it `const_defined?` reaching a parent's class?** `const_defined?`
    searches ancestors unless passed `false`, which once made
    `Capability::Unknown` resolve to the parameter level class, with a
    different hash and a different constructor. Three tests failed and not
