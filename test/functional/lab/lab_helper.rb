@@ -195,13 +195,16 @@ module LabHelper
 
     attr_reader :local, :as, :router_id, :peer, :peer_as, :port
 
-    # local:   address the router speaks from
-    # peer:    address bgp4r listens on, which the router dials
-    # port:    port bgp4r listens on, which the router dials
+    # local:    address the router speaks from
+    # peer:     address bgp4r listens on, which the router dials
+    # port:     port bgp4r listens on, which the router dials
+    # add_path: {receive: true, send_max: 8} for RFC 7911, or nil for none
     def initialize(local: '127.0.0.2', as: 65002, router_id: '10.0.0.2',
-                   peer: '127.0.0.1', peer_as: 65001, port: nil, ipv6: true)
+                   peer: '127.0.0.1', peer_as: 65001, port: nil, ipv6: true,
+                   add_path: nil)
       @local, @as, @router_id = local, as, router_id
       @peer, @peer_as, @ipv6 = peer, peer_as, ipv6
+      @add_path = add_path
       @port = port || Local.free_port
       @listen_port = Local.free_port
       @api_port = Local.free_port
@@ -238,7 +241,19 @@ module LabHelper
             connect-retry = 2
             idle-hold-time-after-reset = 0
       TOML
-      global + afi_safis
+      # RFC 7911, and left out entirely when nobody asked, so a config with
+      # no add-paths block is what it always was. receive lets the router
+      # take several paths for one prefix from us; a send-max above 0 lets
+      # it send us several. A sub-table after the afi-safis array attaches
+      # to this [[neighbors]] element, which is what TOML says and what
+      # GoBGP reads.
+      add_paths = ''
+      if @add_path
+        add_paths = "  [neighbors.add-paths.config]\n" \
+                    "    receive = #{@add_path.fetch(:receive, true)}\n" \
+                    "    send-max = #{@add_path.fetch(:send_max, 8)}\n"
+      end
+      global + afi_safis + add_paths
     end
 
     # Starts the daemon and waits until its API answers, which is the only
@@ -277,6 +292,34 @@ module LabHelper
       status.success? ? out : nil
     rescue SystemCallError
       nil
+    end
+
+    # One neighbor's detail, as the client prints it for a person.
+    def neighbor(address)
+      out, status = Open3.capture2e(self.class.client, '-u', @local,
+                                    '-p', @api_port.to_s, 'neighbor', address)
+      status.success? ? out : nil
+    rescue SystemCallError
+      nil
+    end
+
+    # What the router made of the ADD-PATH Send/Receive field its peer
+    # advertised for one family: "receive", "send" or "receive/send". nil
+    # when it reports no remote add-path at all, which is the answer when
+    # the capability was never negotiated.
+    #
+    # This is the only way to see a second implementation's reading of that
+    # field, and bgp4r had it inverted until #115, so it is worth the one
+    # brittle thing in this class: it parses the client's human output,
+    # because the JSON form wraps every capability in a protobuf Any with a
+    # base64 value and decoding that by hand would be worse. The layout is
+    # therefore not contractual. If a GoBGP release rewords this block the
+    # parse returns nil and the test says so, and that is a test to update
+    # rather than a bgp4r bug.
+    def remote_add_path(address, family = 'ipv4-unicast')
+      text = neighbor(address) or return nil
+      block = text[/add-path:.*?Remote:\s*\n(.*?)(?:\n\s*[a-z-]+:|\z)/m, 1] or return nil
+      block[/#{Regexp.escape(family)}:\s*(\S+)/, 1]
     end
 
     # What to pass lab/fault_matrix.rb as --rib-command: one argument,
