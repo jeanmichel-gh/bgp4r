@@ -42,7 +42,8 @@ test/functional/lab/     lab tests: loopback speaker test and one Compose test p
                          fault_matrix_test.rb (Compose) and fault_matrix_native_test.rb
                          (a gobgpd on loopback, no Docker) assert them;
                          rib_router_gobgp_test.rb points bgp4r's export side at a
-                         native gobgpd, so a real router says what it makes of it
+                         native gobgpd, so a real router says what it makes of it,
+                         and add_path_gobgp_test.rb does the same for RFC 7911
 ```
 
 ## Running tests
@@ -86,13 +87,14 @@ without `gobgpd`):
 ruby test/run_lab.rb
 ```
 
-Against a real router, with no Docker at all. Both need `gobgpd` on
+Against a real router, with no Docker at all. These need `gobgpd` on
 `PATH`, or `GOBGPD` and `GOBGP` naming the binaries, which is how one
 machine answers for more than one GoBGP version. The fault matrix takes a
-few minutes; the export side takes about 30 seconds:
+few minutes; the other two take about 30 seconds each:
 ```
 ruby -I. test/functional/lab/fault_matrix_native_test.rb
 ruby -I. test/functional/lab/rib_router_gobgp_test.rb
+ruby -I. test/functional/lab/add_path_gobgp_test.rb
 ```
 
 Do not run `test/functional/live_feed_test.rb`. It connects to a public feed that no longer answers and hangs forever.
@@ -810,7 +812,11 @@ Lab and conformance:
 * How that wrong row survived is the lesson, not the row. The table was measured by hand once and never re-run, because the only harness that could re-run it needed a Docker daemon that the sandbox did not have. A conformance claim nothing checks reads as verified, exactly like an unread RFC citation, and this one sat in the docs, in `CLAUDE.md` and in a test's comments at the same time.
 * `lab/conformance/gobgpd.conf` and `lab/topologies/fault-matrix/gobgp.toml` are written in the 3.23 style and GoBGP 4 reads them unchanged. Every key is still in the 4.x config structs under the same `mapstructure` name, and 4.x registers `mapstructure.StringToNetIPAddrHookFunc` so the address fields still decode from TOML strings. No schema work is needed; an earlier version of this entry said otherwise and was wrong.
 * `lab/topologies/fault-matrix` exits 1, and that is the right answer: GoBGP discards the malformed tunnel encapsulation attribute and installs the route where RFC 9012 section 13 asks for treat-as-withdraw. Both cases are asserted as a known divergence; see the comment on `TUNNEL_ENCAP` in `test/functional/lab/fault_matrix_scenario.rb`. It is not an old bug since fixed: 3.23.0 and 4.10.0 both do it, measured natively on each, so it is worth reporting upstream.
-* No lab topology exercises add-path against a real router, which is why the inverted Send/Receive field survived: `test/functional/add_path_test.rb` runs bgp4r against bgp4r, where an inverted field cancels. The fix now has tests that write the field value itself on one side, in `test/unit/optional_parameters/add_path_test.rb`, `test/unit/neighbor/add_path_cap_test.rb` and `test/functional/add_path_test.rb`, so the direction is pinned without a second implementation. #124 added the other half that was missing, `test_add_path_puts_two_paths_to_one_prefix_in_the_table` in `test/functional/rib_feed_test.rb`: a loopback session that negotiates the capability, carries two paths to one prefix into a RIB with their Path Identifiers, and withdraws one of them by Identifier. That is still bgp4r against bgp4r. A GoBGP topology is still worth having and is four pieces, of which one exists: `Neighbor#capability` takes `:add_path` since #144, and a topology can ask for it with its arguments, `capabilities: [{add_path: [1, 1, 3]}]`. The other three: an announce block has no way to give a prefix a Path Identifier, since `build_update` calls `Nlri.new` with plain prefix strings; `Lab::Recorder#record_routes` keys received routes by prefix alone, so two paths for one prefix overwrite each other and the state file cannot show a Path Identifier arrived; and GoBGP needs `add-paths` with `send-max` in its config. Do it as its own pull request. A Compose topology is one way; the cheaper one now is a native test on the `LabHelper::Gobgpd` shape, since that needs no daemon, and `Gobgpd#config` would take the `add-paths` and `send-max` keys.
+* **Add-path is exercised against a real router now**, in #153, as `test/functional/lab/add_path_gobgp_test.rb`: three cases, 15 assertions, about 30 seconds, no Docker. `LabHelper::Gobgpd.new(add_path: {receive: true, send_max: 8})` writes the `[neighbors.add-paths.config]` keys, and `Gobgpd#remote_add_path` reads what the router made of the field we sent.
+  * The guard that was missing is GoBGP's own reading of the RFC 7911 section 4 Send/Receive field: we advertise `:send` and it must read "send", `:recv` and it must read "receive". Invert `_send_recv` and that fails with GoBGP reading our `:send` as "receive".
+  * Be precise about what that adds, because #115 already pinned the direction inside bgp4r by writing the field value literally on one side: inverting `_send_recv` today also fails `test/functional/add_path_test.rb` and two unit files. What survived for years was the *behaviour*, where bgp4r against bgp4r cancels the error out. So the new part is a second implementation's reading of the field, plus the data path nothing had checked against anyone else: that GoBGP accepts a Path Identifier from us, holds two paths for one prefix because of it, and understands a withdrawal that names one of them.
+  * **`Neighbor#capability :add_path` takes its arguments in the order `(send_recv, afi, safi)`**, which is what `CAP::Add_path#add` takes. This file used to give the example `capabilities: [{add_path: [1, 1, 3]}]`, which is SAFI 3, NSAP, and a Send/Receive of 1. For IPv4 unicast both ways it is `[3, 1, 1]`, or `[:send_and_receive, 1, 1]`, which says it better. The wrong example was never run.
+  * A Compose topology on `lab/speaker.rb` is still possible and is two pieces, neither needed by the native test: an announce block has no way to give a prefix a Path Identifier, since `build_update` calls `Nlri.new` with plain prefix strings; and `Lab::Recorder#record_routes` keys received routes by prefix alone, so two paths for one prefix overwrite each other and the state file cannot show a Path Identifier arrived. Worth doing only if the lab speaker itself needs add-path.
 * Lowest coverage (unit suite): `path_attributes/origin.rb` 91%, `neighbor/neighbor.rb` 91%, `messages/update.rb` 92%, `optional_parameters/graceful_restart.rb` 92%, `path_attributes/mp_unreach.rb` 92%.
 
 ## Attribute work left
