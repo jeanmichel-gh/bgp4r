@@ -193,6 +193,7 @@ There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Cove
 
 * Work on a branch named `claude/<short-topic>`. Never push to master. The agent tooling may put its scratch worktrees in `.claude/worktrees/`, which `.gitignore` covers; they are whole checkouts, not bgp4r source, and must never be committed.
 * If `gh pr create` fails with HTTP 403, GitHub's GraphQL API is blocked in that sandbox. Open the pull request with `gh api repos/{owner}/{repo}/pulls --method POST` instead.
+* **Do not stack a pull request on another one's branch.** Merging the parent deletes its branch, and GitHub then **closes** the child rather than retargeting it, and a closed pull request can be neither reopened nor rebased onto master through the API: "The pull request cannot be reopened" and "Cannot change the base branch of a closed pull request". The work is not lost, since the branch is still there, but the review history is, and a new pull request has to be opened. That happened to #163, stacked on #162. If a change really does depend on an unmerged one, branch from master anyway and say in the description which pull request to merge first, or wait.
 * One topic per pull request. Small diffs.
 * Run the full unit suite before opening a PR. All tests must pass.
 * New behavior needs a test. Bug fixes need a test that failed before the fix.
