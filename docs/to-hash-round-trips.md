@@ -53,7 +53,7 @@ hash is complete even though no door exists.
 | Verdict | Meaning |
 |---|---|
 | **yes** | Its own `new` rebuilds the same wire bytes. |
-| **by another route** | Its own `new` does not, the other route does. The hash carries everything. What is missing is a door. |
+| **by another route** | Its own `new` does not, the other route does. The hash carries everything, and for most of these the other route is the one that was designed. See "Where these shapes come from". |
 | **not in its attribute** | Its own `new` does, the other route does not. Worse than it sounds: a hash key inherited from a parent class is the cause, and the attribute then rebuilds a different attribute without saying so. |
 | **no** | No route gives the octets back. Information is gone. |
 
@@ -63,6 +63,50 @@ information**. Whether a failing route raises or quietly answers
 something else is in the table rather than in the verdict, because a
 verdict is meant to say what a person gets. The quiet ones are the
 dangerous half and each one says so.
+
+## Where these shapes come from
+
+Worth knowing before reading the table, because it explains almost every
+row in it and it is not something the code says anywhere.
+
+These classes were written in this order: first the test that builds the
+object **from a hash**, then `initialize` until that test passed, and
+then, once the object was right, `to_hash` written to answer the hash the
+test had used in the first place.
+
+So the contract was never `Klass.new(Klass#to_hash)`. It was two separate
+things:
+
+* `Klass.new(bare_hash)`, the hash the test wrote. `Aggregator.new(:address
+  => ..., :asn => ...)`, `Mp_reach.new(:afi => ..., :safi => ..., :nexthop
+  => ..., :nlris => ...)`. No outer key.
+* `Parent.new(wrapped_hash)`, where the outer key exists only because
+  `Path_attribute#to_hash` merges one key per attribute into one hash, and
+  `Extended_communities` does the same for its list.
+
+**That is the whole of the "by another route" column.** `to_hash` answers
+the wrapped form because its caller needs the key; `new` reads the bare
+form because that is what its test wrote. Both halves work. 42 of the 96
+rows are this, and none of them is a defect, which is why nearly all of
+them are left alone.
+
+It also explains the rows that do lose information, and more usefully
+than the danger ranking above. Each one is a field that entered the
+object **after** the hash shape was settled, so there was never a
+construction hash for `to_hash` to match:
+
+* the reserved bits and kept tails, which only exist because of the later
+  keep-what-you-cannot-read work;
+* `Mpls_label_stack`'s TC and TTL and `Label_stack`'s Rsrv, which only
+  arrive by parsing;
+* `Labeled`'s Path Identifier, which is RFC 7911 and later than the class;
+* `Capability::Unknown`'s value octets, kept for the same reason as a tail.
+
+And the three capabilities whose hash is a bare `{:code=>n}` are the
+clean confirmation: `CAP::Add_path`, `CAP::Graceful_restart` and
+`CAP::Orf` have **no hash-construction test at all**, so no `to_hash` was
+ever written for them and they inherit `Capability`'s. Every capability
+that does round trip has one.
 
 ## How the recipes were built
 
@@ -92,10 +136,13 @@ the class's own `new` will not take its own hash, but the attribute that
 owns it will, and the hash carries everything. That covers 19 of the 21
 extended communities, the four AS_PATH segment classes, five tunnel
 sub-TLVs, `Mp_reach`, `Mp_unreach`, `Aggregator`, `Originator_id` and
-the two NLRI collections. Adding a Hash branch to each would be a lot of
-code for a door nobody goes through, because a test builds an
-`Extended_communities` or a `Path_attribute`, not a lone community. The
-two that are not that: `Extended_community` is the partial base class,
+the two NLRI collections. These are not defects. As the section above explains, `new` reads the
+bare hash a test writes and `to_hash` answers the wrapped hash its
+attribute needs, and both halves do their job. Adding a Hash branch for
+the wrapped form would be a lot of code to make a round trip work that
+was never the contract, and a test builds an `Extended_communities` or a
+`Path_attribute` rather than a lone community anyway. The two that are
+not that: `Extended_community` is the partial base class,
 so a subclass is what a test builds, and `OPT_PARM::Capability` is
 likewise the base.
 
