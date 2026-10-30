@@ -91,6 +91,18 @@ NLRI class. For flow spec that is wrong twice over: octets rather than
 bits, and possibly two octets wide. Those two loops have to ask the
 family how long the next NLRI is. Verified in the source on 2026-10-30.
 
+**Half of that is now done and the other half is not.**
+`Flow_spec.nlri_size` answers the question above, for this family, in
+the family's own file, and `Flow_spec.encode_length` writes the field.
+What has not changed is the two loops: they still calculate rather than
+ask, so nothing reaches `Flow_spec` yet. Wiring them is the next piece
+of work.
+
+That split is also the answer to the registry question the plan in
+`CLAUDE.md` leaves open. The need turned out to be one more arm on one
+`case`, read by both loops, because the framing belongs to the family
+and the family can own it. One arm is not a registry.
+
 ## 4. The NLRI value
 
 RFC 8955 section 4.2. The value is `<[component]+>` and a packet matches
@@ -458,8 +470,8 @@ has the plan and the current status; this is only the shape.
 |---|---|
 | the twelve IPv4 components, the seven IPv6 ones, and an unknown type | done, `bgp/nlris/flow_spec_component.rb` |
 | the two operator octets | done, with the reserved bits kept |
-| the NLRI itself, the length framing, the RD for SAFI 134 | not started |
-| the two dispatch points in `mp_reach.rb` and `mp_unreach.rb` | not started |
+| the NLRI itself, the length framing, the RD for SAFI 134 | done, `bgp/nlris/flow_spec.rb` |
+| the two dispatch points in `mp_reach.rb` and `mp_unreach.rb` | not started, so nothing reaches `Flow_spec` yet |
 | a zero length next hop on encode | not started |
 | the receive side checks in `validation.rb` | not started |
 | the seven RFC 8955 section 7 actions | already there, predating this work |
@@ -472,8 +484,12 @@ has the plan and the current status; this is only the shape.
 `test/unit/flow_spec_doc_test.rb` asserts the claims here that a test
 can reach: every component type number, every operator mask, the
 fragment bits, the traffic-action masks, the action code points, the
-20 octet IPv6 community, every vector in section 7 above, and the
-erratum citation. It also checks that `CLAUDE.md` still points here.
+20 octet IPv6 community, every vector in section 7 above, the section
+4.1 length encoding including the 239 and 240 examples, and the
+erratum citation. It also checks that `CLAUDE.md` still points here,
+and that the two claims pointing into the source are still true: that
+the parse loops slice with the prefix rule, and that
+`rt-redirect-ipv6` is still missing.
 
 What it cannot assert is the prose. That is the half that drifted in
 `docs/to-hash-round-trips.md`, so keep the prose to what the RFCs say

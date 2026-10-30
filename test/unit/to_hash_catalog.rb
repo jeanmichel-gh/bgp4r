@@ -868,6 +868,26 @@ module ToHashCatalog
     BGP::Flow_spec::Unknown.new(99, "\x01\x02\x03\x04\x05")
   end
 
+  # The NLRI that carries them, RFC 8955 section 4. Six fields, and the
+  # recipe exercises all six, since Conventions says a thin recipe
+  # passes for the wrong reason: the component list, the section 8 Route
+  # Distinguisher, the RFC 7911 section 3 Path Identifier, a repeated
+  # component type under :duplicates, a Length that disagrees with its
+  # own octets, and a kept tail.
+  #
+  # Every one is reachable from values as well as from the wire, so this
+  # builds from values. The AFI is not a field: it is a parse time
+  # question, and the hash carries it implicitly because the six shared
+  # type numbers have a key each per family.
+  ENTRIES['BGP::Flow_spec'] = entry(:ok, nil, nil) do
+    BGP::Flow_spec.new(:path_id => 100, :rd => [100, 200],
+                       :destination_prefix => '192.0.2.0/24',
+                       :port => [[:eq, 25]],
+                       :duplicates => [{ :port => [[:eq, 80]] }],
+                       :length => 99,
+                       :tail => 'deadbeef')
+  end
+
   # Classes with no entry, each with the reason. An abstract base with no
   # sensible instance belongs here; a class merely awkward to build does
   # not.

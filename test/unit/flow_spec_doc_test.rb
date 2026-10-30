@@ -60,6 +60,10 @@ class FlowSpecDocTest < Test::Unit::TestCase
     @doc ||= File.read(DOC)
   end
 
+  def wire(hex)
+    [hex].pack('H*').is_packed
+  end
+
   def test_the_document_is_there
     assert(File.exist?(DOC), 'docs/flow-spec.md is gone')
     assert(doc.size > 4000, 'docs/flow-spec.md looks truncated')
@@ -348,6 +352,35 @@ class FlowSpecDocTest < Test::Unit::TestCase
            'rt-redirect-ipv6 is implemented now; strike it from the table ' \
            'in docs/flow-spec.md section 11')
     assert_match(/`rt-redirect-ipv6`, type 0x000d \| missing/, doc)
+  end
+
+  # Section 3's length encoding, with the two values the RFC itself
+  # names and the document repeats. The bound matters as much: section
+  # 4.1 says 4095 is "The highest value that can be represented with
+  # this encoding", so above it a constructor has to refuse rather than
+  # write a different length.
+  def test_the_documented_length_encoding_matches_the_library
+    assert_equal('ef', BGP::Flow_spec.encode_length(239).unpack1('H*'))
+    assert_equal('f0f0', BGP::Flow_spec.encode_length(240).unpack1('H*'))
+    assert_equal('ffff', BGP::Flow_spec.encode_length(4095).unpack1('H*'))
+    assert_raise(ArgumentError) { BGP::Flow_spec.encode_length(4096) }
+    assert_equal(239, BGP::Flow_spec::ONE_OCTET_MAX)
+    assert_equal(4095, BGP::Flow_spec::MAX_LEN)
+    assert_equal(0xf0, BGP::Flow_spec::EXTENDED)
+    assert_equal(8, BGP::Flow_spec::RD_SIZE)
+    %w[0xef 0xf0f0 4095 240 239].each do |v|
+      assert(doc.include?(v), "docs/flow-spec.md section 3 omits #{v}")
+    end
+  end
+
+  # Section 3's other claim: the family owns its framing now, so the
+  # loops can ask instead of calculating. The document prints this
+  # method's name, so it has to exist and answer.
+  def test_the_family_answers_the_framing_question
+    assert_match(/Flow_spec\.nlri_size/, doc)
+    assert_equal(12, BGP::Flow_spec.nlri_size(wire('0b0118c00002038106048119')))
+    assert_equal(242, BGP::Flow_spec.nlri_size(wire('f0f0') + 'x' * 240))
+    assert_nil(BGP::Flow_spec.nlri_size(wire('f0')))
   end
 
   # Section 3's claim about where the prefix assumption lives. This one
