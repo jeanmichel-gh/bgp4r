@@ -723,6 +723,122 @@ class Mp_reach_Test < Test::Unit::TestCase
     assert_equal(3, v6.nlris[0].path_id)
   end
 
+  # Flow spec, RFC 8955 section 4, built from the hash Flow_spec reads.
+  # The whole attribute: 0001 is the AFI, 85 the SAFI, then a next hop
+  # length of 0, the reserved octet, and the section 4.1 framed rule of
+  # section 4.3.1.
+  def test_a_flow_spec_rule
+    mpr = BGP::Mp_reach.new(
+      :safi => 133,
+      :nlris => [{ :destination_prefix => '192.0.2.0/24',
+                   :ip_protocol => [[:eq, 6]], :port => [[:eq, 25]] }])
+    assert_equal('800e11' + '0001' + '85' + '00' + '00' +
+                 '0b0118c00002038106048119', mpr.to_shex)
+    back = BGP::Attr.factory(mpr.encode.is_packed)
+    assert_equal(mpr.to_shex, back.to_shex)
+    assert_equal([BGP::Flow_spec], back.nlris.collect(&:class))
+    assert_equal(3, back.nlris[0].size)
+    assert_equal({ :destination_prefix => '192.0.2.0/24',
+                   :ip_protocol => [[:eq, 6]], :port => [[:eq, 25]] },
+                 back.to_hash[:mp_reach][:nlris])
+  end
+
+  # **The AFI is not passed and does not have to be.** Every other
+  # family carries an address in its NLRI, so `afi_from_nlris` reads the
+  # family off one. A flow spec rule carries components, and the six
+  # type numbers that mean different things per family have a hash key
+  # each, so the keys say which family it is.
+  def test_the_flow_spec_afi_comes_from_the_component_keys
+    v4 = BGP::Mp_reach.new(:safi => 133,
+                           :nlris => [{ :destination_prefix => '192.0.2.0/24' }])
+    assert_equal(1, v4.afi)
+    v6 = BGP::Mp_reach.new(
+      :safi => 133,
+      :nlris => [{ :destination_ipv6_prefix => { :prefix => '2001:db8::/32' },
+                   :upper_layer_protocol => [[:eq, 6]] }])
+    assert_equal(2, v6.afi)
+    assert_equal('800e10' + '0002' + '85' + '00' + '00' +
+                 '0a01200020010db8038106', v6.to_shex)
+    assert_equal(v6.to_shex, BGP::Attr.factory(v6.encode.is_packed).to_shex)
+    # and an explicit :afi still wins, since nothing here refuses one
+    assert_equal(2, BGP::Mp_reach.new(
+      :afi => 2, :safi => 133,
+      :nlris => [{ :destination_prefix => '192.0.2.0/24' }]).afi)
+  end
+
+  # RFC 8955 section 4: "When advertising Flow Specifications, the
+  # Length of the Next-Hop Network Address MUST be set to 0."
+  #
+  # **Nothing enforces that and nothing has to.** encode writes
+  # @nexthops.size, and a caller who passes no :nexthop has an empty
+  # list, so the field is 0 by construction.
+  def test_the_flow_spec_next_hop_length_is_zero_without_one
+    mpr = BGP::Mp_reach.new(:safi => 133,
+                            :nlris => [{ :destination_prefix => '192.0.2.0/24' }])
+    assert_equal(0, mpr.encode[6].unpack1('C'), 'the Length of Next Hop octet')
+    assert_equal(mpr.to_shex, BGP::Attr.factory(mpr.encode.is_packed).to_shex)
+  end
+
+  # The other half of section 4: "The Network Address of the Next-Hop
+  # field MUST be ignored."
+  #
+  # **That MUST binds a receiver, and ignoring it cannot mean refusing
+  # the attribute.** A sender that keeps section 4's first MUST never
+  # puts a next hop here at all, so the only way one arrives is a
+  # sender breaking it, and before this bgp4r raised on that: the whole
+  # attribute came back as an Attr::Raw with a Gap and the rule inside
+  # was never read. So the field is read rather than discarded, which
+  # also keeps encode byte for byte and leaves the hash able to rebuild
+  # it. Building one is allowed for the same reason every other invalid
+  # thing is: it is a negative test.
+  def test_a_flow_spec_next_hop_is_read_rather_than_refused
+    hex = '800e0f' + '0001' + '85' + '04' + '0a000001' + '00' +
+          '050118c00002'
+    pa = BGP::Path_attribute.new([hex].pack('H*').is_packed)
+    assert_equal([BGP::Mp_reach], pa.attributes.collect(&:class))
+    assert_equal(hex, pa.to_shex, 'replays byte for byte')
+    assert_equal(0, pa.errors.size, 'not a protocol error')
+    assert_equal(0, pa.undecoded.size, 'and not a coverage gap either')
+    mpr = pa.attributes.first
+    assert_equal('10.0.0.1', mpr.nexthops)
+    assert_equal(['192.0.2.0/24'],
+                 mpr.nlris.collect { |n| n.to_hash[:destination_prefix] })
+    # the hash carries it, so the round trip survives
+    h = mpr.to_hash
+    assert_equal(['10.0.0.1'], h[:mp_reach][:nexthop])
+    assert_equal(mpr.to_shex, BGP::Mp_reach.new(h[:mp_reach]).to_shex)
+    # and building one puts it back on the wire
+    bad = BGP::Mp_reach.new(:safi => 133, :nexthop => '10.0.0.1',
+                            :nlris => [{ :destination_prefix => '192.0.2.0/24' }])
+    assert_equal(4, bad.encode[6].unpack1('C'))
+    assert_equal(hex, bad.to_shex)
+  end
+
+  # A Flow_spec built by the caller is used as it stands, which is the
+  # route a negative test takes when it wants a rule the hash form
+  # cannot express.
+  def test_a_flow_spec_instance_is_taken_as_it_is
+    rule = BGP::Flow_spec.new(BGP::Flow_spec::Port.new(:eq, 25),
+                              BGP::Flow_spec::Destination_prefix.new('192.0.2.0/24'))
+    mpr = BGP::Mp_reach.new(:safi => 133, :nlris => [rule])
+    # out of order, which section 4.2 forbids a sender and bgp4r allows
+    assert_equal('800e0e' + '0001' + '85' + '00' + '00' +
+                 '08' + '048119' + '0118c00002', mpr.to_shex)
+    assert_equal(mpr.to_shex, BGP::Attr.factory(mpr.encode.is_packed).to_shex)
+  end
+
+  # An unknown SAFI still raises, and that raise is what makes
+  # Path_attribute keep the octets as an Attr::Raw with an Attr::Gap.
+  # Wiring flow spec in must not have changed that for anything else.
+  def test_an_unimplemented_safi_still_raises_so_the_octets_survive
+    hex = '800e0e' + '001946' + '04' + '0a000001' + '00' + '0102030405'
+    pa = BGP::Path_attribute.new([hex].pack('H*').is_packed)
+    assert_equal([BGP::Attr::Raw], pa.attributes.collect(&:class))
+    assert_equal(hex, pa.to_shex)
+    assert_equal(0, pa.errors.size)
+    assert_equal([BGP::Attr::Gap], pa.undecoded.collect(&:class))
+  end
+
   private
 
   def attr_len(attr)

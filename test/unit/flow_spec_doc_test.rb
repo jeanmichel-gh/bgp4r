@@ -383,18 +383,38 @@ class FlowSpecDocTest < Test::Unit::TestCase
     assert_nil(BGP::Flow_spec.nlri_size(wire('f0')))
   end
 
-  # Section 3's claim about where the prefix assumption lives. This one
-  # is a pointer into the source, so it has to move when the source
-  # does, and part 2 of the plan is what moves it.
-  def test_the_two_parse_loops_still_slice_with_the_prefix_rule
+  # Section 3's claim about where the framing lives, which is a pointer
+  # into the source and so moves when the source does.
+  #
+  # **It did move, and this guard is what noticed.** Until the wiring,
+  # both loops worked the prefix arithmetic out themselves and this test
+  # asserted exactly that, with a message saying the document needed
+  # updating. Changing the loops failed it on the next run, which is the
+  # whole job: a claim that a test cannot make goes stale silently, and
+  # one a test does make cannot.
+  def test_the_parse_loops_ask_the_family_how_long_an_nlri_is
     %w[mp_reach mp_unreach].each do |f|
       src = File.read(File.expand_path(
         "../../bgp/path_attributes/#{f}.rb", __dir__))
-      assert_match(/\(blen\+7\)\/8\+1/, src,
-                   "#{f}.rb no longer slices with the prefix rule; " \
+      assert_match(/nlri_size/, src,
+                   "#{f}.rb no longer asks the family how long an NLRI is; " \
                    'docs/flow-spec.md section 3 needs updating')
+      assert_not_match(/\(blen\+7\)\/8\+1/, src,
+                       "#{f}.rb still works the prefix arithmetic out inline")
     end
-    assert_match(/\(blen\+7\)\/8\+1/, doc)
+    # and the answers, which is the half a grep cannot give. The prefix
+    # families give a length in bits in one octet, RFC 4271 section 4.3;
+    # flow spec gives octets in one or two, RFC 8955 section 4.1.
+    [BGP::Mp_reach, BGP::Mp_unreach].each do |k|
+      assert_equal(4, k.nlri_size(wire('180a0000'), 1, 1), "#{k}: a /24")
+      assert_equal(1, k.nlri_size(wire('00'), 1, 1), "#{k}: a default route")
+      assert_equal(12, k.nlri_size(wire('0b0118c00002038106048119'), 1, 133),
+                   "#{k}: RFC 8955 section 4.3.1")
+      assert_equal(242, k.nlri_size(wire('f0f0') + 'x' * 240, 1, 133),
+                   "#{k}: the two octet length form")
+      assert_nil(k.nlri_size(wire(''), 1, 1))
+    end
+    assert_match(/nlri_size/, doc)
   end
 
   def test_claude_md_points_at_the_document

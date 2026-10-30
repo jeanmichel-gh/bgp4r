@@ -24,6 +24,9 @@
 require 'bgp/common'
 require 'bgp/iana'
 require 'bgp/nlris/prefix'
+# Nlri.factory names Flow_spec, so it has to be loaded. No cycle: nothing
+# under flow_spec.rb reaches back to this file.
+require 'bgp/nlris/flow_spec'
 module BGP
 
   class Base_nlri
@@ -172,8 +175,25 @@ module BGP
           Prefix.new_ntop(s.is_packed, afi, path_id)
         when 4,128,129
           Labeled.new_ntop(s.is_packed, afi, safi, path_id, withdrawn)
+        when 133,134
+          # RFC 8955 section 4 and section 8. The octets handed here are
+          # one whole 2-tuple, length field included, because
+          # MpReachCommon::ClassMethods#nlri_size asked the family how
+          # long it was. withdrawn means nothing to this family: there
+          # is no label for RFC 8277 section 2.4 to replace.
+          Flow_spec.new_ntop(s.is_packed, afi, safi, path_id)
         else
-          #TODO class Error.....
+          # **This raise is load bearing: do not return an object
+          # instead.** Path_attribute#decode_attribute rescues
+          # StandardError and files an Attr::Gap, so the attribute comes
+          # back as an Attr::Raw that encodes byte for byte and nothing
+          # lands in #errors. Answering an object would delete the Gap
+          # and make bgp4r claim it understood a family it does not.
+          # See #116 and Conventions in CLAUDE.md.
+          #
+          # The #TODO that used to sit here asked for a typed exception
+          # in place of this bare RuntimeError, which would still raise
+          # and would name itself in the Gap. Still worth doing.
           raise RuntimeError, "Afi #{afi} Safi #{safi} not supported!"
         end
       end

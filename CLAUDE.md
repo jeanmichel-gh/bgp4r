@@ -18,9 +18,12 @@ bgp/nlris/               prefix encodings (inet, labeled, VPN, RD, mapped IPv4)
                          flow_spec_component.rb: the RFC 8955 section 4.2.2 and
                          RFC 8956 section 3 flow spec components, and flow_spec.rb
                          the NLRI that carries them, with the section 4.1 length
-                         framing and the section 8 RD. Both pure: nothing
-                         dispatches to either yet, so the two loops in mp_reach.rb
-                         and mp_unreach.rb still cannot read a flow spec UPDATE.
+                         framing and the section 8 RD. Both are wired in now, so
+                         a flow spec UPDATE reads and writes: Nlri.factory and
+                         MpReachCommon#set dispatch to them, and the two parse
+                         loops in mp_reach.rb and mp_unreach.rb ask
+                         MpReachCommon::ClassMethods#nlri_size how long an NLRI is
+                         rather than computing it from a prefix length.
                          docs/flow-spec.md is the guide, see also
                          "Breadth, the one SAFI lever"
 bgp/optional_parameters/ OPEN capabilities (4-byte AS, add-path, graceful restart...)
@@ -42,9 +45,10 @@ bgp/misc/                extras: route_generator.rb (many prefixes packed in UPD
 docs/                    protocol-testing.md: using bgp4r to test a router
                          flow-spec.md: RFC 8955 and RFC 8956 on the wire, as much
                          as is needed to write the encoding and decoding. Read it
-                         before touching flow_spec_component.rb, before adding a
-                         flow spec family to mp_reach.rb, or before adding one of
-                         the missing action communities. Its load bearing claims
+                         before touching flow_spec_component.rb or flow_spec.rb,
+                         before changing how mp_reach.rb and mp_unreach.rb frame
+                         an NLRI, or before adding one of the missing action
+                         communities. Its load bearing claims
                          are asserted by test/unit/flow_spec_doc_test.rb
                          building-objects.md: the three ways into every class and how
                          initialize dispatches between them; read it before changing a
@@ -106,6 +110,13 @@ ruby -I. test/functional/rib_feed_test.rb
 Three speakers over loopback, so a route crosses a bgp4r router and comes out with the export rules applied: transit and route reflection.
 ```
 ruby -I. test/functional/rib_router_test.rb
+```
+
+A flow spec UPDATE over a real session, which is the only test that proves
+the four wiring sites agree with each other, since both sides are pure and
+each unit test reads octets it wrote itself:
+```
+ruby -I. test/functional/flow_spec_test.rb
 ```
 
 The Loc-RIB in a real kernel routing table, inside a network namespace of
@@ -175,7 +186,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. A `lab` job runs the Compose topologies, and installs a `gobgpd` release so the native fault matrix runs there too; it pins 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-10-30: 1489 tests, 23225 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.7%.
+Baseline on 2026-10-30: 1498 tests, 23279 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.7%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -1139,22 +1150,23 @@ expired**: the RIB and FIB plan is finished, and the plan for lifting this
 limit is the section that follows, "Breadth, the one SAFI lever". What stays
 true here is the shape of the gap:
 
-* **MP_REACH and MP_UNREACH read and write only SAFIs 1, 2, 4, 128 and 129.**
-  That one limit blocks EVPN, flowspec, BGP-LS, RT-constrain, MCAST-VPN, VPLS
+* **MP_REACH and MP_UNREACH read and write only SAFIs 1, 2, 4, 128, 129, 133
+  and 134.** 133 and 134 are flowspec and arrived with phase 2 below; the rest
+  of that one limit still blocks EVPN, BGP-LS, RT-constrain, MCAST-VPN, VPLS
   and SR Policy together, so it is the single lever if breadth is ever wanted.
   `Mp_reach.new(:afi=>25, :safi=>70, ...)` raises today.
 * BGP-LS (attribute 29, AFI 16388, SAFI 71 and 72, RFC 9552), EVPN (SAFI 70,
-  RFC 7432, plus 14 unnamed EVPN extended communities), flowspec NLRI (SAFI
-  133 and 134, RFC 8955 and RFC 8956, where every traffic filtering
-  action of RFC 8955 section 7 is implemented, seven type and sub-type
-  combinations for five action kinds, but the rule cannot be sent), ATTR_SET
+  RFC 7432, plus 14 unnamed EVPN extended communities), ATTR_SET
   (attribute 128, RFC 6368), RT-constrain (SAFI 132), MCAST-VPN (SAFI 5).
+  Flowspec was on this list, with every traffic filtering action of RFC 8955
+  section 7 implemented and no way to send the rule they filter. The rule can
+  be sent now, so the family is off it.
 * Coverage as measured: 22 of 34 live path attribute code points, 29 of 115
   extended community sub-type code points, 8 of 22 live capability code
   points. The attribute figure reads worse than it is: FRR's `bgpd.h` defines
   exactly bgp4r's 22 plus two.
 
-### Breadth, the one SAFI lever. Phase 2 under way
+### Breadth, the one SAFI lever. Phase 2 on the wire
 
 The section above deferred breadth and named the single limit. This is the
 plan for lifting it, recorded before the work starts.
@@ -1252,10 +1264,13 @@ Two consequences, both of which change the plan rather than decorate it:
      question behind a lookup reads better than a sixth arm on a `case`,
      that is the need arriving and the registry is worth revisiting
      then. Build it from that need and not ahead of it.
-2. **Flowspec, SAFI 133 and 134, RFC 8955 and RFC 8956. Parts 1 and 2
-   of 4 done.** First of the real families, for three reasons. bgp4r is
-   already half built here, since every traffic filtering action of RFC
-   8955 section 7 is implemented and the rule they filter cannot be
+2. **Flowspec, SAFI 133 and 134, RFC 8955 and RFC 8956. Parts 1 to 3
+   of 5 done, in #175, #176 and #177, so the family reads and writes on
+   the wire**, which is the measure this plan set itself. Validation
+   and the lab are left.
+   First of the real families, for three reasons. bgp4r was already
+   half built here, since every traffic filtering action of RFC 8955
+   section 7 was implemented and the rule they filter could not be
    sent, which is the worst combination to leave standing. **Count those
    carefully, because this file used to say five and the code has
    seven**: Table 8 lists seven type and sub-type combinations
@@ -1404,44 +1419,97 @@ Two consequences, both of which change the plan rather than decorate it:
         replay. That is the single registry of section 8.1.2 showing
         through, and it is the clearest demonstration that the AFI is a
         parse time input and not decoration.
-   3. **Wiring it to the dispatch points. Not started.** Four places,
-      and nothing reads or writes a flow spec UPDATE until all four are
-      done:
-      * **The prefix assumption is in `Mp_reach#parse` and
-        `Mp_unreach#parse`, not in the NLRI classes.** Both loops compute
-        the slice length themselves, `value.slice!(0,(blen+7)/8+1)`, and
-        hand that slice to the NLRI class. For flowspec that is wrong
-        twice: section 4.1's length is in **octets**, not bits, and it is
-        1 or 2 octets wide. Both have to ask `Flow_spec.nlri_size`
-        instead. There is a third loop in `Mp_reach#parse` for AFI 3
-        that flowspec does not reach.
-      * `Nlri.factory` for parse and `MpReachCommon#set` for build, the
-        two gates the plan above describes. `Flow_spec.new_ntop` is
-        shaped for the first, as `Prefix.new_ntop` is.
-      * Section 4: "When advertising Flow Specifications, the Length of
-        the Next-Hop Network Address MUST be set to 0. The Network
-        Address of the Next-Hop field MUST be ignored." So `Mp_reach`
-        writes no next hop for these, which nothing in it does today.
-      * Validation goes in `validation.rb` and nowhere else, per
-        Conventions. **Be exact about whose rule that is, because an
-        earlier version of this entry called it a receive side rule and
-        it is not.** Section 4.2: "Components MUST follow strict type
-        ordering by increasing numerical order. A given component type
-        MAY (exactly once) be present in the Flow Specification." That
-        MUST binds a **sender** as much as a receiver, so bgp4r
-        building a rule out of order is a deliberate deviation from a
-        MUST and not merely an unenforced receive check. Conventions is
-        why, and the deviation is the feature: a test has to be able to
-        put an out of order or repeated component on the wire and watch
-        a router decide. Say that rather than implying the RFC only
-        constrains readers.
+   3. **Wiring it to the dispatch points. Done**, in #177. bgp4r reads
+      and writes a flow spec UPDATE now, over a real session. Four sites,
+      and the count was right but the split was not: site 4 turned out
+      to be two halves facing opposite directions, and only one of them
+      needed nothing.
+      * **The framing. `MpReachCommon::ClassMethods#nlri_size(s, afi,
+        safi)` is the one new method**, and both parse loops ask it
+        instead of computing `(blen+7)/8+1` themselves. It answers the
+        prefix arithmetic for every other family and defers to
+        `Flow_spec.nlri_size` for SAFI 133 and 134, so the framing rule
+        stays with the family that owns it. It answers nil for octets
+        too short to hold a length field, and the loops break on that
+        and let the leftover raise, which is how an attribute bgp4r
+        cannot read still becomes an `Attr::Raw` with an `Attr::Gap`.
+        The third loop in `Mp_reach#parse`, for AFI 3, goes through the
+        same method and flowspec does not reach it.
+      * `Nlri.factory` for parse and `MpReachCommon#set` for build, one
+        arm each. **That is also where the registry question got its
+        answer**: one arm on one `case`, read by both loops, is not a
+        registry. See phase 1 above.
+      * **The AFI cannot be read off a flow spec NLRI, and that broke
+        the build gate before it worked.** `afi_from_nlris` reads the
+        family off an address, and a rule has components instead, so it
+        handed nil to `IPAddr`. `set` skips that inference for these two
+        SAFIs and the arm answers from `@nlris.first.afi`, which the
+        component keys decide. An explicit `:afi` still wins.
+      * **The next hop was two MUSTs, not one, and the receive half was
+        a real bug.** Section 4: "the Length of the Next-Hop Network
+        Address MUST be set to 0. The Network Address of the Next-Hop
+        field MUST be ignored." The first binds a sender and needed no
+        code at all: `Mp_reach#encode` writes `@nexthops.size`, which is
+        0 with no `:nexthop`, so the rule holds by construction, and
+        this entry used to say site 4 was that one sentence. The second
+        binds a **receiver**, and `parse_next_hops` raised on a next hop
+        for an unknown SAFI, so a flow spec UPDATE carrying any next hop
+        at all came back as an `Attr::Raw` with a `Gap` and the rule
+        inside was never read. Ignoring a field cannot mean refusing the
+        attribute. It is read as an address now, the same way SAFI 1 and
+        2 read theirs, which is also what keeps `encode` byte for byte
+        and leaves the hash able to rebuild it, for the same reason a
+        reserved field is kept and echoed. `nexthop_klass` gained the
+        matching arm so one can be built too, because building never
+        validates. Nothing claims RFC 8950 applies to flowspec, so
+        `ipv6_nexthop_length?` was left alone.
+      * **`test/functional/flow_spec_test.rb` is the proof, and it is
+        the only one there can be.** Both sides are pure, so every unit
+        test on the build side reads octets it wrote itself and every
+        one on the parse side is handed octets the test wrote: neither
+        can say that what `encode` puts on a socket is what `parse`
+        takes off it. 7 tests over loopback, half a second. Named in
+        `.github/workflows/test.yml`, which lists each functional test
+        by hand.
+        * **The assertion that matters is the class, not the hex**, and
+          the sabotage is what showed why. With the parse gate's arm
+          deleted, `assert_equal(sent.to_shex, got.to_shex)` still
+          **passed** on every case and only the `Mp_reach` assertion
+          failed: the UPDATE crosses intact and degrades to an
+          `Attr::Raw`, which is #116 working as designed. The session
+          stays up and nothing looks wrong, so a test checking only the
+          session or the octets would have passed against the unwired
+          library.
+        * Four sabotages, each a site: the parse gate's arm deleted
+          fails all 7, the pre-wiring prefix arithmetic in `nlri_size`
+          fails all 7, the build gate's arm made unreachable fails all
+          7, and **reverting only `Mp_unreach`'s own loop fails exactly
+          1**, the withdrawal case, which is what says the two loops are
+          independent copies and that one test is all that covers the
+          second.
+   4. **Validation. Not started**, and its own pull request.
+      `validation.rb` and nowhere else, per Conventions. **Be exact
+      about whose rule it is, because an earlier version of this entry
+      called it a receive side rule and it is not.** Section 4.2:
+      "Components MUST follow strict type ordering by increasing
+      numerical order. A given component type MAY (exactly once) be
+      present in the Flow Specification." That MUST binds a **sender**
+      as much as a receiver, so bgp4r building a rule out of order is a
+      deliberate deviation from a MUST and not merely an unenforced
+      receive check. Conventions is why, and the deviation is the
+      feature: a test has to be able to put an out of order or repeated
+      component on the wire and watch a router decide, which
+      `test_a_rule_no_rfc_allows_crosses_a_session` now does over a real
+      session. Say that rather than implying the RFC only constrains
+      readers. Section 4.2 also makes an unknown component type
+      malformed, so that one belongs in `errors` and not `undecoded`.
       * **A missing end-of-list bit is not always detectable**, so do
         not try to recover the sender's intent. The octets that follow
         are read on as further pairs, and where they happen to form a
         valid operator sequence nothing distinguishes that from what was
         meant. `Flow_spec` bounds the walk with the section 4.1 length,
         which is the only bound there is, and keeps what it cannot read.
-   4. **The lab. Not started.** **Probe before recording anything about
+   5. **The lab. Not started.** **Probe before recording anything about
       it.** Three Docker blocks in this file came apart on being tried.
       Whether GoBGP and FRR accept a flowspec rule from us, and whether
       either gives a RIB answer a test can read, is a measurement. If
