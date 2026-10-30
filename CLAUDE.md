@@ -1171,7 +1171,9 @@ true here is the shape of the gap:
   and SR Policy together, so it is the single lever if breadth is ever wanted.
   `Mp_reach.new(:afi=>25, :safi=>70, ...)` raises today.
 * BGP-LS (attribute 29, AFI 16388, SAFI 71 and 72, RFC 9552), EVPN (SAFI 70,
-  RFC 7432, plus 14 unnamed EVPN extended communities), ATTR_SET
+  RFC 7432 and six more RFCs, eleven route types, plus 14 unnamed EVPN
+  extended community sub-types and one more at 0x03 that the 14 misses;
+  see phase 3 below, where both counts in this line were corrected), ATTR_SET
   (attribute 128, RFC 6368), RT-constrain (SAFI 132), MCAST-VPN (SAFI 5).
   Flowspec was on this list, with every traffic filtering action of RFC 8955
   section 7 implemented and no way to send the rule they filter. The rule can
@@ -1679,10 +1681,129 @@ Two consequences, both of which change the plan rather than decorate it:
        `[0x80,0x08]`, `[0x81,0x08]` and `[0x82,0x08]`, the section 7.4
        redirect-to-VRF encodings, so nothing there is affected. Checked
        on 2026-10-30.
-3. **EVPN, SAFI 70, RFC 7432. Not started.** The big one. Five route
-   types, each with its own NLRI layout, plus the 14 EVPN extended
-   community sub-types `extended_community.rb` currently leaves unnamed.
-   One or two route types per PR, 3 or 4 of them.
+3. **EVPN, SAFI 70, RFC 7432 and six more. Not started.** The big one.
+   Ten parts, planned on 2026-10-30 from eleven RFCs read in full,
+   attached to the session rather than fetched.
+
+   **Two counts in the earlier version of this entry were wrong, and
+   both were wrong by reading one RFC where the registry spans seven.**
+   It said "five route types" and "the 14 EVPN extended community
+   sub-types". The route type count is **eleven**, and that is not an
+   IANA-only claim: RFC 9572 section 3 Table 1 lists the eight already
+   defined across RFC 7432, RFC 9136 and RFC 9251, and its Table 2 adds
+   9, 10 and 11. So the RFC says eleven as plainly as the registry does.
+   The 14 figure is right about the EVPN sub-type registry and **misses
+   one community**, because RFC 7432 section 7.8's Default Gateway is
+   **type 0x03 sub-type 0x0d**, a Transitive Opaque community, not an
+   EVPN 0x06 one. It is invisible to anyone counting only the 0x06
+   registry. bgp4r's `FACTORY` has no 0x03 sub-types at all, so EVPN
+   needs **eleven** communities added, not ten.
+
+   **The NLRI framing is the same shape flowspec just taught us**, which
+   is why that experience transfers whole. RFC 7432 section 7: Route
+   Type (1 octet), Length (1 octet), Route Type specific (variable). So
+   `Evpn.nlri_size` is the analogue of `Flow_spec.nlri_size`, read by
+   the same `MpReachCommon::ClassMethods#nlri_size` the flowspec wiring
+   added, and the two dispatch gates each take one more arm. **Not a
+   registry**, for the reason phase 1 records.
+   * **One difference, and it is in our favour: the framing is
+     recursive and still self delimiting.** Route type 11's Route Key is
+     "the NLRI of the route for which this Leaf A-D route is generated"
+     (RFC 9572 section 3.3), and its terminology section says the Leaf
+     A-D route "embeds the entire NLRI of the triggering PMSI A-D
+     route". Entire, so type and length included, so the Route Key's
+     extent is readable from its own length octet and the variable field
+     that precedes a length-prefixed address needs no outer arithmetic.
+   * **A second difference: no AFI input.** Flowspec needed the AFI at
+     parse time, because RFC 8956 section 8.1.2 gives type 13 two
+     meanings. EVPN needs none: route type 5's Length field is **34 for
+     IPv4 and 58 for IPv6** (RFC 9136 section 3.1), and every other
+     variable address is length-prefixed, so the octets say which family
+     they are. `Flow_spec::COMPONENTS[afi]` has no EVPN counterpart.
+
+   **Shared primitives, which is what makes ten parts rather than
+   eleven.** Reading all eleven layouts together rather than one RFC at
+   a time: the Ethernet Segment Identifier, 10 octets, is in types 1, 2,
+   4, 7 and 8; the Ethernet Tag ID, 4 octets, is in all but 4 and 11; a
+   6-octet MAC is type 2 only; and a **length-prefixed address**, a
+   1-octet length then a variable address, carries the IP in types 2, 3,
+   4 and 5 and the Multicast Source, Multicast Group and Originator
+   Router triple in types 6, 7, 8, 10 and 11. RFC 9251 calls the third
+   of those "Originator Router" and RFC 9572 "Originator's Addr"; they
+   are one shape under two names, so do not write two classes.
+   `Rd` and `Label` bgp4r already has.
+
+   **Two keep-and-echo cases arrive with RFC 9251**, and both are the
+   rule Conventions already records for `Traffic_action` and
+   `Prefix_entry` rather than anything new. Route types 6, 7 and 8 carry
+   a Flags octet whose layout is `| reserved |IE|v3|v2|v1|`, so
+   `DEFINED_BITS = 0x0f` and the hash gains `:bits` only when a reserved
+   bit arrived set. Route type 8 additionally has a **4-octet Reserved
+   field**, which is bigger than any reserved field bgp4r keeps today.
+   Conventions' note that the keep-and-echo rule is recent applies: it
+   has simply not been reached here yet.
+
+   1. **Primitives and the framing, pure.** ESI, Ethernet Tag ID, MAC,
+      the length-prefixed address, the Route Type plus Length framing
+      with `Evpn.nlri_size`, and an `Evpn::Unknown` that keeps the
+      remainder and replays it. No route types, so nothing dispatches to
+      it, the way #175 landed the flowspec components and #156 the FIB
+      planner before anything called either. `docs/evpn.md` is written
+      here, with `test/unit/evpn_doc_test.rb` asserting its load bearing
+      claims and **discovering** the route type table so a new class
+      cannot join the library without the document being told, which is
+      the hole sabotage found in the flowspec guard.
+   2. **Route types 1 and 4**, RFC 7432 sections 7.1 and 7.4, taken
+      together because both are RD plus ESI shaped.
+   3. **Route types 2 and 3**, RFC 7432 sections 7.2 and 7.3. Type 2 is
+      the largest layout in the family: RD, ESI, Ethernet Tag ID, a
+      length-prefixed MAC, a length-prefixed IP, and **two** label
+      fields where the second is 0 or 3 octets.
+   4. **Route type 5**, RFC 9136 section 3.1, the IP Prefix route, whose
+      fixed 34 and 58 lengths are the family dispatch described above.
+   5. **Wiring to the two dispatch sites, plus a loopback functional
+      test.** Deliberately here and not last: after parts 1 to 4 the
+      RFC 7432 and RFC 9136 core is complete, which is the set every
+      EVPN implementation has, so wiring now puts parts 6 and 7 on
+      working rails and gives each of them a functional test for free.
+      The flowspec lesson is that both sides being pure means **no unit
+      test on either can say that what `encode` puts on a socket is what
+      `parse` takes off it**: every build-side test reads octets it wrote
+      itself and every parse-side test is handed octets the test wrote.
+      Only a session says the sites agree.
+   6. **Route types 6, 7 and 8**, RFC 9251 sections 9.1 to 9.3, sharing
+      the address triple and the Flags octet above.
+   7. **Route types 9, 10 and 11**, RFC 9572 sections 3.1 to 3.3,
+      including the recursive Route Key.
+   8. **The eleven extended communities**, the ten of the 0x06 registry
+      that have an RFC plus RFC 7432 section 7.8's Default Gateway at
+      0x03 sub-type 0x0d. Three of the 14 cite only drafts and one is
+      Reserved, so they are out; say which in the pull request.
+   9. **Validation**, in `validation.rb` and nowhere else per
+      Conventions, reusing the family's own tables the way
+      `flow_spec_finding` reuses `Flow_spec.nlri_size` and
+      `Flow_spec::COMPONENTS`, so a route type class added to the
+      library stops being unknown the same day.
+   10. **The lab**, against GoBGP and FRR, the twin of
+       `flow_spec_gobgp_test.rb` and `flow_spec_frr_test.rb`. **Probe
+       before recording a block**, which is the lesson three Docker
+       entries in this file taught by coming apart, and which paid again
+       in #178 where both routers turned out to accept a flowspec rule
+       the plan had treated as uncertain.
+
+   Decisions taken before this starts:
+   * **Route types 6 to 11 are in, and that is a change from the
+     earlier entry**, which named five. RFC 9251 and RFC 9572 are both
+     uploaded, so the reason for leaving them out is gone. They are
+     last because types 1 to 5 are what a router will actually send.
+   * **The Flags octet of types 6, 7 and 8 is part of the NLRI and not
+     part of the route key.** RFC 9251 section 9.1: "all the fields are
+     considered to be part of the prefix in the NLRI, except for the
+     1-octet Flags field", and section 9.3 excludes the Reserved and
+     Maximum Response Time fields too. That distinction is BGP route key
+     processing, which matters to a RIB and not to an encoder, and no
+     EVPN route goes in a RIB by the decision below. Recorded so nobody
+     implements a route key here looking for it.
 4. **The rest, as appetite allows. Not started.** BGP-LS (attribute 29,
    AFI 16388, SAFI 71 and 72, RFC 9552), RT-constrain (SAFI 132),
    MCAST-VPN (SAFI 5), ATTR_SET (attribute 128, RFC 6368). Once phase 1
