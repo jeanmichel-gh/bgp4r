@@ -30,12 +30,13 @@ bgp/nlris/               prefix encodings (inet, labeled, VPN, RD, mapped IPv4)
                          types share, the Esi of RFC 7432 section 5, the
                          Ethernet Tag ID, the MAC and the length-prefixed
                          address, with the Route base and Evpn::Unknown under
-                         them, and route types 1, 2, 3 and 4, the whole of
-                         RFC 7432 section 7; evpn.rb the NLRI with
+                         them, and route types 1 to 5, the whole of RFC 7432
+                         section 7 plus RFC 9136's IP Prefix route;
+                         evpn.rb the NLRI with
                          the section 7 Route Type and Length framing and
                          Evpn.nlri_size. Neither is wired to MP_REACH yet, so
                          an EVPN UPDATE is still an Attr::Raw. Evpn::ROUTES
-                         holds types 1 to 4; every other type reads back as an
+                         holds types 1 to 5; every other type reads back as an
                          Evpn::Unknown that replays byte for byte, and so does
                          a body a registered type cannot reproduce.
                          docs/evpn.md is the guide, see also
@@ -225,7 +226,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. A `lab` job runs the Compose topologies, and installs a `gobgpd` release so the native fault matrix runs there too; it pins 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-10-30: 1605 tests, 23768 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.9%.
+Baseline on 2026-10-30: 1620 tests, 23845 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.9%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -1895,8 +1896,47 @@ Two consequences, both of which change the plan rather than decorate it:
         many words and fixes the MAC's length at 48. A MAC left out
         entirely still builds, since nothing validates; it is just not
         the default.
-   4. **Route type 5**, RFC 9136 section 3.1, the IP Prefix route, whose
-      fixed 34 and 58 lengths are the family dispatch described above.
+   4. **Route type 5. Done**, in #184, RFC 9136 section 3.1, the IP
+      Prefix route, which completes the core set every EVPN
+      implementation has. The section states the sizes outright: "The
+      Length field of the BGP EVPN NLRI for an EVPN IP Prefix route MUST
+      be either 34 (if IPv4 addresses are carried) or 58 (if IPv6
+      addresses are carried)."
+      * **Two things make this layout unlike every other route type and
+        both are easy to get wrong.** The IP Prefix Length octet is a
+        **prefix length and not a field width**: section 3.1 says it
+        "specifies the number of bits in the prefix" while "The IP
+        prefix is a 4- or 16-octet field", so unlike `BGP::Prefix` the
+        octets are not packed down and 10.0.0.0/8 still occupies four of
+        them. And the **GW IP Address has no length octet at all**, so
+        it is raw octets; `Addr` is wrong for both fields.
+      * **The family comes from the body's own size**, 34 or 58, which
+        is the one place in the family with no in-band discriminator to
+        prefer. That is the same information the outer Length carries,
+        read locally so the class stays readable on its own. Do not
+        read this as contradicting part 3: there the IP Address Length
+        field was available and better, here nothing of the kind exists.
+      * **A bug found by probing a value the RFC forbids.** Section 3.1
+        says the prefix length "MUST NOT be greater than 128"; nothing
+        validates, so 200 builds, and the hash carried it as
+        `"10.0.0.0/200"`, a string `IPAddr` refuses, so the round trip
+        died. An out-of-range length is part of the unusual case and
+        hashes as the `{:len, :octets}` pair with the odd widths.
+      * **Three of RFC 9136's own rules are receive side and are part
+        9's work, recorded in `docs/evpn.md` so they are not lost.** All
+        three are stated as RFC 7606 treat-as-withdraw, so they are
+        error handling and not policy: a zero label with no Overlay
+        Index (section 3.1, MUST); a non-zero GW IP and a non-zero ESI
+        at once (section 3.2, SHOULD); and ESI, GW IP, MAC and Label all
+        zero at once (section 3.2, SHOULD). **The complication to know
+        before starting them**: the third reads the EVPN Router's MAC
+        Extended Community, a different path attribute, so it is not a
+        check `validation.rb` can make from the MP_REACH octets alone.
+      * Route key, for the record: section 3.1 says "The RD, Ethernet
+        Tag ID, IP prefix length, and IP prefix are part of the route
+        key used by BGP to compare routes. The rest of the fields are
+        not part of the route key." Matters to a RIB, and no EVPN route
+        goes in one.
    5. **Wiring to the two dispatch sites, plus a loopback functional
       test.** Deliberately here and not last: after parts 1 to 4 the
       RFC 7432 and RFC 9136 core is complete, which is the set every

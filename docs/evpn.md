@@ -95,7 +95,7 @@ across RFC 7432, RFC 9136 and RFC 9251, and its Table 2 adds three.
 | 2 | MAC/IP Advertisement | RFC 7432 section 7.2 | yes |
 | 3 | Inclusive Multicast Ethernet Tag | RFC 7432 section 7.3 | yes |
 | 4 | Ethernet Segment | RFC 7432 section 7.4 | yes |
-| 5 | IP Prefix | RFC 9136 section 3.1 | no |
+| 5 | IP Prefix | RFC 9136 section 3.1 | yes |
 | 6 | Selective Multicast Ethernet Tag | RFC 9251 section 9.1 | no |
 | 7 | Multicast Membership Report Synch | RFC 9251 section 9.2 | no |
 | 8 | Multicast Leave Synch | RFC 9251 section 9.3 | no |
@@ -103,10 +103,10 @@ across RFC 7432, RFC 9136 and RFC 9251, and its Table 2 adds three.
 | 10 | S-PMSI A-D | RFC 9572 section 3.2 | no |
 | 11 | Leaf A-D | RFC 9572 section 3.3 | no |
 
-**All four RFC 7432 route types are implemented; types 5 to 11 still read
-back as an `Evpn::Unknown` that replays byte for byte.** The "In bgp4r"
-column is checked against `Evpn::ROUTES` by the doc test, so it cannot
-drift.
+**Route types 1 to 5 are implemented, which is the core set every EVPN
+implementation has; types 6 to 11 still read back as an `Evpn::Unknown`
+that replays byte for byte.** The "In bgp4r" column is checked against
+`Evpn::ROUTES` by the doc test, so it cannot drift.
 
 ### Types 1 and 4, the RD plus ESI pair
 
@@ -282,6 +282,59 @@ neither is new work in kind.
 
 Both arrive with part 6. Conventions' note that the keep-and-echo rule
 is recent applies: these have simply not been reached yet.
+
+### Type 5, the one fixed-length layout
+
+RFC 9136 section 3.1 states it outright: "The Length field of the BGP
+EVPN NLRI for an EVPN IP Prefix route MUST be either 34 (if IPv4
+addresses are carried) or 58 (if IPv6 addresses are carried)."
+
+**Two things make this layout unlike every other route type, and both
+are easy to get wrong.**
+
+First, the IP Prefix Length octet is a **prefix length and not a field
+width**. Section 3.1: it "can be set to a value between 0 and 32 (bits)
+for IPv4 and between 0 and 128 for IPv6, and it specifies the number of
+bits in the prefix", while "The IP prefix is a 4- or 16-octet field". So
+the prefix is **not** packed down to its length the way `Prefix` packs
+one: 10.0.0.0/8 still occupies four whole octets. `Addr` is therefore
+wrong here, because its width follows its length.
+
+Second, the **GW IP Address has no length octet at all**. Section 3.1
+calls it "a 4- or 16-octet field (IPv4 or IPv6)" and nothing precedes
+it, so it is raw octets. It "MUST be all bytes zero if it is not used as
+an Overlay Index", which is what `Ip_prefix_route.new` defaults to.
+
+**So the family comes from the body's own size**, 34 or 58. That is the
+same information the outer Length carries, available locally, and it is
+the one place in the family where there is no in-band discriminator to
+prefer instead. A body that is neither size is read as IPv4, will not
+reproduce its octets, and falls back to `Unknown`.
+
+**Three of RFC 9136's rules are receive-side and belong to part 9, not
+here.** All three are stated as RFC 7606 treat-as-withdraw, so they are
+error handling rather than policy, and none changes an octet:
+
+* section 3.1: "If the received MPLS label value is zero, the route MUST
+  contain an Overlay Index ... If the received label is zero and the
+  route does not contain an Overlay Index, it MUST be 'treat as
+  withdraw'".
+* section 3.2: the ESI and the GW IP "MUST NOT both be non-zero at the
+  same time. A route containing a non-zero GW IP and a non-zero ESI (at
+  the same time) SHOULD be treat as withdraw".
+* section 3.2: "A route where ESI, GW IP, MAC, and Label are all zero at
+  the same time SHOULD be treat as withdraw."
+
+Note the complication before part 9 starts on them: the third reads the
+**EVPN Router's MAC Extended Community**, which is a different path
+attribute, so it is not a check `validation.rb` can make from the
+MP_REACH octets alone. Two of the three are SHOULD rather than MUST.
+
+**Route key, for the record and not for implementing**: section 3.1 says
+"The RD, Ethernet Tag ID, IP prefix length, and IP prefix are part of
+the route key used by BGP to compare routes. The rest of the fields are
+not part of the route key." That matters to a RIB, and no EVPN route
+goes in one.
 
 ## 6. Route type 5 is the one fixed-length layout
 

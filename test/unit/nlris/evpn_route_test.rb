@@ -685,6 +685,155 @@ class EvpnRouteTest < Test::Unit::TestCase
     end
   end
 
+  # RFC 9136 section 3.1: RD (8), ESI (10), Tag (4), IP Prefix Length
+  # (1), IP Prefix (4 or 16), GW IP Address (4 or 16), MPLS Label (3).
+  # So 34 octets with IPv4 addresses and 58 with IPv6 ones, which the
+  # section states outright.
+  def test_route_type_5_is_thirty_four_or_fifty_eight_octets
+    v4 = BGP::Evpn::Ip_prefix_route.new([100, 200],
+                                        '00:11:22:33:44:55:66:77:88:99',
+                                        100, '10.0.0.0/8', '10.0.0.1', 500)
+    assert_equal(34, v4.encode.size)
+    assert_equal(34, BGP::Evpn::Ip_prefix_route::SIZE_V4)
+    assert_equal(5, v4.type)
+    refute(v4.v6?)
+    v6 = BGP::Evpn::Ip_prefix_route.new([100, 200], BGP::Evpn::Esi.new, 100,
+                                        '2001:db8::/32', '2001:db8::1', 500)
+    assert_equal(58, v6.encode.size)
+    assert_equal(58, BGP::Evpn::Ip_prefix_route::SIZE_V6)
+    assert(v6.v6?)
+  end
+
+  # **The trap.** Section 3.1 puts the prefix length in bits and the
+  # prefix in "a 4- or 16-octet field", so unlike BGP::Prefix the octets
+  # are not packed down to the length: a /8 still occupies four of them.
+  def test_route_type_5_does_not_pack_its_prefix_to_its_length
+    r = BGP::Evpn::Ip_prefix_route.new([100, 200], BGP::Evpn::Esi.new, 100,
+                                       '10.0.0.0/8', '10.0.0.1', 500)
+    assert_equal(8, r.prefix_len)
+    assert_equal(4, r.prefix_octets.size)
+    assert_equal('0a000000', r.prefix_octets.unpack1('H*'))
+    assert_equal('10.0.0.0/8', r.ip_prefix)
+    assert_equal('00000064000000c80000000000000000000000000064080a0000000a' \
+                 '000001001f41', r.to_shex)
+  end
+
+  # The second trap: the GW IP has no length octet, and section 3.1 says
+  # it "MUST be all bytes zero if it is not used as an Overlay Index",
+  # which is what a route built without one gets.
+  def test_route_type_5_gateway_has_no_length_octet_and_defaults_to_zero
+    r = BGP::Evpn::Ip_prefix_route.new([100, 200], BGP::Evpn::Esi.new, 100,
+                                       '10.0.0.0/8', nil, 500)
+    assert_equal(34, r.encode.size, 'still 34, so the gateway is raw octets')
+    assert_equal('00000000', r.gw_octets.unpack1('H*'))
+    assert_equal('0.0.0.0', r.gateway)
+    assert(r.gateway_zero?)
+    refute(BGP::Evpn::Ip_prefix_route.new([1, 1], BGP::Evpn::Esi.new, 0,
+                                          '10.0.0.0/8', '10.0.0.1',
+                                          0).gateway_zero?)
+  end
+
+  def test_route_type_5_builds_four_ways
+    [['10.0.0.0/8', '10.0.0.1'], ['2001:db8::/32', '2001:db8::1'],
+     ['10.0.0.1', nil]].each do |pfx, gw|
+      r = BGP::Evpn::Ip_prefix_route.new([100, 200],
+                                         '00:11:22:33:44:55:66:77:88:99',
+                                         100, pfx, gw, 500)
+      want = r.to_shex
+      assert_equal(want,
+                   BGP::Evpn::Ip_prefix_route.new(r.encode.is_packed).to_shex)
+      assert_equal(want, BGP::Evpn::Ip_prefix_route.new(r.to_hash).to_shex)
+      assert_equal(want, BGP::Evpn::Ip_prefix_route.new(r).to_shex)
+    end
+  end
+
+  # A bare address with no slash takes the family's full length.
+  def test_route_type_5_reads_a_bare_address_as_a_host_prefix
+    assert_equal('10.0.0.1/32',
+                 BGP::Evpn::Ip_prefix_route.new([1, 1], BGP::Evpn::Esi.new, 0,
+                                                '10.0.0.1', nil,
+                                                0).to_hash[:ip_prefix_route][:ip_prefix])
+    assert_equal('2001:db8::1/128',
+                 BGP::Evpn::Ip_prefix_route.new([1, 1], BGP::Evpn::Esi.new, 0,
+                                                '2001:db8::1', nil,
+                                                0).to_hash[:ip_prefix_route][:ip_prefix])
+  end
+
+  # **The regression for a bug probing found.** Section 3.1 says the
+  # prefix length "MUST NOT be greater than 128"; nothing validates, so
+  # 200 builds, and the hash used to carry it as "10.0.0.0/200", a
+  # string IPAddr refuses, so the round trip died. An out-of-range
+  # length is part of the unusual case and hashes as the pair form.
+  def test_a_prefix_length_no_rfc_allows_still_round_trips
+    r = BGP::Evpn::Ip_prefix_route.new([100, 200], BGP::Evpn::Esi.new, 0,
+                                       { :len => 200, :octets => '0a000000' },
+                                       '10.0.0.1', 0)
+    assert_equal(200, r.prefix_len)
+    assert_nil(r.ip_prefix, 'no family can name a /200')
+    assert_equal({ :len => 200, :octets => '0a000000' },
+                 r.to_hash[:ip_prefix_route][:ip_prefix])
+    assert_equal(r.to_shex, BGP::Evpn::Ip_prefix_route.new(r.to_hash).to_shex)
+    assert_equal(34, r.encode.size)
+  end
+
+  # Section 3.1: "The IP prefix and gateway IP address MUST be from the
+  # same IP address family." Nothing validates, so a mixed pair builds
+  # and gives a body that is neither 34 nor 58.
+  def test_a_mixed_family_prefix_and_gateway_still_builds
+    r = BGP::Evpn::Ip_prefix_route.new([100, 200], BGP::Evpn::Esi.new, 0,
+                                       '10.0.0.0/8', '2001:db8::1', 0)
+    assert_equal(46, r.encode.size, 'neither 34 nor 58, and that is allowed')
+    assert_equal(r.to_shex, BGP::Evpn::Ip_prefix_route.new(r.to_hash).to_shex)
+  end
+
+  # Octets that are neither 4 nor 16 wide hash as the pair form on both
+  # fields, so a capture of any width reads back.
+  def test_octets_of_an_odd_width_hash_as_their_own_pairs
+    r = BGP::Evpn::Ip_prefix_route.new([100, 200], BGP::Evpn::Esi.new, 0,
+                                       { :len => 24, :octets => '0a0000' },
+                                       { :octets => '0a00' }, 0)
+    h = r.to_hash[:ip_prefix_route]
+    assert_equal({ :len => 24, :octets => '0a0000' }, h[:ip_prefix])
+    assert_equal({ :octets => '0a00' }, h[:gateway])
+    assert_equal(r.to_shex, BGP::Evpn::Ip_prefix_route.new(r.to_hash).to_shex)
+  end
+
+  def test_route_type_5_prints_itself
+    r = BGP::Evpn::Ip_prefix_route.new([100, 200], BGP::Evpn::Esi.new, 100,
+                                       '10.0.0.0/8', '10.0.0.1', 500)
+    assert_equal('[5] IP Prefix: RD=100:200, ' \
+                 'ESI 00:00:00:00:00:00:00:00:00:00, tag 100, ' \
+                 'prefix 10.0.0.0/8, gateway 10.0.0.1, label 500', r.to_s)
+  end
+
+  # to_s falls back to hex on both fields when neither can be named,
+  # so a capture of any width still prints something a reader can use.
+  # A nil prefix is the same branch the no-argument form takes.
+  def test_route_type_5_prints_hex_for_what_it_cannot_name
+    r = BGP::Evpn::Ip_prefix_route.new([100, 200], BGP::Evpn::Esi.new, 0,
+                                       { :len => 24, :octets => '0a0000' },
+                                       { :octets => '0a00' }, 0)
+    assert_nil(r.ip_prefix)
+    assert_nil(r.gateway)
+    assert_match(/prefix 0a0000\/24/, r.to_s)
+    assert_match(/gateway 0a00/, r.to_s)
+
+    nil_prefix = BGP::Evpn::Ip_prefix_route.new([1, 1], BGP::Evpn::Esi.new,
+                                                0, nil, nil, 0)
+    assert_equal(0, nil_prefix.prefix_len)
+    assert_equal('00000000', nil_prefix.prefix_octets.unpack1('H*'))
+    assert_equal(34, nil_prefix.encode.size)
+  end
+
+  def test_route_type_5_builds_empty_and_refuses_nonsense
+    assert_equal(34, BGP::Evpn::Ip_prefix_route.new.encode.size)
+    assert(BGP::Evpn::Ip_prefix_route.new.gateway_zero?)
+    assert_equal(0, BGP::Evpn::Ip_prefix_route.new.prefix_len)
+    assert_raise(ArgumentError) do
+      BGP::Evpn::Ip_prefix_route.new(1, 2, 3, 4, 5, 6, 7)
+    end
+  end
+
   # The base is in place for the parts that fill it. The route type
   # table itself lives in evpn.rb and is asserted there, because this
   # file requires evpn_route.rb alone and must pass run on its own:

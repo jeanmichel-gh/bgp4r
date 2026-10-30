@@ -965,6 +965,18 @@ module ToHashCatalog
                                     '2001:db8::1')
   end
 
+  # Route type 5, RFC 9136 section 3.1. Six fields and the recipe
+  # exercises all six, with the prefix in the pair form so the
+  # out-of-range length branch is the one measured: a length of 200,
+  # which section 3.1 says MUST NOT happen and which nothing validates,
+  # is what the hash used to lose before it fell back to that form.
+  ENTRIES['BGP::Evpn::Ip_prefix_route'] = entry(:ok, nil, nil) do
+    BGP::Evpn::Ip_prefix_route.new(
+      [100, 200], '00:11:22:33:44:55:66:77:88:99', 100,
+      { :len => 200, :octets => '0a000000' }, '10.0.0.1',
+      BGP::Label.new(:label => 500, :exp => 5, :bottom => 0))
+  end
+
   # The NLRI framing, RFC 7432 section 7. Three fields and the recipe
   # exercises all three: the route, the RFC 7911 section 3 Path
   # Identifier, and a Length that disagrees with its own octets.
