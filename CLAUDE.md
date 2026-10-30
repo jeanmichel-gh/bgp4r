@@ -26,6 +26,17 @@ bgp/nlris/               prefix encodings (inet, labeled, VPN, RD, mapped IPv4)
                          rather than computing it from a prefix length.
                          docs/flow-spec.md is the guide, see also
                          "Breadth, the one SAFI lever"
+                         evpn_route.rb: the primitives the eleven EVPN route
+                         types share, the Esi of RFC 7432 section 5, the
+                         Ethernet Tag ID, the MAC and the length-prefixed
+                         address, with the Route base and Evpn::Unknown under
+                         them; evpn.rb the NLRI with the section 7 Route Type
+                         and Length framing and Evpn.nlri_size. Neither is
+                         wired in yet: every EVPN NLRI reads back as an
+                         Evpn::Unknown that replays byte for byte, and
+                         Evpn::ROUTES is empty, so no route type has meaning.
+                         docs/evpn.md is the guide, see also
+                         "Breadth, the one SAFI lever"
 bgp/optional_parameters/ OPEN capabilities (4-byte AS, add-path, graceful restart...)
 bgp/orfs/                outbound route filtering
 bgp/neighbor/            the BGP finite state machine and TCP session (neighbor.rb)
@@ -51,6 +62,16 @@ docs/                    protocol-testing.md: using bgp4r to test a router
                          validation.rb, or before adding one of the missing
                          action communities. Its load bearing claims
                          are asserted by test/unit/flow_spec_doc_test.rb
+                         evpn.md: RFC 7432 and six more RFCs on the wire. Read it
+                         before touching evpn_route.rb or evpn.rb, before adding a
+                         route type or an EVPN extended community, and before
+                         changing how mp_reach.rb and mp_unreach.rb frame an NLRI.
+                         Its load bearing claims are asserted by
+                         test/unit/evpn_doc_test.rb, which **discovers** the route
+                         type table rather than comparing it against a list, so a
+                         route type class cannot join the library without the
+                         document being told. Proved by sabotage in both
+                         directions, which a listed table would have let through.
                          building-objects.md: the three ways into every class and how
                          initialize dispatches between them; read it before changing a
                          constructor or chasing an object that does not come back.
@@ -201,7 +222,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. A `lab` job runs the Compose topologies, and installs a `gobgpd` release so the native fault matrix runs there too; it pins 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-10-30: 1508 tests, 23337 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.8%.
+Baseline on 2026-10-30: 1574 tests, 23610 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.8%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
