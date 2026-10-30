@@ -91,10 +91,10 @@ across RFC 7432, RFC 9136 and RFC 9251, and its Table 2 adds three.
 
 | Type | Name | Reference | In bgp4r |
 |---|---|---|---|
-| 1 | Ethernet Auto-discovery | RFC 7432 section 7.1 | no |
+| 1 | Ethernet Auto-discovery | RFC 7432 section 7.1 | yes |
 | 2 | MAC/IP Advertisement | RFC 7432 section 7.2 | no |
 | 3 | Inclusive Multicast Ethernet Tag | RFC 7432 section 7.3 | no |
-| 4 | Ethernet Segment | RFC 7432 section 7.4 | no |
+| 4 | Ethernet Segment | RFC 7432 section 7.4 | yes |
 | 5 | IP Prefix | RFC 9136 section 3.1 | no |
 | 6 | Selective Multicast Ethernet Tag | RFC 9251 section 9.1 | no |
 | 7 | Multicast Membership Report Synch | RFC 9251 section 9.2 | no |
@@ -103,10 +103,48 @@ across RFC 7432, RFC 9136 and RFC 9251, and its Table 2 adds three.
 | 10 | S-PMSI A-D | RFC 9572 section 3.2 | no |
 | 11 | Leaf A-D | RFC 9572 section 3.3 | no |
 
-**None is implemented yet, and every EVPN NLRI reads back as an
-`Evpn::Unknown` that replays byte for byte.** That is what the first
-part delivered: the primitives and the framing. The "In bgp4r" column is
+**Types 1 and 4 are implemented; every other type still reads back as an
+`Evpn::Unknown` that replays byte for byte.** The "In bgp4r" column is
 checked against `Evpn::ROUTES` by the doc test, so it cannot drift.
+
+### Types 1 and 4, the RD plus ESI pair
+
+Both open with a Route Distinguisher and an Ethernet Segment Identifier,
+which is why they were taken together.
+
+Route type 1, section 7.1, is **fixed at 25 octets**: RD (8), ESI (10),
+Ethernet Tag ID (4), MPLS Label (3).
+
+Route type 4, section 7.4, is **23 octets with an IPv4 address and 35
+with an IPv6 one**: RD (8), ESI (10), IP Address Length (1), Originating
+Router's IP Address (4 or 16). Section 7.4 ends "The IP address length
+is in bits", which is why that field is an `Addr`.
+
+**`BGP::Label` is reused for the MPLS Label rather than reimplemented.**
+Section 7.1 says only "MPLS Label (3 octets)" and describes no internal
+layout. `Label` already writes a 20-bit label in the top 20 bits of
+three octets, which is what GoBGP and FRR read back, and it keeps the
+three bits below it and the low bit, so an unusual value replays. Its
+hash keys `:label` and `:exp` are merged flat into the route's hash,
+since neither collides with a field of the route.
+
+**A route type is kept only if it can give its own octets back.** Both
+layouts are fixed width, and nothing in the framing guarantees the
+Length agrees with them, so a body is parsed on a copy and the result
+accepted only when its `encode` matches what it was given. A body that
+fails that falls back to `Evpn::Unknown`, which keeps the octets whole.
+That means a route type number the library does implement can still read
+back as Unknown, which looks odd and is the honest answer: the octets
+cannot be represented as these fields, and keeping them beats inventing
+the zeros a short body did not carry. `declared_len` still records the
+Length that lied. This is the same rule `Flow_spec` applies to its
+components, and for the same reason.
+
+**Route key processing is not implemented and is not a gap here.**
+Section 7.1 says the MPLS Label "is to be treated as a route attribute
+as opposed to being part of the route", and section 7.4 names the three
+fields that are part of its prefix. That distinction matters to a RIB,
+and no EVPN route goes in a RIB by the recorded decision.
 
 ## 4. The primitives
 

@@ -341,6 +341,163 @@ class EvpnRouteTest < Test::Unit::TestCase
     assert_equal({ :stub => { :stub => true } }, stub.new.to_hash)
   end
 
+  # RFC 7432 section 7.1: RD (8), ESI (10), Ethernet Tag ID (4), MPLS
+  # Label (3). Fixed at 25 octets.
+  def test_route_type_1_is_twenty_five_octets
+    r = BGP::Evpn::Ethernet_ad.new([100, 200],
+                                   '00:11:22:33:44:55:66:77:88:99',
+                                   100, 500)
+    assert_equal(25, r.encode.size)
+    assert_equal(25, BGP::Evpn::Ethernet_ad::SIZE)
+    assert_equal('00000064000000c80011223344556677889900000064001f41', r.to_shex)
+    assert_equal(1, r.type)
+  end
+
+  def test_route_type_1_carries_its_four_fields
+    r = BGP::Evpn::Ethernet_ad.new([100, 200],
+                                   '00:11:22:33:44:55:66:77:88:99',
+                                   100, 500)
+    assert_equal([100, 200], r.rd.to_hash[:rd])
+    assert_equal('00:11:22:33:44:55:66:77:88:99', r.esi.to_s)
+    assert_equal(100, r.ethernet_tag_id.value)
+    assert_equal(500, r.label.label)
+  end
+
+  def test_route_type_1_builds_four_ways
+    r = BGP::Evpn::Ethernet_ad.new([100, 200],
+                                   '00:11:22:33:44:55:66:77:88:99',
+                                   100, 500)
+    want = r.to_shex
+    assert_equal(want, BGP::Evpn::Ethernet_ad.new(r.encode.is_packed).to_shex)
+    assert_equal(want, BGP::Evpn::Ethernet_ad.new(r.to_hash).to_shex)
+    assert_equal(want, BGP::Evpn::Ethernet_ad.new(r).to_shex)
+  end
+
+  # The hash carries the Label's own keys flat, since neither collides
+  # with a field of the route, and :bottom joins them only when the low
+  # bit arrived 0, which is Label#to_hash's own rule.
+  def test_route_type_1_hash_merges_the_label_keys_flat
+    r = BGP::Evpn::Ethernet_ad.new([100, 200],
+                                   '00:11:22:33:44:55:66:77:88:99',
+                                   100, 500)
+    h = r.to_hash[:ethernet_ad]
+    assert_equal([100, 200], h[:rd])
+    assert_equal(100, h[:ethernet_tag_id])
+    assert_equal(500, h[:label])
+    assert_equal(0, h[:exp])
+    refute(h.has_key?(:bottom), 'the low bit was 1, so no :bottom key')
+  end
+
+  # An MPLS Label with the three bits below it set and the low bit
+  # clear, which only parsing or an explicit hash reaches. Exercised
+  # because a field left at its default passes for the wrong reason.
+  def test_route_type_1_keeps_an_unusual_label
+    l = BGP::Label.new(:label => 500, :exp => 5, :bottom => 0)
+    r = BGP::Evpn::Ethernet_ad.new([100, 200], BGP::Evpn::Esi.new, 0, l)
+    assert_equal('00000064000000c80000000000000000000000000000001f4a', r.to_shex)
+    assert_equal(5, r.to_hash[:ethernet_ad][:exp])
+    assert_equal(0, r.to_hash[:ethernet_ad][:bottom])
+    assert_equal(r.to_shex,
+                 BGP::Evpn::Ethernet_ad.new(r.to_hash).to_shex)
+  end
+
+  # An Array field is splatted, which is the shape Rd#to_hash answers
+  # with. Without that the Array lands in the Administrator field and
+  # encode dies on a nil Assigned Number, which is how this was found.
+  def test_a_two_part_rd_reads_back_in_either_form
+    r = BGP::Evpn::Ethernet_ad.new(['10.0.0.1', 99], BGP::Evpn::Esi.new, 0, 0)
+    assert_equal('00010a00000100630000000000000000000000000000000001', r.to_shex)
+    assert_equal(['10.0.0.1', 99], r.to_hash[:ethernet_ad][:rd])
+    assert_equal(r.to_shex, BGP::Evpn::Ethernet_ad.new(r.to_hash).to_shex)
+    assert_equal(r.to_shex,
+                 BGP::Evpn::Ethernet_ad.new(BGP::Rd.new('10.0.0.1', 99),
+                                            BGP::Evpn::Esi.new, 0, 0).to_shex)
+  end
+
+  # RFC 7432 section 7.4: RD (8), ESI (10), IP Address Length (1),
+  # Originating Router's IP Address (4 or 16). So 23 or 35 octets.
+  def test_route_type_4_is_twenty_three_or_thirty_five_octets
+    v4 = BGP::Evpn::Ethernet_segment.new([100, 200],
+                                         '00:11:22:33:44:55:66:77:88:99',
+                                         '192.0.2.1')
+    assert_equal(23, v4.encode.size)
+    assert_equal(23, BGP::Evpn::Ethernet_segment::SIZE_V4)
+    assert_equal('00000064000000c80011223344556677889920c0000201', v4.to_shex)
+    v6 = BGP::Evpn::Ethernet_segment.new([100, 200], BGP::Evpn::Esi.new,
+                                         '2001:db8::1')
+    assert_equal(35, v6.encode.size)
+    assert_equal(35, BGP::Evpn::Ethernet_segment::SIZE_V6)
+    assert_equal(4, v4.type)
+  end
+
+  def test_route_type_4_builds_four_ways
+    [BGP::Evpn::Ethernet_segment.new([100, 200],
+                                     '00:11:22:33:44:55:66:77:88:99',
+                                     '192.0.2.1'),
+     BGP::Evpn::Ethernet_segment.new([100, 200], BGP::Evpn::Esi.new,
+                                     '2001:db8::1')].each do |r|
+      want = r.to_shex
+      assert_equal(want,
+                   BGP::Evpn::Ethernet_segment.new(r.encode.is_packed).to_shex)
+      assert_equal(want, BGP::Evpn::Ethernet_segment.new(r.to_hash).to_shex)
+      assert_equal(want, BGP::Evpn::Ethernet_segment.new(r).to_shex)
+    end
+  end
+
+  # The address hashes as a string when the octets are a whole family
+  # and the bit count agrees, so a reader sees an address rather than
+  # hex. Same extra-detail-only-when-unusual spirit as :tail and :bits.
+  def test_route_type_4_hashes_its_address_as_a_string
+    r = BGP::Evpn::Ethernet_segment.new([100, 200], BGP::Evpn::Esi.new,
+                                        '192.0.2.1')
+    assert_equal('192.0.2.1', r.to_hash[:ethernet_segment][:ip])
+    r6 = BGP::Evpn::Ethernet_segment.new([100, 200], BGP::Evpn::Esi.new,
+                                         '2001:db8::1')
+    assert_equal('2001:db8::1', r6.to_hash[:ethernet_segment][:ip])
+  end
+
+  # And as the Addr hash when it is not, so a length that lies still
+  # reads back. Both branches are exercised because one alone passes
+  # for the wrong reason.
+  def test_route_type_4_falls_back_to_the_addr_hash_for_an_odd_length
+    odd = BGP::Evpn::Addr.new(24, wire('c00002'))
+    r = BGP::Evpn::Ethernet_segment.new([100, 200], BGP::Evpn::Esi.new, odd)
+    assert_equal({ :bitlen => 24, :value => 'c00002' },
+                 r.to_hash[:ethernet_segment][:ip])
+    assert_equal(r.to_shex, BGP::Evpn::Ethernet_segment.new(r.to_hash).to_shex)
+    assert_equal(22, r.encode.size, 'neither 23 nor 35, and that is allowed')
+  end
+
+  def test_both_route_types_print_themselves
+    r1 = BGP::Evpn::Ethernet_ad.new([100, 200],
+                                    '00:11:22:33:44:55:66:77:88:99',
+                                    100, 500)
+    assert_equal('[1] Ethernet A-D: RD=100:200, ' \
+                 'ESI 00:11:22:33:44:55:66:77:88:99, tag 100, label 500',
+                 r1.to_s)
+    r4 = BGP::Evpn::Ethernet_segment.new([100, 200],
+                                         '00:11:22:33:44:55:66:77:88:99',
+                                         '192.0.2.1')
+    assert_equal('[4] Ethernet Segment: RD=100:200, ' \
+                 'ESI 00:11:22:33:44:55:66:77:88:99, ' \
+                 'originating router 192.0.2.1/32', r4.to_s)
+  end
+
+  # Both build with no arguments at all, which is the all-zero route the
+  # RFC's reserved values describe, and both refuse what they cannot
+  # read. Nothing validates: a type 4 with no address is 19 octets,
+  # which section 7.4's figure does not allow, and it still builds.
+  def test_both_route_types_build_empty_and_refuse_nonsense
+    assert_equal(25, BGP::Evpn::Ethernet_ad.new.encode.size)
+    assert_equal(19, BGP::Evpn::Ethernet_segment.new.encode.size)
+    assert_raise(ArgumentError) do
+      BGP::Evpn::Ethernet_ad.new(1, 2, 3, 4, 5)
+    end
+    assert_raise(ArgumentError) do
+      BGP::Evpn::Ethernet_segment.new(1, 2, 3, 4)
+    end
+  end
+
   # The base is in place for the parts that fill it. The route type
   # table itself lives in evpn.rb and is asserted there, because this
   # file requires evpn_route.rb alone and must pass run on its own:

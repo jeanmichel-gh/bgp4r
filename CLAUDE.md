@@ -30,11 +30,13 @@ bgp/nlris/               prefix encodings (inet, labeled, VPN, RD, mapped IPv4)
                          types share, the Esi of RFC 7432 section 5, the
                          Ethernet Tag ID, the MAC and the length-prefixed
                          address, with the Route base and Evpn::Unknown under
-                         them; evpn.rb the NLRI with the section 7 Route Type
-                         and Length framing and Evpn.nlri_size. Neither is
-                         wired in yet: every EVPN NLRI reads back as an
-                         Evpn::Unknown that replays byte for byte, and
-                         Evpn::ROUTES is empty, so no route type has meaning.
+                         them, and route types 1 and 4; evpn.rb the NLRI with
+                         the section 7 Route Type and Length framing and
+                         Evpn.nlri_size. Neither is wired to MP_REACH yet, so
+                         an EVPN UPDATE is still an Attr::Raw. Evpn::ROUTES
+                         holds types 1 and 4; every other type reads back as an
+                         Evpn::Unknown that replays byte for byte, and so does
+                         a body a registered type cannot reproduce.
                          docs/evpn.md is the guide, see also
                          "Breadth, the one SAFI lever"
 bgp/optional_parameters/ OPEN capabilities (4-byte AS, add-path, graceful restart...)
@@ -222,7 +224,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. A `lab` job runs the Compose topologies, and installs a `gobgpd` release so the native fault matrix runs there too; it pins 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-10-30: 1574 tests, 23610 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.8%.
+Baseline on 2026-10-30: 1589 tests, 23678 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.9%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -1764,18 +1766,81 @@ Two consequences, both of which change the plan rather than decorate it:
    Conventions' note that the keep-and-echo rule is recent applies: it
    has simply not been reached here yet.
 
-   1. **Primitives and the framing, pure.** ESI, Ethernet Tag ID, MAC,
-      the length-prefixed address, the Route Type plus Length framing
-      with `Evpn.nlri_size`, and an `Evpn::Unknown` that keeps the
-      remainder and replays it. No route types, so nothing dispatches to
-      it, the way #175 landed the flowspec components and #156 the FIB
-      planner before anything called either. `docs/evpn.md` is written
-      here, with `test/unit/evpn_doc_test.rb` asserting its load bearing
-      claims and **discovering** the route type table so a new class
-      cannot join the library without the document being told, which is
-      the hole sabotage found in the flowspec guard.
-   2. **Route types 1 and 4**, RFC 7432 sections 7.1 and 7.4, taken
-      together because both are RD plus ESI shaped.
+   1. **Primitives and the framing, pure. Done**, in #181. ESI,
+      Ethernet Tag ID, MAC, the length-prefixed address, the Route Type
+      plus Length framing with `Evpn.nlri_size`, and an `Evpn::Unknown`
+      that keeps the remainder and replays it. `docs/evpn.md` is the
+      guide, and `test/unit/evpn_doc_test.rb` **discovers** the route
+      type table rather than comparing it against a list, so a route
+      type class cannot join the library without the document being
+      told; proved by sabotage in both directions, since with no route
+      type implemented the guard would otherwise have been vacuous.
+      * **Two bugs found by probing rather than by reading**, each with
+        a regression test. `Esi#encode` returned `@value` itself, so
+        building from it emptied the ESI being copied, because `parse`
+        reads with `slice!`: the symptom is the one Conventions warns
+        about, a round trip that fails while both sides print the same
+        hex. And an ESI built from an Integer used `String#<<` with an
+        Integer, which appends a **codepoint**, so every octet from 0x80
+        up became the two bytes of its UTF-8 encoding and `.b` afterwards
+        relabelled without undoing the expansion; the ESI came back 12
+        octets. A test using only low octets passes against that, so the
+        test goes all the way up.
+      * **A third error was caught in the document before it shipped**,
+        and only because the doc test reads `FACTORY` rather than taking
+        the claim on trust: a draft said bgp4r registers no 0x03
+        extended community sub-types. It registers three, `[0x03,0x00]`
+        Origin Validation State, `[0x03,0x0b]` Color and `[0x03,0x0c]`
+        Encapsulation. Only 0x0d is missing, which is the Default
+        Gateway of section 7.8.
+      * **Every length field in this family is in bits**, which is the
+        detail memory reverses, and the four citations are quoted in the
+        guide. **RFC 9572 is the one that does not say**: it has no such
+        sentence and for route type 10 defers to RFC 7117, which has not
+        been read here. Recorded as open rather than guessed, and it is
+        part 7's question.
+      * **The MAC and the IP disagree about what a length means**, on
+        consecutive lines of one figure: section 7.2 gives the MAC as
+        "(6 octets)" flat and the IP as "(0, 4, or 16 octets)". So
+        `Sized#parse` does not infer its own width, it is told, and
+        `Mac_addr` overrides `octets_for`.
+   2. **Route types 1 and 4. Done**, in #182, RFC 7432 sections 7.1
+      and 7.4, taken together because both are RD plus ESI shaped.
+      Route type 1 is fixed at 25 octets; route type 4 is 23 with an
+      IPv4 address and 35 with an IPv6 one.
+      * **`BGP::Label` is reused for the MPLS Label rather than
+        reimplemented.** Section 7.1 says only "MPLS Label (3 octets)"
+        and describes no internal layout, and `Label` already writes a
+        20-bit label in the top 20 bits of three octets, which is what
+        GoBGP and FRR read back, while keeping the three bits below and
+        the low bit so an unusual value replays. Its hash keys `:label`
+        and `:exp` merge flat into the route's hash, since neither
+        collides with a field of the route.
+      * **A route type is kept only if it can give its own octets
+        back**, which is the rule `Flow_spec` already applies to its
+        components and is right here for the same reason: both layouts
+        are fixed width and nothing in the framing guarantees the Length
+        agrees, so a short body would invent the fields it did not find
+        and answer `encode` with octets the peer never sent. The body is
+        parsed on a **copy** and accepted only when its `encode` matches.
+        A body that fails falls back to `Evpn::Unknown`, so a route type
+        number the library does implement can read back as Unknown. That
+        looks odd and is the honest answer; `declared_len` still records
+        the Length that lied.
+      * **`Rd` does not consume the String it is handed, where all four
+        primitives from part 1 do.** Measured, not assumed. So the route
+        parse slices the 8 RD octets itself and lets the rest read
+        themselves. Conventions already records that which classes
+        consume is per class and has to be checked.
+      * **An Array field is splatted in `coerce`**, because that is the
+        shape `Rd#to_hash` answers with: `{:rd => [100, 200]}` against
+        an `Rd.new(100, 200)`. Without the splat the Array lands in the
+        Administrator field and `encode` dies on a nil Assigned Number,
+        which is how this was found.
+      * Route key processing is not implemented and is not a gap:
+        section 7.1 makes the MPLS Label "a route attribute as opposed
+        to being part of the route" and section 7.4 names its own prefix
+        fields, which matters to a RIB, and no EVPN route goes in one.
    3. **Route types 2 and 3**, RFC 7432 sections 7.2 and 7.3. Type 2 is
       the largest layout in the family: RD, ESI, Ethernet Tag ID, a
       length-prefixed MAC, a length-prefixed IP, and **two** label

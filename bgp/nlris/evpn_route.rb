@@ -22,6 +22,8 @@
 
 require 'bgp/common'
 require 'bgp/iana'
+require 'bgp/nlris/rd'
+require 'bgp/nlris/label'
 
 module BGP
 
@@ -72,6 +74,11 @@ module BGP
   # here. `Sized` takes the bit count either way, so the question is the
   # route type's to answer and not this file's.
   class Evpn
+
+    # RFC 4364 section 4.2, the Route Distinguisher every route type but
+    # 11 opens with. `Rd` owns the encoding; this is how many octets to
+    # slice, since it does not consume what it is handed.
+    RD_SIZE = 8
 
     # A 1-octet length in bits followed by its value, the shape behind
     # every variable width field in the family.
@@ -507,6 +514,41 @@ module BGP
         h.has_key?(hash_key) ? h[hash_key] : h
       end
 
+      private
+
+      # **`Rd` does not consume the String it is handed, where the four
+      # primitives in this file do.** Measured, not assumed: `Esi`,
+      # `Addr`, `Mac_addr` and `Ethernet_tag_id` all read with `slice!`,
+      # so a sequential parse walks forward by itself, and `Rd#parse`
+      # leaves its octets where they were. Conventions records that
+      # which classes consume is per class and has to be checked. So the
+      # RD is sliced here and the rest read themselves.
+      def read_rd(s)
+        Rd.new(s.slice!(0, RD_SIZE).is_packed)
+      end
+
+      # Each field accepts either an instance of its own class or
+      # whatever that class builds from, so a route reads as values
+      # without the caller naming five classes.
+      #
+      # **An Array is splatted**, because that is the shape these
+      # classes' own hashes use for a multi-argument field: `Rd#to_hash`
+      # answers `{:rd => [100, 200]}` and `Rd.new` takes
+      # `(100, 200)`, so without the splat the Array lands in the
+      # Administrator field and `encode` dies on a nil Assigned Number.
+      # It also makes `Esi`'s two argument form reachable as
+      # `[1, '0011...']`.
+      def coerce(klass, v)
+        return v if v.is_a?(klass)
+        v.is_a?(Array) ? klass.new(*v) : klass.new(v)
+      end
+
+      # The same, for a field that may be left out entirely.
+      def coerce_or_default(klass, v)
+        return klass.new if v.nil?
+        coerce(klass, v)
+      end
+
     end
 
     # A Route Type bgp4r does not implement, kept whole and written back
@@ -563,6 +605,204 @@ module BGP
       def to_s
         "Unknown route type #{@type}, #{@value.size} octets " \
         "[#{@value.unpack1('H*')}]"
+      end
+
+    end
+
+    # Route type 1, RFC 7432 section 7.1, the Ethernet Auto-discovery
+    # route. Fixed at 25 octets:
+    #
+    #   +---------------------------------------+
+    #   |  Route Distinguisher (RD) (8 octets)  |
+    #   +---------------------------------------+
+    #   |Ethernet Segment Identifier (10 octets)|
+    #   +---------------------------------------+
+    #   |  Ethernet Tag ID (4 octets)           |
+    #   +---------------------------------------+
+    #   |  MPLS Label (3 octets)                |
+    #   +---------------------------------------+
+    #
+    # **`BGP::Label` is reused rather than reimplemented.** Section 7.1
+    # says only "MPLS Label (3 octets)" and describes no internal
+    # layout, and `Label` already writes the 20-bit label in the top 20
+    # bits of three octets, which is what GoBGP and FRR read back. It
+    # also keeps the three bits below and the low bit, so an unusual
+    # value replays. Section 7.1 adds that "The MPLS Label field is to
+    # be treated as a route attribute as opposed to being part of the
+    # route", which is BGP route key processing and matters to a RIB,
+    # not to an encoder; no EVPN route goes in a RIB by the recorded
+    # decision.
+    class Ethernet_ad < Route
+
+      TYPE, HASH_KEY = 1, :ethernet_ad
+
+      SIZE = 25
+
+      attr_reader :rd, :esi, :ethernet_tag_id, :label
+
+      # new(rd, esi, ethernet_tag_id, label) in the figure's order, with
+      # each field either an instance or whatever its class builds from
+      # new(:rd => [100, 200], :esi => '00:11:...', :ethernet_tag_id =>
+      #     100, :label => 500)
+      # the wire bytes, or another instance.
+      def initialize(*args)
+        if args.size == 1 and args[0].is_a?(String) and args[0].is_packed?
+          parse(args[0])
+        elsif args.size == 1 and args[0].is_a?(self.class)
+          parse(args[0].encode.is_packed)
+        elsif args.size == 1 and args[0].is_a?(Hash)
+          from_hash(args[0])
+        elsif (1..4).include?(args.size)
+          @rd              = coerce_or_default(Rd, args[0])
+          @esi             = coerce_or_default(Esi, args[1])
+          @ethernet_tag_id = coerce_or_default(Ethernet_tag_id, args[2])
+          @label           = coerce_or_default(Label, args[3])
+        elsif args.empty?
+          defaults
+        else
+          raise ArgumentError, "invalid argument: #{args.inspect}"
+        end
+        self
+      end
+
+      def parse(s)
+        @rd              = read_rd(s)
+        @esi             = Esi.new(s)
+        @ethernet_tag_id = Ethernet_tag_id.new(s)
+        @label           = Label.new(s)
+        self
+      end
+
+      def encode_value
+        [@rd.encode, @esi.encode, @ethernet_tag_id.encode,
+         @label.encode].join
+      end
+
+      # The Label's own hash keys, :label and :exp, are merged flat
+      # rather than nested, because neither collides with a field here
+      # and `{:label => {:label => 500}}` reads worse than `:label =>
+      # 500`. `:bottom` joins them only when the low bit arrived 0,
+      # which is `Label#to_hash`'s own extra-key-only-when-unusual rule.
+      def value_hash
+        @rd.to_hash
+           .merge(@esi.to_hash)
+           .merge(@ethernet_tag_id.to_hash)
+           .merge(@label.to_hash)
+      end
+
+      def to_s
+        "[1] Ethernet A-D: #{@rd.to_s(false)}, ESI #{@esi}, " \
+        "tag #{@ethernet_tag_id}, label #{@label.label}"
+      end
+
+      private
+
+      def defaults
+        @rd              = Rd.new
+        @esi             = Esi.new
+        @ethernet_tag_id = Ethernet_tag_id.new
+        @label           = Label.new(0)
+      end
+
+      def from_hash(h)
+        h = self.class.unwrap(h)
+        @rd              = coerce_or_default(Rd, h[:rd])
+        @esi             = coerce_or_default(Esi, h[:esi])
+        @ethernet_tag_id = coerce_or_default(Ethernet_tag_id,
+                                             h[:ethernet_tag_id])
+        @label           = Label.new(h)
+      end
+
+    end
+
+    # Route type 4, RFC 7432 section 7.4, the Ethernet Segment route.
+    # 23 octets with an IPv4 address and 35 with an IPv6 one:
+    #
+    #   +---------------------------------------+
+    #   |  RD (8 octets)                        |
+    #   +---------------------------------------+
+    #   |Ethernet Segment Identifier (10 octets)|
+    #   +---------------------------------------+
+    #   |  IP Address Length (1 octet)          |
+    #   +---------------------------------------+
+    #   |  Originating Router's IP Address      |
+    #   |          (4 or 16 octets)             |
+    #   +---------------------------------------+
+    #
+    # Section 7.4: "The IP address length is in bits", which is why the
+    # address is an `Addr` and its width follows its length.
+    class Ethernet_segment < Route
+
+      TYPE, HASH_KEY = 4, :ethernet_segment
+
+      # The two lengths the section's figure allows, which the Length
+      # octet of the NLRI carries. Neither is enforced: nothing
+      # validates on the way out.
+      SIZE_V4 = 23
+      SIZE_V6 = 35
+
+      attr_reader :rd, :esi, :ip
+
+      # new(rd, esi, ip), new(:rd => ..., :esi => ..., :ip =>
+      # '192.0.2.1'), the wire bytes, or another instance.
+      def initialize(*args)
+        if args.size == 1 and args[0].is_a?(String) and args[0].is_packed?
+          parse(args[0])
+        elsif args.size == 1 and args[0].is_a?(self.class)
+          parse(args[0].encode.is_packed)
+        elsif args.size == 1 and args[0].is_a?(Hash)
+          from_hash(args[0])
+        elsif (1..3).include?(args.size)
+          @rd  = coerce_or_default(Rd, args[0])
+          @esi = coerce_or_default(Esi, args[1])
+          @ip  = coerce_or_default(Addr, args[2])
+        elsif args.empty?
+          @rd, @esi, @ip = Rd.new, Esi.new, Addr.new
+        else
+          raise ArgumentError, "invalid argument: #{args.inspect}"
+        end
+        self
+      end
+
+      def parse(s)
+        @rd  = read_rd(s)
+        @esi = Esi.new(s)
+        @ip  = Addr.new(s)
+        self
+      end
+
+      def encode_value
+        [@rd.encode, @esi.encode, @ip.encode].join
+      end
+
+      # The address under one `:ip` key. It is the address string when
+      # the octets are a whole family and the bit count agrees, and the
+      # `Addr` hash otherwise, so a length that lies still reads back.
+      # Same spirit as the `:tail` and `:bits` rule: the plain form
+      # unless something unusual arrived.
+      def value_hash
+        @rd.to_hash.merge(@esi.to_hash).merge(:ip => ip_hash)
+      end
+
+      def to_s
+        "[4] Ethernet Segment: #{@rd.to_s(false)}, ESI #{@esi}, " \
+        "originating router #{@ip}"
+      end
+
+      private
+
+      def ip_hash
+        a = @ip.address
+        return @ip.to_hash if a.nil?
+        return @ip.to_hash unless @ip.bitlen == (@ip.value.size * 8)
+        a
+      end
+
+      def from_hash(h)
+        h = self.class.unwrap(h)
+        @rd  = coerce_or_default(Rd, h[:rd])
+        @esi = coerce_or_default(Esi, h[:esi])
+        @ip  = coerce_or_default(Addr, h[:ip])
       end
 
     end

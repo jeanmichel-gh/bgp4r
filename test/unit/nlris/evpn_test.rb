@@ -135,17 +135,67 @@ class EvpnTest < Test::Unit::TestCase
     refute(BGP::Evpn.new(unknown).to_hash.has_key?(:length))
   end
 
-  # An unimplemented route type reads back whole, which is what this
-  # part delivers: every EVPN NLRI replays today and none has meaning.
-  def test_every_route_type_reads_back_as_unknown_in_this_part
-    assert_equal({}, BGP::Evpn::ROUTES,
-                 'no route type is implemented in this part')
+  # An unimplemented route type reads back whole. Types 1 and 4 are
+  # implemented, so a two octet body for either is not a layout they can
+  # represent and falls back to Unknown; every other type has no class
+  # at all. Either way the octets replay, which is the point.
+  def test_an_unimplemented_route_type_reads_back_whole
+    assert_equal([1, 4], BGP::Evpn::ROUTES.keys.sort)
     (1..11).each do |t|
       n = BGP::Evpn.new(wire('%02x02aabb' % t))
       assert_instance_of(BGP::Evpn::Unknown, n.route)
       assert_equal(t, n.type)
       assert_equal('%02x02aabb' % t, n.to_shex)
     end
+  end
+
+  # A body a registered route type can read resolves to that class.
+  def test_a_whole_body_resolves_to_its_route_type
+    n = BGP::Evpn.new(wire('0119' \
+                           '00000064000000c80011223344556677889900000064001f41'))
+    assert_instance_of(BGP::Evpn::Ethernet_ad, n.route)
+    assert_equal(1, n.type)
+    assert_equal(100, n.route.ethernet_tag_id.value)
+    assert_equal(500, n.route.label.label)
+    assert_nil(n.declared_len)
+
+    m = BGP::Evpn.new(wire('0417' \
+                           '00000064000000c80011223344556677889920c0000201'))
+    assert_instance_of(BGP::Evpn::Ethernet_segment, m.route)
+    assert_equal('192.0.2.1', m.route.ip.address)
+  end
+
+  # **A route type is kept only if it can give its own octets back.**
+  # Both layouts are fixed width and nothing in the framing guarantees
+  # the Length agrees, so a short or long body falls back to Unknown
+  # rather than inventing the fields it did not find. Same rule
+  # Flow_spec applies to its components.
+  def test_a_body_the_route_type_cannot_reproduce_falls_back_to_unknown
+    short = '00000064000000c8001122334455667788990000006400'
+    n = BGP::Evpn.new(wire('0118' + short))
+    assert_instance_of(BGP::Evpn::Unknown, n.route,
+                       'a 23 octet body is not a 25 octet route type 1')
+    assert_equal('0118' + short, n.to_shex)
+    assert_equal(24, n.declared_len)
+
+    long = '00000064000000c80011223344556677889900000064001f41ff'
+    m = BGP::Evpn.new(wire('011a' + long))
+    assert_instance_of(BGP::Evpn::Unknown, m.route)
+    assert_equal('011a' + long, m.to_shex,
+                 'the extra octet replays rather than being dropped')
+  end
+
+  # And a route type 4 whose address length is not 32 or 128 still
+  # resolves, because its own encode does reproduce those octets. So the
+  # fallback is about what the class can represent, not about what the
+  # RFC allows.
+  def test_an_address_length_no_rfc_allows_still_resolves
+    # 0416, then RD (8), ESI (10), a length octet of 24, three octets.
+    n = BGP::Evpn.new(wire('0416' + '00000064000000c8' +
+                           '00000000000000000000' + '18' + 'c00002'))
+    assert_instance_of(BGP::Evpn::Ethernet_segment, n.route)
+    assert_equal(24, n.route.ip.bitlen)
+    assert_nil(n.route.ip.address, 'three octets are not a family')
   end
 
   # RFC 7911 section 3 prepends a Path Identifier to the NLRI.
