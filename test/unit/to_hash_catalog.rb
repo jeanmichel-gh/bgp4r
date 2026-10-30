@@ -787,6 +787,87 @@ module ToHashCatalog
     BGP::OPT_PARM::CAP::Orf::Entry.new(wire('0001ff01014001'))
   end
 
+  # ====================================================================
+  # Flow Specification components
+  # ====================================================================
+
+  # RFC 8955 section 4.2.2 and RFC 8956 section 3. Every one of these
+  # round trips, which is not luck: the hash shape was written against
+  # these classes rather than inherited from an older one, so there is no
+  # field here that entered the object after the hash was settled, which
+  # is the root cause behind every lossy row above.
+  #
+  # The recipes exercise every field, and for an operator component that
+  # means more than the pairs: the AND bit of RFC 8955 section 4.2.1.1, a
+  # value too wide for one octet, a last pair with no end-of-list bit,
+  # the reserved bit that section says "MUST be set to 0 on NLRI
+  # encoding", and the tail of a pair whose value field overran. All five
+  # are reachable from values as well as from the wire, so these build
+  # from values; nothing here arrives only by parsing.
+
+  # An operator component recipe. The three pairs read ">= 137", "AND <=
+  # 139 with the reserved bit set" and "== 8080 without the end-of-list
+  # bit", and then four octets that cannot be a whole pair.
+  FS_NUMERIC = lambda do |k|
+    k.new([:ge, 137],
+          { :op => :and_le, :value => 139, :reserved => 8 },
+          { :op => :eq, :value => 8080, :eol => false },
+          { :tail => '1100' })
+  end
+
+  # The same for a bitmask component, whose low two bits are (not << 1) |
+  # m per RFC 8955 section 4.2.1.2 and whose reserved field is two bits
+  # rather than one.
+  FS_BITMASK = lambda do |k|
+    k.new([:match, 0x02],
+          { :op => :and_not_any, :value => 0x05, :reserved => 12 },
+          { :op => :any, :value => 0x08, :eol => false },
+          { :tail => '1100' })
+  end
+
+  { 'Ip_protocol' => 3, 'Upper_layer_protocol' => 3, 'Port' => 4,
+    'Destination_port' => 5, 'Source_port' => 6, 'Icmp_type' => 7,
+    'Icmpv6_type' => 7, 'Icmp_code' => 8, 'Icmpv6_code' => 8,
+    'Packet_length' => 10, 'Dscp' => 11, 'Flow_label' => 13,
+  }.each_key do |name|
+    k = BGP::Flow_spec.const_get(name)
+    ENTRIES["BGP::Flow_spec::#{name}"] = entry(:ok, nil, nil) { FS_NUMERIC.call(k) }
+  end
+
+  %w[Tcp_flags Fragment Ipv6_fragment].each do |name|
+    k = BGP::Flow_spec.const_get(name)
+    ENTRIES["BGP::Flow_spec::#{name}"] = entry(:ok, nil, nil) { FS_BITMASK.call(k) }
+  end
+
+  # RFC 8955 section 4.2.2.1: "<type (1 octet), length (1 octet), prefix
+  # (variable)>", and the prefix is all the class carries.
+  ENTRIES['BGP::Flow_spec::Destination_prefix'] = entry(:ok, nil, nil) do
+    BGP::Flow_spec::Destination_prefix.new('192.0.2.0/24')
+  end
+
+  ENTRIES['BGP::Flow_spec::Source_prefix'] = entry(:ok, nil, nil) do
+    BGP::Flow_spec::Source_prefix.new('203.0.113.0/24')
+  end
+
+  # RFC 8956 section 3.1 adds an offset octet and padding, so those are
+  # the two fields the IPv4 classes have not got. The padding only exists
+  # where length minus offset is not a whole octet, which is why this is
+  # section 3.8.2's 39 bit pattern and not section 3.8.1's 40 bit one.
+  ENTRIES['BGP::Flow_spec::Destination_ipv6_prefix'] = entry(:ok, nil, nil) do
+    BGP::Flow_spec::Destination_ipv6_prefix.new('2001:db8::/32')
+  end
+
+  ENTRIES['BGP::Flow_spec::Source_ipv6_prefix'] = entry(:ok, nil, nil) do
+    BGP::Flow_spec::Source_ipv6_prefix.new(
+      :prefix => '::1234:5678:9a00:0/65-104', :padding => 1)
+  end
+
+  # The fifth keep-what-you-cannot-read class. It holds a type octet and
+  # the rest of the NLRI value, and both are in the hash.
+  ENTRIES['BGP::Flow_spec::Unknown'] = entry(:ok, nil, nil) do
+    BGP::Flow_spec::Unknown.new(99, "\x01\x02\x03\x04\x05")
+  end
+
   # Classes with no entry, each with the reason. An abstract base with no
   # sensible instance belongs here; a class merely awkward to build does
   # not.
@@ -797,6 +878,32 @@ module ToHashCatalog
       'subclasses, so a field or hash build raises NameError, and a ' \
       'wire build raises NoMethodError on parse_value. Its subclasses ' \
       'are measured instead.',
+    # The six abstract bases of flow_spec_component.rb. Each supplies
+    # TYPE and HASH_KEY from a subclass, so none of the three build paths
+    # can run in the base itself: a field build raises NameError on TYPE
+    # and the Op_component ones raise NotImplementedError on pair_klass.
+    # The 20 concrete classes above are measured instead.
+    'BGP::Flow_spec::Component' =>
+      'an abstract base with no sensible instance. TYPE and HASH_KEY ' \
+      'come from the subclasses, and encode_value is not defined here ' \
+      'at all. Its 20 concrete subclasses are measured instead.',
+    'BGP::Flow_spec::Op_component' =>
+      'an abstract base. pair_klass raises NotImplementedError, so no ' \
+      'build path reaches a pair. Numeric_component and ' \
+      'Bitmask_component supply it and their subclasses are measured.',
+    'BGP::Flow_spec::Numeric_component' =>
+      'an abstract base: it supplies pair_klass and nothing else, so ' \
+      'TYPE and HASH_KEY are still missing. Its 12 subclasses are ' \
+      'measured.',
+    'BGP::Flow_spec::Bitmask_component' =>
+      'an abstract base, as Numeric_component is. Its 3 subclasses are ' \
+      'measured.',
+    'BGP::Flow_spec::Prefix_component' =>
+      'an abstract base: parse reads the class AFI constant, which only ' \
+      'Destination_prefix and Source_prefix define. Both are measured.',
+    'BGP::Flow_spec::Ipv6_prefix_component' =>
+      'an abstract base, as Prefix_component is. ' \
+      'Destination_ipv6_prefix and Source_ipv6_prefix are measured.',
     'BGP::Tunnel_encap::Int_sub_tlv' =>
       'an abstract base with no sensible instance. Its initialize and ' \
       'to_hash read self.class::TYPE, SIZE, NAME and KEY and it ' \
