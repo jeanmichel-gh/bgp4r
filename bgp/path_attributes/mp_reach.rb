@@ -35,38 +35,13 @@ module BGP
       @safi = h[:safi]
       @path_id = h[:path_id]
       @afi = h[:afi] || self.class.afi_from_nlris(h[:nlris])
-      case safi
-      when 1,2
-        pfx_klass = prefix_klass(afi, safi)
-        @nlris = [h[:nlris]].flatten.compact.collect do |n|
-          case n
-          when String
-            path_id ? pfx_klass.new(path_id, n) : pfx_klass.new(n)
-          when Hash
-            # A path ID in the NLRI hash wins over the top level :path_id.
-            pid = n[:path_id] || @path_id
-            pfx = n[:prefix]
-            pid ? pfx_klass.new(pid, pfx) : pfx_klass.new(pfx)
-          else
-            raise ArgumentError, "Invalid: #{n.inspect}"
-          end
-        end
-      when 4
-        @nlris = [h[:nlris]].flatten.compact.collect do |n|
-          path_id = n[:path_id] || @path_id
-          prefix = n[:prefix].is_a?(String) ? Prefix.new(n[:prefix]) : n[:prefix]
-          Labeled.new_with_path_id(path_id, prefix, *labels_from(n))
-        end
-      when 128,129
-        @nlris = [h[:nlris]].flatten.compact.collect do |n|
-          path_id = n[:path_id] || @path_id
-          prefix = n[:prefix].is_a?(Prefix) ? n[:prefix] :  Prefix.new(n[:prefix]) 
-          rd = n[:rd].is_a?(Rd) ?  n[:rd] : Rd.new(*n[:rd])
-          Labeled.new_with_path_id(path_id, Vpn.new(prefix,rd), *labels_from(n))
-        end
-      else
-        raise "SAFI #{safi} not implemented!"
-      end
+      # One lookup where there used to be a case statement per family.
+      # bgp/nlris/registry.rb says why, and each family registers at the
+      # bottom of its own file. The message is unchanged, since a script
+      # may be matching on it.
+      build = Nlri_registry.builder(safi)
+      raise "SAFI #{safi} not implemented!" unless build
+      @nlris = build.call(h[:nlris], afi, safi, @path_id)
       @nexthops = [h[:nexthop]].flatten.collect { |nh| nexthop_klass(afi,safi,nh).new(nh) } if h[:nexthop]
       self
     end
@@ -80,11 +55,6 @@ module BGP
     # NoMethodError in encode: the hash of a parsed withdrawal could not
     # be built back, which is the round trip Conventions asks every class
     # to keep.
-    def labels_from(n)
-      return [{ :compatibility => n[:compatibility] }] if n[:compatibility]
-      [n[:label]].flatten.compact
-    end
-    
     def to_hash
       h_afi_safi = {:safi=> @safi, :afi=>@afi}
       h_nlris = @nlris.size>1 ? @nlris.collect { |n| nlri_to_hash(n) } : nlri_to_hash(@nlris[0])
@@ -153,23 +123,6 @@ module BGP
     
     private 
     
-    def prefix_klass(afi, safi)
-      case afi
-      when 1,2
-        _afi='Inet'
-      when 3
-        return ::BGP.const_get('Prefix')
-      else
-        raise ArgumentError, "AFI #{afi.inspect} is not supported, expected 1 (IPv4), 2 (IPv6) or 3 (NSAP)"
-      end
-      _safi = case safi
-      when 1 ; 'unicast'
-      when 2 ; 'multicast'
-      else
-        raise ArgumentError, "SAFI #{safi.inspect} has no prefix class, expected 1 (unicast) or 2 (multicast)"
-      end
-      ::BGP.const_get([_afi,_safi].join('_'))
-    end
     
   end
 

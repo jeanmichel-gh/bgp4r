@@ -11,6 +11,7 @@ require 'bgp/common'
 require 'bgp/iana'
 
 require 'bgp/nlris/nsap'
+require 'bgp/nlris/registry'
 
 module BGP
 
@@ -256,6 +257,57 @@ end
 #pfx = Prefix.new_ntop([s].pack('H*'), 2)
 
 end
+
+# SAFI 1 and 2, the prefix families, for every AFI. RFC 4760 sections 3
+# and 4 put one <length, prefix> after another in the attribute, so the
+# parser reads the one prefix it is handed.
+#
+# Prefix.klass_for is what MpReachCommon#prefix_klass used to be, moved
+# here because naming Inet_unicast and friends is this file's business
+# and it had exactly one caller.
+module BGP
+  class Prefix
+    def self.klass_for(afi, safi)
+      case afi
+      when 1,2
+        _afi='Inet'
+      when 3
+        return ::BGP.const_get('Prefix')
+      else
+        raise ArgumentError, "AFI #{afi.inspect} is not supported, expected 1 (IPv4), 2 (IPv6) or 3 (NSAP)"
+      end
+      _safi = case safi
+      when 1 ; 'unicast'
+      when 2 ; 'multicast'
+      else
+        raise ArgumentError, "SAFI #{safi.inspect} has no prefix class, expected 1 (unicast) or 2 (multicast)"
+      end
+      ::BGP.const_get([_afi,_safi].join('_'))
+    end
+  end
+
+  Nlri_registry.register_parse([1, 2]) do |s, afi, _safi, path_id, _withdrawn|
+    Prefix.new_ntop(s, afi, path_id)
+  end
+
+  Nlri_registry.register_build([1, 2]) do |nlris, afi, safi, path_id|
+    pfx_klass = Prefix.klass_for(afi, safi)
+    [nlris].flatten.compact.collect do |n|
+      case n
+      when String
+        path_id ? pfx_klass.new(path_id, n) : pfx_klass.new(n)
+      when Hash
+        # A path ID in the NLRI hash wins over the top level :path_id.
+        pid = n[:path_id] || path_id
+        pfx = n[:prefix]
+        pid ? pfx_klass.new(pid, pfx) : pfx_klass.new(pfx)
+      else
+        raise ArgumentError, "Invalid: #{n.inspect}"
+      end
+    end
+  end
+end
+
 
 load "../../test/unit/nlris/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0
 

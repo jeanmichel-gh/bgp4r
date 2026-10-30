@@ -14,7 +14,10 @@ bgp/common.rb            shared helpers (IPAddr extensions, hex dumps)
 bgp/iana.rb              IANA constants (AFI, SAFI, attribute codes)
 bgp/messages/            OPEN, UPDATE, KEEPALIVE, NOTIFICATION, ROUTE-REFRESH, CAPABILITY
 bgp/path_attributes/     one file per path attribute (origin, as_path, communities, mp_reach...)
-bgp/nlris/               prefix encodings (inet, labeled, VPN, RD, mapped IPv4)
+bgp/nlris/               prefix encodings (inet, labeled, VPN, RD, mapped IPv4);
+                         registry.rb maps [afi, safi] to the class that reads and
+                         writes that family, and each family registers at the
+                         bottom of its own file
 bgp/optional_parameters/ OPEN capabilities (4-byte AS, add-path, graceful restart...)
 bgp/orfs/                outbound route filtering
 bgp/neighbor/            the BGP finite state machine and TCP session (neighbor.rb)
@@ -161,7 +164,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. A `lab` job runs the Compose topologies, and installs a `gobgpd` release so the native fault matrix runs there too; it pins 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-10-29: 1407 tests, 22669 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.7%.
+Baseline on 2026-10-29: 1415 tests, 22702 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.7%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -207,6 +210,14 @@ There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Cove
 * Before requiring a standard library, check that it is still a default gem. Ruby keeps moving libraries to bundled gems (`observer` in 3.4, `logger` in 4.0), and under Bundler those fail to load unless declared. Prefer a small built-in copy, as with `BGP::Observable`.
 * Do not redefine methods of standard library classes. Newer versions may add the same method with different behavior (`IPAddr#+` in Ruby 4.0). Guard additions with `unless method_defined?`.
 * **`const_defined?` searches the ancestors unless you pass `false`.** Several files guard a generated class with `unless const_defined? :Unknown` so the file is safe to require twice. That guard asks the wrong question: adding `Optional_parameter::Unknown` in #154 made `Capability.const_defined?(:Unknown)` true by inheritance, so `Capability::Unknown` was never defined and every reference to it resolved up the chain to the parameter level class, which has a different hash and a different constructor. Three tests in two other files failed and not one of them named a constant. Write `const_defined?(:Unknown, false)`, which asks whether this class defines it. `test_the_three_unknown_classes_are_distinct` in `test/unit/optional_parameters/optional_parameter_test.rb` guards the three that now exist. The same guard in `bgp/path_attributes/path_attribute.rb` is still the ancestor searching form; it is correct only because nothing above `Path_attribute` defines an `Unknown`, which is luck.
+  * **The same guard has a second failure mode, which is a file loading earlier defining the constant.** `bgp/nlris/nlri.rb` creates both its classes inside `unless const_defined?(:Nlri)`:
+    ```ruby
+    unless const_defined?(:Nlri)
+      Nlri      = Class.new(Base_nlri) do ... end
+      Withdrawn = Class.new(Base_nlri) do ... end
+    end
+    ```
+    So anything that defines `BGP::Nlri` before that line runs skips the **whole block**, and `Withdrawn` is never defined either. The first draft of the NLRI registry opened `class Nlri` in a file `nlri.rb` requires, and the result was a dozen failures naming `new_ntop`, `empty?`, `<<` and `BGP::Update::Withdrawn`, not one of them naming the guard or the constant that tripped it. **Do not reopen `class Nlri` outside that file**; `Nlri_registry` is a module of its own for exactly this reason, and `test_nlri_and_withdrawn_are_the_base_nlri_subclasses` guards it.
 * Do not mutate string literals. CI runs the suite with `--enable-frozen-string-literal`. Use `String.new` or `+''` for a buffer.
 
 ## Rules for agents
@@ -1125,7 +1136,7 @@ true here is the shape of the gap:
   points. The attribute figure reads worse than it is: FRR's `bgpd.h` defines
   exactly bgp4r's 22 plus two.
 
-### Breadth, the one SAFI lever. Phases 1 to 4 not started
+### Breadth, the one SAFI lever. Phase 1 Done, 2 to 4 not started
 
 The section above deferred breadth and named the single limit. This is the
 plan for lifting it, recorded before the work starts.
@@ -1188,16 +1199,34 @@ Two consequences, both of which change the plan rather than decorate it:
   is what `Attr::Raw` already does. Recorded so the next reader does not
   propose it again.
 
-1. **A registry for NLRI classes. Not started.** Keyed by `[afi, safi]`
-   and shaped on `Attr.register`, read by both gates so they cannot
-   disagree. The families bgp4r already reads move onto it with no
-   behaviour change, and the whole suite passing unchanged is the test.
-   `prefix_klass` stays as what it is, the prefix families' own lookup.
-   A family with no registration still raises, because that raise is what
-   files the Gap.
-   * 1 PR, no new wire format. It comes before the families rather than
-     being discovered halfway through one, the way the locking in RIB
-     phase 2 and the UPDATE builder in phase 3 were both landed first.
+1. **A registry for NLRI classes. Done**, in #173, 1 PR as estimated.
+   `bgp/nlris/registry.rb` holds `BGP::Nlri_registry`, and each family
+   registers at the bottom of its own file the way each attribute file
+   calls `Attr.register`. Both gates consult it and neither names a
+   family any more, so they cannot disagree. The five families bgp4r
+   already read moved onto it with no behaviour change, and the suite
+   passing unchanged at 1407 tests was the test; the 8 that came with it
+   are `test/unit/nlris/registry_test.rb`.
+   * **Parse and build are two registries, not one.** They are not keyed
+     alike and forcing them to be would mean inventing an entry nothing
+     reads. Parsing is keyed by AFI and SAFI, because AFI 1 with SAFI 1
+     reads a whole NLRI list where every other prefix family reads one
+     prefix at a time; building is keyed by SAFI alone, because every AFI
+     builds a family the same way. `Attr` has the same asymmetry in
+     `registered_types` and `registered_keys`.
+   * `MpReachCommon#prefix_klass` became `Prefix.klass_for` and
+     `#labels_from` became `Labeled.labels_from`, each moved to the file
+     whose business it is. Both had exactly one caller.
+   * A family with no registration still raises on both sides, with both
+     messages unchanged, since a script may be matching on them. The
+     parse side raise is the one that matters and it now carries a
+     comment saying so, in place of the `#TODO class Error.....` that
+     asked for the opposite.
+   * **What it cost: the `const_defined?` trap, in a new costume.** The
+     first draft opened `class Nlri` in a file `nlri.rb` requires, which
+     made that file's `unless const_defined?(:Nlri)` guard true before it
+     ran and skipped both class definitions. Twelve failures, none of
+     them naming the constant. Conventions now records it.
 2. **Flowspec, SAFI 133 and 134, RFC 8955 and RFC 8956. Not started.**
    First of the real families, for three reasons. bgp4r is already half
    built here, since all five traffic filtering extended communities are

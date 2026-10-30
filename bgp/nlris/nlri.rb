@@ -24,6 +24,7 @@
 require 'bgp/common'
 require 'bgp/iana'
 require 'bgp/nlris/prefix'
+require 'bgp/nlris/registry'
 module BGP
 
   class Base_nlri
@@ -164,22 +165,35 @@ module BGP
     # because they are the only ones whose NLRI carries a label for RFC
     # 8277 section 2.4 to replace.
     def self.factory(s, afi, safi, path_id=nil, withdrawn=false)
-      if afi== 1 and safi==1
-        Nlri.new_ntop(s.is_packed, path_id)
-      else
-        case safi
-        when 1,2
-          Prefix.new_ntop(s.is_packed, afi, path_id)
-        when 4,128,129
-          Labeled.new_ntop(s.is_packed, afi, safi, path_id, withdrawn)
-        else
-          #TODO class Error.....
-          raise RuntimeError, "Afi #{afi} Safi #{safi} not supported!"
-        end
-      end
+      parse = Nlri_registry.parser(afi, safi)
+      # **This raise is load bearing and must stay.** It is how a family
+      # bgp4r does not implement gets reported: the decoder raising is
+      # what makes Path_attribute file an Attr::Gap and keep the whole
+      # attribute as an Attr::Raw that encodes byte for byte (#116). So
+      # an EVPN or flowspec UPDATE already parses and replays today, with
+      # nothing in errors, because errors means what the peer got wrong.
+      # Returning an object here instead would delete that Gap and make
+      # bgp4r claim it understood a family it does not, which Conventions
+      # calls the worst failure a conformance tool has. A #TODO beside
+      # this line used to ask for exactly that, and it was wrong.
+      raise RuntimeError, "Afi #{afi} Safi #{safi} not supported!" unless parse
+      parse.call(s.is_packed, afi, safi, path_id, withdrawn)
     end
   end
   
+end
+
+# AFI 1 with SAFI 1 is the one family keyed by both AFI and SAFI: the
+# attribute holds a whole NLRI list rather than one prefix, so it is read
+# in one go, where every other prefix family reads one prefix at a time
+# through prefix.rb's registration for every AFI.
+#
+# This sits at the bottom of the file because BGP::Nlri does not exist
+# until the `unless const_defined?(:Nlri)` block above has run.
+module BGP
+  Nlri_registry.register_parse(1, :afi => 1) do |s, _afi, _safi, path_id, _withdrawn|
+    Nlri.new_ntop(s, path_id)
+  end
 end
 
 load "../../test/unit/nlris/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0

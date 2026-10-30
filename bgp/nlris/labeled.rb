@@ -1,4 +1,5 @@
 require 'bgp/nlris/label'
+require 'bgp/nlris/registry'
 module BGP
   class Labeled
 
@@ -85,6 +86,46 @@ module BGP
     end
   end
 
+end
+
+# SAFI 4, labeled unicast (RFC 8277), and SAFI 128 and 129, the VPN
+# families (RFC 4364), whose NLRI is a label stack in front of a prefix
+# and, for the VPN ones, a Route Distinguisher in front of that. The
+# withdrawn flag reaches only these, because they are the only families
+# whose NLRI carries a label for RFC 8277 section 2.4 to replace.
+#
+# Vpn and Rd load after this file, so both are named inside the blocks
+# and resolved when a block runs rather than when this file loads.
+module BGP
+  class Labeled
+    # What MpReachCommon#labels_from was. It reads a build hash, so it
+    # belongs with the families that take labels.
+    def self.labels_from(n)
+      return [{ :compatibility => n[:compatibility] }] if n[:compatibility]
+      [n[:label]].flatten.compact
+    end
+  end
+
+  Nlri_registry.register_parse([4, 128, 129]) do |s, afi, safi, path_id, withdrawn|
+    Labeled.new_ntop(s, afi, safi, path_id, withdrawn)
+  end
+
+  Nlri_registry.register_build(4) do |nlris, _afi, _safi, path_id|
+    [nlris].flatten.compact.collect do |n|
+      pid = n[:path_id] || path_id
+      prefix = n[:prefix].is_a?(String) ? Prefix.new(n[:prefix]) : n[:prefix]
+      Labeled.new_with_path_id(pid, prefix, *Labeled.labels_from(n))
+    end
+  end
+
+  Nlri_registry.register_build([128, 129]) do |nlris, _afi, _safi, path_id|
+    [nlris].flatten.compact.collect do |n|
+      pid = n[:path_id] || path_id
+      prefix = n[:prefix].is_a?(Prefix) ? n[:prefix] : Prefix.new(n[:prefix])
+      rd = n[:rd].is_a?(Rd) ? n[:rd] : Rd.new(*n[:rd])
+      Labeled.new_with_path_id(pid, Vpn.new(prefix, rd), *Labeled.labels_from(n))
+    end
+  end
 end
 
 load "../../test/unit/nlris/#{ File.basename($0.gsub(/.rb/,'_test.rb'))}" if __FILE__ == $0
