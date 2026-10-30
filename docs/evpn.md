@@ -92,8 +92,8 @@ across RFC 7432, RFC 9136 and RFC 9251, and its Table 2 adds three.
 | Type | Name | Reference | In bgp4r |
 |---|---|---|---|
 | 1 | Ethernet Auto-discovery | RFC 7432 section 7.1 | yes |
-| 2 | MAC/IP Advertisement | RFC 7432 section 7.2 | no |
-| 3 | Inclusive Multicast Ethernet Tag | RFC 7432 section 7.3 | no |
+| 2 | MAC/IP Advertisement | RFC 7432 section 7.2 | yes |
+| 3 | Inclusive Multicast Ethernet Tag | RFC 7432 section 7.3 | yes |
 | 4 | Ethernet Segment | RFC 7432 section 7.4 | yes |
 | 5 | IP Prefix | RFC 9136 section 3.1 | no |
 | 6 | Selective Multicast Ethernet Tag | RFC 9251 section 9.1 | no |
@@ -103,9 +103,10 @@ across RFC 7432, RFC 9136 and RFC 9251, and its Table 2 adds three.
 | 10 | S-PMSI A-D | RFC 9572 section 3.2 | no |
 | 11 | Leaf A-D | RFC 9572 section 3.3 | no |
 
-**Types 1 and 4 are implemented; every other type still reads back as an
-`Evpn::Unknown` that replays byte for byte.** The "In bgp4r" column is
-checked against `Evpn::ROUTES` by the doc test, so it cannot drift.
+**All four RFC 7432 route types are implemented; types 5 to 11 still read
+back as an `Evpn::Unknown` that replays byte for byte.** The "In bgp4r"
+column is checked against `Evpn::ROUTES` by the doc test, so it cannot
+drift.
 
 ### Types 1 and 4, the RD plus ESI pair
 
@@ -145,6 +146,59 @@ Section 7.1 says the MPLS Label "is to be treated as a route attribute
 as opposed to being part of the route", and section 7.4 names the three
 fields that are part of its prefix. That distinction matters to a RIB,
 and no EVPN route goes in a RIB by the recorded decision.
+
+### Types 2 and 3
+
+Route type 3, section 7.3, is **17 octets with an IPv4 address and 29
+with an IPv6 one**: RD (8), Ethernet Tag ID (4), IP Address Length (1),
+Originating Router's IP Address (4 or 16). It is **the only one of the
+five with no Ethernet Segment Identifier**, which is worth saying because
+every other RFC 7432 and RFC 9136 route type has one and a reader will
+look for it.
+
+Route type 2, section 7.2, is the largest layout in the family and the
+only one variable in **two independent ways**: RD (8), ESI (10),
+Ethernet Tag ID (4), MAC Address Length (1), MAC Address (6), IP Address
+Length (1), IP Address (0, 4 or 16), MPLS Label1 (3), MPLS Label2 (0 or
+3).
+
+**The field rules for it are in section 14, not section 7.2.** That is
+where to look, and all three matter:
+
+* the MAC: "The MAC Address Length field is in bits, and it is set to
+  48. MAC address length values other than 48 bits are outside the scope
+  of this document." Outside the scope is **not** an error, which is
+  exactly why `Mac_addr` echoes any length and still keeps its 6 octets.
+* the IP: "The IP Address field is optional. By default, the IP Address
+  Length field is set to 0, and the IP Address field is omitted from the
+  route", and when present it "is set to 32 or 128 bits".
+* Label2: "The MPLS Label2 field is an optional field. If it is present,
+  then it is encoded as 3 octets, where the high-order 20 bits contain
+  the label value."
+
+**So six lengths are possible, and all six are distinct**: 33, 36, 37,
+40, 49 and 52. That is what lets section 14 say "The Length field of the
+EVPN NLRI ... is sufficient to determine whether an IP address is encoded
+in this route and, if so, whether the encoded IP address is IPv4 or
+IPv6."
+
+bgp4r does **not** use the outer Length for it. The IP Address Length
+field is the in-band discriminator and `Addr` reads it directly, which is
+simpler and is what the octets themselves say. The two can only disagree
+on a malformed route, and the encode-matches rule catches that by falling
+back to `Unknown`.
+
+**Label2 is decided by what is left**, which is sound because the body is
+bounded: `Evpn` slices exactly Length octets and hands them to the route.
+Fewer than three octets left is not a Label2, and not an error at that
+level either; `encode` then fails to reproduce the body and the NLRI
+falls back to `Unknown`.
+
+**The two labels are named rather than merged flat, and that differs from
+route type 1 on purpose.** One label can merge its own `:label` and
+`:exp` keys into the route's hash because nothing collides, which is what
+type 1 does. Two cannot, so each rides under `:label1` and `:label2`
+holding `Label`'s own hash. `:label2` appears only when there is one.
 
 ## 4. The primitives
 

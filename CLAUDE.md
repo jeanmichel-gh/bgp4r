@@ -30,11 +30,12 @@ bgp/nlris/               prefix encodings (inet, labeled, VPN, RD, mapped IPv4)
                          types share, the Esi of RFC 7432 section 5, the
                          Ethernet Tag ID, the MAC and the length-prefixed
                          address, with the Route base and Evpn::Unknown under
-                         them, and route types 1 and 4; evpn.rb the NLRI with
+                         them, and route types 1, 2, 3 and 4, the whole of
+                         RFC 7432 section 7; evpn.rb the NLRI with
                          the section 7 Route Type and Length framing and
                          Evpn.nlri_size. Neither is wired to MP_REACH yet, so
                          an EVPN UPDATE is still an Attr::Raw. Evpn::ROUTES
-                         holds types 1 and 4; every other type reads back as an
+                         holds types 1 to 4; every other type reads back as an
                          Evpn::Unknown that replays byte for byte, and so does
                          a body a registered type cannot reproduce.
                          docs/evpn.md is the guide, see also
@@ -224,7 +225,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. A `lab` job runs the Compose topologies, and installs a `gobgpd` release so the native fault matrix runs there too; it pins 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-10-30: 1589 tests, 23678 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.9%.
+Baseline on 2026-10-30: 1605 tests, 23768 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.9%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -1841,10 +1842,59 @@ Two consequences, both of which change the plan rather than decorate it:
         section 7.1 makes the MPLS Label "a route attribute as opposed
         to being part of the route" and section 7.4 names its own prefix
         fields, which matters to a RIB, and no EVPN route goes in one.
-   3. **Route types 2 and 3**, RFC 7432 sections 7.2 and 7.3. Type 2 is
-      the largest layout in the family: RD, ESI, Ethernet Tag ID, a
-      length-prefixed MAC, a length-prefixed IP, and **two** label
-      fields where the second is 0 or 3 octets.
+   3. **Route types 2 and 3. Done**, in #183, RFC 7432 sections 7.2
+      and 7.3, which finishes the whole of section 7. Type 3 is 17
+      octets with an IPv4 address and 29 with an IPv6 one, and is **the
+      only one of the five with no Ethernet Segment Identifier**, worth
+      saying because every other type has one and a reader will look.
+      Type 2 is the largest layout in the family.
+      * **The field rules for type 2 are in section 14, not section
+        7.2.** That is where to look and all three matter. The MAC:
+        "The MAC Address Length field is in bits, and it is set to 48.
+        MAC address length values other than 48 bits are outside the
+        scope of this document" — outside the scope is **not** an error,
+        which is exactly why part 1's `Mac_addr` echoes any length and
+        keeps its 6 octets. The IP: "The IP Address field is optional.
+        By default, the IP Address Length field is set to 0, and the IP
+        Address field is omitted from the route." And Label2: "The MPLS
+        Label2 field is an optional field. If it is present, then it is
+        encoded as 3 octets."
+      * **Six lengths are possible and all six are distinct**: 33, 36,
+        37, 40, 49 and 52. That is what lets section 14 say "The Length
+        field of the EVPN NLRI ... is sufficient to determine whether an
+        IP address is encoded in this route and, if so, whether the
+        encoded IP address is IPv4 or IPv6." bgp4r does **not** use the
+        outer Length for it: the IP Address Length field is the in-band
+        discriminator and `Addr` reads it directly. The two can only
+        disagree on a malformed route, and part 2's encode-matches rule
+        catches that. The distinctness is asserted from the library
+        rather than from the document's list.
+      * **Label2 is decided by what is left**, which is sound only
+        because the body is bounded: `Evpn` slices exactly Length octets
+        and hands them down. Two octets left over are not a Label2 and
+        not an error there either; `encode` then cannot reproduce the
+        body and the NLRI falls back to `Unknown`, replaying it.
+      * **The two labels are named rather than merged flat, unlike route
+        type 1, and the reason is the count.** One label can merge its
+        own `:label` and `:exp` keys into the route's hash because
+        nothing collides; two cannot. So each rides under `:label1` and
+        `:label2` holding `Label`'s own hash, and `:label2` appears only
+        when there is one.
+      * **A bug #182 shipped, found while writing this and fixed here.**
+        `BGP::Label.new` with no argument leaves its label unset, so
+        `Ethernet_ad.new(rd, esi, tag)` with the label omitted raised
+        `NoMethodError` inside `Label#encode`, "undefined method `<<'
+        for false". The four argument form and the no argument form both
+        worked, which is why it went unnoticed. `coerce_label` defaults
+        to label 0 in one place for both route types that carry one, and
+        `test_a_route_type_built_without_its_label_still_encodes` is the
+        regression.
+      * **An empty route type 2 is 33 octets, not 27**, because the MAC
+        defaults to 48 zero bits where the IP defaults to absent. That
+        difference is the RFC's: section 14 calls the IP optional in so
+        many words and fixes the MAC's length at 48. A MAC left out
+        entirely still builds, since nothing validates; it is just not
+        the default.
    4. **Route type 5**, RFC 9136 section 3.1, the IP Prefix route, whose
       fixed 34 and 58 lengths are the family dispatch described above.
    5. **Wiring to the two dispatch sites, plus a loopback functional

@@ -498,6 +498,193 @@ class EvpnRouteTest < Test::Unit::TestCase
     end
   end
 
+  # RFC 7432 section 7.2, the largest layout in the family: RD (8),
+  # ESI (10), Tag (4), MAC len (1), MAC (6), IP len (1), IP (0, 4 or
+  # 16), Label1 (3), Label2 (0 or 3).
+  def test_route_type_2_carries_every_field
+    r = BGP::Evpn::Mac_ip_advertisement.new(
+      [100, 200], '00:11:22:33:44:55:66:77:88:99', 100,
+      '00:11:22:33:44:55', '192.0.2.1', 500, 501)
+    assert_equal(40, r.encode.size)
+    assert_equal('00000064000000c800112233445566778899000000643000112233445' \
+                 '520c0000201001f41001f51', r.to_shex)
+    assert_equal(2, r.type)
+    assert_equal([100, 200], r.rd.to_hash[:rd])
+    assert_equal('00:11:22:33:44:55:66:77:88:99', r.esi.to_s)
+    assert_equal(100, r.ethernet_tag_id.value)
+    assert_equal('00:11:22:33:44:55', r.mac.to_s)
+    assert_equal('192.0.2.1', r.ip.address)
+    assert_equal(500, r.label1.label)
+    assert_equal(501, r.label2.label)
+  end
+
+  # **The six lengths section 14 implies, and no two are equal.** That
+  # is what lets the section say "The Length field of the EVPN NLRI ...
+  # is sufficient to determine whether an IP address is encoded in this
+  # route and, if so, whether the encoded IP address is IPv4 or IPv6."
+  def test_the_six_route_type_2_shapes_have_six_distinct_lengths
+    got = {}
+    [[nil, 'none'], ['192.0.2.1', 'v4'], ['2001:db8::1', 'v6']].each do |ip, n|
+      [[nil, 1], [501, 2]].each do |l2, c|
+        r = BGP::Evpn::Mac_ip_advertisement.new(
+          [100, 200], BGP::Evpn::Esi.new, 0, '00:11:22:33:44:55', ip, 500, l2)
+        got["#{n}/#{c}"] = r.encode.size
+      end
+    end
+    assert_equal({ 'none/1' => 33, 'none/2' => 36,
+                   'v4/1' => 37, 'v4/2' => 40,
+                   'v6/1' => 49, 'v6/2' => 52 }, got)
+    assert_equal(6, got.values.uniq.size)
+  end
+
+  def test_route_type_2_builds_four_ways_in_every_shape
+    [[nil, nil], ['192.0.2.1', nil], ['2001:db8::1', 501],
+     [nil, 501], ['192.0.2.1', 501]].each do |ip, l2|
+      r = BGP::Evpn::Mac_ip_advertisement.new(
+        [100, 200], '00:11:22:33:44:55:66:77:88:99', 100,
+        '00:11:22:33:44:55', ip, 500, l2)
+      want = r.to_shex
+      assert_equal(want,
+                   BGP::Evpn::Mac_ip_advertisement.new(r.encode.is_packed).to_shex)
+      assert_equal(want, BGP::Evpn::Mac_ip_advertisement.new(r.to_hash).to_shex)
+      assert_equal(want, BGP::Evpn::Mac_ip_advertisement.new(r).to_shex)
+    end
+  end
+
+  # Section 14: "The IP Address field is optional. By default, the IP
+  # Address Length field is set to 0, and the IP Address field is
+  # omitted from the route."
+  def test_route_type_2_omits_the_ip_by_default
+    r = BGP::Evpn::Mac_ip_advertisement.new([100, 200], BGP::Evpn::Esi.new, 0,
+                                            '00:11:22:33:44:55')
+    assert_equal(33, r.encode.size)
+    assert(r.ip.empty?)
+    assert_equal('00000064000000c80000000000000000000000000000300011223344' \
+                 '5500000001', r.to_shex)
+  end
+
+  # And Label2 appears in the hash only when there is one, which is the
+  # extra-key-only-when-present rule.
+  def test_route_type_2_hash_names_both_labels
+    r = BGP::Evpn::Mac_ip_advertisement.new(
+      [100, 200], BGP::Evpn::Esi.new, 0, '00:11:22:33:44:55',
+      '192.0.2.1', 500, 501)
+    h = r.to_hash[:mac_ip_advertisement]
+    assert_equal({ :label => 500, :exp => 0 }, h[:label1])
+    assert_equal({ :label => 501, :exp => 0 }, h[:label2])
+    assert_equal('00:11:22:33:44:55', h[:mac])
+    assert_equal('192.0.2.1', h[:ip])
+    one = BGP::Evpn::Mac_ip_advertisement.new([100, 200], BGP::Evpn::Esi.new,
+                                              0, '00:11:22:33:44:55')
+    refute(one.to_hash[:mac_ip_advertisement].has_key?(:label2))
+  end
+
+  # Section 14: "MAC address length values other than 48 bits are
+  # outside the scope of this document." Outside the scope is not an
+  # error, so it is echoed and the hash falls back to the Sized form.
+  def test_route_type_2_keeps_a_mac_length_outside_the_scope
+    m = BGP::Evpn::Mac_addr.new(24, wire('001122334455'))
+    r = BGP::Evpn::Mac_ip_advertisement.new([100, 200], BGP::Evpn::Esi.new, 0,
+                                            m, nil, 500)
+    assert_equal({ :bitlen => 24, :value => '001122334455' },
+                 r.to_hash[:mac_ip_advertisement][:mac])
+    assert_equal(r.to_shex,
+                 BGP::Evpn::Mac_ip_advertisement.new(r.to_hash).to_shex)
+    assert_equal(33, r.encode.size, 'still 6 octets of MAC')
+  end
+
+  # RFC 7432 section 7.3: RD (8), Ethernet Tag ID (4), IP Address
+  # Length (1), Originating Router's IP Address (4 or 16).
+  def test_route_type_3_is_seventeen_or_twenty_nine_octets
+    v4 = BGP::Evpn::Inclusive_multicast.new([100, 200], 100, '192.0.2.1')
+    assert_equal(17, v4.encode.size)
+    assert_equal(17, BGP::Evpn::Inclusive_multicast::SIZE_V4)
+    assert_equal('00000064000000c80000006420c0000201', v4.to_shex)
+    v6 = BGP::Evpn::Inclusive_multicast.new([100, 200], 100, '2001:db8::1')
+    assert_equal(29, v6.encode.size)
+    assert_equal(29, BGP::Evpn::Inclusive_multicast::SIZE_V6)
+    assert_equal(3, v4.type)
+  end
+
+  # The only one of the five with no Ethernet Segment Identifier, which
+  # is worth pinning because every other type has one.
+  def test_route_type_3_has_no_ethernet_segment_identifier
+    r = BGP::Evpn::Inclusive_multicast.new([100, 200], 100, '192.0.2.1')
+    refute_respond_to(r, :esi)
+    assert_equal([:rd, :ethernet_tag_id, :ip],
+                 r.to_hash[:inclusive_multicast].keys)
+  end
+
+  def test_route_type_3_builds_four_ways
+    ['192.0.2.1', '2001:db8::1'].each do |ip|
+      r = BGP::Evpn::Inclusive_multicast.new([100, 200], 100, ip)
+      want = r.to_shex
+      assert_equal(want,
+                   BGP::Evpn::Inclusive_multicast.new(r.encode.is_packed).to_shex)
+      assert_equal(want, BGP::Evpn::Inclusive_multicast.new(r.to_hash).to_shex)
+      assert_equal(want, BGP::Evpn::Inclusive_multicast.new(r).to_shex)
+    end
+  end
+
+  # **The regression for a bug #182 shipped.** BGP::Label.new with no
+  # argument leaves its label unset, so a route type built with the
+  # label field omitted died inside Label#encode with "undefined method
+  # `<<' for false". The four argument form and the no argument form
+  # both worked, which is why it was not noticed. coerce_label defaults
+  # to label 0 in one place for both route types that carry one.
+  def test_a_route_type_built_without_its_label_still_encodes
+    assert_nothing_raised do
+      BGP::Evpn::Ethernet_ad.new([100, 200], BGP::Evpn::Esi.new, 0)
+    end
+    assert_equal('00000064000000c80000000000000000000000000000000001',
+                 BGP::Evpn::Ethernet_ad.new([100, 200], BGP::Evpn::Esi.new,
+                                            0).to_shex)
+    assert_equal(0, BGP::Evpn::Ethernet_ad.new([100, 200], BGP::Evpn::Esi.new,
+                                               0).label.label)
+    assert_nothing_raised do
+      BGP::Evpn::Mac_ip_advertisement.new([100, 200], BGP::Evpn::Esi.new, 0,
+                                          '00:11:22:33:44:55').encode
+    end
+    assert_nothing_raised do
+      BGP::Evpn::Mac_ip_advertisement.new(:rd => [100, 200],
+                                          :mac => '00:11:22:33:44:55').encode
+    end
+  end
+
+  def test_both_new_route_types_print_themselves
+    r2 = BGP::Evpn::Mac_ip_advertisement.new(
+      [100, 200], BGP::Evpn::Esi.new, 100, '00:11:22:33:44:55',
+      '192.0.2.1', 500, 501)
+    assert_equal('[2] MAC/IP: RD=100:200, ' \
+                 'ESI 00:00:00:00:00:00:00:00:00:00, tag 100, ' \
+                 'MAC 00:11:22:33:44:55, IP 192.0.2.1/32, label 500, ' \
+                 'label2 501', r2.to_s)
+    r3 = BGP::Evpn::Inclusive_multicast.new([100, 200], 100, '192.0.2.1')
+    assert_equal('[3] Inclusive Multicast: RD=100:200, tag 100, ' \
+                 'originating router 192.0.2.1/32', r3.to_s)
+  end
+
+  # An empty route type 2 is 33 octets, the shortest shape section 14
+  # describes: the MAC defaults to 48 zero bits because the section
+  # fixes its length at 48, and the IP to absent because the same
+  # section calls it optional. A MAC left out entirely still builds,
+  # since nothing validates, and gives 27.
+  def test_both_new_route_types_build_empty_and_refuse_nonsense
+    assert_equal(33, BGP::Evpn::Mac_ip_advertisement.new.encode.size)
+    assert_equal('00:00:00:00:00:00',
+                 BGP::Evpn::Mac_ip_advertisement.new.mac.to_s)
+    assert_equal(27, BGP::Evpn::Mac_ip_advertisement.new(
+      [100, 200], BGP::Evpn::Esi.new, 0, BGP::Evpn::Mac_addr.new).encode.size,
+                 'an absent MAC is buildable, just not the default')
+    assert_equal(13, BGP::Evpn::Inclusive_multicast.new.encode.size)
+    assert_raise(ArgumentError) do
+      BGP::Evpn::Mac_ip_advertisement.new(1, 2, 3, 4, 5, 6, 7, 8)
+    end
+    assert_raise(ArgumentError) do
+      BGP::Evpn::Inclusive_multicast.new(1, 2, 3, 4)
+    end
+  end
+
   # The base is in place for the parts that fill it. The route type
   # table itself lives in evpn.rb and is asserted there, because this
   # file requires evpn_route.rb alone and must pass run on its own:

@@ -187,6 +187,30 @@ class EvpnDocTest < Test::Unit::TestCase
     assert_equal(58, 8 + 10 + 4 + 1 + 16 + 16 + 3)
   end
 
+  # The claim that lets RFC 7432 section 14 say the outer Length alone
+  # identifies route type 2's shape: six are possible and no two are
+  # equal. Built from the library rather than from the document's list,
+  # so a field width changing on either side fails here.
+  def test_the_six_route_type_2_lengths_are_all_distinct
+    assert_match(/33, 36, 37,\s*40, 49 and 52/, doc)
+    sizes = [nil, '192.0.2.1', '2001:db8::1'].product([nil, 501]).collect do |ip, l2|
+      BGP::Evpn::Mac_ip_advertisement.new([100, 200], BGP::Evpn::Esi.new, 0,
+                                          '00:11:22:33:44:55', ip, 500,
+                                          l2).encode.size
+    end
+    assert_equal([33, 36, 37, 40, 49, 52], sizes.sort)
+    assert_equal(6, sizes.uniq.size, 'the outer Length could not identify them')
+  end
+
+  # Route type 3 is the only one of the five with no ESI, which the
+  # document says because a reader will look for one.
+  def test_route_type_3_has_no_ethernet_segment_identifier
+    assert_match(/only one of the\s*five with no Ethernet Segment Identifier/, doc)
+    r = BGP::Evpn::Inclusive_multicast.new([100, 200], 100, '192.0.2.1')
+    refute_respond_to(r, :esi)
+    assert_equal(17, r.encode.size)
+  end
+
   # Section 7's count, and the community that makes it eleven. The
   # Opaque claim is read out of FACTORY rather than taken on trust,
   # which is what caught an earlier draft of this document saying bgp4r

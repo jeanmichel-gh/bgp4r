@@ -140,7 +140,7 @@ class EvpnTest < Test::Unit::TestCase
   # represent and falls back to Unknown; every other type has no class
   # at all. Either way the octets replay, which is the point.
   def test_an_unimplemented_route_type_reads_back_whole
-    assert_equal([1, 4], BGP::Evpn::ROUTES.keys.sort)
+    assert_equal([1, 2, 3, 4], BGP::Evpn::ROUTES.keys.sort)
     (1..11).each do |t|
       n = BGP::Evpn.new(wire('%02x02aabb' % t))
       assert_instance_of(BGP::Evpn::Unknown, n.route)
@@ -163,6 +163,49 @@ class EvpnTest < Test::Unit::TestCase
                            '00000064000000c80011223344556677889920c0000201'))
     assert_instance_of(BGP::Evpn::Ethernet_segment, m.route)
     assert_equal('192.0.2.1', m.route.ip.address)
+
+    # Route type 2 with an IPv4 address and both labels, 40 octets.
+    t2 = BGP::Evpn.new(wire('0228' + '00000064000000c8' +
+                            '00112233445566778899' + '00000064' +
+                            '30' + '001122334455' + '20' + 'c0000201' +
+                            '001f41' + '001f51'))
+    assert_instance_of(BGP::Evpn::Mac_ip_advertisement, t2.route)
+    assert_equal('00:11:22:33:44:55', t2.route.mac.to_s)
+    assert_equal('192.0.2.1', t2.route.ip.address)
+    assert_equal([500, 501], [t2.route.label1.label, t2.route.label2.label])
+
+    t3 = BGP::Evpn.new(wire('0311' + '00000064000000c8' + '00000064' +
+                            '20' + 'c0000201'))
+    assert_instance_of(BGP::Evpn::Inclusive_multicast, t3.route)
+    assert_equal('192.0.2.1', t3.route.ip.address)
+  end
+
+  # Route type 2 is the one layout whose optional trailing field is
+  # decided by what is left, which only works because the body is
+  # bounded: Evpn slices exactly Length octets and hands them down.
+  # One label, 37 octets; two, 40.
+  def test_route_type_2_reads_its_second_label_from_what_is_left
+    body = '00000064000000c8' + '00112233445566778899' + '00000064' +
+           '30' + '001122334455' + '20' + 'c0000201' + '001f41'
+    one = BGP::Evpn.new(wire('0225' + body))
+    assert_instance_of(BGP::Evpn::Mac_ip_advertisement, one.route)
+    assert_nil(one.route.label2)
+    assert_equal('0225' + body, one.to_shex)
+
+    two = BGP::Evpn.new(wire('0228' + body + '001f51'))
+    assert_equal(501, two.route.label2.label)
+    assert_equal('0228' + body + '001f51', two.to_shex)
+  end
+
+  # Two octets left over are not a Label2 and not an error at this
+  # level: encode cannot reproduce the body, so the NLRI falls back to
+  # Unknown and the octets replay.
+  def test_two_octets_left_over_are_not_a_second_label
+    body = '00000064000000c8' + '00112233445566778899' + '00000064' +
+           '30' + '001122334455' + '20' + 'c0000201' + '001f41' + '0000'
+    n = BGP::Evpn.new(wire('0227' + body))
+    assert_instance_of(BGP::Evpn::Unknown, n.route)
+    assert_equal('0227' + body, n.to_shex)
   end
 
   # **A route type is kept only if it can give its own octets back.**
