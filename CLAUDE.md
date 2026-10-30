@@ -1106,7 +1106,10 @@ Decisions already taken that constrain the later phases:
 ### Deliberately not in phase 0
 
 Breadth, because it is a month and phases 2 and 3 are worth more. Recorded so
-the decision is not re-litigated from scratch:
+the decision is not re-litigated from scratch. **That deferral has now
+expired**: the RIB and FIB plan is finished, and the plan for lifting this
+limit is the section that follows, "Breadth, the one SAFI lever". What stays
+true here is the shape of the gap:
 
 * **MP_REACH and MP_UNREACH read and write only SAFIs 1, 2, 4, 128 and 129.**
   That one limit blocks EVPN, flowspec, BGP-LS, RT-constrain, MCAST-VPN, VPLS
@@ -1121,6 +1124,135 @@ the decision is not re-litigated from scratch:
   extended community sub-type code points, 8 of 22 live capability code
   points. The attribute figure reads worse than it is: FRR's `bgpd.h` defines
   exactly bgp4r's 22 plus two.
+
+### Breadth, the one SAFI lever. Phases 1 to 4 not started
+
+The section above deferred breadth and named the single limit. This is the
+plan for lifting it, recorded before the work starts.
+
+**Where the limit actually is**, read in the code rather than recalled.
+Two dispatch points, both a hard coded `case safi`, and no registry:
+
+* **Build**: `MpReachCommon#set` in `mp_reach.rb`, the module both
+  `Mp_reach` and `Mp_unreach` include. Branches for SAFI 1 and 2, for 4,
+  and for 128 and 129, then `raise "SAFI #{safi} not implemented!"`.
+* **Parse**: `Nlri.factory`. Branches for AFI 1 with SAFI 1, then SAFI 1
+  and 2, then 4, 128 and 129, then `raise RuntimeError, "Afi #{afi} Safi
+  #{safi} not supported!"`. `MpReachCommon#nlri_ntop` is a thin wrapper
+  over it.
+* `MpReachCommon#prefix_klass` raises for anything but SAFI 1 and 2. That
+  is the prefix assumption, written down in one place.
+
+The path attributes already solved this shape. `Attr.register(type, klass,
+*keys)` with `by_type` and `by_key` means adding an attribute is a class
+and a registration, not an edit to a case statement, and `Path_attribute`
+never names an attribute class. The NLRI side has nothing equivalent, so
+the two gates above can disagree, and today they do: the parse side groups
+SAFI 4 with 128 and 129 and the build side does not.
+
+**What is already handled, and what the first draft of this plan got
+wrong.** That draft opened with an `Nlri::Unknown`, the fifth
+keep-what-you-cannot-read class, on the grounds that an UPDATE in an
+unimplemented family raises rather than keeping its octets. Measured, it
+does not:
+
+```
+ruby -I. -e 'require "bgp4r"
+  hex = "800e0e" + "001946" + "04" + "0a000001" + "00" + "0102030405"
+  pa = BGP::Path_attribute.new([hex].pack("H*").is_packed)
+  p [pa.attributes.collect(&:class), pa.to_shex == hex,
+     pa.errors.size, pa.undecoded.collect(&:class)]'
+#=> [[BGP::Attr::Raw], true, 0, [BGP::Attr::Gap]]
+```
+
+An MP_REACH for EVPN comes back as an `Attr::Raw` that encodes byte for
+byte, with an `Attr::Gap` in `undecoded` and nothing in `errors`. That is
+#116 working as designed, one level up from the NLRI. So a capture from an
+EVPN or flowspec router already parses and replays today, and a session
+does not raise.
+
+Two consequences, both of which change the plan rather than decorate it:
+
+* **The raise in `Nlri.factory` is load bearing, and the `#TODO class
+  Error.....` beside it is wrong.** That raise is the mechanism by which
+  `Path_attribute` files the `Attr::Gap` and keeps the octets. Returning
+  an object instead would delete the Gap and make bgp4r claim it
+  understood a family it does not, which Conventions calls the worst
+  failure a conformance tool has. The TODO should be deleted and replaced
+  by a comment saying why the raise stays.
+* **A generic `Nlri::Unknown` is not writable anyway**, because the NLRI
+  list framing is per family: SAFI 1, 2, 4, 128 and 129 are self
+  delimiting through a length octet, and EVPN and flowspec each frame
+  their own way. Without the family you cannot split the list, so the
+  most such a class could hold is the whole remainder as one blob, which
+  is what `Attr::Raw` already does. Recorded so the next reader does not
+  propose it again.
+
+1. **A registry for NLRI classes. Not started.** Keyed by `[afi, safi]`
+   and shaped on `Attr.register`, read by both gates so they cannot
+   disagree. The families bgp4r already reads move onto it with no
+   behaviour change, and the whole suite passing unchanged is the test.
+   `prefix_klass` stays as what it is, the prefix families' own lookup.
+   A family with no registration still raises, because that raise is what
+   files the Gap.
+   * 1 PR, no new wire format. It comes before the families rather than
+     being discovered halfway through one, the way the locking in RIB
+     phase 2 and the UPDATE builder in phase 3 were both landed first.
+2. **Flowspec, SAFI 133 and 134, RFC 8955 and RFC 8956. Not started.**
+   First of the real families, for three reasons. bgp4r is already half
+   built here, since all five traffic filtering extended communities are
+   implemented and the rule they filter cannot be sent, which is the
+   worst combination to leave standing. Its NLRI is a list of typed
+   components rather than a prefix, so it is the family that proves the
+   registry and breaks the prefix assumption properly rather than
+   decoratively. And it is small enough to finish.
+   * **Open both RFCs and read the component layouts there.** This plan
+     deliberately names no section numbers, because a citation copied out
+     of a plan reads as verified.
+   * **Build validates nothing**, per Conventions: any component type,
+     any value, any order, any repetition, so a test can put a rule on
+     the wire that no RFC allows and watch a router decide. The five
+     communities already there do not validate either.
+   * **Probe the lab before recording anything about it.** Three Docker
+     blocks in this file came apart on being tried. Whether GoBGP and FRR
+     accept a flowspec rule from us, and whether either gives a RIB
+     answer a test can read, is a measurement. If they do, the lab test
+     is the twin of `rib_router_gobgp_test.rb`; if one does not, that is a
+     recorded fact and not a blocked phase.
+   * 2 or 3 PRs: the components, then the NLRI, then the lab.
+3. **EVPN, SAFI 70, RFC 7432. Not started.** The big one. Five route
+   types, each with its own NLRI layout, plus the 14 EVPN extended
+   community sub-types `extended_community.rb` currently leaves unnamed.
+   One or two route types per PR, 3 or 4 of them.
+4. **The rest, as appetite allows. Not started.** BGP-LS (attribute 29,
+   AFI 16388, SAFI 71 and 72, RFC 9552), RT-constrain (SAFI 132),
+   MCAST-VPN (SAFI 5), ATTR_SET (attribute 128, RFC 6368). Once phase 1
+   is in, each of these is a class and a registration.
+
+Decisions taken before this starts, so they are not re-litigated:
+
+* **No new family goes in a RIB.** `BGP::Rib::Route` keys on the prefix
+  and the Path Identifier, and a flowspec rule or an EVPN route is not a
+  prefix. This is the same decision already recorded for SAFI 4, 128 and
+  129 in part 3 of RIB phase 2, and it holds for the same reason: it is a
+  change to `Route`, the decision process and all three show commands, so
+  it is its own piece of work. Breadth on the wire is what a protocol
+  testing tool needs. A Loc-RIB of EVPN routes is a different product.
+* **The measure of each phase is the wire, not the table.** A family is
+  done when bgp4r can parse a capture in it, replay that capture byte for
+  byte, and build one from field values that no RFC allows. Not when it
+  can route it.
+* **What breadth buys over what #116 already gives** is the thing to keep
+  in view, because the octets already survive. It is meaning: reading an
+  EVPN route type or a flowspec component as a value, building one from
+  field values rather than from hex, and changing one field of a captured
+  rule without hand editing octets. A phase that does not deliver that
+  has not delivered anything, since `Attr::Raw` was already replaying the
+  bytes.
+* The 12 `to_hash` entries that `rake to_hash:pending` names are **not**
+  part of this and are not a prerequisite. They are single field losses
+  in a convenience form for test code, each with a reason recorded, and
+  clearing the list to empty it is not worth a phase.
 
 ## Known issues to work on
 
