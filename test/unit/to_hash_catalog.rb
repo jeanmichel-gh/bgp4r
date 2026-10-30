@@ -923,6 +923,27 @@ module ToHashCatalog
     BGP::Evpn::Unknown.new(99, "\x01\x02\x03\x04\x05")
   end
 
+  # Route type 1, RFC 7432 section 7.1. Four fields and the recipe
+  # exercises all four, with the MPLS Label carrying its three Rsrv bits
+  # set and its low bit clear: a Label left at its default would pass
+  # without ever showing that the route's hash carries :exp and :bottom.
+  ENTRIES['BGP::Evpn::Ethernet_ad'] = entry(:ok, nil, nil) do
+    BGP::Evpn::Ethernet_ad.new([100, 200],
+                               '00:11:22:33:44:55:66:77:88:99',
+                               100,
+                               BGP::Label.new(:label => 500, :exp => 5,
+                                              :bottom => 0))
+  end
+
+  # Route type 4, RFC 7432 section 7.4. Three fields, and the address is
+  # an IPv6 one so the 35 octet form is the one measured; the 23 octet
+  # form and the odd-length fallback are asserted in the class test.
+  ENTRIES['BGP::Evpn::Ethernet_segment'] = entry(:ok, nil, nil) do
+    BGP::Evpn::Ethernet_segment.new([100, 200],
+                                    '00:11:22:33:44:55:66:77:88:99',
+                                    '2001:db8::1')
+  end
+
   # The NLRI framing, RFC 7432 section 7. Three fields and the recipe
   # exercises all three: the route, the RFC 7911 section 3 Path
   # Identifier, and a Length that disagrees with its own octets.

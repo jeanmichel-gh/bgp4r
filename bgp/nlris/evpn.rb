@@ -85,13 +85,17 @@ module BGP
     # give it: eight types across RFC 7432, RFC 9136 and RFC 9251, and
     # three more of its own.
     #
-    # **Empty on purpose.** This part landed the primitives and the
-    # framing, so every EVPN NLRI reads back as an `Evpn::Unknown` that
-    # replays byte for byte and none of them has meaning yet. Each later
-    # part fills rows in here, and `test/unit/evpn_doc_test.rb`
-    # discovers this table rather than listing it, so a route type class
-    # cannot join the library without `docs/evpn.md` being told.
-    ROUTES = {}.freeze
+    # Two rows so far, route types 1 and 4, both RD plus ESI shaped.
+    # Every other type still reads back as an `Evpn::Unknown` that
+    # replays byte for byte. Each later part fills more rows, and
+    # `test/unit/evpn_doc_test.rb` discovers this table rather than
+    # listing it, so a route type class cannot join the library without
+    # `docs/evpn.md` being told, and a class registered here with no
+    # row, or a row with no class, fails either way.
+    ROUTES = {
+      Ethernet_ad.type      => Ethernet_ad,
+      Ethernet_segment.type => Ethernet_segment,
+    }.freeze
 
     # Hash key back to class, for the hash build path. Unknown is in
     # here and in no row above, which is the whole point of it: no type
@@ -207,23 +211,32 @@ module BGP
       len = s.slice!(0, 1).unpack1('C')
       body = s.slice!(0, [len, s.size].min)
       @declared_len = len if len != body.size
-      klass = ROUTES[t]
-      @route = if klass
-                 # **Unreachable in this part, and the one line in these
-                 # two files that is.** `ROUTES` is empty, so no type
-                 # number resolves and every NLRI takes the branch
-                 # below. The branch stays because the next part fills
-                 # `ROUTES` and this is the line it arrives on, the way
-                 # `Fib`'s `:no_next_hop` branch stays for a caller that
-                 # cannot reach it through a live table. What guards it
-                 # meanwhile is `evpn_doc_test.rb`, which fails if a
-                 # route class and `ROUTES` disagree in either
-                 # direction.
-                 klass.new(body.is_packed)
-               else
-                 Unknown.new(t, body)
-               end
+      @route = read_route(t, body) || Unknown.new(t, body)
       self
+    end
+
+    # **A route type is kept only if it can give its own octets back**,
+    # which is stricter than catching an exception and has to be, for
+    # the reason `Flow_spec` records about its components: a fixed
+    # layout parsed from a short body invents the fields it did not
+    # find, so it would answer `encode` with octets the peer never sent.
+    # Route type 1 is 25 octets and route type 4 is 23 or 35, and
+    # nothing in the framing guarantees the Length agrees.
+    #
+    # So the body is parsed on a **copy** and the result accepted only
+    # when its `encode` matches what it was given. A body that fails
+    # that falls back to `Unknown`, which keeps the octets whole and
+    # replays them. That is a known route type number reading back as
+    # Unknown, which looks odd and is the honest answer: bgp4r cannot
+    # represent those octets as fields, and keeping them beats inventing
+    # zeros. `declared_len` already records a Length that lied.
+    def read_route(t, body)
+      klass = ROUTES[t]
+      return nil if klass.nil?
+      r = klass.new(body.dup.is_packed)
+      r.encode == body ? r : nil
+    rescue StandardError
+      nil
     end
 
     def from_hash(h)
