@@ -935,6 +935,27 @@ module ToHashCatalog
                                               :bottom => 0))
   end
 
+  # Route type 2, RFC 7432 section 7.2, the largest layout in the
+  # family. Seven fields and the recipe exercises all seven, including
+  # both optional ones: an IPv6 address, so the longest shape is the one
+  # measured, and a second label, so :label2 is in the hash. The MAC
+  # carries a length outside section 14's 48, which is the branch that
+  # makes the hash fall back to the Sized form.
+  ENTRIES['BGP::Evpn::Mac_ip_advertisement'] = entry(:ok, nil, nil) do
+    BGP::Evpn::Mac_ip_advertisement.new(
+      [100, 200], '00:11:22:33:44:55:66:77:88:99', 100,
+      BGP::Evpn::Mac_addr.new(24, ['001122334455'].pack('H*')),
+      '2001:db8::1',
+      BGP::Label.new(:label => 500, :exp => 5, :bottom => 0),
+      BGP::Label.new(501))
+  end
+
+  # Route type 3, RFC 7432 section 7.3. Three fields and no ESI, which
+  # is what makes it the odd one of the five.
+  ENTRIES['BGP::Evpn::Inclusive_multicast'] = entry(:ok, nil, nil) do
+    BGP::Evpn::Inclusive_multicast.new([100, 200], 100, '2001:db8::1')
+  end
+
   # Route type 4, RFC 7432 section 7.4. Three fields, and the address is
   # an IPv6 one so the 35 octet form is the one measured; the 23 octet
   # form and the odd-length fallback are asserted in the class test.

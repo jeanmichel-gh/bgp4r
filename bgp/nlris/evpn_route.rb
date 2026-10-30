@@ -549,6 +549,21 @@ module BGP
         coerce(klass, v)
       end
 
+      # **`Label` is the one field that cannot default through
+      # `coerce_or_default`**, because `BGP::Label.new` with no argument
+      # leaves its label unset and `encode` then dies in `Label#encode`
+      # with "undefined method `<<' for false". So a label left out
+      # means label 0, written here once rather than in each route type.
+      #
+      # This is a bug #182 shipped: `Ethernet_ad.new(rd, esi, tag)` with
+      # the label omitted raised `NoMethodError`, where the four
+      # argument form and the no argument form both worked. Found while
+      # writing route type 2, which has the same shape twice over.
+      def coerce_label(v)
+        return Label.new(0) if v.nil?
+        coerce(Label, v)
+      end
+
     end
 
     # A Route Type bgp4r does not implement, kept whole and written back
@@ -656,7 +671,7 @@ module BGP
           @rd              = coerce_or_default(Rd, args[0])
           @esi             = coerce_or_default(Esi, args[1])
           @ethernet_tag_id = coerce_or_default(Ethernet_tag_id, args[2])
-          @label           = coerce_or_default(Label, args[3])
+          @label           = coerce_label(args[3])
         elsif args.empty?
           defaults
         else
@@ -803,6 +818,278 @@ module BGP
         @rd  = coerce_or_default(Rd, h[:rd])
         @esi = coerce_or_default(Esi, h[:esi])
         @ip  = coerce_or_default(Addr, h[:ip])
+      end
+
+    end
+
+    # Route type 2, RFC 7432 section 7.2, the MAC/IP Advertisement
+    # route. The largest layout in the family, and the only one variable
+    # in two independent ways:
+    #
+    #   +---------------------------------------+
+    #   |  RD (8 octets)                        |
+    #   +---------------------------------------+
+    #   |Ethernet Segment Identifier (10 octets)|
+    #   +---------------------------------------+
+    #   |  Ethernet Tag ID (4 octets)           |
+    #   +---------------------------------------+
+    #   |  MAC Address Length (1 octet)         |
+    #   +---------------------------------------+
+    #   |  MAC Address (6 octets)               |
+    #   +---------------------------------------+
+    #   |  IP Address Length (1 octet)          |
+    #   +---------------------------------------+
+    #   |  IP Address (0, 4, or 16 octets)      |
+    #   +---------------------------------------+
+    #   |  MPLS Label1 (3 octets)               |
+    #   +---------------------------------------+
+    #   |  MPLS Label2 (0 or 3 octets)          |
+    #   +---------------------------------------+
+    #
+    # **Section 14 is where the field rules are, not section 7.2.** The
+    # MAC: "The MAC Address Length field is in bits, and it is set to
+    # 48. MAC address length values other than 48 bits are outside the
+    # scope of this document." Outside the scope is not an error, which
+    # is why `Mac_addr` echoes any length and keeps its 6 octets. The
+    # IP: "The IP Address field is optional. By default, the IP Address
+    # Length field is set to 0, and the IP Address field is omitted from
+    # the route", and when present it "is set to 32 or 128 bits". And
+    # Label2: "The MPLS Label2 field is an optional field. If it is
+    # present, then it is encoded as 3 octets, where the high-order 20
+    # bits contain the label value."
+    #
+    # **So six lengths are possible and all six are distinct**: 33, 36,
+    # 37, 40, 49 and 52. That is what lets section 14 say "The Length
+    # field of the EVPN NLRI ... is sufficient to determine whether an
+    # IP address is encoded in this route and, if so, whether the
+    # encoded IP address is IPv4 or IPv6." bgp4r does not use the outer
+    # Length for it: the IP Address Length field is the in-band
+    # discriminator and `Addr` reads it directly. The two can only
+    # disagree on a malformed route, and part 2's encode-matches rule
+    # catches that by falling back to `Unknown`.
+    #
+    # **Label2 is decided by what is left**, which is sound because the
+    # body is bounded: `Evpn` slices exactly Length octets and hands
+    # them here. Fewer than 3 octets left is not a Label2 and not an
+    # error here either; `encode` then will not reproduce the body and
+    # the NLRI falls back to `Unknown`.
+    class Mac_ip_advertisement < Route
+
+      TYPE, HASH_KEY = 2, :mac_ip_advertisement
+
+      # Section 14 again, for the two optional fields.
+      LABEL_SIZE = 3
+
+      attr_reader :rd, :esi, :ethernet_tag_id, :mac, :ip, :label1, :label2
+
+      # new(rd, esi, tag, mac, ip, label1, label2) in the figure order,
+      # with ip and label2 optional
+      # new(:rd => [100, 200], :esi => '00:11:...', :ethernet_tag_id =>
+      #     100, :mac => '00:11:22:33:44:55', :ip => '192.0.2.1',
+      #     :label1 => 500, :label2 => 501)
+      # the wire bytes, or another instance.
+      def initialize(*args)
+        if args.size == 1 and args[0].is_a?(String) and args[0].is_packed?
+          parse(args[0])
+        elsif args.size == 1 and args[0].is_a?(self.class)
+          parse(args[0].encode.is_packed)
+        elsif args.size == 1 and args[0].is_a?(Hash)
+          from_hash(args[0])
+        elsif (1..7).include?(args.size)
+          @rd              = coerce_or_default(Rd, args[0])
+          @esi             = coerce_or_default(Esi, args[1])
+          @ethernet_tag_id = coerce_or_default(Ethernet_tag_id, args[2])
+          @mac             = coerce_or_default(Mac_addr, args[3])
+          @ip              = coerce_or_default(Addr, args[4])
+          @label1          = coerce_label(args[5])
+          @label2          = args[6].nil? ? nil : coerce(Label, args[6])
+        elsif args.empty?
+          defaults
+        else
+          raise ArgumentError, "invalid argument: #{args.inspect}"
+        end
+        self
+      end
+
+      def parse(s)
+        @rd              = read_rd(s)
+        @esi             = Esi.new(s)
+        @ethernet_tag_id = Ethernet_tag_id.new(s)
+        @mac             = Mac_addr.new(s)
+        @ip              = Addr.new(s)
+        @label1          = Label.new(s)
+        @label2          = s.size >= LABEL_SIZE ? Label.new(s) : nil
+        self
+      end
+
+      def encode_value
+        [@rd.encode, @esi.encode, @ethernet_tag_id.encode, @mac.encode,
+         @ip.encode, @label1.encode,
+         @label2 ? @label2.encode : +''].join
+      end
+
+      # **The two labels are named rather than merged flat**, which is
+      # where this differs from route type 1 and the reason is the
+      # count: one label can merge its own `:label` and `:exp` keys into
+      # the route's hash because nothing collides, and two cannot. So
+      # each rides under its own key holding `Label`'s own hash.
+      # `:label2` appears only when there is one, which is the
+      # extra-key-only-when-present rule.
+      def value_hash
+        h = @rd.to_hash
+                .merge(@esi.to_hash)
+                .merge(@ethernet_tag_id.to_hash)
+                .merge(:mac => mac_hash, :ip => ip_hash,
+                       :label1 => @label1.to_hash)
+        h = h.merge(:label2 => @label2.to_hash) if @label2
+        h
+      end
+
+      def to_s
+        s = "[2] MAC/IP: #{@rd.to_s(false)}, ESI #{@esi}, " \
+            "tag #{@ethernet_tag_id}, MAC #{@mac}, IP #{@ip}, " \
+            "label #{@label1.label}"
+        s += ", label2 #{@label2.label}" if @label2
+        s
+      end
+
+      private
+
+      # **The MAC defaults to 48 zero bits and the IP to absent, and the
+      # difference is the RFC's.** Section 14 makes the IP optional in
+      # so many words, "By default, the IP Address Length field is set
+      # to 0, and the IP Address field is omitted from the route", while
+      # the MAC is 6 octets in the figure with a length that "is set to
+      # 48". So an empty route type 2 is 33 octets, the shortest shape
+      # the document describes, rather than the 27 a MAC defaulted to
+      # absent would give. A MAC left out entirely still builds, since
+      # nothing validates; it is just not the default.
+      def defaults
+        @rd              = Rd.new
+        @esi             = Esi.new
+        @ethernet_tag_id = Ethernet_tag_id.new
+        @mac             = Mac_addr.new('00:00:00:00:00:00')
+        @ip              = Addr.new
+        @label1          = Label.new(0)
+        @label2          = nil
+      end
+
+      # The MAC as its printed form when the length is the 48 section 14
+      # names, and the `Sized` hash otherwise so a length outside the
+      # scope of the document still reads back.
+      def mac_hash
+        @mac.bitlen == Mac_addr::BITS ? @mac.to_s : @mac.to_hash
+      end
+
+      # As route type 4 does: the address string when the octets are a
+      # whole family and the bit count agrees, the `Addr` hash
+      # otherwise, and nothing to say when the field is absent.
+      def ip_hash
+        return @ip.to_hash if @ip.empty?
+        a = @ip.address
+        return @ip.to_hash if a.nil?
+        return @ip.to_hash unless @ip.bitlen == (@ip.value.size * 8)
+        a
+      end
+
+      def from_hash(h)
+        h = self.class.unwrap(h)
+        @rd              = coerce_or_default(Rd, h[:rd])
+        @esi             = coerce_or_default(Esi, h[:esi])
+        @ethernet_tag_id = coerce_or_default(Ethernet_tag_id,
+                                             h[:ethernet_tag_id])
+        @mac             = coerce_or_default(Mac_addr, h[:mac])
+        @ip              = coerce_or_default(Addr, h[:ip])
+        @label1          = coerce_label(h[:label1])
+        @label2          = h[:label2].nil? ? nil : coerce(Label, h[:label2])
+      end
+
+    end
+
+    # Route type 3, RFC 7432 section 7.3, the Inclusive Multicast
+    # Ethernet Tag route. 17 octets with an IPv4 address and 29 with an
+    # IPv6 one:
+    #
+    #   +---------------------------------------+
+    #   |  RD (8 octets)                        |
+    #   +---------------------------------------+
+    #   |  Ethernet Tag ID (4 octets)           |
+    #   +---------------------------------------+
+    #   |  IP Address Length (1 octet)          |
+    #   +---------------------------------------+
+    #   |  Originating Router's IP Address      |
+    #   |          (4 or 16 octets)             |
+    #   +---------------------------------------+
+    #
+    # **The only one of the five with no Ethernet Segment Identifier**,
+    # which is worth knowing because every other RFC 7432 and RFC 9136
+    # route type has one and a reader will look for it. Section 7.3 ends
+    # "The IP address length is in bits", as 7.2 and 7.4 do.
+    class Inclusive_multicast < Route
+
+      TYPE, HASH_KEY = 3, :inclusive_multicast
+
+      SIZE_V4 = 17
+      SIZE_V6 = 29
+
+      attr_reader :rd, :ethernet_tag_id, :ip
+
+      # new(rd, ethernet_tag_id, ip), new(:rd => ..., :ethernet_tag_id
+      # => ..., :ip => '192.0.2.1'), the wire bytes, or another instance.
+      def initialize(*args)
+        if args.size == 1 and args[0].is_a?(String) and args[0].is_packed?
+          parse(args[0])
+        elsif args.size == 1 and args[0].is_a?(self.class)
+          parse(args[0].encode.is_packed)
+        elsif args.size == 1 and args[0].is_a?(Hash)
+          from_hash(args[0])
+        elsif (1..3).include?(args.size)
+          @rd              = coerce_or_default(Rd, args[0])
+          @ethernet_tag_id = coerce_or_default(Ethernet_tag_id, args[1])
+          @ip              = coerce_or_default(Addr, args[2])
+        elsif args.empty?
+          @rd, @ethernet_tag_id, @ip = Rd.new, Ethernet_tag_id.new, Addr.new
+        else
+          raise ArgumentError, "invalid argument: #{args.inspect}"
+        end
+        self
+      end
+
+      def parse(s)
+        @rd              = read_rd(s)
+        @ethernet_tag_id = Ethernet_tag_id.new(s)
+        @ip              = Addr.new(s)
+        self
+      end
+
+      def encode_value
+        [@rd.encode, @ethernet_tag_id.encode, @ip.encode].join
+      end
+
+      def value_hash
+        @rd.to_hash.merge(@ethernet_tag_id.to_hash).merge(:ip => ip_hash)
+      end
+
+      def to_s
+        "[3] Inclusive Multicast: #{@rd.to_s(false)}, " \
+        "tag #{@ethernet_tag_id}, originating router #{@ip}"
+      end
+
+      private
+
+      def ip_hash
+        a = @ip.address
+        return @ip.to_hash if a.nil?
+        return @ip.to_hash unless @ip.bitlen == (@ip.value.size * 8)
+        a
+      end
+
+      def from_hash(h)
+        h = self.class.unwrap(h)
+        @rd              = coerce_or_default(Rd, h[:rd])
+        @ethernet_tag_id = coerce_or_default(Ethernet_tag_id,
+                                             h[:ethernet_tag_id])
+        @ip              = coerce_or_default(Addr, h[:ip])
       end
 
     end

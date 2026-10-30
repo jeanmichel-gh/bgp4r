@@ -85,7 +85,8 @@ module BGP
     # give it: eight types across RFC 7432, RFC 9136 and RFC 9251, and
     # three more of its own.
     #
-    # Two rows so far, route types 1 and 4, both RD plus ESI shaped.
+    # Four rows so far: route types 1, 2, 3 and 4, the whole of
+    # RFC 7432 section 7. Route type 5 and the rest follow.
     # Every other type still reads back as an `Evpn::Unknown` that
     # replays byte for byte. Each later part fills more rows, and
     # `test/unit/evpn_doc_test.rb` discovers this table rather than
@@ -93,8 +94,10 @@ module BGP
     # `docs/evpn.md` being told, and a class registered here with no
     # row, or a row with no class, fails either way.
     ROUTES = {
-      Ethernet_ad.type      => Ethernet_ad,
-      Ethernet_segment.type => Ethernet_segment,
+      Ethernet_ad.type          => Ethernet_ad,
+      Mac_ip_advertisement.type => Mac_ip_advertisement,
+      Inclusive_multicast.type  => Inclusive_multicast,
+      Ethernet_segment.type     => Ethernet_segment,
     }.freeze
 
     # Hash key back to class, for the hash build path. Unknown is in
