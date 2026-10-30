@@ -180,10 +180,12 @@ There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Cove
   * `path_attribute.rb` keeps a tail too, one level up: the octets after the last whole attribute in the set, which `parse_wire` holds so `encode` gives back what arrived. Its hash is one key per attribute, so the tail is one more key, `Attr::TAIL_KEY` again, and `new` takes it off a **copy** of the caller's hash before iterating, so the key never reaches `Attr.by_key` and the caller can build twice from one hash. Same rule: no tail, no key, and an ordinary attribute set hashes as it always did.
   * `Path_attribute::DUP_KEY`, `:duplicates`, is the same rule for the other thing one key per type cannot hold: a second attribute of a type already in the hash. The occurrences after the first ride in a list of their own hashes and `new` builds them after the distinct types, so no attribute is dropped and an ordinary set has no such key. A repeat that arrived **before** a type it does not repeat comes back in that order rather than its own, which is normalising and not a loss: nothing in BGP orders path attributes, and `Path_attribute#<=>` says so by sorting each side before comparing. Note what that `sort` does and does not do, since a test may lean on it: it sorts by type code only, so two attributes of one type keep their relative order and `<=>` answers non-zero for two sets that differ only in which of them came first. Compare the multiset of each attribute's own octets when that matters.
   * A reserved field inside a fixed layout value is the same rule one level down. An `Extended_community::Typed` parsed from the wire keeps its 6 value octets, so `encode` gives them back, and its hash carries a `:bits` entry, all 48 bits of the value, when a bit outside the fields its own RFC defines is set. `DEFINED_BITS` on the class says which bits it reads, with the RFC text beside it, and `Typed#value_bits`, `#undefined_bits?`, `#keep_bits` and `#with_bits` do the rest in one place. Same rule as a tail: no reserved bit set, no `:bits` entry, so the hash stays the value or the list it has always been. `Traffic_action` is where the shape came from. A build from field values still writes the reserved fields as 0, which is what those RFCs ask an encoder for.
+    * **Echoing a reserved field is the intended behaviour, confirmed by the owner on 2026-10-29**, and the reason is the one in the first Conventions bullet rather than anything in the RFCs: a reserved octet arriving as `0xff` is a negative test, and a tool that can send a value no RFC describes but cannot replay what it just sent is the wrong shape of tool. So the keep-and-echo rule is not up for revisiting as over-engineering. It is worth knowing it is **recent**: #77, #145, #155 and #167 added it across 2026-10-26 to 2026-10-29, where the rest of the library is a decade older, so a class that writes a reserved field as 0 has simply not been reached yet.
   * `Prefix_entry` is the second instance, since #155, and the smallest: RFC 5291 section 4 puts Action in two bits, Match in one and "Reserved is a 5-bit field. It is set to 0 on transmit and ignored on receipt", all in one octet. `DEFINED_BITS = 0xe0` says which bits it reads, `Prefix_entry#bits` keeps all 8 when a reserved one arrived set, and the hash gains `:bits` only then. The one octet REMOVE-ALL entry goes through the same `_first_octet_`, so it is covered by the same change.
 * Every class can be built three ways: from field values, from a hash, and from its wire bytes (a binary String). Most take a fourth, another instance of the class, which they re-parse through its `encode`. Keep them all working when you change a class. **`docs/building-objects.md` is the guide**: the branch order `initialize` uses, why a binary String is recognised only by its `is_packed?` mark and what it does when the mark is missing, how the attribute registry turns a hash key into a class, and a checklist for an object that does not come back. Read it before changing a constructor, and paste it into a session that is debugging one. Its load-bearing claims are asserted by `test/unit/building_objects_test.rb`, because a primer nothing checks goes stale and a reader who trusts a wrong primer loses more time than one with no primer at all. Writing that guard immediately corrected two claims in the document, which is the argument for it.
   * **Two of those claims are worth knowing even without the document.** A constructor may **consume** the String it is handed, since `parse` reads with `slice!`: `Origin`, `Aggregator`, `Communities` and `Path_attribute` all empty it and `Nlri` does not, so pass a `dup` if you need the octets afterwards. This is what makes `assert_equal(octets, Klass.new(octets).encode)` fail while both sides print the same hex, because the left side was emptied before the comparison ran; compare `to_shex`. And **not every class reads wire bytes**: `Prefix` takes a prefix string, and octets are the business of `Nlri` or `Withdrawn`, which slice them, so binary handed to `Prefix` dies inside `IPAddr` whether it is marked or not.
 * `encode` returns wire bytes. `to_hash` returns a hash that round trips through `new`. `to_s` returns the human readable form.
+  * **A generic `encode` in the parent, finalized by `super` in the child, is a deliberate shape here and not an accident.** Measured on 2026-10-29, after a session read "base encode" as a git revision and the owner meant the parent method. Two instances. `Orf#encode` writes the whole RFC 5291 section 4 layout, ORF Type, Length and the entries joined, and `Prefix_orf` does **not** override it: the subclass supplies `Entry` objects and never touches encoding. On the capability side it is three layers, each wrapping the one below: `CAP::Orf#encode` joins its entries and hands them to `Capability#encode`, which wraps them in code and length and hands that to `Optional_parameter#encode` with `extended:`. So when a field is missing from the wire, find which layer owns it before editing: a plain class nested inside one of these, such as `CAP::Orf::Entry`, has `Object` for a superclass and no `super` at all, so its own `encode` is the only place its octets can come from.
   * **That round trip is kept by most classes and broken by some, and the record is `test/unit/to_hash_catalog.rb`**, one entry per class, with what the hash loses, a reproduction, and what has been decided about it. Read it before assuming a hash form works or assuming it does not; both have been assumed wrongly here. **Do not write the counts down anywhere**, including here: `rake to_hash:status` prints them, and `rake to_hash:pending` prints what is still to fix. Without rake, which is not on PATH everywhere, `ruby -I. test/unit/to_hash_status.rb` and the same with `pending`. Every line of that output is read out of the catalog, which the suite measures against the library on every run, so a number it prints cannot be stale without a test failing first.
     * **There used to be a document, `docs/to-hash-round-trips.md`, and it was retired rather than updated.** Its table was generated from the catalog and stayed true. Its prose was not and did not: it spent four pull requests ranking work that two of them had already finished, in the same file as the table that was correct. The generated view replaced it once the root cause was understood, which is that a hash is an argument to `initialize` and what has to come back is the instance state, so a field no key sets cannot survive. Every lossy entry is an instance of that one sentence, which is why 97 paragraphs of prose were not buying anything a list and a reason each does not.
   * **The rule is one way: a gap may stay a gap, a round trip that works must not stop working.** The hash form exists so test code can be written as values rather than hex, so a working round trip is something other people's tests are already built on. `test/unit/to_hash_round_trip_test.rb` enforces that, from declarations in `test/unit/to_hash_catalog.rb`: breaking a working one fails the suite, and closing a gap fails it too, so the record is struck rather than left reading as verified. A new class answering `to_hash` and listed in neither place also fails, so it has to be measured and decided.
@@ -207,6 +209,14 @@ There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Cove
 * Before requiring a standard library, check that it is still a default gem. Ruby keeps moving libraries to bundled gems (`observer` in 3.4, `logger` in 4.0), and under Bundler those fail to load unless declared. Prefer a small built-in copy, as with `BGP::Observable`.
 * Do not redefine methods of standard library classes. Newer versions may add the same method with different behavior (`IPAddr#+` in Ruby 4.0). Guard additions with `unless method_defined?`.
 * **`const_defined?` searches the ancestors unless you pass `false`.** Several files guard a generated class with `unless const_defined? :Unknown` so the file is safe to require twice. That guard asks the wrong question: adding `Optional_parameter::Unknown` in #154 made `Capability.const_defined?(:Unknown)` true by inheritance, so `Capability::Unknown` was never defined and every reference to it resolved up the chain to the parameter level class, which has a different hash and a different constructor. Three tests in two other files failed and not one of them named a constant. Write `const_defined?(:Unknown, false)`, which asks whether this class defines it. `test_the_three_unknown_classes_are_distinct` in `test/unit/optional_parameters/optional_parameter_test.rb` guards the three that now exist. The same guard in `bgp/path_attributes/path_attribute.rb` is still the ancestor searching form; it is correct only because nothing above `Path_attribute` defines an `Unknown`, which is luck.
+  * **The same guard has a second failure mode, which is a file loading earlier defining the constant.** `bgp/nlris/nlri.rb` creates both its classes inside `unless const_defined?(:Nlri)`:
+    ```ruby
+    unless const_defined?(:Nlri)
+      Nlri      = Class.new(Base_nlri) do ... end
+      Withdrawn = Class.new(Base_nlri) do ... end
+    end
+    ```
+    So anything defining `BGP::Nlri` before that line runs skips the **whole block**, and `Withdrawn` is never defined either. Found in #173, which opened `class Nlri` in a file `nlri.rb` requires: a dozen failures naming `new_ntop`, `empty?`, `<<` and `BGP::Update::Withdrawn`, and not one of them naming the guard or the constant that tripped it. That pull request is closed, so this is the only thing kept from it. **Do not reopen `class Nlri` outside that file.**
 * Do not mutate string literals. CI runs the suite with `--enable-frozen-string-literal`. Use `String.new` or `+''` for a buffer.
 
 ## Rules for agents
@@ -219,6 +229,10 @@ There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Cove
 * New behavior needs a test. Bug fixes need a test that failed before the fix.
   * **Check that the proof proved something.** Two "this test catches the regression" runs in one session proved nothing: the first patched a marker string that did not match, so the library was unchanged and the test passed for the obvious reason, and the second made a change the constructor was lenient enough to absorb, so the round trip still worked and the test was right to pass. A sabotage run that passes means the sabotage missed, not that the test is weak. Assert on the thing you changed before you believe the result, and prefer breaking the code the way it would really break, which is usually deleting a line rather than mutating a value.
 * **A claim nothing checks reads as verified, in a document as much as in a comment.** The lesson came twice. Once from the conformance table, measured by hand and never re-run. Once from `docs/to-hash-round-trips.md`, since **retired**, where the tables stayed true across four pull requests because `to_hash_round_trip_test.rb` compares them against the catalog row by row, while the prose beside them drifted into ranking work that two of those pull requests had already finished. The enforced half held and the unenforced half did not, in one file, with nobody noticing. That is what retiring it was for: what a person reads is printed from the catalog now, by `rake to_hash:status`, so there is no unenforced half left to drift. So when a document makes claims a test could make, assert the load-bearing ones: `test/unit/building_objects_test.rb` is what that looks like, and writing it corrected two claims in the document it guards within the hour.
+* **Work out what the code and the tests were built to do before concluding that any of it is wrong.** bgp4r is behind on BGP features and it is not behind on robustness: encoding and decoding have held up for years because the test coverage around them is extensive and deliberate. So a shape that looks odd is far more likely to be a decision whose reason is not written down than a defect, and the burden is on the reader to find the reason first. This was said on 2026-10-29 after two claims in one afternoon that failed the same way.
+  * **The two NLRI dispatch points.** Recorded as drifted apart, because parse groups SAFI 4 with 128 and 129 and build does not. `Labeled#parse` branches on the SAFI itself: parse is one entry point dispatching internally, build dispatches externally because the caller must supply an RD for the VPN families and not for SAFI 4. A difference in the work, read as a defect in the code. It cost a closed pull request, #173.
+  * **The `#TODO class Error.....` in `Nlri.factory`.** Recorded as asking for the wrong thing. It asks for a typed exception where there is a bare `RuntimeError`, which is both modest and right. Four words were read as the opposite of what the surrounding code does.
+  * What would have caught both in a minute each: read the method the branch calls before calling the branching wrong, and read what a TODO's own words ask for rather than what a plan needs them to ask for. **Say "I do not know why this is like this" rather than "this is wrong"** until the first has been answered; the file is full of entries that exist because somebody wrote the second.
 * **A "won't fix" has to record the mechanism, not the verdict.** One was written in this session and reversed an hour later by a single question from the owner: "order should not matter when you recreate an object from a hash, care to explain the concern?" The premise was true, that a Hash keyed by attribute type cannot hold two of a type or say which came first. The conclusion, that nothing readable could be done, did not follow from it, and the prose had carried the premise's authority over to the conclusion. Two things would have caught it. State the premise and the conclusion as separate sentences and check the second follows from the first. And name the bar you are measuring against, because the real mistake was taking byte-exact octets as the bar for a hash whose job is to rebuild instance state.
 * Cite the RFC section in a comment when you implement or fix wire format logic. Open the RFC and check the section number against its text; do not write one from memory. Six citations in this file and in the code were found wrong on 2026-10-27. One of them, "RFC 5291 section 5" for the ROUTE-REFRESH and ORF layout, is section 4, and it had been copied forward into two pull requests before anyone read the RFC. **Both numbers are live in that RFC and mean different things**, which is how the mix up happened and how it could happen again: section 4 is the ORF entry inside a ROUTE-REFRESH, whose Reserved is 5 bits of one octet and is "set to 0 on transmit and ignored on receipt", and section 5 is the Outbound Route Filtering Capability, whose Reserved is a whole octet that the section labels in Figure 3 and never describes. Do not quote section 4's sentence about the capability's octet. Figure 3 also says "Number of ORFs" where section 5's own text says "Number of ORF Types"; they are one field. Another called 0x02 and 0x03 extended community types when they are sub-types. A wrong citation is worse than none, because it reads as verified and sends the next person to the wrong page.
 * Do not delete or weaken existing tests to make a change pass.
@@ -1143,12 +1157,29 @@ Two dispatch points, both a hard coded `case safi`, and no registry:
 * `MpReachCommon#prefix_klass` raises for anything but SAFI 1 and 2. That
   is the prefix assumption, written down in one place.
 
-The path attributes already solved this shape. `Attr.register(type, klass,
-*keys)` with `by_type` and `by_key` means adding an attribute is a class
-and a registration, not an edit to a case statement, and `Path_attribute`
-never names an attribute class. The NLRI side has nothing equivalent, so
-the two gates above can disagree, and today they do: the parse side groups
-SAFI 4 with 128 and 129 and the build side does not.
+The path attributes solved this shape differently, with
+`Attr.register(type, klass, *keys)`, so adding an attribute is a class and
+a registration rather than an edit to a case statement. A registry for the
+NLRI side was tried in #173 and **closed unmerged**, and why is worth
+keeping, because the argument for it was wrong in a way that is easy to
+repeat.
+
+**It claimed the two gates had drifted apart**, since the parse side
+groups SAFI 4 with 128 and 129 and the build side does not. They have not.
+`Labeled#parse` branches on the SAFI itself, so the parse side is one
+entry point that dispatches internally, while the build side dispatches
+externally because the caller must supply a Route Distinguisher for the
+VPN families and not for SAFI 4. **The two sides differ because the work
+differs**, and reading that as latent drift is reading a difference in the
+problem as a defect in the code.
+
+What was left once that went: locality for families not yet written, which
+removes no code and is a bet on the phases below landing, against a module
+and a file of indirection over a `case` with five arms, and twelve broken
+tests on the way from the `const_defined?` trap in `nlri.rb` that
+Conventions now records. Revisit a registry when a family actually needs
+the sixth and seventh arm, so the case comes from need rather than
+anticipation.
 
 **What is already handled, and what the first draft of this plan got
 wrong.** That draft opened with an `Nlri::Unknown`, the fifth
@@ -1173,13 +1204,20 @@ does not raise.
 
 Two consequences, both of which change the plan rather than decorate it:
 
-* **The raise in `Nlri.factory` is load bearing, and the `#TODO class
-  Error.....` beside it is wrong.** That raise is the mechanism by which
-  `Path_attribute` files the `Attr::Gap` and keeps the octets. Returning
-  an object instead would delete the Gap and make bgp4r claim it
-  understood a family it does not, which Conventions calls the worst
-  failure a conformance tool has. The TODO should be deleted and replaced
-  by a comment saying why the raise stays.
+* **The raise in `Nlri.factory` is load bearing**, and that is worth a
+  comment it does not have. It is the mechanism by which `Path_attribute`
+  files the `Attr::Gap` and keeps the octets, so returning an object
+  instead would delete the Gap and make bgp4r claim it understood a family
+  it does not, which Conventions calls the worst failure a conformance
+  tool has.
+  * **The `#TODO class Error.....` beside it is not asking for that, and
+    this file said it was.** `Path_attribute` rescues `StandardError` and
+    records `e.class` in the Gap, so what the TODO wants is a typed
+    exception in place of a bare `RuntimeError`: it would still raise,
+    still file the Gap, and name itself in the Gap rather than appearing
+    as `RuntimeError`. That is a good small change and it is still open.
+    Reading a four word TODO as asking for the opposite of what the code
+    around it does is how an author's intent gets overwritten.
 * **A generic `Nlri::Unknown` is not writable anyway**, because the NLRI
   list framing is per family: SAFI 1, 2, 4, 128 and 129 are self
   delimiting through a length octet, and EVPN and flowspec each frame
