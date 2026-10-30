@@ -362,10 +362,18 @@ class Update_Test < Test::Unit::TestCase
     # Those three octets are the RFC 8277 section 2.4 Compatibility field,
     # not a label: this is MP_UNREACH_NLRI, which is where section 2.4
     # says a withdrawal travels. This test asserted
-    # 'Label Stack=524288 (bottom)' until the reading was fixed, which is
-    # 0x800001 read as a label, and it is the bug rather than a baseline:
-    # with the field read as a label the walk ran on and the prefix came
-    # out wrong too. The value is not the RECOMMENDED 0x800000 here, which
+    # 'Label Stack=524288 (bottom) RD=1:1, ID=1, IPv4=10.1.1.0/24' until
+    # the reading was fixed, where 524288 is 0x800001 read as a label.
+    #
+    # **Only the label field was wrong**, and an earlier version of this
+    # comment said the prefix came out wrong too, which the assertion
+    # quoted above disproves: the RD, the Path Identifier and the prefix
+    # were all read correctly, because the field is three octets wide
+    # whichever of the two things it is and the walk past it did not
+    # shift. So this is a one field misreading, not a misparse, and the
+    # octets round tripped on both sides of the fix.
+    #
+    # The value is not the RECOMMENDED 0x800000 here, which
     # section 2.4 allows for ("However, some implementations set it to
     # 0x000000") and requires a receiver to ignore either way.
     assert_equal 'Compatibility=0x800001 (not the RECOMMENDED 0x800000) ' \
