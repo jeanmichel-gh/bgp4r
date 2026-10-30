@@ -888,6 +888,53 @@ module ToHashCatalog
                        :tail => 'deadbeef')
   end
 
+  # The EVPN primitives, RFC 7432 sections 5 and 7. Each recipe
+  # exercises every field the class carries, which for the two Sized
+  # subclasses is the bit count as well as the value, since a length
+  # that disagrees with its octets is the interesting case and the one a
+  # thin recipe would miss.
+  #
+  # All five are :ok and that is not luck. These classes were written
+  # after the hash shape was understood, so no field here entered the
+  # object later than its hash, which is the one sentence behind every
+  # lossy row above.
+  ENTRIES['BGP::Evpn::Esi'] = entry(:ok, nil, nil) do
+    BGP::Evpn::Esi.new(1, '001122334455667788')
+  end
+
+  ENTRIES['BGP::Evpn::Ethernet_tag_id'] = entry(:ok, nil, nil) do
+    BGP::Evpn::Ethernet_tag_id.new(0xffffffff)
+  end
+
+  # A bit count of 24 against six octets, which is the lie the field is
+  # allowed to tell: RFC 7432 section 7.2 fixes the MAC at six octets
+  # and puts its length in bits, so the two can disagree.
+  ENTRIES['BGP::Evpn::Mac_addr'] = entry(:ok, nil, nil) do
+    BGP::Evpn::Mac_addr.new(24, ['001122334455'].pack('H*'))
+  end
+
+  # The same for the IP Address, whose width does follow its length, so
+  # a count of 24 means three octets here rather than six.
+  ENTRIES['BGP::Evpn::Addr'] = entry(:ok, nil, nil) do
+    BGP::Evpn::Addr.new(24, ['c00002'].pack('H*'))
+  end
+
+  ENTRIES['BGP::Evpn::Unknown'] = entry(:ok, nil, nil) do
+    BGP::Evpn::Unknown.new(99, "\x01\x02\x03\x04\x05")
+  end
+
+  # The NLRI framing, RFC 7432 section 7. Three fields and the recipe
+  # exercises all three: the route, the RFC 7911 section 3 Path
+  # Identifier, and a Length that disagrees with its own octets.
+  #
+  # Built from the wire rather than from values, because `declared_len`
+  # only arrives by parsing: an NLRI built from a route computes its
+  # Length from the body, so there is no way to make it lie from values.
+  # Conventions says where a field only arrives by parsing, parse.
+  ENTRIES['BGP::Evpn'] = entry(:ok, nil, nil) do
+    BGP::Evpn.new_ntop(['09140011223344556677'].pack('H*'), 7)
+  end
+
   # Classes with no entry, each with the reason. An abstract base with no
   # sensible instance belongs here; a class merely awkward to build does
   # not.
@@ -924,6 +971,16 @@ module ToHashCatalog
     'BGP::Flow_spec::Ipv6_prefix_component' =>
       'an abstract base, as Prefix_component is. ' \
       'Destination_ipv6_prefix and Source_ipv6_prefix are measured.',
+    'BGP::Evpn::Sized' =>
+      'an abstract base: from_text raises, so the one argument form no ' \
+      'subclass overrides cannot be built, and the class carries no ' \
+      'hash_key of its own. Addr and Mac_addr supply both and are ' \
+      'measured.',
+    'BGP::Evpn::Route' =>
+      'an abstract base with no sensible instance. type and hash_key ' \
+      'read self.class::TYPE and HASH_KEY and it defines neither, and ' \
+      'encode calls an encode_value it does not have. Unknown is ' \
+      'measured, and the route types fill this in later parts.',
     'BGP::Tunnel_encap::Int_sub_tlv' =>
       'an abstract base with no sensible instance. Its initialize and ' \
       'to_hash read self.class::TYPE, SIZE, NAME and KEY and it ' \

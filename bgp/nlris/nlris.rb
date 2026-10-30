@@ -8,4 +8,6 @@
   mapped_ipv4
   flow_spec_component
   flow_spec
+  evpn_route
+  evpn
 }.each { |n| require "bgp/nlris/#{n}" }
