@@ -215,6 +215,58 @@ class Mp_unreach_Test < Test::Unit::TestCase
                'no Compatibility field on an announcement')
   end
 
+  # Flow spec withdrawals, RFC 8955 section 4. The NLRI length is in
+  # octets and one or two octets wide, section 4.1, so this loop cannot
+  # work it out the way it does for a prefix family: it asks
+  # MpReachCommon::ClassMethods#nlri_size, which defers to the family.
+  # See docs/flow-spec.md section 3.
+  def test_a_flow_spec_withdrawal
+    u = BGP::Mp_unreach.new(
+      :safi => 133,
+      :nlris => [{ :destination_prefix => '192.0.2.0/24',
+                   :ip_protocol => [[:eq, 6]], :port => [[:eq, 25]] }])
+    # MP_UNREACH has neither a next hop nor the reserved octet, so the
+    # AFI and SAFI are followed straight by the section 4.1 framed rule.
+    assert_equal('800f0f' + '0001' + '85' + '0b0118c00002038106048119',
+                 u.to_shex)
+    back = BGP::Attr.factory(u.encode.is_packed)
+    assert_equal(u.to_shex, back.to_shex)
+    assert_equal(1, back.afi)
+    assert_equal(133, back.safi)
+    assert_equal([BGP::Flow_spec], back.nlris.collect(&:class))
+    assert_equal(3, back.nlris[0].size)
+  end
+
+  # RFC 8955 section 8 prepends an 8 octet Route Distinguisher for SAFI
+  # 134, and "The NLRI length field shall include both the 8 octets of
+  # the Route Distinguisher as well as the subsequent Flow Specification
+  # NLRI value."
+  def test_a_flow_spec_vpn_withdrawal_carries_its_route_distinguisher
+    u = BGP::Mp_unreach.new(
+      :safi => 134,
+      :nlris => [{ :rd => [100, 200], :destination_prefix => '192.0.2.0/24' }])
+    assert_equal('800f11000186' + '0d' + '00000064000000c8' + '0118c00002',
+                 u.to_shex)
+    back = BGP::Attr.factory(u.encode.is_packed)
+    assert_equal(u.to_shex, back.to_shex)
+    assert_equal('RD=100:200 (0x64 0x00c8)', back.nlris[0].rd.to_s)
+    assert_equal(1, back.nlris[0].size)
+  end
+
+  # Two rules in one attribute, which is what the 2-tuple framing of
+  # section 4 is for: the loop reads one length field after another.
+  def test_two_flow_spec_rules_in_one_attribute
+    u = BGP::Mp_unreach.new(
+      :safi => 133,
+      :nlris => [{ :destination_prefix => '192.0.2.0/24' },
+                 { :source_prefix => '203.0.113.0/24', :port => [[:eq, 80]] }])
+    back = BGP::Attr.factory(u.encode.is_packed)
+    assert_equal(u.to_shex, back.to_shex)
+    assert_equal(2, back.nlris.size)
+    assert_equal('192.0.2.0/24', back.nlris[0].components[0].prefix.to_s)
+    assert_equal('203.0.113.0/24', back.nlris[1].components[0].prefix.to_s)
+  end
+
   private
   
    def attr_len(attr)

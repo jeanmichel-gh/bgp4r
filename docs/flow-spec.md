@@ -43,11 +43,36 @@ actions are extended community sub-types in
 Both ends MUST advertise the Multiprotocol Extension capability, code 1,
 for the pair they want to use.
 
-**One rule bites on encode immediately.** RFC 8955 section 4: "When
-advertising Flow Specifications, the Length of the Next-Hop Network
-Address MUST be set to 0. The Network Address of the Next-Hop field MUST
-be ignored." Nothing in `Mp_reach#encode` writes a zero length next hop
-today.
+**The next hop rule is two MUSTs, one per direction.** RFC 8955 section
+4: "When advertising Flow Specifications, the Length of the Next-Hop
+Network Address MUST be set to 0. The Network Address of the Next-Hop
+field MUST be ignored." The first binds a sender, the second a receiver,
+and bgp4r needed nothing for the first and a line for the second.
+
+**Sending.** `Mp_reach#encode` writes `@nexthops.size` as that length,
+and a caller who passes no `:nexthop` has an empty list, so the field is
+0 with no code anywhere deciding it should be. An earlier version of
+this document said nothing wrote a zero length next hop today, which was
+wrong when it was written and not merely stale: the rule holds by
+construction. Measured on 2026-10-30.
+
+**Receiving, which is where the work was.** A sender keeping the first
+MUST never puts a next hop here, so the only way one arrives is a sender
+breaking it, and `parse_next_hops` used to raise on that: the whole
+attribute came back as an `Attr::Raw` with an `Attr::Gap` and the rule
+inside was never read. So "ignored" cannot mean "refused", and it does
+not mean "discarded" either. The field is read as an address, the same
+way SAFI 1 and 2 read theirs, for the reason the library keeps and
+echoes a reserved field: `encode` stays byte for byte and the hash can
+still rebuild it. Nothing there claims RFC 8950 applies to flowspec, so
+a length no address fits behaves as it does for every other SAFI.
+
+A caller who does pass a next hop for this family gets one on the wire,
+because building never validates and sending a field the RFC forbids is
+a negative test. All three are asserted:
+`test_the_flow_spec_next_hop_length_is_zero_without_one` and
+`test_a_flow_spec_next_hop_is_read_rather_than_refused` in
+`test/unit/path_attributes/mp_reach_test.rb`.
 
 ## 3. The NLRI framing
 
@@ -84,24 +109,27 @@ else
 end
 ```
 
-**This is where bgp4r does not fit yet.** `Mp_reach#parse` and
-`Mp_unreach#parse` each work out the slice length themselves with the
-prefix rule, `value.slice!(0,(blen+7)/8+1)`, and hand the slice to the
-NLRI class. For flow spec that is wrong twice over: octets rather than
-bits, and possibly two octets wide. Those two loops have to ask the
-family how long the next NLRI is. Verified in the source on 2026-10-30.
+**This is the one place the framing is not shared.** The prefix
+families give a length in **bits**, in one octet, RFC 4271 section 4.3,
+so an NLRI is `1+(length+7)/8` octets, and `Mp_reach#parse` and
+`Mp_unreach#parse` used to work that out inline and hand the slice down.
+Neither half of it holds for flow spec: octets rather than bits, in one
+or two octets rather than always one.
 
-**Half of that is now done and the other half is not.**
-`Flow_spec.nlri_size` answers the question above, for this family, in
-the family's own file, and `Flow_spec.encode_length` writes the field.
-What has not changed is the two loops: they still calculate rather than
-ask, so nothing reaches `Flow_spec` yet. Wiring them is the next piece
-of work.
+So the loops ask instead of calculating. `MpReachCommon::ClassMethods`
+has `nlri_size(s, afi, safi)`, which answers the prefix arithmetic for
+every other family and defers to `Flow_spec.nlri_size` for SAFI 133 and
+134. `Flow_spec.encode_length` writes the field on the way out.
 
-That split is also the answer to the registry question the plan in
-`CLAUDE.md` leaves open. The need turned out to be one more arm on one
-`case`, read by both loops, because the framing belongs to the family
-and the family can own it. One arm is not a registry.
+That is also the answer to the registry question the plan in `CLAUDE.md`
+left open. The need turned out to be one more arm on one `case`, read by
+both loops, because the framing belongs to the family and the family can
+own it. One arm is not a registry.
+
+`nlri_size` answers **nil** for octets too short to hold a length field,
+so a loop stops rather than spinning. The loops then leave the octets
+and raise on the leftover, which is how an attribute bgp4r cannot read
+becomes an `Attr::Raw` with an `Attr::Gap` and keeps its bytes.
 
 ## 4. The NLRI value
 
@@ -471,8 +499,9 @@ has the plan and the current status; this is only the shape.
 | the twelve IPv4 components, the seven IPv6 ones, and an unknown type | done, `bgp/nlris/flow_spec_component.rb` |
 | the two operator octets | done, with the reserved bits kept |
 | the NLRI itself, the length framing, the RD for SAFI 134 | done, `bgp/nlris/flow_spec.rb` |
-| the two dispatch points in `mp_reach.rb` and `mp_unreach.rb` | not started, so nothing reaches `Flow_spec` yet |
-| a zero length next hop on encode | not started |
+| the framing in `mp_reach.rb` and `mp_unreach.rb`, and the two gates | done, so a flow spec UPDATE reads and writes |
+| a zero length next hop on encode | nothing to do: `Mp_reach#encode` writes `@nexthops.size`, which is 0 with no `:nexthop` |
+| ignoring a next hop on receive | done: it used to raise, so the rule inside was never read |
 | the receive side checks in `validation.rb` | not started |
 | the seven RFC 8955 section 7 actions | already there, predating this work |
 | `rt-redirect-ipv6`, type 0x000d | missing |

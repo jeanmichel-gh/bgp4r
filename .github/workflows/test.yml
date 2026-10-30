@@ -59,6 +59,9 @@ jobs:
       - name: Functional test (a route across a bgp4r router)
         run: bundle exec ruby -I. test/functional/rib_router_test.rb
         timeout-minutes: 2
+      - name: Functional test (a flow spec UPDATE over loopback)
+        run: bundle exec ruby -I. test/functional/flow_spec_test.rb
+        timeout-minutes: 2
       - name: Lab speaker over loopback
         run: bundle exec ruby -I. test/functional/lab/speaker_test.rb
         timeout-minutes: 3

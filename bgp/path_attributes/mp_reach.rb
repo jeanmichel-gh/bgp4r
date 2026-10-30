@@ -34,7 +34,14 @@ module BGP
     def set(h)
       @safi = h[:safi]
       @path_id = h[:path_id]
-      @afi = h[:afi] || self.class.afi_from_nlris(h[:nlris])
+      @afi = h[:afi]
+      # Every family but flow spec carries an address in its NLRI, so
+      # the family can be read off one. A flow spec rule carries
+      # components instead, and which family it is shows in their keys,
+      # so its own arm below answers and afi_from_nlris is not asked a
+      # question it would answer by handing nil to IPAddr.
+      @afi ||= self.class.afi_from_nlris(h[:nlris]) unless
+        [IANA::SAFI::FLOW_SPEC_RULES_1, IANA::SAFI::FLOW_SPEC_RULES_2].include?(safi)
       case safi
       when 1,2
         pfx_klass = prefix_klass(afi, safi)
@@ -60,10 +67,30 @@ module BGP
       when 128,129
         @nlris = [h[:nlris]].flatten.compact.collect do |n|
           path_id = n[:path_id] || @path_id
-          prefix = n[:prefix].is_a?(Prefix) ? n[:prefix] :  Prefix.new(n[:prefix]) 
+          prefix = n[:prefix].is_a?(Prefix) ? n[:prefix] :  Prefix.new(n[:prefix])
           rd = n[:rd].is_a?(Rd) ?  n[:rd] : Rd.new(*n[:rd])
           Labeled.new_with_path_id(path_id, Vpn.new(prefix,rd), *labels_from(n))
         end
+      when IANA::SAFI::FLOW_SPEC_RULES_1, IANA::SAFI::FLOW_SPEC_RULES_2
+        # RFC 8955 section 4. A rule is given either as a Flow_spec,
+        # which is used as it stands, or as the hash Flow_spec reads,
+        # one key per component. The component keys say which family a
+        # rule is, so nothing here passes the AFI down.
+        #
+        # **No next hop is written for this family and none has to be
+        # taken out.** Section 4: "When advertising Flow Specifications,
+        # the Length of the Next-Hop Network Address MUST be set to 0."
+        # Mp_reach#encode writes @nexthops.size, which is 0 when the
+        # caller passes no :nexthop, so the rule holds by itself.
+        # Passing one anyway still puts it on the wire, because building
+        # never validates and that is a negative test.
+        @nlris = [h[:nlris]].flatten.compact.collect do |n|
+          next n if n.is_a?(Flow_spec)
+          fs = Flow_spec.new(n)
+          fs.path_id ||= @path_id
+          fs
+        end
+        @afi ||= @nlris.empty? ? IANA::AFI::IPv4 : @nlris.first.afi
       else
         raise "SAFI #{safi} not implemented!"
       end
@@ -106,6 +133,35 @@ module BGP
     private :nlri_to_hash
     
     module ClassMethods
+
+      # How many octets the next NLRI occupies, including whatever
+      # length field it carries. The Path Identifier of RFC 7911 section
+      # 3 is already off the octets by the time this is asked.
+      #
+      # **This is a per family question and not arithmetic one loop can
+      # do for every family**, which is why it is a method rather than
+      # the expression it replaced. The prefix families give a length in
+      # **bits**, in one octet, RFC 4271 section 4.3, so the NLRI is
+      # 1+(length+7)/8 octets and both parse loops worked that out
+      # themselves. Flow spec gives a length in **octets**, in one or
+      # two, RFC 8955 section 4.1, so neither half of that arithmetic
+      # holds and the family answers instead.
+      #
+      # nil when the octets cannot hold a length field at all, so a
+      # caller stops rather than looping. The loops then leave the
+      # octets, and Mp_reach#parse and Mp_unreach#parse raise on the
+      # leftover, which is how an attribute bgp4r cannot read becomes an
+      # Attr::Raw with an Attr::Gap and keeps its bytes. See #116.
+      def nlri_size(s, afi, safi)
+        return nil if s.nil? || s.empty?
+        case safi
+        when IANA::SAFI::FLOW_SPEC_RULES_1, IANA::SAFI::FLOW_SPEC_RULES_2
+          Flow_spec.nlri_size(s)
+        else
+          (s.getbyte(0) + 7) / 8 + 1
+        end
+      end
+
       # One NLRI of an MP_REACH or MP_UNREACH attribute. RFC 4760 sections 3
       # and 4: for SAFI 1 and 2 each NLRI is a single <length, prefix>, with
       # the Path Identifier already read when add-path is on (RFC 7911
@@ -231,10 +287,13 @@ module BGP
 
         while value.size>0
           path_id = value.slice!(0,4).unpack('N')[0]  if path_id_flag
-          blen = value.slice(0,1).unpack('C')[0]
-          nlri = Nlri.factory(value.slice!(0,(blen+7)/8+1), @afi, @safi, path_id)
-          # nlri = Nsap.new_ntoh(value.slice!(0,(blen+7)/8+1))
-          @nlris << nlri
+          # The same question as the loop below, through the same
+          # method. Flow spec never reaches this branch, since it is
+          # AFI 1 and 2 and this is AFI 3, so nlri_size answers the
+          # prefix arithmetic here exactly as the inline expression did.
+          n = self.class.nlri_size(value, @afi, @safi)
+          break if n.nil? || n <= 0
+          @nlris << Nlri.factory(value.slice!(0,n), @afi, @safi, path_id)
         end
 
       else
@@ -248,10 +307,14 @@ module BGP
           path_id_flag = arg
         end
 
-        while value.size>0          
+        while value.size>0
           path_id = path_id_flag ? value.slice!(0,4).unpack('N')[0] : nil
-          blen = value.slice(0,1).unpack('C')[0]
-          @nlris << self.class.nlri_ntop(value.slice!(0,(blen+7)/8+1), @afi, @safi, path_id)
+          # The family says how long its NLRI is; see nlri_size. nil is
+          # octets too short to hold a length field, so stop and let the
+          # leftover below raise rather than loop.
+          n = self.class.nlri_size(value, @afi, @safi)
+          break if n.nil? || n <= 0
+          @nlris << self.class.nlri_ntop(value.slice!(0,n), @afi, @safi, path_id)
         end
       end
       raise RuntimeError, "leftover afer parsing: #{value.unpack('H*')}" if value.size>0
@@ -287,7 +350,21 @@ module BGP
       ipv6_nh = @afi == 1 && ipv6_nexthop_length?(s.size)
       while s.size>0
         case @safi
-        when 1,2,4
+        # SAFI 133 and 134 are here because RFC 8955 section 4 says "the
+        # Length of the Next-Hop Network Address MUST be set to 0. The
+        # Network Address of the Next-Hop field MUST be ignored." A sender
+        # that writes 0 never reaches this loop, so the only way in is a
+        # sender breaking that MUST, and ignoring the field must not mean
+        # refusing the attribute: before this bgp4r raised here, so a
+        # flowspec UPDATE with any next hop at all came back as an
+        # Attr::Raw with a Gap and its components were never read.
+        # Reading it as an address rather than discarding it is what keeps
+        # encode byte for byte and keeps the hash able to rebuild it, the
+        # same reason a reserved field is kept and echoed elsewhere.
+        # Nothing here claims RFC 8950 applies to flowspec, so
+        # ipv6_nexthop_length? is left alone and a length no address fits
+        # behaves as it does for every other SAFI.
+        when 1,2,4,133,134
           case @afi
           when 1
             if ipv6_nh
@@ -357,6 +434,14 @@ module BGP
           end
         when 128,129
           ::BGP::const_get('Vpn')
+        when 133,134
+          # RFC 8955 section 4 wants the length set to 0, so a flowspec
+          # MP_REACH is normally built with no :nexthop at all and encode
+          # writes 0 on its own. One given anyway is honoured rather than
+          # refused: Conventions says building never validates, because
+          # putting a field on the wire that the RFC forbids is the
+          # negative test the library exists for.
+          ::BGP::const_get('Prefix')
         else
           raise ArgumentError, "no next hop class for AFI #{afi.inspect} SAFI #{safi.inspect}"
         end
