@@ -74,7 +74,12 @@ test/functional/lab/     lab tests: loopback speaker test and one Compose test p
                          table inside a network namespace, no Docker, needs root;
                          fault_matrix_frr_test.rb runs the same matrix against
                          FRR's bgpd, standalone on loopback, no Docker and no zebra,
-                         and rib_router_frr_test.rb points our export side at it
+                         and rib_router_frr_test.rb points our export side at it;
+                         flow_spec_gobgp_test.rb and flow_spec_frr_test.rb send a
+                         flow spec rule to each and assert what it reads back,
+                         which is the only check on our components, operator
+                         octets and section 4.1 length that is not bgp4r's own
+                         opinion. They send only; see docs/flow-spec.md section 12
 ```
 
 ## Running tests
@@ -162,6 +167,15 @@ minute:
 ruby -I. test/functional/lab/rib_router_frr_test.rb
 ```
 
+A flow spec rule from bgp4r read back by each router, which is the only
+check on our components, operator octets, section 4.1 length, RFC 8956
+offset and section 8 RD that is not bgp4r's own opinion. About a minute
+and 45 seconds respectively, and both need the binaries above:
+```
+ruby -I. test/functional/lab/flow_spec_gobgp_test.rb
+ruby -I. test/functional/lab/flow_spec_frr_test.rb
+```
+
 Which `#to_hash` read back and which do not, printed from
 `test/unit/to_hash_catalog.rb` rather than written down anywhere:
 ```
@@ -186,7 +200,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. A `lab` job runs the Compose topologies, and installs a `gobgpd` release so the native fault matrix runs there too; it pins 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-10-30: 1498 tests, 23279 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.7%.
+Baseline on 2026-10-30: 1499 tests, 23289 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.7%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -1264,10 +1278,13 @@ Two consequences, both of which change the plan rather than decorate it:
      question behind a lookup reads better than a sixth arm on a `case`,
      that is the need arriving and the registry is worth revisiting
      then. Build it from that need and not ahead of it.
-2. **Flowspec, SAFI 133 and 134, RFC 8955 and RFC 8956. Parts 1 to 3
-   of 5 done, in #175, #176 and #177, so the family reads and writes on
-   the wire**, which is the measure this plan set itself. Validation
-   and the lab are left.
+2. **Flowspec, SAFI 133 and 134, RFC 8955 and RFC 8956. Parts 1, 2, 3
+   and 5 done, in #175, #176, #177 and #178, so the family reads and
+   writes on the wire** and two real routers agree, which is the measure
+   this plan set itself. **Part 4, validation, is the only one left**,
+   and the lab was taken before it deliberately: what the two routers do
+   with a rule decides which checks are worth adding and to which
+   channel. See part 5 for what that measurement found.
    First of the real families, for three reasons. bgp4r was already
    half built here, since every traffic filtering action of RFC 8955
    section 7 was implemented and the rule they filter could not be
@@ -1503,18 +1520,71 @@ Two consequences, both of which change the plan rather than decorate it:
       session. Say that rather than implying the RFC only constrains
       readers. Section 4.2 also makes an unknown component type
       malformed, so that one belongs in `errors` and not `undecoded`.
+      * **Part 5 measured what two routers actually do, and it bears
+        directly on this.** Neither enforces the ordering MUST; GoBGP
+        enforces the once-only rule by resetting and FRR ignores it;
+        FRR treats an unknown type as malformed and GoBGP installs it.
+        So for the unknown type the RFC and one router agree, which is
+        the case for putting it in `errors`, and for the other two rules
+        there is no agreement to lean on and the RFC decides. Do not
+        copy either router: one agreeing is not a quorum, and the fault
+        matrix already showed how far apart two can be on receive.
       * **A missing end-of-list bit is not always detectable**, so do
         not try to recover the sender's intent. The octets that follow
         are read on as further pairs, and where they happen to form a
         valid operator sequence nothing distinguishes that from what was
         meant. `Flow_spec` bounds the walk with the section 4.1 length,
         which is the only bound there is, and keeps what it cannot read.
-   5. **The lab. Not started.** **Probe before recording anything about
-      it.** Three Docker blocks in this file came apart on being tried.
-      Whether GoBGP and FRR accept a flowspec rule from us, and whether
-      either gives a RIB answer a test can read, is a measurement. If
-      they do, the lab test is the twin of `rib_router_gobgp_test.rb`; if
-      one does not, that is a recorded fact and not a blocked phase.
+   5. **The lab. Done**, in #178, and taken **before** part 4 on purpose, because
+      what two real routers do with a rule is what tells you which
+      checks are worth adding and to which channel. `docs/flow-spec.md`
+      section 12 has the measurements; this is what they change.
+      * The entry here said to probe first, and probing paid: **both
+        routers accept a rule from bgp4r and both give a RIB answer a
+        test can read**, which is more than this plan assumed. So there
+        are two tests, the twins of the two `rib_router_*` ones:
+        `test/functional/lab/flow_spec_gobgp_test.rb`, 8 cases and 50
+        assertions in about a minute, and `flow_spec_frr_test.rb`, 9
+        cases and 45 assertions in about 45 seconds. Both are picked up
+        by `test/run_lab.rb`, which globs the directory, and CI already
+        pins the two versions they assert against.
+      * **What a second implementation vouches for, which no bgp4r test
+        can**: the components by type number, the **operator octet
+        whole** (GoBGP prints `op => 129`, our end-of-list bit plus eq),
+        the **section 4.1 length** (FRR puts it in the rule's own name,
+        `/11`), the RFC 8956 **offset**, the section 8 **RD**, the
+        section 7.1 **traffic-rate action**, and a withdrawal.
+      * **The two routers disagree on every part of section 4.2**, which
+        is the finding that matters for part 4. Out of order: GoBGP
+        accepts and normalises, FRR accepts and keeps our order. A type
+        twice: GoBGP resets, FRR keeps both. An unknown type, which the
+        RFC calls malformed: GoBGP installs it, FRR resets with 3/9. So
+        each enforces one of the two enforceable rules, a different one,
+        and neither enforces the ordering MUST. **bgp4r follows the RFC
+        and not either router**: one router agreeing is not a quorum.
+      * GoBGP's reset is its ordering check firing on the repeat, in its
+        own words, `ipv4-flowspec nlri violate strict type ordering`,
+        and the NOTIFICATION it sends is **code 0 subcode 0**, which RFC
+        4271 section 4.5 does not define and its own log calls `code
+        0(undefined)`. Recorded, not filed: the job is bgp4r catching
+        up, and bgp4r reads the undefined code back correctly.
+      * Two harness facts, each measured because each silently voids a
+        run. **GoBGP's config file and its client use different names
+        for the VPN family**: the config takes `l3vpn-ipv4-flowspec` and
+        the client `ipv4-l3vpn-flowspec`, each rejecting the other, which
+        is what `Gobgpd::FS_CLIENT` maps. And **FRR 8.4.4 has no VPN flow
+        spec family**, failing two ways: SAFI 134 alone is refused with
+        2/7 Unsupported Capability, and SAFI 134 beside 133 comes up and
+        discards the rule **in silence**. Both asserted, the second
+        because a silent discard is the worse one to meet unknowingly.
+      * **These two tests send only**, and that is worth knowing before
+        trusting them: each asserts a router's reading of what bgp4r put
+        on the wire, so reverting `nlri_size` to the pre-wiring prefix
+        arithmetic leaves both passing. Measured, by trying it. The parse
+        direction belongs to `test/functional/flow_spec_test.rb`. What
+        does fail them is an encode-side slip: dropping the end-of-list
+        bit fails 5 of the 8 GoBGP cases and 3 of the 9 FRR ones, and a
+        section 4.1 length off by one fails 7 of the 9 FRR cases.
    * **Build validates nothing**, per Conventions: any component type,
      any value, any order, any repetition, so a test can put a rule on
      the wire that no RFC allows and watch a router decide. The action
@@ -1616,6 +1686,7 @@ Lab and conformance:
   * Be precise about what that adds, because #115 already pinned the direction inside bgp4r by writing the field value literally on one side: inverting `_send_recv` today also fails `test/functional/add_path_test.rb` and two unit files. What survived for years was the *behaviour*, where bgp4r against bgp4r cancels the error out. So the new part is a second implementation's reading of the field, plus the data path nothing had checked against anyone else: that GoBGP accepts a Path Identifier from us, holds two paths for one prefix because of it, and understands a withdrawal that names one of them.
   * **`Neighbor#capability :add_path` takes its arguments in the order `(send_recv, afi, safi)`**, which is what `CAP::Add_path#add` takes. This file used to give the example `capabilities: [{add_path: [1, 1, 3]}]`, which is SAFI 3, NSAP, and a Send/Receive of 1. For IPv4 unicast both ways it is `[3, 1, 1]`, or `[:send_and_receive, 1, 1]`, which says it better. The wrong example was never run.
   * A Compose topology on `lab/speaker.rb` is still possible and is two pieces, neither needed by the native test: an announce block has no way to give a prefix a Path Identifier, since `build_update` calls `Nlri.new` with plain prefix strings; and `Lab::Recorder#record_routes` keys received routes by prefix alone, so two paths for one prefix overwrite each other and the state file cannot show a Path Identifier arrived. Worth doing only if the lab speaker itself needs add-path.
+* **Flow spec interop lives in `docs/flow-spec.md` section 12**, measured and asserted rather than written down here, the same way the fault matrix columns are. The short version: both routers accept a rule from bgp4r and read it back, and they disagree on every part of RFC 8955 section 4.2. Two harness facts worth knowing before writing another flow spec lab test: GoBGP's **config file and its client use different names for the VPN family**, `l3vpn-ipv4-flowspec` and `ipv4-l3vpn-flowspec`, each rejecting the other; and **FRR 8.4.4 has no VPN flow spec family**, refusing a session that offers SAFI 134 alone with 2/7 and silently discarding the rule when SAFI 133 is there too.
 * Lowest coverage (unit suite): `neighbor/neighbor.rb` 91%, `messages/update.rb` 92%, `optional_parameters/graceful_restart.rb` 92%, `neighbor/add_path_cap.rb` 93%, `path_attributes/mp_unreach.rb` 93%.
 
 ## Attribute work left
