@@ -182,4 +182,121 @@ class TestAttrCheck < Test::Unit::TestCase
     assert_equal 'attribute 1: b (treat_as_withdraw)', e.message
   end
 
+  # Flow spec, RFC 8955 section 4.2 and RFC 8956. SAFI 133 and 134 are
+  # the only SAFIs with an NLRI these rules apply to.
+  #
+  # **The subcode and the action are not RFC 8955's and the comment on
+  # flow_spec_finding says where they come from.** Section 10 is four
+  # lines and defines neither: "Error handling according to [RFC7606]
+  # and [RFC4760] applies to this specification." So a malformed rule
+  # makes the attribute carrying it malformed and gets what bgp4r
+  # already gives a malformed MP_REACH, 9 and a session reset.
+  #
+  # Every hex string below was built with the library and read back
+  # before it was pasted here, rather than typed from the layout.
+
+  # A rule that is well formed is not reported, which is the assertion
+  # the three below are measured against.
+  def test_good_flow_spec_rules_have_no_findings
+    [ # RFC 8955 section 4.3.1, destination with a protocol and a port
+      '800e11 000185 0000 0b 0118c00002 038106 048119',
+      # RFC 8956, an IPv6 destination with an upper-layer protocol
+      '800e10 000285 0000 0a 01200020010db8 038106',
+      # SAFI 134, the section 8 Route Distinguisher in front
+      '800e13 000186 0000 0d 00000064000000c8 0118c00002',
+      # a withdrawal, which is the other parse loop
+      '800f09 000185 05 0118c00002',
+      # two rules in one attribute
+      '800e11 000185 0000 05 0118c00002 05 0218cb0071',
+    ].each { |hex| assert_equal [], check(hex), hex }
+  end
+
+  # Section 4.2: "Components MUST follow strict type ordering by
+  # increasing numerical order."
+  def test_flow_spec_components_out_of_order
+    assert_equal [[9, RESET]], check('800e0e 000185 0000 08 048119 0118c63364')
+    assert_equal 'flow spec component type 1 after type 4, which is not increasing (RFC 8955 section 4.2)',
+                 reason('800e0e 000185 0000 08 048119 0118c63364')
+    # and under RFC 8956, where type 13 exists and type 1 still sorts first
+    assert_equal [[9, RESET]],
+                 check('800e13 000285 0000 0d 0da100000007 01200020010db8')
+  end
+
+  # The other half of section 4.2: "A given component type MAY (exactly
+  # once) be present in the Flow Specification." Equal is not increasing
+  # either, so a repeat breaks both halves and gets its own words.
+  def test_a_flow_spec_component_type_twice
+    hex = '800e11 000185 0000 0b 0118cb0071 048119 048150'
+    assert_equal [[9, RESET]], check(hex)
+    assert_equal 'flow spec component type 4 appears more than once (RFC 8955 section 4.2)',
+                 reason(hex)
+  end
+
+  # Section 4.2: an NLRI "not encoded as specified here, including an
+  # NLRI that contains an unknown component type, is considered
+  # malformed". Type 99 is Unassigned for both families in RFC 8956
+  # section 8.1.2.
+  #
+  # **The known types come from Flow_spec::COMPONENTS**, so a component
+  # class added to the library stops being unknown here on the same day
+  # and this check cannot call a type unknown that bgp4r implements.
+  def test_an_unknown_flow_spec_component_type
+    hex = '800e0f 000185 0000 09 0119c00002 80638105'
+    assert_equal [[9, RESET]], check(hex)
+    assert_equal 'unknown flow spec component type 99 (RFC 8955 section 4.2)', reason(hex)
+    # type 13 is Unassigned for IPv4 and Flow Label for IPv6, so the
+    # same octets are malformed in one family and fine in the other
+    v4 = '800e0c 000185 0000 06 0da100000007'
+    v6 = '800e0c 000285 0000 06 0da100000007'
+    assert_equal [[9, RESET]], check(v4), 'type 13 is Unassigned for IPv4'
+    assert_equal 'unknown flow spec component type 13 (RFC 8955 section 4.2)', reason(v4)
+    assert_equal [], check(v6), 'and Flow Label for IPv6'
+  end
+
+  # The section 4.1 framing, which is Flow_spec.nlri_size rather than a
+  # second copy of the rule.
+  def test_flow_spec_nlri_framing
+    assert_equal [[9, RESET]], check('800e07 000185 0000 0b 01')
+    assert_equal 'flow spec NLRI of 12 octets runs past the attribute, 2 left (RFC 8955 section 4.1)',
+                 reason('800e07 000185 0000 0b 01')
+    # 0xf0 opens the 2 octet form of section 4.1 and nothing follows it
+    assert_equal [[9, RESET]], check('800e06 000185 0000 f0')
+    assert_equal '1 octet left, too few for a flow spec NLRI length field (RFC 8955 section 4.1)',
+                 reason('800e06 000185 0000 f0')
+    # section 4.2 encodes the value as <[component]+>, one or more
+    assert_equal [[9, RESET]], check('800e06 000185 0000 00')
+    assert_equal 'flow spec NLRI with no component (RFC 8955 section 4.2)',
+                 reason('800e06 000185 0000 00')
+    # a component whose own fields run past the NLRI it sits in
+    assert_equal [[9, RESET]], check('800e08 000185 0000 02 0118')
+    # and the same through MP_UNREACH, whose loop is a separate copy
+    assert_equal [[9, RESET]], check('800f06 000185 02 0118')
+  end
+
+  # RFC 8955 section 8: "The NLRI length field shall include both the 8
+  # octets of the Route Distinguisher as well as the subsequent Flow
+  # Specification NLRI value."
+  def test_a_vpn_flow_spec_rule_too_short_for_its_route_distinguisher
+    hex = '800e0a 000186 0000 04 01020304'
+    assert_equal [[9, RESET]], check(hex)
+    assert_equal '4 octets, a SAFI 134 rule needs 8 for its Route Distinguisher (RFC 8955 section 8)',
+                 reason(hex)
+  end
+
+  # The prefix families must be untouched by all of the above, since
+  # their NLRI is not a component list and none of these rules applies.
+  def test_the_prefix_families_are_not_flow_spec_checked
+    assert_equal [], check('800e0d 000101 04 0a000001 00 18c00002')
+    assert_equal [], check('800f05 000101 18c00002')
+    # SAFI 4, 128 and 129 likewise
+    assert_equal [], check('800f05 000104 18c00002')
+  end
+
+  # The reason of the one finding for hex, so a test can assert which
+  # rule fired rather than only that something did.
+  def reason(hex)
+    f = Attr::Check.attribute(b(hex), false)
+    f.size == 1 ? f.first.reason : f.collect(&:reason)
+  end
+
 end

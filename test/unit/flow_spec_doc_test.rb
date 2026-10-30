@@ -417,6 +417,66 @@ class FlowSpecDocTest < Test::Unit::TestCase
     assert_match(/nlri_size/, doc)
   end
 
+  # Section 10 of the document says what a malformed rule is reported
+  # as, and why that answer is not RFC 8955's to give: its own section
+  # 10 defers to RFC 7606 and RFC 4760 and names no subcode, so bgp4r
+  # reuses the verdict it already gives a malformed MP_REACH.
+  #
+  # This asserts the library against that prose, because the subcode is
+  # the one number in this document a reader could act on and get wrong.
+  # The three rules themselves are asserted in
+  # test/unit/path_attributes/validation_test.rb; what is checked here
+  # is only that the document and the library still agree on what comes
+  # out.
+  def test_the_documented_subcode_is_what_the_library_reports
+    # one rule per section 4.2 sentence, each built by the library
+    bad = {
+      'out of order' => BGP::Flow_spec.new(
+        BGP::Flow_spec::Port.new([:eq, 25]),
+        BGP::Flow_spec::Destination_prefix.new('192.0.2.0/24')),
+      'a type twice' => BGP::Flow_spec.new(
+        BGP::Flow_spec::Destination_prefix.new('192.0.2.0/24'),
+        BGP::Flow_spec::Port.new([:eq, 25]),
+        BGP::Flow_spec::Port.new([:eq, 80])),
+      'an unknown type' => BGP::Flow_spec.new(
+        BGP::Flow_spec::Destination_prefix.new('192.0.2.0/24'),
+        BGP::Flow_spec::Unknown.new(99, [0x81, 0x05].pack('C*'))),
+    }
+    bad.each do |what, rule|
+      attr = BGP::Mp_reach.new(:safi => 133, :nlris => [rule])
+      findings = BGP::Attr::Check.attribute(attr.encode.is_packed, false)
+      assert_equal(1, findings.size, "#{what}: one finding")
+      f = findings.first
+      assert_equal(9, f.subcode, "#{what}: the subcode section 10 leads to")
+      assert_equal(:session_reset, f.action, "#{what}: the action")
+      assert_match(/RFC 8955 section 4\.2/, f.reason, "#{what}: cites the rule")
+      # and the NOTIFICATION that subcode names
+      assert_equal('UPDATE msg error (3), Optional Attribute Error (9)',
+                   f.notification.to_s[/UPDATE.*/].strip,
+                   "#{what}: the NOTIFICATION")
+    end
+    # a well formed rule is reported as nothing, which is what makes the
+    # three above mean something
+    ok = BGP::Mp_reach.new(
+      :safi => 133,
+      :nlris => [{ :destination_prefix => '192.0.2.0/24',
+                   :ip_protocol => [[:eq, 6]], :port => [[:eq, 25]] }])
+    assert_equal([], BGP::Attr::Check.attribute(ok.encode.is_packed, false))
+    # and the document still says both numbers
+    assert_match(/subcode 9 with a session reset/, doc)
+    assert_match(/RFC 7606 section 7\.11/, doc)
+  end
+
+  # RFC 9117 updates RFC 8955's validation procedure, and nothing in
+  # RFC 8955 or RFC 8956 points forward to it, so the document says so.
+  # Nothing in the library implements it, which is why this only guards
+  # the mention: an audit that reads two of the three RFCs would
+  # otherwise conclude the section 6 procedure stands as written.
+  def test_the_document_names_the_rfc_that_updates_the_validation_procedure
+    assert_match(/RFC 9117/, doc)
+    assert_match(/Revised Validation Procedure/, doc)
+  end
+
   def test_claude_md_points_at_the_document
     md = File.read(File.expand_path('../../CLAUDE.md', __dir__),
                    :encoding => 'UTF-8')

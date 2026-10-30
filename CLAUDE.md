@@ -47,8 +47,9 @@ docs/                    protocol-testing.md: using bgp4r to test a router
                          as is needed to write the encoding and decoding. Read it
                          before touching flow_spec_component.rb or flow_spec.rb,
                          before changing how mp_reach.rb and mp_unreach.rb frame
-                         an NLRI, or before adding one of the missing action
-                         communities. Its load bearing claims
+                         an NLRI, before touching the flow spec checks in
+                         validation.rb, or before adding one of the missing
+                         action communities. Its load bearing claims
                          are asserted by test/unit/flow_spec_doc_test.rb
                          building-objects.md: the three ways into every class and how
                          initialize dispatches between them; read it before changing a
@@ -200,7 +201,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. A `lab` job runs the Compose topologies, and installs a `gobgpd` release so the native fault matrix runs there too; it pins 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-10-30: 1499 tests, 23289 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.7%.
+Baseline on 2026-10-30: 1508 tests, 23337 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.8%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -1180,7 +1181,7 @@ true here is the shape of the gap:
   points. The attribute figure reads worse than it is: FRR's `bgpd.h` defines
   exactly bgp4r's 22 plus two.
 
-### Breadth, the one SAFI lever. Phase 2 on the wire
+### Breadth, the one SAFI lever. Phase 2 done
 
 The section above deferred breadth and named the single limit. This is the
 plan for lifting it, recorded before the work starts.
@@ -1278,13 +1279,16 @@ Two consequences, both of which change the plan rather than decorate it:
      question behind a lookup reads better than a sixth arm on a `case`,
      that is the need arriving and the registry is worth revisiting
      then. Build it from that need and not ahead of it.
-2. **Flowspec, SAFI 133 and 134, RFC 8955 and RFC 8956. Parts 1, 2, 3
-   and 5 done, in #175, #176, #177 and #178, so the family reads and
-   writes on the wire** and two real routers agree, which is the measure
-   this plan set itself. **Part 4, validation, is the only one left**,
-   and the lab was taken before it deliberately: what the two routers do
-   with a rule decides which checks are worth adding and to which
-   channel. See part 5 for what that measurement found.
+2. **Flowspec, SAFI 133 and 134, RFC 8955 and RFC 8956. Done**, in
+   #175, #176, #177, #178 and #179. The family reads and writes on the
+   wire, two real routers agree, and a malformed rule is reported on
+   receive without bgp4r losing the ability to send one. That is the
+   measure this plan set itself, so **the whole of phase 2 is
+   finished**; what is left for flow spec is the three action
+   communities at the end of this entry, each its own piece of work.
+   Part 5, the lab, was taken before part 4 deliberately: what the two
+   routers do with a rule decided which checks were worth adding and to
+   which channel.
    First of the real families, for three reasons. bgp4r was already
    half built here, since every traffic filtering action of RFC 8955
    section 7 was implemented and the rule they filter could not be
@@ -1504,7 +1508,7 @@ Two consequences, both of which change the plan rather than decorate it:
           1**, the withdrawal case, which is what says the two loops are
           independent copies and that one test is all that covers the
           second.
-   4. **Validation. Not started**, and its own pull request.
+   4. **Validation. Done**, in #179, which finishes phase 2.
       `validation.rb` and nowhere else, per Conventions. **Be exact
       about whose rule it is, because an earlier version of this entry
       called it a receive side rule and it is not.** Section 4.2:
@@ -1535,6 +1539,57 @@ Two consequences, both of which change the plan rather than decorate it:
         valid operator sequence nothing distinguishes that from what was
         meant. `Flow_spec` bounds the walk with the section 4.1 length,
         which is the only bound there is, and keeps what it cannot read.
+      * **The subcode is not RFC 8955's to give, and that is the one
+        thing this part had to read the RFC for.** Its section 10 is
+        four lines, "Error handling according to [RFC7606] and [RFC4760]
+        applies to this specification", and names no subcode and no
+        action. Section 4.2 sends a malformed NLRI there in its own
+        words: one "not encoded as specified here, including an NLRI
+        that contains an unknown component type, is considered malformed
+        and error handling according to Section 10 is performed". So a
+        malformed rule makes the attribute carrying it malformed, and it
+        gets what bgp4r already gives a malformed MP_REACH: **subcode 9
+        with a session reset**, read from RFC 7606 section 7.11 in the
+        two findings that were already there. Inventing a subcode would
+        have been the error. FRR 8.4.4 was measured sending 3/9 on an
+        unknown component type, which is corroboration and not the
+        reason. `test_the_documented_subcode_is_what_the_library_reports`
+        in `flow_spec_doc_test.rb` keeps the document and the library
+        agreeing on it.
+      * **It walks the octets and does not ask `Flow_spec` to parse
+        them**, which is the house style of `prefix_sid_finding` and
+        `tunnel_encap_finding` and is right for the same reason:
+        `Attr::Check` runs on the raw octets and never on the decoder's
+        output, so the two channels stay independent. A rule that is
+        both malformed and undecodable gets a Finding in `errors` and an
+        `Attr::Gap` in `undecoded`, and neither waits on the other.
+        Parsing first would mean a rule bgp4r cannot read is never
+        reported as a protocol error however plainly the RFC says it is
+        one.
+        * What it does **not** reimplement is anything the family owns:
+          `Flow_spec.nlri_size` gives the section 4.1 framing,
+          `Flow_spec::COMPONENTS` the type numbers known per family, and
+          `Flow_spec::Pair` the operator masks. So a component class
+          added to the library stops being unknown here the same day,
+          the masks cannot drift, and **type 13 is malformed for IPv4
+          and a Flow Label for IPv6** without validation knowing why.
+          Only the component boundary walk is local, because nothing
+          else needs it.
+      * Each of the three rules was proved to have a test that fails
+        when that rule is deleted, and the unknown type guard turns out
+        to be load bearing twice: without it `known[comp]` is nil and
+        the walk raises, so its test errors rather than passing.
+      * **RFC 9117 updates RFC 8955's validation procedure and nothing
+        in RFC 8955 or RFC 8956 points forward to it.** "Revised
+        Validation Procedure for BGP Flow Specifications", August 2021,
+        Updates: 8955. Section 4.1 redefines step (b) of the section 6
+        procedure so an empty AS_PATH, or one holding only an
+        AS_CONFED_SEQUENCE, also validates; section 4.2 redefines the
+        AS_PATH rule so a route server peer works. Both are route
+        feasibility, so neither is what `validation.rb` checks and
+        neither changes an octet. Recorded because an audit that reads
+        only the two flow spec RFCs will conclude the section 6
+        procedure stands as written, and it does not.
    5. **The lab. Done**, in #178, and taken **before** part 4 on purpose, because
       what two real routers do with a rule is what tells you which
       checks are worth adding and to which channel. `docs/flow-spec.md`

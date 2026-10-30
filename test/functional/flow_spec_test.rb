@@ -319,5 +319,22 @@ class FlowSpecSessionTest < Test::Unit::TestCase
                   BGP::Flow_spec::Port],
                  back.components.collect(&:class),
                  'in the order they were sent, out of order as that is')
+
+    # **Both halves of the rule, over one socket.** Building never
+    # validates, so the rule went out as written; receiving does, so the
+    # far side reports it rather than accepting it silently. Nothing
+    # else asserts those two together: the unit tests drive one side at
+    # a time, and the lab tests ask a router instead.
+    #
+    # The finding is in errors, not undecoded: RFC 8955 section 4.2
+    # calls this malformed in its own words, which is a protocol error
+    # and not a gap in bgp4r.
+    assert_equal(0, got.path_attribute.undecoded.size, 'not a coverage gap')
+    reasons = got.path_attribute.errors.collect(&:reason)
+    assert_equal(1, reasons.size, "one finding, got #{reasons.inspect}")
+    assert_match(/not increasing \(RFC 8955 section 4\.2\)/, reasons.first)
+    # and it did not stop the session, because the default policy is not
+    # :strict. A conformance run that wants the reset asks for it.
+    assert(@s.is_established?, 'the session stayed up')
   end
 end

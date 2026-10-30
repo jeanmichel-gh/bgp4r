@@ -484,10 +484,54 @@ as a pure wire format spec, and do not put any of this in an encoder.
   destination prefix and the originator. RFC 8956 section 5 changes item
   (a) to read "A destination prefix component with offset=0 is embedded
   in the Flow Specification".
+  * **A third RFC updates this one and it is easy to miss**, because
+    nothing in RFC 8955 or RFC 8956 points forward to it: **RFC 9117**,
+    "Revised Validation Procedure for BGP Flow Specifications", August
+    2021, Updates: 8955. Its section 4.1 redefines step (b) so that an
+    empty AS_PATH, or one holding only an AS_CONFED_SEQUENCE, also
+    validates, which is what lets a central route controller originate a
+    rule it has no forwarding path for. Its section 4.2 redefines the
+    AS_PATH rule so a route server peer works, since a route server does
+    not insert its own AS. Both are route feasibility, so neither is
+    what `validation.rb` checks and neither changes an octet. Recorded
+    because an audit that reads only 8955 and 8956 will conclude the
+    section 6 procedure still stands as written, and it does not.
 * **Error handling.** RFC 8955 section 10 defers to RFC 7606 and RFC
   4760, and adds that a malformed action community, in the sense of RFC
   7606 section 7.14, is one "that cannot be decoded according to Section
   7 of this document".
+  * **That deferral is what decides the subcode bgp4r reports**, and it
+    is the whole of section 10 on the subject: four lines, "Error
+    handling according to [RFC7606] and [RFC4760] applies to this
+    specification", naming no subcode and no action of its own. Section
+    4.2 sends a malformed NLRI there in its own words: an NLRI "not
+    encoded as specified here, including an NLRI that contains an
+    unknown component type, is considered malformed and error handling
+    according to Section 10 is performed". So a malformed rule makes the
+    attribute carrying it malformed, and bgp4r gives it what it already
+    gives a malformed MP_REACH: subcode 9 with a session reset, read
+    from RFC 7606 section 7.11. Inventing a subcode here would be the
+    error. FRR 8.4.4 was independently measured sending 3/9 on an
+    unknown component type, which is corroboration and not the reason.
+  * The three checks live in `validation.rb` and nowhere else, per
+    Conventions, and only ever run on receive or on an explicit
+    `Path_attribute#validate`. **Building still validates nothing**, so
+    every rule below can be put on the wire:
+    * components not in increasing type order (section 4.2)
+    * a component type more than once (section 4.2, where equal is not
+      increasing either, so a repeat breaks both halves of the sentence)
+    * an unknown component type (section 4.2), with the known set taken
+      from `Flow_spec::COMPONENTS` so the check cannot call a type
+      unknown that bgp4r implements, and so type 13 is malformed for
+      IPv4 and a Flow Label for IPv6
+    * the section 4.1 framing, and the section 8 Route Distinguisher
+  * **The check walks octets and does not ask `Flow_spec` to parse
+    them.** `Attr::Check` runs on the raw octets, never on the decoder's
+    output, so the two channels stay independent: a rule that is both
+    malformed and undecodable gets a Finding in `errors` and an
+    `Attr::Gap` in `undecoded`, and neither waits on the other. Parsing
+    first would mean a rule bgp4r cannot read is never reported as a
+    protocol error however plainly the RFC says it is one.
 
 ## 11. Where bgp4r stands
 
@@ -502,7 +546,7 @@ has the plan and the current status; this is only the shape.
 | the framing in `mp_reach.rb` and `mp_unreach.rb`, and the two gates | done, so a flow spec UPDATE reads and writes |
 | a zero length next hop on encode | nothing to do: `Mp_reach#encode` writes `@nexthops.size`, which is 0 with no `:nexthop` |
 | ignoring a next hop on receive | done: it used to raise, so the rule inside was never read |
-| the receive side checks in `validation.rb` | not started |
+| the receive side checks in `validation.rb` | done: the three section 4.2 rules, the 4.1 framing and the section 8 RD |
 | the seven RFC 8955 section 7 actions | already there, predating this work |
 | `rt-redirect-ipv6`, type 0x000d | missing |
 | the two redirect-to-IP communities of `draft-ietf-idr-flowspec-redirect-ip` | missing |

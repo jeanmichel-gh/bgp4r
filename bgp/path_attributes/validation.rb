@@ -228,10 +228,155 @@ module BGP
           if n < 5 or 5 + v.getbyte(3) > n
             return Finding.new(type, 9, RESET, "next hop does not fit in #{n} octets (RFC 7606 section 7.11)")
           end
+          nlri_at = 5 + v.getbyte(3)
+          return flow_spec_finding(type, v.byteslice(nlri_at, n - nlri_at),
+                                   v.unpack1('n'), v.getbyte(2))
         when MP_UNREACH
           return Finding.new(type, 9, RESET, "length #{n}, AFI and SAFI need 3 (RFC 7606 section 7.11)") if n < 3
+          return flow_spec_finding(type, v.byteslice(3, n - 3),
+                                   v.unpack1('n'), v.getbyte(2))
         end
         nil
+      end
+
+      # The flow spec NLRI list of an MP_REACH or MP_UNREACH, RFC 8955
+      # section 4 and RFC 8956. nil for every other SAFI, so this costs
+      # the prefix families one comparison.
+      #
+      # **The subcode and the action are not RFC 8955's.** Its section 10
+      # is four lines and defines neither: "Error handling according to
+      # [RFC7606] and [RFC4760] applies to this specification." And
+      # section 4.2 says an NLRI "not encoded as specified here,
+      # including an NLRI that contains an unknown component type, is
+      # considered malformed and error handling according to Section 10
+      # is performed". So a malformed rule makes the attribute carrying
+      # it malformed, and it gets what bgp4r already gives a malformed
+      # MP_REACH: subcode 9 and a session reset, read from RFC 7606
+      # section 7.11 in the two findings above. Inventing a subcode here
+      # would be the error.
+      #
+      # **This walks the octets rather than asking Flow_spec to parse
+      # them, on purpose.** Attr::Check runs on the raw octets and never
+      # on the decoder's output, so the two channels stay independent:
+      # an NLRI that is both malformed and undecodable gets a Finding
+      # here and an Attr::Gap there, and neither waits on the other.
+      # Parsing first would mean a rule bgp4r cannot read is never
+      # reported as a protocol error, however plainly the RFC says it is
+      # one. See #116 and Conventions in CLAUDE.md.
+      #
+      # What it does **not** reimplement is anything the family already
+      # owns: `Flow_spec.nlri_size` gives the section 4.1 framing,
+      # `Flow_spec::COMPONENTS` gives the type numbers known per family,
+      # and `Flow_spec::Pair` gives the operator masks. So a component
+      # class added to the library is known here the same day, and the
+      # masks cannot drift apart. Only the component boundary walk is
+      # local, because nothing else needs it.
+      def flow_spec_finding(type, nlri, afi, safi)
+        return nil unless safi == IANA::SAFI::FLOW_SPEC_RULES_1 or
+                          safi == IANA::SAFI::FLOW_SPEC_RULES_2
+        known = ::BGP::Flow_spec::COMPONENTS[afi]
+        return nil if known.nil?
+        vpn = safi == IANA::SAFI::FLOW_SPEC_RULES_2
+        while nlri.size > 0
+          size = ::BGP::Flow_spec.nlri_size(nlri)
+          if size.nil?
+            return Finding.new(type, 9, RESET,
+              "#{nlri.size} octet left, too few for a flow spec NLRI length field (RFC 8955 section 4.1)")
+          end
+          if size > nlri.size
+            return Finding.new(type, 9, RESET,
+              "flow spec NLRI of #{size} octets runs past the attribute, #{nlri.size} left (RFC 8955 section 4.1)")
+          end
+          # The value is the 2-tuple minus its own length field, and
+          # nlri_size counts both, so take the field width off the front.
+          field = (nlri.getbyte(0) & 0xf0) == 0xf0 ? 2 : 1
+          f = flow_spec_rule_finding(type, nlri.byteslice(field, size - field),
+                                     known, vpn)
+          return f if f
+          nlri = nlri.byteslice(size, nlri.size - size)
+        end
+        nil
+      end
+
+      # One flow spec NLRI value: the section 8 Route Distinguisher for
+      # SAFI 134, then the components, against the three rules of RFC
+      # 8955 section 4.2.
+      def flow_spec_rule_finding(type, value, known, vpn)
+        i = 0
+        if vpn
+          # RFC 8955 section 8: "The NLRI length field shall include both
+          # the 8 octets of the Route Distinguisher as well as the
+          # subsequent Flow Specification NLRI value."
+          if value.size < ::BGP::Flow_spec::RD_SIZE
+            return Finding.new(type, 9, RESET,
+              "#{value.size} octets, a SAFI 134 rule needs 8 for its Route Distinguisher (RFC 8955 section 8)")
+          end
+          i = ::BGP::Flow_spec::RD_SIZE
+        end
+        if i == value.size
+          # Section 4.2 encodes the value as <[component]+>, one or more.
+          return Finding.new(type, 9, RESET,
+            "flow spec NLRI with no component (RFC 8955 section 4.2)")
+        end
+        seen = nil
+        while i < value.size
+          comp = value.getbyte(i)
+          unless known.key?(comp)
+            return Finding.new(type, 9, RESET,
+              "unknown flow spec component type #{comp} (RFC 8955 section 4.2)")
+          end
+          # "Components MUST follow strict type ordering by increasing
+          # numerical order. A given component type MAY (exactly once) be
+          # present in the Flow Specification." Equal is not increasing,
+          # so a repeat breaks both halves; it gets its own words because
+          # they say more to a reader than "not increasing" does.
+          if seen and comp == seen
+            return Finding.new(type, 9, RESET,
+              "flow spec component type #{comp} appears more than once (RFC 8955 section 4.2)")
+          end
+          if seen and comp < seen
+            return Finding.new(type, 9, RESET,
+              "flow spec component type #{comp} after type #{seen}, which is not increasing (RFC 8955 section 4.2)")
+          end
+          seen = comp
+          size = flow_spec_component_size(value, i, known[comp])
+          if size.nil? or i + size > value.size
+            return Finding.new(type, 9, RESET,
+              "flow spec component type #{comp} runs past the NLRI (RFC 8955 section 4.2)")
+          end
+          i += size
+        end
+        nil
+      end
+
+      # The whole size of the component at i, type octet included, or nil
+      # when the octets run out before its own fields do.
+      #
+      # Three shapes, and the class says which: a prefix (RFC 8955
+      # section 4.2.2.1, "encoded as in BGP UPDATE messages"), an IPv6
+      # prefix with the extra offset octet of RFC 8956 section 3.1, and
+      # everything else as {op, value} pairs ended by the section 4.2.1.1
+      # end-of-list bit.
+      def flow_spec_component_size(value, i, klass)
+        fs = ::BGP::Flow_spec
+        if klass <= fs::Ipv6_prefix_component
+          return nil if i + 3 > value.size
+          len, off = value.getbyte(i + 1), value.getbyte(i + 2)
+          return nil if len < off
+          3 + ((len - off) + 7) / 8
+        elsif klass <= fs::Prefix_component
+          return nil if i + 2 > value.size
+          2 + (value.getbyte(i + 1) + 7) / 8
+        else
+          j = i + 1
+          loop do
+            return nil if j >= value.size
+            op = value.getbyte(j)
+            j += 1 + (1 << ((op & fs::Pair::LEN_MASK) >> fs::Pair::LEN_SHIFT))
+            break if (op & fs::Pair::EOL) != 0
+          end
+          j - i
+        end
       end
 
       def fixed(type, n, want, action, rfc, subcode)
