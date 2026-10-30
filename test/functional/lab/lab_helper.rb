@@ -196,16 +196,39 @@ module LabHelper
 
     attr_reader :local, :as, :router_id, :peer, :peer_as, :port
 
+    # The flow spec families, by the name the **config file** wants.
+    #
+    # **The config and the client disagree about these names in 3.23.0**,
+    # measured on 2026-10-30 and not a typo here: the config file takes
+    # `l3vpn-ipv4-flowspec` and rejects `ipv4-l3vpn-flowspec` with
+    # "isn't a valid route family name", while the client takes
+    # `ipv4-l3vpn-flowspec` and rejects the other with "unsupported
+    # address family". So a VPN flow spec test needs both spellings, and
+    # FS_CLIENT below maps one to the other. The two unicast families and
+    # the two plain flow spec ones are spelled alike on both sides.
+    FS_IPV4 = 'ipv4-flowspec'
+    FS_IPV6 = 'ipv6-flowspec'
+    FS_VPN  = 'l3vpn-ipv4-flowspec'
+    FS_CLIENT = { FS_VPN => 'ipv4-l3vpn-flowspec' }.freeze
+
+    # The name to pass the client's -a for a family, which is its own
+    # name except where the two disagree.
+    def self.client_family(name) ; FS_CLIENT[name] || name ; end
+
     # local:    address the router speaks from
     # peer:     address bgp4r listens on, which the router dials
     # port:     port bgp4r listens on, which the router dials
     # add_path: {receive: true, send_max: 8} for RFC 7911, or nil for none
+    # families: extra afi-safi names beyond the two unicast ones, such as
+    #           FS_IPV4. Empty by default, so a config with none is what
+    #           it always was.
     def initialize(local: '127.0.0.2', as: 65002, router_id: '10.0.0.2',
                    peer: '127.0.0.1', peer_as: 65001, port: nil, ipv6: true,
-                   add_path: nil)
+                   add_path: nil, families: [])
       @local, @as, @router_id = local, as, router_id
       @peer, @peer_as, @ipv6 = peer, peer_as, ipv6
       @add_path = add_path
+      @families = families
       @port = port || Local.free_port
       @listen_port = Local.free_port
       @api_port = Local.free_port
@@ -215,6 +238,7 @@ module LabHelper
     def config
       families = ['ipv4-unicast']
       families << 'ipv6-unicast' if @ipv6
+      families += @families
       afi_safis = families.collect { |f|
         "  [[neighbors.afi-safis]]\n" \
         "    [neighbors.afi-safis.config]\n" \
@@ -352,6 +376,46 @@ module LabHelper
       paths.find { |p| p['best'] } || paths.first
     end
 
+    # The RIB for one family, which is what a flow spec test asks for,
+    # since `global rib` with no -a answers for IPv4 unicast only.
+    #
+    # The keys are the router's own rendering of each rule rather than a
+    # prefix, which is the whole reason this is worth asserting: GoBGP
+    # prints `[destination: 192.0.2.0/24][protocol: ==tcp][port: ==25]`
+    # for the rule of RFC 8955 section 4.3.1, so the key is a second
+    # implementation reading our components back, protocol 6 spelled tcp
+    # and all. Treat the exact text as GoBGP's and not contractual: a
+    # release may reword it, and that is a test to update.
+    def rib_family(family)
+      out, status = Open3.capture2e(self.class.client, '-u', @local,
+                                    '-p', @api_port.to_s, 'global', 'rib',
+                                    '-a', self.class.client_family(family), '-j')
+      return nil unless status.success?
+      JSON.parse(out)
+    rescue SystemCallError, JSON::ParserError
+      nil
+    end
+
+    # The one rule in that family, or nil when it holds none. Every flow
+    # spec case here sends exactly one, so this saves each test naming a
+    # key it would have to spell the router's way.
+    def only_rule(family)
+      r = rib_family(family) or return nil
+      pair = r.first or return nil
+      key, paths = pair
+      path = paths.find { |p| p['best'] } || paths.first
+      [key, path]
+    end
+
+    # The component list of a flow spec path, as the client prints it:
+    # one entry per component, keyed by the RFC 8955 section 4.2 type
+    # number, so an assertion names the type the RFC does. The operator
+    # octet comes back whole, under 'op', which is what makes this worth
+    # reading: `op => 129` is our end-of-list bit plus eq.
+    def self.components(path)
+      (((path['nlri'] || {})['value']) || [])
+    end
+
     # A path's attributes keyed by their BGP attribute type code, so an
     # assertion names the code point the RFC does: 2 AS_PATH, 3 NEXT_HOP,
     # 5 LOCAL_PREF, 9 ORIGINATOR_ID and 10 CLUSTER_LIST here. The client
@@ -477,12 +541,28 @@ module LabHelper
     # read as "FRR resets on all 18 cases" until the harness's own
     # test_the_rib_answer_was_usable said the RIB answer could not be
     # trusted.
+    # The flow spec families, by the name FRR's own `address-family`
+    # command wants. **There is no VPN flow spec family in 8.4.4**, and
+    # that is measured rather than inferred from its absence here: a
+    # session on which bgp4r advertises SAFI 134 alone is refused with
+    # NOTIFICATION 2/7, Unsupported Capability (RFC 5492 section 5), and
+    # one that also carries SAFI 133 comes up and then discards a SAFI
+    # 134 rule in silence, leaving nothing in any RIB and sending no
+    # notification. So a VPN flow spec case belongs to the GoBGP test
+    # alone; see test/functional/lab/flow_spec_frr_test.rb.
+    FS_IPV4 = 'ipv4 flowspec'
+    FS_IPV6 = 'ipv6 flowspec'
+
+    # families: extra address families, each activated for the peer, such
+    #           as FS_IPV4. Empty by default, so a config with none is
+    #           what it always was.
     def initialize(local: '127.0.0.2', as: 65002, router_id: '10.0.0.2',
                    peer: '127.0.0.1', peer_as: 65001, port: nil, ipv6: true,
-                   network: nil)
+                   network: nil, families: [])
       @local, @as, @router_id = local, as, router_id
       @peer, @peer_as, @ipv6 = peer, peer_as, ipv6
       @network = network
+      @families = families
       @port = port || Local.free_port
       @listen_port = Local.free_port
       @vty_port = Local.free_port
@@ -526,6 +606,13 @@ module LabHelper
       lines << ' exit-address-family'
       if @ipv6
         lines << ' address-family ipv6 unicast'
+        lines << '  neighbor %s activate' % @peer
+        lines << ' exit-address-family'
+      end
+      # A family has to be activated for the peer or FRR negotiates it
+      # and then has nowhere to put what arrives.
+      @families.each do |f|
+        lines << ' address-family %s' % f
         lines << '  neighbor %s activate' % @peer
         lines << ' exit-address-family'
       end
@@ -639,6 +726,24 @@ module LabHelper
     def path(prefix)
       paths = (rib || {})[prefix] or return nil
       paths.find { |p| p['bestpath'] } || paths.first
+    end
+
+    # The one rule in a flow spec family, as [key, path], or nil when it
+    # holds none. The twin of Gobgpd#only_rule, so the two flow spec
+    # tests read alike.
+    #
+    # **FRR's key carries the RFC 8955 section 4.1 length**, which is
+    # worth knowing before reading one: the rule of section 4.3.1 comes
+    # back as `to 192.0.2.0/24 proto = 6  port = 25 /11`, where 11 is
+    # 0x0b, the length a correct encoder writes. So the key checks our
+    # framing arithmetic as well as our components, with FRR's own
+    # spacing, which is its text and not contractual.
+    def only_rule(family)
+      r = rib(family) or return nil
+      pair = r.first or return nil
+      key, paths = pair
+      path = paths.find { |p| p['bestpath'] } || paths.first
+      [key, path]
     end
 
     # One prefix in full, which is a different command and a different

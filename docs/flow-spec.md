@@ -508,7 +508,72 @@ has the plan and the current status; this is only the shape.
 | the two redirect-to-IP communities of `draft-ietf-idr-flowspec-redirect-ip` | missing |
 | any flow spec family in a RIB | deliberately out of scope, see `CLAUDE.md` |
 
-## 12. How this document is kept true
+## 12. What two real routers make of our rules
+
+Measured on 2026-10-30 against GoBGP 3.23.0 and FRR 8.4.4, both
+standalone on loopback with no Docker. Each row is asserted by a named
+test, so this table is re-run rather than remembered.
+
+Both routers accept a rule from bgp4r and both give a RIB answer a test
+can read, which is more than the plan assumed. What they read back is
+worth listing, because each item is a field only a second implementation
+can vouch for:
+
+| what comes back | router | asserted by |
+|---|---|---|
+| the components, by RFC 8955 section 4.2 type number | GoBGP | `test_gobgp_reads_an_ipv4_rule_back` |
+| the **operator octet whole**, `op => 129`, our end-of-list bit plus eq | GoBGP | same |
+| the **section 4.1 length**, in the rule's own name, `/11` | FRR | `test_frr_reads_an_ipv4_rule_back` |
+| the RFC 8956 **offset**, as `/0` and as `off 0` | both | `test_*_reads_an_ipv6_rule_back` |
+| the section 8 **Route Distinguisher**, `100:200` | GoBGP | `test_gobgp_reads_a_vpn_rule_and_its_route_distinguisher_back` |
+| the section 7.1 **traffic-rate action**, in bytes per second | both | `test_*_reads_a_traffic_rate_action_back` |
+| a withdrawal, by the RIB emptying | both | `test_*_drops_a_rule_we_withdraw` |
+
+**They disagree on every part of section 4.2**, which is the reason the
+lab holds two routers rather than one:
+
+| the rule, RFC 8955 section 4.2 | GoBGP 3.23.0 | FRR 8.4.4 |
+|---|---|---|
+| components in increasing type order (MUST) | accepts, **normalises** to canonical order | accepts, **keeps our order** |
+| a type at most once | **resets the session** | accepts, keeps both |
+| an unknown type makes the NLRI malformed | accepts and installs it | **resets the session**, 3/9 |
+
+So each router enforces one of the two enforceable rules, and a different
+one, and neither enforces the ordering MUST. Three things follow:
+
+* **bgp4r follows the RFC, not either router**, when part 4 adds these to
+  `validation.rb`. One router agreeing is not a quorum.
+* GoBGP's reset is its ordering check firing on the repeat, in its own
+  words: `ipv4-flowspec nlri violate strict type ordering`. The
+  NOTIFICATION it sends is **code 0 subcode 0**, which RFC 4271 section
+  4.5 does not define and GoBGP's own log calls `code 0(undefined)`.
+  Recorded, not filed upstream.
+* FRR's is NOTIFICATION **3/9**, UPDATE Message Error / Optional
+  Attribute Error, which is the RFC-conformant verdict on this one.
+
+Two more measured facts, each of which silently voids a test run:
+
+* **GoBGP's config file and its client use different names for the VPN
+  family.** The config takes `l3vpn-ipv4-flowspec` and rejects
+  `ipv4-l3vpn-flowspec` as "isn't a valid route family name"; the client
+  takes `ipv4-l3vpn-flowspec` and rejects the other as "unsupported
+  address family". `LabHelper::Gobgpd::FS_CLIENT` maps one to the other.
+* **FRR 8.4.4 has no VPN flow spec family at all**, and it fails two
+  ways. With SAFI 134 as the only family we advertise it refuses the
+  session with NOTIFICATION 2/7, Unsupported Capability. With SAFI 133
+  alongside, the session comes up and the rule is discarded **in
+  silence**: nothing in any RIB, no notification. Both are asserted, the
+  second because a silent discard is the worse of the two for anyone
+  testing a router with bgp4r.
+
+**What these two tests do not cover**, so nobody reads more into them
+than is there: they send only. Each asserts a router's reading of what
+bgp4r put on the wire, so the whole parse direction is outside them, and
+reverting `nlri_size` to the pre-wiring prefix arithmetic leaves both
+passing. That direction belongs to `test/functional/flow_spec_test.rb`
+over loopback and to the unit tests. Measured, by trying it.
+
+## 13. How this document is kept true
 
 `test/unit/flow_spec_doc_test.rb` asserts the claims here that a test
 can reach: every component type number, every operator mask, the
@@ -516,9 +581,10 @@ fragment bits, the traffic-action masks, the action code points, the
 20 octet IPv6 community, every vector in section 7 above, the section
 4.1 length encoding including the 239 and 240 examples, and the
 erratum citation. It also checks that `CLAUDE.md` still points here,
-and that the two claims pointing into the source are still true: that
-the parse loops slice with the prefix rule, and that
-`rt-redirect-ipv6` is still missing.
+and that the claims pointing into the source are still true: that the
+parse loops ask the family how long an NLRI is, that `rt-redirect-ipv6`
+is still missing, and that every test named in section 12's tables
+still exists under that name.
 
 What it cannot assert is the prose. That is the half that drifted in
 `docs/to-hash-round-trips.md`, so keep the prose to what the RFCs say

@@ -424,4 +424,42 @@ class FlowSpecDocTest < Test::Unit::TestCase
                  'CLAUDE.md no longer points at docs/flow-spec.md')
   end
 
+  # Section 12 of the document names the test that asserts each
+  # interoperability row, so a reader can check a claim about GoBGP or
+  # FRR by running the one test rather than the lab.
+  #
+  # **This guard only checks that every name it cites still exists**,
+  # which is the half a unit test can reach: the rows themselves are
+  # asserted by the lab tests, and those need two routers installed.
+  # What it catches is the ordinary way such a table rots, which is a
+  # test renamed or deleted while the document goes on citing it, and
+  # that is worth catching because a row pointing at a method nobody can
+  # find reads exactly like a row nobody measured.
+  def test_the_interop_rows_name_tests_that_exist
+    doc = File.read(File.expand_path('../../docs/flow-spec.md', __dir__),
+                    :encoding => 'UTF-8')
+    cited = doc.scan(/`(test_(?:gobgp|frr|\*)_[a-z0-9_*]+)`/).flatten.uniq
+    assert(cited.size >= 6,
+           "section 12 cites #{cited.size} test names, expected the table")
+    files = {
+      'gobgp' => 'flow_spec_gobgp_test.rb',
+      'frr'   => 'flow_spec_frr_test.rb',
+    }
+    bodies = files.transform_values do |f|
+      File.read(File.expand_path("../functional/lab/#{f}", __dir__),
+                :encoding => 'UTF-8')
+    end
+    cited.each do |name|
+      # A name written with a * stands for both routers, as the table
+      # writes test_*_reads_an_ipv6_rule_back for the pair.
+      wanted = name.include?('*') ? files.keys : [name[/test_(gobgp|frr)_/, 1]]
+      wanted.each do |which|
+        real = name.sub('*', which)
+        assert_match(/^\s*def #{Regexp.escape(real)}\b/, bodies[which],
+                     "docs/flow-spec.md section 12 cites #{real}, which " \
+                     "#{files[which]} does not define")
+      end
+    end
+  end
+
 end
