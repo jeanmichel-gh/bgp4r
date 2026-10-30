@@ -164,7 +164,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. A `lab` job runs the Compose topologies, and installs a `gobgpd` release so the native fault matrix runs there too; it pins 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-10-30: 1434 tests, 22869 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.7%.
+Baseline on 2026-10-30: 1435 tests, 22873 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.7%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -1134,8 +1134,9 @@ true here is the shape of the gap:
   `Mp_reach.new(:afi=>25, :safi=>70, ...)` raises today.
 * BGP-LS (attribute 29, AFI 16388, SAFI 71 and 72, RFC 9552), EVPN (SAFI 70,
   RFC 7432, plus 14 unnamed EVPN extended communities), flowspec NLRI (SAFI
-  133 and 134, RFC 8955 and RFC 8956, where all five traffic filtering
-  communities are implemented but the rule cannot be sent), ATTR_SET
+  133 and 134, RFC 8955 and RFC 8956, where every traffic filtering
+  action of RFC 8955 section 7 is implemented, seven type and sub-type
+  combinations for five action kinds, but the rule cannot be sent), ATTR_SET
   (attribute 128, RFC 6368), RT-constrain (SAFI 132), MCAST-VPN (SAFI 5).
 * Coverage as measured: 22 of 34 live path attribute code points, 29 of 115
   extended community sub-type code points, 8 of 22 live capability code
@@ -1242,9 +1243,15 @@ Two consequences, both of which change the plan rather than decorate it:
      then. Build it from that need and not ahead of it.
 2. **Flowspec, SAFI 133 and 134, RFC 8955 and RFC 8956. Part 1 of 3
    done.** First of the real families, for three reasons. bgp4r is
-   already half built here, since all five traffic filtering extended
-   communities are implemented and the rule they filter cannot be sent,
-   which is the worst combination to leave standing. Its NLRI is a list
+   already half built here, since every traffic filtering action of RFC
+   8955 section 7 is implemented and the rule they filter cannot be
+   sent, which is the worst combination to leave standing. **Count those
+   carefully, because this file used to say five and the code has
+   seven**: Table 8 lists seven type and sub-type combinations
+   representing **five action kinds**, since rt-redirect has three
+   encodings, 0x8008, 0x8108 and 0x8208, for the three Route Target
+   forms of RFC 4360 and RFC 5668. Both numbers are right about
+   different things and neither is right on its own. Its NLRI is a list
    of typed components rather than a prefix, so it is the family that
    breaks the prefix assumption properly rather than decoratively. And
    it is small enough to finish.
@@ -1260,14 +1267,37 @@ Two consequences, both of which change the plan rather than decorate it:
       the FIB planner before anything called either. 27 tests.
       * **The five worked examples in the RFCs are the test vectors**,
         RFC 8955 section 4.3 and RFC 8956 section 3.8. Each gives the
-        octets for a flow the document describes in words, so building
-        from values and comparing against the document's own hex cannot
-        pass for the wrong reason. **Four hand written expectations were
-        wrong while this was written and the RFC's hex caught all four**,
+        octets for a flow the document describes in words. What that
+        buys is narrower than "cannot pass for the wrong reason", which
+        is an overstatement this file carried for a day: a vector is
+        worth more than an expectation derived here because it is
+        independent of **this reader's** understanding of the RFC, and
+        that is all it is. It does not make a test immune, as the
+        erratum below shows. **Four hand written expectations were wrong
+        while this was written and the RFC's hex caught all four**,
         which is the check-the-proof rule in Rules for agents arriving
         from the other direction: the probe was wrong, not the library,
         and the only reason that was visible is that it printed both
         sides rather than a pass or fail.
+      * **One of those five vectors is wrong in the published RFC, and
+        the test uses the corrected octets.** RFC 8956 errata ID 7571,
+        Technical, Verified by John Scudder on 2024-01-12: section 3.8.1
+        Table 1 prints the destination as `01 20 00 20 01 0d bb` where
+        it should read `01 20 00 20 01 0d b8`. Table 2 of the same
+        section decodes that octet as 0xb8 and the prose says
+        2001:db8::/32, so the document disagrees with itself and the
+        erratum settles it. The test file cites the erratum, so nobody
+        "fixes" the vector to match Table 1.
+        * Worth recording how that was nearly got wrong. The
+          discrepancy was spotted and the conclusion, use 0xb8, was
+          right, but the **reason** given was that the HTML to text
+          conversion had mangled it. It had not: the RFC itself prints
+          `bb`. Right answer, invented mechanism, which is the same
+          failure as a wrong RFC citation and leaves the next reader
+          nothing to check. **Read the errata for any RFC whose own
+          example you are about to disbelieve**, at
+          `https://www.rfc-editor.org/errata/rfcNNNN`, before explaining
+          the discrepancy some other way.
       * The API shape was the owner's choice on 2026-10-30:
         `initialize(*args)` taking one Array per {op, value} pair, so
         `Port.new([:ge, 137], [:and_le, 139], [:eq, 8080])` is RFC 8955
@@ -1334,16 +1364,36 @@ Two consequences, both of which change the plan rather than decorate it:
         Distinguisher as well as the subsequent Flow Specification NLRI
         value."
       * Validation goes in `validation.rb` and nowhere else, per
-        Conventions. Section 4.2 is the receive side rule: "Components
-        MUST follow strict type ordering by increasing numerical order. A
-        given component type MAY (exactly once) be present in the Flow
-        Specification." Building must keep allowing any order and any
-        repetition.
+        Conventions. **Be exact about whose rule that is, because an
+        earlier version of this entry called it a receive side rule and
+        it is not.** Section 4.2: "Components MUST follow strict type
+        ordering by increasing numerical order. A given component type
+        MAY (exactly once) be present in the Flow Specification." That
+        MUST binds a **sender** as much as a receiver, so bgp4r
+        building a rule out of order is a deliberate deviation from a
+        MUST and not merely an unenforced receive check. Conventions is
+        why, and the deviation is the feature: a test has to be able to
+        put an out of order or repeated component on the wire and watch
+        a router decide. Say that rather than implying the RFC only
+        constrains readers.
       * **A Flow_spec hash is one key per component type, so it has the
         same two problems `Path_attribute#to_hash` had**, and #169 is the
         answer to both: a repeated component type needs a `:duplicates`
         list, and the order of two of a type is incidental. Do not
         re-derive this.
+      * **Parsing must stay bounded by the enclosing NLRI and must not
+        guess a component boundary.** The section 4.1 length gives that
+        bound, and it is the only one there is: a component carries no
+        length of its own, so an operator list ends at its end-of-list
+        bit and nowhere else. Two consequences for part 2. The bound has
+        to be enforced by handing a component exactly that NLRI's value
+        octets, since `Op_component#parse` otherwise reads to the end of
+        whatever String it is given. And **a missing end-of-list bit is
+        not always detectable**: the octets that follow are read on as
+        further pairs, and where they happen to form a valid operator
+        sequence nothing distinguishes that from what the sender meant.
+        So keep the octets and report what is reportable; do not try to
+        recover the sender's intent.
    3. **The lab. Not started.** **Probe before recording anything about
       it.** Three Docker blocks in this file came apart on being tried.
       Whether GoBGP and FRR accept a flowspec rule from us, and whether
@@ -1352,20 +1402,43 @@ Two consequences, both of which change the plan rather than decorate it:
       one does not, that is a recorded fact and not a blocked phase.
    * **Build validates nothing**, per Conventions: any component type,
      any value, any order, any repetition, so a test can put a rule on
-     the wire that no RFC allows and watch a router decide. The five
+     the wire that no RFC allows and watch a router decide. The action
      communities already there do not validate either, and
      `test_nothing_validates` in the component test file pins six
      specific things no RFC allows.
-   * Not in any of the three parts, and worth doing on its own: the two
-     redirect-to-IP action communities of
-     `draft-ietf-idr-flowspec-redirect-ip-08`, IPv4-address-specific
-     sub-type 0x0c and IPv6-address-specific type 0x000c, which bgp4r
-     has not got. The registration that draft asks IANA to **deprecate**
-     is type 0x08 of the Transitive Extended Community **Types**
-     registry, which is not what bgp4r registered: `Redirect` sits at
-     `[0x80,0x08]`, `[0x81,0x08]` and `[0x82,0x08]`, the section 7.4
-     redirect-to-VRF encodings, so nothing there is affected. Checked on
-     2026-10-30.
+   * **RFC 8956 is not purely an encoding delta, and two of its changes
+     are outside the wire format.** Section 4, ordering: RFC 8955
+     section 5.1 is reused "with new consideration for the IPv6 prefix
+     offset", and "If the offsets are not equal, the lowest offset has
+     precedence, as this Flow Specification matches the most significant
+     bit". Section 5, validation: item (a) of the RFC 8955 section 6
+     procedure "should now read" as "A destination prefix component with
+     offset=0 is embedded in the Flow Specification". Neither changes
+     any octet, so neither is part 2's work, but do not record RFC 8956
+     as an encoding delta alone, which an earlier version of this
+     summary did.
+   * **Three action communities are missing and none is part of these
+     three parts.** Each is small and each is its own piece of work.
+     * `rt-redirect-ipv6`, RFC 8956 section 6.1, **type 0x000d**, "the
+       same encoding as the IPv6-Address-Specific Route-Target Extended
+       Community (Section 2 of [RFC5701])". That community is **20
+       octets**, not the 8 of RFC 4360: two type octets, sixteen address
+       octets, two Local Administrator octets. Measured on 2026-10-30,
+       `Ipv6_extended_community.new(:route_target, '2001:db8::1', 100)`
+       encodes 20 octets as `0002`, the address, then `0064`. So this
+       goes in `ipv6_extended_communities.rb`, which carries attribute
+       **25** and today knows only sub-types 0x02 Route Target and 0x03
+       Route Origin; adding 0x0d is an entry in `NAMES` and `LABELS`.
+     * The two redirect-to-IP communities of
+       `draft-ietf-idr-flowspec-redirect-ip-08`,
+       IPv4-address-specific sub-type 0x0c and IPv6-address-specific
+       type 0x000c. A draft, so lower priority than the one above.
+     * The registration that draft asks IANA to **deprecate** is type
+       0x08 of the Transitive Extended Community **Types** registry,
+       which is not what bgp4r registered: `Redirect` sits at
+       `[0x80,0x08]`, `[0x81,0x08]` and `[0x82,0x08]`, the section 7.4
+       redirect-to-VRF encodings, so nothing there is affected. Checked
+       on 2026-10-30.
 3. **EVPN, SAFI 70, RFC 7432. Not started.** The big one. Five route
    types, each with its own NLRI layout, plus the 14 EVPN extended
    community sub-types `extended_community.rb` currently leaves unnamed.

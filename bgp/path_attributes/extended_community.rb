@@ -882,6 +882,20 @@ module BGP
     TYPE, SUBTYPE = 0x80, 0x07
     LABEL = 'Traffic action'
     SAMPLE, TERMINAL = 0x02, 0x01
+    # **The T bit reads the opposite way round to its name, so do not
+    # infer it.** RFC 8955 section 7.3, verbatim: "T Terminal Action (bit
+    # 47): When this bit is set, the traffic filtering engine will
+    # evaluate any subsequent Flow Specifications (as defined by the
+    # ordering procedure Section 5.1). If not set, the evaluation of the
+    # traffic filters stops when this Flow Specification is evaluated."
+    #
+    # So `terminal: true` means **carry on** to the next rule and
+    # `terminal: false` means stop at this one, which is the reverse of
+    # what the name suggests. The bit value here is right and nothing
+    # needs changing; this is written down because a reader who assumes
+    # from the name gets the semantics backwards, and bit 47 of a 48 bit
+    # value is the least significant, which is why TERMINAL is 0x01.
+    #
     # The two bits section 7.3 defines. The 46 above them are reserved,
     # and this class has always carried them, which is where the other
     # four got the shape.

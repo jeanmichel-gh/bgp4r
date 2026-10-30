@@ -27,11 +27,14 @@
 #
 # The load bearing tests here are the five worked examples the two RFCs
 # print: three in RFC 8955 section 4.3 and two in RFC 8956 section 3.8.
-# Each gives the octets a correct encoder produces for a flow it
-# describes in words, so building from values and comparing to the
-# document's own hex is the one check that cannot pass for the wrong
-# reason. Four hand written expectations were wrong while this was
-# written and the RFC's hex caught every one.
+# Each gives the octets for a flow it describes in words, so comparing
+# against them checks this code against something independent of
+# whoever read the RFC. That is narrower than immune, and one of the
+# five is wrong in the published document: see the RFC 8956 errata note
+# on test_the_rfc_8956_example_1_components below.
+#
+# Four hand written expectations were wrong while this was written and
+# the RFC's hex caught every one.
 #
 # BGP:: names are written out in full, see Conventions in CLAUDE.md.
 
@@ -87,6 +90,14 @@ class FlowSpecComponentTest < Test::Unit::TestCase
 
   # RFC 8956 section 3.8.1: "packets from ::1234:5678:9a00:0/64-104 to
   # 2001:db8::/32 and upper-layer protocol tcp".
+  #
+  # **The document's Table 1 is wrong and this test uses the corrected
+  # octets.** RFC 8956 errata ID 7571, Technical, Verified by John
+  # Scudder on 2024-01-12: Table 1 prints the destination as
+  # "01 20 00 20 01 0d bb" where it should read "01 20 00 20 01 0d b8".
+  # Table 2 in the same section decodes that octet as 0xb8 and the prose
+  # says 2001:db8::/32, so the document disagrees with itself and the
+  # erratum settles it. Do not "fix" this test to match Table 1.
   def test_the_rfc_8956_example_1_components
     assert_equal('01200020010db8',
                  BGP::Flow_spec::Destination_ipv6_prefix.new('2001:db8::/32').to_shex)
@@ -194,11 +205,24 @@ class FlowSpecComponentTest < Test::Unit::TestCase
   # RFC 8956 section 3.7: "Type 13 component values SHOULD be encoded as
   # 4-octet quantities (numeric_op len=10)". It is the one component
   # whose recommended width is wider than its values need, so a flow
-  # label of 6 is four octets and not one.
-  def test_the_flow_label_is_four_octets_even_for_a_small_value
+  # label of 6 defaults to four octets where a port defaults to one.
+  #
+  # **SHOULD, not MUST**: one octet is not prohibited and a decoder has
+  # to read whatever len says, so both directions are asserted below.
+  # Only the default differs from the other numeric components.
+  def test_the_flow_label_defaults_to_the_four_octets_section_3_7_recommends
     assert_equal('0da100000006', BGP::Flow_spec::Flow_label.new(:eq, 6).to_shex)
     assert_equal(2, BGP::Flow_spec::Flow_label.new(:eq, 6).pairs[0].len)
     assert_equal(0, BGP::Flow_spec::Port.new(:eq, 6).pairs[0].len)
+  end
+
+  def test_a_narrower_flow_label_still_builds_and_still_parses
+    assert_equal('0d8106',
+                 BGP::Flow_spec::Flow_label.new(:op => :eq, :value => 6, :len => 0).to_shex)
+    o = from_value(BGP::Flow_spec::Flow_label, '0d8106')
+    assert_equal('0d8106', o.to_shex)
+    assert_equal(0, o.pairs[0].len)
+    assert_equal(6, o.pairs[0].value)
   end
 
   # Conventions: building and encoding never validate. Every one of these
