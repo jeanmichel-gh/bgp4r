@@ -35,6 +35,12 @@ bgp/rib/                 routes and the decision process (RFC 4271 section 9); r
                          see "Where the work is going"
 bgp/misc/                extras: route_generator.rb (many prefixes packed in UPDATEs), live_feed.rb (a client for an old public BGP feed)
 docs/                    protocol-testing.md: using bgp4r to test a router
+                         flow-spec.md: RFC 8955 and RFC 8956 on the wire, as much
+                         as is needed to write the encoding and decoding. Read it
+                         before touching flow_spec_component.rb, before adding a
+                         flow spec family to mp_reach.rb, or before adding one of
+                         the missing action communities. Its load bearing claims
+                         are asserted by test/unit/flow_spec_doc_test.rb
                          building-objects.md: the three ways into every class and how
                          initialize dispatches between them; read it before changing a
                          constructor or chasing an object that does not come back.
@@ -164,7 +170,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. A `lab` job runs the Compose topologies, and installs a `gobgpd` release so the native fault matrix runs there too; it pins 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-10-30: 1435 tests, 22873 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.7%.
+Baseline on 2026-10-30: 1455 tests, 23022 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.7%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -1260,6 +1266,15 @@ Two consequences, both of which change the plan rather than decorate it:
    rather than fetched, because the fetch tool caps quoted material at
    125 characters and so will not give back a figure. Every section
    number below was read in the text.
+   **`docs/flow-spec.md` is the guide to all of it**, written on
+   2026-10-30 after a review of an earlier summary found six things to
+   revise. Read it before any of the parts below.
+   `test/unit/flow_spec_doc_test.rb` asserts its load bearing claims
+   against the library, the way `building_objects_test.rb` guards the
+   other primer, and the type number table is **discovered** rather than
+   listed so a new component class cannot join the library without the
+   document being told. That hole was found by sabotage: a fourteenth
+   type was added and the first version of the guard passed.
    1. **The components. Done**, in `bgp/nlris/flow_spec_component.rb`:
       the two operator octets, 19 component types, `Component::Unknown`,
       and the four abstract bases under them. Pure, and nothing
