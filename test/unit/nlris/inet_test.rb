@@ -32,7 +32,7 @@ class Inet_unicast_Test < Test::Unit::TestCase
     assert_equal(1,Inet_unicast.new('2009:4:4::/64').safi)
   end
   # This round trip works, so Conventions requires a test to say so, and
-  # docs/to-hash-round-trips.md records it as working. All three fields
+  # its entry in test/unit/to_hash_catalog.rb records it. All three fields
   # the class carries are in the hash: the prefix, the RFC 7911 section 3
   # Path Identifier, and the tail a Length field too wide for its family
   # leaves over.

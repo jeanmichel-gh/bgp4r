@@ -55,13 +55,12 @@ require 'test/unit'
 require 'bgp4r'
 require 'bgp/orfs/orf'
 require 'test/unit/to_hash_catalog'
+require 'test/unit/to_hash_status'
 
 class ToHashRoundTripTest < Test::Unit::TestCase
 
   # Resolved from this file rather than from the working directory, so
   # the file can be run from anywhere and not only from the repo root.
-  DOC = 'docs/to-hash-round-trips.md'
-  DOC_PATH = File.expand_path("../../#{DOC}", __dir__)
 
   # What the class's own `new` makes of its own hash.
   def own_route(name, entry)
@@ -116,7 +115,7 @@ class ToHashRoundTripTest < Test::Unit::TestCase
       when :elsewhere
         assert(!own_route(name, entry),
                "#{name} now rebuilds from its own to_hash; make it :ok in " \
-               "to_hash_catalog.rb and in #{DOC}")
+               "to_hash_catalog.rb")
       when :ok_alone
         assert(!other_route(name, entry),
                "#{name} now rebuilds through its attribute too; make it :ok")
@@ -132,9 +131,10 @@ class ToHashRoundTripTest < Test::Unit::TestCase
   end
 
   # A :lossy entry claims information is gone rather than that a door is
-  # missing, which is the difference between the two halves of the
-  # document. Nothing mechanical can prove a negative, so what is checked
-  # is that the claim was written down deliberately.
+  # missing, and those are different things. Nothing mechanical can prove
+  # a negative, so what is checked is that the claim was written down
+  # deliberately, with its mechanism and a reproduction, because that
+  # text is now what a reader is shown.
   def test_every_gap_says_what_it_loses_and_what_was_decided
     ToHashCatalog::ENTRIES.reject { |_, e| e.verdict == :ok }.each do |name, entry|
       assert(entry.loses.to_s.size > 8, "#{name} does not say what its hash loses")
@@ -220,48 +220,49 @@ class ToHashRoundTripTest < Test::Unit::TestCase
     end
   end
 
-  # The document and the catalog cannot be allowed to drift, because the
-  # document is the half a person reads and the catalog is the half that
-  # is true. CLAUDE.md asks for a file to be kept true in the pull
-  # request that makes it false. This is that asking, enforced.
-  def test_the_document_says_what_the_catalog_measures
-    rows = doc_rows
-    assert_equal(ToHashCatalog::ENTRIES.keys.sort, rows.keys.sort,
-                 "#{DOC} lists different classes than to_hash_catalog.rb")
-    ToHashCatalog::ENTRIES.each do |name, entry|
-      row = rows[name]
-      assert_equal(ToHashCatalog::VERDICT_WORDS.fetch(entry.verdict), row[:verdict],
-                   "#{DOC} disagrees with the catalog about #{name}")
-      assert_equal(ToHashCatalog::DECISION_WORDS.fetch(entry.decision), row[:decision],
-                   "#{DOC} disagrees with the catalog about the decision on #{name}")
+  # There used to be two tests here comparing this catalog against
+  # docs/to-hash-round-trips.md, because that document was the half a
+  # person read and this is the half that is true. The document is gone.
+  # Its tables were generated from this catalog and its prose was not,
+  # and it was the prose that drifted, spending four pull requests
+  # ranking work that two of them had already finished. What a person
+  # reads now is printed from here, by rake to_hash:status and
+  # rake to_hash:pending, so there is no second copy to keep in step.
+  #
+  # This is what is left of those two. The printing has to name every
+  # class, so a new entry cannot be measured by the suite and then left
+  # out of the view a person actually looks at.
+  def test_the_status_view_names_every_class_measured
+    status = ToHashStatus.status
+    ToHashCatalog::ENTRIES.each_key do |name|
+      assert(status.include?(name.sub('BGP::', '')),
+             "rake to_hash:status leaves out #{name}")
+    end
+    assert_match(/#{ToHashCatalog::ENTRIES.size} classes measured/, status)
+    pending = ToHashCatalog::ENTRIES.select { |_, e| e.decision == :fix }
+    assert_match(/#{pending.size} to fix/, ToHashStatus.pending)
+    pending.each_key do |name|
+      assert(ToHashStatus.pending.include?(name.sub('BGP::', '')),
+             "rake to_hash:pending leaves out #{name}")
     end
   end
 
-  def test_the_document_lists_every_class_without_a_recipe
-    body = File.read(DOC_PATH)
-    ToHashCatalog::NO_RECIPE.each_key do |name|
-      assert(body.include?(name.sub('BGP::', '')),
-             "#{DOC} does not mention #{name}, which has no recipe")
+  # CLAUDE.md tells a reader to run two rake tasks, and nothing else in
+  # the tree runs them: CI calls test/run_unit.rb directly, and `rake` is
+  # a development gem that is not on PATH everywhere. So a rename on
+  # either side would leave the documented command broken with nothing
+  # saying so, which is the failure this file exists to stop. The
+  # Rakefile is read as text rather than loaded, to keep rake out of the
+  # suite's requires.
+  def test_the_documented_rake_tasks_exist
+    rakefile = File.read(File.expand_path('../../Rakefile', __dir__))
+    %w[status pending].each do |name|
+      assert_match(/^\s*task :#{name}\b/, rakefile,
+                   "the Rakefile no longer defines to_hash:#{name}")
+      assert(ToHashStatus.respond_to?(name),
+             "ToHashStatus.#{name} is gone, so to_hash:#{name} cannot work")
     end
-  end
-
-  private
-
-  # The tables in the document, as {class name => {:verdict, :decision}}.
-  # A row is four cells and its first cell is a class name in backticks
-  # with the BGP:: left off, which is how the document writes them. The
-  # document holds one table per family, and this reads them all.
-  def doc_rows
-    rows = {}
-    File.readlines(DOC_PATH).each do |line|
-      next unless line.start_with?('| `')
-      cells = line.split('|').collect(&:strip)
-      cells.shift
-      next unless cells.size >= 4
-      rows["BGP::#{cells[0].delete('`')}"] = { :verdict => cells[1], :decision => cells[3] }
-    end
-    assert(rows.size > 20, "no table found in #{DOC}")
-    rows
+    assert_match(/namespace :to_hash do/, rakefile)
   end
 
 end
