@@ -97,7 +97,8 @@ module BGP
         # A hash from a value too short to hold the fixed part carries
         # the kept octets and nothing else, so the fields start at zero.
         build(h[:tunnel_type] || (tail && NO_TUNNEL), h[:identifier],
-              :label => h[:label], :flags => h[:flags],
+              :label => h[:label], :label_bits => h[:label_bits],
+              :flags => h[:flags],
               :leaf_info_required => h[:leaf_info_required])
       else
         type, identifier = args
@@ -107,10 +108,32 @@ module BGP
       end
     end
 
+    # The 20 bit label sits in the high 20 bits of the 3 octet field, so
+    # these are the 4 bits below it. RFC 6514 section 5 names the field
+    # "MPLS Label" and describes no layout for those 4 bits, the same
+    # shape RFC 7432 section 7.1 has for its own 3 octet label, so they
+    # are **kept and echoed** rather than read: an encoder that wrote
+    # them back as 0 could not replay a capture, which Conventions makes
+    # the one thing this library must always do.
+    DEFINED_LABEL_BITS = 0xfffff0
+
     # The MPLS label, in the high 20 bits of the 3 octet field, or nil
-    # when the field is zero (RFC 6514 section 5).
+    # when the whole field is zero (RFC 6514 section 5).
     def label
       @label
+    end
+
+    # All 24 bits of the label field, which is what encode writes. Read
+    # it when undefined_label_bits? says the field holds more than the
+    # label; `label` alone cannot rebuild it then.
+    def label_bits
+      @label_field
+    end
+
+    # Whether a bit below the 20 bit label arrived set, which is what
+    # puts a :label_bits key in the hash.
+    def undefined_label_bits?
+      (@label_field.to_i & ~DEFINED_LABEL_BITS) > 0
     end
 
     def leaf_info_required?
@@ -137,7 +160,13 @@ module BGP
       h = { :tunnel_type => tunnel_name || @tunnel_type }
       h[:identifier] = identifier_hash unless @identifier.empty?
       h[:label] = @label if @label
-      h[:flags] = @pmsi_flags if @pmsi_flags != 0 and not leaf_info_required?
+      # Only when the field holds more than the label, so an ordinary
+      # attribute hashes as it always did. Same rule as :tail and :bits.
+      h[:label_bits] = @label_field if undefined_label_bits?
+      # Whenever the octet holds a bit other than the one named below, so
+      # flags 0x41 carry both keys and the RFC 7902 Extension bit is not
+      # lost behind :leaf_info_required. The two are not exclusive.
+      h[:flags] = @pmsi_flags if (@pmsi_flags & ~LEAF_INFO_REQUIRED) > 0
       h[:leaf_info_required] = true if leaf_info_required?
       { :pmsi_tunnel => h }
     end
@@ -146,8 +175,8 @@ module BGP
     # A value too short to hold the fixed part is written back as it came.
     def encode
       return super(tail) if tail
-      field = @label ? (@label << 4) : 0
-      super([@pmsi_flags, @tunnel_type, field >> 16, field & 0xffff].pack('CCCn') + @identifier)
+      super([@pmsi_flags, @tunnel_type, @label_field >> 16,
+             @label_field & 0xffff].pack('CCCn') + @identifier)
     end
 
     private
@@ -196,6 +225,16 @@ module BGP
       if @label and not (@label.is_a?(Integer) and @label >= 0 and @label <= 0xfffff)
         raise ArgumentError, "invalid MPLS label #{@label.inspect}, expected 0 to 1048575"
       end
+      # :label_bits is the whole 24 bit field and wins where it is given,
+      # since it is the only way to say what the 4 bits below the label
+      # hold. Without it the field is the label shifted into place, which
+      # is what an encoder is asked for.
+      bits = opts[:label_bits]
+      if bits and not (bits.is_a?(Integer) and bits >= 0 and bits <= 0xffffff)
+        raise ArgumentError, "invalid label field #{bits.inspect}, expected 0 to 16777215"
+      end
+      @label_field = bits || (@label ? @label << 4 : 0)
+      @label ||= @label_field.zero? ? nil : (@label_field >> 4)
       @identifier = pack_identifier(identifier)
     end
 
@@ -226,11 +265,14 @@ module BGP
       if value.size < 5
         @tail = value.b
         @pmsi_flags, @tunnel_type, @label, @identifier = 0, 0, nil, ''.b
+        @label_field = 0
         return
       end
       @pmsi_flags, @tunnel_type = value.unpack('CC')
-      field = (value.getbyte(2) << 16) | value.byteslice(3, 2).unpack1('n')
-      @label = field.zero? ? nil : (field >> 4)
+      # The whole field is kept, so encode replays it whatever is in the
+      # 4 bits below the label.
+      @label_field = (value.getbyte(2) << 16) | value.byteslice(3, 2).unpack1('n')
+      @label = @label_field.zero? ? nil : (@label_field >> 4)
       @identifier = value.byteslice(5, value.size - 5).to_s.b
     end
 
