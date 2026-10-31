@@ -131,6 +131,54 @@ class LabHelperTest < Test::Unit::TestCase
     assert_equal('evpn', G.client_family(G::EVPN))
   end
 
+  # The generated gobgpd config. `peer2` was added so one daemon can sit
+  # between two bgp4r speakers, which `attr_set_gobgp_test.rb` needs
+  # because an optional transitive attribute's whole point is surviving
+  # transit. Ten lab tests share this helper, so **the config a caller
+  # without peer2 gets has to be what it always was**, and that was
+  # checked by diffing five option sets before and after the refactor.
+  # These two tests are that check moved into the suite, since a claim
+  # nothing runs reads as verified.
+  #
+  # Every port is fixed, because the real ones come from free_port and
+  # would differ per run.
+  def fixed_config(**kw)
+    g = G.new(**kw)
+    g.instance_variable_set(:@port, 1111)
+    g.instance_variable_set(:@listen_port, 2222)
+    g.instance_variable_set(:@api_port, 3333)
+    g.config
+  end
+
+  def test_one_neighbor_without_peer2_whatever_else_is_asked_for
+    [{}, { :ipv6 => false }, { :families => ['rtc'] },
+     { :add_path => { :receive => true, :send_max => 8 } }].each do |kw|
+      cfg = fixed_config(**kw)
+      assert_equal(1, cfg.scan('[[neighbors]]').size, kw.inspect)
+      assert_equal(1, cfg.scan('neighbor-address').size, kw.inspect)
+    end
+  end
+
+  # And with one, a second whole element rather than a second copy of
+  # the first: its own address, its own AS, its own remote port, and the
+  # afi-safis every neighbor here gets.
+  def test_peer2_adds_a_second_neighbor_element
+    cfg = fixed_config(:ipv6 => false,
+                       :peer2 => { :address => '127.0.0.3', :as => 65003,
+                                   :port => 9999 })
+    assert_equal(2, cfg.scan('[[neighbors]]').size)
+    assert_match(/neighbor-address = "127\.0\.0\.1"/, cfg)
+    assert_match(/neighbor-address = "127\.0\.0\.3"/, cfg)
+    assert_match(/peer-as = 65003/, cfg)
+    assert_match(/remote-port = 9999/, cfg)
+    assert_equal(2, cfg.scan('afi-safi-name').size, 'one family each')
+    # The first element is unchanged by the second's presence, which is
+    # what keeps the single-peer callers safe.
+    one = fixed_config(:ipv6 => false)
+    assert(cfg.start_with?(one.sub(/\s+\z/, '')),
+           'the first neighbor block is still byte for byte the old one')
+  end
+
   def test_the_families_spelled_alike_on_both_sides
     [G::FS_IPV4, G::FS_IPV6, G::RTC, 'ipv4-unicast'].each do |name|
       assert_equal(name, G.client_family(name),

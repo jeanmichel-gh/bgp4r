@@ -258,13 +258,25 @@ module LabHelper
     # families: extra afi-safi names beyond the two unicast ones, such as
     #           FS_IPV4. Empty by default, so a config with none is what
     #           it always was.
+    # peer2:    a second neighbor as {address:, as:, port:}, or nil for
+    #           none. **What it is for**: a router with one peer can only
+    #           say what it made of what we sent, where a router with two
+    #           carries a route from one bgp4r speaker to another, so the
+    #           far side reads what crossed a real implementation. That
+    #           is what attr_set_gobgp_test.rb needs, since ATTR_SET
+    #           exists so a customer's attributes survive transit (RFC
+    #           6368 section 5) and nothing but a transit router can say
+    #           whether they do. nil by default, and the config a caller
+    #           without it gets is byte for byte what it always was,
+    #           which test/unit/lab_helper_test.rb pins.
     def initialize(local: '127.0.0.2', as: 65002, router_id: '10.0.0.2',
                    peer: '127.0.0.1', peer_as: 65001, port: nil, ipv6: true,
-                   add_path: nil, families: [])
+                   add_path: nil, families: [], peer2: nil)
       @local, @as, @router_id = local, as, router_id
       @peer, @peer_as, @ipv6 = peer, peer_as, ipv6
       @add_path = add_path
       @families = families
+      @peer2 = peer2
       @port = port || Local.free_port
       pick_ports
       @dir = Dir.mktmpdir('bgp4r-gobgpd')
@@ -281,14 +293,6 @@ module LabHelper
     private :pick_ports
 
     def config
-      families = ['ipv4-unicast']
-      families << 'ipv6-unicast' if @ipv6
-      families += @families
-      afi_safis = families.collect { |f|
-        "  [[neighbors.afi-safis]]\n" \
-        "    [neighbors.afi-safis.config]\n" \
-        "      afi-safi-name = \"#{f}\"\n"
-      }.join
       global = <<~TOML
         [global.config]
           as = #{@as}
@@ -298,14 +302,38 @@ module LabHelper
           # only dials out here; GoBGP would still bind 179 without this.
           port = #{@listen_port}
 
+      TOML
+      out = global + neighbor_block(@peer, @peer_as, @port)
+      # A second neighbor, when one was asked for, so the daemon carries
+      # a route between two bgp4r speakers. Appended whole after the
+      # first one's sub-tables, which is where TOML puts the next
+      # [[neighbors]] element.
+      out += "\n" + neighbor_block(@peer2[:address], @peer2[:as], @peer2[:port]) if @peer2
+      out
+    end
+
+    # One [[neighbors]] element: its config, transport, timers, the
+    # afi-safis every neighbor here gets, and the add-paths block when
+    # one was asked for. Extracted from `config` so a second neighbor is
+    # a second call rather than a second copy of the TOML.
+    def neighbor_block(address, peer_as, remote_port)
+      families = ['ipv4-unicast']
+      families << 'ipv6-unicast' if @ipv6
+      families += @families
+      afi_safis = families.collect { |f|
+        "  [[neighbors.afi-safis]]\n" \
+        "    [neighbors.afi-safis.config]\n" \
+        "      afi-safi-name = \"#{f}\"\n"
+      }.join
+      block = <<~TOML
         [[neighbors]]
           [neighbors.config]
-            neighbor-address = "#{@peer}"
-            peer-as = #{@peer_as}
+            neighbor-address = "#{address}"
+            peer-as = #{peer_as}
           [neighbors.transport.config]
             local-address = "#{@local}"
             # Where bgp4r listens, so our side needs no privilege either.
-            remote-port = #{@port}
+            remote-port = #{remote_port}
           [neighbors.timers.config]
             # These ask the router to come back quickly, for a caller
             # that gives each case its own session. **GoBGP 3.23.0
@@ -336,8 +364,9 @@ module LabHelper
                     "    receive = #{@add_path.fetch(:receive, true)}\n" \
                     "    send-max = #{@add_path.fetch(:send_max, 8)}\n"
       end
-      global + afi_safis + add_paths
+      block + afi_safis + add_paths
     end
+    private :neighbor_block
 
     # Did the daemon die because something already held a port it tried
     # to bind? Its own words, and it says them for the gRPC port and for
