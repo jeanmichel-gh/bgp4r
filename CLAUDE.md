@@ -135,7 +135,12 @@ test/functional/lab/     lab tests: loopback speaker test and one Compose test p
                          dying. GoBGP is the only check on route type 5's GW IP,
                          and FRR is the one that sends 3/9 on a malformed NLRI,
                          which is what part 9 chose. They send only too; see
-                         docs/evpn.md section 9
+                         docs/evpn.md section 9;
+                         rt_constrain_gobgp_test.rb does the same for
+                         RT-constrain, and has no FRR twin because FRR
+                         8.4.4 has no such family. It carries the two
+                         GoBGP 3.23.0 crashes this family found, one of
+                         them on entirely conformant traffic
 ```
 
 ## Running tests
@@ -295,7 +300,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. The `lab` job is a matrix, one job per group in `test/lab_groups.rb`, so its cost is the slowest group and not the total: it was 12m42s as one serial suite. Each job installs only what its group needs, which is why the matrix entry carries a `gobgp`, `frr`, `docker` or `netns` flag. The `gobgp` groups pin 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-10-31: 1769 tests, 25397 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.1%.
+Baseline on 2026-10-31: 1769 tests, 25398 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.1%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -2760,25 +2765,79 @@ Two consequences, both of which change the plan rather than decorate it:
         by hand. Five sabotages, one per site plus the framing; the next
         hop one errors 8 and spares exactly the withdrawal, which
         carries no next hop, the same signature #185 measured for EVPN.
-      * Nothing is left for this family on the wire. **A lab test is its
-        own piece of work and only GoBGP can carry it**, measured on
-        2026-10-31 rather than guessed, because the first draft of this
-        entry guessed and got the name wrong.
-        * GoBGP 3.23.0's **config file calls the family `rtc`**, and a
-          `LabHelper::Gobgpd.new(families: ['rtc'])` comes up on it.
-          `ipv4-rtc` and `route-target-constraints` are both refused, so
-          the daemon never starts. Whether its **client** wants another
-          name is unmeasured, and the config and the client have already
-          disagreed twice, for VPN flow spec and for EVPN, so expect a
-          `CLIENT_FAMILY` entry and check before writing one.
+      * **The lab. Done**, in #203, as
+        `test/functional/lab/rt_constrain_gobgp_test.rb`: 9 cases, 41
+        assertions, 86 seconds, no Docker. **Only GoBGP can carry it**,
+        so there is no FRR twin, which makes this the second family
+        after VPN flow spec with one reference rather than two.
         * **FRR 8.4.4 has no RT-constrain family at all.** Its `bgpd`
           carries `bgp_nlri_parse_` functions for evpn, flowspec, ip,
           label and vpn and none for this, and its `address-family`
           grammar offers only the two unicast blocks, `ipv4`, `ipv6` and
           `l2vpn evpn`. Its `route-target` strings are the extended
           community and VNI config, not an address family, so do not
-          read them as support. That makes this the second family after
-          VPN flow spec where the lab can have only one reference.
+          read them as support.
+        * **The config and the client agree on `rtc`**, measured, which
+          corrects the caution the previous entry here carried. It said
+          to expect a `CLIENT_FAMILY` entry because the two sides had
+          already disagreed for VPN flow spec and for EVPN. They do not
+          disagree here: the client takes `rtc` and refuses `ipv4-rtc`,
+          `route-target-constraints`, `rtfilter` and `ipv4-rtfilter`.
+          Two precedents are not a pattern, and the entry should have
+          said unmeasured rather than expected.
+        * **What a second implementation vouches for**: that the 96-bit
+          prefix splits 4 and 8 where section 4 says, since GoBGP prints
+          the origin AS and the route target as separate fields; that
+          the route target inside is a real one, since it renders all
+          three RFC 4360 and RFC 5668 forms by their own structure, a
+          four-octet AS among them as asdot (`65002:1.4464:5` for AS
+          70000); that the zero-length default is read as the default
+          and not as a prefix of nothing (`0:default`); and that the
+          framing holds across two NLRIs in one attribute.
+        * **What it cannot vouch for is our length octet**, and the
+          mechanism is worth knowing: **GoBGP reads the prefix as `mlen
+          / 8` octets, flooring, where section 4's encoding rounds up.**
+          So 96, 97 and 103 bits over the same 12 octets all read back
+          as the same route. Proved by sabotage, where writing `@mlen +
+          1` left every case in that file passing. The length is covered
+          by `test/functional/rt_constrain_test.rb` instead. Flooring
+          and rounding up agree on every length section 4 produces, 0,
+          32, 64 and 96, so this is reachable only by sending one no RFC
+          describes.
+        * **GoBGP drops a partial prefix in silence**, 32 bits and 64
+          bits alike: session up, nothing logged, nothing installed. The
+          64-bit one is section 4's own motivating example, "a prefix
+          would encompass all route target extended communities assigned
+          by a given Global Administrator", so the family's headline use
+          does not work on 3.23.0. Asserted as a divergence.
+        * **Two crashes in GoBGP 3.23.0, both found by writing this
+          test, both deterministic, and the first is the serious one.**
+          Recorded and not filed, per the standing decision that the job
+          here is bgp4r catching up.
+          * **The zero-length default plus any second membership route
+            GoBGP accepts panics it**: a nil pointer dereference in
+            `propagateUpdate`, SIGSEGV, daemon down. **Both routes are
+            entirely conformant**, so this is not negative testing:
+            section 4 blesses the zero-length default in so many words
+            and its last paragraph makes it what "a route reflector
+            speaking to one of its PE router clients" sends. The trigger
+            is a sequence and not a value, which is why it is stated as
+            one: the default alone is fine, two 96-bit prefixes are
+            fine, and the default followed by a 32-bit prefix is fine
+            because that one is dropped before reaching the code. The
+            default sent **twice** crashes it, and so does a 96-bit
+            prefix followed by the default.
+          * **A prefix whose length demands more octets than the NLRI
+            holds panics it too**, which is a missing bounds check: 104
+            bits floors to 13 where 12 are present. 103 is fine, so the
+            boundary is exactly where the floored count passes what
+            arrived. This one needs a malformed NLRI, so it is ordinary
+            negative testing.
+          * Both are asserted rather than avoided, because a lab test
+            that quietly skips the sequence that breaks the router is
+            the unchecked claim this file keeps getting burned by. If a
+            later GoBGP fixes either, that case fails and says to
+            re-measure.
    2. **ATTR_SET, attribute 128, RFC 6368. Not started**, and the RFC is
       read and on hand. Section 5: an optional transitive attribute
       whose value is a 4-octet Origin AS then "a variable-length field
@@ -2879,6 +2938,7 @@ Lab and conformance:
   * **`Neighbor#capability :add_path` takes its arguments in the order `(send_recv, afi, safi)`**, which is what `CAP::Add_path#add` takes. This file used to give the example `capabilities: [{add_path: [1, 1, 3]}]`, which is SAFI 3, NSAP, and a Send/Receive of 1. For IPv4 unicast both ways it is `[3, 1, 1]`, or `[:send_and_receive, 1, 1]`, which says it better. The wrong example was never run.
   * A Compose topology on `lab/speaker.rb` is still possible and is two pieces, neither needed by the native test: an announce block has no way to give a prefix a Path Identifier, since `build_update` calls `Nlri.new` with plain prefix strings; and `Lab::Recorder#record_routes` keys received routes by prefix alone, so two paths for one prefix overwrite each other and the state file cannot show a Path Identifier arrived. Worth doing only if the lab speaker itself needs add-path.
 * **EVPN interop lives in `docs/evpn.md` section 9**, measured and asserted rather than written down here. The short version: **both routers implement route types 1 to 5 and neither knows 6 to 11**, GoBGP logging `Unknown EVPN Route type: N` and FRR saying nothing at all; FRR answers a malformed NLRI with **3/9 and a reset**, which is what `validation.rb` reports for the same octets, where GoBGP keeps the session up. Three harness facts worth knowing before writing another EVPN lab test: GoBGP's config file and its client disagree about the family name again, `l2vpn-evpn` against `evpn`; FRR's EVPN JSON has **no `routes` key** and is keyed by Route Distinguisher, so `Frr#rib` answers `{}` for it however many routes are in it and `Frr#evpn_rib` exists for that; and FRR prints `gateway IP 2.0.0.0` for every non-zero route type 5 gateway, so GoBGP is the only check on those octets.
+* **RT-constrain interop found two GoBGP 3.23.0 crashes**, asserted in `test/functional/lab/rt_constrain_gobgp_test.rb` and detailed in phase 4 part 1 above. The short version, because one of them matters more than any other divergence in this file: **the zero-length default route target followed by any second membership route GoBGP accepts panics the daemon**, a nil pointer dereference in `propagateUpdate`, and **both routes are entirely conformant** — RFC 4684 section 4 blesses the zero-length default and says it is what a route reflector's PE client sends. The second crash needs a malformed NLRI: a prefix length demanding more octets than the NLRI holds, 104 bits over 12 octets. Also measured: GoBGP drops a 32-bit or 64-bit partial prefix in silence, so the family's headline use does not work there; it reads the prefix as `mlen / 8` octets where the RFC rounds up, which is why that test cannot vouch for our length octet; and **the config and the client agree on `rtc`**, unlike VPN flow spec and EVPN. FRR 8.4.4 has no RT-constrain family at all, so this is the second family with one reference rather than two.
 * **Flow spec interop lives in `docs/flow-spec.md` section 12**, measured and asserted rather than written down here, the same way the fault matrix columns are. The short version: both routers accept a rule from bgp4r and read it back, and they disagree on every part of RFC 8955 section 4.2. Two harness facts worth knowing before writing another flow spec lab test: GoBGP's **config file and its client use different names for the VPN family**, `l3vpn-ipv4-flowspec` and `ipv4-l3vpn-flowspec`, each rejecting the other; and **FRR 8.4.4 has no VPN flow spec family**, refusing a session that offers SAFI 134 alone with 2/7 and silently discarding the rule when SAFI 133 is there too.
 * **`to_hash_round_trip_test.rb` cannot read a test file that is not pure ASCII.** `test_every_working_round_trip_is_asserted_in_a_class_test_file` reads every test file body and matches regexps against it, and a single non-ASCII character in any of them makes it error with `ArgumentError: invalid byte sequence in US-ASCII`, pointing at its own line 190 and naming neither the file nor the character. Found on 2026-10-31 by putting one arrow in a comment in a new test file: that file passed on its own and the suite errored in a test it has nothing to do with. Every test file is ASCII today, so nothing is wrong now; what is wrong is the diagnosis the next person gets. The fix is an encoding on the read or a `scrub`, and it is one line in a file this change does not otherwise touch.
 * Lowest coverage (unit suite): `neighbor/neighbor.rb` 91%, `messages/update.rb` 92%, `neighbor/add_path_cap.rb` 93%, `path_attributes/mp_unreach.rb` 93%, `path_attributes/ipv6_extended_communities.rb` 93%, `optional_parameters/graceful_restart.rb` 93%.

@@ -220,8 +220,19 @@ module LabHelper
     # map below is no longer flow spec's alone.
     EVPN = 'l2vpn-evpn'
 
+    # RT-constrain, AFI 1 SAFI 132, RFC 4684. **The two sides agree on
+    # this one**, measured on 2026-10-31: the config file and the client
+    # both take `rtc`, and the client rejects `ipv4-rtc`,
+    # `route-target-constraints`, `rtfilter` and `ipv4-rtfilter` with
+    # "unsupported address family". So this family needs no CLIENT_FAMILY
+    # entry, which is worth saying because the two families above set the
+    # expectation that it would. Checked rather than assumed, after a
+    # first draft of the CLAUDE.md entry guessed the name and was wrong.
+    RTC = 'rtc'
+
     # Config-file name to client name, for the families where the two
-    # disagree. Everything else is spelled alike on both sides.
+    # disagree. Everything else is spelled alike on both sides, RTC
+    # included.
     CLIENT_FAMILY = { FS_VPN => 'ipv4-l3vpn-flowspec', EVPN => 'evpn' }.freeze
 
     # The name to pass the client's -a for a family, which is its own
