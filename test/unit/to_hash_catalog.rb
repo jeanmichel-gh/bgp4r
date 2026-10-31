@@ -539,6 +539,18 @@ module ToHashCatalog
   # silence. It unwraps :prefix_sid now, and the two TLVs above carry
   # their own fields, so the whole attribute round trips: both TLVs with
   # reserved and flags set, and the tail of a cut TLV header.
+  # RFC 6368 section 5. Both fields survive and both doors work: its own
+  # new unwraps the wrapped form, and Path_attribute reads the :attr_set
+  # key. The build exercises the Origin AS and both nested attributes,
+  # and the nested AGGREGATOR is the field that would be lost silently
+  # if the 4-octet AS rule of section 5 were not applied on the way back
+  # in: a 2-octet parse reads 4200000001 as 59905.
+  ENTRIES['BGP::Attr_set'] = entry(:ok, nil, nil, PATH_ATTR) do
+    BGP::Attr_set.new(65000,
+                      BGP::Origin.new(:igp),
+                      BGP::Aggregator.new('10.0.0.1', 4200000001))
+  end
+
   ENTRIES['BGP::Prefix_sid'] = entry(:ok, nil, nil, PATH_ATTR) do
     v = '010007' + '0ac00000000064' + '030008' + 'c0de003e800003e8' + '0100'
     BGP::Prefix_sid.new(wire('c028' + format('%02x', v.length / 2) + v))

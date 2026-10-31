@@ -300,7 +300,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. The `lab` job is a matrix, one job per group in `test/lab_groups.rb`, so its cost is the slowest group and not the total: it was 12m42s as one serial suite. Each job installs only what its group needs, which is why the matrix entry carries a `gobgp`, `frr`, `docker` or `netns` flag. The `gobgp` groups pin 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-10-31: 1777 tests, 25413 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.1%.
+Baseline on 2026-10-31: 1804 tests, 25506 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.1%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -1294,19 +1294,20 @@ true here is the shape of the gap:
   :safi=>70, :nexthop=>["10.0.0.1"], :nlris=>[{:inclusive_multicast=>{:rd=>
   [100,200], :tag=>0, :originator=>"10.0.0.1"}}]).to_shex'` prints the
   attribute. A stale entry sends the next reader after work that is done.
-* BGP-LS (attribute 29, AFI 16388, SAFI 71 and 72, RFC 9552), ATTR_SET
-  (attribute 128, RFC 6368), MCAST-VPN (SAFI 5).
-  Flowspec, EVPN and RT-constrain were all on this list and all three are
-  off it, because the
+* BGP-LS (attribute 29, AFI 16388, SAFI 71 and 72, RFC 9552), MCAST-VPN
+  (SAFI 5).
+  Flowspec, EVPN, RT-constrain and ATTR_SET were all on this list and all
+  four are off it, because the
   rule and the route can be sent now: flowspec had every traffic filtering
   action of RFC 8955 section 7 implemented and no way to send the rule they
   filter, and EVPN had none of its eleven route types and four of its eleven
   extended communities. Phase 3 below measured that community registry rather
   than recalling it, 18 assigned entries with 14 carrying an RFC, and all 14
   are in.
-* Coverage as measured: 22 of 34 live path attribute code points, and 8 of 22
+* Coverage as measured: 23 of 34 live path attribute code points, and 8 of 22
   live capability code points. The attribute figure reads worse than it is:
-  FRR's `bgpd.h` defines exactly bgp4r's 22 plus two. **The extended community
+  FRR's `bgpd.h` defines exactly bgp4r's 22 plus two, where the 23rd is
+  ATTR_SET, which FRR does not define at all. **The extended community
   figure is not written down here**, because it moved three times in a week
   and `ruby -I. -e 'require "bgp4r"; p BGP::Extended_community::FACTORY.size'`
   prints the registered code points, against the 115 the IANA registries
@@ -2641,10 +2642,10 @@ Two consequences, both of which change the plan rather than decorate it:
      processing, which matters to a RIB and not to an encoder, and no
      EVPN route goes in a RIB by the decision below. Recorded so nobody
      implements a route key here looking for it.
-4. **The rest, as appetite allows. One of four done.** RT-constrain
-   (SAFI 132, RFC 4684) **is in**; ATTR_SET (attribute 128, RFC 6368),
-   MCAST-VPN (SAFI 5, RFC 6514) and BGP-LS (attribute 29, AFI 16388,
-   SAFI 71 and 72, RFC 9552) are not. This entry used to say "each of
+4. **The rest, as appetite allows. Two of four done.** RT-constrain
+   (SAFI 132, RFC 4684) and ATTR_SET (attribute 128, RFC 6368) **are
+   in**; MCAST-VPN (SAFI 5, RFC 6514) and BGP-LS (attribute 29, AFI
+   16388, SAFI 71 and 72, RFC 9552) are not. This entry used to say "each of
    these is a class and a registration", which held for the first and
    understates the last considerably: BGP-LS is a whole TLV language of
    node, link and prefix descriptors, not one layout.
@@ -2838,37 +2839,68 @@ Two consequences, both of which change the plan rather than decorate it:
             the unchecked claim this file keeps getting burned by. If a
             later GoBGP fixes either, that case fails and says to
             re-measure.
-   2. **ATTR_SET, attribute 128, RFC 6368. Not started**, and the RFC is
-      read and on hand. Section 5: an optional transitive attribute
-      whose value is a 4-octet Origin AS then "a variable-length field
-      that conforms to the BGP UPDATE message path attribute encoding
-      rules", so its length is 4 plus the attributes. It is a
-      `Path_attribute` inside a `Path_attribute`, the attribute-level
-      analogue of EVPN route type 11's Route Key, and `Path_attribute`
-      consumes the String it is handed, which the nested parse has to
-      allow for.
-      * Two encoding rules that are not free. The Origin AS is a 32-bit
-        unsigned integer "regardless of whether or not the originating
-        PE supports 4-octet AS numbers", and **the AS_PATH and
-        AGGREGATOR inside MUST use 4-octet AS numbers "regardless of the
-        capabilities advertised by the BGP speaker to which the ATTR_SET
-        attribute is transmitted"**. bgp4r's `encode` has a 2 versus 4
-        octet AS switch, so that is a constraint on it rather than
-        something that falls out.
-      * Three malformed conditions for `validation.rb`, from section 5:
-        a length under 4 octets, MP_REACH or MP_UNREACH carried inside,
-        or an included attribute malformed itself. NEXT_HOP "SHOULD NOT
-        be included" and "SHOULD be ignored" when it is, which is a
-        receive side rule and not a refusal.
-      * **One paragraph of section 5 must not be implemented as
-        written.** Its error handling says a malformed ATTR_SET whose
-        "Partial flag is set and its Neighbor-Complete flag is clear" is
-        treated as a withdraw per `[OPT-TRANS-BGP]`, which its own
-        references list as Work in Progress, September 2010. That draft
-        became RFC 7606, which has no Neighbor-Complete flag. So the
-        action has to come from RFC 7606 and not from this sentence,
-        which is the trap flow spec part 4 and EVPN part 9 each
-        recorded from the other direction. RFC 7606 is not on hand yet.
+   2. **ATTR_SET, attribute 128, RFC 6368. Done**, in one pull request,
+      because it is one attribute and not a family: no NLRI, no
+      dispatch gate, no framing rule. Section 5: an optional transitive
+      attribute whose value is a 4-octet Origin AS then "a
+      variable-length field that conforms to the BGP UPDATE message
+      path attribute encoding rules". It is a `Path_attribute` inside a
+      `Path_attribute`, the attribute-level analogue of EVPN route type
+      11's Route Key. `Path_attribute` consuming the String it is
+      handed cost nothing in the end, because the nested parse is given
+      a slice of our own making.
+      * **Two encoding rules that are not free, and both are in
+        `Attr_set::INNER`.** The Origin AS is a 32-bit unsigned integer
+        "regardless of whether or not the originating PE supports
+        4-octet AS numbers", so unlike AGGREGATOR it never follows the
+        session. And the AS_PATH and AGGREGATOR inside MUST use 4-octet
+        AS numbers "regardless of the capabilities advertised by the
+        BGP speaker to which the ATTR_SET attribute is transmitted", so
+        `INNER` forces `:as4byte` in **both** directions. The receive
+        half is the one with teeth: a 2-octet nested parse reads AS
+        4200000001 back as 59905 in silence, which is the same
+        truncation `As4_aggregator`'s catalog entry records.
+      * `INNER` also carries `:policy => :lenient`, so a malformed
+        nested attribute cannot raise out of the decoder and get filed
+        as an `Attr::Gap`. Section 5 does make it a malformed ATTR_SET,
+        and that is `errors`' business through `validation.rb`.
+      * **The three malformed conditions of section 5 are in
+        `validation.rb`**: a length under 4 octets, MP_REACH or
+        MP_UNREACH carried inside, and an included attribute malformed
+        itself. The third **reuses `Attr::Check.attribute`** on each
+        nested attribute rather than repeating a rule, so a rule added
+        anywhere else reaches inside a set the same day, and it
+        recurses for a set inside a set. NEXT_HOP "SHOULD NOT be
+        included" and "SHOULD be ignored" when it is, so it is not
+        reported: ignoring a field cannot mean refusing the attribute.
+      * **The paragraph of section 5 that must not be implemented as
+        written is now moot, and RFC 7606 says so itself.** That
+        paragraph conditions the handling on "its Partial flag is set
+        and its Neighbor-Complete flag is clear" per `[OPT-TRANS-BGP]`,
+        which RFC 6368's own reference list gives as Work in Progress,
+        September 2010; the draft became RFC 7606, which has no such
+        flag. **RFC 7606 section 7.16 replaces the paragraph
+        outright**: "An UPDATE message with a malformed ATTR_SET
+        attribute SHALL be handled using the approach of 'treat as
+        withdraw'", and "the normative reference to [OPT-TRANS-BGP] in
+        [RFC6368] is removed". So every finding is TAW and none reads a
+        flag. This entry used to say the action had to be derived from
+        RFC 7606; it did not, because 7.16 names it. Read the revising
+        RFC before deriving anything, which is the lesson RFC 9785
+        taught in EVPN part 8b from the other direction.
+      * A value too short to hold the Origin AS is kept and echoed, in
+        `@tail`, the way `pmsi_tunnel.rb` keeps a value shorter than
+        its own fixed part. **That is the one thing sabotage caught as
+        untested**: the behaviour was written and no test in the
+        class's own file covered it, so deleting the branch passed.
+      * **Four hand written length expectations were wrong in this one
+        pull request**, every time by putting an attribute's total size
+        where its value size belonged or the reverse, and the library
+        was right all four times. RFC 6368 carries no worked example
+        and no hex, so there is nothing here to check a reading
+        against, which is the RFC 4684 situation again. Compute the
+        vectors with the library and paste the result; do not type
+        them.
    3. **MCAST-VPN, SAFI 5, RFC 6514. Not started**, and that RFC is not
       on hand either. Note from EVPN part 7: the only first hand reading
       of RFC 6514 section 4.3 here came through
@@ -2994,4 +3026,4 @@ request that added the attribute:
 * Prefix-SID (40): the SRv6 TLVs of RFC 9252, and the RFC 8669 section 4.1 rule for labeled unicast.
 * No check for a missing well known mandatory attribute. That needs `Update`, not `Path_attribute`, because it depends on whether the message carries NLRI.
 * The external peer rules for LOCAL_PREF, ORIGINATOR_ID and CLUSTER_LIST, and the RFC 7311 section 3.2 AIGP checks. bgp4r does not know whether a peer is external where the checks run.
-* Not started: BGP-LS, ATTR_SET, BGPsec_Path.
+* Not started: BGP-LS, BGPsec_Path.

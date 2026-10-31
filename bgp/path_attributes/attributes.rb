@@ -21,6 +21,7 @@
   pmsi_tunnel
   tunnel_encap
   as4
+  attr_set
 }.each do |attr|
   require "bgp/path_attributes/#{attr}"
 end
