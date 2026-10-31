@@ -350,4 +350,101 @@ class EvpnDocTest < Test::Unit::TestCase
                  "CLAUDE.md no longer points at #{DOC}")
   end
 
+
+  # Section 5's first keep and echo case, and the claim a reader
+  # skimming the figure will get backwards.
+  def test_the_four_defined_flag_bits_are_the_low_nibble
+    assert_match(/The four defined bits are the low nibble/, doc)
+    assert_match(/bit 7 is the least\s+significant/, doc)
+    assert_equal(0x0f, BGP::Evpn::Flags::DEFINED_BITS)
+    assert_equal(0x01, BGP::Evpn::Flags::V1)
+    assert_equal(0x08, BGP::Evpn::Flags::IE)
+    # No reserved bit set, no :bits entry.
+    assert_equal([:v3], BGP::Evpn::Flags.new(:v3).to_hash)
+    f = BGP::Evpn::Flags.new(['f4'].pack('H*').is_packed)
+    assert_equal([:v3, { :bits => 0xf4 }], f.to_hash)
+    assert_equal('f4', f.to_shex)
+  end
+
+  # Section 5's second case, and the sentence that says the RFC asks for
+  # it rather than only Conventions. The quote is checked, since this is
+  # the one place an RFC agrees with the keep and echo rule and a future
+  # audit should be able to see that without opening RFC 9251.
+  def test_the_document_quotes_the_rfc_asking_for_the_reserved_echo
+    assert_match(/the first one an RFC\s+asks to be echoed in so many words/, doc)
+    assert_match(/it MUST propagate it unchanged/, doc)
+    assert_equal(4, BGP::Evpn::Leave_synch::RESERVED_SIZE)
+    r = BGP::Evpn::Leave_synch.new
+    assert(r.reserved_zero?)
+    refute(r.to_hash[:leave_synch].has_key?(:reserved))
+  end
+
+  # Section 3's route type 6, 7, 8 table, read against the classes. The
+  # ESI column is the row a reader will check, since route type 6 has
+  # none and its two siblings do.
+  def test_the_multicast_route_types_carry_the_fields_the_table_says
+    assert_match(/Types 6, 7 and 8, the multicast triple/, doc)
+    six = BGP::Evpn::Selective_multicast.new
+    refute_respond_to(six, :esi, 'route type 6 has no ESI')
+    assert_respond_to(BGP::Evpn::Membership_report_synch.new, :esi)
+    assert_respond_to(BGP::Evpn::Leave_synch.new, :esi)
+    # The two fields route type 8 adds.
+    refute_respond_to(BGP::Evpn::Membership_report_synch.new,
+                      :max_response_time)
+    assert_respond_to(BGP::Evpn::Leave_synch.new, :max_response_time)
+    assert_respond_to(BGP::Evpn::Leave_synch.new, :reserved)
+    # And the triple, which all three share.
+    [six, BGP::Evpn::Membership_report_synch.new,
+     BGP::Evpn::Leave_synch.new].each do |r|
+      [:source, :group, :originator].each do |f|
+        assert_instance_of(BGP::Evpn::Addr, r.send(f))
+      end
+      assert_instance_of(BGP::Evpn::Flags, r.flags)
+    end
+  end
+
+  # The FIXED_SIZE numbers the document prints, measured rather than
+  # trusted, since a number in prose is the thing that goes stale.
+  def test_the_fixed_sizes_the_document_prints_are_the_library_s
+    assert_match(/28 octets for route type 6 with three IPv4 addresses, 64 with/,
+                 doc)
+    assert_equal(16, BGP::Evpn::Selective_multicast::FIXED_SIZE)
+    assert_equal(26, BGP::Evpn::Membership_report_synch::FIXED_SIZE)
+    assert_equal(31, BGP::Evpn::Leave_synch::FIXED_SIZE)
+    v4 = ['192.0.2.1', '232.1.1.1', '10.0.0.1']
+    v6 = ['2001:db8::1', 'ff0e::1', '2001:db8::9']
+    assert_equal(28, BGP::Evpn::Selective_multicast
+                       .new([1, 1], 1, *v4, [:v3]).encode.size)
+    assert_equal(64, BGP::Evpn::Selective_multicast
+                       .new([1, 1], 1, *v6, [:v3]).encode.size)
+    assert_equal(38, BGP::Evpn::Membership_report_synch
+                       .new([1, 1], nil, 1, *v4, [:v3]).encode.size)
+    assert_equal(43, BGP::Evpn::Leave_synch
+                       .new([1, 1], nil, 1, *v4, 10, [:v3]).encode.size)
+  end
+
+  # The module and not a base class claim, which exists because of the
+  # discovery guard above: an abstract Route subclass would read as a
+  # twelfth route type.
+  def test_the_shared_fields_are_a_module_so_the_discovery_guard_holds
+    assert_match(/share their fields through a module and not a base class/,
+                 doc)
+    refute(BGP::Evpn::Multicast_fields.is_a?(Class))
+    assert(BGP::Evpn.constants.include?(:Multicast_fields))
+    refute(implemented.include?(BGP::Evpn::Multicast_fields))
+  end
+
+  # The (*,G) claim, which is the one place an absent field is the
+  # ordinary case rather than the unusual one.
+  def test_a_zero_multicast_source_length_is_the_ordinary_star_g_case
+    assert_match(/An absent Multicast Source is the ordinary case and not an error/,
+                 doc)
+    assert_match(/the Multicast\s+Source Length is set to 0/, doc)
+    r = BGP::Evpn::Selective_multicast.new([1, 1], 1, nil, '232.1.1.1',
+                                           '10.0.0.1', [:v2])
+    assert(r.source.empty?)
+    assert_equal(0, r.source.bitlen)
+    assert_match(/\(\*,/, r.to_s)
+  end
+
 end

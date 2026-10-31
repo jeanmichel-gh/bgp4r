@@ -135,12 +135,16 @@ class EvpnTest < Test::Unit::TestCase
     refute(BGP::Evpn.new(unknown).to_hash.has_key?(:length))
   end
 
-  # An unimplemented route type reads back whole. Types 1 and 4 are
-  # implemented, so a two octet body for either is not a layout they can
-  # represent and falls back to Unknown; every other type has no class
-  # at all. Either way the octets replay, which is the point.
+  # An unimplemented route type reads back whole. A two octet body is
+  # not a layout any registered type can represent, so a registered one
+  # falls back to Unknown and an unregistered one was never going to be
+  # anything else. Either way the octets replay, which is the point.
+  #
+  # The registry list moves with each part that adds a route type, and
+  # `test/unit/evpn_doc_test.rb` is what keeps it honest: it discovers
+  # the classes the library defines rather than listing them.
   def test_an_unimplemented_route_type_reads_back_whole
-    assert_equal([1, 2, 3, 4, 5], BGP::Evpn::ROUTES.keys.sort)
+    assert_equal([1, 2, 3, 4, 5, 6, 7, 8], BGP::Evpn::ROUTES.keys.sort)
     (1..11).each do |t|
       n = BGP::Evpn.new(wire('%02x02aabb' % t))
       assert_instance_of(BGP::Evpn::Unknown, n.route)
@@ -314,6 +318,61 @@ class EvpnTest < Test::Unit::TestCase
     assert_equal(BGP::Evpn.new(unknown), BGP::Evpn.new(unknown))
     refute_equal(BGP::Evpn.new(unknown), BGP::Evpn.new(unknown(10)))
     refute_equal(BGP::Evpn.new(unknown), 'not an Evpn')
+  end
+
+
+  # The three route types RFC 9251 adds, through the framing. Their
+  # bodies are variable, so these are the first rows where the Length
+  # octet is not a constant of the route type.
+  def test_the_rfc_9251_route_types_frame_and_replay
+    r6 = '061c' \
+         '00000064000000c80000000a20c000020120e8010101200a00000104'
+    r7 = '0726' \
+         '00000064000000c8001122334455667788990000000a' \
+         '20c000020120e8010101200a00000106'
+    r8 = '082b' \
+         '00000064000000c8001122334455667788990000000a' \
+         '20c000020120e8010101200a000001000000006402'
+    { r6 => BGP::Evpn::Selective_multicast,
+      r7 => BGP::Evpn::Membership_report_synch,
+      r8 => BGP::Evpn::Leave_synch }.each do |hex, klass|
+      n = BGP::Evpn.new(wire(hex))
+      assert_instance_of(klass, n.route, hex)
+      assert_equal(hex, n.to_shex)
+      assert_equal(klass.type, n.type)
+      # The framing says how long it is, and the body's own fields agree.
+      assert_equal(hex.size / 2, BGP::Evpn.nlri_size(wire(hex)))
+      assert_equal(hex, BGP::Evpn.new(n.to_hash).to_shex)
+    end
+  end
+
+  # An (*,*) body is shorter than an (S,G) one for the same route type,
+  # which is what makes these the first variable length rows.
+  def test_a_wildcard_multicast_route_is_shorter_than_an_s_g_one
+    star = '0610' + '00000064000000c80000000a' + '000000' + '04'
+    n = BGP::Evpn.new(wire(star))
+    assert_instance_of(BGP::Evpn::Selective_multicast, n.route)
+    assert_equal(star, n.to_shex)
+    assert_equal(18, BGP::Evpn.nlri_size(wire(star)))
+    assert(n.route.source.empty?)
+    assert(n.route.group.empty?)
+    assert(n.route.originator.empty?)
+  end
+
+  # **A length that lies inside the body makes the route unreadable even
+  # though the route type is implemented**, because the triple is self
+  # describing: a Multicast Source Length of 200 bits claims the rest of
+  # the body. So the route-type-kept-only-if-it-can-give-its-own-octets-
+  # back rule hands it to Unknown, which replays it. Route types 1 to 5
+  # could only reach this with a truncated body; these three reach it
+  # with a body of the right length and one field lying.
+  def test_a_lying_triple_length_falls_back_to_unknown
+    hex = '0613' + '00000064000000c80000000a' + 'c8ffffff' + '0000' + 'ff'
+    n = BGP::Evpn.new(wire(hex))
+    assert_instance_of(BGP::Evpn::Unknown, n.route)
+    assert_equal(6, n.type)
+    assert_equal(hex, n.to_shex)
+    assert_equal(hex, BGP::Evpn.new(n.to_hash).to_shex)
   end
 
 end

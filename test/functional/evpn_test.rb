@@ -25,7 +25,7 @@ require 'bgp4r'
 require 'test/helpers/server'
 
 # An EVPN UPDATE over a real session, RFC 7432 section 7 and RFC 9136
-# section 3.1, AFI 25 with SAFI 70.
+# section 3.1 and RFC 9251 sections 9.1 to 9.3, AFI 25 with SAFI 70.
 #
 # **This is the only test that proves the wiring sites agree with each
 # other**, which is the same thing `flow_spec_test.rb` is for and for the
@@ -289,4 +289,86 @@ class EvpnSessionTest < Test::Unit::TestCase
     assert_equal('0118' + body, mpr.nlris.first.to_shex)
     assert(@s.is_established?, 'and the session is still up')
   end
+
+  # Route type 6, RFC 9251 section 9.1. The first route type whose body
+  # is variable in three independent places, so a framing slip here
+  # shows as the wrong fields rather than as a failure.
+  def test_a_selective_multicast_route_crosses_a_session
+    mpr = crosses(session,
+                  reach([BGP::Evpn.new(
+                    BGP::Evpn::Selective_multicast.new(
+                      [100, 200], 100, '192.0.2.1', '232.1.1.1',
+                      '10.0.0.9', [:v3]))]))
+    r = mpr.nlris.first.route
+    assert_instance_of(BGP::Evpn::Selective_multicast, r)
+    assert_equal(6, mpr.nlris.first.type)
+    assert_equal('192.0.2.1', r.source.address)
+    assert_equal('232.1.1.1', r.group.address)
+    assert_equal('10.0.0.9', r.originator.address)
+    assert(r.flags.v3?)
+    refute(r.flags.v2?)
+  end
+
+  # The (*,G) form of the same route, section 9.1.1: "In case of a (*,G)
+  # Membership Report, the Multicast Source Length is set to 0" and the
+  # address field is not used. The body is four octets shorter than the
+  # case above, so the length field in front of each address is what the
+  # far side has to walk.
+  def test_a_star_g_selective_multicast_route_crosses_a_session
+    mpr = crosses(session,
+                  reach([BGP::Evpn.new(
+                    BGP::Evpn::Selective_multicast.new(
+                      [100, 200], 100, nil, '232.1.1.1', '10.0.0.9',
+                      [:v2]))]))
+    r = mpr.nlris.first.route
+    assert_instance_of(BGP::Evpn::Selective_multicast, r)
+    assert(r.source.empty?, 'the absent source came back absent')
+    assert_equal(0, r.source.bitlen)
+    assert_equal('232.1.1.1', r.group.address)
+    assert(r.flags.v2?)
+  end
+
+  # Route type 7, section 9.2: route type 6 with an ESI. A mixed family
+  # triple, an IPv4 group with an IPv6 originator, because each address
+  # carries its own length and nothing outside says which is which.
+  def test_a_membership_report_synch_route_crosses_a_session
+    mpr = crosses(session,
+                  reach([BGP::Evpn.new(
+                    BGP::Evpn::Membership_report_synch.new(
+                      [100, 200], ESI, 100, nil, '232.1.1.1',
+                      '2001:db8::9', [:v2, :v3]))]))
+    r = mpr.nlris.first.route
+    assert_instance_of(BGP::Evpn::Membership_report_synch, r)
+    assert_equal(7, mpr.nlris.first.type)
+    assert_equal(ESI, r.esi.to_s)
+    assert_equal('232.1.1.1', r.group.address)
+    assert_equal(32, r.group.bitlen)
+    assert_equal('2001:db8::9', r.originator.address)
+    assert_equal(128, r.originator.bitlen, 'the two families survived together')
+  end
+
+  # Route type 8, section 9.3, with both keep and echo cases set: a
+  # reserved bit in the Flags octet and a non-zero 4-octet Reserved
+  # field, which section 9.3.1 says a receiver "MUST propagate ...
+  # unchanged". Built from the hash, because a build from field values
+  # writes the Reserved field as zero.
+  def test_a_leave_synch_route_crosses_a_session_with_its_reserved_fields
+    mpr = crosses(session,
+                  reach([BGP::Evpn.new(
+                    BGP::Evpn::Leave_synch.new(
+                      :rd => [100, 200], :esi => ESI,
+                      :ethernet_tag_id => 100, :source => '192.0.2.1',
+                      :group => '232.1.1.1', :originator => '10.0.0.9',
+                      :reserved => 'deadbeef', :max_response_time => 100,
+                      :flags => [:v2, { :bits => 0xf2 }]))]))
+    r = mpr.nlris.first.route
+    assert_instance_of(BGP::Evpn::Leave_synch, r)
+    assert_equal(8, mpr.nlris.first.type)
+    assert_equal(100, r.max_response_time)
+    refute(r.reserved_zero?)
+    assert_equal('deadbeef', r.reserved.unpack1('H*'))
+    assert(r.flags.v2?)
+    assert_equal(0xf0, r.flags.reserved_bits)
+  end
+
 end

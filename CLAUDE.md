@@ -30,8 +30,11 @@ bgp/nlris/               prefix encodings (inet, labeled, VPN, RD, mapped IPv4)
                          types share, the Esi of RFC 7432 section 5, the
                          Ethernet Tag ID, the MAC and the length-prefixed
                          address, with the Route base and Evpn::Unknown under
-                         them, and route types 1 to 5, the whole of RFC 7432
-                         section 7 plus RFC 9136's IP Prefix route;
+                         them, the Flags octet of RFC 9251 and the
+                         Multicast_fields module that carries the address
+                         triple, and route types 1 to 8: the whole of RFC 7432
+                         section 7, RFC 9136's IP Prefix route and RFC 9251
+                         sections 9.1 to 9.3;
                          evpn.rb the NLRI with
                          the section 7 Route Type and Length framing and
                          Evpn.nlri_size. Both are wired in now, so an EVPN
@@ -40,7 +43,7 @@ bgp/nlris/               prefix encodings (inet, labeled, VPN, RD, mapped IPv4)
                          parse loops ask nlri_size, and parse_next_hops reads
                          the RFC 7432 section 14 next hop by its length, since
                          the AFI is 25 for both families. Evpn::ROUTES holds
-                         types 1 to 5; every other type reads back as an
+                         types 1 to 8; every other type reads back as an
                          Evpn::Unknown that replays byte for byte, and so does
                          a body a registered type cannot reproduce.
                          docs/evpn.md is the guide, see also
@@ -236,7 +239,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. A `lab` job runs the Compose topologies, and installs a `gobgpd` release so the native fault matrix runs there too; it pins 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-10-30: 1622 tests, 23855 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.9%.
+Baseline on 2026-10-30: 1652 tests, 24102 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.0%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -2004,8 +2007,68 @@ Two consequences, both of which change the plan rather than decorate it:
         weaken an existing test to make a change pass, and this is what
         that looks like when the test is right and its example has
         expired.
-   6. **Route types 6, 7 and 8**, RFC 9251 sections 9.1 to 9.3, sharing
-      the address triple and the Flags octet above.
+   6. **Route types 6, 7 and 8. Done**, in #186, RFC 9251 sections 9.1
+      to 9.3, which brings the two keep-and-echo cases part 1 planned
+      for. Route type 7 is route type 6 with an ESI, and route type 8 is
+      route type 7 with a 4-octet Reserved field and a Maximum Response
+      Time before the Flags, so the three are one layout with two
+      additions and share the address triple through
+      `Evpn::Multicast_fields`.
+      * **The first layouts in the family variable in more than one
+        place.** Each carries three length prefixed addresses in a row,
+        so neither the route type nor the outer Length says where a
+        field ends: the body describes itself, field by field. Route
+        types 2 to 5 each had at most one variable field.
+      * **A module and not a base class, and the reason is the doc
+        test.** `evpn_doc_test.rb` discovers the route type table from
+        the `Route` subclasses the library defines, so an abstract
+        `Multicast < Route` would read as a twelfth route type with no
+        row to put it in. A module is in `Evpn.constants` and that
+        guard does not count it. The guard fired on the table rows for
+        6, 7 and 8 while this was written, which is it working.
+      * **The four defined Flags bits are the low nibble**, which the
+        sections say rather than leaving to the figure: "The least
+        significant bit (bit 7) indicates support for IGMP version 1",
+        then bit 6 version 2, bit 5 version 3, bit 4 Include/Exclude.
+        So `DEFINED_BITS` is `0x0f` and the reserved field is the high
+        nibble, which is the opposite of what the figure reads like
+        left to right. Sabotaged to `0xf0`: 2 failures and 18 errors.
+      * **Route type 8's Reserved field is the first one an RFC asks to
+        be echoed in so many words.** Section 9.3.1: "The originator
+        MUST set the Reserved field to 0; the receiver SHOULD ignore
+        it, and if it needs to be propagated, it MUST propagate it
+        unchanged." Conventions mandates keep and echo on bgp4r's own
+        grounds, which are that a tool able to send a value no RFC
+        describes has to be able to replay what it just sent. Here an
+        RFC agrees, which is worth knowing before anyone files the
+        behaviour as over-engineering. Four octets, the largest
+        reserved field in the library.
+      * **A bug this found in `Sized#parse`, from part 1.** It read its
+        length octet with `unpack1('C')`, which answers nil when the
+        body has run out, and `octets_for` then raised `NoMethodError:
+        undefined method '+' for nil`. Route types 2 to 5 could only
+        reach that with a truncated body, where these three reach it
+        with a body of exactly the right length and one field lying:
+        a Multicast Source Length of 200 bits claims the rest of the
+        body, so the two fields behind it find nothing. `.to_i` reads
+        an absent field as length 0, `encode` then comes back the wrong
+        length, and `Evpn#read_route` falls back to `Unknown`, which
+        replays the capture. Found by probing a value no RFC allows,
+        not by reading. Regression test, and reverting it fails 1 and
+        errors 1.
+      * **`addr_hash` was lifted into `Route`**, where three route
+        types had identical private copies of it and these three would
+        have added nine more uses. No behaviour change: the third copy
+        had an extra `empty?` guard that answered the same thing, since
+        an empty `Addr` has no address.
+      * **An absent Multicast Source is the ordinary case here, not the
+        unusual one**, which is the opposite of route type 2's optional
+        IP. Section 9.1.1: "In case of a (*,G) Membership Report, the
+        Multicast Source Length is set to 0" and the address "field is
+        not used". `to_s` prints the `*` the section writes, and
+        section 9.1.3's default route is (*,*).
+      * The functional test gained four cases, 13 now, which is still
+        the only test that proves the five wiring sites agree.
    7. **Route types 9, 10 and 11**, RFC 9572 sections 3.1 to 3.3,
       including the recursive Route Key.
    8. **The eleven extended communities**, the ten of the 0x06 registry

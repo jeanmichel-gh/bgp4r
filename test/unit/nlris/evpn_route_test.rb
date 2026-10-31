@@ -303,6 +303,23 @@ class EvpnRouteTest < Test::Unit::TestCase
   # know which. to_hash_catalog.rb lists it under NO_RECIPE for this.
   def test_sized_is_abstract_and_says_so
     assert_raise(ArgumentError) { BGP::Evpn::Sized.new('192.0.2.1') }
+  end
+
+  # A body can run out exactly where a length octet should be, which
+  # route types 6, 7 and 8 reach by ordinary means: they read three of
+  # these in a row, so a length that lies about its own width consumes
+  # the fields behind it. `unpack1('C')` answers nil there and
+  # `octets_for` used to raise NoMethodError on it.
+  def test_a_length_octet_that_is_not_there_reads_as_zero
+    assert_nothing_raised { BGP::Evpn::Addr.new(wire('')) }
+    a = BGP::Evpn::Addr.new(wire(''))
+    assert_equal(0, a.bitlen)
+    assert(a.empty?)
+    assert_equal('00', a.to_shex)
+    # And the octets it does have, when the length asks for more.
+    b = BGP::Evpn::Addr.new(wire('80c0000201'))
+    assert_equal(128, b.bitlen)
+    assert_equal(4, b.value.size)
     assert_nothing_raised { BGP::Evpn::Sized.new(32, 'abcd') }
   end
 
@@ -844,6 +861,415 @@ class EvpnRouteTest < Test::Unit::TestCase
     assert_equal(:unknown, BGP::Evpn::Unknown.hash_key)
     assert(BGP::Evpn::Unknown.ancestors.include?(BGP::Evpn::Route))
     assert_respond_to(BGP::Evpn::Unknown.new(1, 'a'), :encode_value)
+  end
+
+
+  # ---------------------------------------------------------------
+  # The Flags octet of route types 6, 7 and 8, RFC 9251 sections 9.1,
+  # 9.2 and 9.3.
+  # ---------------------------------------------------------------
+
+  # The sections name the bit positions rather than leaving them to the
+  # figure: "The least significant bit (bit 7) indicates support for
+  # IGMP version 1", then bit 6 version 2, bit 5 version 3, and bit 4
+  # the Include/Exclude bit. So the four defined bits are the low
+  # nibble, which is the opposite of what the figure reads like left to
+  # right.
+  def test_the_four_defined_flag_bits_are_the_low_nibble
+    assert_equal(0x0f, BGP::Evpn::Flags::DEFINED_BITS)
+    assert_equal(0x01, BGP::Evpn::Flags::V1)
+    assert_equal(0x02, BGP::Evpn::Flags::V2)
+    assert_equal(0x04, BGP::Evpn::Flags::V3)
+    assert_equal(0x08, BGP::Evpn::Flags::IE)
+    assert_equal('01', BGP::Evpn::Flags.new(:v1).to_shex)
+    assert_equal('02', BGP::Evpn::Flags.new(:v2).to_shex)
+    assert_equal('04', BGP::Evpn::Flags.new(:v3).to_shex)
+    assert_equal('08', BGP::Evpn::Flags.new(:ie).to_shex)
+  end
+
+  def test_flags_are_one_octet_built_four_ways
+    f = BGP::Evpn::Flags.new(:v2, :v3)
+    assert_equal(1, f.encode.size)
+    assert_equal(1, f.size)
+    assert_equal('06', f.to_shex)
+    assert_equal('06', BGP::Evpn::Flags.new([:v3, :v2]).to_shex)
+    assert_equal('06', BGP::Evpn::Flags.new(0x06).to_shex)
+    assert_equal('06', BGP::Evpn::Flags.new(wire('06')).to_shex)
+    assert_equal('06', BGP::Evpn::Flags.new(f).to_shex)
+    assert_equal('06', BGP::Evpn::Flags.new(f.to_hash).to_shex)
+    assert_equal('00', BGP::Evpn::Flags.new.to_shex)
+  end
+
+  def test_the_flag_predicates_read_each_bit
+    f = BGP::Evpn::Flags.new(0x0f)
+    assert(f.v1?)
+    assert(f.v2?)
+    assert(f.v3?)
+    assert(f.ie?)
+    # "an Include Group type (bit value 0) or an Exclude Group type (bit
+    # value 1)", so the two names are one bit read the two ways the
+    # sections name it.
+    assert(f.exclude?)
+    g = BGP::Evpn::Flags.new(:v2)
+    assert(g.v2?)
+    refute(g.v1?)
+    refute(g.v3?)
+    refute(g.ie?)
+    refute(g.exclude?)
+    assert_equal([:v3, :v2], BGP::Evpn::Flags.new(:v2, :v3).names)
+  end
+
+  # The keep and echo rule Conventions records for Traffic_action and
+  # Prefix_entry: a reserved bit that arrived set is written back, and
+  # the hash says so.
+  def test_a_reserved_flag_bit_is_kept_and_echoed
+    f = BGP::Evpn::Flags.new(wire('f6'))
+    assert(f.undefined_bits?)
+    assert_equal(0xf0, f.reserved_bits)
+    assert_equal('f6', f.to_shex)
+    assert_equal([:v3, :v2, { :bits => 0xf6 }], f.to_hash)
+    assert_equal('f6', BGP::Evpn::Flags.new(f.to_hash).to_shex)
+    assert_equal('f6', BGP::Evpn::Flags.new(f).to_shex)
+    assert_match(/reserved bits 1111/, f.to_s)
+  end
+
+  # No reserved bit set, no :bits entry, so an ordinary Flags hashes to
+  # the plain list of names it has always been.
+  def test_an_ordinary_flags_hash_is_the_plain_list
+    f = BGP::Evpn::Flags.new(:v3)
+    refute(f.undefined_bits?)
+    assert_equal(0, f.reserved_bits)
+    assert_equal([:v3], f.to_hash)
+    assert_equal([], BGP::Evpn::Flags.new.to_hash)
+    assert_equal('none', BGP::Evpn::Flags.new.to_s)
+    assert_equal('v3,v2', BGP::Evpn::Flags.new(:v2, :v3).to_s)
+  end
+
+  def test_flags_refuse_only_what_one_octet_cannot_hold
+    assert_raise(ArgumentError) { BGP::Evpn::Flags.new(0x100) }
+    assert_raise(ArgumentError) { BGP::Evpn::Flags.new(-1) }
+    assert_raise(ArgumentError) { BGP::Evpn::Flags.new(:v4) }
+    assert_raise(ArgumentError) { BGP::Evpn::Flags.new(1.5) }
+    # But every octet value builds, including the reserved nibble the
+    # sections say MUST be 0 and an IE bit set with no v3.
+    assert_equal('ff', BGP::Evpn::Flags.new(0xff).to_shex)
+    assert_equal('08', BGP::Evpn::Flags.new(:ie).to_shex)
+  end
+
+  # ---------------------------------------------------------------
+  # Route type 6, RFC 9251 section 9.1, the SMET route.
+  # ---------------------------------------------------------------
+
+  def test_route_type_6_is_the_smet_route
+    assert_equal(6, BGP::Evpn::Selective_multicast.type)
+    assert_equal(:selective_multicast, BGP::Evpn::Selective_multicast.hash_key)
+    r = BGP::Evpn::Selective_multicast.new([100, 200], 10, '192.0.2.1',
+                                           '232.1.1.1', '10.0.0.1', [:v3])
+    assert_equal('00000064000000c8' \
+                 '0000000a' \
+                 '20c0000201' \
+                 '20e8010101' \
+                 '200a000001' \
+                 '04', r.to_shex)
+    assert_equal(28, r.encode.size)
+    assert_equal('192.0.2.1', r.source.address)
+    assert_equal('232.1.1.1', r.group.address)
+    assert_equal('10.0.0.1', r.originator.address)
+    assert(r.flags.v3?)
+  end
+
+  # FIXED_SIZE is every octet but the three addresses, their length
+  # octets included, so a body is that plus the addresses.
+  def test_route_type_6_is_fixed_size_plus_its_three_addresses
+    assert_equal(16, BGP::Evpn::Selective_multicast::FIXED_SIZE)
+    v4 = BGP::Evpn::Selective_multicast.new([100, 200], 10, '192.0.2.1',
+                                            '232.1.1.1', '10.0.0.1', [:v3])
+    assert_equal(16 + (3 * 4), v4.encode.size)
+    v6 = BGP::Evpn::Selective_multicast.new([100, 200], 10, '2001:db8::1',
+                                            'ff0e::1', '2001:db8::9',
+                                            [:v3, :ie])
+    assert_equal(16 + (3 * 16), v6.encode.size)
+    assert_equal('00000064000000c8' \
+                 '0000000a' \
+                 '8020010db8000000000000000000000001' \
+                 '80ff0e0000000000000000000000000001' \
+                 '8020010db8000000000000000000000009' \
+                 '0c', v6.to_shex)
+    assert_equal(16, BGP::Evpn::Selective_multicast.new.encode.size)
+  end
+
+  # Section 9.1.1: "In case of a (*,G) Membership Report, the Multicast
+  # Source Length is set to 0" and the address "field is not used", so
+  # an absent source is the ordinary case and not an error.
+  def test_a_star_g_report_has_a_zero_length_multicast_source
+    r = BGP::Evpn::Selective_multicast.new([100, 200], 10, nil, '232.1.1.1',
+                                           '10.0.0.1', [:v2])
+    assert_equal('00000064000000c8' \
+                 '0000000a' \
+                 '00' \
+                 '20e8010101' \
+                 '200a000001' \
+                 '02', r.to_shex)
+    assert_equal(24, r.encode.size)
+    assert(r.source.empty?)
+    assert_equal(0, r.source.bitlen)
+    assert_match(/\(\*,232\.1\.1\.1/, r.to_s)
+    assert_equal(r.to_shex,
+                 BGP::Evpn::Selective_multicast.new(r.to_hash).to_shex)
+  end
+
+  # Section 9.1.1 puts every one of the three lengths in bits: the
+  # Multicast Source Length "MUST be set to the length of the Multicast
+  # Source Address in bits", 32 for IPv4 and 128 for IPv6, the same for
+  # the group, and "The Originator Router Length is the length of the
+  # Originator Router Address in bits."
+  def test_all_three_triple_lengths_are_in_bits
+    r = BGP::Evpn::Selective_multicast.new([100, 200], 10, '192.0.2.1',
+                                           'ff0e::1', '10.0.0.1', [:v3])
+    assert_equal(32, r.source.bitlen)
+    assert_equal(128, r.group.bitlen)
+    assert_equal(32, r.originator.bitlen)
+    assert_equal(4, r.source.value.size)
+    assert_equal(16, r.group.value.size)
+  end
+
+  def test_route_type_6_builds_four_ways
+    r = BGP::Evpn::Selective_multicast.new([100, 200], 10, '192.0.2.1',
+                                           '232.1.1.1', '10.0.0.1', [:v3])
+    assert_equal(r.to_shex,
+                 BGP::Evpn::Selective_multicast.new(r.encode.is_packed).to_shex)
+    assert_equal(r.to_shex, BGP::Evpn::Selective_multicast.new(r).to_shex)
+    assert_equal(r.to_shex,
+                 BGP::Evpn::Selective_multicast.new(r.to_hash).to_shex)
+    assert_equal({ :selective_multicast =>
+                   { :rd => [100, 200], :ethernet_tag_id => 10,
+                     :source => '192.0.2.1', :group => '232.1.1.1',
+                     :originator => '10.0.0.1', :flags => [:v3] } },
+                 r.to_hash)
+    # The field hash reads back as well as the wrapped one.
+    assert_equal(r.to_shex, BGP::Evpn::Selective_multicast
+                              .new(r.to_hash[:selective_multicast]).to_shex)
+    assert_raise(ArgumentError) do
+      BGP::Evpn::Selective_multicast.new(1, 2, 3, 4, 5, 6, 7)
+    end
+  end
+
+  # ---------------------------------------------------------------
+  # Route type 7, RFC 9251 section 9.2.
+  # ---------------------------------------------------------------
+
+  # Route type 6 with an ESI between the RD and the Ethernet Tag ID,
+  # which section 9.2 is why: it coordinates state "between the PEs
+  # attached to a given ES".
+  def test_route_type_7_is_route_type_6_with_an_esi
+    assert_equal(7, BGP::Evpn::Membership_report_synch.type)
+    assert_equal(:membership_report_synch,
+                 BGP::Evpn::Membership_report_synch.hash_key)
+    r = BGP::Evpn::Membership_report_synch
+          .new([100, 200], '00:11:22:33:44:55:66:77:88:99', 10, '192.0.2.1',
+               '232.1.1.1', '10.0.0.1', [:v2, :v3])
+    assert_equal('00000064000000c8' \
+                 '00112233445566778899' \
+                 '0000000a' \
+                 '20c0000201' \
+                 '20e8010101' \
+                 '200a000001' \
+                 '06', r.to_shex)
+    assert_equal(26, BGP::Evpn::Membership_report_synch::FIXED_SIZE)
+    assert_equal(26 + (3 * 4), r.encode.size)
+    assert_equal(BGP::Evpn::Selective_multicast::FIXED_SIZE +
+                 BGP::Evpn::Esi::WIDTH,
+                 BGP::Evpn::Membership_report_synch::FIXED_SIZE)
+    assert_equal('00:11:22:33:44:55:66:77:88:99', r.esi.to_s)
+  end
+
+  def test_route_type_7_builds_four_ways
+    r = BGP::Evpn::Membership_report_synch
+          .new([100, 200], '00:11:22:33:44:55:66:77:88:99', 10, '192.0.2.1',
+               '232.1.1.1', '10.0.0.1', [:v2, :v3])
+    k = BGP::Evpn::Membership_report_synch
+    assert_equal(r.to_shex, k.new(r.encode.is_packed).to_shex)
+    assert_equal(r.to_shex, k.new(r).to_shex)
+    assert_equal(r.to_shex, k.new(r.to_hash).to_shex)
+    assert_equal({ :membership_report_synch =>
+                   { :rd => [100, 200],
+                     :esi => '00:11:22:33:44:55:66:77:88:99',
+                     :ethernet_tag_id => 10, :source => '192.0.2.1',
+                     :group => '232.1.1.1', :originator => '10.0.0.1',
+                     :flags => [:v3, :v2] } },
+                 r.to_hash)
+    assert_equal(26, k.new.encode.size)
+    assert_raise(ArgumentError) { k.new(1, 2, 3, 4, 5, 6, 7, 8) }
+  end
+
+  # ---------------------------------------------------------------
+  # Route type 8, RFC 9251 section 9.3.
+  # ---------------------------------------------------------------
+
+  def test_route_type_8_adds_reserved_and_a_maximum_response_time
+    assert_equal(8, BGP::Evpn::Leave_synch.type)
+    assert_equal(:leave_synch, BGP::Evpn::Leave_synch.hash_key)
+    assert_equal(4, BGP::Evpn::Leave_synch::RESERVED_SIZE)
+    r = BGP::Evpn::Leave_synch
+          .new([100, 200], '00:11:22:33:44:55:66:77:88:99', 10, '192.0.2.1',
+               '232.1.1.1', '10.0.0.1', 100, [:v2])
+    assert_equal('00000064000000c8' \
+                 '00112233445566778899' \
+                 '0000000a' \
+                 '20c0000201' \
+                 '20e8010101' \
+                 '200a000001' \
+                 '00000000' \
+                 '64' \
+                 '02', r.to_shex)
+    assert_equal(31, BGP::Evpn::Leave_synch::FIXED_SIZE)
+    assert_equal(31 + (3 * 4), r.encode.size)
+    # Five octets more than route type 7: the 4 octet Reserved field and
+    # the Maximum Response Time.
+    assert_equal(BGP::Evpn::Membership_report_synch::FIXED_SIZE + 5,
+                 BGP::Evpn::Leave_synch::FIXED_SIZE)
+    # Section 9.3.1: "the value to be used while sending a query, as
+    # defined in [RFC2236]".
+    assert_equal(100, r.max_response_time)
+  end
+
+  # Section 9.3.1: "The originator MUST set the Reserved field to 0",
+  # which is what a build from field values does, and there is no
+  # :reserved key to show for it.
+  def test_a_build_writes_the_reserved_field_as_zero
+    r = BGP::Evpn::Leave_synch
+          .new([100, 200], '00:11:22:33:44:55:66:77:88:99', 10, '192.0.2.1',
+               '232.1.1.1', '10.0.0.1', 100, [:v2])
+    assert(r.reserved_zero?)
+    assert_equal(4, r.reserved.size)
+    assert_equal('00000000', r.reserved.unpack1('H*'))
+    refute(r.to_hash[:leave_synch].has_key?(:reserved))
+    refute_match(/reserved/, r.to_s)
+  end
+
+  # The other half of section 9.3.1: "the receiver SHOULD ignore it, and
+  # if it needs to be propagated, it MUST propagate it unchanged." The
+  # largest reserved field in the library, and the first one an RFC asks
+  # to be echoed in so many words.
+  def test_a_non_zero_reserved_field_is_kept_and_echoed
+    hex = '00000064000000c8' \
+          '00112233445566778899' \
+          '0000000a' \
+          '00' \
+          '20e8010101' \
+          '200a000001' \
+          'deadbeef' \
+          '64' \
+          'f2'
+    r = BGP::Evpn::Leave_synch.new(wire(hex))
+    assert_equal(hex, r.to_shex)
+    refute(r.reserved_zero?)
+    assert_equal('deadbeef', r.reserved.unpack1('H*'))
+    assert_equal('deadbeef', r.to_hash[:leave_synch][:reserved])
+    assert_match(/reserved deadbeef/, r.to_s)
+    # And both keep and echo cases at once, since the Flags octet in
+    # that capture carries a reserved bit too.
+    assert_equal([:v2, { :bits => 0xf2 }],
+                 r.to_hash[:leave_synch][:flags])
+    assert_equal(hex, BGP::Evpn::Leave_synch.new(r.to_hash).to_shex)
+    assert_equal(hex, BGP::Evpn::Leave_synch.new(r).to_shex)
+  end
+
+  def test_route_type_8_builds_four_ways
+    r = BGP::Evpn::Leave_synch
+          .new([100, 200], '00:11:22:33:44:55:66:77:88:99', 10, '192.0.2.1',
+               '232.1.1.1', '10.0.0.1', 100, [:v2])
+    k = BGP::Evpn::Leave_synch
+    assert_equal(r.to_shex, k.new(r.encode.is_packed).to_shex)
+    assert_equal(r.to_shex, k.new(r).to_shex)
+    assert_equal(r.to_shex, k.new(r.to_hash).to_shex)
+    assert_equal({ :leave_synch =>
+                   { :rd => [100, 200],
+                     :esi => '00:11:22:33:44:55:66:77:88:99',
+                     :ethernet_tag_id => 10, :source => '192.0.2.1',
+                     :group => '232.1.1.1', :originator => '10.0.0.1',
+                     :max_response_time => 100, :flags => [:v2] } },
+                 r.to_hash)
+    assert_equal(31, k.new.encode.size)
+    assert_equal(0, k.new.max_response_time)
+    assert_raise(ArgumentError) { k.new(1, 2, 3, 4, 5, 6, 7, 8, 9) }
+  end
+
+  # Each prints its route type number, the (S,G) pair as an operator
+  # writes it, and the fields that are its own. Asserted because a to_s
+  # nothing calls is a NoMethodError waiting for the first reader who
+  # prints a route.
+  def test_the_three_multicast_route_types_print_their_own_fields
+    r6 = BGP::Evpn::Selective_multicast
+           .new([100, 200], 10, '192.0.2.1', '232.1.1.1', '10.0.0.1', [:v3])
+    assert_match(/^\[6\] Selective Multicast:/, r6.to_s)
+    assert_match(/\(192\.0\.2\.1\/32,232\.1\.1\.1\/32\)/, r6.to_s)
+    assert_match(/flags v3/, r6.to_s)
+
+    r7 = BGP::Evpn::Membership_report_synch
+           .new([100, 200], '00:11:22:33:44:55:66:77:88:99', 10, nil,
+                '232.1.1.1', '10.0.0.1', [:v2])
+    assert_match(/^\[7\] Multicast Membership Report Synch:/, r7.to_s)
+    assert_match(/ESI 00:11:22:33:44:55:66:77:88:99/, r7.to_s)
+    assert_match(/\(\*,232\.1\.1\.1\/32\)/, r7.to_s)
+
+    r8 = BGP::Evpn::Leave_synch
+           .new([100, 200], '00:11:22:33:44:55:66:77:88:99', 10, nil, nil,
+                nil, 100, [:v2])
+    assert_match(/^\[8\] Multicast Leave Synch:/, r8.to_s)
+    assert_match(/\(\*,\*\)/, r8.to_s, 'the (*,*) default route')
+    assert_match(/max response time 100/, r8.to_s)
+  end
+
+  # The three share the triple and the Flags through one module, and a
+  # module rather than a base class so Evpn.constants gains no Route
+  # subclass without a route type number. evpn_doc_test.rb discovers the
+  # route type table from exactly that set.
+  def test_the_three_multicast_route_types_share_their_fields
+    [BGP::Evpn::Selective_multicast, BGP::Evpn::Membership_report_synch,
+     BGP::Evpn::Leave_synch].each do |k|
+      assert(k.ancestors.include?(BGP::Evpn::Multicast_fields), k.to_s)
+      assert(k.ancestors.include?(BGP::Evpn::Route), k.to_s)
+      r = k.new
+      [:source, :group, :originator].each do |f|
+        assert_instance_of(BGP::Evpn::Addr, r.send(f), "#{k}##{f}")
+      end
+      assert_instance_of(BGP::Evpn::Flags, r.flags, "#{k}#flags")
+    end
+    refute(BGP::Evpn::Multicast_fields.is_a?(Class))
+  end
+
+  # Nothing validates, per Conventions, so a rule no RFC allows still
+  # goes on the wire for a router to decide about.
+  def test_nothing_validates_the_multicast_route_types
+    # A source length that lies about the octets it came with.
+    r = BGP::Evpn::Selective_multicast
+          .new([0, 0], 0xffffffff, BGP::Evpn::Addr.new(200, "\xff\xff\xff"),
+               nil, nil, 0xff)
+    assert_equal(200, r.source.bitlen)
+    assert_equal(3, r.source.value.size)
+    # MAX-ET, the reserved Ethernet Tag ID of RFC 7432 section 7.
+    assert(r.ethernet_tag_id.max_et?)
+    # Every flag bit set, reserved nibble included, with IE set and no
+    # v3, which section 9.1 says MUST be ignored.
+    assert_equal(0xff, r.flags.value)
+    assert(r.flags.ie?)
+    # **A length that lies eats the fields behind it**, which is the
+    # negative test working as intended and not a defect: the body is
+    # self describing, so a source of 200 bits is the rest of it. So the
+    # class cannot reproduce that body, and `Evpn` keeps it whole as an
+    # `Unknown` instead, which evpn_test.rb asserts, since the framing
+    # is where that rule lives and this file requires evpn_route.rb
+    # alone.
+    refute_equal(r.to_shex,
+                 BGP::Evpn::Selective_multicast.new(r.encode.is_packed).to_shex)
+    # A Maximum Response Time of 255 and MAX-ESI, which section 5
+    # reserves.
+    r8 = BGP::Evpn::Leave_synch.new([0, 0], BGP::Evpn::Esi.new(wire('ff' * 10)),
+                                    0, nil, nil, nil, 255, 0)
+    assert(r8.esi.max?)
+    assert_equal(255, r8.max_response_time)
+    assert_equal(r8.to_shex, BGP::Evpn::Leave_synch.new(r8.to_hash).to_shex)
   end
 
 end

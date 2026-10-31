@@ -104,9 +104,9 @@ across RFC 7432, RFC 9136 and RFC 9251, and its Table 2 adds three.
 | 3 | Inclusive Multicast Ethernet Tag | RFC 7432 section 7.3 | yes |
 | 4 | Ethernet Segment | RFC 7432 section 7.4 | yes |
 | 5 | IP Prefix | RFC 9136 section 3.1 | yes |
-| 6 | Selective Multicast Ethernet Tag | RFC 9251 section 9.1 | no |
-| 7 | Multicast Membership Report Synch | RFC 9251 section 9.2 | no |
-| 8 | Multicast Leave Synch | RFC 9251 section 9.3 | no |
+| 6 | Selective Multicast Ethernet Tag | RFC 9251 section 9.1 | yes |
+| 7 | Multicast Membership Report Synch | RFC 9251 section 9.2 | yes |
+| 8 | Multicast Leave Synch | RFC 9251 section 9.3 | yes |
 | 9 | Per-Region I-PMSI A-D | RFC 9572 section 3.1 | no |
 | 10 | S-PMSI A-D | RFC 9572 section 3.2 | no |
 | 11 | Leaf A-D | RFC 9572 section 3.3 | no |
@@ -208,6 +208,71 @@ route type 1 on purpose.** One label can merge its own `:label` and
 type 1 does. Two cannot, so each rides under `:label1` and `:label2`
 holding `Label`'s own hash. `:label2` appears only when there is one.
 
+### Types 6, 7 and 8, the multicast triple
+
+RFC 9251 sections 9.1, 9.2 and 9.3. **The first variable length layouts
+in the family that are variable in more than one place**: each carries
+three length prefixed addresses in a row, so neither the route type nor
+the outer Length tells you where a field ends. The body describes itself,
+field by field.
+
+| | 6 | 7 | 8 |
+|---|---|---|---|
+| RD (8) | yes | yes | yes |
+| ESI (10) | | yes | yes |
+| Ethernet Tag ID (4) | yes | yes | yes |
+| the triple | yes | yes | yes |
+| Reserved (4) | | | yes |
+| Maximum Response Time (1) | | | yes |
+| Flags (1) | yes | yes | yes |
+
+So route type 7 is route type 6 with an ESI, and route type 8 is route
+type 7 with two more fields before the Flags. Section 9.2 says why 7 has
+the ESI where 6 does not: it coordinates state "between the PEs attached
+to a given ES operating in All-Active (or Single-Active) redundancy
+mode".
+
+**Route type 6 is the second route type with no Ethernet Segment
+Identifier**, after route type 3, which is worth saying because its two
+siblings here have one and a reader comparing the three will look for it.
+
+The triple is Multicast Source, Multicast Group and Originator Router,
+each a 1-octet length in bits then that many bits rounded up to octets,
+so `Addr` carries all three. RFC 9251 calls the third "Originator Router"
+and RFC 9572 "Originator's Addr"; they are one shape under two names, so
+there is one class and not two.
+
+**An absent Multicast Source is the ordinary case and not an error.**
+Section 9.1.1: "In case of a (*,G) Membership Report, the Multicast
+Source Length is set to 0" and the address "field is not used". That is
+the length 0 and no octets an `Addr` built with no argument already
+encodes, and `to_s` prints it as the `*` the section writes. Section
+9.1.3's default Selective Multicast route is (*,*), both of them absent.
+
+`FIXED_SIZE` on each class is every octet but the three addresses, their
+three length octets included, so a body is `FIXED_SIZE` plus the
+addresses: 28 octets for route type 6 with three IPv4 addresses, 64 with
+three IPv6 ones, 38 and 43 for route types 7 and 8 with IPv4. **Nothing
+reads those totals**, since each address carries its own length; the
+constants are there to be read.
+
+**The three share their fields through a module and not a base class.**
+`test/unit/evpn_doc_test.rb` discovers the route type table from the
+`Route` subclasses the library defines, so an abstract `Multicast <
+Route` would read as a twelfth route type with no row to put it in.
+`Evpn::Multicast_fields` is a module, which `Evpn.constants` holds and
+that guard does not count.
+
+**A length that lies inside the triple makes the route unreadable even
+though its route type is implemented**, and that is the negative test
+working rather than a defect: a Multicast Source Length of 200 bits
+claims the rest of the body, so the class cannot reproduce the octets it
+was handed and `Evpn` keeps them whole as an `Unknown`. Route types 1 to
+5 could only reach that with a truncated body. These three reach it with
+a body of exactly the right length and one field lying, which is why
+`Sized#parse` had to stop raising when a body runs out where a length
+octet should be.
+
 ## 4. The primitives
 
 Four shapes carry every field in the eleven layouts that is not an `Rd`
@@ -280,18 +345,47 @@ rule asks for it.
 
 Conventions records the rule and the two existing instances,
 `Traffic_action` and `Prefix_entry`. RFC 9251 brings two more, and
-neither is new work in kind.
+neither is new work in kind. Both are in, with route types 6, 7 and 8.
 
 * Route types 6, 7 and 8 carry a Flags octet laid out
-  `| reserved |IE|v3|v2|v1|`, so `DEFINED_BITS` is `0x0f` and the hash
-  gains a `:bits` entry only when a reserved bit arrived set.
-* Route type 8 additionally has a **4-octet Reserved field**, larger
-  than any reserved field bgp4r keeps today.
+  `| reserved |IE|v3|v2|v1|`, so `Evpn::Flags::DEFINED_BITS` is `0x0f`
+  and the hash gains a `{:bits => n}` entry only when a reserved bit
+  arrived set. **The four defined bits are the low nibble**, which the
+  sections say rather than leaving to the figure: bit 7 is the least
+  significant and means IGMP version 1, bit 6 version 2, bit 5 version
+  3, bit 4 Include/Exclude. A reader skimming the figure left to right
+  will assume the opposite.
+* Route type 8 additionally has a **4-octet Reserved field**, the
+  largest reserved field in the library, and **the first one an RFC
+  asks to be echoed in so many words**. Section 9.3.1: "The originator
+  MUST set the Reserved field to 0; the receiver SHOULD ignore it, and
+  if it needs to be propagated, it MUST propagate it unchanged."
+  Conventions mandates keep and echo on bgp4r's own grounds, which are
+  that a tool able to send a value no RFC describes has to be able to
+  replay what it just sent. Here the RFC agrees, which is worth knowing
+  before anyone files the behaviour as over-engineering.
 
-Both arrive with part 6. Conventions' note that the keep-and-echo rule
-is recent applies: these have simply not been reached yet.
+`Leave_synch#reserved_zero?` is the extra-key-only-when-unusual test, so
+an ordinary route type 8 hashes without a `:reserved` key and an
+ordinary Flags hashes to the plain list of names.
 
-### Type 5, the one fixed-length layout
+## 6. Route type 5 is the one fixed-length layout
+
+The other route types are subsections of section 3 above. This one has a
+section because it is the odd one out: every other layout is either a
+fixed width that the route type decides or a variable one that the body
+describes, and this one is fixed at two widths that the outer Length
+alone distinguishes.
+
+RFC 9136 section 3.1 fixes the Length field: "MUST be either 34 (if IPv4
+addresses are carried) or 58 (if IPv6 addresses are carried)". The
+arithmetic agrees both ways:
+
+* IPv4: 8 + 10 + 4 + 1 + 4 + 4 + 3 = 34
+* IPv6: 8 + 10 + 4 + 1 + 16 + 16 + 3 = 58
+
+So the Length alone says which family, which is part of why this family
+needs no AFI input.
 
 RFC 9136 section 3.1 states it outright: "The Length field of the BGP
 EVPN NLRI for an EVPN IP Prefix route MUST be either 34 (if IPv4
@@ -343,20 +437,6 @@ MP_REACH octets alone. Two of the three are SHOULD rather than MUST.
 the route key used by BGP to compare routes. The rest of the fields are
 not part of the route key." That matters to a RIB, and no EVPN route
 goes in one.
-
-## 6. Route type 5 is the one fixed-length layout
-
-RFC 9136 section 3.1 gives two figures and fixes the Length field:
-"MUST be either 34 (if IPv4 addresses are carried) or 58 (if IPv6
-addresses are carried)". The arithmetic agrees both ways:
-
-* IPv4: 8 + 10 + 4 + 1 + 4 + 4 + 3 = 34
-* IPv6: 8 + 10 + 4 + 1 + 16 + 16 + 3 = 58
-
-So the Length alone says which family, which is why this family needs no
-AFI input. Note that the IP Prefix field is **fixed width**, 4 or 16
-octets, and is not truncated to the prefix length the way `Prefix`
-packs its octets.
 
 ## 7. The extended communities
 
