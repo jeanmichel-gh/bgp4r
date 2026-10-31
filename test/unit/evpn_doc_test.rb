@@ -211,6 +211,47 @@ class EvpnDocTest < Test::Unit::TestCase
     assert_equal(17, r.encode.size)
   end
 
+  # Route type 5's two traps, both asserted from the library. The
+  # prefix is not packed down to its length, and the gateway has no
+  # length octet, so a /8 route is 34 octets with four whole prefix
+  # octets rather than one.
+  def test_route_type_5_does_not_pack_its_prefix
+    assert_match(/prefix length and not a field\s*width/, doc)
+    assert_match(/GW IP Address has no length octet at all/, doc)
+    r = BGP::Evpn::Ip_prefix_route.new([100, 200], BGP::Evpn::Esi.new, 0,
+                                       '10.0.0.0/8', '10.0.0.1', 500)
+    assert_equal(34, r.encode.size)
+    assert_equal(4, r.prefix_octets.size, 'a /8 still occupies four octets')
+    assert_equal(8, r.prefix_len)
+    assert_equal('0a000000', r.prefix_octets.unpack1('H*'))
+  end
+
+  # And the 34 or 58 the section states, from the library rather than
+  # from the document's text.
+  def test_the_route_type_5_body_is_thirty_four_or_fifty_eight
+    assert_match(/MUST be either 34 \(if IPv4/, doc)
+    v4 = BGP::Evpn::Ip_prefix_route.new([1, 1], BGP::Evpn::Esi.new, 0,
+                                        '10.0.0.0/8', nil, 0)
+    v6 = BGP::Evpn::Ip_prefix_route.new([1, 1], BGP::Evpn::Esi.new, 0,
+                                        '2001:db8::/32', nil, 0)
+    assert_equal([34, 58], [v4.encode.size, v6.encode.size])
+    assert_equal([BGP::Evpn::Ip_prefix_route::SIZE_V4,
+                  BGP::Evpn::Ip_prefix_route::SIZE_V6],
+                 [v4.encode.size, v6.encode.size])
+    refute(v4.v6?)
+    assert(v6.v6?)
+  end
+
+  # The three receive-side rules RFC 9136 adds, recorded as part 9's
+  # work. This only checks the document still names them and that none
+  # is implemented yet, so the note cannot quietly go stale.
+  def test_the_rfc_9136_treat_as_withdraw_rules_are_recorded_for_later
+    assert_match(/treat as withdraw/, doc)
+    assert_match(/Overlay Index/, doc)
+    assert_match(/belong to part 9/, doc)
+    assert_match(/not a check `validation\.rb` can make/, doc)
+  end
+
   # Section 7's count, and the community that makes it eleven. The
   # Opaque claim is read out of FACTORY rather than taken on trust,
   # which is what caught an earlier draft of this document saying bgp4r

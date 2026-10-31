@@ -140,7 +140,7 @@ class EvpnTest < Test::Unit::TestCase
   # represent and falls back to Unknown; every other type has no class
   # at all. Either way the octets replay, which is the point.
   def test_an_unimplemented_route_type_reads_back_whole
-    assert_equal([1, 2, 3, 4], BGP::Evpn::ROUTES.keys.sort)
+    assert_equal([1, 2, 3, 4, 5], BGP::Evpn::ROUTES.keys.sort)
     (1..11).each do |t|
       n = BGP::Evpn.new(wire('%02x02aabb' % t))
       assert_instance_of(BGP::Evpn::Unknown, n.route)
@@ -178,6 +178,34 @@ class EvpnTest < Test::Unit::TestCase
                             '20' + 'c0000201'))
     assert_instance_of(BGP::Evpn::Inclusive_multicast, t3.route)
     assert_equal('192.0.2.1', t3.route.ip.address)
+
+    # Route type 5, the IPv4 form: body 34 octets, so Length 0x22.
+    t5 = BGP::Evpn.new(wire('0522' + '00000064000000c8' +
+                            '00000000000000000000' + '00000064' +
+                            '08' + '0a000000' + '0a000001' + '001f41'))
+    assert_instance_of(BGP::Evpn::Ip_prefix_route, t5.route)
+    assert_equal('10.0.0.0/8', t5.route.ip_prefix)
+    assert_equal('10.0.0.1', t5.route.gateway)
+    assert_equal(500, t5.route.label.label)
+  end
+
+  # Route type 5 is the one layout with no in-band discriminator: the
+  # body's own size, 34 or 58, says which family. A body that is
+  # neither reproduces nothing and falls back to Unknown, replaying it.
+  def test_route_type_5_reads_its_family_from_the_body_size
+    v6 = BGP::Evpn.new(wire('053a' + '00000064000000c8' +
+                            '00000000000000000000' + '00000064' + '20' +
+                            '20010db8' + '00' * 12 +
+                            '20010db8' + '00' * 11 + '01' + '001f41'))
+    assert_instance_of(BGP::Evpn::Ip_prefix_route, v6.route)
+    assert(v6.route.v6?)
+    assert_equal('2001:db8::/32', v6.route.ip_prefix)
+
+    odd = '00' * 32
+    n = BGP::Evpn.new(wire('0520' + odd))
+    assert_instance_of(BGP::Evpn::Unknown, n.route,
+                       'a 32 octet body is neither 34 nor 58')
+    assert_equal('0520' + odd, n.to_shex)
   end
 
   # Route type 2 is the one layout whose optional trailing field is

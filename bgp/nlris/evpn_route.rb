@@ -1094,6 +1094,252 @@ module BGP
 
     end
 
+    # Route type 5, RFC 9136 section 3.1, the IP Prefix route. The one
+    # fixed length layout in the family: **34 octets with IPv4
+    # addresses and 58 with IPv6 ones**, which the section states
+    # outright, "The Length field of the BGP EVPN NLRI for an EVPN IP
+    # Prefix route MUST be either 34 (if IPv4 addresses are carried) or
+    # 58 (if IPv6 addresses are carried)."
+    #
+    #   +---------------------------------------+
+    #   |      RD (8 octets)                    |
+    #   +---------------------------------------+
+    #   |Ethernet Segment Identifier (10 octets)|
+    #   +---------------------------------------+
+    #   |  Ethernet Tag ID (4 octets)           |
+    #   +---------------------------------------+
+    #   |  IP Prefix Length (1 octet, 0 to 128) |
+    #   +---------------------------------------+
+    #   |  IP Prefix (4 or 16 octets)           |
+    #   +---------------------------------------+
+    #   |  GW IP Address (4 or 16 octets)       |
+    #   +---------------------------------------+
+    #   |  MPLS Label (3 octets)                |
+    #   +---------------------------------------+
+    #
+    # **Two things make this layout unlike every other route type, and
+    # both are easy to get wrong.**
+    #
+    # First, the IP Prefix Length octet is a **prefix length and not a
+    # field width**. Section 3.1: it "can be set to a value between 0
+    # and 32 (bits) for IPv4 and between 0 and 128 for IPv6, and it
+    # specifies the number of bits in the prefix", while "The IP prefix
+    # is a 4- or 16-octet field". So the prefix is **not** packed down
+    # to its length the way `Prefix` packs one: 10.0.0.0/8 still
+    # occupies four whole octets. `Addr` is therefore wrong here, since
+    # its width follows its length.
+    #
+    # Second, the **GW IP Address has no length octet at all**. It is
+    # "a 4- or 16-octet field (IPv4 or IPv6)" and nothing precedes it,
+    # so it is raw octets.
+    #
+    # **So the family comes from the body's size**, 34 or 58, which is
+    # the same information the outer Length carries and is available
+    # locally. That keeps this class readable in its own right, the way
+    # every other route type is, and it is the one place in the family
+    # where there is no in-band discriminator to prefer instead.
+    #
+    # Nothing validates. A prefix length above 128, which section 3.1
+    # says MUST NOT happen, still builds; so do a prefix and a gateway
+    # of different families, which the same section says MUST NOT
+    # happen; and so does a body that is neither 34 nor 58.
+    class Ip_prefix_route < Route
+
+      TYPE, HASH_KEY = 5, :ip_prefix_route
+
+      # The two body lengths section 3.1 allows. These are the Route
+      # Type specific field, so the NLRI on the wire is two octets
+      # longer than each.
+      SIZE_V4 = 34
+      SIZE_V6 = 58
+
+      V4_WIDTH = 4
+      V6_WIDTH = 16
+
+      attr_reader :rd, :esi, :ethernet_tag_id, :prefix_len, :label
+
+      # The prefix and the gateway as raw octets, whatever width they
+      # were given. The readers below put them in address form.
+      attr_reader :prefix_octets, :gw_octets
+
+      # new(rd, esi, ethernet_tag_id, '10.0.0.0/8', '10.0.0.1', label),
+      # where the prefix string gives the length, the octets and the
+      # family in one
+      # new(:rd => [100, 200], :esi => ..., :ethernet_tag_id => 100,
+      #     :ip_prefix => '10.0.0.0/8', :gateway => '10.0.0.1',
+      #     :label => 500)
+      # the wire bytes, or another instance.
+      def initialize(*args)
+        if args.size == 1 and args[0].is_a?(String) and args[0].is_packed?
+          parse(args[0])
+        elsif args.size == 1 and args[0].is_a?(self.class)
+          parse(args[0].encode.is_packed)
+        elsif args.size == 1 and args[0].is_a?(Hash)
+          from_hash(args[0])
+        elsif (1..6).include?(args.size)
+          @rd              = coerce_or_default(Rd, args[0])
+          @esi             = coerce_or_default(Esi, args[1])
+          @ethernet_tag_id = coerce_or_default(Ethernet_tag_id, args[2])
+          set_prefix(args[3])
+          set_gateway(args[4])
+          @label           = coerce_label(args[5])
+        elsif args.empty?
+          defaults
+        else
+          raise ArgumentError, "invalid argument: #{args.inspect}"
+        end
+        self
+      end
+
+      # The body's own size says which family, since nothing inside it
+      # does. A body that is neither 34 nor 58 is read as IPv4 and will
+      # not reproduce its octets, so `Evpn` falls back to `Unknown` and
+      # the capture replays: the encode-matches rule from #182 carrying
+      # the case this layout cannot represent.
+      def parse(s)
+        w = s.size >= SIZE_V6 ? V6_WIDTH : V4_WIDTH
+        @rd              = read_rd(s)
+        @esi             = Esi.new(s)
+        @ethernet_tag_id = Ethernet_tag_id.new(s)
+        @prefix_len      = s.slice!(0, 1).unpack1('C')
+        @prefix_octets   = s.slice!(0, [w, s.size].min)
+        @gw_octets       = s.slice!(0, [w, s.size].min)
+        @label           = Label.new(s)
+        self
+      end
+
+      def encode_value
+        [@rd.encode, @esi.encode, @ethernet_tag_id.encode,
+         [@prefix_len].pack('C'), @prefix_octets, @gw_octets,
+         @label.encode].join
+      end
+
+      # True when the octets held are IPv6 wide. Read off the prefix,
+      # since that is what section 3.1's two figures are keyed on.
+      def v6?
+        @prefix_octets.size == V6_WIDTH
+      end
+
+      # The prefix in address form, "10.0.0.0/8".
+      #
+      # **nil when the octets are neither 4 nor 16, and also when the
+      # length does not fit the family those octets are.** The second
+      # half was a bug found by probing: section 3.1 says the length
+      # "MUST NOT be greater than 128", nothing validates so 200 builds,
+      # and `"10.0.0.0/200"` is a string `IPAddr` refuses, so the hash
+      # did not read back. An out-of-range length is part of the unusual
+      # case and belongs in the `{:len, :octets}` form with it.
+      def ip_prefix
+        a = address(@prefix_octets)
+        return nil if a.nil?
+        return nil if @prefix_len > (v6? ? 128 : 32)
+        "#{a}/#{@prefix_len}"
+      end
+
+      # Section 3.1: "The GW IP field MUST be all bytes zero if it is
+      # not used as an Overlay Index."
+      def gateway
+        address(@gw_octets)
+      end
+
+      def gateway_zero?
+        !@gw_octets.empty? and @gw_octets.each_byte.all?(&:zero?)
+      end
+
+      # One label, so its keys merge flat as route type 1's do. The
+      # prefix and the gateway hash as address strings when the octets
+      # are a whole family, and as hex otherwise, which is the
+      # extra-detail-only-when-unusual rule the family already uses.
+      def value_hash
+        h = @rd.to_hash
+                .merge(@esi.to_hash)
+                .merge(@ethernet_tag_id.to_hash)
+        h = h.merge(prefix_hash).merge(gateway_hash)
+        h.merge(@label.to_hash)
+      end
+
+      def to_s
+        "[5] IP Prefix: #{@rd.to_s(false)}, ESI #{@esi}, " \
+        "tag #{@ethernet_tag_id}, prefix #{ip_prefix || prefix_hex}, " \
+        "gateway #{gateway || gw_hex}, label #{@label.label}"
+      end
+
+      private
+
+      def defaults
+        @rd              = Rd.new
+        @esi             = Esi.new
+        @ethernet_tag_id = Ethernet_tag_id.new
+        @prefix_len      = 0
+        @prefix_octets   = ("\x00" * V4_WIDTH).b
+        @gw_octets       = ("\x00" * V4_WIDTH).b
+        @label           = Label.new(0)
+      end
+
+      # A prefix string sets the length, the octets and the width at
+      # once. A Hash with :len and :octets is the way to write a pair
+      # the RFC does not allow, which a negative test wants.
+      def set_prefix(v)
+        case v
+        when nil
+          @prefix_len, @prefix_octets = 0, ("\x00" * V4_WIDTH).b
+        when Hash
+          @prefix_len    = v[:len].to_i
+          @prefix_octets = [v[:octets].to_s].pack('H*').b
+        else
+          ip = IPAddr.new(v.to_s)
+          @prefix_len    = v.to_s.include?('/') ? ip.prefix : (ip.ipv4? ? 32 : 128)
+          @prefix_octets = ip.hton
+        end
+      end
+
+      def set_gateway(v)
+        @gw_octets = case v
+                     when nil  then ("\x00" * @prefix_octets.size).b
+                     when Hash then [v[:octets].to_s].pack('H*').b
+                     else IPAddr.new(v.to_s).hton
+                     end
+      end
+
+      def address(octets)
+        return nil unless [V4_WIDTH, V6_WIDTH].include?(octets.size)
+        IPAddr.new_ntoh(octets).to_s
+      end
+
+      def prefix_hex
+        "#{@prefix_octets.unpack1('H*')}/#{@prefix_len}"
+      end
+
+      def gw_hex
+        @gw_octets.unpack1('H*')
+      end
+
+      def prefix_hash
+        a = ip_prefix
+        return { :ip_prefix => a } if a
+        { :ip_prefix => { :len => @prefix_len,
+                          :octets => @prefix_octets.unpack1('H*') } }
+      end
+
+      def gateway_hash
+        a = gateway
+        return { :gateway => a } if a
+        { :gateway => { :octets => @gw_octets.unpack1('H*') } }
+      end
+
+      def from_hash(h)
+        h = self.class.unwrap(h)
+        @rd              = coerce_or_default(Rd, h[:rd])
+        @esi             = coerce_or_default(Esi, h[:esi])
+        @ethernet_tag_id = coerce_or_default(Ethernet_tag_id,
+                                             h[:ethernet_tag_id])
+        set_prefix(h[:ip_prefix])
+        set_gateway(h[:gateway])
+        @label           = coerce_label(h)
+      end
+
+    end
+
   end
 
 end
