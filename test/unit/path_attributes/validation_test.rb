@@ -502,6 +502,89 @@ class TestAttrCheck < Test::Unit::TestCase
     end
   end
 
+  # ATTR_SET, RFC 6368 section 5. Well formed first, which is what the
+  # three rules below are measured against. The second is the one that
+  # matters most: section 5 fixes the AS size inside the set, so a
+  # 4-octet nested AS_PATH is conformant and must not be reported, and
+  # it is reported if attr_set_finding passes the session's as4byte
+  # instead of true.
+  def test_good_attr_sets_have_no_findings
+    [ # the Origin AS alone, the 4 octet minimum
+      'c0 80 04 0000fde8',
+      # an ORIGIN and a LOCAL_PREF inside
+      'c0 80 0f 0000fde8 40010100 40050400000064',
+      # a 4-octet AS_PATH inside, which section 5 requires
+      'c0 80 11 0000fde8 40020a 02020000fde90000fdea',
+      # a 4-octet AGGREGATOR inside
+      'c0 80 0f 0000fde8 c00708 fa56ea01 0a000001',
+      # a set inside a set
+      'c0 80 0f 0000fde8 c080080000fde940010100',
+    ].each { |hex| assert_equal [], check(hex), hex }
+  end
+
+  # Section 5: the value is a 4-octet Origin AS then the attributes, so
+  # a value below 4 octets cannot hold the one fixed field.
+  def test_an_attr_set_shorter_than_its_origin_as
+    assert_equal [[5, TAW]], check('c0 80 03 000000')
+    assert_equal 'length 3, needs at least 4 for the Origin AS (RFC 6368 section 5)',
+                 reason('c0 80 03 000000')
+    assert_equal [[5, TAW]], check('c0 80 00')
+  end
+
+  # Section 5: the set "can carry any attribute that can appear in a BGP
+  # UPDATE" except MP_REACH and MP_UNREACH.
+  def test_an_attr_set_carrying_mp_reach_or_mp_unreach
+    reach = 'c0 80 12 0000fde8 800e0b 0001 01 04 0a000001 00 0814'
+    assert_equal [[9, TAW]], check(reach)
+    assert_equal 'includes attribute 14, which RFC 6368 section 5 excludes',
+                 reason(reach)
+    unreach = 'c0 80 0c 0000fde8 800f05 0001 01 0814'
+    assert_equal [[9, TAW]], check(unreach)
+    assert_equal 'includes attribute 15, which RFC 6368 section 5 excludes',
+                 reason(unreach)
+  end
+
+  # Section 5's third condition, and it is implemented by reusing
+  # Attr::Check.attribute on each nested attribute rather than by
+  # repeating any rule, so a rule added anywhere else reaches inside a
+  # set the same day.
+  def test_an_attr_set_whose_included_attribute_is_malformed
+    # ORIGIN value 7, which RFC 7606 section 7.1 makes malformed
+    bad_origin = 'c0 80 08 0000fde8 40010107'
+    assert_equal [[9, TAW]], check(bad_origin)
+    assert_match(/included attribute 1 is malformed/, reason(bad_origin))
+    assert_match(/undefined ORIGIN value 7/, reason(bad_origin))
+    # a nested length that runs past the end of the set
+    cut = 'c0 80 07 0000fde8 400105'
+    assert_equal [[9, TAW]], check(cut)
+    assert_match(/included attribute is malformed/, reason(cut))
+    # and nested one level deeper, through the recursion
+    deep = 'c0 80 0f 0000fde8 c080080000fde940010107'
+    assert_equal [[9, TAW]], check(deep)
+  end
+
+  # RFC 7606 section 7.16 replaces the final paragraph of RFC 6368
+  # section 5 outright: "An UPDATE message with a malformed ATTR_SET
+  # attribute SHALL be handled using the approach of 'treat as
+  # withdraw'". So no ATTR_SET finding is a reset, whatever RFC 6368's
+  # own superseded text said about Optional Attribute Error.
+  def test_every_attr_set_finding_is_treat_as_withdraw
+    [ 'c0 80 03 000000',
+      'c0 80 12 0000fde8 800e0b 0001 01 04 0a000001 00 0814',
+      'c0 80 08 0000fde8 40010107',
+      'c0 80 07 0000fde8 400105',
+    ].each do |hex|
+      actions = check(hex).collect(&:last)
+      assert_equal [TAW], actions.uniq, hex
+    end
+  end
+
+  # RFC 6368 section 5 and RFC 7606 section 3 (c): optional transitive.
+  def test_an_attr_set_with_the_wrong_flags
+    assert_equal [[4, TAW]], check('80 80 04 0000fde8'), 'optional, not transitive'
+    assert_equal [[4, TAW]], check('40 80 04 0000fde8'), 'transitive, not optional'
+  end
+
   # The reason of the one finding for hex, so a test can assert which
   # rule fired rather than only that something did.
   def reason(hex)

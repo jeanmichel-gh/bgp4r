@@ -113,6 +113,7 @@ module BGP
         PREFIX_SID       => OPTIONAL | TRANSITIVE,
         PMSI_TUNNEL      => OPTIONAL | TRANSITIVE,
         TUNNEL_ENCAP     => OPTIONAL | TRANSITIVE,
+        ATTR_SET         => OPTIONAL | TRANSITIVE,   # RFC 6368 section 5
       }
 
       extend self
@@ -242,6 +243,67 @@ module BGP
                                    v.unpack1('n'), v.getbyte(2)) ||
                  evpn_finding(type, v.byteslice(3, n - 3),
                               v.unpack1('n'), v.getbyte(2), false)
+        when ATTR_SET
+          return attr_set_finding(type, v)
+        end
+        nil
+      end
+
+      # The ATTR_SET attribute of RFC 6368 section 5: a 4-octet Origin
+      # AS then "a variable-length field that conforms to the BGP UPDATE
+      # message path attribute encoding rules". Section 5 names three
+      # things that make it malformed, and all three are here: a length
+      # below 4, an included MP_REACH or MP_UNREACH, and an included
+      # attribute that is itself malformed.
+      #
+      # **The action is RFC 7606 section 7.16's, not RFC 6368's, and the
+      # section 5 paragraph must not be implemented as written.** That
+      # paragraph conditions the handling on "its Partial flag is set
+      # and its Neighbor-Complete flag is clear", referring to
+      # [OPT-TRANS-BGP], which RFC 6368's own reference list gives as
+      # Work in Progress, September 2010. That draft became RFC 7606,
+      # which has no Neighbor-Complete flag at all. RFC 7606 section
+      # 7.16 replaces the paragraph outright: "An UPDATE message with a
+      # malformed ATTR_SET attribute SHALL be handled using the approach
+      # of 'treat as withdraw'", and "the normative reference to
+      # [OPT-TRANS-BGP] in [RFC6368] is removed". So every finding here
+      # is TAW and none of them reads a flag.
+      #
+      # The subcodes are RFC 4271's, since 7.16 names none: 5 for a
+      # length error, as every length finding in this file uses, and 9,
+      # Optional Attribute Error, for the content cases, which is where
+      # section 5's superseded text pointed before 7.16 replaced it.
+      #
+      # The nested attributes are **walked, not decoded**, which is the
+      # house style of prefix_sid_finding and tunnel_encap_finding and
+      # is right for the same reason: Attr::Check runs on raw octets and
+      # never on a decoder's output, so a set that is both malformed and
+      # undecodable gets a Finding here and an Attr::Gap there, with
+      # neither waiting on the other.
+      def attr_set_finding(type, v)
+        n = v.size
+        if n < 4
+          return Finding.new(type, 5, TAW,
+            "length #{n}, needs at least 4 for the Origin AS (RFC 6368 section 5)")
+        end
+        s = v.byteslice(4, n - 4).to_s.dup
+        until s.empty?
+          bytes, cut = next_attribute(s)
+          return Finding.new(type, 9, TAW,
+            "included attribute is malformed: #{cut.reason} (RFC 6368 section 5)") if cut
+          inner = bytes.getbyte(1)
+          if inner == MP_REACH or inner == MP_UNREACH
+            return Finding.new(type, 9, TAW,
+              "includes attribute #{inner}, which RFC 6368 section 5 excludes")
+          end
+          # as4byte is true and not the session's: section 5 fixes the AS
+          # size inside the set. Checking a nested AS_PATH with 2-octet
+          # AS numbers would report a conformant set as malformed.
+          found = attribute(bytes, true)
+          unless found.empty?
+            return Finding.new(type, 9, TAW,
+              "included attribute #{inner} is malformed: #{found.first.reason} (RFC 6368 section 5)")
+          end
         end
         nil
       end
