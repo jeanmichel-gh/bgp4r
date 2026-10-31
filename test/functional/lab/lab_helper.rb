@@ -194,7 +194,9 @@ module LabHelper
       v[/\bversion\s+v?(\d+)\./, 1]&.to_i
     end
 
-    attr_reader :local, :as, :router_id, :peer, :peer_as, :port
+    # listen_port is the daemon's own BGP port, which is what
+    # fault_matrix.rb --dial needs. Frr exposes it too.
+    attr_reader :local, :as, :router_id, :peer, :peer_as, :port, :listen_port
 
     # The flow spec families, by the name the **config file** wants.
     #
