@@ -47,9 +47,9 @@ module BGP
     # (RFC 9574), 11 BIER (RFC 8556), 12 SR-MPLS P2MP Tree and 13 SRv6
     # P2MP Tree (both RFC 10018). 9 is unassigned, 0x7b to 0x7e and 0xfb
     # to 0xfe are experimental, 0x7f is reserved, 0x80 to 0xfa are
-    # reserved for Composite Tunnel and 0xff is the wildcard transport
-    # tunnel type (RFC 8338). An unnamed type still round trips: pass its
-    # number to send it.
+    # reserved for Composite Tunnel (see COMPOSITE) and 0xff is the
+    # wildcard transport tunnel type (RFC 8338). An unnamed type still
+    # round trips: pass its number to send it.
     NO_TUNNEL            = 0
     RSVP_TE_P2MP         = 1
     MLDP_P2MP            = 2
@@ -69,6 +69,33 @@ module BGP
       :ingress_replication  => INGRESS_REPLICATION,
       :mldp_mp2mp           => MLDP_MP2MP,
     }
+
+    # **The composite tunnel bit, RFC 8317 section 6.2**, which is why
+    # `tunnel_type` answers 7 bits and not the whole octet. Section 8.1
+    # "updates [RFC7385] by changing the previously unassigned values"
+    # so that 0x80 to 0xfa are "Reserved for Composite Tunnel", and
+    # section 6.2 says what the bit means: "When receiver Ingress
+    # Replication labels are needed, the high-order bit of the Tunnel
+    # Type field (composite tunnel bit) is set while the remaining
+    # low-order seven bits indicate the Tunnel Type as before (for the
+    # existing Tunnel Types)."
+    #
+    # It is a **layout change and not only a name**, which is the part
+    # to know: "When this composite tunnel bit is set, the 'tunnel
+    # identifier' field begins with a three-octet label, followed by the
+    # actual tunnel identifier for the transmit tunnel." That leading
+    # label is `ir_label` here, and the Tunnel Identifier `identifier`
+    # answers is what follows it.
+    #
+    # Section 6.2 also records why the bit lives in this field rather
+    # than in the Flags octet, which is worth keeping because it is a
+    # deliberate interoperability choice: "PEs that don't understand the
+    # new meaning of the high-order bit treat the Tunnel Type as an
+    # undefined Tunnel Type and treat the PMSI Tunnel attribute as a
+    # malformed attribute [RFC6514]. That is why the composite tunnel
+    # bit is allocated in the Tunnel Type field rather than the Flags
+    # field."
+    COMPOSITE = 0x80
 
     # The only flag RFC 6514 section 5 defines, and the only one bgp4r
     # names. RFC 7902 made the field a registry, "P-Multicast Service
@@ -98,6 +125,8 @@ module BGP
         # the kept octets and nothing else, so the fields start at zero.
         build(h[:tunnel_type] || (tail && NO_TUNNEL), h[:identifier],
               :label => h[:label], :label_bits => h[:label_bits],
+              :composite => h[:composite],
+              :ir_label => h[:ir_label], :ir_label_bits => h[:ir_label_bits],
               :flags => h[:flags],
               :leaf_info_required => h[:leaf_info_required])
       else
@@ -136,6 +165,33 @@ module BGP
       (@label_field.to_i & ~DEFINED_LABEL_BITS) > 0
     end
 
+    # Whether the composite tunnel bit of RFC 8317 section 6.2 is set.
+    def composite?
+      @composite
+    end
+
+    # The leading 3 octet label a composite tunnel puts in front of the
+    # Tunnel Identifier, its high 20 bits, or nil when there is no such
+    # field. **Absent is a real answer**, and not only for a
+    # non-composite attribute: a composite one whose body leaves fewer
+    # than 3 octets after the fixed part has nowhere to put it, and
+    # bgp4r keeps those octets in `identifier` and replays them rather
+    # than inventing a field. So this answers 0 for a zero field, where
+    # `label` answers nil, because there nil has to mean absent.
+    def ir_label
+      @ir_label
+    end
+
+    # All 24 bits of that field, or nil when there is none.
+    def ir_label_bits
+      @ir_label_field
+    end
+
+    def undefined_ir_label_bits?
+      !@ir_label_field.nil? &&
+        (@ir_label_field & ~DEFINED_LABEL_BITS) > 0
+    end
+
     def leaf_info_required?
       (@pmsi_flags & LEAF_INFO_REQUIRED) > 0
     end
@@ -145,8 +201,10 @@ module BGP
     end
 
     def to_s(method=:default)
-      super("#{tunnel_name || "type #{@tunnel_type}"}: #{identifier_s}" \
+      super("#{@composite ? 'composite ' : ''}" \
+            "#{tunnel_name || "type #{@tunnel_type}"}: #{identifier_s}" \
             "#{@label ? ", label #{@label}" : ''}" \
+            "#{@ir_label ? ", ir label #{@ir_label}" : ''}" \
             "#{leaf_info_required? ? ', leaf info required' : ''}", method)
     end
 
@@ -158,8 +216,18 @@ module BGP
     def to_hash
       return { :pmsi_tunnel => tail_entry } if tail
       h = { :tunnel_type => tunnel_name || @tunnel_type }
+      # RFC 8317 section 6.2's bit and its leading label, each only when
+      # present, so a non-composite attribute hashes as it always did.
+      h[:composite] = true if @composite
       h[:identifier] = identifier_hash unless @identifier.empty?
       h[:label] = @label if @label
+      # :ir_label carries 0 where :label is omitted for a zero field, and
+      # the reason is that this field is **optional**: the fixed part
+      # always has a label field, so omitting the key says zero, while
+      # the leading label may be absent entirely and the key is the only
+      # thing that says whether it is there.
+      h[:ir_label] = @ir_label if @ir_label_field
+      h[:ir_label_bits] = @ir_label_field if undefined_ir_label_bits?
       # Only when the field holds more than the label, so an ordinary
       # attribute hashes as it always did. Same rule as :tail and :bits.
       h[:label_bits] = @label_field if undefined_label_bits?
@@ -175,8 +243,15 @@ module BGP
     # A value too short to hold the fixed part is written back as it came.
     def encode
       return super(tail) if tail
-      super([@pmsi_flags, @tunnel_type, @label_field >> 16,
-             @label_field & 0xffff].pack('CCCn') + @identifier)
+      # RFC 8317 section 6.2 puts the composite bit back on the Tunnel
+      # Type octet, and its leading label back in front of the Tunnel
+      # Identifier. No ir_label means none is written, so a composite
+      # attribute whose body had no room for one replays as it came.
+      octet = @tunnel_type | (@composite ? COMPOSITE : 0)
+      super([@pmsi_flags, octet, @label_field >> 16,
+             @label_field & 0xffff].pack('CCCn') +
+            (@ir_label_field ? label_octets(@ir_label_field) : ''.b) +
+            @identifier)
     end
 
     private
@@ -214,11 +289,17 @@ module BGP
     end
 
     def build(type, identifier, opts = {})
-      @tunnel_type = type.is_a?(Symbol) ? TYPES[type] : type
-      raise ArgumentError, "unknown tunnel type #{type.inspect}" if @tunnel_type.nil?
-      unless @tunnel_type.is_a?(Integer) and (0..255).include?(@tunnel_type)
+      raw = type.is_a?(Symbol) ? TYPES[type] : type
+      raise ArgumentError, "unknown tunnel type #{type.inspect}" if raw.nil?
+      unless raw.is_a?(Integer) and (0..255).include?(raw)
         raise ArgumentError, "invalid tunnel type #{type.inspect}, expected 0 to 255"
       end
+      # A number with the high bit set is a composite tunnel, RFC 8317
+      # section 6.2, so a caller already passing 0x82 gets the octets it
+      # always did while tunnel_type answers the 7 bit registry number.
+      # :composite asks for the bit with a plain type.
+      @composite = (raw & COMPOSITE) > 0 || opts[:composite] ? true : false
+      @tunnel_type = raw & ~COMPOSITE
       @pmsi_flags = opts[:flags].to_i
       @pmsi_flags |= LEAF_INFO_REQUIRED if opts[:leaf_info_required]
       @label = opts[:label]
@@ -235,6 +316,23 @@ module BGP
       end
       @label_field = bits || (@label ? @label << 4 : 0)
       @label ||= @label_field.zero? ? nil : (@label_field >> 4)
+      # RFC 8317 section 6.2's leading label, the same pair of options
+      # one level down. **Nothing is inserted when neither is given**,
+      # even with the composite bit set: building never validates, so
+      # bgp4r writes the fields it was asked for and a test can put a
+      # composite tunnel with no leading label on the wire. Pass
+      # :ir_label => 0 for the zero field a correct encoder writes.
+      ir = opts[:ir_label]
+      if ir and not (ir.is_a?(Integer) and ir >= 0 and ir <= 0xfffff)
+        raise ArgumentError, "invalid IR label #{ir.inspect}, expected 0 to 1048575"
+      end
+      ir_bits = opts[:ir_label_bits]
+      if ir_bits and not (ir_bits.is_a?(Integer) and ir_bits >= 0 and ir_bits <= 0xffffff)
+        raise ArgumentError,
+              "invalid IR label field #{ir_bits.inspect}, expected 0 to 16777215"
+      end
+      @ir_label_field = ir_bits || (ir ? ir << 4 : nil)
+      @ir_label = @ir_label_field && (@ir_label_field >> 4)
       @identifier = pack_identifier(identifier)
     end
 
@@ -268,12 +366,35 @@ module BGP
         @label_field = 0
         return
       end
-      @pmsi_flags, @tunnel_type = value.unpack('CC')
+      @pmsi_flags, octet = value.unpack('CC')
+      # RFC 8317 section 6.2: the high bit is the composite tunnel bit
+      # and "the remaining low-order seven bits indicate the Tunnel Type
+      # as before", so the registry's number is what tunnel_type answers.
+      @composite, @tunnel_type = (octet & COMPOSITE) > 0, octet & ~COMPOSITE
       # The whole field is kept, so encode replays it whatever is in the
       # 4 bits below the label.
-      @label_field = (value.getbyte(2) << 16) | value.byteslice(3, 2).unpack1('n')
+      @label_field = label_field_at(value, 2)
       @label = @label_field.zero? ? nil : (@label_field >> 4)
-      @identifier = value.byteslice(5, value.size - 5).to_s.b
+      rest = value.byteslice(5, value.size - 5).to_s.b
+      # And when the bit is set "the 'tunnel identifier' field begins
+      # with a three-octet label, followed by the actual tunnel
+      # identifier". A body with no room for one keeps its octets where
+      # they are rather than being given a field it did not carry.
+      if @composite and rest.size >= 3
+        @ir_label_field = label_field_at(rest, 0)
+        @ir_label = @ir_label_field >> 4
+        rest = rest.byteslice(3, rest.size - 3).to_s.b
+      end
+      @identifier = rest
+    end
+
+    # One 3 octet label field, read at an offset.
+    def label_field_at(s, at)
+      (s.getbyte(at) << 16) | s.byteslice(at + 1, 2).unpack1('n')
+    end
+
+    def label_octets(field)
+      [field >> 16, field & 0xffff].pack('Cn')
     end
 
   end

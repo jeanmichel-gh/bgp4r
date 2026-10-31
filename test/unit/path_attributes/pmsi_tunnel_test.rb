@@ -168,6 +168,117 @@ class TestPmsiTunnel < Test::Unit::TestCase
     assert_equal 'c0', c.to_shex[0, 2]
   end
 
+  # **RFC 8317 section 6.2's composite tunnel bit is a layout change and
+  # not only a name.** "the high-order bit of the Tunnel Type field
+  # (composite tunnel bit) is set while the remaining low-order seven
+  # bits indicate the Tunnel Type as before", and "When this composite
+  # tunnel bit is set, the 'tunnel identifier' field begins with a
+  # three-octet label, followed by the actual tunnel identifier for the
+  # transmit tunnel."
+  def test_a_composite_tunnel_reads_its_type_and_its_leading_label
+    # flags 00, type 0x82, label 100, leading label 200, then two
+    # addresses, which is where the layout change shows: a reader that
+    # ignored the bit would take the label's octets as the identifier.
+    hex = 'c01610' + '00' + '83' + '000640' + '000c80' + '0a000001e8010101'
+    a = Pmsi_tunnel.new(wire(hex))
+    assert a.composite?
+    assert_equal 3, a.tunnel_type, 'the low 7 bits are the registry number'
+    assert_equal :pim_ssm, a.tunnel_name
+    assert_equal 100, a.label
+    assert_equal 200, a.ir_label
+    assert_equal ['10.0.0.1', '232.1.1.1'], a.to_hash[:pmsi_tunnel][:identifier]
+    assert_equal hex, a.to_shex
+    assert_match(/composite pim_ssm/, a.to_s)
+    assert_match(/ir label 200/, a.to_s)
+    h = a.to_hash[:pmsi_tunnel]
+    assert_equal true, h[:composite]
+    assert_equal 200, h[:ir_label]
+    assert_equal a.encode, Pmsi_tunnel.new(h).encode, h.inspect
+    # A plain tunnel carries neither key, so an ordinary attribute
+    # hashes as it always did.
+    plain = Pmsi_tunnel.new(:ingress_replication, '10.0.0.1', :label => 100)
+    refute plain.composite?
+    assert_nil plain.ir_label
+    refute plain.to_hash[:pmsi_tunnel].key?(:composite)
+    refute plain.to_hash[:pmsi_tunnel].key?(:ir_label)
+  end
+
+  # Nothing a caller could already write changes its octets: a number
+  # with the high bit set is what the composite bit is, so `new(0x82)`
+  # encodes what it always did and `tunnel_type` now answers 2.
+  def test_a_tunnel_type_with_the_high_bit_set_is_the_composite_bit
+    a = Pmsi_tunnel.new(0x82)
+    assert_equal 'c016050082000000', a.to_shex
+    assert a.composite?
+    assert_equal 2, a.tunnel_type
+    # And :composite asks for the bit with a plain type, same octets.
+    assert_equal a.to_shex,
+                 Pmsi_tunnel.new(:mldp_p2mp, nil, :composite => true).to_shex
+    # The range check is still on the octet a caller passes.
+    assert_raise(ArgumentError) { Pmsi_tunnel.new(256) }
+  end
+
+  # **Two cases where the leading label is absent rather than zero**, and
+  # the hash has to tell them apart or a rebuild invents three octets.
+  def test_an_absent_leading_label_is_not_a_zero_one
+    # Composite, but the body leaves fewer than 3 octets after the fixed
+    # part, so there is nowhere to put the field. The octets stay in the
+    # identifier and replay; nothing is invented.
+    %w[0082000640 008200064000 00820006400a01].each do |value|
+      hex = format('c016%02x', value.size / 2) + value
+      a = Pmsi_tunnel.new(wire(hex))
+      assert a.composite?, value
+      assert_nil a.ir_label, "#{value} invented a leading label"
+      assert_nil a.ir_label_bits, value
+      assert_equal hex, a.to_shex, "#{value} did not replay"
+      h = a.to_hash[:pmsi_tunnel]
+      refute h.key?(:ir_label), value
+      assert_equal a.encode, Pmsi_tunnel.new(h).encode, h.inspect
+    end
+    # A zero field is present and reads as 0, where `label` would answer
+    # nil: this field is optional, so nil has to mean absent.
+    z = Pmsi_tunnel.new(wire('c016080082000640000000'))
+    assert_equal 0, z.ir_label
+    assert_equal 0, z.ir_label_bits
+    assert_equal 0, z.to_hash[:pmsi_tunnel][:ir_label]
+    assert_equal 'c016080082000640000000', z.to_shex
+    assert_equal z.encode, Pmsi_tunnel.new(z.to_hash[:pmsi_tunnel]).encode
+    # Built, the two options behave the same way: neither given writes
+    # no field even with the bit set, since building never validates.
+    assert_equal 'c016050082000000',
+                 Pmsi_tunnel.new(:mldp_p2mp, nil, :composite => true).to_shex
+    assert_equal 'c016080082000000000000',
+                 Pmsi_tunnel.new(:mldp_p2mp, nil, :composite => true,
+                                 :ir_label => 0).to_shex
+    assert_equal 'c01608008200000000064f',
+                 Pmsi_tunnel.new(:mldp_p2mp, nil, :composite => true,
+                                 :ir_label_bits => 0x00064f).to_shex
+    assert_raise(ArgumentError) do
+      Pmsi_tunnel.new(:mldp_p2mp, nil, :ir_label => 0x100000)
+    end
+    assert_raise(ArgumentError) do
+      Pmsi_tunnel.new(:mldp_p2mp, nil, :ir_label_bits => 0x1000000)
+    end
+  end
+
+  # The 4 bits below the leading label are kept and echoed too, the same
+  # rule the attribute's own label field follows.
+  def test_the_leading_label_keeps_the_four_bits_below_it
+    hex = 'c0160c' + '00' + '82' + '000640' + '00012c' + '0a000001'
+    a = Pmsi_tunnel.new(wire(hex))
+    assert_equal 0x12, a.ir_label
+    assert_equal 0x00012c, a.ir_label_bits
+    assert a.undefined_ir_label_bits?
+    assert_equal hex, a.to_shex
+    h = a.to_hash[:pmsi_tunnel]
+    assert_equal 0x00012c, h[:ir_label_bits]
+    assert_equal a.encode, Pmsi_tunnel.new(h).encode, h.inspect
+    # And no key when those bits are clear.
+    b = Pmsi_tunnel.new(wire('c0160c00820006400000c00a000001'))
+    refute b.undefined_ir_label_bits?
+    refute b.to_hash[:pmsi_tunnel].key?(:ir_label_bits)
+  end
+
   # A tunnel type bgp4r has no shape for keeps its octets.
   def test_unknown_tunnel_type
     a = Pmsi_tunnel.new(9, '0102030405')
