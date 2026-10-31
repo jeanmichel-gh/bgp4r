@@ -2963,6 +2963,33 @@ Two consequences, both of which change the plan rather than decorate it:
           client, so the config builder is `neighbor_block`. Caught by
           "wrong number of arguments (given 3, expected 1)" and not by
           reading.
+        * **Three sabotages, each landing, and the framing claim above
+          is the one they were for.** Forcing the nested AS to the
+          2-octet form fails 2 of the 6 cases, which is the encode half
+          of section 5's rule. Writing the attribute's length one short
+          makes the route **never install**, so "a wrong length sends
+          the UPDATE to RFC 7606 rather than the RIB" is measured and
+          not argued. Building the router with `peer2` nil fails at
+          "both sessions came up", which is what says the far speaker
+          is real and that the transit assertion is not reading our own
+          send.
+          * **The first attempt at that third one missed, and how is
+            the part to keep.** Appending `if false` to the `G.new(...)`
+            call nil'd `router` and the test died on `NoMethodError:
+            undefined method 'up' for nil`, two errors and zero
+            assertions. It caught nothing about transit: it broke the
+            constructor. **A sabotage that errors for a reason
+            unrelated to the claim is the same miss as one that
+            passes**, which is the Rules for agents rule arriving from
+            a third direction. Change the one input the claim rests on,
+            here `:peer2 => nil`, and read the failure message to check
+            it names the assertion you meant.
+          * Run these one test method at a time, `-n
+            test_the_set_crosses_the_router_octet_for_octet`. A
+            sabotaged full file is 6 cases each sitting out a 30s
+            `wait_for`, which overran the foreground limit twice and
+            left a patched working tree behind both times. One method
+            is about 45s.
    3. **MCAST-VPN, SAFI 5, RFC 6514. Not started**, and that RFC is not
       on hand either. Note from EVPN part 7: the only first hand reading
       of RFC 6514 section 4.3 here came through
