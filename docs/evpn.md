@@ -56,6 +56,14 @@ differs from flow spec, where one NLRI is a list of components under a
 single length. Several EVPN NLRIs sit one after another in the
 attribute, each framed by its own two octets.
 
+**It is wired in now.** `Nlri.factory` and `MpReachCommon#set` each have
+an arm for AFI 25 SAFI 70, `nlri_size` defers to `Evpn.nlri_size`, and
+`parse_next_hops` and `nexthop_klass` read and write the section 14 next
+hop. So an EVPN UPDATE reads and writes over a real session;
+`test/functional/evpn_test.rb` is the proof, and the only one there can
+be, since both sides are pure and every unit test reads octets it wrote
+itself.
+
 **The NLRI owns its framing, and `Evpn.nlri_size` is how.** A prefix
 family's length is in bits and one octet wide, so `Mp_reach#parse` has
 always worked out how many octets to slice with `(blen+7)/8+1`. That
@@ -376,6 +384,71 @@ keys rather than taking the claim on trust. Same failure as a wrong RFC
 citation: it would have read as verified.
 
 These arrive with part 8.
+
+## 7a. The wiring, and the next hop
+
+Five sites, one more than flow spec needed, and the extra one is the next
+hop.
+
+| Site | What it does |
+|---|---|
+| `IANA::SAFI::EVPN` | the constant, 70, which did not exist |
+| `nlri_size` | defers to `Evpn.nlri_size` for SAFI 70 |
+| `Nlri.factory` | the parse gate, one arm for SAFI 70 |
+| `MpReachCommon#set` | the build gate, one arm, and skips `afi_from_nlris` |
+| `parse_next_hops` and `nexthop_klass` | the section 14 next hop |
+
+**The AFI is not inferred, it is fixed.** `afi_from_nlris` reads the
+family off an address, and an EVPN NLRI has none, so SAFI 70 joins flow
+spec in skipping it. The difference is that flow spec answers from its
+components' keys while EVPN has nothing to answer from and nothing to
+ask: section 7 fixes AFI 25, so the arm simply sets it.
+
+**The next hop is where EVPN differs from every family already wired.**
+Section 14: "The Next Hop field of the MP_REACH_NLRI attribute of the
+route MUST be set to the IPv4 or IPv6 address of the advertising PE." So
+unlike flow spec, which must write a length of 0, EVPN writes a real
+address — and unlike SAFI 1 and 2, **the AFI cannot say which family it
+is**, because it is 25 for both. The field's length is the only
+discriminator: 4 octets is IPv4, 16 is IPv6.
+
+`ipv6_nexthop_length?` is left alone. Nothing says RFC 8950 applies to
+EVPN, and its lengths are keyed on AFI 1 anyway.
+
+A next hop too short for either family reads as IPv4 and `Prefix` pads it
+out. That is exactly what SAFI 1 already does with a short next hop, so
+it is consistency with the library rather than a new rule.
+
+`nexthop_klass` answers a plain `Prefix` and the address the caller gave
+decides the family. There is no `Ipv4_mapped` branch as SAFI 1 and 2
+have: that one exists because an IPv4 next hop under AFI 2 is written as
+an IPv4-mapped IPv6 address, and here the AFI is 25 either way.
+
+**What the functional test proves, and what no unit test can.** Nine
+cases over loopback: route type 1; route type 2 with both optional
+fields and again with neither, which are the two ends of section 14's
+six lengths; route type 5 in its IPv6 form, whose family comes from the
+body size alone; three route types in one attribute, where one wrong
+length desynchronises the rest; both next hop families; a withdrawal; an
+unimplemented route type arriving as `Evpn::Unknown`; and a Length that
+lies, which crosses and replays with the session still up.
+
+Each of the five sites was sabotaged and the failures counted:
+
+| Sabotage | Result |
+|---|---|
+| the parse gate's arm | 9 of 9 fail |
+| `nlri_size` reverted to the prefix arithmetic | 9 of 9 fail |
+| the build gate's arm made unreachable | 9 of 9 error |
+| the next hop arm deleted | 8 of 9 fail |
+| `Mp_unreach`'s own loop only | exactly 1 fails |
+
+The last two are the informative ones. The next hop sabotage spares the
+withdrawal case, which carries no next hop. And **reverting only
+`Mp_unreach`'s loop fails exactly one test**, the withdrawal, which is
+what says the two parse loops are independent copies and that one test
+is all that covers the second. The flow spec wiring measured the same
+signature, so this is the shape to expect of the next family too.
 
 ## 8. Nothing validates on the way out
 

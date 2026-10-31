@@ -34,9 +34,13 @@ bgp/nlris/               prefix encodings (inet, labeled, VPN, RD, mapped IPv4)
                          section 7 plus RFC 9136's IP Prefix route;
                          evpn.rb the NLRI with
                          the section 7 Route Type and Length framing and
-                         Evpn.nlri_size. Neither is wired to MP_REACH yet, so
-                         an EVPN UPDATE is still an Attr::Raw. Evpn::ROUTES
-                         holds types 1 to 5; every other type reads back as an
+                         Evpn.nlri_size. Both are wired in now, so an EVPN
+                         UPDATE reads and writes: Nlri.factory and
+                         MpReachCommon#set dispatch on AFI 25 SAFI 70, the two
+                         parse loops ask nlri_size, and parse_next_hops reads
+                         the RFC 7432 section 14 next hop by its length, since
+                         the AFI is 25 for both families. Evpn::ROUTES holds
+                         types 1 to 5; every other type reads back as an
                          Evpn::Unknown that replays byte for byte, and so does
                          a body a registered type cannot reproduce.
                          docs/evpn.md is the guide, see also
@@ -150,6 +154,12 @@ each unit test reads octets it wrote itself:
 ruby -I. test/functional/flow_spec_test.rb
 ```
 
+The same for an EVPN UPDATE, AFI 25 SAFI 70, and the only test that
+proves its five wiring sites agree. Half a second:
+```
+ruby -I. test/functional/evpn_test.rb
+```
+
 The Loc-RIB in a real kernel routing table, inside a network namespace of
 its own, so nothing can touch the routing table of the machine it runs on.
 No Docker. It needs root, or any way to get CAP_NET_ADMIN, and omits
@@ -226,7 +236,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. A `lab` job runs the Compose topologies, and installs a `gobgpd` release so the native fault matrix runs there too; it pins 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-10-30: 1620 tests, 23845 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.9%.
+Baseline on 2026-10-30: 1622 tests, 23855 assertions, all passing. Line coverage of `bgp/` from the unit suite: 97.9%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -1937,16 +1947,63 @@ Two consequences, both of which change the plan rather than decorate it:
         key used by BGP to compare routes. The rest of the fields are
         not part of the route key." Matters to a RIB, and no EVPN route
         goes in one.
-   5. **Wiring to the two dispatch sites, plus a loopback functional
-      test.** Deliberately here and not last: after parts 1 to 4 the
-      RFC 7432 and RFC 9136 core is complete, which is the set every
-      EVPN implementation has, so wiring now puts parts 6 and 7 on
-      working rails and gives each of them a functional test for free.
-      The flowspec lesson is that both sides being pure means **no unit
-      test on either can say that what `encode` puts on a socket is what
-      `parse` takes off it**: every build-side test reads octets it wrote
-      itself and every parse-side test is handed octets the test wrote.
-      Only a session says the sites agree.
+   5. **Wiring to the dispatch sites, plus a loopback functional test.
+      Done**, in #185. bgp4r reads and writes an EVPN UPDATE now, over a
+      real session. **Five sites, not four**: flow spec needed the
+      framing, the two gates and a next hop sentence that cost no code,
+      where EVPN needs a next hop that does.
+      * `IANA::SAFI::EVPN` did not exist and is now 70, from RFC 7432
+        section 11, "IANA has assigned BGP EVPNs a SAFI value of 70".
+        AFI 25 was already `IANA::AFI::L2VPN`.
+      * `nlri_size` defers to `Evpn.nlri_size`, `Nlri.factory` and
+        `MpReachCommon#set` take one arm each, and `set` skips
+        `afi_from_nlris` as it does for flow spec. **The difference is
+        that flow spec answers from its components' keys and EVPN has
+        nothing to answer from and nothing to ask**: section 7 fixes AFI
+        25, so the arm sets it.
+      * **The next hop is where EVPN differs from every family already
+        wired.** Section 14: "The Next Hop field of the MP_REACH_NLRI
+        attribute of the route MUST be set to the IPv4 or IPv6 address
+        of the advertising PE." So unlike flow spec, which must write a
+        length of 0, EVPN writes a real address, and unlike SAFI 1 and 2
+        **the AFI cannot say which family it is**, because it is 25 for
+        both. The field's length is the only discriminator, 4 octets or
+        16. `ipv6_nexthop_length?` is left alone: nothing says RFC 8950
+        applies to EVPN and its lengths are keyed on AFI 1 anyway. A
+        field too short for either reads as IPv4 and `Prefix` pads it,
+        which is what SAFI 1 already does, so that is consistency with
+        the library rather than a new rule. `nexthop_klass` answers a
+        plain `Prefix` with no `Ipv4_mapped` branch, since that one
+        exists only because an IPv4 next hop under AFI 2 is written as
+        an IPv4-mapped address.
+      * **`test/functional/evpn_test.rb` is the proof and the only one
+        there can be**, for the reason `flow_spec_test.rb` records. 9
+        tests, 117 assertions, under a second. Named in
+        `.github/workflows/test.yml`, which lists each functional test
+        by hand.
+      * **Five sabotages, one per site, and the last two are the
+        informative ones.** The parse gate's arm, `nlri_size` reverted
+        to the prefix arithmetic, and the build gate's arm made
+        unreachable each fail or error all 9. The next hop arm deleted
+        fails **8**, sparing the withdrawal case, which carries no next
+        hop. And reverting only `Mp_unreach`'s own loop fails **exactly
+        1**, the withdrawal, which is what says the two parse loops are
+        independent copies and that one test is all that covers the
+        second. The flow spec wiring measured the same signature, so
+        expect it again for the next family.
+      * **Two of #116's tests used EVPN as their example of an
+        undecodable family, and wiring EVPN in made them fail.** They
+        assert that a valid attribute bgp4r cannot decode becomes an
+        `Attr::Gap` and not a protocol error, and SAFI 70 now decodes,
+        so the example stopped being one. The constant is `UNDECODABLE`
+        now and points at BGP-LS, AFI 16388 SAFI 71, which is phase 4
+        and so the furthest out. **Every assertion is unchanged; only
+        the family moved.** Whoever wires BGP-LS in will have to move
+        them again, and the same rule applies then: re-point the
+        example, do not weaken the assertion. Conventions says not to
+        weaken an existing test to make a change pass, and this is what
+        that looks like when the test is right and its example has
+        expired.
    6. **Route types 6, 7 and 8**, RFC 9251 sections 9.1 to 9.3, sharing
       the address triple and the Flags octet above.
    7. **Route types 9, 10 and 11**, RFC 9572 sections 3.1 to 3.3,
