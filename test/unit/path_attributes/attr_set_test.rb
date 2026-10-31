@@ -194,6 +194,63 @@ class TestAttrSet < Test::Unit::TestCase
     assert_equal 4294967295, Attr_set.new(0xffffffff).origin_as
   end
 
+  # A value too short to hold the Origin AS is kept and echoed, the way
+  # pmsi_tunnel.rb keeps a value shorter than its own fixed part. A
+  # reader that invented a zero AS instead would answer encode with
+  # octets the peer never sent: c08003000000 came back as c080040000
+  # 0000, one octet longer than it arrived. Deleting the branch in
+  # attr_set.rb#parse fails every assertion here.
+  def test_a_value_too_short_for_the_origin_as_is_kept_whole
+    ['c08003000000', 'c0800100', 'c080020000'].each do |hex|
+      a = Attr_set.new(wire(hex))
+      assert_equal hex, a.to_shex, 'replays byte for byte'
+      assert_equal({ :attr_set => { :tail => hex[6..-1] } }, a.to_hash)
+      assert_equal hex, Attr_set.new(a.to_hash).to_shex, 'and rebuilds from it'
+    end
+  end
+
+  # No tail, no key, so an ordinary set hashes as the two fields it has
+  # always hashed as. Same rule as :tail and :bits elsewhere.
+  def test_an_ordinary_set_has_no_tail_key
+    h = Attr_set.new(65000, Origin.new(:igp)).to_hash
+    assert !h[:attr_set].key?(:tail)
+    assert_equal [:origin_as, :attributes], h[:attr_set].keys
+  end
+
+  # The whole attribute set has to survive one too, since a short value
+  # arrives inside a Path_attribute in practice and the finding is what
+  # reports it.
+  def test_a_short_set_replays_inside_a_path_attribute
+    hex = 'c08003000000'
+    pa = Path_attribute.new(wire(hex))
+    assert_equal hex, pa.encode.unpack1('H*')
+    assert_equal 1, pa.errors.size
+    assert_equal :treat_as_withdraw, pa.errors.first.action
+  end
+
+  # The shapes :attributes accepts in a hash. All four are reachable and
+  # none was covered until this test: a Path_attribute, the hash one
+  # answers, a bare attribute, and nothing at all.
+  def test_the_attributes_key_takes_four_shapes
+    # 4 octets of Origin AS plus a 4 octet ORIGIN is a value of 8.
+    pa = Path_attribute.new(Origin.new(:igp))
+    assert_equal 'c080080000fde840010100',
+                 Attr_set.new(:origin_as => 65000, :attributes => pa).to_shex
+    assert_equal 'c080080000fde840010100',
+                 Attr_set.new(:origin_as => 65000, :attributes => pa.to_hash).to_shex
+    assert_equal 'c080080000fde840010100',
+                 Attr_set.new(:origin_as => 65000,
+                              :attributes => Origin.new(:igp)).to_shex
+    assert_equal 'c080040000fde8',
+                 Attr_set.new(:origin_as => 65000).to_shex
+  end
+
+  def test_an_argument_it_cannot_read_raises
+    [nil, 'not packed', 1.5, :igp, []].each do |arg|
+      assert_raise(ArgumentError, arg.inspect) { Attr_set.new(arg) }
+    end
+  end
+
   def test_to_s_names_the_origin_as_and_the_nested_attributes
     s = Attr_set.new(65000, Origin.new(:igp)).to_s
     assert_match(/Attr Set/, s)
