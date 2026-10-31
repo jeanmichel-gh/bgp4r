@@ -95,6 +95,31 @@ class LabGroupsTest < Test::Unit::TestCase
 
   WORKFLOW = '.github/workflows/test.yml'
 
+  # The Docker image leaves `.github` out, deliberately: `.dockerignore`
+  # names it beside `.git`, because CI config is not part of what the
+  # image ships. So the unit suite runs inside the image with no
+  # workflow to read, and the two checks below cannot run there.
+  #
+  # Omitting is right for that one case and wrong for every other, so
+  # the condition is the whole directory being absent and not the file.
+  # `.github` there and the workflow missing is a real fault and fails,
+  # since that is what a renamed or deleted workflow looks like. The
+  # checks still run on every push and pull request, in the `ruby` jobs.
+  #
+  # Written after the first CI run of this: the image's three jobs
+  # failed with Errno::ENOENT where the runner's passed, which is the
+  # load order trap's cousin, a test that reads a file outside the
+  # library tree without asking whether it is there.
+  def workflow_or_omit
+    return File.read(WORKFLOW) if File.exist?(WORKFLOW)
+    unless File.directory?('.github')
+      omit('.github is absent, as it is inside the Docker image, which ' \
+           'excludes it; the runner jobs are where this is checked')
+    end
+    flunk("#{WORKFLOW} is missing, but .github is here, so it was " \
+          'renamed or deleted rather than left out of an image')
+  end
+
   # The other half of the arrangement, and the half the file to group
   # guard above does not reach: a group defined here and missing from the
   # workflow matrix runs in no job, silently, exactly like an unassigned
@@ -105,8 +130,7 @@ class LabGroupsTest < Test::Unit::TestCase
   # requiring it, and this needs nothing from one: `group: name` under
   # the lab matrix is the only place that string appears.
   def test_the_workflow_runs_a_job_for_every_group
-    assert(File.exist?(WORKFLOW), WORKFLOW)
-    in_yaml = File.read(WORKFLOW).scan(/^\s*- group:\s*(\S+)/).flatten
+    in_yaml = workflow_or_omit.scan(/^\s*- group:\s*(\S+)/).flatten
     assert_equal(LabGroups.groups.sort, in_yaml.sort,
       "the lab matrix in #{WORKFLOW} and LabGroups::GROUPS disagree. A " \
       'group in only one of them runs in no job, or names a group ' \
@@ -117,7 +141,7 @@ class LabGroupsTest < Test::Unit::TestCase
   # entry is what says so. A gobgp group with no gobgp flag would omit
   # every test in it and report a pass.
   def test_every_group_declares_a_dependency_in_the_workflow
-    yaml = File.read(WORKFLOW)
+    yaml = workflow_or_omit
     LabGroups.groups.each do |g|
       entry = yaml[/^\s*- group:\s*#{Regexp.escape(g)}\s*\n((?:\s{12,}\S.*\n)*)/, 1]
       refute_nil(entry, "no matrix entry for #{g} in #{WORKFLOW}")
