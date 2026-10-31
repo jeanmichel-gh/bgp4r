@@ -27,9 +27,32 @@
 #
 # Compose tests are skipped when Docker is not available, unless
 # LAB_REQUIRE_DOCKER=1 is set, as in CI.
+#
+# One group, which is how CI runs them, a job each, so the lab's cost is
+# the slowest group and not the total. test/lab_groups.rb says which
+# file is in which group and why:
+#
+#   ruby test/run_lab.rb gobgp-matrix
+#   ruby test/run_lab.rb --groups          # print the names and exit
+#
+# With no argument every file on disk runs, as it always did, and that
+# stays a glob rather than the union of the groups: a new lab test runs
+# here the day it lands whether or not it has been assigned to a group.
+# test/unit/lab_groups_test.rb is what makes it get assigned.
 
 root = File.expand_path('..', __dir__)
 $LOAD_PATH.unshift(root) unless $LOAD_PATH.include?(root)
 Dir.chdir(root)
 
-Dir['test/functional/lab/*_test.rb'].sort.each { |f| require "./#{f}" }
+require './test/lab_groups'
+
+if ARGV.first == '--groups'
+  puts LabGroups.groups
+  exit 0
+end
+
+# ArgumentError on an unknown name, rather than running nothing and
+# exiting 0, which a CI job would report as a pass.
+files = ARGV.first ? LabGroups.files(ARGV.shift) : LabGroups.all_files
+
+files.each { |f| require "./#{f}" }
