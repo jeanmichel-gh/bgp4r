@@ -1019,6 +1019,41 @@ module ToHashCatalog
       :flags => [:v2, { :bits => 0xf2 }])
   end
 
+  # The Region ID of route type 9, RFC 9572 sections 3.1 and 6.2. One
+  # field, and the recipe uses the first of section 6.2's three example
+  # encodings, a Transitive Two-Octet AS-specific EC of sub-type 0x09
+  # carrying AS 65000.
+  ENTRIES['BGP::Evpn::Region_id'] = entry(:ok, nil, nil) do
+    BGP::Evpn::Region_id.new('00090000fde80000')
+  end
+
+  # Route type 9, RFC 9572 section 3.1. Three fields and the recipe
+  # exercises all three.
+  ENTRIES['BGP::Evpn::Per_region_i_pmsi'] = entry(:ok, nil, nil) do
+    BGP::Evpn::Per_region_i_pmsi.new([100, 200], 100, '00090000fde80000')
+  end
+
+  # Route type 10, RFC 9572 section 3.2. Five fields and the recipe
+  # exercises all five, with an absent Multicast Source, which is the
+  # (*,G) case, and a group whose length lies about its octets.
+  ENTRIES['BGP::Evpn::S_pmsi'] = entry(:ok, nil, nil) do
+    BGP::Evpn::S_pmsi.new(
+      [100, 200], 100, nil, BGP::Evpn::Addr.new(24, ['e80101'].pack('H*')),
+      '2001:db8::1')
+  end
+
+  # Route type 11, RFC 9572 section 3.3. Two fields, and the Route Key
+  # is a whole NLRI, so its hash is nested one level deeper than any
+  # other route type's. The recipe puts a route type 9 in there rather
+  # than an Unknown, so the nesting is exercised through a real route
+  # type and the inner hash has to read back as well as the outer.
+  ENTRIES['BGP::Evpn::Leaf_a_d'] = entry(:ok, nil, nil) do
+    BGP::Evpn::Leaf_a_d.new(
+      BGP::Evpn.new(BGP::Evpn::Per_region_i_pmsi
+                      .new([100, 200], 100, '00090000fde80000')),
+      '2001:db8::1')
+  end
+
   # The NLRI framing, RFC 7432 section 7. Three fields and the recipe
   # exercises all three: the route, the RFC 7911 section 3 Path
   # Identifier, and a Length that disagrees with its own octets.

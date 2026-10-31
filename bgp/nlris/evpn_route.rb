@@ -488,6 +488,127 @@ module BGP
 
     end
 
+    # The Region ID of route type 9, RFC 9572 section 3.1, 8 octets.
+    #
+    # **It is shaped like an extended community and bgp4r does not
+    # decode it as one.** Section 3.1 says it "is encoded in the same
+    # way that an EC is encoded, as detailed in Section 6.2", and
+    # section 6.2 gives three example encodings and then "The use of
+    # other EC encodings MAY be allowed as long as they uniquely
+    # identify the region", so the sub-type is not fixed.
+    #
+    # Reusing `BGP::Extended_community` was the obvious move, the way
+    # `BGP::Label` is reused for the MPLS Label, and it was measured and
+    # rejected for two reasons. **`Extended_community` cannot be rebuilt
+    # from its own `to_hash`**: neither `factory` nor `new` takes a
+    # Hash, so route type 9's hash round trip would break and have to be
+    # recorded as a loss. And it would buy no meaning anyway, because
+    # **all three of section 6.2's own examples read back as
+    # `Extended_community::Unknown` today**: two of them use sub-type
+    # 0x09, Source AS of RFC 6514 section 4.5, which bgp4r's `FACTORY`
+    # does not register, and the third is "a Transitive IPv4-Address-
+    # specific EC of any sub-type". So this holds the octets, replays
+    # them, and the field's EC reading is left to whoever wants it.
+    #
+    # Nothing validates. Any 8 octets, including an encoding no RFC
+    # describes, which section 6.2 half allows anyway.
+    class Region_id
+
+      WIDTH = 8
+
+      ZERO = ("\x00" * WIDTH).b.freeze
+
+      attr_reader :value
+
+      def self.hash_key
+        :region_id
+      end
+
+      # new, the all-zero Region ID
+      # new('00090000fde80000'), the octets as hex
+      # new(0x00090000fde80000), the same as an Integer
+      # the wire octets, this class's own hash, or another instance.
+      def initialize(*args)
+        @value = ZERO.dup
+        if args.empty?
+          # Zero, which no region uses and which encodes.
+        elsif args.size == 1 and args[0].is_a?(String) and args[0].is_packed?
+          parse(args[0])
+        elsif args.size == 1 and args[0].is_a?(self.class)
+          @value = args[0].value.dup
+        elsif args.size == 1 and args[0].is_a?(Hash)
+          from_hash(args[0])
+        elsif args.size == 1 and args[0].is_a?(Integer)
+          refuse_a_value_the_field_cannot_hold(args[0])
+          @value = [args[0] >> 32, args[0] & 0xffffffff].pack('NN')
+        elsif args.size == 1
+          @value = hex(args[0])
+        else
+          raise ArgumentError, "invalid argument: #{args.inspect}"
+        end
+        self
+      end
+
+      def parse(s)
+        @value = s.slice!(0, WIDTH)
+        self
+      end
+
+      # A copy, for the reason `Esi#encode` gives.
+      def encode
+        @value.dup
+      end
+
+      def to_shex
+        @value.unpack1('H*')
+      end
+
+      def size
+        @value.size
+      end
+
+      def to_i
+        @value.unpack('NN').inject(0) { |a, n| (a << 32) | n }
+      end
+
+      def zero?
+        @value == ZERO
+      end
+
+      def to_hash
+        { self.class.hash_key => to_shex }
+      end
+
+      def to_s
+        to_shex
+      end
+
+      private
+
+      def from_hash(h)
+        v = h.has_key?(self.class.hash_key) ? h[self.class.hash_key] : h
+        return @value = hex(v) if v.is_a?(String)
+        refuse_a_value_the_field_cannot_hold(v.to_i)
+        @value = [v.to_i >> 32, v.to_i & 0xffffffff].pack('NN')
+      end
+
+      # Any length of hex, left padded, so a short one is the low octets
+      # and nothing is silently dropped.
+      def hex(s)
+        h = s.to_s.delete(':. ')
+        raise ArgumentError, "#{s.inspect} is not hex" unless h =~ /\A[0-9a-fA-F]*\z/
+        raise ArgumentError, "#{s.inspect} is more than #{WIDTH} octets" if
+          h.size > WIDTH * 2
+        [h.rjust(WIDTH * 2, '0')].pack('H*')
+      end
+
+      def refuse_a_value_the_field_cannot_hold(v)
+        return if (0..0xffffffffffffffff).include?(v)
+        raise ArgumentError, "#{v} does not fit in #{WIDTH} octets"
+      end
+
+    end
+
     # The Flags octet of route types 6, 7 and 8. RFC 9251 sections 9.1,
     # 9.2 and 9.3 each give it, identically in all three:
     #
@@ -699,7 +820,12 @@ module BGP
     # a twelfth route type with no row to put it in.
     module Multicast_fields
 
-      attr_reader :source, :group, :originator, :flags
+      # **The Flags octet is not here**, where the first draft of this
+      # module had it. Route type 10, RFC 9572 section 3.2, carries the
+      # triple and no Flags, so an `attr_reader :flags` in the module
+      # would answer nil for it and read as a field that is there and
+      # unset. The three RFC 9251 types declare their own.
+      attr_reader :source, :group, :originator
 
       private
 
@@ -1650,7 +1776,7 @@ module BGP
 
       FIXED_SIZE = 16
 
-      attr_reader :rd, :ethernet_tag_id
+      attr_reader :rd, :ethernet_tag_id, :flags
 
       # new(rd, ethernet_tag_id, source, group, originator, flags) in the
       # figure's order, with each field either an instance or whatever
@@ -1755,7 +1881,7 @@ module BGP
 
       FIXED_SIZE = 26
 
-      attr_reader :rd, :esi, :ethernet_tag_id
+      attr_reader :rd, :esi, :ethernet_tag_id, :flags
 
       # new(rd, esi, ethernet_tag_id, source, group, originator, flags),
       # its own hash, the wire bytes, or another instance.
@@ -1879,7 +2005,7 @@ module BGP
 
       ZERO_RESERVED = ("\x00" * RESERVED_SIZE).b.freeze
 
-      attr_reader :rd, :esi, :ethernet_tag_id, :max_response_time
+      attr_reader :rd, :esi, :ethernet_tag_id, :max_response_time, :flags
 
       # All four octets of the Reserved field, as they arrived or as they
       # were given. Always 4 octets on anything built here.
@@ -1983,6 +2109,312 @@ module BGP
       def read_reserved(v)
         return ZERO_RESERVED.dup if v.nil?
         [v.to_s].pack('H*')
+      end
+
+    end
+
+    # Route type 9, RFC 9572 section 3.1, the Per-Region I-PMSI A-D
+    # route. Fixed at 20 octets:
+    #
+    #   +-----------------------------------+
+    #   |       RD (8 octets)               |
+    #   +-----------------------------------+
+    #   |  Ethernet Tag ID (4 octets)       |
+    #   +-----------------------------------+
+    #   |  Region ID (8 octets)             |
+    #   +-----------------------------------+
+    #
+    # Section 3 adds a rule about the RD that binds a sender and is not
+    # an encoding: the Route Type specific field of types 9 and 10
+    # "starts with a Type 1 RD (Route Distinguisher), whose
+    # Administrator sub-field MUST match that of the RD in all current
+    # EVPN routes that are not Leaf A-D routes". Nothing validates, so
+    # any RD of any type builds here.
+    class Per_region_i_pmsi < Route
+
+      TYPE, HASH_KEY = 9, :per_region_i_pmsi
+
+      SIZE = 20
+
+      attr_reader :rd, :ethernet_tag_id, :region_id
+
+      # new(rd, ethernet_tag_id, region_id) in the figure's order, with
+      # each field either an instance or whatever its class builds from
+      # new(:rd => [100, 200], :ethernet_tag_id => 10,
+      #     :region_id => '00090000fde80000')
+      # the wire bytes, or another instance.
+      def initialize(*args)
+        if args.size == 1 and args[0].is_a?(String) and args[0].is_packed?
+          parse(args[0])
+        elsif args.size == 1 and args[0].is_a?(self.class)
+          parse(args[0].encode.is_packed)
+        elsif args.size == 1 and args[0].is_a?(Hash)
+          from_hash(args[0])
+        elsif (1..3).include?(args.size)
+          @rd              = coerce_or_default(Rd, args[0])
+          @ethernet_tag_id = coerce_or_default(Ethernet_tag_id, args[1])
+          @region_id       = coerce_or_default(Region_id, args[2])
+        elsif args.empty?
+          @rd              = Rd.new
+          @ethernet_tag_id = Ethernet_tag_id.new
+          @region_id       = Region_id.new
+        else
+          raise ArgumentError, "invalid argument: #{args.inspect}"
+        end
+        self
+      end
+
+      def parse(s)
+        @rd              = read_rd(s)
+        @ethernet_tag_id = Ethernet_tag_id.new(s)
+        @region_id       = Region_id.new(s)
+        self
+      end
+
+      def encode_value
+        [@rd.encode, @ethernet_tag_id.encode, @region_id.encode].join
+      end
+
+      def value_hash
+        @rd.to_hash
+           .merge(@ethernet_tag_id.to_hash)
+           .merge(@region_id.to_hash)
+      end
+
+      def to_s
+        "[9] Per-Region I-PMSI A-D: #{@rd.to_s(false)}, " \
+        "tag #{@ethernet_tag_id}, region #{@region_id}"
+      end
+
+      private
+
+      def from_hash(h)
+        h = self.class.unwrap(h)
+        @rd              = coerce_or_default(Rd, h[:rd])
+        @ethernet_tag_id = coerce_or_default(Ethernet_tag_id,
+                                             h[:ethernet_tag_id])
+        @region_id       = coerce_or_default(Region_id, h[:region_id])
+      end
+
+    end
+
+    # Route type 10, RFC 9572 section 3.2, the S-PMSI A-D route:
+    #
+    #   +-----------------------------------+
+    #   |       RD (8 octets)               |
+    #   +-----------------------------------+
+    #   |  Ethernet Tag ID (4 octets)       |
+    #   +-----------------------------------+
+    #   |  the address triple (variable)    |
+    #   +-----------------------------------+
+    #
+    # **Route type 6 without its Flags octet**, so it shares the triple
+    # through `Multicast_fields` and is the reason that module does not
+    # carry the Flags.
+    #
+    # **This is the route type whose length units RFC 9572 does not
+    # state, and the answer comes from the chain it points at.** Part 1
+    # of the EVPN plan recorded that as open rather than guessing it,
+    # and it is settled now. Section 3.2: "Other than the addition of
+    # the Ethernet Tag ID and Originator's Addr Length fields, it is
+    # identical to the S-PMSI A-D route as defined in [RFC7117]." That
+    # route carries the RFC 6514 section 4.3 encoding, whose own
+    # sentence is "If the Multicast Source field contains an IPv4
+    # address, then the value of the Multicast Source Length field is
+    # 32." **32 for IPv4 and 128 for IPv6 is bits**, by the values
+    # rather than by the word, which neither document uses. So `Addr`
+    # is right for all three fields, as it is for route types 6, 7 and
+    # 8 where RFC 9251 says bits outright.
+    #
+    # Read in draft-ietf-bess-rfc6514bis-00 section 4.3, which obsoletes
+    # RFC 6514. **RFC 7117 section 9.2.1 itself was not read**: three
+    # fetches of it got no further than section 8.4.3. Recorded that way
+    # so the next reader knows which link of the chain is first hand.
+    #
+    # RFC 6514 section 4.3 adds "Usage of other values of the Multicast
+    # Source Length and Multicast Group Length fields is outside the
+    # scope of this document", which is the same "outside the scope is
+    # not an error" shape RFC 7432 section 14 uses for the MAC length,
+    # and is why `Addr` echoes any length here too.
+    class S_pmsi < Route
+
+      include Multicast_fields
+
+      TYPE, HASH_KEY = 10, :s_pmsi
+
+      FIXED_SIZE = 15
+
+      attr_reader :rd, :ethernet_tag_id
+
+      # new(rd, ethernet_tag_id, source, group, originator), its own
+      # hash, the wire bytes, or another instance.
+      def initialize(*args)
+        if args.size == 1 and args[0].is_a?(String) and args[0].is_packed?
+          parse(args[0])
+        elsif args.size == 1 and args[0].is_a?(self.class)
+          parse(args[0].encode.is_packed)
+        elsif args.size == 1 and args[0].is_a?(Hash)
+          from_hash(args[0])
+        elsif (1..5).include?(args.size)
+          @rd              = coerce_or_default(Rd, args[0])
+          @ethernet_tag_id = coerce_or_default(Ethernet_tag_id, args[1])
+          coerce_triple(args[2], args[3], args[4])
+        elsif args.empty?
+          @rd              = Rd.new
+          @ethernet_tag_id = Ethernet_tag_id.new
+          coerce_triple(nil, nil, nil)
+        else
+          raise ArgumentError, "invalid argument: #{args.inspect}"
+        end
+        self
+      end
+
+      def parse(s)
+        @rd              = read_rd(s)
+        @ethernet_tag_id = Ethernet_tag_id.new(s)
+        parse_triple(s)
+        self
+      end
+
+      def encode_value
+        [@rd.encode, @ethernet_tag_id.encode, encode_triple].join
+      end
+
+      def value_hash
+        @rd.to_hash.merge(@ethernet_tag_id.to_hash).merge(triple_hash)
+      end
+
+      def to_s
+        "[10] S-PMSI A-D: #{@rd.to_s(false)}, " \
+        "tag #{@ethernet_tag_id}, #{triple_to_s}"
+      end
+
+      private
+
+      def from_hash(h)
+        h = self.class.unwrap(h)
+        @rd              = coerce_or_default(Rd, h[:rd])
+        @ethernet_tag_id = coerce_or_default(Ethernet_tag_id,
+                                             h[:ethernet_tag_id])
+        triple_from_hash(h)
+      end
+
+    end
+
+    # Route type 11, RFC 9572 section 3.3, the Leaf A-D route:
+    #
+    #   +-----------------------------------+
+    #   |      Route Key (variable)         |
+    #   +-----------------------------------+
+    #   |Originator's Addr Length (1 octet) |
+    #   +-----------------------------------+
+    #   |Originator's Addr (4 or 16 octets) |
+    #   +-----------------------------------+
+    #
+    # **The only route type with neither an RD nor an Ethernet Tag ID**,
+    # and the only one that is recursive. Both follow from what the
+    # Route Key is: section 3.3 says "The Route Key is the NLRI of the
+    # route for which this Leaf A-D route is generated", and the
+    # document's terminology section says the Leaf A-D route "embeds the
+    # entire NLRI of the triggering PMSI A-D route". Entire, so the
+    # Route Type and Length octets are in there, so whatever the
+    # triggering route carries is reached through the Route Key rather
+    # than repeated beside it.
+    #
+    # Section 3 confirms it from the other side: the RD rule it states
+    # for types 9 and 10 names "non-Leaf A-D routes" as the ones that
+    # must match, so a Leaf A-D route is explicitly the exception.
+    #
+    # **The recursion costs nothing, because the framing is self
+    # delimiting.** A Route Key's extent comes from its own Length
+    # octet, so `Evpn.nlri_size` answers it and `Evpn` parses it, and
+    # the variable width field in front of the Originator's Addr needs
+    # no outer arithmetic. That is the property part 1 of the plan
+    # recorded in `Evpn`'s own class comment, kept against this day.
+    #
+    # **It reaches `Evpn` at call time and not at load time**, which is
+    # what makes that legal: `Evpn` is the class around this one, and
+    # `nlri_size` and the NLRI's `initialize` are added by
+    # `bgp/nlris/evpn.rb`, which requires this file first. So this class
+    # is the one place in the file that does not work against
+    # `evpn_route.rb` alone, and its tests live in
+    # `test/unit/nlris/evpn_test.rb` beside the framing they exercise.
+    #
+    # Nothing validates. Any Route Key, including one carrying a route
+    # type bgp4r does not implement, which comes back as an
+    # `Evpn::Unknown` inside the Route Key and replays; and a Leaf A-D
+    # route inside a Leaf A-D route, which no RFC describes.
+    class Leaf_a_d < Route
+
+      TYPE, HASH_KEY = 11, :leaf_a_d
+
+      attr_reader :route_key, :originator
+
+      # new(route_key, originator), where the Route Key is an `Evpn`, an
+      # `Evpn::Route` that one is built around, or its wire octets
+      # new(:route_key => { :inclusive_multicast => { ... } },
+      #     :originator => '10.0.0.1')
+      # the wire bytes, or another instance.
+      def initialize(*args)
+        if args.size == 1 and args[0].is_a?(String) and args[0].is_packed?
+          parse(args[0])
+        elsif args.size == 1 and args[0].is_a?(self.class)
+          parse(args[0].encode.is_packed)
+        elsif args.size == 1 and args[0].is_a?(Hash)
+          from_hash(args[0])
+        elsif (1..2).include?(args.size)
+          @route_key  = coerce_route_key(args[0])
+          @originator = coerce_or_default(Addr, args[1])
+        elsif args.empty?
+          @route_key  = coerce_route_key(nil)
+          @originator = Addr.new
+        else
+          raise ArgumentError, "invalid argument: #{args.inspect}"
+        end
+        self
+      end
+
+      def parse(s)
+        n = Evpn.nlri_size(s)
+        raise ArgumentError, 'Route Key too short to frame' if n.nil?
+        @route_key  = Evpn.new(s.slice!(0, n).is_packed)
+        @originator = Addr.new(s)
+        self
+      end
+
+      def encode_value
+        [@route_key.encode, @originator.encode].join
+      end
+
+      def value_hash
+        { :route_key => @route_key.to_hash,
+          :originator => addr_hash(@originator) }
+      end
+
+      def to_s
+        "[11] Leaf A-D: route key #{@route_key.route}, " \
+        "originator #{@originator}"
+      end
+
+      private
+
+      # An `Evpn` passes through, an `Evpn::Route` is wrapped in one,
+      # wire octets are parsed as one, and a Hash is handed to `Evpn`,
+      # which reads one key per route type. Nothing is a sensible
+      # default, so an absent Route Key is an `Evpn::Unknown` of type 0
+      # with no body, which is 2 octets and replays.
+      def coerce_route_key(v)
+        return v if v.is_a?(Evpn)
+        return Evpn.new(v) if v.is_a?(Route) or v.is_a?(Hash)
+        return Evpn.new(v) if v.is_a?(String) and v.is_packed?
+        return Evpn.new(Unknown.new(0, +'')) if v.nil?
+        raise ArgumentError, "#{v.inspect} is not a Route Key"
+      end
+
+      def from_hash(h)
+        h = self.class.unwrap(h)
+        @route_key  = coerce_route_key(h[:route_key])
+        @originator = coerce_or_default(Addr, h[:originator])
       end
 
     end
