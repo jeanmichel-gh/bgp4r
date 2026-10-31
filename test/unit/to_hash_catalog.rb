@@ -544,14 +544,17 @@ module ToHashCatalog
   end
 
   ENTRIES['BGP::Pmsi_tunnel'] = entry(
-    :lossy,
-    'the other seven bits of the flags octet. to_hash writes :flags only ' \
-    'when no leaf bit is set, so flags 0x41 hash as ' \
-    ':leaf_info_required=>true alone and the RFC 7902 Extension bit is ' \
-    'gone: 41 comes back as 01.',
-    :fix, PATH_ATTR) do
-    BGP::Pmsi_tunnel.new(:pim_ssm, ['10.0.0.1', '232.1.1.1'],
-                         :label => 100, :flags => 0x41)
+    :elsewhere,
+    'nothing, since the label field and the flags octet were fixed. The ' \
+    'fields nest under :pmsi_tunnel and new reads the inner hash, so ' \
+    'Path_attribute is the door.',
+    :keep, PATH_ATTR) do
+    # Parsed, because the 4 bits below the 20 bit label only arrive that
+    # way through an ordinary build. RFC 6514 section 5 with RFC 7902's
+    # flags registry: the Extension bit beside Leaf Information Required,
+    # a tunnel type, those 4 label bits, and the two PIM addresses.
+    BGP::Pmsi_tunnel.new(['c0160d' + '41' + '03' + '00064f' +
+                          '0a000001e8010101'].pack('H*').is_packed)
   end
 
   # ====================================================================

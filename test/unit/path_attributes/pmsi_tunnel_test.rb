@@ -76,6 +76,98 @@ class TestPmsiTunnel < Test::Unit::TestCase
     end
   end
 
+  # **The 4 bits below the 20 bit label are kept and echoed**, because
+  # RFC 6514 section 5 names the field "MPLS Label" and describes no
+  # layout for them, and an encoder that wrote them back as 0 could not
+  # replay a capture. Before this, 000641 came back as 000640, and worse,
+  # a field of 000001 became a label of 0 and encoded as 000000, which
+  # the section makes mean no label at all: a non-zero field arrived and
+  # left as absent. Every test in this file used :label => 100, whose
+  # low 4 bits are zero, which is why nothing caught it.
+  def test_the_label_field_keeps_the_four_bits_below_the_label
+    { '000640' => [100, nil],         # the ordinary case, no extra key
+      '000641' => [100, 0x000641],
+      '00064f' => [100, 0x00064f],
+      '000001' => [0, 0x000001],      # a field too small to hold a label
+      'ffffff' => [0xfffff, 0xffffff],
+    }.each do |field, (label, bits)|
+      hex = 'c01609' + '0006' + field + '0a000001'
+      a = Pmsi_tunnel.new(wire(hex))
+      assert_equal label, a.label, field
+      assert_equal hex, a.to_shex, "#{field} did not replay"
+      h = a.to_hash[:pmsi_tunnel]
+      assert_equal bits, h[:label_bits], "#{field} :label_bits"
+      assert_equal !bits.nil?, a.undefined_label_bits?, field
+      assert_equal a.encode, Pmsi_tunnel.new(h).encode, h.inspect
+    end
+    # A zero field is still no label, and carries neither key.
+    a = Pmsi_tunnel.new(wire('c01609' + '0006' + '000000' + '0a000001'))
+    assert_nil a.label
+    refute a.undefined_label_bits?
+    refute a.to_hash[:pmsi_tunnel].key?(:label_bits)
+    # Built from field values the 4 bits are 0, which is what an encoder
+    # is asked for, so :label_bits is the only way to set them.
+    assert_equal 0x000640, Pmsi_tunnel.new(:no_tunnel, nil, :label => 100).label_bits
+    assert_equal 0x00064f,
+                 Pmsi_tunnel.new(:no_tunnel, nil, :label_bits => 0x00064f).label_bits
+    assert_equal 100, Pmsi_tunnel.new(:no_tunnel, nil, :label_bits => 0x00064f).label
+    assert_raise(ArgumentError) do
+      Pmsi_tunnel.new(:no_tunnel, nil, :label_bits => 0x1000000)
+    end
+  end
+
+  # **Flags 0x41 lost the RFC 7902 Extension bit**, because to_hash wrote
+  # :flags only when no leaf bit was set, so the octet came back as 0x01.
+  # The two keys are not exclusive: :flags carries the whole octet
+  # whenever it holds a bit other than the one :leaf_info_required names.
+  def test_the_flags_octet_rebuilds_whatever_bits_it_holds
+    [0x00, 0x01, 0x40, 0x41, 0x80, 0xff].each do |f|
+      a = Pmsi_tunnel.new(:tunnel_type => :pim_ssm,
+                          :identifier => ['10.0.0.1', '232.1.1.1'],
+                          :label => 100, :flags => f)
+      assert_equal f, a.pmsi_flags, format('flags 0x%02x', f)
+      h = a.to_hash[:pmsi_tunnel]
+      assert_equal a.encode, Pmsi_tunnel.new(h).encode, format('flags 0x%02x', f)
+      assert_equal f, Pmsi_tunnel.new(h).pmsi_flags, format('flags 0x%02x', f)
+    end
+    # The two common octets hash as they always did.
+    assert_equal({ :tunnel_type => :no_tunnel },
+                 Pmsi_tunnel.new(:no_tunnel).to_hash[:pmsi_tunnel])
+    assert_equal({ :tunnel_type => :no_tunnel, :leaf_info_required => true },
+                 Pmsi_tunnel.new(:no_tunnel, nil, :leaf_info_required => true)
+                   .to_hash[:pmsi_tunnel])
+    # And 0x41 carries both, where it used to carry the leaf bit alone.
+    assert_equal({ :tunnel_type => :no_tunnel, :flags => 0x41,
+                   :leaf_info_required => true },
+                 Pmsi_tunnel.new(:tunnel_type => :no_tunnel, :flags => 0x41)
+                   .to_hash[:pmsi_tunnel])
+  end
+
+  # **`:flags` means two different things and `Attr::OVERRIDE_KEYS` is
+  # why**, which is worth a test because it reads as a bug and is a
+  # feature. `Attr.new` pops a trailing Hash whose keys are *all* in
+  # `[:flags, :type, :length]` and applies it to the attribute header,
+  # which is how Conventions lets a test make the header lie. So at the
+  # multi-argument call site `:flags` is the **header's** 4 bits and
+  # never reaches the PMSI Tunnel flags octet, and the single Hash form
+  # is how that octet is set. A hash carrying any other key is not
+  # popped, so `:label => 100, :flags => 1` reaches the octet after all.
+  def test_the_flags_option_is_the_header_override_at_the_multi_arg_call_site
+    # Popped: the header flags become 0x41, and the octet stays 0.
+    a = Pmsi_tunnel.new(:no_tunnel, nil, :flags => 0x41)
+    assert_equal 0, a.pmsi_flags
+    assert_equal '10', a.to_shex[0, 2], 'the header flags were not overridden'
+    # Not popped, because :label is not an override key.
+    b = Pmsi_tunnel.new(:no_tunnel, nil, :label => 100, :flags => 0x41)
+    assert_equal 0x41, b.pmsi_flags
+    assert_equal 'c0', b.to_shex[0, 2], 'the header flags were overridden'
+    # The single Hash form always reaches the octet, since :tunnel_type
+    # is not an override key, which is what to_hash relies on.
+    c = Pmsi_tunnel.new(:tunnel_type => :no_tunnel, :flags => 0x41)
+    assert_equal 0x41, c.pmsi_flags
+    assert_equal 'c0', c.to_shex[0, 2]
+  end
+
   # A tunnel type bgp4r has no shape for keeps its octets.
   def test_unknown_tunnel_type
     a = Pmsi_tunnel.new(9, '0102030405')
