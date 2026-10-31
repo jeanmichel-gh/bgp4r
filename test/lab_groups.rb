@@ -60,14 +60,14 @@ module LabGroups
     ],
 
     # What GoBGP makes of a family bgp4r learned to speak. A new EVPN or
-    # flow spec lab test goes here. 132s.
+    # flow spec lab test goes here. 139s.
     'gobgp-families' => %w[
       evpn_gobgp_test
       flow_spec_gobgp_test
     ],
 
     # What GoBGP makes of our export side and of RFC 7911. A new
-    # send-side lab test against GoBGP goes here. 64s.
+    # send-side lab test against GoBGP goes here. 74s.
     'gobgp-router' => %w[
       add_path_gobgp_test
       rib_router_gobgp_test
@@ -84,7 +84,7 @@ module LabGroups
 
     # No router binary and no Docker. fib_test is here and needs
     # CAP_NET_ADMIN, which is why this group's job runs it a second time
-    # under sudo; see the workflow. 9s.
+    # under sudo; see the workflow. 10s.
     'local' => %w[
       fib_test
       generate_test
