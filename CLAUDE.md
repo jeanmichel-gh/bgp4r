@@ -52,6 +52,14 @@ bgp/nlris/               prefix encodings (inet, labeled, VPN, RD, mapped IPv4)
                          does a body a registered type cannot reproduce.
                          docs/evpn.md is the guide, see also
                          "Breadth, the one SAFI lever"
+                         rt_constrain.rb: the RFC 4684 section 4 Route
+                         Target membership NLRI, AFI 1 SAFI 132. Pure so
+                         far: nothing dispatches to it. It needs no
+                         framing rule of its own, unlike the two
+                         families above, because section 4's encoding is
+                         the prefix arithmetic nlri_size already does,
+                         and the route target inside it is partial by
+                         design. See "Breadth, the one SAFI lever"
 bgp/optional_parameters/ OPEN capabilities (4-byte AS, add-path, graceful restart...)
 bgp/orfs/                outbound route filtering
 bgp/neighbor/            the BGP finite state machine and TCP session (neighbor.rb)
@@ -278,7 +286,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. The `lab` job is a matrix, one job per group in `test/lab_groups.rb`, so its cost is the slowest group and not the total: it was 12m42s as one serial suite. Each job installs only what its group needs, which is why the matrix entry carries a `gobgp`, `frr`, `docker` or `netns` flag. The `gobgp` groups pin 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-10-31: 1745 tests, 25179 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.1%.
+Baseline on 2026-10-31: 1764 tests, 25371 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.1%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -2617,10 +2625,130 @@ Two consequences, both of which change the plan rather than decorate it:
      processing, which matters to a RIB and not to an encoder, and no
      EVPN route goes in a RIB by the decision below. Recorded so nobody
      implements a route key here looking for it.
-4. **The rest, as appetite allows. Not started.** BGP-LS (attribute 29,
-   AFI 16388, SAFI 71 and 72, RFC 9552), RT-constrain (SAFI 132),
-   MCAST-VPN (SAFI 5), ATTR_SET (attribute 128, RFC 6368). Once phase 1
-   is in, each of these is a class and a registration.
+4. **The rest, as appetite allows. Started.** RT-constrain (SAFI 132,
+   RFC 4684), ATTR_SET (attribute 128, RFC 6368), MCAST-VPN (SAFI 5,
+   RFC 6514), BGP-LS (attribute 29, AFI 16388, SAFI 71 and 72, RFC
+   9552). This entry used to say "each of these is a class and a
+   registration", which holds for the first and understates the last
+   considerably: BGP-LS is a whole TLV language of node, link and
+   prefix descriptors, not one layout.
+
+   **Do BGP-LS last, or three tests move twice.** `mp_reach_test.rb`'s
+   `test_an_unimplemented_safi_still_raises` and the two behind
+   `path_attribute_test.rb`'s `UNDECODABLE` all use BGP-LS as their
+   example of a family bgp4r cannot decode. They were re-pointed once
+   already, from EVPN in #185. If BGP-LS lands first they move to
+   MCAST-VPN; when all four land there is no unimplemented family left
+   and they need a SAFI IANA has not assigned instead.
+
+   1. **RT-constrain, SAFI 132, RFC 4684. The NLRI is done**, pure, in
+      `bgp/nlris/rt_constrain.rb`. Nothing dispatches to it yet, the way
+      #125 landed the export rules and #175 the flow spec components
+      before anything called either. 19 tests, the file at 100% line
+      coverage. The RFC is read, not fetched.
+      * **This family needs no new framing rule, which is what makes it
+        the cheapest of the four.** Section 4: "The NLRI field in the
+        MP_REACH_NLRI and MP_UNREACH_NLRI is a prefix of 0 to 96 bits,
+        encoded as defined in Section 4 of [5]", where its [5] is RFC
+        2858, which RFC 4760 obsoletes. So `nlri_size`'s `else` branch,
+        `(s.getbyte(0) + 7) / 8 + 1`, is already exactly it, where flow
+        spec and EVPN each needed an arm. Measured against the three
+        cases section 4 describes: 1 octet for the zero-length default,
+        5 for a 32-bit prefix and 13 for a 96-bit one. A reader looking
+        for an arm will not find one, and `rt_constrain.rb` says why.
+      * **The route target inside is partial by design, and that is the
+        whole point of the family.** Section 4: "Route targets can then
+        be expressed as prefixes, where, for instance, a prefix would
+        encompass all route target extended communities assigned by a
+        given Global Administrator". A two-octet-AS route target is
+        type, sub-type, a 2-octet Global Administrator and a 4-octet
+        Local Administrator (RFC 4360 section 3.1), so that prefix is 64
+        bits and holds 4 of the community's 8 octets. **So
+        `BGP::Route_target` is not reused as a field** the way
+        `BGP::Label` is in the EVPN route types: at 64 bits half of it is
+        absent and a class that always decoded one would invent the half
+        it did not get. `Rt_constrain` holds the length and the octets,
+        and answers `origin_as` and `route_target` only where the length
+        makes them whole.
+      * The hash has two shapes and which one is the only question: at
+        exactly 32 or 96 bits the two fields of the figure reproduce the
+        octets and the hash is those fields; everything else is the
+        length and the octets verbatim. Same rule as `:tail` and
+        `:bits`, so an ordinary hash is the two fields alone.
+      * **Nothing validates**, per Conventions. Section 4's "the minimum
+        prefix length is 32 bits" and its 96-bit maximum are both
+        deviated from on purpose, and `test_nothing_validates` puts a
+        16-bit and a 200-bit prefix on the wire. **RFC 4684 says nothing
+        about malformed NLRIs anywhere in its text**, measured by
+        reading it, so what a receiver answers with is not this RFC's to
+        give and is not invented; that is the RFC 7432 and RFC 9572
+        situation again, not the RFC 8955 one.
+      * **Two hand written expectations in the test were wrong and the
+        library was right**, which is worth recording because the cause
+        is structural: RFC 4684 carries no worked example, where RFC
+        8955 and RFC 8956 carry five between them. A route target's own
+        octets begin with its type and sub-type, so the widest
+        two-octet-AS one is `0002` then six `ff` and not eight; and 16
+        bits is two octets, not one. The test file says so, and says
+        that it therefore checks the library against this reader's
+        arithmetic rather than against the document.
+      * **Sabotage found a real gap and an unreachable guard.** Dropping
+        the length check from `route_target` passed, because the test
+        stepped `(0..95).step(8)` and so skipped 89 to 95 bits, which
+        all occupy twelve octets: there the community's octets are all
+        present and only the length says its last bits are padding.
+        The test walks every length now. Dropping the `@mlen < 32` guard
+        from `origin_as` also passed, and that one is genuinely
+        unreachable, since `@value` is fitted to the length by both
+        `fit_to_mlen` and `parse` and `unpack1('N')` answers nil on
+        fewer than 4 octets. It is kept and recorded as unreachable, the
+        way `Fib`'s `:no_next_hop` branch is.
+      * Still to do for this family: the two dispatch arms and the next
+        hop, which section 4 reads "as an IPv4 address whenever the
+        length of NextHop address is 4 octets, and as a IPv6 address
+        whenever the length of the NextHop address is 16 octets", the
+        same length-only discriminator EVPN needed and #185 built. Then
+        a loopback functional test, which is the only thing that can
+        say the wiring sites agree. `prefix_klass` is the one thing to
+        look at: it raises for SAFI 132 and the value here is not an
+        address.
+   2. **ATTR_SET, attribute 128, RFC 6368. Not started**, and the RFC is
+      read and on hand. Section 5: an optional transitive attribute
+      whose value is a 4-octet Origin AS then "a variable-length field
+      that conforms to the BGP UPDATE message path attribute encoding
+      rules", so its length is 4 plus the attributes. It is a
+      `Path_attribute` inside a `Path_attribute`, the attribute-level
+      analogue of EVPN route type 11's Route Key, and `Path_attribute`
+      consumes the String it is handed, which the nested parse has to
+      allow for.
+      * Two encoding rules that are not free. The Origin AS is a 32-bit
+        unsigned integer "regardless of whether or not the originating
+        PE supports 4-octet AS numbers", and **the AS_PATH and
+        AGGREGATOR inside MUST use 4-octet AS numbers "regardless of the
+        capabilities advertised by the BGP speaker to which the ATTR_SET
+        attribute is transmitted"**. bgp4r's `encode` has a 2 versus 4
+        octet AS switch, so that is a constraint on it rather than
+        something that falls out.
+      * Three malformed conditions for `validation.rb`, from section 5:
+        a length under 4 octets, MP_REACH or MP_UNREACH carried inside,
+        or an included attribute malformed itself. NEXT_HOP "SHOULD NOT
+        be included" and "SHOULD be ignored" when it is, which is a
+        receive side rule and not a refusal.
+      * **One paragraph of section 5 must not be implemented as
+        written.** Its error handling says a malformed ATTR_SET whose
+        "Partial flag is set and its Neighbor-Complete flag is clear" is
+        treated as a withdraw per `[OPT-TRANS-BGP]`, which its own
+        references list as Work in Progress, September 2010. That draft
+        became RFC 7606, which has no Neighbor-Complete flag. So the
+        action has to come from RFC 7606 and not from this sentence,
+        which is the trap flow spec part 4 and EVPN part 9 each
+        recorded from the other direction. RFC 7606 is not on hand yet.
+   3. **MCAST-VPN, SAFI 5, RFC 6514. Not started**, and that RFC is not
+      on hand either. Note from EVPN part 7: the only first hand reading
+      of RFC 6514 section 4.3 here came through
+      draft-ietf-bess-rfc6514bis-00, which obsoletes it.
+   4. **BGP-LS, attribute 29 and AFI 16388 SAFI 71 and 72, RFC 9552.
+      Not started**, largest of the four, and last for the reason above.
 
 Decisions taken before this starts, so they are not re-litigated:
 

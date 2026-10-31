@@ -10,4 +10,5 @@
   flow_spec
   evpn_route
   evpn
+  rt_constrain
 }.each { |n| require "bgp/nlris/#{n}" }
