@@ -30,11 +30,15 @@ bgp/nlris/               prefix encodings (inet, labeled, VPN, RD, mapped IPv4)
                          types share, the Esi of RFC 7432 section 5, the
                          Ethernet Tag ID, the MAC and the length-prefixed
                          address, with the Route base and Evpn::Unknown under
-                         them, the Flags octet of RFC 9251 and the
-                         Multicast_fields module that carries the address
-                         triple, and route types 1 to 8: the whole of RFC 7432
-                         section 7, RFC 9136's IP Prefix route and RFC 9251
-                         sections 9.1 to 9.3;
+                         them, the Flags octet of RFC 9251, the Region ID of
+                         RFC 9572 and the Multicast_fields module that carries
+                         the address triple, and **all eleven route types**:
+                         the whole of RFC 7432 section 7, RFC 9136's IP Prefix
+                         route, RFC 9251 sections 9.1 to 9.3 and RFC 9572
+                         sections 3.1 to 3.3. Route type 11's Route Key is a
+                         whole NLRI, so Leaf_a_d reaches Evpn at call time and
+                         is the one class here that does not work against
+                         evpn_route.rb alone;
                          evpn.rb the NLRI with
                          the section 7 Route Type and Length framing and
                          Evpn.nlri_size. Both are wired in now, so an EVPN
@@ -43,9 +47,9 @@ bgp/nlris/               prefix encodings (inet, labeled, VPN, RD, mapped IPv4)
                          parse loops ask nlri_size, and parse_next_hops reads
                          the RFC 7432 section 14 next hop by its length, since
                          the AFI is 25 for both families. Evpn::ROUTES holds
-                         types 1 to 8; every other type reads back as an
-                         Evpn::Unknown that replays byte for byte, and so does
-                         a body a registered type cannot reproduce.
+                         all eleven types; a type outside 1 to 11 reads back as
+                         an Evpn::Unknown that replays byte for byte, and so
+                         does a body a registered type cannot reproduce.
                          docs/evpn.md is the guide, see also
                          "Breadth, the one SAFI lever"
 bgp/optional_parameters/ OPEN capabilities (4-byte AS, add-path, graceful restart...)
@@ -158,7 +162,8 @@ ruby -I. test/functional/flow_spec_test.rb
 ```
 
 The same for an EVPN UPDATE, AFI 25 SAFI 70, and the only test that
-proves its five wiring sites agree. Half a second:
+proves its five wiring sites agree. It also carries the one case that
+puts an NLRI inside an NLRI, route type 11's Route Key. About a second:
 ```
 ruby -I. test/functional/evpn_test.rb
 ```
@@ -239,7 +244,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. A `lab` job runs the Compose topologies, and installs a `gobgpd` release so the native fault matrix runs there too; it pins 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-10-30: 1652 tests, 24102 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.0%.
+Baseline on 2026-10-30: 1675 tests, 24278 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.0%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -1719,9 +1724,11 @@ Two consequences, both of which change the plan rather than decorate it:
        `[0x80,0x08]`, `[0x81,0x08]` and `[0x82,0x08]`, the section 7.4
        redirect-to-VRF encodings, so nothing there is affected. Checked
        on 2026-10-30.
-3. **EVPN, SAFI 70, RFC 7432 and six more. Not started.** The big one.
-   Ten parts, planned on 2026-10-30 from eleven RFCs read in full,
-   attached to the session rather than fetched.
+3. **EVPN, SAFI 70, RFC 7432 and six more. Parts 1 to 7 done**, so all
+   eleven route types read and write on the wire and an EVPN UPDATE
+   crosses a session. Parts 8 to 10 are left: the extended communities,
+   validation and the lab. Ten parts, planned on 2026-10-30 from eleven
+   RFCs read in full, attached to the session rather than fetched.
 
    **Two counts in the earlier version of this entry were wrong, and
    both were wrong by reading one RFC where the registry spans seven.**
@@ -2069,8 +2076,84 @@ Two consequences, both of which change the plan rather than decorate it:
         section 9.1.3's default route is (*,*).
       * The functional test gained four cases, 13 now, which is still
         the only test that proves the five wiring sites agree.
-   7. **Route types 9, 10 and 11**, RFC 9572 sections 3.1 to 3.3,
-      including the recursive Route Key.
+   7. **Route types 9, 10 and 11. Done**, in #187, RFC 9572 sections
+      3.1 to 3.3, so **all eleven route types are in**. The three have
+      less in common with each other than the RFC 9251 trio do. Route
+      type 9 is fixed at 20 octets; route type 10 is route type 6
+      without its Flags octet; route type 11 is the recursive one.
+      * **The units question part 1 recorded as open is closed, and
+        how it was closed is the part to keep.** RFC 9572 has no "in
+        bits" sentence anywhere, confirmed by reading the whole text.
+        Section 3.2 says only that route type 10 is "identical to the
+        S-PMSI A-D route as defined in [RFC7117]" apart from two added
+        fields, and that route carries the RFC 6514 section 4.3
+        encoding, which answers it by value rather than by the word:
+        "If the Multicast Source field contains an IPv4 address, then
+        the value of the Multicast Source Length field is 32." 32 for
+        IPv4 and 128 for IPv6 is a bit count. So `Addr` is right for
+        all three fields of route type 10 and for route type 11's
+        Originator's Addr.
+        * **Which link is first hand is recorded, because that is what
+          an audit needs.** The RFC 6514 sentence was read in
+          draft-ietf-bess-rfc6514bis-00 section 4.3, which obsoletes
+          RFC 6514. **RFC 7117 section 9.2.1 itself was not read**:
+          three fetches got no further than section 8.4.3, and
+          rfc-editor.org is not reachable from this session. The
+          doc test asserts both halves, so the answer cannot keep its
+          confidence while losing its provenance.
+        * RFC 6514 section 4.3 also says "Usage of other values of the
+          Multicast Source Length and Multicast Group Length fields is
+          outside the scope of this document", the same "outside the
+          scope is not an error" shape RFC 7432 section 14 uses for the
+          MAC length. Which is why `Addr` echoes any length here too.
+      * **`Region_id` holds 8 octets and is not an extended community,
+        measured rather than assumed.** Section 3.1 says it "is encoded
+        in the same way that an EC is encoded", so reusing
+        `BGP::Extended_community` was the obvious move, the way `Label`
+        is reused for the MPLS Label. Two things rule it out. It
+        **cannot be rebuilt from its own `to_hash`**: neither `factory`
+        nor `new` takes a Hash, so route type 9's hash round trip would
+        break and have to be recorded as a loss. And it buys no meaning
+        anyway, because **all three of section 6.2's own examples read
+        back as `Extended_community::Unknown` today**: two use sub-type
+        0x09, Source AS of RFC 6514 section 4.5, which bgp4r's
+        `FACTORY` does not register, and the third is "a Transitive
+        IPv4-Address-specific EC of any sub-type". Registering Source
+        AS is its own small piece of work and is listed under "Known
+        issues to work on".
+      * **The Flags moved out of `Multicast_fields`**, where part 6 put
+        it. Route type 10 carries the triple and no Flags, so an
+        `attr_reader :flags` in the shared module would answer nil for
+        it and read as a field that is there and unset. The three RFC
+        9251 types declare their own now.
+      * **Route type 11 is the only one with neither an RD nor an
+        Ethernet Tag ID**, and that follows from the Route Key rather
+        than being an omission: section 3.3 makes it "the NLRI of the
+        route for which this Leaf A-D route is generated" and the
+        terminology section says the route "embeds the entire NLRI of
+        the triggering PMSI A-D route". Entire, so whatever the
+        triggering route carried is reached through the Route Key.
+        Section 3 confirms it from the other side, since the RD rule it
+        states for types 9 and 10 names "non-Leaf A-D routes" as the
+        ones that must match.
+      * **The recursion cost nothing, which is what part 1 predicted.**
+        A Route Key's extent comes from its own Length octet, so
+        `Evpn.nlri_size` answers it and `Evpn` parses it, and the
+        variable width field in front of the Originator's Addr needs no
+        outer arithmetic.
+      * **`Leaf_a_d` reaches `Evpn` at call time and not at load
+        time**, which is what makes a route type in `evpn_route.rb`
+        able to hold an NLRI from `evpn.rb`: `Evpn` is the class around
+        every route type and the NLRI's own methods are added by the
+        file that requires this one. So it is the one class there that
+        does not work against `evpn_route.rb` alone, and **its tests
+        live in `test/unit/nlris/evpn_test.rb`** beside the framing they
+        exercise. Keeping the other ten tested against `evpn_route.rb`
+        by itself is what proves they need no NLRI, and the doc test
+        asserts that too.
+      * The functional test gained four cases, 17 now, including two
+        Leaf A-D routes in one attribute, which is the only thing that
+        says the recursion does not over-read.
    8. **The eleven extended communities**, the ten of the 0x06 registry
       that have an RFC plus RFC 7432 section 7.8's Default Gateway at
       0x03 sub-type 0x0d. Three of the 14 cite only drafts and one is
@@ -2137,6 +2220,8 @@ Found while fixing other bugs, not fixed yet. Verified against master on
 `ruby -I. -e '...'`.
 
 Smaller things:
+
+* **The Source AS extended community, sub-type 0x09, is not registered**, and RFC 9572 section 6.2 is what showed it: two of the three example Region ID encodings it gives are "a Transitive Two-Octet AS-specific EC of sub-type 0x09 (Source AS)" and the four-octet form of the same, and both read back as `Extended_community::Unknown` in bgp4r today. It is RFC 6514 section 4.5, not an EVPN 0x06 community, so it is not part of EVPN part 8; it is its own small piece of work, an entry in `extended_community.rb`'s `FACTORY` with the two type octets `[0x00,0x09]` and `[0x02,0x09]`. Nothing is wrong today, since an unknown sub-type replays byte for byte; what is missing is meaning. Measured on 2026-10-30: `ruby -I. -e 'require "bgp4r"; p BGP::Extended_community.factory(["00090000fde80000"].pack("H*")).class'` prints `BGP::Extended_community::Unknown`.
 
 * `Nsap.new` and `Nsap.new_nsap` disagree on the default prefix length, so the same address string gives two different prefixes depending on which constructor built it: `ruby -I. -e 'require "bgp/nlris/nsap"; p [BGP::Nsap.new("49.0102.0304.0506.0608.0910.1112.1314.1516.1718.ff").mlen, BGP::Nsap.new_nsap("49.0102.0304.0506.0608.0910.1112.1314.1516.1718.ff").mlen]'` prints `[160, 152]`. `Nsap#mlen` falls back to 160, the whole twenty octet address, where `new_nsap` writes `len ||= 152` and so masks the twentieth octet away and encodes nineteen. 160 is the one that matches the rest of the class, including `MAX_MLEN` and `prefix_mask_bits`. It was left alone when the clamp above it was fixed, because `test_new_nsap` and `test_nsap` both pin the 152 default and the fix moves them, which makes it a behaviour change of its own rather than part of that one. Found while raising the clamp from 152 to 160.
 

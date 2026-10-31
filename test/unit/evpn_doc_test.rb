@@ -157,13 +157,26 @@ class EvpnDocTest < Test::Unit::TestCase
     assert_match(/RFC 9251 says it of all three lengths/, doc)
   end
 
-  # And the one RFC that does not say, recorded as open rather than
-  # guessed. If part 7 reads RFC 7117 this claim changes and the test
-  # with it; what must not happen is the open question going quiet.
-  def test_the_document_records_rfc_9572_as_silent_on_the_units
+  # And the one RFC that does not say. This was recorded as open in
+  # part 1 rather than guessed, and part 7 closed it through the chain
+  # RFC 9572 points at, so the test moved with the claim: what the
+  # earlier version guarded against was the open question going quiet,
+  # and what this one guards is the answer keeping its provenance.
+  def test_the_document_settles_the_rfc_9572_units_and_says_how
     assert_match(/RFC 9572 is the one that does not say/, doc)
     assert_match(/RFC 7117/, doc)
-    assert_match(/has not been read here/, doc)
+    # The sentence that answers it, by value rather than by the word.
+    assert_match(/the value of the Multicast Source Length\s+field is 32/, doc)
+    # And which link of the chain is first hand, which is the part an
+    # audit needs and the part prose loses first.
+    assert_match(/draft-ietf-bess-rfc6514bis-00 section/, doc)
+    assert_match(/RFC 7117 section 9\.2\.1 itself was not\s+read/, doc)
+    # The library reads a bit count, which is what the answer means.
+    r = BGP::Evpn::S_pmsi.new([1, 1], 1, '192.0.2.1', 'ff0e::1', '10.0.0.1')
+    assert_equal(32, r.source.bitlen)
+    assert_equal(4, r.source.value.size)
+    assert_equal(128, r.group.bitlen)
+    assert_equal(16, r.group.value.size)
   end
 
   # The difference between the two fields on consecutive lines of one
@@ -445,6 +458,74 @@ class EvpnDocTest < Test::Unit::TestCase
     assert(r.source.empty?)
     assert_equal(0, r.source.bitlen)
     assert_match(/\(\*,/, r.to_s)
+  end
+
+
+  # Section 3's route type 9 entry, and the reasoning behind Region_id
+  # not being an extended community. The measurement is the claim, so
+  # the test makes it again rather than trusting the prose.
+  def test_the_region_id_is_not_decoded_as_an_extended_community
+    assert_match(/does not decode them as an\s+extended community/, doc)
+    assert_equal(8, BGP::Evpn::Region_id::WIDTH)
+    # It cannot be rebuilt from its own to_hash, which is half the
+    # reason.
+    ec = BGP::Extended_community.factory(['00090000fde80000'].pack('H*'))
+    assert_raise(ArgumentError) { BGP::Extended_community.new(ec.to_hash) }
+    assert_raise(NoMethodError) { BGP::Extended_community.factory(ec.to_hash) }
+    # And all three of section 6.2's examples are Unknown today, which
+    # is the other half: sub-type 0x09 Source AS is unregistered.
+    ['00090000fde80000', '0209000186a00000', '0101000000010000'].each do |h|
+      assert_instance_of(BGP::Extended_community::Unknown,
+                         BGP::Extended_community.factory([h].pack('H*')),
+                         h)
+    end
+    assert_match(/sub-type 0x09, Source AS/, doc)
+    # Where Region_id does round trip through its own hash.
+    r = BGP::Evpn::Region_id.new('00090000fde80000')
+    assert_equal(r.to_shex, BGP::Evpn::Region_id.new(r.to_hash).to_shex)
+  end
+
+  # Route type 10 is route type 6 less its Flags, which is why the
+  # shared module does not carry the Flags.
+  def test_route_type_10_is_route_type_6_without_the_flags
+    assert_match(/route type 6 without its\s+Flags octet/, doc)
+    assert_equal(BGP::Evpn::Selective_multicast::FIXED_SIZE - 1,
+                 BGP::Evpn::S_pmsi::FIXED_SIZE)
+    refute_respond_to(BGP::Evpn::S_pmsi.new, :flags)
+    assert_respond_to(BGP::Evpn::Selective_multicast.new, :flags)
+    assert(BGP::Evpn::S_pmsi.ancestors.include?(BGP::Evpn::Multicast_fields))
+  end
+
+  # Route type 11, the recursion. The claim that costs most if it is
+  # wrong is that the Route Key is a whole NLRI, framing included.
+  def test_the_leaf_a_d_route_key_is_a_whole_nlri
+    assert_match(/only route type with neither an RD nor an Ethernet Tag/, doc)
+    assert_match(/embeds the entire NLRI of the triggering PMSI A-D/, doc)
+    inner = BGP::Evpn.new(BGP::Evpn::Inclusive_multicast
+                            .new([1, 1], 1, '10.0.0.1'))
+    r = BGP::Evpn::Leaf_a_d.new(inner, '10.0.0.9')
+    # Framing included: the body starts with the Route Key's own Route
+    # Type and Length octets.
+    assert_equal(inner.to_shex, r.to_shex[0, inner.to_shex.size])
+    assert_equal(3, r.route_key.type)
+    assert_equal(inner.encode.size + r.originator.size, r.encode.size)
+    refute_respond_to(r, :rd)
+    refute_respond_to(r, :ethernet_tag_id)
+  end
+
+  # And that it reaches Evpn at call time, which is what lets a route
+  # type in evpn_route.rb hold an NLRI from evpn.rb.
+  def test_only_the_leaf_a_d_route_needs_the_nlri
+    assert_match(/reaches `Evpn` at call time and not at load time/, doc)
+    BGP::Evpn::ROUTES.each do |t, k|
+      next if t == 11
+      assert_nothing_raised("route type #{t} should build with no NLRI") do
+        k.new
+      end
+    end
+    # Route type 11 builds too, since Evpn is loaded here. What the
+    # document records is that evpn_route.rb alone would not do.
+    assert_nothing_raised { BGP::Evpn::Leaf_a_d.new }
   end
 
 end

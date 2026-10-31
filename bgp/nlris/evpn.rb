@@ -85,11 +85,16 @@ module BGP
     # give it: eight types across RFC 7432, RFC 9136 and RFC 9251, and
     # three more of its own.
     #
-    # Eight rows so far: route types 1 to 4 from RFC 7432 section 7,
-    # route type 5 from RFC 9136 section 3.1, which together are the
-    # core set every EVPN implementation has, and route types 6, 7 and 8
-    # from RFC 9251 sections 9.1 to 9.3. Types 9, 10 and 11 follow.
-    # Every other type still reads back as an `Evpn::Unknown` that
+    # **All eleven rows, as of route types 9, 10 and 11.** Types 1 to 4
+    # from RFC 7432 section 7, type 5 from RFC 9136 section 3.1, which
+    # together are the core set every EVPN implementation has, types 6,
+    # 7 and 8 from RFC 9251 sections 9.1 to 9.3, and types 9, 10 and 11
+    # from RFC 9572 sections 3.1 to 3.3. Route type 11's Route Key is an
+    # NLRI of its own, so this class parses one from inside a route it
+    # built, which is the recursion the framing was always able to
+    # carry.
+    #
+    # A type outside 1 to 11 still reads back as an `Evpn::Unknown` that
     # replays byte for byte. Each later part fills more rows, and
     # `test/unit/evpn_doc_test.rb` discovers this table rather than
     # listing it, so a route type class cannot join the library without
@@ -104,6 +109,9 @@ module BGP
       Selective_multicast.type  => Selective_multicast,
       Membership_report_synch.type => Membership_report_synch,
       Leave_synch.type          => Leave_synch,
+      Per_region_i_pmsi.type    => Per_region_i_pmsi,
+      S_pmsi.type               => S_pmsi,
+      Leaf_a_d.type             => Leaf_a_d,
     }.freeze
 
     # Hash key back to class, for the hash build path. Unknown is in

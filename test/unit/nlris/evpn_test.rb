@@ -144,7 +144,7 @@ class EvpnTest < Test::Unit::TestCase
   # `test/unit/evpn_doc_test.rb` is what keeps it honest: it discovers
   # the classes the library defines rather than listing them.
   def test_an_unimplemented_route_type_reads_back_whole
-    assert_equal([1, 2, 3, 4, 5, 6, 7, 8], BGP::Evpn::ROUTES.keys.sort)
+    assert_equal((1..11).to_a, BGP::Evpn::ROUTES.keys.sort)
     (1..11).each do |t|
       n = BGP::Evpn.new(wire('%02x02aabb' % t))
       assert_instance_of(BGP::Evpn::Unknown, n.route)
@@ -373,6 +373,201 @@ class EvpnTest < Test::Unit::TestCase
     assert_equal(6, n.type)
     assert_equal(hex, n.to_shex)
     assert_equal(hex, BGP::Evpn.new(n.to_hash).to_shex)
+  end
+
+
+  # ---------------------------------------------------------------
+  # Route type 11, RFC 9572 section 3.3, the Leaf A-D route. Its tests
+  # live here and not in evpn_route_test.rb, because its Route Key is
+  # an NLRI: the class reaches `Evpn.nlri_size` and `Evpn.new` at call
+  # time, so it is the one route type that does not work against
+  # evpn_route.rb alone. That file requires evpn_route.rb by itself on
+  # purpose, which is what proves the other ten do not need the NLRI.
+  # ---------------------------------------------------------------
+
+  # Section 3.3: "The Route Key is the NLRI of the route for which this
+  # Leaf A-D route is generated", and the terminology section says the
+  # Leaf A-D route "embeds the entire NLRI of the triggering PMSI A-D
+  # route". Entire, so the Route Type and Length octets are in there,
+  # which is what makes the recursion self delimiting.
+  def test_a_leaf_a_d_route_embeds_a_whole_nlri_as_its_route_key
+    assert_equal(11, BGP::Evpn::Leaf_a_d.type)
+    assert_equal(:leaf_a_d, BGP::Evpn::Leaf_a_d.hash_key)
+    inner = BGP::Evpn.new(BGP::Evpn::Inclusive_multicast
+                            .new([100, 200], 10, '10.0.0.1'))
+    r = BGP::Evpn::Leaf_a_d.new(inner, '10.0.0.9')
+    # The Route Key carries its own framing: route type 3, length 0x11.
+    assert_equal('0311' \
+                 '00000064000000c8' \
+                 '0000000a' \
+                 '200a000001' \
+                 '200a000009', r.to_shex)
+    assert_equal(inner.to_shex, r.route_key.to_shex)
+    assert_instance_of(BGP::Evpn::Inclusive_multicast, r.route_key.route)
+    assert_equal('10.0.0.9', r.originator.address)
+    # And the whole thing framed as an NLRI of its own, 2 + 24.
+    n = BGP::Evpn.new(r)
+    assert_equal('0b18' \
+                 '0311' \
+                 '00000064000000c8' \
+                 '0000000a' \
+                 '200a000001' \
+                 '200a000009', n.to_shex)
+    assert_equal(26, BGP::Evpn.nlri_size(wire(n.to_shex)))
+  end
+
+  # **The only route type with neither an RD nor an Ethernet Tag ID**,
+  # which follows from the Route Key carrying whatever the triggering
+  # route carried. Section 3 confirms it from the other side: the RD
+  # rule it states for types 9 and 10 names "non-Leaf A-D routes" as
+  # the ones that must match, so this one is the stated exception.
+  def test_a_leaf_a_d_route_has_no_rd_and_no_ethernet_tag_id
+    r = BGP::Evpn::Leaf_a_d.new
+    refute_respond_to(r, :rd)
+    refute_respond_to(r, :ethernet_tag_id)
+    assert_respond_to(r, :route_key)
+    assert_respond_to(r, :originator)
+    # Every other route type has at least one of the two.
+    BGP::Evpn::ROUTES.each do |t, k|
+      next if t == 11
+      e = k.new
+      assert(e.respond_to?(:rd) || e.respond_to?(:ethernet_tag_id),
+             "route type #{t} should carry an RD or an Ethernet Tag ID")
+    end
+  end
+
+  def test_route_type_11_builds_four_ways
+    inner = BGP::Evpn.new(BGP::Evpn::Per_region_i_pmsi
+                            .new([100, 200], 10, '00090000fde80000'))
+    r = BGP::Evpn::Leaf_a_d.new(inner, '2001:db8::9')
+    k = BGP::Evpn::Leaf_a_d
+    assert_equal(r.to_shex, k.new(r.encode.is_packed).to_shex)
+    assert_equal(r.to_shex, k.new(r).to_shex)
+    assert_equal(r.to_shex, k.new(r.to_hash).to_shex)
+    assert_equal({ :leaf_a_d =>
+                   { :route_key =>
+                     { :per_region_i_pmsi =>
+                       { :rd => [100, 200], :ethernet_tag_id => 10,
+                         :region_id => '00090000fde80000' } },
+                     :originator => '2001:db8::9' } },
+                 r.to_hash)
+    # A Route Key may be given as the route itself, as its octets, or as
+    # a hash, since all three are things Evpn builds from.
+    plain = BGP::Evpn::Per_region_i_pmsi.new([100, 200], 10,
+                                             '00090000fde80000')
+    assert_equal(r.to_shex, k.new(plain, '2001:db8::9').to_shex)
+    assert_equal(r.to_shex,
+                 k.new(wire(inner.to_shex), '2001:db8::9').to_shex)
+    assert_raise(ArgumentError) { k.new(1, 2, 3) }
+    assert_raise(ArgumentError) { k.new(42, '10.0.0.1') }
+  end
+
+  # It prints its route type number, the route its Route Key holds, and
+  # the originator. Asserted because a to_s nothing calls is a
+  # NoMethodError waiting for the first reader who prints a route.
+  def test_a_leaf_a_d_route_prints_its_route_key
+    inner = BGP::Evpn.new(BGP::Evpn::Inclusive_multicast
+                            .new([100, 200], 10, '10.0.0.1'))
+    r = BGP::Evpn::Leaf_a_d.new(inner, '10.0.0.9')
+    assert_match(/^\[11\] Leaf A-D: route key /, r.to_s)
+    # The Route Key prints as the route it holds, so the nesting is
+    # visible rather than hex.
+    assert_match(/\[3\] Inclusive Multicast:/, r.to_s)
+    assert_match(/originator 10\.0\.0\.9/, r.to_s)
+    assert_match(/route key Unknown route type 0/, BGP::Evpn::Leaf_a_d.new.to_s)
+  end
+
+  # An absent Route Key is not nothing: there is no sensible default
+  # NLRI, so it is a type 0 Unknown with no body, 2 octets, which
+  # replays like any other.
+  def test_an_absent_route_key_is_an_empty_unknown_nlri
+    r = BGP::Evpn::Leaf_a_d.new
+    assert_equal('000000', r.to_shex)
+    assert_instance_of(BGP::Evpn::Unknown, r.route_key.route)
+    assert_equal(0, r.route_key.type)
+    assert(r.originator.empty?)
+    assert_equal(r.to_shex,
+                 BGP::Evpn::Leaf_a_d.new(r.encode.is_packed).to_shex)
+  end
+
+  # Nothing validates, so a Route Key may hold a route type bgp4r does
+  # not implement, and a Leaf A-D route may hold another one, which no
+  # RFC describes. Both replay.
+  def test_a_route_key_holds_anything_and_replays
+    unimplemented = BGP::Evpn.new(BGP::Evpn::Unknown.new(99, wire('aabbcc')))
+    r = BGP::Evpn::Leaf_a_d.new(unimplemented, '10.0.0.9')
+    assert_equal('6303aabbcc200a000009', r.to_shex)
+    back = BGP::Evpn::Leaf_a_d.new(r.encode.is_packed)
+    assert_equal(r.to_shex, back.to_shex)
+    assert_instance_of(BGP::Evpn::Unknown, back.route_key.route)
+    assert_equal(99, back.route_key.type)
+
+    nested = BGP::Evpn::Leaf_a_d.new(BGP::Evpn.new(r), '2001:db8::1')
+    assert_instance_of(BGP::Evpn::Leaf_a_d, nested.route_key.route)
+    assert_equal(nested.to_shex,
+                 BGP::Evpn::Leaf_a_d.new(nested.encode.is_packed).to_shex)
+    assert_equal(nested.to_shex,
+                 BGP::Evpn::Leaf_a_d.new(nested.to_hash).to_shex)
+  end
+
+  # A Route Key whose own Length lies about the octets behind it cannot
+  # reproduce the body, so the encode-matches rule hands the whole NLRI
+  # to Unknown, which replays it. The outer Length is 6 here and the
+  # Route Key claims 17.
+  def test_a_route_key_whose_length_lies_falls_back_to_unknown
+    hex = '0b06' + '0311' + '00000064'
+    n = BGP::Evpn.new(wire(hex))
+    assert_instance_of(BGP::Evpn::Unknown, n.route)
+    assert_equal(11, n.type)
+    assert_equal(hex, n.to_shex)
+    assert_equal(hex, BGP::Evpn.new(n.to_hash).to_shex)
+  end
+
+  # A Route Key too short to carry even its two framing octets has
+  # nothing to frame, which is the one thing the class refuses, since
+  # the alternative is inventing a length.
+  def test_a_route_key_too_short_to_frame_is_refused
+    assert_raise(ArgumentError) { BGP::Evpn::Leaf_a_d.new(wire('03')) }
+    # Through the NLRI it is an Unknown that replays, as always.
+    n = BGP::Evpn.new(wire('0b0103'))
+    assert_instance_of(BGP::Evpn::Unknown, n.route)
+    assert_equal('0b0103', n.to_shex)
+  end
+
+  # Two Leaf A-D NLRIs in a row come off one buffer, which is what the
+  # parse loops do and the only thing that proves the recursion does not
+  # over-read.
+  def test_two_leaf_a_d_nlris_in_a_row_each_read_their_own
+    inner = BGP::Evpn.new(BGP::Evpn::Inclusive_multicast
+                            .new([100, 200], 10, '10.0.0.1'))
+    one = BGP::Evpn.new(BGP::Evpn::Leaf_a_d.new(inner, '10.0.0.9'))
+    buf = (one.encode + one.encode).is_packed
+    a = BGP::Evpn.new(buf)
+    b = BGP::Evpn.new(buf)
+    assert_equal(one.to_shex, a.to_shex)
+    assert_equal(one.to_shex, b.to_shex)
+    assert(buf.empty?, 'both NLRIs read exactly their own octets')
+  end
+
+  # The 2026-10-30 open question, closed. Part 1 of the EVPN plan
+  # recorded that RFC 9572 never says its length fields are in bits,
+  # and deferred the answer to this part rather than guessing it.
+  # Section 3.2 defers to RFC 7117, which carries the RFC 6514 section
+  # 4.3 encoding: "If the Multicast Source field contains an IPv4
+  # address, then the value of the Multicast Source Length field is 32."
+  # 32 for IPv4 and 128 for IPv6 is bits, by the values and not by the
+  # word, which no document in the chain uses.
+  def test_the_rfc_9572_length_fields_hold_a_bit_count
+    r = BGP::Evpn::S_pmsi.new([100, 200], 10, '192.0.2.1', 'ff0e::1',
+                              '10.0.0.1')
+    assert_equal(32, r.source.bitlen)
+    assert_equal(128, r.group.bitlen)
+    leaf = BGP::Evpn::Leaf_a_d
+             .new(BGP::Evpn.new(BGP::Evpn::Per_region_i_pmsi.new), '10.0.0.9')
+    assert_equal(32, leaf.originator.bitlen)
+    assert_equal(128, BGP::Evpn::Leaf_a_d
+                        .new(BGP::Evpn.new(BGP::Evpn::Per_region_i_pmsi.new),
+                             '2001:db8::9').originator.bitlen)
   end
 
 end

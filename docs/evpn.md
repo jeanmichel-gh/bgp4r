@@ -107,9 +107,9 @@ across RFC 7432, RFC 9136 and RFC 9251, and its Table 2 adds three.
 | 6 | Selective Multicast Ethernet Tag | RFC 9251 section 9.1 | yes |
 | 7 | Multicast Membership Report Synch | RFC 9251 section 9.2 | yes |
 | 8 | Multicast Leave Synch | RFC 9251 section 9.3 | yes |
-| 9 | Per-Region I-PMSI A-D | RFC 9572 section 3.1 | no |
-| 10 | S-PMSI A-D | RFC 9572 section 3.2 | no |
-| 11 | Leaf A-D | RFC 9572 section 3.3 | no |
+| 9 | Per-Region I-PMSI A-D | RFC 9572 section 3.1 | yes |
+| 10 | S-PMSI A-D | RFC 9572 section 3.2 | yes |
+| 11 | Leaf A-D | RFC 9572 section 3.3 | yes |
 
 **Route types 1 to 5 are implemented, which is the core set every EVPN
 implementation has; types 6 to 11 still read back as an `Evpn::Unknown`
@@ -273,6 +273,70 @@ a body of exactly the right length and one field lying, which is why
 `Sized#parse` had to stop raising when a body runs out where a length
 octet should be.
 
+### Types 9, 10 and 11, the RFC 9572 additions
+
+Sections 3.1, 3.2 and 3.3. The three have less in common with each other
+than the RFC 9251 trio do, so read them one at a time.
+
+**Route type 9**, the Per-Region I-PMSI A-D route, is fixed at 20
+octets: RD (8), Ethernet Tag ID (4), Region ID (8). The Region ID "is
+encoded in the same way that an EC is encoded, as detailed in Section
+6.2", and section 6.2 gives three example encodings and then "The use of
+other EC encodings MAY be allowed as long as they uniquely identify the
+region", so the sub-type is not fixed.
+
+**`Region_id` holds those 8 octets and does not decode them as an
+extended community**, which was measured rather than assumed. Reusing
+`BGP::Extended_community` was the obvious move, the way `BGP::Label` is
+reused for the MPLS Label, and two things rule it out. It **cannot be
+rebuilt from its own `to_hash`**: neither `Extended_community.factory`
+nor `.new` takes a Hash, so route type 9's hash round trip would break
+and have to be recorded as a loss. And it would buy no meaning anyway,
+because **all three of section 6.2's own examples read back as
+`Extended_community::Unknown` today**: two use sub-type 0x09, Source AS
+of RFC 6514 section 4.5, which bgp4r's `FACTORY` does not register, and
+the third is "a Transitive IPv4-Address-specific EC of any sub-type".
+Registering Source AS is its own small piece of work.
+
+**Route type 10**, the S-PMSI A-D route, is route type 6 without its
+Flags octet: RD (8), Ethernet Tag ID (4), then the address triple. So it
+shares `Multicast_fields` with the RFC 9251 trio, and it is the reason
+that module does not carry the Flags: an `attr_reader :flags` there
+would answer nil for this route type and read as a field that is present
+and unset.
+
+**Route type 11**, the Leaf A-D route, is the odd one: Route Key
+(variable), Originator's Addr Length (1), Originator's Addr (4 or 16).
+
+* **It is the only route type with neither an RD nor an Ethernet Tag
+  ID**, and that follows from what the Route Key is rather than being an
+  omission. Section 3.3: "The Route Key is the NLRI of the route for
+  which this Leaf A-D route is generated", and the terminology section
+  says the route "embeds the entire NLRI of the triggering PMSI A-D
+  route". Entire, so whatever the triggering route carried is reached
+  through the Route Key instead of repeated beside it. Section 3
+  confirms it from the other side: the RD rule it states for types 9 and
+  10 names "non-Leaf A-D routes" as the ones that must match, so this
+  one is the stated exception.
+* **The recursion costs nothing, because the framing is self
+  delimiting.** A Route Key's extent comes from its own Length octet, so
+  `Evpn.nlri_size` answers it and `Evpn` parses it. That is the property
+  section 2 above recorded in part 1, kept against this day.
+* **`Leaf_a_d` reaches `Evpn` at call time and not at load time**, which
+  is what makes it legal: `Evpn` is the class around every route type,
+  and the NLRI's own methods are added by `bgp/nlris/evpn.rb`, which
+  requires `evpn_route.rb` first. So this is the one class in that file
+  that does not work against `evpn_route.rb` alone, and its tests live in
+  `test/unit/nlris/evpn_test.rb` beside the framing they exercise. The
+  other ten are tested against `evpn_route.rb` by itself, which is what
+  proves they need no NLRI.
+* Nothing validates, so a Route Key may hold a route type bgp4r does not
+  implement, which comes back as an `Evpn::Unknown` inside it and
+  replays, and a Leaf A-D route may hold another Leaf A-D route, which no
+  RFC describes. A Route Key whose own Length lies about the octets
+  behind it cannot reproduce the body, so the encode-matches rule hands
+  the whole NLRI to `Unknown`, which replays it.
+
 ## 4. The primitives
 
 Four shapes carry every field in the eleven layouts that is not an `Rd`
@@ -285,6 +349,8 @@ a time shows eleven layouts.
 | `Ethernet_tag_id` | 4 octets | all but 4 and 11 |
 | `Mac_addr` | length plus 6 octets | 2 |
 | `Addr` | length plus 0, 4 or 16 octets | 2, 3, 4, 5, and the triple in 6, 7, 8, 10, 11 |
+| `Flags` | 1 octet | 6, 7, 8 |
+| `Region_id` | 8 octets | 9 |
 
 RFC 9251 calls the third member of its address triple "Originator
 Router" and RFC 9572 calls it "Originator's Addr". They are one shape
@@ -314,13 +380,30 @@ This is the detail to get right, because it is the one memory reverses.
 * RFC 9136 section 3.1: the IP Prefix Length "specifies the number of
   bits in the prefix", 0 to 32 for IPv4 and 0 to 128 for IPv6.
 
-**RFC 9572 is the one that does not say**, and that is recorded rather
-than guessed. It has no "in bits" sentence anywhere, and for route type
-10 it says only that the route is "identical to the S-PMSI A-D route as
-defined in [RFC7117]" apart from two added fields, so the units are
-RFC 7117's. **That RFC has not been read here.** `Sized` takes the bit
-count either way, so the question belongs to route types 10 and 11 and
-is open until part 7 reads RFC 7117.
+**RFC 9572 is the one that does not say**, and part 7 closed the
+question rather than leaving it. It has no "in bits" sentence anywhere,
+and for route type 10 section 3.2 says only that the route is
+"identical to the S-PMSI A-D route as defined in [RFC7117]" apart from
+two added fields, so the units are the ones that route already uses.
+
+**That route carries the RFC 6514 section 4.3 encoding, which answers
+it by value rather than by the word**: "If the Multicast Source field
+contains an IPv4 address, then the value of the Multicast Source Length
+field is 32." 32 for IPv4 and 128 for IPv6 is a bit count, and no
+document in the chain uses the word "bits" for it. The same section
+adds "Usage of other values of the Multicast Source Length and
+Multicast Group Length fields is outside the scope of this document",
+which is the same "outside the scope is not an error" shape RFC 7432
+section 14 uses for the MAC length, and is why `Addr` echoes any length
+here too.
+
+**Which link of that chain is first hand matters, so it is recorded.**
+The RFC 6514 sentence was read in draft-ietf-bess-rfc6514bis-00 section
+4.3, which obsoletes RFC 6514. **RFC 7117 section 9.2.1 itself was not
+read**: three fetches of it got no further than section 8.4.3, and the
+rfc-editor.org copy is not reachable from this session. So the units
+are settled on RFC 6514's own words and on RFC 9572's deferral to the
+route that carries them, not on RFC 7117's text.
 
 ### The MAC and the IP disagree about what a length means
 

@@ -1272,4 +1272,168 @@ class EvpnRouteTest < Test::Unit::TestCase
     assert_equal(r8.to_shex, BGP::Evpn::Leave_synch.new(r8.to_hash).to_shex)
   end
 
+
+  # ---------------------------------------------------------------
+  # The Region ID of route type 9, RFC 9572 sections 3.1 and 6.2.
+  # ---------------------------------------------------------------
+
+  def test_the_region_id_is_eight_octets_built_five_ways
+    assert_equal(8, BGP::Evpn::Region_id::WIDTH)
+    r = BGP::Evpn::Region_id.new('00090000fde80000')
+    assert_equal(8, r.encode.size)
+    assert_equal(8, r.size)
+    assert_equal('00090000fde80000', r.to_shex)
+    assert_equal('00090000fde80000', BGP::Evpn::Region_id
+                                       .new(0x00090000fde80000).to_shex)
+    assert_equal('00090000fde80000',
+                 BGP::Evpn::Region_id.new(wire('00090000fde80000')).to_shex)
+    assert_equal('00090000fde80000', BGP::Evpn::Region_id.new(r).to_shex)
+    assert_equal('00090000fde80000',
+                 BGP::Evpn::Region_id.new(r.to_hash).to_shex)
+    assert_equal(0x00090000fde80000, r.to_i)
+    refute(r.zero?)
+    assert(BGP::Evpn::Region_id.new.zero?)
+    assert_equal('0000000000000000', BGP::Evpn::Region_id.new.to_shex)
+  end
+
+  # A hash may carry the Region ID either way, since the constructor
+  # takes both and `to_hash` answers hex.
+  def test_a_region_id_hash_takes_hex_or_an_integer
+    assert_equal('00090000fde80000',
+                 BGP::Evpn::Region_id
+                   .new(:region_id => '00090000fde80000').to_shex)
+    assert_equal('00090000fde80000',
+                 BGP::Evpn::Region_id
+                   .new(:region_id => 0x00090000fde80000).to_shex)
+    # And the bare value, not wrapped in its own key.
+    assert_equal('000000000000fde8',
+                 BGP::Evpn::Region_id.new(65_000).to_shex)
+    assert_raise(ArgumentError) do
+      BGP::Evpn::Region_id.new(:region_id => 2**64)
+    end
+  end
+
+  # Short hex is the low octets, left padded, so nothing is dropped in
+  # silence. 65000 as an AS number reads the same either way.
+  def test_a_short_region_id_is_left_padded
+    assert_equal('000000000000fde8', BGP::Evpn::Region_id.new('fde8').to_shex)
+    assert_equal(BGP::Evpn::Region_id.new(65_000).to_shex,
+                 BGP::Evpn::Region_id.new('fde8').to_shex)
+  end
+
+  def test_a_region_id_refuses_only_what_eight_octets_cannot_hold
+    assert_raise(ArgumentError) { BGP::Evpn::Region_id.new('zz') }
+    assert_raise(ArgumentError) { BGP::Evpn::Region_id.new('0' * 18) }
+    assert_raise(ArgumentError) { BGP::Evpn::Region_id.new(2**64) }
+    assert_raise(ArgumentError) { BGP::Evpn::Region_id.new(-1) }
+    assert_raise(ArgumentError) { BGP::Evpn::Region_id.new(1, 2) }
+    # Section 6.2 says "The use of other EC encodings MAY be allowed", so
+    # an encoding no RFC describes still builds.
+    assert_equal('ffffffffffffffff',
+                 BGP::Evpn::Region_id.new('ff' * 8).to_shex)
+  end
+
+  # ---------------------------------------------------------------
+  # Route type 9, RFC 9572 section 3.1.
+  # ---------------------------------------------------------------
+
+  def test_route_type_9_is_the_per_region_i_pmsi_route
+    assert_equal(9, BGP::Evpn::Per_region_i_pmsi.type)
+    assert_equal(:per_region_i_pmsi, BGP::Evpn::Per_region_i_pmsi.hash_key)
+    assert_equal(20, BGP::Evpn::Per_region_i_pmsi::SIZE)
+    r = BGP::Evpn::Per_region_i_pmsi.new([100, 200], 10, '00090000fde80000')
+    assert_equal('00000064000000c8' \
+                 '0000000a' \
+                 '00090000fde80000', r.to_shex)
+    assert_equal(20, r.encode.size)
+    assert_equal(8 + 4 + 8, BGP::Evpn::Per_region_i_pmsi::SIZE)
+    assert_equal([100, 200], r.rd.to_hash[:rd])
+    assert_equal(10, r.ethernet_tag_id.value)
+    assert_equal('00090000fde80000', r.region_id.to_shex)
+    # The one route type of the three with a fixed size, so an empty one
+    # is the same 20 octets.
+    assert_equal(20, BGP::Evpn::Per_region_i_pmsi.new.encode.size)
+  end
+
+  def test_route_type_9_builds_four_ways
+    r = BGP::Evpn::Per_region_i_pmsi.new([100, 200], 10, '00090000fde80000')
+    k = BGP::Evpn::Per_region_i_pmsi
+    assert_equal(r.to_shex, k.new(r.encode.is_packed).to_shex)
+    assert_equal(r.to_shex, k.new(r).to_shex)
+    assert_equal(r.to_shex, k.new(r.to_hash).to_shex)
+    assert_equal({ :per_region_i_pmsi =>
+                   { :rd => [100, 200], :ethernet_tag_id => 10,
+                     :region_id => '00090000fde80000' } },
+                 r.to_hash)
+    assert_match(/^\[9\] Per-Region I-PMSI A-D:/, r.to_s)
+    assert_match(/region 00090000fde80000/, r.to_s)
+    assert_raise(ArgumentError) { k.new(1, 2, 3, 4) }
+  end
+
+  # ---------------------------------------------------------------
+  # Route type 10, RFC 9572 section 3.2.
+  # ---------------------------------------------------------------
+
+  # Route type 6 without its Flags octet, which is why Multicast_fields
+  # does not carry the Flags.
+  def test_route_type_10_is_route_type_6_without_the_flags
+    assert_equal(10, BGP::Evpn::S_pmsi.type)
+    assert_equal(:s_pmsi, BGP::Evpn::S_pmsi.hash_key)
+    r = BGP::Evpn::S_pmsi.new([100, 200], 10, '192.0.2.1', '232.1.1.1',
+                              '10.0.0.1')
+    assert_equal('00000064000000c8' \
+                 '0000000a' \
+                 '20c0000201' \
+                 '20e8010101' \
+                 '200a000001', r.to_shex)
+    assert_equal(15, BGP::Evpn::S_pmsi::FIXED_SIZE)
+    assert_equal(15 + (3 * 4), r.encode.size)
+    # One octet less than route type 6's, which is the Flags.
+    assert_equal(BGP::Evpn::Selective_multicast::FIXED_SIZE - 1,
+                 BGP::Evpn::S_pmsi::FIXED_SIZE)
+    refute_respond_to(r, :flags, 'route type 10 has no Flags octet')
+    assert_respond_to(BGP::Evpn::Selective_multicast.new, :flags)
+  end
+
+  # The units question RFC 9572 leaves open, settled through the chain
+  # it points at. Section 3.2 makes this route "identical to the S-PMSI
+  # A-D route as defined in [RFC7117]" but for two fields, and that
+  # route carries the RFC 6514 section 4.3 encoding, whose own sentence
+  # is "If the Multicast Source field contains an IPv4 address, then the
+  # value of the Multicast Source Length field is 32." 32 for IPv4 and
+  # 128 for IPv6 is bits, by the values rather than by the word.
+  def test_route_type_10_lengths_are_in_bits
+    r = BGP::Evpn::S_pmsi.new([100, 200], 10, '192.0.2.1', 'ff0e::1',
+                              '2001:db8::9')
+    assert_equal(32, r.source.bitlen)
+    assert_equal(4, r.source.value.size)
+    assert_equal(128, r.group.bitlen)
+    assert_equal(16, r.group.value.size)
+    assert_equal(128, r.originator.bitlen)
+    assert_equal(15 + 4 + 16 + 16, r.encode.size)
+    assert_equal(15 + (3 * 16),
+                 BGP::Evpn::S_pmsi.new([100, 200], 10, '2001:db8::1',
+                                       'ff0e::1', '2001:db8::9').encode.size)
+  end
+
+  def test_route_type_10_builds_four_ways
+    r = BGP::Evpn::S_pmsi.new([100, 200], 10, nil, nil, '10.0.0.1')
+    k = BGP::Evpn::S_pmsi
+    assert_equal('00000064000000c8' \
+                 '0000000a' \
+                 '00' \
+                 '00' \
+                 '200a000001', r.to_shex)
+    assert_equal(r.to_shex, k.new(r.encode.is_packed).to_shex)
+    assert_equal(r.to_shex, k.new(r).to_shex)
+    assert_equal(r.to_shex, k.new(r.to_hash).to_shex)
+    # The (*,*) wildcard of RFC 6514 section 4.3, both lengths 0.
+    assert(r.source.empty?)
+    assert(r.group.empty?)
+    assert_match(/\(\*,\*\)/, r.to_s)
+    assert_match(/^\[10\] S-PMSI A-D:/, r.to_s)
+    assert_equal(15, k.new.encode.size)
+    assert_raise(ArgumentError) { k.new(1, 2, 3, 4, 5, 6) }
+  end
+
 end

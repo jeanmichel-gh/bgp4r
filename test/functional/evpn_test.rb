@@ -25,7 +25,8 @@ require 'bgp4r'
 require 'test/helpers/server'
 
 # An EVPN UPDATE over a real session, RFC 7432 section 7 and RFC 9136
-# section 3.1 and RFC 9251 sections 9.1 to 9.3, AFI 25 with SAFI 70.
+# section 3.1, RFC 9251 sections 9.1 to 9.3 and RFC 9572 sections
+# 3.1 to 3.3, AFI 25 with SAFI 70.
 #
 # **This is the only test that proves the wiring sites agree with each
 # other**, which is the same thing `flow_spec_test.rb` is for and for the
@@ -369,6 +370,78 @@ class EvpnSessionTest < Test::Unit::TestCase
     assert_equal('deadbeef', r.reserved.unpack1('H*'))
     assert(r.flags.v2?)
     assert_equal(0xf0, r.flags.reserved_bits)
+  end
+
+
+  # Route type 9, RFC 9572 section 3.1, the one fixed size layout of the
+  # three.
+  def test_a_per_region_i_pmsi_route_crosses_a_session
+    mpr = crosses(session,
+                  reach([BGP::Evpn.new(
+                    BGP::Evpn::Per_region_i_pmsi.new([100, 200], 100,
+                                                     '00090000fde80000'))]))
+    r = mpr.nlris.first.route
+    assert_instance_of(BGP::Evpn::Per_region_i_pmsi, r)
+    assert_equal(9, mpr.nlris.first.type)
+    assert_equal([100, 200], r.rd.to_hash[:rd])
+    assert_equal(100, r.ethernet_tag_id.value)
+    assert_equal('00090000fde80000', r.region_id.to_shex)
+  end
+
+  # Route type 10, section 3.2, route type 6 without its Flags. A mixed
+  # family triple with an absent source, which is the (*,G) case.
+  def test_an_s_pmsi_route_crosses_a_session
+    mpr = crosses(session,
+                  reach([BGP::Evpn.new(
+                    BGP::Evpn::S_pmsi.new([100, 200], 100, nil, '232.1.1.1',
+                                          '2001:db8::9'))]))
+    r = mpr.nlris.first.route
+    assert_instance_of(BGP::Evpn::S_pmsi, r)
+    assert_equal(10, mpr.nlris.first.type)
+    assert(r.source.empty?)
+    assert_equal('232.1.1.1', r.group.address)
+    assert_equal(32, r.group.bitlen)
+    assert_equal('2001:db8::9', r.originator.address)
+    assert_equal(128, r.originator.bitlen)
+  end
+
+  # Route type 11, section 3.3, the recursive one: an NLRI inside an
+  # NLRI, both read off the same socket. This is the case that would
+  # show a framing slip as a short read rather than as a failure, since
+  # the Route Key's extent comes from its own Length octet.
+  def test_a_leaf_a_d_route_carries_a_whole_nlri_across_a_session
+    key = BGP::Evpn.new(BGP::Evpn::Inclusive_multicast
+                          .new([100, 200], 100, '10.0.0.1'))
+    mpr = crosses(session,
+                  reach([BGP::Evpn.new(
+                    BGP::Evpn::Leaf_a_d.new(key, '10.0.0.9'))]))
+    r = mpr.nlris.first.route
+    assert_instance_of(BGP::Evpn::Leaf_a_d, r)
+    assert_equal(11, mpr.nlris.first.type)
+    assert_equal(key.to_shex, r.route_key.to_shex)
+    assert_instance_of(BGP::Evpn::Inclusive_multicast, r.route_key.route)
+    assert_equal('10.0.0.1', r.route_key.route.ip.address)
+    assert_equal('10.0.0.9', r.originator.address)
+  end
+
+  # Two of them in one attribute, which is what proves the recursion
+  # does not over-read: the second NLRI starts where the first ended.
+  def test_two_leaf_a_d_routes_in_one_attribute_cross_a_session
+    key = BGP::Evpn.new(BGP::Evpn::Inclusive_multicast
+                          .new([100, 200], 100, '10.0.0.1'))
+    mpr = crosses(session,
+                  reach([BGP::Evpn.new(BGP::Evpn::Leaf_a_d.new(key,
+                                                               '10.0.0.9')),
+                         BGP::Evpn.new(BGP::Evpn::Leaf_a_d.new(key,
+                                                               '10.0.0.10'))]))
+    assert_equal(2, mpr.nlris.size)
+    assert_equal([11, 11], mpr.nlris.collect(&:type))
+    assert_equal(['10.0.0.9', '10.0.0.10'],
+                 mpr.nlris.collect { |n| n.route.originator.address })
+    mpr.nlris.each do |n|
+      assert_instance_of(BGP::Evpn::Leaf_a_d, n.route)
+      assert_equal(key.to_shex, n.route.route_key.to_shex)
+    end
   end
 
 end
