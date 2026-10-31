@@ -40,6 +40,7 @@
 
 require 'test/unit'
 require 'bgp/nlris/evpn'
+require 'bgp/path_attributes/validation'
 require 'bgp/path_attributes/extended_community'
 require 'bgp/path_attributes/mp_reach'
 require 'bgp/nlris/nlri'
@@ -257,14 +258,23 @@ class EvpnDocTest < Test::Unit::TestCase
     assert(v6.v6?)
   end
 
-  # The three receive-side rules RFC 9136 adds, recorded as part 9's
-  # work. This only checks the document still names them and that none
-  # is implemented yet, so the note cannot quietly go stale.
-  def test_the_rfc_9136_treat_as_withdraw_rules_are_recorded_for_later
+  # The three receive-side rules RFC 9136 adds. One landed with part 9
+  # and two did not, because each turns on whether an EVPN Router's MAC
+  # Extended Community is present and `validation.rb` is handed one
+  # attribute at a time.
+  #
+  # **This test asked for "belong to part 9" until part 9 landed.** It
+  # failed then, which is the guard working: the document said all three
+  # were still to do. Re-pointed at the new truth rather than weakened.
+  def test_the_rfc_9136_treat_as_withdraw_rules_are_recorded
     assert_match(/treat as withdraw/, doc)
     assert_match(/Overlay Index/, doc)
-    assert_match(/belong to part 9/, doc)
-    assert_match(/not a check `validation\.rb` can make/, doc)
+    # The correction part 9 found: two of the three need that community,
+    # not one, because section 3.2 lets an Overlay Index be a MAC.
+    assert_match(/Two of the three need the EVPN Router's MAC Extended/, doc)
+    assert_match(/cross-attribute checks, which\s+`validation\.rb` does not do/, doc)
+    # The one that is checked, named as checked.
+    assert_match(/\*\*Checked\*\*, section 8a/, doc)
   end
 
   # Section 7's count, and the community that makes it eleven. Every
@@ -655,6 +665,127 @@ class EvpnDocTest < Test::Unit::TestCase
     # Route type 11 builds too, since Evpn is loaded here. What the
     # document records is that evpn_route.rb alone would not do.
     assert_nothing_raised { BGP::Evpn::Leaf_a_d.new }
+  end
+
+  # ---------------------------------------------------------------
+  # Section 8a, the receive side checks.
+  # ---------------------------------------------------------------
+
+  # Section 8a's table, as [what, action, said_in] per row.
+  def check_rows
+    doc.lines.each_with_object([]) do |l, a|
+      m = l.match(/^\|\s*([a-z][^|]*?)\s*\|\s*(session reset|treat as withdraw)\s*\|([^|]*)\|\s*$/)
+      a << [m[1], m[2].tr(' ', '_').to_sym, m[3].strip] if m
+    end
+  end
+
+  # **The row count is discovered from the library, not from this test.**
+  # Every check is one `Finding.new` inside the EVPN block of
+  # validation.rb, so counting them there and comparing against the table
+  # catches the failure a listed table cannot: a check added to the
+  # library with no row to describe it.
+  #
+  # The slice markers are asserted before the count, so the slice cannot
+  # silently become empty and make this vacuous. That is the lesson the
+  # flow spec guard learned by sabotage and the one #188 learned from a
+  # script that checked its match and not its result.
+  def test_section_8a_has_one_row_per_check_the_library_makes
+    src = File.read('bgp/path_attributes/validation.rb', :encoding => 'UTF-8')
+    first, last = src.index('def evpn_finding'), src.index('def nonzero?')
+    assert(first, 'validation.rb has no evpn_finding to count')
+    assert(last && last > first, 'the slice markers moved, so this guard is measuring nothing')
+    block = src[first...last]
+    assert_equal(block.scan('Finding.new(').size, check_rows.size,
+                 "#{DOC} section 8a does not have one row per check in evpn_finding")
+    # Not vacuous in the other direction either.
+    assert_operator(check_rows.size, :>=, 8)
+  end
+
+  # Each row's Action cell against what the library actually answers.
+  # The probes are built from the library and keyed by a distinctive
+  # phrase of the row's own first cell, so a reworded row fails loudly
+  # rather than quietly matching nothing.
+  def test_every_row_of_section_8a_gets_the_action_it_claims
+    rt1  = BGP::Evpn.new(BGP::Evpn::Ethernet_ad.new([100, 200], BGP::Evpn::Esi.new, 0, 100)).to_shex
+    rt5  = BGP::Evpn.new(BGP::Evpn::Ip_prefix_route
+                           .new([100, 200], BGP::Evpn::Esi.new, 0, '10.0.0.0/8', nil, 500)).to_shex
+    rt5g = BGP::Evpn.new(BGP::Evpn::Ip_prefix_route
+                           .new([100, 200], BGP::Evpn::Esi.new(1), 0, '10.0.0.0/8',
+                                '10.0.0.9', 500)).to_shex
+    smet = BGP::Evpn.new(BGP::Evpn::Selective_multicast
+                           .new([100, 200], 0, nil, '239.1.1.1', '10.0.0.1', :v2)).to_shex
+    smet0 = BGP::Evpn.new(BGP::Evpn::Selective_multicast
+                            .new([100, 200], 0, nil, '239.1.1.1', '10.0.0.1')).to_shex
+    probes = {
+      'fewer than 2 octets'   => rt1 + '05',
+      'runs past the attribute' => rt1[0, 2] + 'ff' + rt1[4..],
+      'neither 34 nor 58'     => '0521' + rt5[4..][0, 66],
+      'prefix length above 128' => rt5[0, 48] + 'c8' + rt5[50..],
+      'non-zero GW IP'        => rt5g,
+      'too short to hold its route key' => '060c' + smet[4..][0, 24],
+      'address length field runs past' => smet[0, 28] + 'c8' + smet[30..],
+      'no IGMP version flag set' => smet0,
+    }
+    rows = check_rows
+    probes.each do |phrase, nlri|
+      row = rows.select { |what, _, _| what.include?(phrase) }
+      assert_equal(1, row.size,
+                   "#{DOC} section 8a has #{row.size} rows matching #{phrase.inspect}")
+      # One EVPN MP_REACH carrying that NLRI, and the action it gets.
+      hex = '800e' + format('%02x', 9 + nlri.size / 2) +
+            '001946' + '04' + '0a000001' + '00' + nlri
+      findings = BGP::Attr::Check.attribute([hex].pack('H*'), false)
+      assert_equal(1, findings.size, "#{phrase}: #{findings.collect(&:reason)}")
+      assert_equal(row.first[1], findings.first.action, phrase)
+      # And the section each row cites is the one the finding names, so a
+      # row cannot claim an RFC the library does not quote.
+      row.first[2].scan(/RFC (\d+) section ([\d.]+)/) do |rfc, sec|
+        next unless findings.first.reason.include?("RFC #{rfc}")
+        assert_match(/RFC #{rfc} section #{Regexp.escape(sec)}/, findings.first.reason, phrase)
+      end
+    end
+    # The multiset of actions, so the table cannot swap two rows' cells.
+    assert_equal({ :session_reset => 6, :treat_as_withdraw => 2 },
+                 rows.group_by { |r| r[1] }.transform_values(&:size))
+  end
+
+  # Section 8a's two claims about which RFCs say nothing, which are the
+  # reason the framing findings cite RFC 7606 rather than an EVPN RFC.
+  # Read in the text on 2026-10-30 and asserted here so the claim cannot
+  # keep its confidence while losing its provenance.
+  def test_the_document_says_which_rfcs_carry_no_error_handling
+    assert_match(/RFC 7432 and RFC 9572 contain no error\s+handling text at all/, doc)
+    assert_match(/RFC 9251 section 9\.7/, doc)
+    assert_match(/route keys cannot be extracted/, doc)
+    # An unknown route type is reported nowhere, which is the asymmetry
+    # with flow spec that section 8a states.
+    assert_match(/An unknown route type is not reported/, doc)
+    unknown = BGP::Evpn.new(BGP::Evpn::Unknown.new(12, '01020304')).to_shex
+    hex = '800e' + format('%02x', 9 + unknown.size / 2) +
+          '001946' + '04' + '0a000001' + '00' + unknown
+    assert_equal([], BGP::Attr::Check.attribute([hex].pack('H*'), false),
+                 'an unregistered route type is reported, which section 8a says it is not')
+  end
+
+  # Section 8a's two MP_REACH-only rules, and the route key sentences
+  # that are the reason. The version flag one is the case where checking
+  # a withdrawal would report the very withdrawal RFC 9251 asked for.
+  def test_the_two_data_rules_do_not_run_on_a_withdrawal
+    assert_match(/Two of the eight run on an MP_REACH only/, doc)
+    rt5g = BGP::Evpn.new(BGP::Evpn::Ip_prefix_route
+                           .new([100, 200], BGP::Evpn::Esi.new(1), 0, '10.0.0.0/8',
+                                '10.0.0.9', 500)).to_shex
+    smet0 = BGP::Evpn.new(BGP::Evpn::Selective_multicast
+                            .new([100, 200], 0, nil, '239.1.1.1', '10.0.0.1')).to_shex
+    [rt5g, smet0].each do |nlri|
+      withdraw = '800f' + format('%02x', 3 + nlri.size / 2) + '001946' + nlri
+      assert_equal([], BGP::Attr::Check.attribute([withdraw].pack('H*'), false),
+                   'a data rule fired on an MP_UNREACH, where the field is not part of the route key')
+      reach = '800e' + format('%02x', 9 + nlri.size / 2) +
+              '001946' + '04' + '0a000001' + '00' + nlri
+      assert_equal(1, BGP::Attr::Check.attribute([reach].pack('H*'), false).size,
+                   'and the same NLRI in an MP_REACH is reported')
+    end
   end
 
 end

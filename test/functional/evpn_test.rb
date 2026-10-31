@@ -116,7 +116,11 @@ class EvpnSessionTest < Test::Unit::TestCase
   # Sends one UPDATE carrying the given MP attribute and returns the
   # MP_REACH or MP_UNREACH the far side parsed, after asserting that it
   # is one rather than an Attr::Raw.
-  def crosses(catcher, mp, klass = BGP::Mp_reach)
+  # `errors` is what validation.rb should report on what arrived. It is
+  # 0 for a well formed route, and a case that sends one no RFC allows
+  # says so and asserts which rule fired, which is stronger than the
+  # blanket "no protocol error" this helper asserted before part 9.
+  def crosses(catcher, mp, klass = BGP::Mp_reach, errors: 0)
     sent = BGP::Update.new(
       BGP::Path_attribute.new(BGP::Origin.new(0),
                               BGP::As_path.new(CLIENT_AS),
@@ -129,7 +133,8 @@ class EvpnSessionTest < Test::Unit::TestCase
 
     attr = got.path_attribute.find(klass)
     assert_not_nil(attr, "a #{klass}, not an Attr::Raw")
-    assert_equal(0, got.path_attribute.errors.size, 'no protocol error')
+    assert_equal(errors, got.path_attribute.errors.size,
+                 got.path_attribute.errors.collect(&:to_s).join('; '))
     assert_equal(0, got.path_attribute.undecoded.size, 'and no coverage gap')
     assert_equal(AFI, attr.afi)
     assert_equal(SAFI, attr.safi)
@@ -191,11 +196,19 @@ class EvpnSessionTest < Test::Unit::TestCase
   # Route type 5, RFC 9136 section 3.1, whose family comes from the body
   # size alone. Nothing inside the NLRI says IPv6, so this is the one
   # route type a framing slip can turn into the wrong family.
+  #
+  # **This case used to pass ESI here as well as a gateway, which RFC
+  # 9136 section 3.2 forbids**, and part 9 found it: "they MUST NOT both
+  # be non-zero at the same time". The ESI is zero now, which is what
+  # that section calls the GW IP Overlay Index case and leaves every
+  # assertion below unchanged. The forbidden combination has a case of
+  # its own further down, where it is the subject rather than an
+  # accident.
   def test_an_ipv6_ip_prefix_route_crosses_a_session
     mpr = crosses(session,
                   reach([BGP::Evpn.new(
                     BGP::Evpn::Ip_prefix_route.new(
-                      [100, 200], ESI, 100, '2001:db8::/32',
+                      [100, 200], BGP::Evpn::Esi.new, 100, '2001:db8::/32',
                       '2001:db8::1', 500))]))
     r = mpr.nlris.first.route
     assert_instance_of(BGP::Evpn::Ip_prefix_route, r)
@@ -278,6 +291,12 @@ class EvpnSessionTest < Test::Unit::TestCase
   # Evpn::Unknown that replays it, because the route type cannot
   # reproduce those octets. The session stays up, which is what a
   # negative test wants: the router under test decides, not bgp4r.
+  #
+  # **Part 9 added the other half: the receiver now says so.** This used
+  # to assert no protocol error, which was true only because nothing
+  # checked EVPN. Sending it is still free and the session still stays
+  # up; what changed is that `errors` names the fault, which is the whole
+  # point of the receive side.
   def test_a_route_no_rfc_allows_crosses_a_session
     catcher = session
     # Route type 1 declaring 24 octets with 23 behind it.
@@ -285,10 +304,33 @@ class EvpnSessionTest < Test::Unit::TestCase
     liar = BGP::Evpn.new(['0118' + body].pack('H*').is_packed)
     assert_equal(24, liar.declared_len)
 
-    mpr = crosses(catcher, reach([liar]))
+    mpr = crosses(catcher, reach([liar]), BGP::Mp_reach, :errors => 1)
     assert_instance_of(BGP::Evpn::Unknown, mpr.nlris.first.route)
     assert_equal('0118' + body, mpr.nlris.first.to_shex)
     assert(@s.is_established?, 'and the session is still up')
+  end
+
+  # RFC 9136 section 3.2 over a real session, which is the only place
+  # the receive side checks are exercised on octets that crossed a
+  # socket rather than ones a test wrote: "The ESI and GW IP fields may
+  # both be zero at the same time. However, they MUST NOT both be
+  # non-zero at the same time."
+  #
+  # Building it is free, per Conventions, and the session stays up: a
+  # treat-as-withdraw is not a reset, and the point of a negative test
+  # is that the router under test decides.
+  def test_a_route_type_5_that_rfc_9136_forbids_is_reported
+    catcher = session
+    mpr = crosses(catcher,
+                  reach([BGP::Evpn.new(
+                    BGP::Evpn::Ip_prefix_route.new(
+                      [100, 200], ESI, 100, '10.0.0.0/8',
+                      '10.0.0.9', 500))]),
+                  BGP::Mp_reach, :errors => 1)
+    r = mpr.nlris.first.route
+    assert_instance_of(BGP::Evpn::Ip_prefix_route, r)
+    assert_equal('10.0.0.9', r.gateway, 'and it decoded, so this is not a coverage gap')
+    assert(@s.is_established?, 'the session is still up')
   end
 
   # Route type 6, RFC 9251 section 9.1. The first route type whose body

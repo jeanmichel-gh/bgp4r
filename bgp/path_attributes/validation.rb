@@ -229,12 +229,18 @@ module BGP
             return Finding.new(type, 9, RESET, "next hop does not fit in #{n} octets (RFC 7606 section 7.11)")
           end
           nlri_at = 5 + v.getbyte(3)
+          # Each answers nil for the other's family, so the prefix
+          # families pay one comparison each and nothing else.
           return flow_spec_finding(type, v.byteslice(nlri_at, n - nlri_at),
-                                   v.unpack1('n'), v.getbyte(2))
+                                   v.unpack1('n'), v.getbyte(2)) ||
+                 evpn_finding(type, v.byteslice(nlri_at, n - nlri_at),
+                              v.unpack1('n'), v.getbyte(2), true)
         when MP_UNREACH
           return Finding.new(type, 9, RESET, "length #{n}, AFI and SAFI need 3 (RFC 7606 section 7.11)") if n < 3
           return flow_spec_finding(type, v.byteslice(3, n - 3),
-                                   v.unpack1('n'), v.getbyte(2))
+                                   v.unpack1('n'), v.getbyte(2)) ||
+                 evpn_finding(type, v.byteslice(3, n - 3),
+                              v.unpack1('n'), v.getbyte(2), false)
         end
         nil
       end
@@ -347,6 +353,180 @@ module BGP
           i += size
         end
         nil
+      end
+
+      # The EVPN NLRI list of an MP_REACH or MP_UNREACH, AFI 25 SAFI 70.
+      # nil for every other family, so this costs the prefix families one
+      # comparison.
+      #
+      # **Where the action and the subcode come from, because the route
+      # type RFCs mostly do not say.** RFC 7432 and RFC 9572 contain no
+      # error handling text at all: neither says "malformed", neither
+      # mentions RFC 7606. RFC 9251 section 9.7 is the only EVPN RFC that
+      # does, and it agrees with what bgp4r already gives a malformed
+      # MP_REACH: "If a received BGP update is malformed such that BGP
+      # route keys cannot be extracted, then the BGP update MUST be
+      # considered invalid. The receiving PE MUST apply the 'session
+      # reset' procedure per [RFC7606]." So the framing and length
+      # findings are subcode 9 with a session reset, the same as the two
+      # MP_REACH findings above and for the same reason, RFC 7606 section
+      # 7.11. Where a route type's own RFC names treat-as-withdraw
+      # instead, that wins, which is RFC 7606 section 3 working as
+      # intended; those findings say which section said so.
+      #
+      # **An unknown route type is not an error here, where an unknown
+      # flow spec component type is.** That asymmetry is the RFCs': RFC
+      # 8955 section 4.2 says in so many words that an NLRI containing an
+      # unknown component type "is considered malformed", and no EVPN RFC
+      # says anything of the kind about a route type outside its own. So
+      # an unregistered route type keeps its octets as an `Evpn::Unknown`
+      # and is reported nowhere, which is RFC 4271 section 5's posture
+      # toward what a receiver does not recognize. Do not add it: types
+      # 12 to 255 are unassigned, so it would make bgp4r call a correct
+      # router malformed the day IANA assigns one.
+      #
+      # **`reach` is why this takes an argument `flow_spec_finding` does
+      # not, and it changes the answer.** Two of the rules below are
+      # about the data in a route being advertised, and the fields they
+      # read are explicitly not part of the route key: RFC 9136 section
+      # 3.1 says only "The RD, Ethernet Tag ID, IP prefix length, and IP
+      # prefix are part of the route key", and RFC 9251 section 9.1 says
+      # "all the fields are considered to be part of the prefix in the
+      # NLRI, except for the 1-octet Flags field". A withdrawal names a
+      # route key, so whatever it carries in the other fields is
+      # don't-care. Running the version flag rule on an MP_UNREACH would
+      # be worse than useless: RFC 9251 section 4.1 asks a PE to withdraw
+      # the route rather than re-advertise it with the flags reset, so
+      # bgp4r would report the very withdrawal the RFC asked for.
+      def evpn_finding(type, nlri, afi, safi, reach)
+        return nil unless afi == IANA::AFI::L2VPN and safi == IANA::SAFI::EVPN
+        framing = ::BGP::Evpn::FRAMING
+        while nlri.size > 0
+          size = ::BGP::Evpn.nlri_size(nlri)
+          if size.nil?
+            return Finding.new(type, 9, RESET,
+              "#{nlri.size} octet left, too few for an EVPN Route Type and Length (RFC 7432 section 7)")
+          end
+          if size > nlri.size
+            return Finding.new(type, 9, RESET,
+              "EVPN NLRI of #{size} octets runs past the attribute, #{nlri.size} left (RFC 7432 section 7)")
+          end
+          f = evpn_route_finding(type, nlri.getbyte(0),
+                                 nlri.byteslice(framing, size - framing), reach)
+          return f if f
+          nlri = nlri.byteslice(size, nlri.size - size)
+        end
+        nil
+      end
+
+      # One EVPN route's body, against the rules its own RFC states. The
+      # route type numbers come from the classes rather than being written
+      # again here, so they cannot drift from `Evpn::ROUTES`.
+      #
+      # Only two of the eleven have rules a receiver can check from these
+      # octets alone. The others are either silent (RFC 7432's five and
+      # RFC 9572's three say nothing about error handling) or need another
+      # attribute, which is what `docs/evpn.md` section 9 records.
+      def evpn_route_finding(type, route_type, body, reach)
+        case route_type
+        when ::BGP::Evpn::Ip_prefix_route.type
+          ip_prefix_route_finding(type, body, reach)
+        when ::BGP::Evpn::Selective_multicast.type
+          selective_multicast_finding(type, body, reach)
+        end
+      end
+
+      # RFC 9136 sections 3.1 and 3.2, the IP Prefix route. The one route
+      # type with a stated length, and the only one whose RFC names
+      # treat-as-withdraw for a data combination.
+      def ip_prefix_route_finding(type, body, reach)
+        klass  = ::BGP::Evpn::Ip_prefix_route
+        v4, v6 = klass::SIZE_V4, klass::SIZE_V6
+        # Section 3.1: "The Length field of the BGP EVPN NLRI for an EVPN
+        # IP Prefix route MUST be either 34 (if IPv4 addresses are
+        # carried) or 58 (if IPv6 addresses are carried)."
+        unless body.size == v4 or body.size == v6
+          return Finding.new(type, 9, RESET,
+            "EVPN IP Prefix route of #{body.size} octets, must be #{v4} or #{v6} (RFC 9136 section 3.1)")
+        end
+        # RD (8), ESI (10), Ethernet Tag ID (4), then the IP Prefix Length
+        # octet, the prefix, the GW IP Address and a 3 octet label.
+        esi_at, esi_len, plen_at = 8, 10, 22
+        # Section 3.1: the prefix length "specifies the number of bits in
+        # the prefix. The value MUST NOT be greater than 128." The section
+        # names no receiver action, so the generic one applies.
+        plen = body.getbyte(plen_at)
+        if plen > 128
+          return Finding.new(type, 9, RESET,
+            "IP prefix length #{plen}, must not be greater than 128 (RFC 9136 section 3.1)")
+        end
+        return nil unless reach
+        # Section 3.2: "The ESI and GW IP fields may both be zero at the
+        # same time. However, they MUST NOT both be non-zero at the same
+        # time. A route containing a non-zero GW IP and a non-zero ESI (at
+        # the same time) SHOULD be treat as withdraw [RFC7606]." Table 1
+        # of that section lists every combination it does allow.
+        addr = body.size == v4 ? 4 : 16
+        if nonzero?(body, esi_at, esi_len) and
+           nonzero?(body, plen_at + 1 + addr, addr)
+          return Finding.new(type, 9, TAW,
+            'a non-zero ESI and a non-zero GW IP at the same time (RFC 9136 section 3.2)')
+        end
+        nil
+      end
+
+      # RFC 9251 sections 4.1, 9.1 and 9.7, the Selective Multicast
+      # Ethernet Tag route.
+      def selective_multicast_finding(type, body, reach)
+        klass = ::BGP::Evpn::Selective_multicast
+        # RD (8), Ethernet Tag ID (4), three length-prefixed addresses,
+        # then the Flags octet. With all three addresses absent that is
+        # the smallest body there can be, so anything shorter cannot hold
+        # the RD and Ethernet Tag ID the route key is made of.
+        if body.size < klass::FIXED_SIZE
+          return Finding.new(type, 9, RESET,
+            "EVPN SMET route of #{body.size} octets, too few for its route key, " \
+            "which needs #{klass::FIXED_SIZE} (RFC 9251 section 9.7)")
+        end
+        # Each of the three addresses is a length in bits then its octets,
+        # and the Flags octet follows the third. A length field claiming
+        # more octets than are left is malformed under any reading of the
+        # bit count, which is what makes this safe to report: RFC 6514
+        # section 4.3 gives 32 and 128 and calls other values "outside the
+        # scope", so bgp4r echoes any of them rather than ruling on them.
+        i = 8 + 4
+        3.times do |n|
+          i += 1 + (body.getbyte(i) + 7) / 8
+          if i > body.size - 1
+            return Finding.new(type, 9, RESET,
+              "EVPN SMET route address #{n + 1} runs past the route, " \
+              "leaving no Flags octet (RFC 9251 section 9.7)")
+          end
+        end
+        return nil unless reach
+        # Section 4.1: "the received EVPN route MUST have at least one
+        # version flag set. If all version flags are reset, it is an error
+        # because the PE should have received an EVPN route withdraw for
+        # the last version flag. An error MUST be considered as a BGP
+        # error, and the PE MUST apply the 'treat-as-withdraw' procedure
+        # per [RFC7606]." Section 9.7 restates it as Flags "not in
+        # accordance with the IGMP/MLD version-X expectation".
+        #
+        # Route types 7 and 8 carry the same Flags octet and this does not
+        # check them, because the RFC states the rule in SMET's own
+        # processing section and nowhere else. See docs/evpn.md section 9.
+        flags = ::BGP::Evpn::Flags
+        versions = flags::V1 | flags::V2 | flags::V3
+        if (body.getbyte(-1) & versions) == 0
+          return Finding.new(type, 9, TAW,
+            'an EVPN SMET route with no IGMP version flag set (RFC 9251 section 4.1)')
+        end
+        nil
+      end
+
+      # True when any of n octets of s from i is not zero.
+      def nonzero?(s, i, n)
+        s.byteslice(i, n).each_byte.any? { |b| b > 0 }
       end
 
       # The whole size of the component at i, type octet included, or nil
