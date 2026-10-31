@@ -223,6 +223,7 @@ module BGP
           # RFC 6514 section 5: flags, tunnel type, a 3 octet label, then
           # the tunnel identifier.
           return Finding.new(type, 5, TAW, "length #{n}, needs at least 5 (RFC 6514 section 5)") if n < 5
+          return pmsi_tunnel_finding(type, v)
         when MP_REACH
           # AFI, SAFI, next hop length, next hop, reserved (RFC 4760 section 3).
           if n < 5 or 5 + v.getbyte(3) > n
@@ -630,6 +631,32 @@ module BGP
       # its tunnel type affects its own TLV at most. So the sub-TLV
       # lengths the RFC gives are not checked, and bgp4r keeps and
       # passes on every sub-TLV it reads.
+      # RFC 8317 section 6.2's one receive side rule on the PMSI Tunnel
+      # attribute: "Using the composite tunnel bit for Tunnel Types 0x00
+      # 'no tunnel information present' and 0x06 'Ingress Replication'
+      # is invalid. A PE that receives a PMSI Tunnel attribute with such
+      # information considers it malformed, and it SHOULD treat this
+      # Update as though all the routes contained in this Update had
+      # been withdrawn per Section 6 of [RFC6514]." So the action is
+      # treat-as-withdraw in the section's own words, and the subcode is
+      # the one the length finding above already uses, since the section
+      # names none and inventing one is the trap EVPN part 9 recorded.
+      #
+      # **The bit on its own is not an error**, and must not become one:
+      # every other composite tunnel type is valid, and 0x80 to 0xfa are
+      # Reserved for Composite Tunnel by section 8.1. The type numbers
+      # come from `Pmsi_tunnel` so they cannot drift from the encoder.
+      def pmsi_tunnel_finding(type, v)
+        octet = v.getbyte(1)
+        return nil if (octet & ::BGP::Pmsi_tunnel::COMPOSITE).zero?
+        base = octet & ~::BGP::Pmsi_tunnel::COMPOSITE
+        return nil unless [::BGP::Pmsi_tunnel::NO_TUNNEL,
+                           ::BGP::Pmsi_tunnel::INGRESS_REPLICATION].include?(base)
+        Finding.new(type, 5, TAW,
+                    "composite tunnel bit with tunnel type #{base} " \
+                    "(RFC 8317 section 6.2)")
+      end
+
       def tunnel_encap_finding(type, v)
         return Finding.new(type, 5, TAW, "no TLVs (RFC 9012 section 13)") if v.empty?
         i = 0

@@ -549,11 +549,14 @@ module ToHashCatalog
     'fields nest under :pmsi_tunnel and new reads the inner hash, so ' \
     'Path_attribute is the door.',
     :keep, PATH_ATTR) do
-    # Parsed, because the 4 bits below the 20 bit label only arrive that
-    # way through an ordinary build. RFC 6514 section 5 with RFC 7902's
-    # flags registry: the Extension bit beside Leaf Information Required,
-    # a tunnel type, those 4 label bits, and the two PIM addresses.
-    BGP::Pmsi_tunnel.new(['c0160d' + '41' + '03' + '00064f' +
+    # Parsed, because the 4 bits below each 20 bit label only arrive
+    # that way through an ordinary build. Every field at once: RFC 7902's
+    # Extension bit beside Leaf Information Required, RFC 8317 section
+    # 6.2's composite tunnel bit with a tunnel type under it and the
+    # leading label it puts in front of the Tunnel Identifier, the 4
+    # bits below both labels, and the two PIM addresses of RFC 6514
+    # section 5.
+    BGP::Pmsi_tunnel.new(['c01610' + '41' + '83' + '00064f' + '000c8f' +
                           '0a000001e8010101'].pack('H*').is_packed)
   end
 

@@ -468,6 +468,40 @@ class TestAttrCheck < Test::Unit::TestCase
     assert_equal [], pa.undecoded, 'the route decodes, so this is not a coverage gap'
   end
 
+  # **RFC 8317 section 6.2: "Using the composite tunnel bit for Tunnel
+  # Types 0x00 'no tunnel information present' and 0x06 'Ingress
+  # Replication' is invalid"**, and such an attribute is treated "as
+  # though all the routes contained in this Update had been withdrawn".
+  # The subcode is the one the PMSI length finding already uses, since
+  # the section names none.
+  def test_a_composite_pmsi_tunnel_of_type_0_or_6_is_invalid
+    { 0x80 => 0, 0x86 => 6 }.each do |octet, base|
+      hex = 'c01609' + '00' + format('%02x', octet) + '000640' + '0a000001'
+      assert_equal [[5, TAW]], check(hex), format('tunnel type 0x%02x', octet)
+      assert_match(/composite tunnel bit with tunnel type #{base} /, reason(hex))
+      assert_match(/RFC 8317 section 6\.2/, reason(hex))
+      # And the octets survive, so a test can still put it on the wire
+      # and watch a router decide.
+      pa = BGP::Path_attribute.new(b(hex))
+      assert_equal hex, pa.to_shex
+      assert_equal [], pa.undecoded, 'the attribute decodes, so this is no gap'
+    end
+  end
+
+  # **The bit on its own is not an error and must not become one.** Every
+  # other composite tunnel type is valid, and RFC 8317 section 8.1
+  # reserves 0x80 to 0xfa for Composite Tunnel, so reporting the bit
+  # would make bgp4r call a correct router malformed.
+  def test_every_other_composite_pmsi_tunnel_type_is_clean
+    # 0x82 mLDP P2MP, 0x8b BIER, 0xff the wildcard transport tunnel
+    # type of RFC 8338, whose base 0x7f is Reserved and not 0 or 6.
+    [0x82, 0x83, 0x8b, 0xfa, 0xff,
+     0x00, 0x06, 0x02].each do |octet|
+      hex = 'c01609' + '00' + format('%02x', octet) + '000640' + '0a000001'
+      assert_equal [], check(hex), format('tunnel type 0x%02x', octet)
+    end
+  end
+
   # The reason of the one finding for hex, so a test can assert which
   # rule fired rather than only that something did.
   def reason(hex)
