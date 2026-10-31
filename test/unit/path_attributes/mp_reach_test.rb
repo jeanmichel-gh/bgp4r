@@ -849,10 +849,99 @@ class Mp_reach_Test < Test::Unit::TestCase
     assert_equal([BGP::Attr::Gap], pa.undecoded.collect(&:class))
   end
 
+  # RT-constrain, RFC 4684 section 4, AFI 1 SAFI 132. The whole
+  # attribute: 0001 is the AFI, 84 the SAFI, then a next hop length of 4
+  # with 10.0.0.1, the reserved octet, and the membership prefix, a
+  # length octet of 0x60 and 12 octets of origin AS and route target.
+  #
+  # **The framing needed no arm, unlike the two families above.** Section
+  # 4 calls the NLRI "a prefix of 0 to 96 bits, encoded as defined in
+  # Section 4 of [5]", which is the prefix arithmetic nlri_size already
+  # did in its else branch, so a reader looking for a `when` for this
+  # family will not find one.
+  def test_an_rt_constrain_membership_prefix
+    mpr = BGP::Mp_reach.new(
+      :safi => 132, :nexthop => ['10.0.0.1'],
+      :nlris => [BGP::Rt_constrain.new(65000, [65000, 100])])
+    assert_equal('800e16' + '0001' + '84' + '04' + '0a000001' + '00' +
+                 '60' + '0000fde8' + '0002fde800000064', mpr.to_shex)
+    back = BGP::Attr.factory(mpr.encode.is_packed)
+    assert_equal(mpr.to_shex, back.to_shex)
+    assert_equal([BGP::Rt_constrain], back.nlris.collect(&:class))
+    assert_equal(96, back.nlris[0].mlen)
+    assert_equal(65000, back.nlris[0].origin_as)
+    assert_equal({ :origin_as => 65000,
+                   :route_target => { :route_target => [65000, 100] } },
+                 back.to_hash[:mp_reach][:nlris])
+  end
+
+  # The AFI is not asked for and is not inferred. Section 4: "The [AFI,
+  # SAFI] value pair used to identify this NLRI is (AFI=1, SAFI=132)", so
+  # the arm sets it, the way the EVPN arm sets 25. Inferring it is what
+  # afi_from_nlris would do, and it reads an address off the NLRI, which
+  # this family has not got: it would hand a Hash or an Integer to
+  # IPAddr.
+  def test_the_rt_constrain_afi_is_set_and_not_inferred
+    from_hash = BGP::Mp_reach.new(
+      :safi => 132, :nexthop => ['10.0.0.1'],
+      :nlris => [{ :origin_as => 65000 }])
+    assert_equal(1, from_hash.afi)
+    assert_equal(32, from_hash.nlris[0].mlen)
+    # an explicit :afi still wins, since nothing here refuses one
+    assert_equal(2, BGP::Mp_reach.new(
+      :afi => 2, :safi => 132, :nexthop => ['2001:db8::1'],
+      :nlris => [{ :origin_as => 65000 }]).afi)
+  end
+
+  # **Section 4's next hop rule, which is this family's own and not RFC
+  # 8950's.** The field "shall be interpreted as an IPv4 address whenever
+  # the length of NextHop address is 4 octets, and as a IPv6 address
+  # whenever the length of the NextHop address is 16 octets."
+  #
+  # The AFI is 1, so without an arm of its own the by-AFI case in
+  # parse_next_hops reads a 16-octet field as **four** IPv4 addresses.
+  # ipv6_nexthop_length? answers false for SAFI 132, so nothing else
+  # rescues it: this is the assertion that the length rule is read.
+  def test_an_rt_constrain_ipv6_next_hop_is_read_by_its_length
+    mpr = BGP::Mp_reach.new(
+      :safi => 132, :nexthop => ['2001:db8::1'],
+      :nlris => [BGP::Rt_constrain.new(65000, [65000, 100])])
+    assert_equal('800e22' + '0001' + '84' + '10' +
+                 '20010db8000000000000000000000001' + '00' +
+                 '60' + '0000fde8' + '0002fde800000064', mpr.to_shex)
+    back = BGP::Attr.factory(mpr.encode.is_packed)
+    assert_equal(mpr.to_shex, back.to_shex)
+    assert_equal(1, back.afi, 'still AFI 1, which is the whole point')
+    # Mp_reach#nexthops joins with ", ", so one address and no comma says
+    # the 16 octets were one IPv6 next hop and not four IPv4 ones.
+    assert_equal('2001:db8::1', back.nexthops)
+    assert_equal(96, back.nlris[0].mlen, 'and the NLRI behind it still read')
+  end
+
+  # Several prefixes of different lengths in one attribute, including
+  # section 4's zero-length default. **This is the case the framing
+  # depends on**: the last NLRI in an attribute has nothing behind it to
+  # over-read into, so arithmetic wrong by a constant still passes a
+  # single-prefix test. Measured by sabotage, where nlri_size off by one
+  # left every single-prefix case passing.
+  def test_several_rt_constrain_prefixes_frame_one_after_another
+    mpr = BGP::Mp_reach.new(
+      :safi => 132, :nexthop => ['10.0.0.1'],
+      :nlris => [BGP::Rt_constrain.new,
+                 BGP::Rt_constrain.new(65000),
+                 BGP::Rt_constrain.new(65000, [65000, 100], 64),
+                 BGP::Rt_constrain.new(65001, [65001, 200])])
+    back = BGP::Attr.factory(mpr.encode.is_packed)
+    assert_equal(mpr.to_shex, back.to_shex)
+    assert_equal(4, back.nlris.size)
+    assert_equal([0, 32, 64, 96], back.nlris.collect(&:mlen))
+    assert_equal([nil, 65000, 65000, 65001], back.nlris.collect(&:origin_as))
+  end
+
   private
 
   def attr_len(attr)
     attr.encode[2,1].unpack('C')[0]
   end
-  
+
 end

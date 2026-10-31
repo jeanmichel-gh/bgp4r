@@ -36,16 +36,19 @@ module BGP
       @path_id = h[:path_id]
       @afi = h[:afi]
       # Every prefix family carries an address in its NLRI, so the
-      # family can be read off one. Two families do not. A flow spec
+      # family can be read off one. Three families do not. A flow spec
       # rule carries components instead, and which family it is shows in
       # their keys. An EVPN NLRI carries a route type whose fields are
       # an RD, an ESI and the rest, and its family is not a question at
-      # all: RFC 7432 section 7 fixes it at AFI 25. Both arms below
-      # answer for themselves, so afi_from_nlris is not asked a question
-      # it would answer by handing nil to IPAddr.
+      # all: RFC 7432 section 7 fixes it at AFI 25. An RT-constrain
+      # prefix holds an origin AS and a route target, and RFC 4684
+      # section 4 fixes its family at AFI 1. All three arms below answer
+      # for themselves, so afi_from_nlris is not asked a question it
+      # would answer by handing nil to IPAddr.
       @afi ||= self.class.afi_from_nlris(h[:nlris]) unless
         [IANA::SAFI::FLOW_SPEC_RULES_1, IANA::SAFI::FLOW_SPEC_RULES_2,
-         IANA::SAFI::EVPN].include?(safi)
+         IANA::SAFI::EVPN,
+         IANA::SAFI::ROUTE_TARGET_CONSTRAINTS].include?(safi)
       case safi
       when 1,2
         pfx_klass = prefix_klass(afi, safi)
@@ -116,6 +119,39 @@ module BGP
           e
         end
         @afi ||= IANA::AFI::L2VPN
+      when IANA::SAFI::ROUTE_TARGET_CONSTRAINTS
+        # RFC 4684 section 4. A membership prefix is given either as an
+        # Rt_constrain, used as it stands, or as the hash Rt_constrain
+        # reads. Like EVPN there is no family to infer: section 4 says
+        # the pair is "(AFI=1, SAFI=132)", so the arm sets it rather
+        # than asking the NLRIs, which hold an origin AS and a route
+        # target rather than an address.
+        #
+        # **A next hop is written here, as for EVPN.** Section 4: "The
+        # Next Hop field of MP_REACH_NLRI attribute shall be
+        # interpreted as an IPv4 address whenever the length of NextHop
+        # address is 4 octets, and as a IPv6 address whenever the length
+        # of the NextHop address is 16 octets." So the caller passes
+        # :nexthop and the line below this case builds it.
+        #
+        # **An Array of field values cannot be passed here, and that is
+        # the flatten below rather than a decision.** `[h[:nlris]]
+        # .flatten` is a deep flatten, so `[[65000, [65000, 100]]]`
+        # arrives as `[65000, 65000, 100]` and builds three 32-bit
+        # prefixes where the caller asked for one of 96 bits. Measured on
+        # 2026-10-31, by probing it. A Hash survives flatten untouched,
+        # which is why every family here takes one, so this arm takes an
+        # Rt_constrain or the hash Rt_constrain reads and nothing else.
+        # Rt_constrain.new(65000, [65000, 100]) is still how a caller
+        # builds one from field values; it just cannot travel inside
+        # :nlris as a bare Array.
+        @nlris = [h[:nlris]].flatten.compact.collect do |n|
+          next n if n.is_a?(Rt_constrain)
+          rtc = Rt_constrain.new(n)
+          rtc.path_id ||= @path_id
+          rtc
+        end
+        @afi ||= IANA::AFI::IPv4
       else
         raise "SAFI #{safi} not implemented!"
       end
@@ -417,23 +453,35 @@ module BGP
           else
             @nexthops << Vpn.new([64+32,s.slice!(0,12)].pack('Ca*'))
           end
-        when IANA::SAFI::EVPN
+        when IANA::SAFI::EVPN, IANA::SAFI::ROUTE_TARGET_CONSTRAINTS
+          # Two families whose next hop is read by its length alone, and
+          # they arrive at that from opposite directions, so both
+          # sentences are here rather than one standing in for the other.
+          #
           # RFC 7432 section 14: "The Next Hop field of the MP_REACH_NLRI
           # attribute of the route MUST be set to the IPv4 or IPv6
-          # address of the advertising PE."
+          # address of the advertising PE." **For EVPN the length says
+          # which because the AFI cannot.** For SAFI 1 and 2 the AFI is 1
+          # or 2 and the case above reads it off that; EVPN's AFI is 25
+          # for both families, so the only thing telling an IPv4 next hop
+          # from an IPv6 one is a field of 4 octets or 16.
           #
-          # **The length says which, because the AFI cannot.** For SAFI
-          # 1 and 2 the AFI is 1 or 2 and the case above reads it off
-          # that; here the AFI is 25 for both families, so the only
-          # thing that distinguishes an IPv4 next hop from an IPv6 one
-          # is that the field is 4 octets or 16. ipv6_nexthop_length? is
-          # left alone: nothing says RFC 8950 applies to EVPN, and its
-          # lengths are for AFI 1 anyway.
+          # RFC 4684 section 4: the field "shall be interpreted as an
+          # IPv4 address whenever the length of NextHop address is 4
+          # octets, and as a IPv6 address whenever the length of the
+          # NextHop address is 16 octets." **For RT-constrain the AFI
+          # could have said, and the RFC says to use the length anyway.**
+          # Its AFI is 1, so the case above would have read every next
+          # hop as IPv4 and a 16-octet field as four of them. Do not read
+          # the 16-octet half as RFC 8950 arriving at the same answer:
+          # ipv6_nexthop_length? answers false for SAFI 132, nothing
+          # claims RFC 8950 applies here, and section 4 is first hand.
           #
-          # A field too short for either reads as IPv4 and Prefix pads
-          # it out, which is exactly what SAFI 1 already does with a
-          # short next hop. Consistent with the library rather than a
-          # new rule, and it ends the loop either way.
+          # So ipv6_nexthop_length? is left alone for both. A field too
+          # short for either reads as IPv4 and Prefix pads it out, which
+          # is exactly what SAFI 1 already does with a short next hop.
+          # Consistent with the library rather than a new rule, and it
+          # ends the loop either way.
           if s.size >= 16
             @nexthops << Prefix.new_ntop([128,s.slice!(0,16)].pack('Ca*'),2)
           else
@@ -487,13 +535,16 @@ module BGP
           end
         when 128,129
           ::BGP::const_get('Vpn')
-        when IANA::SAFI::EVPN
+        when IANA::SAFI::EVPN, IANA::SAFI::ROUTE_TARGET_CONSTRAINTS
           # RFC 7432 section 14 wants the advertising PE's own IPv4 or
-          # IPv6 address, so this is an ordinary Prefix and the address
-          # the caller gave decides the family. No Ipv4_mapped branch
-          # as SAFI 1 and 2 have: that one exists because an IPv4 next
-          # hop under AFI 2 is written as an IPv4-mapped IPv6 address,
-          # and the AFI here is 25 either way.
+          # IPv6 address and RFC 4684 section 4 takes either too, so
+          # this is an ordinary Prefix and the address the caller gave
+          # decides the family. No Ipv4_mapped branch as SAFI 1 and 2
+          # have: that one exists because an IPv4 next hop under AFI 2
+          # is written as an IPv4-mapped IPv6 address, and neither of
+          # these families writes one. EVPN's AFI is 25 either way, and
+          # RT-constrain's is 1 while still taking an IPv6 next hop,
+          # which is section 4's own sentence and not AFI 2.
           ::BGP::const_get('Prefix')
         when 133,134
           # RFC 8955 section 4 wants the length set to 0, so a flowspec

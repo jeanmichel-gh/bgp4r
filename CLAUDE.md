@@ -53,8 +53,11 @@ bgp/nlris/               prefix encodings (inet, labeled, VPN, RD, mapped IPv4)
                          docs/evpn.md is the guide, see also
                          "Breadth, the one SAFI lever"
                          rt_constrain.rb: the RFC 4684 section 4 Route
-                         Target membership NLRI, AFI 1 SAFI 132. Pure so
-                         far: nothing dispatches to it. It needs no
+                         Target membership NLRI, AFI 1 SAFI 132. Wired
+                         in now, so a membership UPDATE reads and
+                         writes: Nlri.factory and MpReachCommon#set
+                         dispatch to it and parse_next_hops reads the
+                         section 4 next hop by its length. It needs no
                          framing rule of its own, unlike the two
                          families above, because section 4's encoding is
                          the prefix arithmetic nlri_size already does,
@@ -186,6 +189,12 @@ rather than ones a test wrote. About a second:
 ruby -I. test/functional/evpn_test.rb
 ```
 
+The same for an RT-constrain UPDATE, AFI 1 SAFI 132, and the only test
+that proves its three wiring sites agree. Under a second:
+```
+ruby -I. test/functional/rt_constrain_test.rb
+```
+
 The Loc-RIB in a real kernel routing table, inside a network namespace of
 its own, so nothing can touch the routing table of the machine it runs on.
 No Docker. It needs root, or any way to get CAP_NET_ADMIN, and omits
@@ -286,7 +295,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. The `lab` job is a matrix, one job per group in `test/lab_groups.rb`, so its cost is the slowest group and not the total: it was 12m42s as one serial suite. Each job installs only what its group needs, which is why the matrix entry carries a `gobgp`, `frr`, `docker` or `netns` flag. The `gobgp` groups pin 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-10-31: 1764 tests, 25371 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.1%.
+Baseline on 2026-10-31: 1769 tests, 25397 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.1%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -1268,10 +1277,11 @@ expired**: the RIB and FIB plan is finished, and the plan for lifting this
 limit is the section that follows, "Breadth, the one SAFI lever". What stays
 true here is the shape of the gap:
 
-* **MP_REACH and MP_UNREACH read and write SAFIs 1, 2, 4, 128, 129, 133 and
-  134, plus AFI 25 SAFI 70.** 133 and 134 are flowspec, which arrived with
-  phase 2 below, and AFI 25 SAFI 70 is EVPN, which arrived with phase 3 part
-  5. What that one limit still blocks is BGP-LS, RT-constrain, MCAST-VPN,
+* **MP_REACH and MP_UNREACH read and write SAFIs 1, 2, 4, 128, 129, 132, 133
+  and 134, plus AFI 25 SAFI 70.** 133 and 134 are flowspec, which arrived with
+  phase 2 below, AFI 25 SAFI 70 is EVPN, which arrived with phase 3 part
+  5, and 132 is RT-constrain, which arrived with phase 4 part 1. What that
+  one limit still blocks is BGP-LS, MCAST-VPN,
   VPLS and SR Policy, so it is the single lever if more breadth is wanted.
   **This bullet said `Mp_reach.new(:afi=>25, :safi=>70, ...)` raises, which
   #185 made false and did not correct here.** It does not raise:
@@ -1280,8 +1290,9 @@ true here is the shape of the gap:
   [100,200], :tag=>0, :originator=>"10.0.0.1"}}]).to_shex'` prints the
   attribute. A stale entry sends the next reader after work that is done.
 * BGP-LS (attribute 29, AFI 16388, SAFI 71 and 72, RFC 9552), ATTR_SET
-  (attribute 128, RFC 6368), RT-constrain (SAFI 132), MCAST-VPN (SAFI 5).
-  Flowspec and EVPN were both on this list and both are off it, because the
+  (attribute 128, RFC 6368), MCAST-VPN (SAFI 5).
+  Flowspec, EVPN and RT-constrain were all on this list and all three are
+  off it, because the
   rule and the route can be sent now: flowspec had every traffic filtering
   action of RFC 8955 section 7 implemented and no way to send the rule they
   filter, and EVPN had none of its eleven route types and four of its eleven
@@ -1296,13 +1307,21 @@ true here is the shape of the gap:
   prints the registered code points, against the 115 the IANA registries
   listed when this was last counted by hand.
 
-### Breadth, the one SAFI lever. Phases 2 and 3 done
+### Breadth, the one SAFI lever. Phases 2 and 3 done, phase 4 part 1 done
 
 The section above deferred breadth and named the single limit. This is the
 plan for lifting it, recorded before the work starts.
 
 **Where the limit actually is**, read in the code rather than recalled.
-Two dispatch points, both a hard coded `case safi`, and no registry:
+Two dispatch points, both a hard coded `case safi`, and no registry. **The
+three bullets below describe the gates as they were before any of the
+phases below landed**, which is what the registry argument was made
+against. Each family since has added one arm to each gate, so flow spec,
+EVPN and RT-constrain are three more apiece: `set` now has 6 arms and
+`Nlri.factory` 5, counted on 2026-10-31 rather than worked out, because
+working it out the first time gave seven. The argument's conclusion has
+not changed, and phase 1 says why it was re-tested each time rather than
+assumed.
 
 * **Build**: `MpReachCommon#set` in `mp_reach.rb`, the module both
   `Mp_reach` and `Mp_unreach` include. Branches for SAFI 1 and 2, for 4,
@@ -2617,13 +2636,13 @@ Two consequences, both of which change the plan rather than decorate it:
      processing, which matters to a RIB and not to an encoder, and no
      EVPN route goes in a RIB by the decision below. Recorded so nobody
      implements a route key here looking for it.
-4. **The rest, as appetite allows. Started.** RT-constrain (SAFI 132,
-   RFC 4684), ATTR_SET (attribute 128, RFC 6368), MCAST-VPN (SAFI 5,
-   RFC 6514), BGP-LS (attribute 29, AFI 16388, SAFI 71 and 72, RFC
-   9552). This entry used to say "each of these is a class and a
-   registration", which holds for the first and understates the last
-   considerably: BGP-LS is a whole TLV language of node, link and
-   prefix descriptors, not one layout.
+4. **The rest, as appetite allows. One of four done.** RT-constrain
+   (SAFI 132, RFC 4684) **is in**; ATTR_SET (attribute 128, RFC 6368),
+   MCAST-VPN (SAFI 5, RFC 6514) and BGP-LS (attribute 29, AFI 16388,
+   SAFI 71 and 72, RFC 9552) are not. This entry used to say "each of
+   these is a class and a registration", which held for the first and
+   understates the last considerably: BGP-LS is a whole TLV language of
+   node, link and prefix descriptors, not one layout.
 
    **Do BGP-LS last, or three tests move twice.** `mp_reach_test.rb`'s
    `test_an_unimplemented_safi_still_raises` and the two behind
@@ -2633,11 +2652,12 @@ Two consequences, both of which change the plan rather than decorate it:
    MCAST-VPN; when all four land there is no unimplemented family left
    and they need a SAFI IANA has not assigned instead.
 
-   1. **RT-constrain, SAFI 132, RFC 4684. The NLRI is done**, pure, in
-      `bgp/nlris/rt_constrain.rb`. Nothing dispatches to it yet, the way
-      #125 landed the export rules and #175 the flow spec components
-      before anything called either. 19 tests, the file at 100% line
-      coverage. The RFC is read, not fetched.
+   1. **RT-constrain, SAFI 132, RFC 4684. Done**, in #200 and #202: the
+      NLRI, then the wiring. bgp4r reads and writes a membership UPDATE
+      now, over a real session. The RFC is read, not fetched.
+      **Three wiring sites, not four or five**, which is what made this
+      the cheapest of the four families: the two dispatch gates and the
+      next hop. `nlri_size` needed no arm, for the reason below.
       * **This family needs no new framing rule, which is what makes it
         the cheapest of the four.** Section 4: "The NLRI field in the
         MP_REACH_NLRI and MP_UNREACH_NLRI is a prefix of 0 to 96 bits,
@@ -2695,15 +2715,70 @@ Two consequences, both of which change the plan rather than decorate it:
         `fit_to_mlen` and `parse` and `unpack1('N')` answers nil on
         fewer than 4 octets. It is kept and recorded as unreachable, the
         way `Fib`'s `:no_next_hop` branch is.
-      * Still to do for this family: the two dispatch arms and the next
-        hop, which section 4 reads "as an IPv4 address whenever the
-        length of NextHop address is 4 octets, and as a IPv6 address
-        whenever the length of the NextHop address is 16 octets", the
-        same length-only discriminator EVPN needed and #185 built. Then
-        a loopback functional test, which is the only thing that can
-        say the wiring sites agree. `prefix_klass` is the one thing to
-        look at: it raises for SAFI 132 and the value here is not an
-        address.
+      * **The next hop is the one site with no precedent in the
+        library**, and it is a length-only rule for a different reason
+        than EVPN's. Section 4: the field "shall be interpreted as an
+        IPv4 address whenever the length of NextHop address is 4 octets,
+        and as a IPv6 address whenever the length of the NextHop address
+        is 16 octets." EVPN reads by length because its AFI is 25 and
+        **cannot** say which family a next hop is; here the AFI is 1 and
+        **could** have said, and the RFC says to use the length anyway.
+        So the two share the arm and the comment carries both sentences.
+        Do not read the 16-octet half as RFC 8950 reaching the same
+        answer: `ipv6_nexthop_length?` answers false for SAFI 132, so
+        without this arm a 16-octet field reads as **four** IPv4
+        addresses, and nothing claims RFC 8950 applies here.
+      * `prefix_klass` was recorded as the thing to look at, since it
+        raises for SAFI 132 and this family's value is not an address.
+        It needed nothing: its only caller is the `when 1,2` arm of
+        `set`, measured rather than assumed, so a SAFI 132 build never
+        reaches it.
+      * **An Array of field values cannot travel inside `:nlris`, and
+        that is `set`'s flatten rather than a decision.** Every arm
+        reads `[h[:nlris]].flatten`, which is a **deep** flatten, so
+        `[[65000, [65000, 100]]]` arrives as `[65000, 65000, 100]` and
+        builds three 32-bit prefixes where one of 96 bits was asked for.
+        Found by probing the first draft of the arm, which had an
+        `is_a?(Array)` branch that was therefore unreachable. A Hash
+        survives flatten untouched, which is why every family here takes
+        one. `Rt_constrain.new(65000, [65000, 100])` is still the field
+        value form; it just has to be built before it goes in.
+      * **The framing is more forgiving here than in the other two
+        families, which changes what a test has to cover.**
+        `nlri_size` off by one fails only 3 of the functional test's 9
+        cases, and they are exactly the three carrying two or more
+        NLRIs: the last NLRI in an attribute has nothing behind it to
+        over-read into, so a single-prefix case passes against
+        arithmetic wrong by a constant. Flow spec and EVPN both failed
+        **every** case on the same slip, because their length fields sit
+        inside a body the loop re-reads. So the multi-prefix cases are
+        the only cover the framing has and must not be thinned out.
+      * `test/functional/rt_constrain_test.rb` is the proof and the only
+        one there can be, for the reason `flow_spec_test.rb` records. 9
+        tests, 87 assertions, under a second. Named in
+        `.github/workflows/test.yml`, which lists each functional test
+        by hand. Five sabotages, one per site plus the framing; the next
+        hop one errors 8 and spares exactly the withdrawal, which
+        carries no next hop, the same signature #185 measured for EVPN.
+      * Nothing is left for this family on the wire. **A lab test is its
+        own piece of work and only GoBGP can carry it**, measured on
+        2026-10-31 rather than guessed, because the first draft of this
+        entry guessed and got the name wrong.
+        * GoBGP 3.23.0's **config file calls the family `rtc`**, and a
+          `LabHelper::Gobgpd.new(families: ['rtc'])` comes up on it.
+          `ipv4-rtc` and `route-target-constraints` are both refused, so
+          the daemon never starts. Whether its **client** wants another
+          name is unmeasured, and the config and the client have already
+          disagreed twice, for VPN flow spec and for EVPN, so expect a
+          `CLIENT_FAMILY` entry and check before writing one.
+        * **FRR 8.4.4 has no RT-constrain family at all.** Its `bgpd`
+          carries `bgp_nlri_parse_` functions for evpn, flowspec, ip,
+          label and vpn and none for this, and its `address-family`
+          grammar offers only the two unicast blocks, `ipv4`, `ipv6` and
+          `l2vpn evpn`. Its `route-target` strings are the extended
+          community and VNI config, not an address family, so do not
+          read them as support. That makes this the second family after
+          VPN flow spec where the lab can have only one reference.
    2. **ATTR_SET, attribute 128, RFC 6368. Not started**, and the RFC is
       read and on hand. Section 5: an optional transitive attribute
       whose value is a 4-octet Origin AS then "a variable-length field
