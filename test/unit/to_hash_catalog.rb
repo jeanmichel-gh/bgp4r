@@ -1169,6 +1169,53 @@ module ToHashCatalog
     BGP::Evpn.new_ntop(['09140011223344556677'].pack('H*'), 7)
   end
 
+  # The MCAST-VPN primitives of RFC 6514 section 4, which are this
+  # family's own and not EVPN's; docs/mcast-vpn.md section 5 records why.
+  # No field here entered its class after the hash shape was settled,
+  # which is the one sentence behind every lossy row in this catalog, so
+  # all five round trip.
+  #
+  # The Multicast Source and Multicast Group field. Built with a length
+  # the RFC calls outside its scope, because that is the branch where
+  # the hash carries the bit count and the octets rather than an address
+  # string, and it is the branch that could break.
+  ENTRIES['BGP::Mcast_vpn::Addr'] = entry(:ok, nil, nil) do
+    BGP::Mcast_vpn::Addr.new(24, ['c00002'].pack('H*'))
+  end
+
+  # "Source AS (4 octets)", sections 4.2 and 4.6. One field, and a value
+  # too wide for the 2-octet AS form, since the field never follows the
+  # session.
+  ENTRIES['BGP::Mcast_vpn::Source_as'] = entry(:ok, nil, nil) do
+    BGP::Mcast_vpn::Source_as.new(70013)
+  end
+
+  # The Originating Router's IP Address, which has no length field in
+  # either document. Built at a width that is neither family, because
+  # that is the branch where the hash carries the octets rather than an
+  # address string. The address branch is asserted in the class's own
+  # test file.
+  ENTRIES['BGP::Mcast_vpn::Originating_router'] = entry(:ok, nil, nil) do
+    BGP::Mcast_vpn::Originating_router.new(
+      ['0102030405'].pack('H*').is_packed)
+  end
+
+  # The keep-what-you-cannot-read class for this level, which is also
+  # where RFC 7441's three mLDP route types land. Type 0x43 is one of
+  # them.
+  ENTRIES['BGP::Mcast_vpn::Unknown'] = entry(:ok, nil, nil) do
+    BGP::Mcast_vpn::Unknown.new(0x43, ['0102030405'].pack('H*'))
+  end
+
+  # The NLRI framing, section 4. Three fields and the recipe exercises
+  # all three, the way the Evpn one above does: the route, the RFC 7911
+  # section 3 Path Identifier, and a Length that disagrees with its own
+  # octets. Built from the wire for the same reason, that `declared_len`
+  # only arrives by parsing.
+  ENTRIES['BGP::Mcast_vpn'] = entry(:ok, nil, nil) do
+    BGP::Mcast_vpn.new_ntop(['01ff0a000001'].pack('H*'), 7)
+  end
+
   # RFC 4684 section 4. The whole prefix, which is the branch where the
   # two fields of the section's figure reproduce the octets, with a path
   # identifier on top. The other branch, where they cannot and the hash
@@ -1235,6 +1282,12 @@ module ToHashCatalog
       'read self.class::TYPE and HASH_KEY and it defines neither, and ' \
       'encode calls an encode_value it does not have. Unknown is ' \
       'measured, and the route types fill this in later parts.',
+    'BGP::Mcast_vpn::Route' =>
+      'an abstract base with no sensible instance, as Evpn::Route is. ' \
+      'type and hash_key read self.class::TYPE and HASH_KEY and it ' \
+      'defines neither, and encode calls an encode_value it does not ' \
+      'have. Unknown is measured, and the route types fill this in ' \
+      'later parts.',
     'BGP::Tunnel_encap::Int_sub_tlv' =>
       'an abstract base with no sensible instance. Its initialize and ' \
       'to_hash read self.class::TYPE, SIZE, NAME and KEY and it ' \

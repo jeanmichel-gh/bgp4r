@@ -63,6 +63,22 @@ bgp/nlris/               prefix encodings (inet, labeled, VPN, RD, mapped IPv4)
                          the prefix arithmetic nlri_size already does,
                          and the route target inside it is partial by
                          design. See "Breadth, the one SAFI lever"
+                         mcast_vpn_route.rb: the three primitives the
+                         MCAST-VPN route types of RFC 6514 section 4 share,
+                         the length-prefixed Addr for the Multicast Source
+                         and Group, the 4-octet Source_as, and the
+                         Originating_router that has no length field in any
+                         document, with the Route base and
+                         Mcast_vpn::Unknown under them;
+                         mcast_vpn.rb the NLRI with the section 4 Route Type
+                         and Length framing and Mcast_vpn.nlri_size, which
+                         is Evpn.nlri_size again because the framing is the
+                         same shape. **Nothing dispatches to either yet**:
+                         Mcast_vpn::ROUTES is empty, so every route type
+                         reads back as an Unknown that replays byte for
+                         byte, and an MCAST-VPN UPDATE is still an Attr::Raw
+                         with an Attr::Gap. docs/mcast-vpn.md is the guide,
+                         see also "Breadth, the one SAFI lever"
 bgp/optional_parameters/ OPEN capabilities (4-byte AS, add-path, graceful restart...)
 bgp/orfs/                outbound route filtering
 bgp/neighbor/            the BGP finite state machine and TCP session (neighbor.rb)
@@ -99,6 +115,17 @@ docs/                    protocol-testing.md: using bgp4r to test a router
                          route type class cannot join the library without the
                          document being told. Proved by sabotage in both
                          directions, which a listed table would have let through.
+                         mcast-vpn.md: RFC 6514 and RFC 7441 on the wire. Read
+                         it before touching mcast_vpn_route.rb or mcast_vpn.rb,
+                         before adding a route type, before changing how
+                         mp_reach.rb and mp_unreach.rb frame an NLRI, and
+                         before putting an MCAST-VPN check in validation.rb.
+                         Its load bearing claims are asserted by
+                         test/unit/mcast_vpn_doc_test.rb, whose route type
+                         table is **discovered** rather than listed. Three of
+                         its guards are true only while this family is half
+                         built and fail the day the next part lands, which is
+                         deliberate: they name what to update
                          building-objects.md: the three ways into every class and how
                          initialize dispatches between them; read it before changing a
                          constructor or chasing an object that does not come back.
@@ -314,7 +341,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. The `lab` job is a matrix, one job per group in `test/lab_groups.rb`, so its cost is the slowest group and not the total: it was 12m42s as one serial suite. Each job installs only what its group needs, which is why the matrix entry carries a `gobgp`, `frr`, `docker` or `netns` flag. The `gobgp` groups pin 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-10-31: 1804 tests, 25506 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.1%.
+Baseline on 2026-10-31: 1881 tests, 25794 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.2%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -2992,8 +3019,9 @@ Two consequences, both of which change the plan rather than decorate it:
             `wait_for`, which overran the foreground limit twice and
             left a patched working tree behind both times. One method
             is about 45s.
-   3. **MCAST-VPN, SAFI 5, RFC 6514. Planned, not started**, in seven
-      parts below. **The RFC is readable now**, which corrects the note
+   3. **MCAST-VPN, SAFI 5, RFC 6514. One of seven parts done**, in
+      #208: the framing and the primitives, pure, with nothing
+      dispatching to them. **The RFC is readable now**, which corrects the note
       this entry used to carry: it was fetched in full on 2026-10-31,
       along with draft-ietf-bess-rfc6514bis-00, which obsoletes it, and
       RFC 7441, which updates it. EVPN part 7's note that the only first
@@ -3120,26 +3148,68 @@ Two consequences, both of which change the plan rather than decorate it:
         with that many bits of value, which is `Evpn::Addr` exactly, and
         the sharing is by citation rather than coincidence: EVPN route
         type 10 is "identical to the S-PMSI A-D route as defined in
-        [RFC7117]", which carries this encoding. Against that, lifting
-        `Sized`, `Addr`, `Route` and `Unknown` out of `class Evpn` is a
-        refactor across a 2426 line file, its test file and
-        `evpn_doc_test.rb`, which discovers `Evpn.constants`. That is
-        #173's argument again: it removes no code, and it is a bet on a
-        third family. **Revisit when a third family needs them**, and
-        until then an `Mcast_vpn::Addr` whose comment cites RFC 6514's
-        own sentence is the smaller mistake.
-      1. **Primitives and the framing, pure.** The Route Type plus
-         Length framing with `Mcast_vpn.nlri_size`, an
+        [RFC7117]", which carries this encoding. Against that is #173's
+        argument: sharing removes no code today and bets on a third
+        family. **Revisit when a third family needs them**, and until
+        then an `Mcast_vpn::Addr` whose comment cites RFC 6514's own
+        sentence is the smaller mistake.
+        * **This entry overstated the cost of sharing, and #208
+          corrected it.** It said sharing means lifting `Sized`, `Addr`,
+          `Route` and `Unknown` out of `class Evpn`, a refactor across a
+          2426 line file, its test file and `evpn_doc_test.rb`, which
+          discovers `Evpn.constants`. There is a cheaper shape: a module
+          holding only `coerce`, `coerce_or_default`, `read_rd` and
+          `addr_hash`, included by both `Route` bases. It is additive, it
+          leaves `Evpn.constants` alone and it leaves every subclass
+          working. The decision did not change, because that is still a
+          second topic in one pull request, but the reason for it is
+          weaker than this entry claimed and a reader should know which.
+      1. **Primitives and the framing, pure. Done**, in #208. The Route
+         Type plus Length framing with `Mcast_vpn.nlri_size`, an
          `Mcast_vpn::Unknown` that keeps the remainder and replays it,
-         and the fields the layouts share: the length prefixed address
-         for Multicast Source and Multicast Group, the 4-octet Source
-         AS, and the trailing Originating Router's IP Address with no
-         length of its own. Nothing dispatches to it, the way #181
-         landed EVPN's primitives. `docs/mcast-vpn.md` is the guide and
-         `test/unit/mcast_vpn_doc_test.rb` asserts its load bearing
-         claims, with the route type table **discovered** rather than
-         listed, which is what stopped a route type class joining EVPN
-         without the document being told.
+         and the three fields the layouts share: `Addr` for the
+         Multicast Source and Multicast Group, the 4-octet `Source_as`,
+         and `Originating_router`, the trailing address with no length
+         of its own. Nothing dispatches to it, the way #181 landed
+         EVPN's primitives and #156 the FIB planner. `docs/mcast-vpn.md`
+         is the guide and `test/unit/mcast_vpn_doc_test.rb` asserts its
+         load bearing claims, with the route type table **discovered**
+         rather than listed.
+         * **Four of the doc test's guards are aimed at this family
+           being half built**, which is the lesson `docs/evpn.md` taught
+           three times in one week. A claim that is true only today is
+           asserted as true only today: when a route type arrives, when
+           the dispatch gates learn SAFI 5, when a receive side check
+           appears, and when the prose saying no route type exists stops
+           being true, the matching assertion fails and its message
+           names which section to rewrite. `validation.rb` is read as
+           **text** for one of those, so the guard needs no MCAST-VPN
+           code to exist in order to watch for it.
+         * **Seven sabotages, six landing and one passing, and the one
+           that passed is the useful one.** `octets_for(bitlen)`
+           returning `bitlen` unrounded passed every test in the first
+           version of the file. The reason is structural rather than
+           careless: the only parse of an `Addr` there was of octets
+           that ran out anyway, where `[octets_for(200), 2].min` is 2
+           either way, so nothing measured where the field **ends**. In
+           route types 3, 5, 6 and 7 an `Addr` is followed by another
+           field, so that is the whole job of the rounding. Two tests
+           now parse an `Addr` with something behind it, one on an octet
+           boundary and one at 20 bits, and the sabotage fails both.
+           Check the proof proved something, from Rules for agents,
+           arriving from the same direction as the ESI bug in #181.
+         * **A test-local `Probe` subclass is what covers the `Route`
+           base's four private helpers**, since no real route type calls
+           them yet. It lives under the test class, so
+           `Mcast_vpn.constants` never sees it and the doc test's
+           discovery cannot count it, it is in no `ROUTES` entry, and
+           its `TYPE` is 0, which IANA reserves. That took
+           `mcast_vpn_route.rb` to 100% line coverage.
+         * **The one uncovered piece is `read_route`'s body**, three
+           lines, unreachable while `ROUTES` is empty because the guard
+           above it answers nil for every type. Said in a comment there
+           rather than left for a coverage report to raise as a
+           question; part 2 is where those lines first run.
       2. **Route types 1, 2 and 5**, which are the three whose bodies
          split with no guess. Type 2 is fixed at 12 octets, RD and
          Source AS. Type 5 is RD, source and group. Type 1 is RD and the
