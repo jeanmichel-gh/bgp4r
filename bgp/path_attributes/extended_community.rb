@@ -1145,6 +1145,248 @@ module BGP
     LABEL = "Router's MAC"
   end
 
+  # RFC 9251 section 9.4: the Multicast Flags Extended Community, EVPN
+  # sub-type 0x09. A 2-octet Flags field then 4 reserved octets.
+  #
+  #   | Type=0x06     |Sub-Type=0x09  |     Flags (2 Octets)      |M|I|
+  #   |                           Reserved=0                          |
+  #
+  # **The two defined bits are the least significant of the Flags
+  # field**, which the section says rather than leaving to the figure:
+  # "Bit 15 (shown as I) defines IGMP Proxy Support" and "Bit 14 (shown
+  # as M) defines MLD Proxy Support", numbered "0-15, from high order to
+  # low order" by its section 12.3 registry. So I is the low bit of the
+  # value's 6th-from-last... in 48-bit terms the Flags field is the top
+  # two octets, so I is bit 32 and M is bit 33.
+  #
+  # "Bits 0 to 13 are reserved for the future. The sender MUST set it to
+  # 0, and the receiver MUST ignore it", and the same for the 4 reserved
+  # octets, so both come back as a `:bits` entry when a peer set one.
+  #
+  # Section 9.4 has a receive side rule this does not enforce, per
+  # Conventions: "if both M and I flags are 0, the router MUST treat
+  # this update as malformed". That belongs in `validation.rb` and is
+  # EVPN part 9's work; building one is a negative test and must stay
+  # possible, which `Multicast_flags.new` with no argument is.
+  class Multicast_flags < Extended_community::Typed
+    TYPE, SUBTYPE = 0x06, 0x09
+    LABEL = 'Multicast Flags'
+    # Bit 15 of the Flags field is bit 32 of the value, bit 14 is 33.
+    IGMP_PROXY = 1 << 32
+    MLD_PROXY  = 1 << 33
+    DEFINED_BITS = IGMP_PROXY | MLD_PROXY
+    def igmp_proxy?
+      @igmp_proxy
+    end
+    def mld_proxy?
+      @mld_proxy
+    end
+    private
+    def build(arg = nil, igmp_proxy: false, mld_proxy: false, bits: nil)
+      if arg.is_a?(Hash)
+        # to_hash nests the fields under this community's own key, so
+        # read that form here too. `Traffic_action` records why: reading
+        # only the outer hash finds every field nil and builds a clean
+        # looking community that loses all 48 value bits with no error,
+        # because these field defaults pass their own check. Measured
+        # here before the unwrap went in, and it did exactly that.
+        arg = arg[hash_key] if arg.key?(hash_key)
+        igmp_proxy, mld_proxy, bits =
+          arg[:igmp_proxy], arg[:mld_proxy], arg[:bits]
+      elsif arg.is_a?(Array)
+        igmp_proxy = arg.include?(:igmp_proxy)
+        mld_proxy  = arg.include?(:mld_proxy)
+      end
+      return keep_bits(bits) if bits
+      @igmp_proxy, @mld_proxy = igmp_proxy ? true : false, mld_proxy ? true : false
+    end
+    def value_octets
+      flags = (@igmp_proxy ? 1 : 0) | (@mld_proxy ? 2 : 0)
+      [flags, 0].pack('nN')
+    end
+    def parse_value(v)
+      flags, _ = v.unpack('nN')
+      @igmp_proxy = (flags & 1) > 0
+      @mld_proxy  = (flags & 2) > 0
+    end
+    def value_s
+      names = []
+      names << 'IGMP proxy' if @igmp_proxy
+      names << 'MLD proxy' if @mld_proxy
+      with_bits(names.empty? ? 'none' : names.join(', '))
+    end
+    def hash_value
+      h = []
+      h << :igmp_proxy if @igmp_proxy
+      h << :mld_proxy if @mld_proxy
+      return h unless undefined_bits?
+      { :igmp_proxy => @igmp_proxy, :mld_proxy => @mld_proxy,
+        :bits => value_bits }
+    end
+  end
+
+  # RFC 9251 section 9.5: the EVI-RT Extended Communities, EVPN sub-types
+  # 0x0A to 0x0D, which identify the EVI a route applies to "but do not
+  # have any effect on the distribution of the route". Route types 7 and
+  # 8 each "MUST carry exactly one EVI-RT EC".
+  #
+  #   | Type=0x06     |  Sub-Type=n   |       RT associated with EVI  |
+  #   |             RT associated with the EVI  (cont.)               |
+  #
+  # **The value is copied from a Route Target and the sub-type says
+  # which kind**, which is the whole design: section 9.5 says the value
+  # field "is identical to the value field of RT1", and picks the
+  # sub-type from RT1's own structure. So the six octets split the way
+  # that structure splits them, 2 plus 4 for a Two-Octet AS-specific RT
+  # and 4 plus 2 for the other two.
+  #
+  # Section 9.5 adds that "an EVI-RT EC is not a Route Target extended
+  # community, is not visible to the RT Constrain mechanism [RFC4684],
+  # and is not intended to influence the propagation of routes by BGP",
+  # which is why these are their own classes and not `Route_target`
+  # under another sub-type.
+  #
+  # Nothing validates. Section 9.5's "MUST carry exactly one" and its
+  # treat-as-withdraw for none or several is a receive side rule for
+  # `validation.rb`, EVPN part 9's work.
+  class Evi_rt < Extended_community::Typed
+    TYPE = 0x06
+    # How the six octets split: the Global Administrator's width, with
+    # the Local Administrator taking the rest. nil where the structure
+    # does not fit, which is Type 3 alone.
+    GLOBAL_WIDTH = 2
+    # True where the Global Administrator is an IPv4 address rather than
+    # an AS number.
+    GLOBAL_IS_ADDR = false
+    attr_reader :global, :local
+    private
+    def build(global = nil, local = nil, value: nil, bits: nil)
+      if global.is_a?(Hash)
+        # The wrapped form too, for the reason `Traffic_action` records:
+        # without this, the outer hash gives nil for every field and a
+        # community of zeros is built in silence.
+        global = global[hash_key] if global.key?(hash_key)
+      end
+      if global.is_a?(Hash)
+        global, local, value = global[:global], global[:local], global[:value]
+      elsif global.is_a?(Array)
+        global, local = global
+      end
+      return keep_bits(bits) if bits
+      return set_value(value) unless value.nil?
+      return set_value(global) if local.nil? and global.is_a?(String) and
+                                  !self.class::GLOBAL_IS_ADDR
+      raise ArgumentError, "#{self.class::LABEL} has no field layout, " \
+                           'build it from its six value octets' if width.nil?
+      @global, @local = global, local.to_i
+      check('local administrator', @local, local_max)
+      check_global
+    end
+    def width
+      self.class::GLOBAL_WIDTH
+    end
+    def local_max
+      (1 << ((6 - width) * 8)) - 1
+    end
+    def check_global
+      if self.class::GLOBAL_IS_ADDR
+        @global = IPAddr.new(@global.to_s).to_s
+      else
+        check('global administrator', @global.to_i, (1 << (width * 8)) - 1)
+        @global = @global.to_i
+      end
+    end
+    # The six octets as they are, for a layout this class cannot split.
+    def set_value(hex)
+      h = hex.to_s.delete(':. ')
+      unless h =~ /\A\h{12}\z/
+        raise ArgumentError, "invalid value #{hex.inspect}, expected 12 hex digits"
+      end
+      @raw = [h].pack('H*').b
+      parse_value(@raw)
+    end
+    def value_octets
+      return @raw if width.nil?
+      g = self.class::GLOBAL_IS_ADDR ? IPAddr.new(@global).hton :
+          [@global].pack(width == 2 ? 'n' : 'N')
+      g + [@local].pack(width == 2 ? 'N' : 'n')
+    end
+    def parse_value(v)
+      if width.nil?
+        @global, @local = nil, nil
+        return
+      end
+      @global = self.class::GLOBAL_IS_ADDR ?
+                IPAddr.new_ntoh(v.byteslice(0, 4)).to_s :
+                v.byteslice(0, width).unpack1(width == 2 ? 'n' : 'N')
+      @local = v.byteslice(width, 6 - width).unpack1(width == 2 ? 'N' : 'n')
+    end
+    def value_s
+      return (@raw || value_octets).unpack1('H*') if width.nil?
+      "#{@global}:#{@local}"
+    end
+    def hash_value
+      return { :value => (@raw || value_octets).unpack1('H*') } if width.nil?
+      [@global, @local]
+    end
+  end
+
+  # Type 0, sub-type 0x0A: section 9.5 says its value comes from "a
+  # Transitive Two-Octet AS-specific EC", whose value field is a 2-octet
+  # Global Administrator and a 4-octet Local Administrator (RFC 4360
+  # section 3.1).
+  class Evi_rt_0 < Evi_rt
+    SUBTYPE = 0x0a
+    LABEL = 'EVI-RT Type 0'
+    GLOBAL_WIDTH = 2
+  end
+
+  # Type 1, sub-type 0x0B: from "a Transitive IPv4-Address-specific EC",
+  # whose value field is a 4-octet address and a 2-octet Local
+  # Administrator (RFC 4360 section 3.2).
+  class Evi_rt_1 < Evi_rt
+    SUBTYPE = 0x0b
+    LABEL = 'EVI-RT Type 1'
+    GLOBAL_WIDTH = 4
+    GLOBAL_IS_ADDR = true
+  end
+
+  # Type 2, sub-type 0x0C: from "a Transitive Four-Octet AS-specific
+  # EC", whose value field is a 4-octet AS and a 2-octet Local
+  # Administrator (RFC 5668 section 2).
+  class Evi_rt_2 < Evi_rt
+    SUBTYPE = 0x0c
+    LABEL = 'EVI-RT Type 2'
+    GLOBAL_WIDTH = 4
+  end
+
+  # Type 3, sub-type 0x0D, and **the one RFC 9251 contradicts itself
+  # about**. Section 9.5 says its value field "is identical to the value
+  # field of RT1" where RT1 is "a Transitive IPv6-Address-specific EC",
+  # and RFC 5701 section 2 makes that community 20 octets with an
+  # **18-octet** value field: 16 for the address and 2 for the Local
+  # Administrator. An EVPN extended community has 6.
+  #
+  # The figure in that same section shows the 8-octet form, and section
+  # 12.1 registers 0x0D in the "EVPN Extended Community Sub-Types"
+  # subregistry, which is the 8-octet family. **bgp4r follows the figure
+  # and the registry**, because that is where the code point lives: a
+  # 20-octet community would need one in the IPv6-address-specific
+  # registry, and IANA lists none. Checked on 2026-10-30: the IANA
+  # registry gives 0x0D as "EVI-RT Type 3", reference RFC 9251, and
+  # there is no erratum on RFC 9251 about it.
+  #
+  # So this class carries the six octets and does not split them, since
+  # the layout it is told to copy does not fit in them. `new` takes 12
+  # hex digits. If the 18-octet reading is ever settled as the right
+  # one, this is the class to change and the hash key `:value` is what
+  # would move.
+  class Evi_rt_3 < Evi_rt
+    SUBTYPE = 0x0d
+    LABEL = 'EVI-RT Type 3'
+    GLOBAL_WIDTH = nil
+  end
+
   class Extended_community
     # RFC 4360 section 2 and the IANA "BGP Extended Communities" registry.
     # Key: [type with the transitive bit masked, subtype].
@@ -1181,6 +1423,11 @@ module BGP
       [0x06, 0x01] => Esi_label,             # RFC 7432 section 7.5
       [0x06, 0x02] => Es_import,             # RFC 7432 section 7.6
       [0x06, 0x03] => Router_mac,            # RFC 9135 section 8.1
+      [0x06, 0x09] => Multicast_flags,       # RFC 9251 section 9.4
+      [0x06, 0x0a] => Evi_rt_0,              # RFC 9251 section 9.5
+      [0x06, 0x0b] => Evi_rt_1,
+      [0x06, 0x0c] => Evi_rt_2,
+      [0x06, 0x0d] => Evi_rt_3,
     }.freeze
   end
 

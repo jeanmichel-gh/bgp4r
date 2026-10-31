@@ -118,6 +118,18 @@ module BGP
       :esi_label               => ->(v) { v.is_a?(Hash) ? Esi_label.new(v) : Esi_label.new(v[0], single_active: v[1]) },
       :es_import               => ->(v) { Es_import.new(v) },
       :router_mac              => ->(v) { Router_mac.new(v) },
+      # RFC 9251 section 9.4. Its list form is the flag names that are
+      # set, so the empty list is a community with neither, and the Hash
+      # form carries the reserved bits as the two above do.
+      :multicast_flags         => ->(v) { Multicast_flags.new(v) },
+      # RFC 9251 section 9.5. Types 0, 1 and 2 hash as the [global,
+      # local] pair their RT structure splits into; type 3 hashes as a
+      # Hash holding its six octets, because the structure it is told to
+      # copy does not fit in them. Both forms go to the one constructor.
+      :evi_rt_0                => ->(v) { Evi_rt_0.new(v) },
+      :evi_rt_1                => ->(v) { Evi_rt_1.new(v) },
+      :evi_rt_2                => ->(v) { Evi_rt_2.new(v) },
+      :evi_rt_3                => ->(v) { Evi_rt_3.new(v) },
     }.freeze
 
     attr_reader :communities
