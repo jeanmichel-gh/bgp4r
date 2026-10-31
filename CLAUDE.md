@@ -140,7 +140,13 @@ test/functional/lab/     lab tests: loopback speaker test and one Compose test p
                          RT-constrain, and has no FRR twin because FRR
                          8.4.4 has no such family. It carries the two
                          GoBGP 3.23.0 crashes this family found, one of
-                         them on entirely conformant traffic
+                         them on entirely conformant traffic;
+                         attr_set_gobgp_test.rb is the only one that runs
+                         a router **in the middle**, two bgp4r speakers
+                         with a gobgpd between them, because RFC 6368's
+                         ATTR_SET exists to survive transit and neither
+                         router implements it. LabHelper::Gobgpd's peer2
+                         is what makes that possible
 ```
 
 ## Running tests
@@ -274,6 +280,14 @@ seconds, where the second was recorded as a minute until it was measured:
 ```
 ruby -I. test/functional/lab/evpn_gobgp_test.rb
 ruby -I. test/functional/lab/evpn_frr_test.rb
+```
+
+An ATTR_SET carried **through** a gobgpd rather than read back by one:
+two bgp4r speakers with the router between them, which is what an
+optional transitive attribute is for and the only lab test here shaped
+that way. 50 seconds, measured on 2026-10-31 against gobgpd 3.23.0:
+```
+ruby -I. test/functional/lab/attr_set_gobgp_test.rb
 ```
 
 Which `#to_hash` read back and which do not, printed from
@@ -2901,6 +2915,51 @@ Two consequences, both of which change the plan rather than decorate it:
         against, which is the RFC 4684 situation again. Compute the
         vectors with the library and paste the result; do not type
         them.
+      * **The lab. Done**, as
+        `test/functional/lab/attr_set_gobgp_test.rb`: 6 cases, 29
+        assertions, 50 seconds, no Docker. **Neither router implements
+        attribute 128**, measured with `strings` before anything was
+        written: gobgpd 3.23.0 carries PMSI_TUNNEL, TUNNEL_ENCAP,
+        LARGE_COMMUNITY, AIGP, PREFIX_SID and AGGREGATOR and no
+        ATTR_SET, and FRR 8.4.4 has none either. So there is no FRR
+        twin, which makes this the third case after VPN flow spec and
+        RT-constrain with one reference rather than two.
+        * **So the test runs the router in the middle, and that is the
+          only lab test here shaped that way.** A router with one peer
+          can only say what it made of what we sent. RFC 6368 section 5
+          makes the set optional transitive so a customer's attributes
+          survive the provider network, and only a router between two
+          speakers can say whether they do. `LabHelper::Gobgpd` takes a
+          `peer2` for it.
+        * Measured: GoBGP accepts it, installs the route, keeps the
+          value whole and base64 encodes it in the client's JSON, and
+          **propagates it to the far peer byte for byte** with the
+          nested 4-octet AGGREGATOR intact.
+        * **Be exact about what that corroborates, because it is less
+          than it looks.** GoBGP never parses the attributes inside, so
+          this does **not** vouch for the meaning of section 5's
+          4-octet AS rule; nothing but another ATTR_SET implementation
+          could. It vouches for the framing, since a wrong length or
+          wrong flags would send the UPDATE to RFC 7606 instead of the
+          RIB, and for the transit property itself.
+        * **One measurement recorded and not filed: GoBGP propagates
+          with the Partial bit clear**, flags 0xc0 rather than 0xe0, on
+          an attribute it does not recognize. RFC 4271 section 9 is the
+          part that would settle whether that is a divergence, and this
+          file records that both fetchable sources truncate the
+          document before it, so the test asserts the measurement and
+          claims nothing about conformance. If a later GoBGP sets the
+          bit, that case fails and says to re-measure.
+        * The helper refactor is byte for byte safe for the ten tests
+          that share `LabHelper::Gobgpd`: five option sets were diffed
+          before and after, and **that check is in
+          `test/unit/lab_helper_test.rb`** rather than left as a claim,
+          since a claim nothing runs reads as verified.
+        * A name collision worth knowing: `Gobgpd#neighbor(address)`
+          already existed, reading one neighbor's detail from the
+          client, so the config builder is `neighbor_block`. Caught by
+          "wrong number of arguments (given 3, expected 1)" and not by
+          reading.
    3. **MCAST-VPN, SAFI 5, RFC 6514. Not started**, and that RFC is not
       on hand either. Note from EVPN part 7: the only first hand reading
       of RFC 6514 section 4.3 here came through
@@ -3012,6 +3071,7 @@ Lab and conformance:
   * A Compose topology on `lab/speaker.rb` is still possible and is two pieces, neither needed by the native test: an announce block has no way to give a prefix a Path Identifier, since `build_update` calls `Nlri.new` with plain prefix strings; and `Lab::Recorder#record_routes` keys received routes by prefix alone, so two paths for one prefix overwrite each other and the state file cannot show a Path Identifier arrived. Worth doing only if the lab speaker itself needs add-path.
 * **EVPN interop lives in `docs/evpn.md` section 9**, measured and asserted rather than written down here. The short version: **both routers implement route types 1 to 5 and neither knows 6 to 11**, GoBGP logging `Unknown EVPN Route type: N` and FRR saying nothing at all; FRR answers a malformed NLRI with **3/9 and a reset**, which is what `validation.rb` reports for the same octets, where GoBGP keeps the session up. Three harness facts worth knowing before writing another EVPN lab test: GoBGP's config file and its client disagree about the family name again, `l2vpn-evpn` against `evpn`; FRR's EVPN JSON has **no `routes` key** and is keyed by Route Distinguisher, so `Frr#rib` answers `{}` for it however many routes are in it and `Frr#evpn_rib` exists for that; and FRR prints `gateway IP 2.0.0.0` for every non-zero route type 5 gateway, so GoBGP is the only check on those octets.
 * **RT-constrain interop found two GoBGP 3.23.0 crashes**, asserted in `test/functional/lab/rt_constrain_gobgp_test.rb` and detailed in phase 4 part 1 above. The short version, because one of them matters more than any other divergence in this file: **the zero-length default route target followed by any second membership route GoBGP accepts panics the daemon**, a nil pointer dereference in `propagateUpdate`, and **both routes are entirely conformant** — RFC 4684 section 4 blesses the zero-length default and says it is what a route reflector's PE client sends. The second crash needs a malformed NLRI: a prefix length demanding more octets than the NLRI holds, 104 bits over 12 octets. Also measured: GoBGP drops a 32-bit or 64-bit partial prefix in silence, so the family's headline use does not work there; it reads the prefix as `mlen / 8` octets where the RFC rounds up, which is why that test cannot vouch for our length octet; and **the config and the client agree on `rtc`**, unlike VPN flow spec and EVPN. FRR 8.4.4 has no RT-constrain family at all, so this is the second family with one reference rather than two.
+* **ATTR_SET interop is the one that runs a router in the middle.** Neither GoBGP 3.23.0 nor FRR 8.4.4 implements attribute 128, measured with `strings` before the test was written, so there is no FRR twin and the question became what a router that has never heard of it can still vouch for. The answer is the property the attribute exists for: RFC 6368 section 5 makes it optional transitive so a customer's attributes cross the provider network. `attr_set_gobgp_test.rb` puts a gobgpd between two bgp4r speakers through `LabHelper::Gobgpd`'s `peer2`, and GoBGP carries the attribute to the far side **byte for byte** with the nested 4-octet AGGREGATOR intact, storing the value base64 encoded meanwhile. **What it does not vouch for**: GoBGP never parses the attributes inside, so the meaning of the 4-octet AS rule is still bgp4r's own opinion and only another ATTR_SET implementation could change that. What it does vouch for is the framing, since a wrong length or wrong flags would send the UPDATE to RFC 7606 rather than the RIB. One measurement recorded and not filed: **GoBGP propagates it with the Partial bit clear**, flags 0xc0 rather than 0xe0, on an attribute it does not recognize; RFC 4271 section 9 would settle whether that is a divergence and this file records that both fetchable sources truncate before it, so nothing is claimed.
 * **Flow spec interop lives in `docs/flow-spec.md` section 12**, measured and asserted rather than written down here, the same way the fault matrix columns are. The short version: both routers accept a rule from bgp4r and read it back, and they disagree on every part of RFC 8955 section 4.2. Two harness facts worth knowing before writing another flow spec lab test: GoBGP's **config file and its client use different names for the VPN family**, `l3vpn-ipv4-flowspec` and `ipv4-l3vpn-flowspec`, each rejecting the other; and **FRR 8.4.4 has no VPN flow spec family**, refusing a session that offers SAFI 134 alone with 2/7 and silently discarding the rule when SAFI 133 is there too.
 * **`to_hash_round_trip_test.rb` cannot read a test file that is not pure ASCII.** `test_every_working_round_trip_is_asserted_in_a_class_test_file` reads every test file body and matches regexps against it, and a single non-ASCII character in any of them makes it error with `ArgumentError: invalid byte sequence in US-ASCII`, pointing at its own line 190 and naming neither the file nor the character. Found on 2026-10-31 by putting one arrow in a comment in a new test file: that file passed on its own and the suite errored in a test it has nothing to do with. Every test file is ASCII today, so nothing is wrong now; what is wrong is the diagnosis the next person gets. The fix is an encoding on the read or a `scrub`, and it is one line in a file this change does not otherwise touch.
 * Lowest coverage (unit suite): `neighbor/neighbor.rb` 91%, `messages/update.rb` 92%, `neighbor/add_path_cap.rb` 93%, `path_attributes/mp_unreach.rb` 93%, `path_attributes/ipv6_extended_communities.rb` 93%, `optional_parameters/graceful_restart.rb` 93%.
