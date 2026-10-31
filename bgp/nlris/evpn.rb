@@ -85,9 +85,10 @@ module BGP
     # give it: eight types across RFC 7432, RFC 9136 and RFC 9251, and
     # three more of its own.
     #
-    # Five rows so far: route types 1 to 4 from RFC 7432 section 7 and
-    # route type 5 from RFC 9136 section 3.1, which is the core set
-    # every EVPN implementation has. Types 6 to 11 follow.
+    # Eight rows so far: route types 1 to 4 from RFC 7432 section 7,
+    # route type 5 from RFC 9136 section 3.1, which together are the
+    # core set every EVPN implementation has, and route types 6, 7 and 8
+    # from RFC 9251 sections 9.1 to 9.3. Types 9, 10 and 11 follow.
     # Every other type still reads back as an `Evpn::Unknown` that
     # replays byte for byte. Each later part fills more rows, and
     # `test/unit/evpn_doc_test.rb` discovers this table rather than
@@ -100,6 +101,9 @@ module BGP
       Inclusive_multicast.type  => Inclusive_multicast,
       Ethernet_segment.type     => Ethernet_segment,
       Ip_prefix_route.type      => Ip_prefix_route,
+      Selective_multicast.type  => Selective_multicast,
+      Membership_report_synch.type => Membership_report_synch,
+      Leave_synch.type          => Leave_synch,
     }.freeze
 
     # Hash key back to class, for the hash build path. Unknown is in

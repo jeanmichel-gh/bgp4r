@@ -129,8 +129,20 @@ module BGP
         (bitlen + 7) / 8
       end
 
+      # **`.to_i` and not `unpack1('C')` alone**, because a body can run
+      # out exactly where a length octet should be and then `unpack1`
+      # answers nil, which used to raise `NoMethodError: undefined
+      # method '+' for nil` out of `octets_for`. Route types 2 to 5 are
+      # bounded by the outer Length so only a malformed body got there,
+      # but route types 6, 7 and 8 read three of these in a row and a
+      # length that lies about its own width eats the fields behind it,
+      # which is an ordinary negative test rather than a malformed
+      # capture. An absent field reads as length 0 and no octets now, so
+      # `encode` comes back shorter than the body and `Evpn#read_route`
+      # falls back to `Unknown`, which replays it. Found by probing a
+      # source length of 200 bits with three octets behind it.
       def parse(s)
-        @bitlen = s.slice!(0, 1).unpack1('C')
+        @bitlen = s.slice!(0, 1).unpack1('C').to_i
         n = [self.class.octets_for(@bitlen), s.size].min
         @value = s.slice!(0, n)
         self
@@ -476,6 +488,258 @@ module BGP
 
     end
 
+    # The Flags octet of route types 6, 7 and 8. RFC 9251 sections 9.1,
+    # 9.2 and 9.3 each give it, identically in all three:
+    #
+    #     0  1  2  3  4  5  6  7
+    #   +--+--+--+--+--+--+--+--+
+    #   | reserved  |IE|v3|v2|v1|
+    #   +--+--+--+--+--+--+--+--+
+    #
+    # **Bit 7 is the least significant**, which the sections say rather
+    # than leaving to the figure: "The least significant bit (bit 7)
+    # indicates support for IGMP version 1", then bit 6 for version 2,
+    # bit 5 for version 3, and bit 4 the Include/Exclude bit. So the four
+    # defined bits are the low nibble and the reserved field is the high
+    # one, which is the opposite of what a reader skimming the figure
+    # left to right will assume.
+    #
+    # IE is "whether the (S,G) information carried within the route type
+    # is of an Include Group type (bit value 0) or an Exclude Group type
+    # (bit value 1)", and all three sections add that "The Exclude Group
+    # type bit MUST be ignored if bit 5 is not set."
+    #
+    # For IPv6 the same bits mean MLD: bit 7 MLD version 1, bit 6 MLD
+    # version 2, and "Since there is no MLD version 3, in case of the
+    # IPv6 route, the third least significant bit MUST be 0." Nothing
+    # here knows which family the route carries, and nothing validates
+    # either way, so the names stay the figure's.
+    #
+    # **Keep and echo the reserved bits**, which is the rule Conventions
+    # records for `Traffic_action` and `Prefix_entry`: `DEFINED_BITS`
+    # says which bits this class reads, a build from field values writes
+    # the rest as 0 as the sections ask, and the hash gains a
+    # `{:bits => n}` entry only when a reserved bit arrived set, so an
+    # ordinary Flags hashes to the plain list of names it has always
+    # been.
+    #
+    # Nothing validates. Any octet value, including the reserved nibble
+    # the sections say MUST be 0 and an IE bit set with no v3.
+    class Flags
+
+      DEFINED_BITS = 0x0f
+
+      V1 = 0x01
+      V2 = 0x02
+      V3 = 0x04
+      IE = 0x08
+
+      # High to low, so the hash and `to_s` read as the figure does.
+      BITS = { :ie => IE, :v3 => V3, :v2 => V2, :v1 => V1 }.freeze
+
+      # The entry that carries the whole octet when the readable list
+      # cannot, as `Attr::TAIL_KEY` rides in an attribute's value list.
+      BITS_KEY = :bits
+
+      attr_reader :value
+
+      def self.hash_key
+        :flags
+      end
+
+      def self.bits_entry?(h)
+        h.is_a?(Hash) and h.has_key?(BITS_KEY)
+      end
+
+      # new, no bit set
+      # new(:v2, :v3) or new([:v2, :v3]), the names in any order
+      # new(0x06), the whole octet, reserved bits included
+      # new([:v2, { :bits => 0xf6 }]), which is this class's own hash
+      # the wire octet, or another instance.
+      def initialize(*args)
+        @value = 0
+        args = args[0] if args.size == 1 and args[0].is_a?(Array)
+        if args.size == 1 and args[0].is_a?(String) and args[0].is_packed?
+          parse(args[0])
+        elsif args.size == 1 and args[0].is_a?(self.class)
+          @value = args[0].value
+        elsif args.size == 1 and args[0].is_a?(Integer)
+          refuse_a_value_the_field_cannot_hold(args[0])
+          @value = args[0]
+        elsif args.all? { |a| a.is_a?(Symbol) or self.class.bits_entry?(a) }
+          # An empty list lands here too, which is the no-bit-set Flags.
+          args.each { |a| set_one(a) }
+        else
+          raise ArgumentError, "invalid argument: #{args.inspect}, " \
+                               'expected bit names, an octet or a hash'
+        end
+        self
+      end
+
+      def parse(s)
+        @value = s.slice!(0, 1).unpack1('C').to_i
+        self
+      end
+
+      def encode
+        [@value].pack('C')
+      end
+
+      def to_shex
+        encode.unpack1('H*')
+      end
+
+      def size
+        1
+      end
+
+      def set?(name)
+        !(@value & BITS.fetch(name)).zero?
+      end
+
+      def v1? ; set?(:v1) ; end
+      def v2? ; set?(:v2) ; end
+      def v3? ; set?(:v3) ; end
+
+      # The Include/Exclude bit. Set means Exclude Group, so the two
+      # names are the same bit read the two ways the sections name it.
+      def ie? ; set?(:ie) ; end
+      def exclude? ; set?(:ie) ; end
+
+      # The bits outside the four the sections define, in place.
+      def reserved_bits
+        @value & ~DEFINED_BITS & 0xff
+      end
+
+      def undefined_bits?
+        !reserved_bits.zero?
+      end
+
+      def names
+        BITS.keys.select { |n| set?(n) }
+      end
+
+      # The names that are set, and the whole octet behind them only when
+      # a reserved bit is set, so an ordinary Flags hashes to the list
+      # alone.
+      def to_hash
+        h = names
+        h += [{ BITS_KEY => @value }] if undefined_bits?
+        h
+      end
+
+      def to_s
+        s = names.empty? ? 'none' : names.join(',')
+        # += rebinds rather than mutating, so the frozen literal is safe.
+        s += format(', reserved bits %04b', reserved_bits >> 4) if
+          undefined_bits?
+        s
+      end
+
+      private
+
+      def set_one(a)
+        if self.class.bits_entry?(a)
+          v = a[BITS_KEY].to_i
+          refuse_a_value_the_field_cannot_hold(v)
+          @value = v
+        else
+          @value |= BITS.fetch(a) do
+            raise ArgumentError, "unknown flag #{a.inspect}, " \
+                                 "expected one of #{BITS.keys.inspect}"
+          end
+        end
+      end
+
+      # Conventions allows a constructor to refuse an input it cannot
+      # represent at all, because the alternative is silently sending a
+      # different value. One octet holds 0 to 255 and nothing else.
+      def refuse_a_value_the_field_cannot_hold(v)
+        return if (0..0xff).include?(v)
+        raise ArgumentError, "#{v} does not fit in one octet"
+      end
+
+    end
+
+    # The fields route types 6, 7 and 8 share: the address triple of RFC
+    # 9251 sections 9.1 to 9.3, three length prefixed addresses one after
+    # another, and the Flags octet that ends all three layouts.
+    #
+    #   +---------------------------------------+
+    #   |  Multicast Source Length (1 octet)    |
+    #   +---------------------------------------+
+    #   |  Multicast Source Address (variable)  |
+    #   +---------------------------------------+
+    #   |  Multicast Group Length (1 octet)     |
+    #   +---------------------------------------+
+    #   |  Multicast Group Address (Variable)   |
+    #   +---------------------------------------+
+    #   |  Originator Router Length (1 octet)   |
+    #   +---------------------------------------+
+    #   |  Originator Router Address (variable) |
+    #   +---------------------------------------+
+    #
+    # All three lengths are in bits, which section 9.1.1 states for each
+    # of them: the Multicast Source Length "MUST be set to the length of
+    # the Multicast Source Address in bits", 32 for IPv4 and 128 for
+    # IPv6, the same for the group, and "The Originator Router Length is
+    # the length of the Originator Router Address in bits." So `Addr`
+    # carries each one, as it carries the IP of route types 2, 3, 4.
+    #
+    # **An absent Multicast Source is the ordinary case, not an error.**
+    # Section 9.1.1: "In case of a (*,G) Membership Report, the Multicast
+    # Source Length is set to 0" and the address "field is not used",
+    # which is the length 0 and no octets an `Addr` built with no
+    # argument already encodes.
+    #
+    # **A module and not a base class**, so `Evpn.constants` gains no
+    # `Route` subclass without a route type number behind it.
+    # `test/unit/evpn_doc_test.rb` discovers the route type table from
+    # exactly that set, so an abstract `Multicast < Route` would read as
+    # a twelfth route type with no row to put it in.
+    module Multicast_fields
+
+      attr_reader :source, :group, :originator, :flags
+
+      private
+
+      def parse_triple(s)
+        @source     = Addr.new(s)
+        @group      = Addr.new(s)
+        @originator = Addr.new(s)
+      end
+
+      def encode_triple
+        [@source.encode, @group.encode, @originator.encode].join
+      end
+
+      def coerce_triple(src, grp, org)
+        @source     = coerce_or_default(Addr, src)
+        @group      = coerce_or_default(Addr, grp)
+        @originator = coerce_or_default(Addr, org)
+      end
+
+      def triple_hash
+        { :source     => addr_hash(@source),
+          :group      => addr_hash(@group),
+          :originator => addr_hash(@originator) }
+      end
+
+      def triple_from_hash(h)
+        coerce_triple(h[:source], h[:group], h[:originator])
+      end
+
+      # (S,G) as an operator writes it, with a star for a field that is
+      # not there: section 9.1.1's (*,G), and (*,*) for the default
+      # Selective Multicast route of section 9.1.3.
+      def triple_to_s
+        s = @source.empty? ? '*' : @source.to_s
+        g = @group.empty? ? '*' : @group.to_s
+        "(#{s},#{g}), originator #{@originator}"
+      end
+
+    end
+
     # The base every route type is built on. A route owns its body and
     # its type number; the Route Type and Length octets of RFC 7432
     # section 7 are written by `Evpn`, which is the NLRI.
@@ -562,6 +826,18 @@ module BGP
       def coerce_label(v)
         return Label.new(0) if v.nil?
         coerce(Label, v)
+      end
+
+      # How an `Addr` field hashes: the address string when the octets
+      # are a whole family and the bit count agrees with them, and the
+      # `Addr` hash otherwise, which is the absent field and every
+      # length that lies. Written once here because five route types now
+      # carry between one and three of these.
+      def addr_hash(a)
+        s = a.address
+        return a.to_hash if s.nil?
+        return a.to_hash unless a.bitlen == (a.value.size * 8)
+        s
       end
 
     end
@@ -807,10 +1083,7 @@ module BGP
       private
 
       def ip_hash
-        a = @ip.address
-        return @ip.to_hash if a.nil?
-        return @ip.to_hash unless @ip.bitlen == (@ip.value.size * 8)
-        a
+        addr_hash(@ip)
       end
 
       def from_hash(h)
@@ -981,15 +1254,8 @@ module BGP
         @mac.bitlen == Mac_addr::BITS ? @mac.to_s : @mac.to_hash
       end
 
-      # As route type 4 does: the address string when the octets are a
-      # whole family and the bit count agrees, the `Addr` hash
-      # otherwise, and nothing to say when the field is absent.
       def ip_hash
-        return @ip.to_hash if @ip.empty?
-        a = @ip.address
-        return @ip.to_hash if a.nil?
-        return @ip.to_hash unless @ip.bitlen == (@ip.value.size * 8)
-        a
+        addr_hash(@ip)
       end
 
       def from_hash(h)
@@ -1078,10 +1344,7 @@ module BGP
       private
 
       def ip_hash
-        a = @ip.address
-        return @ip.to_hash if a.nil?
-        return @ip.to_hash unless @ip.bitlen == (@ip.value.size * 8)
-        a
+        addr_hash(@ip)
       end
 
       def from_hash(h)
@@ -1336,6 +1599,390 @@ module BGP
         set_prefix(h[:ip_prefix])
         set_gateway(h[:gateway])
         @label           = coerce_label(h)
+      end
+
+    end
+
+    # Route type 6, RFC 9251 section 9.1, the Selective Multicast
+    # Ethernet Tag route, which the section calls the SMET route:
+    #
+    #   +---------------------------------------+
+    #   |  RD (8 octets)                        |
+    #   +---------------------------------------+
+    #   |  Ethernet Tag ID (4 octets)           |
+    #   +---------------------------------------+
+    #   |  Multicast Source Length (1 octet)    |
+    #   +---------------------------------------+
+    #   |  Multicast Source Address (variable)  |
+    #   +---------------------------------------+
+    #   |  Multicast Group Length (1 octet)     |
+    #   +---------------------------------------+
+    #   |  Multicast Group Address (Variable)   |
+    #   +---------------------------------------+
+    #   |  Originator Router Length (1 octet)   |
+    #   +---------------------------------------+
+    #   |  Originator Router Address (variable) |
+    #   +---------------------------------------+
+    #   |  Flags (1 octet)                      |
+    #   +---------------------------------------+
+    #
+    # **The second route type with no Ethernet Segment Identifier**,
+    # after route type 3, which is worth saying because its two siblings
+    # here have one and a reader comparing the three will look for it.
+    #
+    # `FIXED_SIZE` is every octet but the three addresses, their three
+    # length octets included, so a body is `FIXED_SIZE` plus the
+    # addresses: 28 octets with three IPv4 ones and 64 with three IPv6
+    # ones. Nothing reads that total, since each address carries its own
+    # length and the body therefore says how long it is; the constant is
+    # here to be read rather than to parse with.
+    #
+    # Section 9.1: "For the purpose of BGP route key processing, all the
+    # fields are considered to be part of the prefix in the NLRI, except
+    # for the 1-octet Flags field." That is route key processing, which
+    # matters to a RIB and not to an encoder, and no EVPN route goes in a
+    # RIB by the recorded decision.
+    class Selective_multicast < Route
+
+      include Multicast_fields
+
+      TYPE, HASH_KEY = 6, :selective_multicast
+
+      FIXED_SIZE = 16
+
+      attr_reader :rd, :ethernet_tag_id
+
+      # new(rd, ethernet_tag_id, source, group, originator, flags) in the
+      # figure's order, with each field either an instance or whatever
+      # its class builds from
+      # new(:rd => [100, 200], :ethernet_tag_id => 10,
+      #     :source => '192.0.2.1', :group => '232.1.1.1',
+      #     :originator => '10.0.0.1', :flags => [:v3])
+      # the wire bytes, or another instance.
+      def initialize(*args)
+        if args.size == 1 and args[0].is_a?(String) and args[0].is_packed?
+          parse(args[0])
+        elsif args.size == 1 and args[0].is_a?(self.class)
+          parse(args[0].encode.is_packed)
+        elsif args.size == 1 and args[0].is_a?(Hash)
+          from_hash(args[0])
+        elsif (1..6).include?(args.size)
+          @rd              = coerce_or_default(Rd, args[0])
+          @ethernet_tag_id = coerce_or_default(Ethernet_tag_id, args[1])
+          coerce_triple(args[2], args[3], args[4])
+          @flags           = coerce_or_default(Flags, args[5])
+        elsif args.empty?
+          defaults
+        else
+          raise ArgumentError, "invalid argument: #{args.inspect}"
+        end
+        self
+      end
+
+      def parse(s)
+        @rd              = read_rd(s)
+        @ethernet_tag_id = Ethernet_tag_id.new(s)
+        parse_triple(s)
+        @flags           = Flags.new(s)
+        self
+      end
+
+      def encode_value
+        [@rd.encode, @ethernet_tag_id.encode, encode_triple,
+         @flags.encode].join
+      end
+
+      def value_hash
+        @rd.to_hash
+           .merge(@ethernet_tag_id.to_hash)
+           .merge(triple_hash)
+           .merge(Flags.hash_key => @flags.to_hash)
+      end
+
+      def to_s
+        "[6] Selective Multicast: #{@rd.to_s(false)}, " \
+        "tag #{@ethernet_tag_id}, #{triple_to_s}, flags #{@flags}"
+      end
+
+      private
+
+      def defaults
+        @rd              = Rd.new
+        @ethernet_tag_id = Ethernet_tag_id.new
+        coerce_triple(nil, nil, nil)
+        @flags           = Flags.new
+      end
+
+      def from_hash(h)
+        h = self.class.unwrap(h)
+        @rd              = coerce_or_default(Rd, h[:rd])
+        @ethernet_tag_id = coerce_or_default(Ethernet_tag_id,
+                                             h[:ethernet_tag_id])
+        triple_from_hash(h)
+        @flags           = coerce_or_default(Flags, h[Flags.hash_key])
+      end
+
+    end
+
+    # Route type 7, RFC 9251 section 9.2, the Multicast Membership Report
+    # Synch route. Route type 6 with an Ethernet Segment Identifier
+    # between the RD and the Ethernet Tag ID:
+    #
+    #   +---------------------------------------+
+    #   |  RD (8 octets)                        |
+    #   +---------------------------------------+
+    #   |Ethernet Segment Identifier (10 octets)|
+    #   +---------------------------------------+
+    #   |  Ethernet Tag ID (4 octets)           |
+    #   +---------------------------------------+
+    #   |  the address triple (variable)        |
+    #   +---------------------------------------+
+    #   |  Flags (1 octet)                      |
+    #   +---------------------------------------+
+    #
+    # Section 9.2: it "is used to coordinate the IGMP Membership Report
+    # (x,G) state for a given BD between the PEs attached to a given ES
+    # operating in All-Active (or Single-Active) redundancy mode", which
+    # is why it carries an ESI where the SMET route does not.
+    #
+    # `FIXED_SIZE` is 10 octets more than route type 6's, so a body with
+    # three IPv4 addresses is 38 octets.
+    class Membership_report_synch < Route
+
+      include Multicast_fields
+
+      TYPE, HASH_KEY = 7, :membership_report_synch
+
+      FIXED_SIZE = 26
+
+      attr_reader :rd, :esi, :ethernet_tag_id
+
+      # new(rd, esi, ethernet_tag_id, source, group, originator, flags),
+      # its own hash, the wire bytes, or another instance.
+      def initialize(*args)
+        if args.size == 1 and args[0].is_a?(String) and args[0].is_packed?
+          parse(args[0])
+        elsif args.size == 1 and args[0].is_a?(self.class)
+          parse(args[0].encode.is_packed)
+        elsif args.size == 1 and args[0].is_a?(Hash)
+          from_hash(args[0])
+        elsif (1..7).include?(args.size)
+          @rd              = coerce_or_default(Rd, args[0])
+          @esi             = coerce_or_default(Esi, args[1])
+          @ethernet_tag_id = coerce_or_default(Ethernet_tag_id, args[2])
+          coerce_triple(args[3], args[4], args[5])
+          @flags           = coerce_or_default(Flags, args[6])
+        elsif args.empty?
+          defaults
+        else
+          raise ArgumentError, "invalid argument: #{args.inspect}"
+        end
+        self
+      end
+
+      def parse(s)
+        @rd              = read_rd(s)
+        @esi             = Esi.new(s)
+        @ethernet_tag_id = Ethernet_tag_id.new(s)
+        parse_triple(s)
+        @flags           = Flags.new(s)
+        self
+      end
+
+      def encode_value
+        [@rd.encode, @esi.encode, @ethernet_tag_id.encode, encode_triple,
+         @flags.encode].join
+      end
+
+      def value_hash
+        @rd.to_hash
+           .merge(@esi.to_hash)
+           .merge(@ethernet_tag_id.to_hash)
+           .merge(triple_hash)
+           .merge(Flags.hash_key => @flags.to_hash)
+      end
+
+      def to_s
+        "[7] Multicast Membership Report Synch: #{@rd.to_s(false)}, " \
+        "ESI #{@esi}, tag #{@ethernet_tag_id}, #{triple_to_s}, " \
+        "flags #{@flags}"
+      end
+
+      private
+
+      def defaults
+        @rd              = Rd.new
+        @esi             = Esi.new
+        @ethernet_tag_id = Ethernet_tag_id.new
+        coerce_triple(nil, nil, nil)
+        @flags           = Flags.new
+      end
+
+      def from_hash(h)
+        h = self.class.unwrap(h)
+        @rd              = coerce_or_default(Rd, h[:rd])
+        @esi             = coerce_or_default(Esi, h[:esi])
+        @ethernet_tag_id = coerce_or_default(Ethernet_tag_id,
+                                             h[:ethernet_tag_id])
+        triple_from_hash(h)
+        @flags           = coerce_or_default(Flags, h[Flags.hash_key])
+      end
+
+    end
+
+    # Route type 8, RFC 9251 section 9.3, the Multicast Leave Synch
+    # route. Route type 7 with two more fields before the Flags:
+    #
+    #   +---------------------------------------+
+    #   |  RD (8 octets)                        |
+    #   +---------------------------------------+
+    #   |Ethernet Segment Identifier (10 octets)|
+    #   +---------------------------------------+
+    #   |  Ethernet Tag ID (4 octets)           |
+    #   +---------------------------------------+
+    #   |  the address triple (variable)        |
+    #   +---------------------------------------+
+    #   |  Reserved (4 octets)                  |
+    #   +---------------------------------------+
+    #   |  Maximum Response Time (1 octet)      |
+    #   +---------------------------------------+
+    #   |  Flags (1 octet)                      |
+    #   +---------------------------------------+
+    #
+    # `FIXED_SIZE` is 5 octets more than route type 7's, so a body with
+    # three IPv4 addresses is 43 octets.
+    #
+    # **The Reserved field is the largest reserved field in the library,
+    # and it is the first one an RFC asks to be echoed in so many
+    # words.** Section 9.3.1: "The originator MUST set the Reserved field
+    # to 0; the receiver SHOULD ignore it, and if it needs to be
+    # propagated, it MUST propagate it unchanged." Conventions already
+    # mandates keep and echo on bgp4r's own grounds, which are that a
+    # tool able to send a value no RFC describes has to be able to replay
+    # what it just sent; here the RFC agrees. So the four octets are kept
+    # as they arrived, a build from field values writes zeros, and the
+    # hash gains a `:reserved` key only when they are not zero.
+    #
+    # The Maximum Response Time is an ordinary field, not a reserved one:
+    # section 9.3.1 makes it "the value to be used while sending a query,
+    # as defined in [RFC2236]". Section 9.3 keeps it out of the route key
+    # along with the Reserved and Flags fields, which is a RIB's business
+    # and not an encoder's.
+    class Leave_synch < Route
+
+      include Multicast_fields
+
+      TYPE, HASH_KEY = 8, :leave_synch
+
+      FIXED_SIZE    = 31
+      RESERVED_SIZE = 4
+
+      ZERO_RESERVED = ("\x00" * RESERVED_SIZE).b.freeze
+
+      attr_reader :rd, :esi, :ethernet_tag_id, :max_response_time
+
+      # All four octets of the Reserved field, as they arrived or as they
+      # were given. Always 4 octets on anything built here.
+      attr_reader :reserved
+
+      # new(rd, esi, ethernet_tag_id, source, group, originator,
+      #     max_response_time, flags), which leaves the Reserved field
+      # zero, since that is what section 9.3.1 asks an originator for.
+      # Its own hash, where `:reserved => 'ffffffff'` reaches the field,
+      # the wire bytes, or another instance.
+      def initialize(*args)
+        if args.size == 1 and args[0].is_a?(String) and args[0].is_packed?
+          parse(args[0])
+        elsif args.size == 1 and args[0].is_a?(self.class)
+          parse(args[0].encode.is_packed)
+        elsif args.size == 1 and args[0].is_a?(Hash)
+          from_hash(args[0])
+        elsif (1..8).include?(args.size)
+          @rd                = coerce_or_default(Rd, args[0])
+          @esi               = coerce_or_default(Esi, args[1])
+          @ethernet_tag_id   = coerce_or_default(Ethernet_tag_id, args[2])
+          coerce_triple(args[3], args[4], args[5])
+          @reserved          = ZERO_RESERVED.dup
+          @max_response_time = args[6].to_i
+          @flags             = coerce_or_default(Flags, args[7])
+        elsif args.empty?
+          defaults
+        else
+          raise ArgumentError, "invalid argument: #{args.inspect}"
+        end
+        self
+      end
+
+      def parse(s)
+        @rd                = read_rd(s)
+        @esi               = Esi.new(s)
+        @ethernet_tag_id   = Ethernet_tag_id.new(s)
+        parse_triple(s)
+        @reserved          = s.slice!(0, RESERVED_SIZE).to_s
+        @max_response_time = s.slice!(0, 1).unpack1('C').to_i
+        @flags             = Flags.new(s)
+        self
+      end
+
+      def encode_value
+        [@rd.encode, @esi.encode, @ethernet_tag_id.encode, encode_triple,
+         @reserved, [@max_response_time].pack('C'), @flags.encode].join
+      end
+
+      # Zero Reserved octets, which is every route an originator is
+      # meant to send, so the key is there only for a capture that
+      # carried something else.
+      def reserved_zero?
+        @reserved == ZERO_RESERVED
+      end
+
+      def value_hash
+        h = @rd.to_hash
+                .merge(@esi.to_hash)
+                .merge(@ethernet_tag_id.to_hash)
+                .merge(triple_hash)
+                .merge(:max_response_time => @max_response_time,
+                       Flags.hash_key => @flags.to_hash)
+        h[:reserved] = @reserved.unpack1('H*') unless reserved_zero?
+        h
+      end
+
+      def to_s
+        s = "[8] Multicast Leave Synch: #{@rd.to_s(false)}, ESI #{@esi}, " \
+            "tag #{@ethernet_tag_id}, #{triple_to_s}, " \
+            "max response time #{@max_response_time}, flags #{@flags}"
+        # += rebinds rather than mutating, so the frozen literal is safe.
+        s += ", reserved #{@reserved.unpack1('H*')}" unless reserved_zero?
+        s
+      end
+
+      private
+
+      def defaults
+        @rd                = Rd.new
+        @esi               = Esi.new
+        @ethernet_tag_id   = Ethernet_tag_id.new
+        coerce_triple(nil, nil, nil)
+        @reserved          = ZERO_RESERVED.dup
+        @max_response_time = 0
+        @flags             = Flags.new
+      end
+
+      def from_hash(h)
+        h = self.class.unwrap(h)
+        @rd                = coerce_or_default(Rd, h[:rd])
+        @esi               = coerce_or_default(Esi, h[:esi])
+        @ethernet_tag_id   = coerce_or_default(Ethernet_tag_id,
+                                                h[:ethernet_tag_id])
+        triple_from_hash(h)
+        @reserved          = read_reserved(h[:reserved])
+        @max_response_time = h[:max_response_time].to_i
+        @flags             = coerce_or_default(Flags, h[Flags.hash_key])
+      end
+
+      def read_reserved(v)
+        return ZERO_RESERVED.dup if v.nil?
+        [v.to_s].pack('H*')
       end
 
     end

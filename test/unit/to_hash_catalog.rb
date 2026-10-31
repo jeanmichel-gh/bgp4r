@@ -977,6 +977,48 @@ module ToHashCatalog
       BGP::Label.new(:label => 500, :exp => 5, :bottom => 0))
   end
 
+  # The Flags octet of route types 6, 7 and 8, RFC 9251 sections 9.1 to
+  # 9.3. The recipe sets a reserved bit as well as two defined ones, so
+  # it exercises the `{:bits => n}` entry the list cannot otherwise
+  # carry: a Flags built from names alone would round trip without ever
+  # showing that half of the hash.
+  ENTRIES['BGP::Evpn::Flags'] = entry(:ok, nil, nil) do
+    BGP::Evpn::Flags.new(0xf6)
+  end
+
+  # Route type 6, RFC 9251 section 9.1. Six fields and the recipe
+  # exercises all six, with an absent Multicast Source, which section
+  # 9.1.1 makes the ordinary (*,G) case, and a group whose length lies
+  # about the octets behind it.
+  ENTRIES['BGP::Evpn::Selective_multicast'] = entry(:ok, nil, nil) do
+    BGP::Evpn::Selective_multicast.new(
+      [100, 200], 100, nil, BGP::Evpn::Addr.new(24, ['e80101'].pack('H*')),
+      '2001:db8::1', [:v3, :v2])
+  end
+
+  # Route type 7, RFC 9251 section 9.2. Seven fields and the recipe
+  # exercises all seven.
+  ENTRIES['BGP::Evpn::Membership_report_synch'] = entry(:ok, nil, nil) do
+    BGP::Evpn::Membership_report_synch.new(
+      [100, 200], '00:11:22:33:44:55:66:77:88:99', 100, '192.0.2.1',
+      '232.1.1.1', '2001:db8::1', [:v3])
+  end
+
+  # Route type 8, RFC 9251 section 9.3. Nine fields, and two of them
+  # only reach the object through the hash or the wire: the Reserved
+  # field, which a build from values writes as zero because section
+  # 9.3.1 tells an originator to, and a Flags with a reserved bit set.
+  # Conventions says to exercise every field a class carries, so this
+  # recipe builds from the hash rather than from values.
+  ENTRIES['BGP::Evpn::Leave_synch'] = entry(:ok, nil, nil) do
+    BGP::Evpn::Leave_synch.new(
+      :rd => [100, 200], :esi => '00:11:22:33:44:55:66:77:88:99',
+      :ethernet_tag_id => 100, :source => '192.0.2.1',
+      :group => '232.1.1.1', :originator => '2001:db8::1',
+      :reserved => 'deadbeef', :max_response_time => 100,
+      :flags => [:v2, { :bits => 0xf2 }])
+  end
+
   # The NLRI framing, RFC 7432 section 7. Three fields and the recipe
   # exercises all three: the route, the RFC 7911 section 3 Path
   # Identifier, and a Length that disagrees with its own octets.
