@@ -1545,41 +1545,80 @@ module BGP
 
   # RFC 8584 section 2.2: the DF Election Extended Community, EVPN
   # sub-type 0x06, by which "A PE can indicate its willingness to
-  # support HRW and/or AC-DF".
+  # support HRW and/or AC-DF". RFC 8584 gave it 3 reserved octets after
+  # the Bitmap; **RFC 9785 section 3 takes the last two of them** and is
+  # the layout written here:
   #
-  #   | Type = 0x06   | Sub-Type(0x06)| RSV |  DF Alg |    Bitmap     ~
-  #   ~     Bitmap    |            Reserved                           |
+  #   | Type=0x06     | Sub-Type(0x06)| RSV |  DF Alg |    Bitmap     ~
+  #   ~     Bitmap    |   Reserved    |   DF Preference (2 octets)    |
   #
   # So DF Alg is the low 5 bits of the value's first octet, the Bitmap is
-  # its next two and 3 reserved octets follow. The RSV bits above DF Alg
-  # are "Reserved bits for information that is specific to DF Alg".
+  # its next two, one reserved octet follows and the DF Preference is the
+  # last two. The RSV bits above DF Alg are "Reserved bits for
+  # information that is specific to DF Alg".
   #
-  # **Two RFCs define bits in that Bitmap and both are read here.** RFC
-  # 8584's own registry gives bit 1, AC-DF, and leaves bits 0 and 2 to 15
-  # unassigned; RFC 9722 section 2.1 adds bit 3, Time Synchronization. A
-  # mask covering only the first would report a T bit as a reserved one.
-  # The RFC numbers the Bitmap's bits from its high order end and states
-  # where each lands in the whole community, which is the cross-check
-  # both bits were placed by: bit 1 is "Bit 25" of the community and bit
-  # 3 is "Bit 27", and the community's third octet is where its value
-  # begins.
+  # **Three RFCs define bits in that Bitmap and all three are read
+  # here.** RFC 8584's own registry gives bit 1, AC-DF, and leaves bits 0
+  # and 2 to 15 unassigned; RFC 9722 section 2.1 adds bit 3, Time
+  # Synchronization; RFC 9785 section 3 adds bit 0, the D or "Don't
+  # Preempt" bit. A mask covering only the first would report either of
+  # the others as a reserved bit, which is what #190 shipped and this
+  # fixed: **a bit one RFC leaves unassigned is a bit a later RFC can
+  # fill**, so go by the registry and not by the defining RFC alone.
+  # Each RFC numbers the Bitmap's bits from its high order end and states
+  # where each lands in the whole community, which is the cross-check all
+  # three were placed by: bit 0 is "Bit 24" of the community, bit 1 is
+  # "Bit 25" and bit 3 is "Bit 27", and the community's third octet is
+  # where its value begins.
+  #
+  # **The DF Preference is read whatever the algorithm, and named as a
+  # preference only for the two it belongs to.** RFC 9785 section 3 gives
+  # it a meaning under Highest-Preference and Lowest-Preference, where
+  # "the default value MUST be 32767", and for any other algorithm says
+  # only that "these 2 octets can be encoded differently". So the octets
+  # are always read, so they always round trip, and `to_s` prints them as
+  # a preference only where the RFC says they are one.
   class Df_election < Extended_community::Typed
     TYPE, SUBTYPE = 0x06, 0x06
     LABEL = 'DF Election'
     # The Bitmap is the value's second and third octets, numbered from
-    # its high order end, so its bit n is bit 39 - n of the value.
-    AC_DF     = 1 << 38  # RFC 8584 section 2.2, Bitmap bit 1
-    TIME_SYNC = 1 << 36  # RFC 9722 section 2.1, Bitmap bit 3
-    CAPABILITIES = { :ac_df=> AC_DF, :time_sync=> TIME_SYNC }.freeze
-    # RFC 8584 section 2.2's "DF Alg" registry. Type 0 is the "Default DF
-    # election algorithm, or modulus-based algorithm as defined in
-    # [RFC7432]", types 2 to 30 are unassigned and 31 is "Reserved for
-    # Experimental Use". Any number from 0 to 31 encodes.
-    ALGORITHMS = { :default=> 0, :hrw=> 1, :experimental=> 31 }.freeze
-    DEFINED_BITS = (0x1f << 40) | AC_DF | TIME_SYNC
-    attr_reader :df_alg
+    # its high order end, so its bit n is bit 39 - n of the value, and
+    # BITMAP_SHIFT is what turns one of these into the 16-bit field.
+    BITMAP_SHIFT = 24
+    DONT_PREEMPT = 1 << 39  # RFC 9785 section 3, Bitmap bit 0
+    AC_DF        = 1 << 38  # RFC 8584 section 2.2, Bitmap bit 1
+    TIME_SYNC    = 1 << 36  # RFC 9722 section 2.1, Bitmap bit 3
+    # In Bitmap bit order, which is the order to_s lists them in.
+    CAPABILITIES = { :dont_preempt=> DONT_PREEMPT, :ac_df=> AC_DF,
+                     :time_sync=> TIME_SYNC }.freeze
+    # The "DF Alg" registry RFC 8584 section 2.2 created. Type 0 is the
+    # "Default DF election algorithm, or modulus-based algorithm as
+    # defined in [RFC7432]" and 31 is "Reserved for Experimental Use";
+    # **RFC 9785 section 6 allocated 2 and 3**, leaving 4 to 30
+    # unassigned. Any number from 0 to 31 encodes.
+    ALGORITHMS = { :default=> 0, :hrw=> 1, :highest_preference=> 2,
+                   :lowest_preference=> 3, :experimental=> 31 }.freeze
+    # The two the DF Preference field belongs to, RFC 9785 section 3:
+    # "The Designated Forwarder Preference field is specific to Highest-
+    # Preference and Lowest-Preference Algorithms, and this document does
+    # not define any meaning for other algorithms."
+    PREFERENCE_ALGORITHMS = [ALGORITHMS[:highest_preference],
+                             ALGORITHMS[:lowest_preference]].freeze
+    # "The allowed values are within the range 0-65535, and the default
+    # value MUST be 32767. This value is the midpoint in the allowed
+    # Preference range of values".
+    DEFAULT_PREFERENCE = 32767
+    DEFINED_BITS = (0x1f << 40) | DONT_PREEMPT | AC_DF | TIME_SYNC | 0xffff
+    attr_reader :df_alg, :df_pref
     def alg_name
       ALGORITHMS.key(@df_alg)
+    end
+    # Whether the last two octets are a DF Preference at all.
+    def preference_alg?
+      PREFERENCE_ALGORITHMS.include?(@df_alg)
+    end
+    def dont_preempt?
+      @dont_preempt
     end
     def ac_df?
       @ac_df
@@ -1588,43 +1627,70 @@ module BGP
       @time_sync
     end
     private
-    def build(arg = nil, df_alg: nil, ac_df: false, time_sync: false, bits: nil)
+    def build(arg = nil, df_alg: nil, dont_preempt: false, ac_df: false,
+              time_sync: false, df_pref: nil, bits: nil)
       arg = unwrap(arg)
       if arg.is_a?(Hash)
-        arg, ac_df, time_sync, bits =
-          arg[:df_alg], arg[:ac_df], arg[:time_sync], arg[:bits]
+        arg, dont_preempt, ac_df, time_sync, df_pref, bits =
+          arg[:df_alg], arg[:dont_preempt], arg[:ac_df], arg[:time_sync],
+          arg[:df_pref], arg[:bits]
       elsif arg.is_a?(Array)
-        arg, names = arg[0], arg[1] || []
+        names, df_pref, arg = arg[1] || [], arg[2], arg[0]
+        dont_preempt = names.include?(:dont_preempt)
         ac_df, time_sync = names.include?(:ac_df), names.include?(:time_sync)
       end
       arg = df_alg if arg.nil?
       return keep_bits(bits) if bits
       @df_alg = ALGORITHMS[arg] || check('DF algorithm', arg.to_i, 0x1f)
+      @dont_preempt = dont_preempt ? true : false
       @ac_df, @time_sync = ac_df ? true : false, time_sync ? true : false
+      # Section 3's default is the preference algorithms' own. Under any
+      # other algorithm these octets are RFC 8584's reserved ones, so
+      # they default to 0, and a value given explicitly always wins.
+      df_pref ||= preference_alg? ? DEFAULT_PREFERENCE : 0
+      @df_pref = check('DF preference', df_pref.to_i, 0xffff)
     end
     def value_octets
-      bitmap = (@ac_df ? 0x4000 : 0) | (@time_sync ? 0x1000 : 0)
-      [@df_alg, bitmap, 0, 0].pack('CnCn')
+      bitmap = CAPABILITIES.inject(0) do |m, (name, bit)|
+        m | (send("#{name}?") ? bit >> BITMAP_SHIFT : 0)
+      end
+      [@df_alg, bitmap, 0, @df_pref].pack('CnCn')
     end
     def parse_value(v)
-      alg, bitmap, _, _ = v.unpack('CnCn')
-      @df_alg    = alg & 0x1f
-      @ac_df     = (bitmap & 0x4000) > 0
-      @time_sync = (bitmap & 0x1000) > 0
+      alg, bitmap, _, pref = v.unpack('CnCn')
+      @df_alg, @df_pref = alg & 0x1f, pref
+      CAPABILITIES.each do |name, bit|
+        instance_variable_set("@#{name}",
+                              (bitmap & (bit >> BITMAP_SHIFT)) > 0)
+      end
     end
     def capability_names
       CAPABILITIES.keys.select { |n| send("#{n}?") }
     end
     def value_s
       names = capability_names
-      with_bits("alg #{alg_name || @df_alg}" +
-                (names.empty? ? '' : ', ' + names.join(', ')))
+      s = "alg #{alg_name || @df_alg}"
+      s += ', ' + names.join(', ') unless names.empty?
+      if preference_alg?
+        s += ", pref #{@df_pref}"
+      elsif @df_pref.to_i > 0
+        # Not a preference under this algorithm, so do not call it one.
+        s += format(', last octets 0x%04x', @df_pref)
+      end
+      with_bits(s)
     end
     def hash_value
       alg = alg_name || @df_alg
-      return [alg, capability_names] unless undefined_bits?
-      { :df_alg=> alg, :ac_df=> @ac_df, :time_sync=> @time_sync,
-        :bits=> value_bits }
+      unless undefined_bits?
+        h = [alg, capability_names]
+        # The preference rides along where it is a field, and otherwise
+        # only when a peer put something in those octets, so an ordinary
+        # DF Election community hashes as the pair it always did.
+        h << @df_pref if preference_alg? || @df_pref.to_i > 0
+        return h
+      end
+      { :df_alg=> alg, :dont_preempt=> @dont_preempt, :ac_df=> @ac_df,
+        :time_sync=> @time_sync, :df_pref=> @df_pref, :bits=> value_bits }
     end
   end
 

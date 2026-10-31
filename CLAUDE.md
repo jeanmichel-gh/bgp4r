@@ -265,7 +265,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. A `lab` job runs the Compose topologies, and installs a `gobgpd` release so the native fault matrix runs there too; it pins 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-10-30: 1716 tests, 24827 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.1%.
+Baseline on 2026-10-30: 1719 tests, 24879 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.1%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -2295,7 +2295,8 @@ Two consequences, both of which change the plan rather than decorate it:
           Section 5 is "Solution Benefits".
       * **8b, the other six. Done**, in #190: EVPN Layer 2 Attributes
         at 0x04 (RFC 8214 section 3.1), E-Tree at 0x05 (RFC 8317
-        section 6.1), DF Election at 0x06 (RFC 8584 section 2.2),
+        section 6.1), DF Election at 0x06 (RFC 8584 section 2.2,
+        extended by RFC 9785 section 3),
         ARP/ND at 0x08 (RFC 9047 section 2), Service Carving Time at
         0x0f (RFC 9722 section 2.1), and the Default Gateway at `[0x03,
         0x0d]` (RFC 7432 section 7.8, whose IANA reference is an
@@ -2318,22 +2319,65 @@ Two consequences, both of which change the plan rather than decorate it:
           Unlike RFC 7432 section 7.5 it does say where the label sits:
           "The value of the 20-bit MPLS label is encoded in the
           high-order 20 bits of the Leaf label field".
-        * **Two RFCs define bits in the one DF Election Bitmap and both
-          are read.** RFC 8584 section 2.2 gives bit 1, AC-DF, and
-          leaves bits 0 and 2 to 15 unassigned; **RFC 9722 section 2.1
-          adds bit 3**, Time Synchronization, and nothing in RFC 8584
-          points forward to it. A mask covering only the first would
-          report a correct T bit as a reserved one. Same shape as the
+        * **Three RFCs define bits in the one DF Election Bitmap and
+          all three are read**, which is a correction to what #190
+          shipped and what this entry first said. RFC 8584 section 2.2
+          gives bit 1, AC-DF, and leaves bits 0 and 2 to 15
+          unassigned; **RFC 9722 section 2.1 adds bit 3**, Time
+          Synchronization; **RFC 9785 section 3 adds bit 0**, the D or
+          "Don't Preempt" bit. Nothing in RFC 8584 points forward to
+          either. A mask covering only RFC 8584 would report a correct
+          T or D bit as a reserved one. Same shape as the
           `Pmsi_tunnel` flags registry: a bit one RFC leaves
           unassigned is a bit a later RFC can fill, so check the
           registry and not only the defining RFC.
-        * **Four of these RFCs number their flag bits twice, and the
+          * **#190 wrote that sentence down and then missed RFC 9785
+            by it**, which is the part worth keeping. The RFC was
+            uploaded with the EVPN set and named in `docs/evpn.md`'s
+            own RFC table as "further communities and procedures",
+            and was never opened: the registry was read through the
+            two RFCs in hand rather than looked up. So the rule is
+            not enough on its own. **Read every RFC that lists itself
+            as updating the one you are implementing**, and RFC
+            9785's header says `Updates: 8584` in so many words.
+          * Fixed in the DF Election follow up, with the two DF Alg
+            values and the DF Preference field below. Nothing was
+            wrong on the wire while it was missing, because
+            keep-and-echo replayed the octets as reserved bits; what
+            was missing was the meaning, which is the whole of what a
+            breadth phase buys over #116.
+        * **RFC 9785 section 3 also takes the last two of RFC 8584's
+          three reserved octets**, for a DF Preference, and section 6
+          allocates DF Alg 2 Highest-Preference and 3
+          Lowest-Preference. So `ALGORITHMS` has five entries now and
+          4 to 30 are what is left unassigned.
+          * The field is "specific to Highest-Preference and
+            Lowest-Preference Algorithms", where "the default value
+            MUST be 32767", and for any other algorithm the section
+            says only that "these 2 octets can be encoded
+            differently". **So bgp4r reads it under every algorithm
+            and names it a preference under only those two**: reading
+            it always is what makes the octets replay, and `to_s`
+            prints `last octets 0x1234` elsewhere rather than
+            claiming a meaning the RFC withholds. `DEFINED_BITS`
+            gains the low 16 bits either way, so the one remaining
+            reserved octet is still what earns a `:bits` entry.
+          * The default is per algorithm, so a preference algorithm
+            **always** carries the value in its hash, where any other
+            carries it only when non-zero. Without that an alg 2
+            community with a preference of 0 would hash as the pair
+            and read back as the section 3 default of 32767, which is
+            a wrong value rather than a lost one. A test pins it.
+        * **Four RFCs number their flag bits twice, and the
           second number is what the placements were checked against.**
           RFC 9047 section 2 says R is "Bit 7 of the Flags field" and
           "Bit 23 of the Extended Community", O is bit 6 and bit 22, I
           is bit 4 and bit 20; RFC 8584 says the Bitmap's bit 0
           "corresponds to Bit 24"; RFC 9722 says its T bit
-          "corresponds to Bit 27". All five hold.
+          "corresponds to Bit 27"; RFC 9785 says its D bit is Bitmap
+          "Bit 0 (corresponds to Bit 24 of the DF Election Extended
+          Community)", which is RFC 8584's sentence from the other end
+          and so pins the Bitmap's own origin twice over. All six hold.
           `test_each_flag_sits_at_the_bit_number_its_own_rfc_gives_it`
           asserts them, and `docs/evpn.md` section 7b has the table,
           which `evpn_doc_test.rb` reads out of the document rather
