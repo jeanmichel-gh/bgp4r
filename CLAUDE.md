@@ -2665,7 +2665,9 @@ Two consequences, both of which change the plan rather than decorate it:
    16388, SAFI 71 and 72, RFC 9552) are not. This entry used to say "each of
    these is a class and a registration", which held for the first and
    understates the last considerably: BGP-LS is a whole TLV language of
-   node, link and prefix descriptors, not one layout.
+   node, link and prefix descriptors, not one layout. It understates
+   MCAST-VPN too, though less: seven route types across one RFC, three
+   more across another, and no router here to check them against.
 
    **Do BGP-LS last, or three tests move twice.** `mp_reach_test.rb`'s
    `test_an_unimplemented_safi_still_raises` and the two behind
@@ -2990,10 +2992,188 @@ Two consequences, both of which change the plan rather than decorate it:
             `wait_for`, which overran the foreground limit twice and
             left a patched working tree behind both times. One method
             is about 45s.
-   3. **MCAST-VPN, SAFI 5, RFC 6514. Not started**, and that RFC is not
-      on hand either. Note from EVPN part 7: the only first hand reading
-      of RFC 6514 section 4.3 here came through
-      draft-ietf-bess-rfc6514bis-00, which obsoletes it.
+   3. **MCAST-VPN, SAFI 5, RFC 6514. Planned, not started**, in seven
+      parts below. **The RFC is readable now**, which corrects the note
+      this entry used to carry: it was fetched in full on 2026-10-31,
+      along with draft-ietf-bess-rfc6514bis-00, which obsoletes it, and
+      RFC 7441, which updates it. EVPN part 7's note that the only first
+      hand reading here came through the bis draft applied to RFC 6514
+      section 4.3 and no longer applies.
+      * **The registry has ten route types and RFC 6514 defines seven.**
+        IANA's "BGP MCAST-VPN Route Types" registry, read on 2026-10-31:
+        0x01 Intra-AS I-PMSI A-D, 0x02 Inter-AS I-PMSI A-D, 0x03 S-PMSI
+        A-D, 0x04 Leaf A-D, 0x05 Source Active A-D, 0x06 Shared Tree
+        Join and 0x07 Source Tree Join from RFC 6514 section 4, then
+        0x43, 0x44 and 0x47 from **RFC 7441**, the mLDP forms of 0x03,
+        0x04 and 0x07. 0x00 and 0x80 to 0xff are Reserved.
+        * **RFC 7441's header says `Updates: 6514` in so many words**,
+          so EVPN part 8b's rule found this one before it cost anything:
+          read every RFC that lists itself as updating the one you are
+          implementing. That rule was written after RFC 9785 was missed
+          by it; this is the first time it has paid.
+        * The relationship is stated rather than arithmetic. RFC 7441:
+          the new types' "high-order two bits have the value 0x01, and
+          (b) the low-order six bits have the same value as the
+          codepoints for the corresponding route types". So 0x40 to 0x7f
+          is the mLDP range and `base + 0x40` is the result, not the
+          rule.
+      * **The three mLDP types are deliberately out of scope**, and the
+        reason is that they are not BGP. Each carries an mLDP FEC
+        Element, which RFC 7441 does not lay out at all: it points at
+        "the FEC Element diagram in Section 2.2 of RFC 6388", so the
+        extent of that field belongs to LDP and bgp4r has nothing of
+        LDP. They read back as `Mcast_vpn::Unknown` and replay byte for
+        byte, which is what #116 already gives one level up. Revisit
+        only if someone wants mLDP, and then it is an RFC 6388 reader
+        first and three route types second.
+      * **The framing is the EVPN shape exactly**, which is why that
+        experience transfers whole. RFC 6514 section 4: a Route Type
+        octet, a Length octet, and a Route Type specific field, where
+        "The Length field indicates the length in octets of the Route
+        Type specific field of the MCAST-VPN NLRI". So
+        `Mcast_vpn.nlri_size` is `Evpn.nlri_size` again, read by the
+        same `MpReachCommon::ClassMethods#nlri_size`, and the two
+        dispatch gates take one more arm each. **Not a registry**, for
+        the reason phase 1 records.
+      * **Two AFIs, where EVPN has one.** Section 4: "with an Address
+        Family Identifier (AFI) of 1 or 2 and a Subsequent AFI (SAFI) of
+        MCAST-VPN". Nothing inside the NLRI reads differently per
+        family, because the source and group are length prefixed, so the
+        parse needs no AFI input any more than EVPN's does. Where the
+        two AFIs are likely to matter is the next hop, and part 5 is
+        where that gets measured rather than assumed.
+      * **Section 4 gives no SAFI number**, and neither does the bis
+        draft: both say "a SAFI of MCAST-VPN" and leave it to IANA. The
+        registry says 5, and `IANA::SAFI::MCAST_VPN` is already 5 with
+        `iana.rb` already printing 'Multicast VPN', so that is one site
+        this family needs nothing at.
+      * **The Leaf A-D route cannot be split from its own octets, and
+        this is the design problem of the family.** Route type 4's body
+        is a Route Key of no stated length followed by an Originating
+        Router's IP Address of no stated length. Section 4.4 says only
+        that "the Route Key of the Leaf A-D route is set to the NLRI of
+        the received route", and **the bis draft does not close it
+        either**, which was checked rather than assumed. So the split is
+        not in the band.
+        * The readable reading is that the Route Key is a whole nested
+          NLRI, Route Type and Length octets included, which makes it
+          self delimiting and leaves the address as what is behind it.
+          That is the same shape as EVPN route type 11, and **RFC 9572
+          needed its own terminology section to say "entire NLRI"**
+          before it was more than a reading. RFC 6514 has no such
+          sentence.
+        * So part 4 takes that reading and does not assert it: the
+          nested read is accepted only when the result replays byte for
+          byte, which is the rule `Evpn#read_route` already applies, and
+          a body that fails it is kept whole. **Say in the code that it
+          is a reading and not a rule**, per Rules for agents: "I do not
+          know why this is like this" is the honest line until an
+          implementation or a later document answers it.
+      * **The Originating Router's IP Address has no length field in any
+        of the three types that carry it**, 1, 3 and 4, and neither
+        document states its width or derives one. Section 8 only asks
+        that PE addresses "MUST be of the same address family as the
+        'Originating Router's IP Address'". So its width is what is left
+        of the body, which the Length bounds, and its family comes from
+        its own size, 4 or 16. That is `Ip_prefix_route`'s rule and
+        route type 2's Label2 rule, both already in the EVPN work.
+      * **No worked example and no hex anywhere in RFC 6514**, the RFC
+        4684 and RFC 6368 situation rather than the flow spec one. Those
+        two cost four wrong hand written length expectations in #204 and
+        two in #200, every one of them the library being right. So
+        compute the vectors with the library and paste the result, and
+        say in the test file that it therefore checks the library
+        against this reader's arithmetic and not against the document.
+      * **There is no NLRI error handling text, measured by reading
+        both documents.** "Malformed" appears only for the PMSI Tunnel
+        attribute and the PE Distinguisher Labels attribute, and neither
+        document references RFC 7606 for an NLRI. So what a receiver
+        answers for a bad MCAST-VPN NLRI is not this RFC's to give, and
+        is not invented: that is the RFC 7432, RFC 9572 and RFC 4684
+        situation and not RFC 8955's. Part 6 is where that is settled,
+        and it may well be a recorded decision rather than a check.
+      * **Neither lab router has SAFI 5, so this is the first family
+        with no outside reference at all.** Measured with `strings`
+        before any of this was written, the way ATTR_SET's absence was.
+        GoBGP 3.23.0's family list is `ipv4-multicast` (SAFI 2),
+        `l3vpn-ipv4-multicast` and `l3vpn-ipv6-multicast` (SAFI 129),
+        `l2vpn-vpls`, `l2vpn-evpn` and the unicast, labelled and flow
+        spec entries, with nothing for MCAST-VPN; FRR 8.4.4 has five
+        `bgp_nlri_parse_` functions, for evpn, flowspec, ip, label and
+        vpn, and none for this.
+        * **The ATTR_SET trick does not transfer**, and it is worth
+          saying why before someone tries it. A router carries an
+          optional transitive **attribute** it has never heard of,
+          which is what made a gobgpd in the middle worth building. An
+          NLRI in a family the router did not negotiate does not cross
+          anything, so there is nothing in the middle to measure.
+        * So the wire format of this family will be bgp4r's own opinion
+          checked only against the field widths the two documents state,
+          which is weaker than every family since flow spec. **Say so
+          in `docs/mcast-vpn.md` rather than leaving it implied**, and
+          do not read the loopback functional test in part 5 as
+          interoperability: it proves the wiring sites agree with each
+          other, which is all it has ever proved.
+      * **The primitives are this family's own and not EVPN's**, which
+        is a decision with a cost and so is recorded with its mechanism.
+        The Multicast Source and Multicast Group are a length in bits
+        with that many bits of value, which is `Evpn::Addr` exactly, and
+        the sharing is by citation rather than coincidence: EVPN route
+        type 10 is "identical to the S-PMSI A-D route as defined in
+        [RFC7117]", which carries this encoding. Against that, lifting
+        `Sized`, `Addr`, `Route` and `Unknown` out of `class Evpn` is a
+        refactor across a 2426 line file, its test file and
+        `evpn_doc_test.rb`, which discovers `Evpn.constants`. That is
+        #173's argument again: it removes no code, and it is a bet on a
+        third family. **Revisit when a third family needs them**, and
+        until then an `Mcast_vpn::Addr` whose comment cites RFC 6514's
+        own sentence is the smaller mistake.
+      1. **Primitives and the framing, pure.** The Route Type plus
+         Length framing with `Mcast_vpn.nlri_size`, an
+         `Mcast_vpn::Unknown` that keeps the remainder and replays it,
+         and the fields the layouts share: the length prefixed address
+         for Multicast Source and Multicast Group, the 4-octet Source
+         AS, and the trailing Originating Router's IP Address with no
+         length of its own. Nothing dispatches to it, the way #181
+         landed EVPN's primitives. `docs/mcast-vpn.md` is the guide and
+         `test/unit/mcast_vpn_doc_test.rb` asserts its load bearing
+         claims, with the route type table **discovered** rather than
+         listed, which is what stopped a route type class joining EVPN
+         without the document being told.
+      2. **Route types 1, 2 and 5**, which are the three whose bodies
+         split with no guess. Type 2 is fixed at 12 octets, RD and
+         Source AS. Type 5 is RD, source and group. Type 1 is RD and the
+         trailing address, so it is the first to need the what-is-left
+         rule and the smallest place to get it right.
+      3. **Route types 3, 6 and 7.** Type 3 is type 5 with the trailing
+         address behind it. Types 6 and 7 share one layout, RD, Source
+         AS, source and group, the way RFC 6514 section 4.6 covers both
+         in one subsection, so they are one class apart from the type
+         number.
+      4. **Route type 4, the Leaf A-D route**, last of the layouts
+         because it is the one the documents do not settle. The nested
+         read, the replay check that stops it being an assertion, and
+         the fallback that keeps the body.
+      5. **Wiring to the dispatch sites, plus a loopback functional
+         test.** `nlri_size`, `Nlri.factory`, `MpReachCommon#set`, and
+         the next hop, where the question is whether two AFIs let this
+         family join the SAFI 1, 2 and 4 arm as it looks like it should
+         or needs one of its own. Expect the sabotage signature the last
+         two families both measured: one per site, and reverting only
+         `Mp_unreach`'s own loop fails exactly the withdrawal case.
+      6. **Validation**, in `validation.rb` and nowhere else per
+         Conventions, and the first question is whether there is
+         anything to put there. On today's reading neither document
+         names a malformed NLRI or a subcode, so this part may be a
+         recorded decision with its reason rather than a check. If it is,
+         say so in `docs/mcast-vpn.md` and have the doc test hold it,
+         so the next audit does not read the absence as an oversight.
+      7. **The lab**, which for this family is a measurement rather than
+         a test, for the reason above. Assert that neither router
+         negotiates SAFI 5, since that is the fact the whole scope of
+         part 6 and the weakness of part 5 rest on, and a fact nothing
+         checks reads as verified. If a later GoBGP or FRR grows the
+         family, that assertion fails and says to come back.
    4. **BGP-LS, attribute 29 and AFI 16388 SAFI 71 and 72, RFC 9552.
       Not started**, largest of the four, and last for the reason above.
 
