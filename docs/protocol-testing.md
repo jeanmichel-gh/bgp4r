@@ -423,6 +423,9 @@ ruby lab/fault_matrix.rb --peer 127.0.0.2 --peer-as 65002 \
   --rib-command 'gobgp -u 127.0.0.2 global rib' --json gobgp.json
 ```
 
+Add `--dial PORT`, the router's own BGP port, to connect out rather than
+wait for it to dial in. That is much faster; see below.
+
 ```
 FAULT               EXPECTED (RFC 7606)     WHAT IT DID         ROUTE       VERDICT
 origin_length       treat_as_withdraw       kept the session    dropped     agrees
@@ -458,7 +461,20 @@ GOBGPD=/opt/gobgp4/gobgpd GOBGP=/opt/gobgp4/gobgp \
   ruby -I. test/functional/lab/fault_matrix_native_test.rb
 ```
 
-Either takes a few minutes: every case gets its own session.
+Every case gets its own session, because a reset leaves nothing to
+reuse, so how long one takes to get is the whole per case cost.
+
+`--dial PORT` is the fast way, for a router whose listening port you
+know. Waiting for the router to dial back in costs 10 to 14s a case
+against GoBGP 3.23.0, and neither `connect-retry` nor
+`idle-hold-time-after-reset` changes that: measured on 2026-10-31,
+asking for 30 instead moves nothing. Dialling it instead costs 5s, so
+the matrix runs in about 2 minutes rather than 4 and a half. Both native
+tests pass it.
+
+Listening is still the default, because it works with any
+implementation that can be told to peer with us, and that is the point
+of the harness.
 
 ## What three implementations do
 
@@ -638,8 +654,9 @@ non-zero on any disagreement with the catalog, and against GoBGP two
 cases disagree: see the divergence below. Read the table, or the JSON,
 rather than the status.
 
-The addresses are fixed, because `lab/fault_matrix.rb` only listens and
-hangs up on any peer but the one given to `--peer`. The matrix is AS
+The addresses are fixed, because by default `lab/fault_matrix.rb` only
+listens and hangs up on any peer but the one given to `--peer`. With
+`--dial` it connects out instead and the hang up does not arise. The matrix is AS
 65001 on 10.30.0.1 and the router is AS 65002 on 10.30.0.2.
 
 The matrix reads the router's RIB, so it tells treat-as-withdraw from

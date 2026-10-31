@@ -99,6 +99,12 @@ class LabFaultMatrixNativeTest < Test::Unit::TestCase
                              '--my-as', router.peer_as.to_s,
                              '--next-hop', router.peer,
                              '--settle', ENV.fetch('FAULT_SETTLE', '2'),
+                             # We dial the router, rather than waiting for
+                             # it to dial us. Each case needs a session of
+                             # its own and GoBGP takes 10 to 14s to come
+                             # back, whatever its timers are set to, where
+                             # it accepts one from us in under 3s.
+                             '--dial', router.listen_port.to_s,
                              '--rib-command', router.rib_command,
                              '--json', json,
                              chdir: LabHelper::ROOT)

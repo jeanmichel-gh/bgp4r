@@ -110,6 +110,10 @@ class LabFaultMatrixFrrTest < Test::Unit::TestCase
                              # is a loopback address; see Frr::NEXT_HOP.
                              '--next-hop', LabHelper::Frr::NEXT_HOP,
                              '--settle', ENV.fetch('FAULT_SETTLE', '2'),
+                             # The twin of the GoBGP run: we dial, so the
+                             # matrix never waits on the router's own
+                             # connect timer. See with_session.
+                             '--dial', router.listen_port.to_s,
                              '--rib-command', router.rib_command,
                              '--json', json,
                              chdir: LabHelper::ROOT)

@@ -194,8 +194,10 @@ ruby test/run_lab.rb
 
 Against a real router, with no Docker at all. These need `gobgpd` on
 `PATH`, or `GOBGPD` and `GOBGP` naming the binaries, which is how one
-machine answers for more than one GoBGP version. The fault matrix takes a
-few minutes; the other two take about 30 seconds each:
+machine answers for more than one GoBGP version. Measured on 2026-10-31
+against gobgpd 3.23.0: the fault matrix 2 minutes, `rib_router` 29
+seconds, `add_path` 35 seconds. The matrix was more than twice that
+before it passed `--dial`; see "Lab and conformance" below.
 ```
 ruby -I. test/functional/lab/fault_matrix_native_test.rb
 ruby -I. test/functional/lab/rib_router_gobgp_test.rb
@@ -210,21 +212,23 @@ invoking user, and both ends get ports of their own. Checked as a
 non-root user and not only as root, because the difference is not
 nothing: `vtysh` cannot read `/etc/frr/vtysh.conf` without the `frrvty`
 group and prefixes a warning to every answer, which broke the first CI
-run of this. A few minutes:
+run of this. 25 seconds, measured on 2026-10-31 against bgpd 8.4.4, and
+about twice that before it passed `--dial`:
 ```
 ruby -I. test/functional/lab/fault_matrix_frr_test.rb
 ```
 
-And bgp4r's export side against FRR, the twin of the GoBGP one, about a
-minute:
+And bgp4r's export side against FRR, the twin of the GoBGP one. 4
+seconds, which the "about a minute" recorded here until 2026-10-31 was
+simply wrong about:
 ```
 ruby -I. test/functional/lab/rib_router_frr_test.rb
 ```
 
 A flow spec rule from bgp4r read back by each router, which is the only
 check on our components, operator octets, section 4.1 length, RFC 8956
-offset and section 8 RD that is not bgp4r's own opinion. About a minute
-and 45 seconds respectively, and both need the binaries above:
+offset and section 8 RD that is not bgp4r's own opinion. 61 and 45
+seconds, and both need the binaries above:
 ```
 ruby -I. test/functional/lab/flow_spec_gobgp_test.rb
 ruby -I. test/functional/lab/flow_spec_frr_test.rb
@@ -234,8 +238,8 @@ The same for EVPN. Both routers know route types 1 to 5 only, so the
 other six are asserted as ignored without the session dying. GoBGP is
 the only check on route type 5's GW IP Address, since FRR prints a
 constant there, and FRR is the one that answers a malformed NLRI with
-3/9, which is what `validation.rb` reports for the same octets. About 70
-seconds and a minute:
+3/9, which is what `validation.rb` reports for the same octets. 71 and 15
+seconds, where the second was recorded as a minute until it was measured:
 ```
 ruby -I. test/functional/lab/evpn_gobgp_test.rb
 ruby -I. test/functional/lab/evpn_frr_test.rb
@@ -2652,6 +2656,11 @@ Smaller things:
 
 Lab and conformance:
 
+* **The fault matrix dials the router, and that is where its time went.** Each fault needs a session of its own, because a reset leaves nothing to reuse, so the per case cost is however long it takes to get one. Waiting for the router to dial back in was 10 to 14s a case against GoBGP 3.23.0, which was 219s of the matrix's 257s where the 2s settle on 18 cases is 30s. `lab/fault_matrix.rb --dial PORT` reverses the direction, and both native tests pass it: the GoBGP matrix went from 265s to 123s and the FRR one from 46s to 23s, with every verdict unchanged. Listening stays the default because the header's reason holds, that it works with any implementation that can be told to peer with us, and the Compose test still exercises it.
+  * **Two keys in the generated gobgpd config are no-ops, and their comment used to claim otherwise.** `connect-retry` and `idle-hold-time-after-reset` under `[neighbors.timers.config]`: asking for 30 instead of 2, and 30 instead of 0, changes nothing on 3.23.0. Measured on 2026-10-31 and reproduced with a bare `TCPServer`, so it is not the harness. They are kept, since they cost nothing and a later GoBGP may honour them.
+  * **The floor is 5s and it is the router's.** GoBGP takes the TCP connection at once and will not finish the OPEN exchange until 5s after the previous session ended, which is its default `idle-hold-time-after-reset`, the key it ignores. So `DIAL_TIMEOUT` and `DIAL_RETRY` are measured to sit on that floor rather than picked: 1 and 0.25 give 5.02s, 3 and 0.5 give 7.01s, and 0.5 and 0.1 give 5.42s because polling harder overshoots. Do not tighten them without re-measuring.
+  * Two theories died on the way, both recorded so they are not retried: a connection collision from GoBGP dialling us as well, which `passive-mode = true` disproved by changing nothing, and the idle hold being settable from the config.
+  * **What is still on the table is the CI job, not the matrix.** `test/run_lab.rb` globs the directory and requires every file into one serial suite, so the lab job is the sum of 15 files and sets the whole workflow's clock: 12m42s on 95fe87b where no other job reaches 50s. Splitting it across runners would make the floor the slowest single file instead, with no test changes at all. It has to be one group per runner and not parallel processes, because `LabHelper::Local.free_port` binds port 0 and closes it, so two processes on one machine can be handed the same port.
 * **GoBGP runs natively, so the fault matrix needs no Docker.** `gobgpd` from a release tarball peers with bgp4r on loopback, and `test/functional/lab/fault_matrix_native_test.rb` runs the whole matrix against it. Both sides get a port of their own, so neither needs root nor `net.ipv4.ip_unprivileged_port_start`: the generated config sets `[global.config] port` and `[neighbors.transport.config] remote-port`, both of which GoBGP 3 and 4 honour. `LabHelper::Gobgpd` writes that config and starts the daemon. This is the harness to reach for before assuming a conformance question is blocked. `docs/protocol-testing.md` has the recipe under "On a Linux VM": how to get a particular version from a release tarball, with its checksum, and the two config keys that keep both ends off port 179. **Check which version you have**, because it changes the answers: Ubuntu 24.04's `gobgpd` package is 3.23.0, and GoBGP publishes Linux builds only.
 * The two GoBGP columns and the FRR one in `docs/protocol-testing.md` are asserted by the three fault matrix tests, so they are re-measured rather than recorded by hand. **The versions do not answer alike, and the column used to claim they did.** GoBGP 3.23.0 resets with subcode 5 on `attr_overrun` where RFC 7606 section 4 makes treat-as-withdraw a MUST; GoBGP 4.10.0 fixed it. So 4.10.0 agrees on 16 of the 18 rows, 3.23.0 on 15, and FRR 8.4.4 on 6. The expectations are per router and per version in `test/functional/lab/fault_matrix_scenario.rb`: the native GoBGP test asks the binary, the Compose test reads `GOBGP_IMAGE`, and the FRR test asserts against major 8 only, so keep those in step if a pin moves. **Only the BIRD column is still a hand measurement**, from 2.14, and only the session level outcomes there, since BIRD gives no usable RIB answer over a loopback session. Two rows of the FRR column were wrong when it was asserted in #159, both the hand measurement's fault; see phase 5 above.
 * How that wrong row survived is the lesson, not the row. The table was measured by hand once and never re-run, because the only harness that could re-run it needed a Docker daemon that the sandbox did not have. A conformance claim nothing checks reads as verified, exactly like an unread RFC citation, and this one sat in the docs, in `CLAUDE.md` and in a test's comments at the same time.

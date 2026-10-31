@@ -25,8 +25,15 @@
 # did with each one. bgp4r listens and the router connects, so it works
 # with any implementation that can be told to peer with us.
 #
+# --dial PORT reverses that for a router whose listening port is known,
+# which is every router the lab starts itself. Each case needs a session
+# of its own, and waiting for the router to dial back is what that costs:
+# 10 to 14s a case against GoBGP 3.23.0, where dialling it takes under
+# 3s. See the comment on with_session.
+#
 #   ruby lab/fault_matrix.rb --peer 127.0.0.2 --peer-as 65002
 #   ruby lab/fault_matrix.rb --peer 127.0.0.2 --peer-as 65002 --json out.json
+#   ruby lab/fault_matrix.rb --peer 127.0.0.2 --peer-as 65002 --dial 1790
 #
 # What it can tell apart from one session:
 #
@@ -70,7 +77,7 @@ module BGP
     def run(names)
       baseline
       results = names.collect { |name| run_one(name) }
-      close_listener
+      close_session
       results
     end
 
@@ -160,20 +167,78 @@ module BGP
       Update.new(pa, Nlri.new(PREFIX))
     end
 
-    # A listener and a session of its own for each fault. Reusing one
-    # listener leaves connections the router made while we were not
-    # listening queued in its backlog, and the next accept takes a dead
-    # one, so every other fault saw no session at all.
+    # A session of its own for each fault, because a reset leaves
+    # nothing to reuse. Two ways to get one, and which one is used is
+    # the whole per case cost.
+    #
+    # By default the router dials us. That works with any
+    # implementation that can be told to peer with us, which is why it
+    # is the default, and it is slow: GoBGP 3.23.0 waits 10 to 14s
+    # before dialling back, and neither connect-retry nor
+    # idle-hold-time-after-reset moves that. Measured on 2026-10-31,
+    # asking for 30 instead of 2 changed nothing, outside this harness
+    # as well as in it.
+    #
+    # --dial reverses it, for a router whose listening port is known,
+    # which is every router the lab starts itself. The same GoBGP takes
+    # an inbound session within 3s of the last one ending, so the
+    # matrix stops paying for a timer it cannot set.
     def with_session
-      open_listener
-      ok = @peer.wait_for_state(:Established, @opts[:connect_timeout])
+      ok = @opts[:dial] ? dial_session : accept_session
       yield ok
     ensure
-      close_listener
+      close_session
     end
 
+    # How long one dial may take, and how long to wait before trying
+    # again. The router may still be holding the previous session down,
+    # so a refused or unanswered dial is not a failure until
+    # connect_timeout is spent.
+    #
+    # These two are measured against GoBGP 3.23.0 rather than picked.
+    # It takes the TCP connection at once and then will not finish the
+    # OPEN exchange until 5s after the previous session ended, so 5s is
+    # the floor and the only question is how closely these hit it:
+    #
+    #   1 and 0.25     5.02s     <- here
+    #   3 and 0.5      7.01s
+    #   0.5 and 0.1    5.42s     polling harder overshoots
+    #
+    # 5s is also GoBGP's default idle-hold-time-after-reset, which it
+    # ignores from the config: asking for 0 or for 30 moves nothing.
+    # So the floor is the router's and not ours to set. Measured
+    # 2026-10-31, and do not tighten these without re-measuring.
+    DIAL_TIMEOUT = 1
+    DIAL_RETRY = 0.25
+
+    def dial_session
+      close_session
+      deadline = Time.now + @opts[:connect_timeout]
+      loop do
+        @peer = new_neighbor
+        begin
+          @peer.start(:port => @opts[:dial], :timeout => DIAL_TIMEOUT)
+          return true if @peer.is_established?
+        rescue StandardError => e
+          log "dial #{@opts[:peer]}:#{@opts[:dial]}: #{e.class}: #{e.message}"
+        end
+        close_session
+        return false if Time.now > deadline
+        sleep DIAL_RETRY
+      end
+    end
+
+    def accept_session
+      open_listener
+      @peer.wait_for_state(:Established, @opts[:connect_timeout])
+    end
+
+    # A listener of its own for each fault too, when the router dials
+    # us. Reusing one leaves connections the router made while we were
+    # not listening queued in its backlog, and the next accept takes a
+    # dead one, so every other fault saw no session at all.
     def open_listener
-      close_listener
+      close_session
       @listener = TCPServer.new(@opts[:listen], @opts[:port])
       listening = @listener
       @peer = new_neighbor
@@ -200,7 +265,9 @@ module BGP
       end
     end
 
-    def close_listener
+    # Covers both ways in: when we dialled there is no listener and no
+    # accept thread, and those two branches are simply skipped.
+    def close_session
       @accepting.kill if @accepting
       begin
         @peer.close if @peer
@@ -274,6 +341,8 @@ def parse(argv)
     p.on('--peer-as AS', Integer, 'the router AS')        { |v| o[:peer_as] = v.to_i }
     p.on('--listen ADDR', 'address bgp4r listens on')     { |v| o[:listen] = v }
     p.on('--port PORT', Integer, 'port bgp4r listens on') { |v| o[:port] = v.to_i }
+    p.on('--dial PORT', Integer,
+         'dial the router on PORT instead of waiting for it to dial us') { |v| o[:dial] = v.to_i }
     p.on('--my-as AS', Integer, 'the bgp4r AS')           { |v| o[:my_as] = v.to_i }
     p.on('--id ID', 'the bgp4r router id')                { |v| o[:id] = v }
     p.on('--next-hop ADDR', 'NEXT_HOP to advertise')      { |v| o[:next_hop] = v }
