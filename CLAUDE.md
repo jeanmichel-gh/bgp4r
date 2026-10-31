@@ -318,6 +318,30 @@ There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Cove
   * What would have caught both in a minute each: read the method the branch calls before calling the branching wrong, and read what a TODO's own words ask for rather than what a plan needs them to ask for. **Say "I do not know why this is like this" rather than "this is wrong"** until the first has been answered; the file is full of entries that exist because somebody wrote the second.
 * **A "won't fix" has to record the mechanism, not the verdict.** One was written in this session and reversed an hour later by a single question from the owner: "order should not matter when you recreate an object from a hash, care to explain the concern?" The premise was true, that a Hash keyed by attribute type cannot hold two of a type or say which came first. The conclusion, that nothing readable could be done, did not follow from it, and the prose had carried the premise's authority over to the conclusion. Two things would have caught it. State the premise and the conclusion as separate sentences and check the second follows from the first. And name the bar you are measuring against, because the real mistake was taking byte-exact octets as the bar for a hash whose job is to rebuild instance state.
 * Cite the RFC section in a comment when you implement or fix wire format logic. Open the RFC and check the section number against its text; do not write one from memory. Six citations in this file and in the code were found wrong on 2026-10-27. One of them, "RFC 5291 section 5" for the ROUTE-REFRESH and ORF layout, is section 4, and it had been copied forward into two pull requests before anyone read the RFC. **Both numbers are live in that RFC and mean different things**, which is how the mix up happened and how it could happen again: section 4 is the ORF entry inside a ROUTE-REFRESH, whose Reserved is 5 bits of one octet and is "set to 0 on transmit and ignored on receipt", and section 5 is the Outbound Route Filtering Capability, whose Reserved is a whole octet that the section labels in Figure 3 and never describes. Do not quote section 4's sentence about the capability's octet. Figure 3 also says "Number of ORFs" where section 5's own text says "Number of ORF Types"; they are one field. Another called 0x02 and 0x03 extended community types when they are sub-types. A wrong citation is worse than none, because it reads as verified and sends the next person to the wrong page.
+* **`b"""..."""` in Python is a bytes literal, not an assignment, and it
+  corrupted this file once.** #188 edited CLAUDE.md with a heredoc Python
+  script whose replacements read `a="""old"""` then `b"""new"""`, missing
+  the `=` on four of them. Python accepts that line as an expression
+  statement and discards it, so `b` kept the value from the **previous**
+  edit and each `s.replace(a, b)` pasted the wrong block: the part 8 entry
+  landed inside the BGP-LS bullet and again below it, and the baseline line
+  replaced the phase 3 heading. Three sections were mangled and the file
+  grew 241 lines. Every `assert s.count(a)==1` passed, because the bug was
+  in `b` and nothing checked `b`.
+  * What makes it worse than a typo is that it is **silent and valid**: no
+    syntax error, no exception, no failing test, since no test reads this
+    file. It was found only when the next session re-read CLAUDE.md and the
+    text did not make sense.
+  * So when a script edits a document, **assert on the result and not only
+    on the match**: count the headings that should appear once, and print
+    the line count. A rebuild from the last good version is the repair,
+    because a patch on top of mangled text leaves residue. #189 did that:
+    `git show <last good>:CLAUDE.md` into a temporary file, the intended
+    edits re-applied from a table of (old, new) pairs so neither side can
+    be dropped, then the duplicate count checked.
+  * The same shape would bite `r`, `f` and `u` prefixed strings. Prefer a
+    list of pairs iterated with `for old, new in EDITS`, which has nowhere
+    to lose an assignment, and keep the `Edit` tool for anything short.
 * Do not delete or weaken existing tests to make a change pass.
 * If you find a bug you are not fixing, list it in the PR description.
 * A plan that spans more than one session goes under "Where the work is going" as phases with their status, before the work starts. A plan that lives only in a chat is lost the moment the context is: the RIB plan below had to be recovered from a transcript because nothing in this file recorded it, or recorded that phase 1 was finished.
@@ -1214,181 +1238,19 @@ true here is the shape of the gap:
   and SR Policy together, so it is the single lever if breadth is ever wanted.
   `Mp_reach.new(:afi=>25, :safi=>70, ...)` raises today.
 * BGP-LS (attribute 29, AFI 16388, SAFI 71 and 72, RFC 9552), EVPN (SAFI 70,
-   8. **The eleven extended communities.** Two pull requests, because
-      eleven classes in one is not a small diff: **8a is Done**, in
-      #188, with the five of RFC 9251, and 8b has the other six.
-      * **The registry, measured on 2026-10-30 rather than recalled,
-        and it explains both figures this file carried.** The "EVPN
-        Extended Community Sub-Types" subregistry under type 0x06 has
-        **18 assigned entries**, 0x00 to 0x10 and 0x15. **Fourteen have
-        an RFC**, three cite only drafts (0x0e EVPN Attachment Circuit,
-        0x10 EVPN Link Bandwidth, 0x15 RT-derived-EC) and one is
-        Reserved (0x07). bgp4r had four of the fourteen, so ten were
-        missing, and the eleventh is the Default Gateway at `[0x03,
-        0x0d]`. **So the fourteen and the ten were right about different
-        things**: the count with an RFC and the count still to write.
-        The prose here read as though they disagreed.
-      * **8a, the five of RFC 9251. Done**, in #188: Multicast Flags at
-        0x09 (section 9.4) and the four EVI-RT types at 0x0a to 0x0d
-        (section 9.5). Taken first because route types 7 and 8 need
-        them, since section 9.5 says each "MUST carry exactly one EVI-RT
-        EC".
-        * **The EVI-RT value is a Route Target's value field and the
-          sub-type says which kind**, so the six octets split the way
-          that RT's structure splits them: 2 plus 4 for a Two-Octet
-          AS-specific RT, 4 plus 2 for an IPv4-Address-specific or a
-          Four-Octet AS-specific one. None has a reserved bit, because
-          every octet is a field of the RT. They are their own classes
-          and not `Route_target` under another sub-type because section
-          9.5 says an EVI-RT EC "is not a Route Target extended
-          community, is not visible to the RT Constrain mechanism
-          [RFC4684], and is not intended to influence the propagation of
-          routes by BGP".
-        * **Type 3 is the one RFC 9251 contradicts itself about, and
-          bgp4r follows the figure and the registry.** Section 9.5 says
-          its value is identical to the value field of "a Transitive
-          IPv6-Address-specific EC", which RFC 5701 section 2 makes
-          **18 octets**; an EVPN extended community has 6. The same
-          section's figure shows the 8-octet form and section 12.1
-          registers 0x0d in the 0x06 subregistry, which is the 8-octet
-          family, and a 20-octet community would need a code point in
-          the IPv6-address-specific registry that IANA does not list.
-          There is no erratum on RFC 9251 about it, checked. So
-          `Evi_rt_3` carries its six octets and does not split them, and
-          `docs/evpn.md` records the mechanism rather than the verdict.
-        * **The two defined Multicast Flags bits are the least
-          significant of the Flags field**, which section 9.4 says
-          rather than leaving to the figure, and section 12.3's registry
-          numbers the bits "0-15, from high order to low order". So in
-          the 48-bit value IGMP is bit 32 and MLD bit 33.
-        * **A FACTORY entry with no HASH_BUILDERS entry is half a
-          wiring, and `extended_communities_test.rb` already guards
-          it.** `test_every_wire_form_the_factory_knows_survives_its_own_hash`
-          pins `FACTORY.size + 1` forms, so five new registrations fail
-          it until five forms are added, and each form goes through
-          `factory`, `to_hash`, `new` and `encode`. Measured the hard
-          way first: the classes parsed and `Extended_communities.new(a
-          hash)` raised `NoMethodError` inside `factory`.
-        * **These five unwrap their own hash key, where their four EVPN
-          siblings do not, and `Traffic_action`'s comment is the
-          reason.** Without the unwrap the wrapped hash gives nil for
-          every field and a community of **zeros** is built in silence,
-          because these field defaults pass their own check. That is the
-          exact failure that comment records, measured here before the
-          unwrap went in, so these are `:ok` in the catalog where
-          `Mac_mobility`, `Esi_label`, `Es_import` and `Router_mac` are
-          `:elsewhere` with `NO_HASH_BRANCH`: those four raise rather
-          than building a wrong one, so nothing there is quiet.
-        * **The community table in `docs/evpn.md` section 7 is
-          discovered, not listed**, the twin of the route type guard: it
-          reads `FACTORY` and cross-checks the "In bgp4r" column in both
-          directions. The hard coded count it replaced said "four", and
-          adding these five is what made it false. **The DF Election
-          citation was wrong in a draft of that table and reading RFC
-          8584 caught it**: that community is section **2.2**, not 5.1.
-          Section 5 is "Solution Benefits".
-      * **8b, the other six. Not started.** EVPN Layer 2 Attributes at
-        0x04 (RFC 8214 section 3.1), E-Tree at 0x05 (RFC 8317 section
-        6.1), DF Election at 0x06 (RFC 8584 section 2.2), ARP/ND at 0x08
-        (RFC 9047 section 2), Service Carving Time at 0x0f (RFC 9722
-        section 2.1), and the Default Gateway at `[0x03, 0x0d]` (RFC
-        7432 section 7.8, whose IANA reference is an author's name
-        rather than an RFC). Every layout was read in #188's session and
-        each is 6 value octets; five of the six are flags plus reserved
-        fields, so they are the keep-and-echo shape, and Service Carving
-        Time is the odd one with no reserved bit at all, an NTP
-        timestamp in 4 plus 2 octets.
-
+  RFC 7432 and six more RFCs, eleven route types, plus the EVPN extended
+  community sub-types and one more at 0x03 that the 0x06 registry misses;
+  see phase 3 below, which measured that registry rather than recalling
+  it: 18 assigned entries, 14 with an RFC), ATTR_SET
   (attribute 128, RFC 6368), RT-constrain (SAFI 132), MCAST-VPN (SAFI 5).
   Flowspec was on this list, with every traffic filtering action of RFC 8955
   section 7 implemented and no way to send the rule they filter. The rule can
   be sent now, so the family is off it.
-   8. **The eleven extended communities.** Two pull requests, because
-      eleven classes in one is not a small diff: **8a is Done**, in
-      #188, with the five of RFC 9251, and 8b has the other six.
-      * **The registry, measured on 2026-10-30 rather than recalled,
-        and it explains both figures this file carried.** The "EVPN
-        Extended Community Sub-Types" subregistry under type 0x06 has
-        **18 assigned entries**, 0x00 to 0x10 and 0x15. **Fourteen have
-        an RFC**, three cite only drafts (0x0e EVPN Attachment Circuit,
-        0x10 EVPN Link Bandwidth, 0x15 RT-derived-EC) and one is
-        Reserved (0x07). bgp4r had four of the fourteen, so ten were
-        missing, and the eleventh is the Default Gateway at `[0x03,
-        0x0d]`. **So the fourteen and the ten were right about different
-        things**: the count with an RFC and the count still to write.
-        The prose here read as though they disagreed.
-      * **8a, the five of RFC 9251. Done**, in #188: Multicast Flags at
-        0x09 (section 9.4) and the four EVI-RT types at 0x0a to 0x0d
-        (section 9.5). Taken first because route types 7 and 8 need
-        them, since section 9.5 says each "MUST carry exactly one EVI-RT
-        EC".
-        * **The EVI-RT value is a Route Target's value field and the
-          sub-type says which kind**, so the six octets split the way
-          that RT's structure splits them: 2 plus 4 for a Two-Octet
-          AS-specific RT, 4 plus 2 for an IPv4-Address-specific or a
-          Four-Octet AS-specific one. None has a reserved bit, because
-          every octet is a field of the RT. They are their own classes
-          and not `Route_target` under another sub-type because section
-          9.5 says an EVI-RT EC "is not a Route Target extended
-          community, is not visible to the RT Constrain mechanism
-          [RFC4684], and is not intended to influence the propagation of
-          routes by BGP".
-        * **Type 3 is the one RFC 9251 contradicts itself about, and
-          bgp4r follows the figure and the registry.** Section 9.5 says
-          its value is identical to the value field of "a Transitive
-          IPv6-Address-specific EC", which RFC 5701 section 2 makes
-          **18 octets**; an EVPN extended community has 6. The same
-          section's figure shows the 8-octet form and section 12.1
-          registers 0x0d in the 0x06 subregistry, which is the 8-octet
-          family, and a 20-octet community would need a code point in
-          the IPv6-address-specific registry that IANA does not list.
-          There is no erratum on RFC 9251 about it, checked. So
-          `Evi_rt_3` carries its six octets and does not split them, and
-          `docs/evpn.md` records the mechanism rather than the verdict.
-        * **The two defined Multicast Flags bits are the least
-          significant of the Flags field**, which section 9.4 says
-          rather than leaving to the figure, and section 12.3's registry
-          numbers the bits "0-15, from high order to low order". So in
-          the 48-bit value IGMP is bit 32 and MLD bit 33.
-        * **A FACTORY entry with no HASH_BUILDERS entry is half a
-          wiring, and `extended_communities_test.rb` already guards
-          it.** `test_every_wire_form_the_factory_knows_survives_its_own_hash`
-          pins `FACTORY.size + 1` forms, so five new registrations fail
-          it until five forms are added, and each form goes through
-          `factory`, `to_hash`, `new` and `encode`. Measured the hard
-          way first: the classes parsed and `Extended_communities.new(a
-          hash)` raised `NoMethodError` inside `factory`.
-        * **These five unwrap their own hash key, where their four EVPN
-          siblings do not, and `Traffic_action`'s comment is the
-          reason.** Without the unwrap the wrapped hash gives nil for
-          every field and a community of **zeros** is built in silence,
-          because these field defaults pass their own check. That is the
-          exact failure that comment records, measured here before the
-          unwrap went in, so these are `:ok` in the catalog where
-          `Mac_mobility`, `Esi_label`, `Es_import` and `Router_mac` are
-          `:elsewhere` with `NO_HASH_BRANCH`: those four raise rather
-          than building a wrong one, so nothing there is quiet.
-        * **The community table in `docs/evpn.md` section 7 is
-          discovered, not listed**, the twin of the route type guard: it
-          reads `FACTORY` and cross-checks the "In bgp4r" column in both
-          directions. The hard coded count it replaced said "four", and
-          adding these five is what made it false. **The DF Election
-          citation was wrong in a draft of that table and reading RFC
-          8584 caught it**: that community is section **2.2**, not 5.1.
-          Section 5 is "Solution Benefits".
-      * **8b, the other six. Not started.** EVPN Layer 2 Attributes at
-        0x04 (RFC 8214 section 3.1), E-Tree at 0x05 (RFC 8317 section
-        6.1), DF Election at 0x06 (RFC 8584 section 2.2), ARP/ND at 0x08
-        (RFC 9047 section 2), Service Carving Time at 0x0f (RFC 9722
-        section 2.1), and the Default Gateway at `[0x03, 0x0d]` (RFC
-        7432 section 7.8, whose IANA reference is an author's name
-        rather than an RFC). Every layout was read in #188's session and
-        each is 6 value octets; five of the six are flags plus reserved
-        fields, so they are the keep-and-echo shape, and Service Carving
-        Time is the odd one with no reserved bit at all, an NTP
-        timestamp in 4 plus 2 octets.
- The attribute figure reads worse than it is: FRR's `bgpd.h` defines
-  exactly bgp4r's 22 plus two.
+* Coverage as measured: 22 of 34 live path attribute code points, 34 of 115
+  extended community sub-type code points, 8 of 22 live capability code
+  points. The community figure moves with each part of phase 3 part 8. The
+  attribute figure reads worse than it is: FRR's `bgpd.h` defines exactly
+  bgp4r's 22 plus two.
 
 ### Breadth, the one SAFI lever. Phase 2 done
 
@@ -1888,7 +1750,11 @@ Two consequences, both of which change the plan rather than decorate it:
        `[0x80,0x08]`, `[0x81,0x08]` and `[0x82,0x08]`, the section 7.4
        redirect-to-VRF encodings, so nothing there is affected. Checked
        on 2026-10-30.
-Baseline on 2026-10-30: 1686 tests, 24459 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.0%. Ten parts, planned on 2026-10-30 from eleven
+3. **EVPN, SAFI 70, RFC 7432 and six more. Parts 1 to 7 and 8a done**,
+   so all eleven route types read and write on the wire, an EVPN UPDATE
+   crosses a session, and the five extended communities of RFC 9251 are
+   in. Part 8b, 9 and 10 are left: the other six communities,
+   validation and the lab. Ten parts, planned on 2026-10-30 from eleven
    RFCs read in full, attached to the session rather than fetched.
 
    **Two counts in the earlier version of this entry were wrong, and
