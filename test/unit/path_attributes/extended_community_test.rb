@@ -943,8 +943,48 @@ class Extended_community_Test < Test::Unit::TestCase
     assert_equal('0609000000000000', BGP::Multicast_flags.new.to_shex)
   end
 
+  # **Two guards over every `Typed` class the factory knows**, discovered
+  # from FACTORY rather than listed, so a class cannot join the library
+  # without being covered. Both are about the wrapped form `to_hash`
+  # answers, `{:multicast_flags => ...}`, being handed back to `new`.
+  #
+  # Conventions says `Klass.new(Klass#to_hash)` was never the contract,
+  # and that stands: a class is free to refuse it. What it may not do is
+  # accept it and build something else, which is what `Traffic_action`
+  # did, silently losing all 48 value bits because its field defaults
+  # passed their own check.
+  #
+  # So: same octets, or a refusal. A refusal is an ArgumentError, which
+  # is a class saying no. A TypeError or a NoMethodError is a class
+  # reading a shape it never checked, which is the `Multicast_flags` bug
+  # this pair was written for: it unwrapped the hash and then read the
+  # list inside it as a Hash.
+  def test_a_wrapped_hash_builds_the_same_octets_or_is_refused_by_name
+    %w[000000000000 ffffffffffff 0102030405f6].each do |value|
+      BGP::Extended_community::FACTORY.each do |(type, sub), klass|
+        next unless klass < BGP::Extended_community::Typed
+        hex = format('%02x%02x', type, sub) + value
+        c = BGP::Extended_community.factory([hex].pack('H*'))
+        where = "#{klass} from #{hex}"
+        begin
+          assert_equal(hex, klass.new(c.to_hash).to_shex,
+                       "#{where} took its own hash and built other octets")
+        rescue ArgumentError
+          # A class saying no to the wrapped form. Allowed, and recorded
+          # per class in test/unit/to_hash_catalog.rb.
+        rescue TypeError, NoMethodError => e
+          flunk("#{where} read its own hash as a shape it never checked: " \
+                "#{e.class}: #{e.message}")
+        end
+      end
+    end
+  end
+
   def test_multicast_flags_builds_four_ways
     c = BGP::Multicast_flags.new([:igmp_proxy, :mld_proxy])
+    # The whole hash, not only the value under the key. This is the one
+    # that caught the unwrap reading a list as a Hash.
+    assert_equal(c.to_shex, BGP::Multicast_flags.new(c.to_hash).to_shex)
     assert(c.igmp_proxy?)
     assert(c.mld_proxy?)
     assert_equal('Multicast Flags: IGMP proxy, MLD proxy', c.to_s)
@@ -1095,6 +1135,347 @@ class Extended_community_Test < Test::Unit::TestCase
       key = klass.to_s.split('::').last.downcase.to_sym
       assert(BGP::Extended_communities::HASH_BUILDERS.has_key?(key),
              "#{key} has no HASH_BUILDERS entry, so its hash cannot build back")
+    end
+  end
+
+  # ---------------------------------------------------------------
+  # The last six EVPN communities: RFC 8214 section 3.1, RFC 8317
+  # section 6.1, RFC 8584 section 2.2, RFC 9047 section 2, RFC 9722
+  # section 2.1 and RFC 7432 section 7.8.
+  # ---------------------------------------------------------------
+
+  # **Four of these six RFCs give their flag bits a second number, the
+  # bit's place in the whole 8-octet community, and this is the test that
+  # uses it.** RFC 9047 section 2 says R is "Bit 23 of the Extended
+  # Community", O is 22 and I is 20; RFC 8584 section 2.2 says the
+  # Bitmap's bit 0 "corresponds to Bit 24"; RFC 9722 section 2.1 says its
+  # T bit "corresponds to Bit 27". Those numbers are the document's own,
+  # so asserting them checks the layout against the RFC rather than
+  # against this reader's arithmetic, which is what the five RFC flow
+  # spec vectors buy for that family.
+  def test_each_flag_sits_at_the_bit_number_its_own_rfc_gives_it
+    # The RFCs number a community's bits from the high bit of the type
+    # octet, so bit n is 0x80 >> (n % 8) in octet n / 8.
+    set_bits = lambda do |c|
+      c.encode.unpack('C8').each_with_index.flat_map do |o, i|
+        (0..7).select { |b| (o & (0x80 >> b)) > 0 }.collect { |b| i * 8 + b }
+      end
+    end
+    # Each case: the community, the flag bit the RFC numbers, the rest of
+    # the bits being the type and sub-type octets' own.
+    [[BGP::Arp_nd.new(:router => true),        23, 'RFC 9047 R'],
+     [BGP::Arp_nd.new(:override => true),      22, 'RFC 9047 O'],
+     [BGP::Arp_nd.new(:immutable => true),     20, 'RFC 9047 I'],
+     [BGP::Df_election.new(0, :ac_df => true), 25, 'RFC 8584 bitmap bit 1, bit 0 being 24'],
+     [BGP::Df_election.new(0, :time_sync => true), 27, 'RFC 9722 T'],
+    ].each do |c, bit, what|
+      got = set_bits.call(c)
+      assert(got.include?(bit), "#{what}: bit #{bit} not set, bits are #{got.inspect}")
+      # And nothing else in the value, so the bit is alone where it should
+      # be rather than one of several that happen to include it.
+      assert_equal([bit], got.reject { |b| b < 16 }, what)
+    end
+  end
+
+  # **DEFINED_BITS says which of the 48 value bits a class reads, and
+  # this derives it rather than restating it**: every field set to its
+  # widest value, ORed, has to be exactly the mask. Less means encode
+  # writes a bit the class calls reserved, which would put a `:bits`
+  # entry on a community built from values; more means a field the class
+  # reads cannot be reached, so the mask forgives a bit nothing writes.
+  # It covers the four older classes too, which is why it is here rather
+  # than in one class's test.
+  def test_every_defined_bits_mask_is_exactly_what_its_own_fields_can_write
+    value_bits = lambda do |c|
+      high, low = c.encode.byteslice(2, 6).unpack('nN')
+      (high << 32) | low
+    end
+    { BGP::Layer2_attributes =>
+        BGP::Layer2_attributes.new(0xffff, :control_word => true,
+                                   :primary => true, :backup => true),
+      BGP::E_tree       => BGP::E_tree.new(0xfffff, :leaf => true),
+      BGP::Df_election  => BGP::Df_election.new(0x1f, :ac_df => true,
+                                                :time_sync => true),
+      BGP::Arp_nd       => BGP::Arp_nd.new(:router => true, :override => true,
+                                           :immutable => true),
+      BGP::Default_gateway => BGP::Default_gateway.new,
+      BGP::Esi_label    => BGP::Esi_label.new(0xfffff, :single_active => true),
+      BGP::Mac_mobility => BGP::Mac_mobility.new(0xffffffff, :sticky => true),
+      BGP::Multicast_flags => BGP::Multicast_flags.new(:igmp_proxy => true,
+                                                       :mld_proxy => true),
+      BGP::Traffic_marking => BGP::Traffic_marking.new(0x3f),
+      BGP::Encapsulation   => BGP::Encapsulation.new(0xffff),
+    }.each do |klass, widest|
+      assert_equal(format('0x%012x', klass::DEFINED_BITS),
+                   format('0x%012x', value_bits.call(widest)),
+                   "#{klass} reads bits its own fields cannot write, or writes bits it calls reserved")
+    end
+    # The one with no mask at all reaches every bit, so it can never have
+    # a reserved one. RFC 9722 section 2.1 defines both its fields and
+    # leaves nothing over.
+    refute(BGP::Service_carving_time.const_defined?(:DEFINED_BITS, false))
+    sct = BGP::Extended_community.factory(['060fffffffffffff'].pack('H*'))
+    assert_equal([0xffffffff, 0xffff], sct.to_hash[:service_carving_time])
+  end
+
+  # RFC 8214 section 3.1, Figure 2: `|   MBZ                   |C|P|B|`,
+  # so B is the low bit of the 2-octet Control Flags field.
+  def test_layer2_attributes_puts_its_three_flags_at_the_bottom_of_the_field
+    assert_equal([0x06, 0x04],
+                 [BGP::Layer2_attributes::TYPE, BGP::Layer2_attributes::SUBTYPE])
+    assert_equal('060400010000' + '0000',
+                 BGP::Layer2_attributes.new(0, :backup => true).to_shex)
+    assert_equal('060400020000' + '0000',
+                 BGP::Layer2_attributes.new(0, :primary => true).to_shex)
+    assert_equal('060400040000' + '0000',
+                 BGP::Layer2_attributes.new(0, :control_word => true).to_shex)
+    # Control Flags, L2 MTU, then the two reserved octets.
+    assert_equal('0604' + '0007' + '05dc' + '0000',
+                 BGP::Layer2_attributes
+                   .new(1500, :control_word => true, :primary => true,
+                        :backup => true).to_shex)
+  end
+
+  def test_layer2_attributes_builds_four_ways
+    c = BGP::Layer2_attributes.new(1500, :primary => true)
+    assert_equal(1500, c.mtu)
+    assert(c.primary?)
+    refute(c.backup?)
+    refute(c.control_word?)
+    assert_equal('Layer 2 Attributes: MTU 1500, primary', c.to_s)
+    assert_equal({ :layer2_attributes => [1500, [:primary]] }, c.to_hash)
+    # Its own hash value, the whole hash to_hash answers, the wire octets
+    # and the list HASH_BUILDERS serves.
+    assert_equal(c.to_shex,
+                 BGP::Layer2_attributes.new(c.to_hash[:layer2_attributes]).to_shex)
+    assert_equal(c.to_shex, BGP::Layer2_attributes.new(c.to_hash).to_shex)
+    assert_equal(c.to_shex,
+                 BGP::Extended_community.factory([c.to_shex].pack('H*')).to_shex)
+    assert_equal(c.to_shex,
+                 BGP::Extended_communities.new(c.to_hash).communities[0].to_shex)
+    # An MTU on its own, which is the field without the flags.
+    assert_equal({ :layer2_attributes => [9000, []] },
+                 BGP::Layer2_attributes.new(9000).to_hash)
+    assert_raise(ArgumentError) { BGP::Layer2_attributes.new(0x10000) }
+  end
+
+  # RFC 8317 section 6.1 has the `Esi_label` layout: a Flags octet with
+  # one low bit, two reserved octets, a 3-octet label field. Unlike that
+  # section, this one says where the label sits: "The value of the 20-bit
+  # MPLS label is encoded in the high-order 20 bits of the Leaf label
+  # field".
+  def test_e_tree_carries_its_label_in_the_high_20_bits
+    assert_equal([0x06, 0x05], [BGP::E_tree::TYPE, BGP::E_tree::SUBTYPE])
+    # Flags, two reserved octets, then the label shifted up 4.
+    assert_equal('0605' + '01' + '0000' + '000000',
+                 BGP::E_tree.new(0, :leaf => true).to_shex)
+    assert_equal('0605' + '00' + '0000' + '000010',
+                 BGP::E_tree.new(1).to_shex)
+    assert_equal('0605' + '00' + '0000' + 'fffff0',
+                 BGP::E_tree.new(0xfffff).to_shex)
+    assert_equal(0xfffff,
+                 BGP::Extended_community
+                   .factory(['060500' + '0000' + 'fffff0'].pack('H*')).label)
+    assert_raise(ArgumentError) { BGP::E_tree.new(0x100000) }
+  end
+
+  def test_e_tree_builds_four_ways
+    c = BGP::E_tree.new(16, :leaf => true)
+    assert_equal(16, c.label)
+    assert(c.leaf?)
+    assert_equal('E-Tree: leaf label 16, leaf', c.to_s)
+    assert_equal({ :e_tree => [16, true] }, c.to_hash)
+    assert_equal(c.to_shex, BGP::E_tree.new(c.to_hash[:e_tree]).to_shex)
+    assert_equal(c.to_shex, BGP::E_tree.new(c.to_hash).to_shex)
+    assert_equal(c.to_shex,
+                 BGP::Extended_community.factory([c.to_shex].pack('H*')).to_shex)
+    assert_equal(c.to_shex,
+                 BGP::Extended_communities.new(c.to_hash).communities[0].to_shex)
+    refute(BGP::E_tree.new(16).leaf?)
+  end
+
+  # **Two RFCs define bits in one Bitmap and both are read.** RFC 8584
+  # section 2.2 gives bit 1, AC-DF; RFC 9722 section 2.1 adds bit 3, Time
+  # Synchronization. A mask covering only the first would report a T bit
+  # as a reserved one.
+  def test_df_election_reads_the_bitmap_bits_of_both_rfcs
+    assert_equal([0x06, 0x06],
+                 [BGP::Df_election::TYPE, BGP::Df_election::SUBTYPE])
+    # RSV and DF Alg in one octet, the 2-octet Bitmap, 3 reserved octets.
+    assert_equal('0606' + '01' + '4000' + '000000',
+                 BGP::Df_election.new(:hrw, :ac_df => true).to_shex)
+    assert_equal('0606' + '00' + '1000' + '000000',
+                 BGP::Df_election.new(:default, :time_sync => true).to_shex)
+    assert_equal('0606' + '1f' + '5000' + '000000',
+                 BGP::Df_election.new(:experimental, :ac_df => true,
+                                      :time_sync => true).to_shex)
+    # Section 2.2's own registry: 0 default or modulus, 1 HRW, 2 to 30
+    # unassigned, 31 experimental. An unassigned one still encodes.
+    assert_equal({ :default => 0, :hrw => 1, :experimental => 31 },
+                 BGP::Df_election::ALGORITHMS)
+    assert_equal('0606' + '0f' + '0000' + '000000', BGP::Df_election.new(15).to_shex)
+    assert_nil(BGP::Df_election.new(15).alg_name)
+    assert_raise(ArgumentError) { BGP::Df_election.new(32) }
+  end
+
+  def test_df_election_builds_four_ways
+    c = BGP::Df_election.new(:hrw, :ac_df => true)
+    assert_equal(1, c.df_alg)
+    assert_equal(:hrw, c.alg_name)
+    assert(c.ac_df?)
+    refute(c.time_sync?)
+    assert_equal('DF Election: alg hrw, ac_df', c.to_s)
+    assert_equal({ :df_election => [:hrw, [:ac_df]] }, c.to_hash)
+    assert_equal(c.to_shex, BGP::Df_election.new(c.to_hash[:df_election]).to_shex)
+    assert_equal(c.to_shex, BGP::Df_election.new(c.to_hash).to_shex)
+    assert_equal(c.to_shex,
+                 BGP::Extended_community.factory([c.to_shex].pack('H*')).to_shex)
+    assert_equal(c.to_shex,
+                 BGP::Extended_communities.new(c.to_hash).communities[0].to_shex)
+    # An algorithm with no name hashes as its number, and comes back.
+    n = BGP::Df_election.new(15, :time_sync => true)
+    assert_equal({ :df_election => [15, [:time_sync]] }, n.to_hash)
+    assert_equal(n.to_shex,
+                 BGP::Extended_communities.new(n.to_hash).communities[0].to_shex)
+  end
+
+  # RFC 9047 section 2: Flags is `|       |I| |O|R|`, and "Bits 0-3 and 5
+  # are not assigned by this document".
+  def test_arp_nd_has_one_flags_octet_and_five_reserved
+    assert_equal([0x06, 0x08], [BGP::Arp_nd::TYPE, BGP::Arp_nd::SUBTYPE])
+    assert_equal('0608' + '01' + '00000000' + '00',
+                 BGP::Arp_nd.new(:router => true).to_shex)
+    assert_equal('0608' + '02' + '00000000' + '00',
+                 BGP::Arp_nd.new(:override => true).to_shex)
+    assert_equal('0608' + '08' + '00000000' + '00',
+                 BGP::Arp_nd.new(:immutable => true).to_shex)
+    assert_equal('0608' + '0b' + '00000000' + '00',
+                 BGP::Arp_nd.new(:router => true, :override => true,
+                                 :immutable => true).to_shex)
+    # Eight octets, not the nine a 1 + 4 + 2 value would make. The first
+    # draft of this class packed CNn and wrote seven value octets.
+    assert_equal(8, BGP::Arp_nd.new.encode.size)
+  end
+
+  def test_arp_nd_builds_four_ways
+    c = BGP::Arp_nd.new([:router, :immutable])
+    assert(c.router?)
+    assert(c.immutable?)
+    refute(c.override?)
+    assert_equal('ARP/ND: immutable, router', c.to_s)
+    assert_equal({ :arp_nd => [:immutable, :router] }, c.to_hash)
+    assert_equal(c.to_shex, BGP::Arp_nd.new(c.to_hash[:arp_nd]).to_shex)
+    assert_equal(c.to_shex, BGP::Arp_nd.new(c.to_hash).to_shex)
+    assert_equal(c.to_shex, BGP::Arp_nd.new(:router => true,
+                                            :immutable => true).to_shex)
+    assert_equal(c.to_shex,
+                 BGP::Extended_community.factory([c.to_shex].pack('H*')).to_shex)
+    assert_equal(c.to_shex,
+                 BGP::Extended_communities.new(c.to_hash).communities[0].to_shex)
+    none = BGP::Arp_nd.new
+    assert_equal({ :arp_nd => [] }, none.to_hash)
+    assert_equal('ARP/ND: none', none.to_s)
+  end
+
+  # RFC 9722 section 2.1: 32 bits of NTP seconds then "The high-order 16
+  # bits of the NTP 'Fraction' field". Both fields are defined, so this
+  # is the one EVPN community with no reserved bit anywhere.
+  def test_service_carving_time_carries_an_ntp_timestamp
+    assert_equal([0x06, 0x0f], [BGP::Service_carving_time::TYPE,
+                                BGP::Service_carving_time::SUBTYPE])
+    c = BGP::Service_carving_time.new(3_940_000_000, 0x8000)
+    assert_equal('060f' + 'ead7a100' + '8000', c.to_shex)
+    assert_equal([3_940_000_000, 0x8000], [c.seconds, c.fraction])
+    # One tick is 2^-16 s, so 0x8000 is half a second and not 32768 of
+    # anything. to_s says both, since the field is what goes on the wire.
+    assert_equal('Service Carving Time: seconds 3940000000, ' \
+                 'fraction 32768 (0.500000s)', c.to_s)
+    assert_equal({ :service_carving_time => [3_940_000_000, 0x8000] }, c.to_hash)
+    assert_equal(c.to_shex,
+                 BGP::Service_carving_time
+                   .new(c.to_hash[:service_carving_time]).to_shex)
+    assert_equal(c.to_shex, BGP::Service_carving_time.new(c.to_hash).to_shex)
+    assert_equal(c.to_shex,
+                 BGP::Extended_community.factory([c.to_shex].pack('H*')).to_shex)
+    assert_equal(c.to_shex,
+                 BGP::Extended_communities.new(c.to_hash).communities[0].to_shex)
+    assert_raise(ArgumentError) { BGP::Service_carving_time.new(0x100000000, 0) }
+    assert_raise(ArgumentError) { BGP::Service_carving_time.new(0, 0x10000) }
+  end
+
+  # RFC 7432 section 7.8, the one of the eleven that is an Opaque type
+  # rather than an EVPN 0x06 sub-type, and the one with no fields at all:
+  # "The Value field of this community is reserved (set to 0 by the
+  # senders, ignored by the receivers)."
+  def test_default_gateway_has_no_fields_at_all
+    assert_equal([0x03, 0x0d], [BGP::Default_gateway::TYPE,
+                                BGP::Default_gateway::SUBTYPE])
+    assert_equal(13, BGP::Extended_community::DEFAULT_GATEWAY)
+    c = BGP::Default_gateway.new
+    assert_equal('030d' + '000000000000', c.to_shex)
+    assert_equal('Default Gateway: reserved', c.to_s)
+    assert_equal({ :default_gateway => [] }, c.to_hash)
+    assert_equal(c.to_shex, BGP::Default_gateway.new(c.to_hash).to_shex)
+    assert_equal(c.to_shex,
+                 BGP::Extended_community.factory([c.to_shex].pack('H*')).to_shex)
+    assert_equal(c.to_shex,
+                 BGP::Extended_communities.new(c.to_hash).communities[0].to_shex)
+    # Every one of its 48 bits is reserved, so a peer that set any of
+    # them gets them all back.
+    set = BGP::Extended_community.factory(['030dffffffffffff'].pack('H*'))
+    assert_instance_of(BGP::Default_gateway, set)
+    assert_equal('030dffffffffffff', set.to_shex)
+    assert_equal({ :default_gateway => { :bits => 0xffffffffffff } }, set.to_hash)
+    assert_equal('030dffffffffffff',
+                 BGP::Extended_communities.new(set.to_hash)
+                   .communities[0].to_shex)
+  end
+
+  # The keep and echo rule across all six: a reserved bit a peer set
+  # comes back through encode, rides in the hash as one `:bits` entry,
+  # and builds the same octets again. No reserved bit, no entry.
+  def test_the_last_six_evpn_communities_keep_the_reserved_bits_a_peer_set
+    { 'fff805dcffff' => BGP::Layer2_attributes, # every MBZ bit, both reserved octets
+      'fe0000fffff0' => BGP::E_tree,            # the 7 MBZ bits and a reserved octet
+      'e0ab00000000' => BGP::Df_election,       # RSV bits and unassigned bitmap bits
+      'f5ffffffffff' => BGP::Arp_nd,            # bits 0-3 and 5, all 5 reserved octets
+    }.each do |value, klass|
+      hex = format('%02x%02x', klass::TYPE, klass::SUBTYPE) + value
+      c = BGP::Extended_community.factory([hex].pack('H*'))
+      assert_instance_of(klass, c)
+      assert_equal(hex, c.to_shex, "#{klass} did not echo its reserved bits")
+      h = c.to_hash
+      assert_kind_of(Hash, h[h.keys.first],
+                     "#{klass} hashed a reserved bit as its plain field list")
+      assert_equal(value.to_i(16), h[h.keys.first][:bits])
+      assert_equal(hex, BGP::Extended_communities.new(h).communities[0].to_shex,
+                   "#{klass} could not rebuild itself from its own hash")
+      assert_match(/bits 0x#{value}/, c.to_s)
+    end
+    # And with nothing reserved set, the hash is the field list it would
+    # have been anyway.
+    [BGP::Layer2_attributes.new(1500), BGP::E_tree.new(16),
+     BGP::Df_election.new(:hrw), BGP::Arp_nd.new,
+     BGP::Service_carving_time.new(1, 2), BGP::Default_gateway.new].each do |c|
+      refute_kind_of(Hash, c.to_hash[c.to_hash.keys.first], c.class.to_s)
+    end
+  end
+
+  # Both registries, which is the half that was missing for all five of
+  # RFC 9251's: a FACTORY entry with no HASH_BUILDERS entry parses and
+  # then cannot build back from its own hash.
+  def test_the_last_six_evpn_communities_are_registered_both_ways
+    { [0x06, 0x04] => BGP::Layer2_attributes,
+      [0x06, 0x05] => BGP::E_tree,
+      [0x06, 0x06] => BGP::Df_election,
+      [0x06, 0x08] => BGP::Arp_nd,
+      [0x06, 0x0f] => BGP::Service_carving_time,
+      [0x03, 0x0d] => BGP::Default_gateway }.each do |key, klass|
+      assert_equal(klass, BGP::Extended_community::FACTORY[key],
+                   format('type 0x%02x sub-type 0x%02x', *key))
+      hash_key = klass.to_s.split('::').last.downcase.to_sym
+      assert(BGP::Extended_communities::HASH_BUILDERS.has_key?(hash_key),
+             "#{hash_key} has no HASH_BUILDERS entry, so its hash cannot build back")
     end
   end
 

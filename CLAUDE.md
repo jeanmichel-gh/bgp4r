@@ -244,7 +244,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. A `lab` job runs the Compose topologies, and installs a `gobgpd` release so the native fault matrix runs there too; it pins 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-10-30: 1686 tests, 24459 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.0%.
+Baseline on 2026-10-30: 1703 tests, 24733 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.1%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -1232,25 +1232,33 @@ expired**: the RIB and FIB plan is finished, and the plan for lifting this
 limit is the section that follows, "Breadth, the one SAFI lever". What stays
 true here is the shape of the gap:
 
-* **MP_REACH and MP_UNREACH read and write only SAFIs 1, 2, 4, 128, 129, 133
-  and 134.** 133 and 134 are flowspec and arrived with phase 2 below; the rest
-  of that one limit still blocks EVPN, BGP-LS, RT-constrain, MCAST-VPN, VPLS
-  and SR Policy together, so it is the single lever if breadth is ever wanted.
-  `Mp_reach.new(:afi=>25, :safi=>70, ...)` raises today.
-* BGP-LS (attribute 29, AFI 16388, SAFI 71 and 72, RFC 9552), EVPN (SAFI 70,
-  RFC 7432 and six more RFCs, eleven route types, plus the EVPN extended
-  community sub-types and one more at 0x03 that the 0x06 registry misses;
-  see phase 3 below, which measured that registry rather than recalling
-  it: 18 assigned entries, 14 with an RFC), ATTR_SET
+* **MP_REACH and MP_UNREACH read and write SAFIs 1, 2, 4, 128, 129, 133 and
+  134, plus AFI 25 SAFI 70.** 133 and 134 are flowspec, which arrived with
+  phase 2 below, and AFI 25 SAFI 70 is EVPN, which arrived with phase 3 part
+  5. What that one limit still blocks is BGP-LS, RT-constrain, MCAST-VPN,
+  VPLS and SR Policy, so it is the single lever if more breadth is wanted.
+  **This bullet said `Mp_reach.new(:afi=>25, :safi=>70, ...)` raises, which
+  #185 made false and did not correct here.** It does not raise:
+  `ruby -I. -e 'require "bgp4r"; puts BGP::Mp_reach.new(:afi=>25,
+  :safi=>70, :nexthop=>["10.0.0.1"], :nlris=>[{:inclusive_multicast=>{:rd=>
+  [100,200], :tag=>0, :originator=>"10.0.0.1"}}]).to_shex'` prints the
+  attribute. A stale entry sends the next reader after work that is done.
+* BGP-LS (attribute 29, AFI 16388, SAFI 71 and 72, RFC 9552), ATTR_SET
   (attribute 128, RFC 6368), RT-constrain (SAFI 132), MCAST-VPN (SAFI 5).
-  Flowspec was on this list, with every traffic filtering action of RFC 8955
-  section 7 implemented and no way to send the rule they filter. The rule can
-  be sent now, so the family is off it.
-* Coverage as measured: 22 of 34 live path attribute code points, 34 of 115
-  extended community sub-type code points, 8 of 22 live capability code
-  points. The community figure moves with each part of phase 3 part 8. The
-  attribute figure reads worse than it is: FRR's `bgpd.h` defines exactly
-  bgp4r's 22 plus two.
+  Flowspec and EVPN were both on this list and both are off it, because the
+  rule and the route can be sent now: flowspec had every traffic filtering
+  action of RFC 8955 section 7 implemented and no way to send the rule they
+  filter, and EVPN had none of its eleven route types and four of its eleven
+  extended communities. Phase 3 below measured that community registry rather
+  than recalling it, 18 assigned entries with 14 carrying an RFC, and all 14
+  are in.
+* Coverage as measured: 22 of 34 live path attribute code points, and 8 of 22
+  live capability code points. The attribute figure reads worse than it is:
+  FRR's `bgpd.h` defines exactly bgp4r's 22 plus two. **The extended community
+  figure is not written down here**, because it moved three times in a week
+  and `ruby -I. -e 'require "bgp4r"; p BGP::Extended_community::FACTORY.size'`
+  prints the registered code points, against the 115 the IANA registries
+  listed when this was last counted by hand.
 
 ### Breadth, the one SAFI lever. Phase 2 done
 
@@ -1750,12 +1758,19 @@ Two consequences, both of which change the plan rather than decorate it:
        `[0x80,0x08]`, `[0x81,0x08]` and `[0x82,0x08]`, the section 7.4
        redirect-to-VRF encodings, so nothing there is affected. Checked
        on 2026-10-30.
-3. **EVPN, SAFI 70, RFC 7432 and six more. Parts 1 to 7 and 8a done**,
-   so all eleven route types read and write on the wire, an EVPN UPDATE
-   crosses a session, and the five extended communities of RFC 9251 are
-   in. Part 8b, 9 and 10 are left: the other six communities,
-   validation and the lab. Ten parts, planned on 2026-10-30 from eleven
-   RFCs read in full, attached to the session rather than fetched.
+3. **EVPN, SAFI 70, RFC 7432 and six more. Parts 1 to 8 done**, so all
+   eleven route types read and write on the wire, an EVPN UPDATE
+   crosses a session, and **every EVPN extended community with an RFC
+   behind it is in**: all eleven, five with RFC 9251 and six with the
+   rest. Parts 9 and 10 are left, validation and the lab. Ten parts,
+   planned on 2026-10-30 from eleven RFCs read in full, attached to the
+   session rather than fetched.
+
+   By the measure this plan set itself, which is the wire and not the
+   table, the family is done: bgp4r parses an EVPN capture, replays it
+   byte for byte, and builds one from field values that no RFC allows.
+   What parts 9 and 10 add is reporting a malformed route on receive and
+   a second implementation's opinion of what we send.
 
    **Two counts in the earlier version of this entry were wrong, and
    both were wrong by reading one RFC where the registry spans seven.**
@@ -2181,9 +2196,9 @@ Two consequences, both of which change the plan rather than decorate it:
       * The functional test gained four cases, 17 now, including two
         Leaf A-D routes in one attribute, which is the only thing that
         says the recursion does not over-read.
-   8. **The eleven extended communities.** Two pull requests, because
-      eleven classes in one is not a small diff: **8a is Done**, in
-      #188, with the five of RFC 9251, and 8b has the other six.
+   8. **The eleven extended communities. Done**, in two pull requests,
+      because eleven classes in one is not a small diff: **8a** in #188
+      with the five of RFC 9251, and **8b** in #190 with the other six.
       * **The registry, measured on 2026-10-30 rather than recalled,
         and it explains both figures this file carried.** The "EVPN
         Extended Community Sub-Types" subregistry under type 0x06 has
@@ -2254,17 +2269,96 @@ Two consequences, both of which change the plan rather than decorate it:
           citation was wrong in a draft of that table and reading RFC
           8584 caught it**: that community is section **2.2**, not 5.1.
           Section 5 is "Solution Benefits".
-      * **8b, the other six. Not started.** EVPN Layer 2 Attributes at
-        0x04 (RFC 8214 section 3.1), E-Tree at 0x05 (RFC 8317 section
-        6.1), DF Election at 0x06 (RFC 8584 section 2.2), ARP/ND at 0x08
-        (RFC 9047 section 2), Service Carving Time at 0x0f (RFC 9722
-        section 2.1), and the Default Gateway at `[0x03, 0x0d]` (RFC
-        7432 section 7.8, whose IANA reference is an author's name
-        rather than an RFC). Every layout was read in #188's session and
-        each is 6 value octets; five of the six are flags plus reserved
-        fields, so they are the keep-and-echo shape, and Service Carving
-        Time is the odd one with no reserved bit at all, an NTP
-        timestamp in 4 plus 2 octets.
+      * **8b, the other six. Done**, in #190: EVPN Layer 2 Attributes
+        at 0x04 (RFC 8214 section 3.1), E-Tree at 0x05 (RFC 8317
+        section 6.1), DF Election at 0x06 (RFC 8584 section 2.2),
+        ARP/ND at 0x08 (RFC 9047 section 2), Service Carving Time at
+        0x0f (RFC 9722 section 2.1), and the Default Gateway at `[0x03,
+        0x0d]` (RFC 7432 section 7.8, whose IANA reference is an
+        author's name rather than an RFC). `docs/evpn.md` section 7b is
+        the guide.
+        * **The split of shapes was not quite what the earlier version
+          of this entry said.** It read "five of the six are flags plus
+          reserved fields". Four are: 0x04, 0x05, 0x06 and 0x08.
+          Service Carving Time has no reserved bit at all, which that
+          sentence had right, and **the Default Gateway has no fields
+          at all**, which it did not: RFC 7432 section 7.8 says "The
+          Value field of this community is reserved (set to 0 by the
+          senders, ignored by the receivers)", so all 48 bits are
+          reserved. It is the purest keep-and-echo case in the library,
+          `DEFINED_BITS` is 0, and its hash is an empty list until a
+          peer puts something in there. The miscount came from reading
+          section 7.8 last.
+        * **E-Tree is `Esi_label` with a different name on the bit**,
+          same layout and the same mask, `(1 << 40) | (0xfffff << 4)`.
+          Unlike RFC 7432 section 7.5 it does say where the label sits:
+          "The value of the 20-bit MPLS label is encoded in the
+          high-order 20 bits of the Leaf label field".
+        * **Two RFCs define bits in the one DF Election Bitmap and both
+          are read.** RFC 8584 section 2.2 gives bit 1, AC-DF, and
+          leaves bits 0 and 2 to 15 unassigned; **RFC 9722 section 2.1
+          adds bit 3**, Time Synchronization, and nothing in RFC 8584
+          points forward to it. A mask covering only the first would
+          report a correct T bit as a reserved one. Same shape as the
+          `Pmsi_tunnel` flags registry: a bit one RFC leaves
+          unassigned is a bit a later RFC can fill, so check the
+          registry and not only the defining RFC.
+        * **Four of these RFCs number their flag bits twice, and the
+          second number is what the placements were checked against.**
+          RFC 9047 section 2 says R is "Bit 7 of the Flags field" and
+          "Bit 23 of the Extended Community", O is bit 6 and bit 22, I
+          is bit 4 and bit 20; RFC 8584 says the Bitmap's bit 0
+          "corresponds to Bit 24"; RFC 9722 says its T bit
+          "corresponds to Bit 27". All five hold.
+          `test_each_flag_sits_at_the_bit_number_its_own_rfc_gives_it`
+          asserts them, and `docs/evpn.md` section 7b has the table,
+          which `evpn_doc_test.rb` reads out of the document rather
+          than trusting. **That is worth as much here as the five RFC
+          vectors are for flow spec**, and for the same narrow reason:
+          the number is the document's own, so it is independent of
+          this reader's arithmetic.
+        * **`DEFINED_BITS` is derived by a test now rather than
+          restated.**
+          `test_every_defined_bits_mask_is_exactly_what_its_own_fields_can_write`
+          sets every field of a class to its widest value, ORs the
+          value bits, and requires the result to be exactly the mask.
+          Less means `encode` writes a bit the class calls reserved, so
+          a community built from field values would carry a `:bits`
+          entry; more means a field the class reads cannot be reached.
+          It covers the four older EVPN classes, `Traffic_marking` and
+          `Encapsulation` too, and all ten agreed first time. A one bit
+          typo in any of them fails it.
+        * **A bug #188 shipped, found here and fixed.**
+          `Multicast_flags` unwrapped the hash `to_hash` answers and
+          then read the list inside it as a Hash, so
+          `Multicast_flags.new(its own to_hash)` raised `TypeError`.
+          Part 8a's test only ever fed it the value under the key, so
+          nothing caught it. The unwrap is one method on the base now,
+          `Extended_community::Typed#unwrap`: unwrap, then dispatch on
+          the shape, in one place for all nine classes that take the
+          wrapped form. `Evi_rt` had already got the order right and
+          `Traffic_action` survived only because its hash value is
+          always a Hash.
+        * **And a bug this part nearly shipped**, which is why `Arp_nd`
+          has a test asserting the community is 8 octets: its first
+          draft packed the value as `CNn`, one Flags octet and 5
+          reserved, which is 1 + 4 + 2 and writes 7. Found by probing a
+          round trip, not by reading.
+        * **Two guards over every `Typed` class the factory knows**,
+          discovered from `FACTORY` so a new class cannot join without
+          being covered. A wrapped hash handed back to `new` must build
+          the same octets or be refused, and a refusal must be an
+          `ArgumentError`, which is a class saying no. A `TypeError` or
+          a `NoMethodError` is a class reading a shape it never
+          checked, which is the `Multicast_flags` bug. Conventions'
+          rule that `Klass.new(Klass#to_hash)` was never the contract
+          still stands: a class may refuse the wrapped form, it may not
+          accept it and build something else.
+        * The doc test's "the Default Gateway is still missing"
+          assertion failed the moment the class landed, which is the
+          guard working. It was re-pointed at the new truth rather than
+          weakened, the same way #185 re-pointed #116's undecodable
+          family from EVPN to BGP-LS.
    9. **Validation**, in `validation.rb` and nowhere else per
       Conventions, reusing the family's own tables the way
       `flow_spec_finding` reuses `Flow_spec.nlri_size` and
@@ -2351,7 +2445,7 @@ Lab and conformance:
   * **`Neighbor#capability :add_path` takes its arguments in the order `(send_recv, afi, safi)`**, which is what `CAP::Add_path#add` takes. This file used to give the example `capabilities: [{add_path: [1, 1, 3]}]`, which is SAFI 3, NSAP, and a Send/Receive of 1. For IPv4 unicast both ways it is `[3, 1, 1]`, or `[:send_and_receive, 1, 1]`, which says it better. The wrong example was never run.
   * A Compose topology on `lab/speaker.rb` is still possible and is two pieces, neither needed by the native test: an announce block has no way to give a prefix a Path Identifier, since `build_update` calls `Nlri.new` with plain prefix strings; and `Lab::Recorder#record_routes` keys received routes by prefix alone, so two paths for one prefix overwrite each other and the state file cannot show a Path Identifier arrived. Worth doing only if the lab speaker itself needs add-path.
 * **Flow spec interop lives in `docs/flow-spec.md` section 12**, measured and asserted rather than written down here, the same way the fault matrix columns are. The short version: both routers accept a rule from bgp4r and read it back, and they disagree on every part of RFC 8955 section 4.2. Two harness facts worth knowing before writing another flow spec lab test: GoBGP's **config file and its client use different names for the VPN family**, `l3vpn-ipv4-flowspec` and `ipv4-l3vpn-flowspec`, each rejecting the other; and **FRR 8.4.4 has no VPN flow spec family**, refusing a session that offers SAFI 134 alone with 2/7 and silently discarding the rule when SAFI 133 is there too.
-* Lowest coverage (unit suite): `neighbor/neighbor.rb` 91%, `messages/update.rb` 92%, `optional_parameters/graceful_restart.rb` 92%, `neighbor/add_path_cap.rb` 93%, `path_attributes/mp_unreach.rb` 93%.
+* Lowest coverage (unit suite): `neighbor/neighbor.rb` 91%, `messages/update.rb` 92%, `neighbor/add_path_cap.rb` 93%, `path_attributes/mp_unreach.rb` 93%, `path_attributes/ipv6_extended_communities.rb` 93%, `optional_parameters/graceful_restart.rb` 93%.
 
 ## Attribute work left
 

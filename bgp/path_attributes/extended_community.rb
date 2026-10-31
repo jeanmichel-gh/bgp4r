@@ -38,6 +38,7 @@ module BGP
     BGP_DATA_COLLECT = 8
     COLOR = 11
     ENCAPSULATION = 12
+    DEFAULT_GATEWAY = 13
 
     IANA_AUTHORITY_BIT = 0x80
     TRANSITIVE = 0x0    
@@ -779,6 +780,25 @@ module BGP
       @raw = [bits >> 32, bits & 0xffffffff].pack('nN').b
       parse_value(@raw)
     end
+    # `to_hash` nests a community's fields under the community's own key,
+    # because that is the form `Extended_communities` reads, so a hash
+    # build takes that form as well as the bare fields.
+    #
+    # **Why the unwrap exists**, which `Traffic_action` found: reading the
+    # outer hash finds every field nil and builds a clean looking
+    # community of zeros with no error at all, for every class whose
+    # field defaults pass their own check. The ones that raise instead
+    # are the lucky ones.
+    #
+    # **Why it has to happen before the shape is dispatched on**: what is
+    # under the key is a list for most of these classes and a Hash only
+    # when the community also carries reserved bits. `Multicast_flags`
+    # unwrapped inside its own Hash branch and then read the list it got
+    # back as a Hash, so `Multicast_flags.new(its own to_hash)` raised
+    # TypeError. Unwrap, then dispatch.
+    def unwrap(arg)
+      arg.is_a?(Hash) && arg.key?(hash_key) ? arg[hash_key] : arg
+    end
     # to_s names the reserved bits too, so what encode would write is
     # visible rather than only the fields the class reads.
     def with_bits(s)
@@ -910,15 +930,12 @@ module BGP
     attr_reader :bits
     private
     def build(arg = nil, sample: false, terminal: false, bits: nil)
+      # This is the community the unwrap in `Typed#unwrap` was found
+      # on: reading only the outer hash found :sample, :terminal and
+      # :bits all nil and built a clean looking community encoding
+      # 8007000000000000, losing all 48 value bits with no error.
+      arg = unwrap(arg)
       if arg.is_a?(Hash)
-        # to_hash nests the fields under this community's own key, which
-        # is the form Extended_communities reads. Read it here too.
-        # Reading only the outer hash found :sample, :terminal and :bits
-        # all nil and built a clean looking community encoding
-        # 8007000000000000, losing all 48 value bits with no error. This
-        # is the one community whose field defaults pass their own check,
-        # so it is the one that was quiet where the others raise.
-        arg = arg[hash_key] if arg.key?(hash_key)
         sample, terminal, bits = arg[:sample], arg[:terminal], arg[:bits]
       elsif arg
         raise ArgumentError, "invalid traffic action #{arg.inspect}, use sample: and terminal:"
@@ -1183,14 +1200,8 @@ module BGP
     end
     private
     def build(arg = nil, igmp_proxy: false, mld_proxy: false, bits: nil)
+      arg = unwrap(arg)
       if arg.is_a?(Hash)
-        # to_hash nests the fields under this community's own key, so
-        # read that form here too. `Traffic_action` records why: reading
-        # only the outer hash finds every field nil and builds a clean
-        # looking community that loses all 48 value bits with no error,
-        # because these field defaults pass their own check. Measured
-        # here before the unwrap went in, and it did exactly that.
-        arg = arg[hash_key] if arg.key?(hash_key)
         igmp_proxy, mld_proxy, bits =
           arg[:igmp_proxy], arg[:mld_proxy], arg[:bits]
       elsif arg.is_a?(Array)
@@ -1261,12 +1272,7 @@ module BGP
     attr_reader :global, :local
     private
     def build(global = nil, local = nil, value: nil, bits: nil)
-      if global.is_a?(Hash)
-        # The wrapped form too, for the reason `Traffic_action` records:
-        # without this, the outer hash gives nil for every field and a
-        # community of zeros is built in silence.
-        global = global[hash_key] if global.key?(hash_key)
-      end
+      global = unwrap(global)
       if global.is_a?(Hash)
         global, local, value = global[:global], global[:local], global[:value]
       elsif global.is_a?(Array)
@@ -1387,6 +1393,407 @@ module BGP
     GLOBAL_WIDTH = nil
   end
 
+  # RFC 8214 section 3.1: the EVPN Layer 2 Attributes Extended Community,
+  # EVPN sub-type 0x04, "to be included with per-EVI Ethernet A-D routes"
+  # and "mandatory if multihoming is enabled".
+  #
+  #   |  Type (0x06) / Sub-type (0x04) (2 octets) |
+  #   |  Control Flags  (2 octets)                |
+  #   |  L2 MTU (2 octets)                        |
+  #   |  Reserved (2 octets)                      |
+  #
+  # **The three defined flags are the least significant of the Control
+  # Flags field**, which its Figure 2 shows rather than says:
+  # `|   MBZ                   |C|P|B|`, MBZ being "MUST Be Zero". So B
+  # is the low bit of that 2-octet field, P the one above it and C the
+  # one above that, which in the 48-bit value puts B at bit 32, P at 33
+  # and C at 34.
+  #
+  # Section 3.1: "the remaining bits MUST be set to zero when sending and
+  # MUST be ignored when receiving this community". Those 13 bits and the
+  # 2 reserved octets come back as a `:bits` entry when a peer set one.
+  class Layer2_attributes < Extended_community::Typed
+    TYPE, SUBTYPE = 0x06, 0x04
+    LABEL = 'Layer 2 Attributes'
+    # The Control Flags field is the value's top two octets, so its own
+    # low bit is bit 32 of the value.
+    BACKUP       = 1 << 32
+    PRIMARY      = 1 << 33
+    CONTROL_WORD = 1 << 34
+    # The flag names, in the order Figure 2 draws them.
+    FLAGS = { :control_word=> CONTROL_WORD, :primary=> PRIMARY, :backup=> BACKUP }.freeze
+    # The three flags and the whole L2 MTU, which is the value's middle
+    # two octets. Everything else is MBZ or reserved.
+    DEFINED_BITS = CONTROL_WORD | PRIMARY | BACKUP | (0xffff << 16)
+    attr_reader :mtu
+    def control_word?
+      @control_word
+    end
+    def primary?
+      @primary
+    end
+    def backup?
+      @backup
+    end
+    private
+    # Four ways to say it: `new(1500, primary: true)`, the hash value
+    # `new([1500, [:primary]])`, the wrapped hash `to_hash` answers, and
+    # the Hash of named fields a community with reserved bits hashes as.
+    def build(arg = nil, mtu: nil, control_word: false, primary: false,
+              backup: false, bits: nil)
+      arg = unwrap(arg)
+      if arg.is_a?(Hash)
+        mtu, bits = arg[:mtu], arg[:bits]
+        control_word, primary, backup =
+          arg[:control_word], arg[:primary], arg[:backup]
+      elsif arg.is_a?(Array)
+        mtu, names = arg[0], arg[1] || []
+        control_word, primary, backup =
+          names.include?(:control_word), names.include?(:primary),
+          names.include?(:backup)
+      elsif !arg.nil?
+        mtu = arg
+      end
+      return keep_bits(bits) if bits
+      @mtu = check('L2 MTU', mtu.to_i, 0xffff)
+      @control_word, @primary, @backup =
+        control_word ? true : false, primary ? true : false, backup ? true : false
+    end
+    def value_octets
+      flags = (@control_word ? 4 : 0) | (@primary ? 2 : 0) | (@backup ? 1 : 0)
+      [flags, @mtu, 0].pack('nnn')
+    end
+    def parse_value(v)
+      flags, @mtu, _ = v.unpack('nnn')
+      @control_word = (flags & 4) > 0
+      @primary      = (flags & 2) > 0
+      @backup       = (flags & 1) > 0
+    end
+    def flag_names
+      FLAGS.keys.select { |n| send("#{n}?") }
+    end
+    def value_s
+      names = flag_names
+      with_bits("MTU #{@mtu}" + (names.empty? ? '' : ', ' + names.join(', ')))
+    end
+    def hash_value
+      return [@mtu, flag_names] unless undefined_bits?
+      { :mtu=> @mtu, :control_word=> @control_word, :primary=> @primary,
+        :backup=> @backup, :bits=> value_bits }
+    end
+  end
+
+  # RFC 8317 section 6.1: the E-Tree Extended Community, EVPN sub-type
+  # 0x05, "used for Leaf-Indication of known unicast and BUM traffic".
+  #
+  #   | Type=0x06     | Sub-Type=0x05 | Flags(1 Octet)|  Reserved=0   |
+  #   |  Reserved=0   |           Leaf Label                          |
+  #
+  # The same layout as `Esi_label`: a Flags octet with one low bit, two
+  # reserved octets, then a 3-octet label field. Flags is
+  # `|     MBZ     |L|`, so Leaf-Indication is bit 40 of the value.
+  #
+  # Unlike `Esi_label`, this section does say where the label sits:
+  # "The value of the 20-bit MPLS label is encoded in the high-order 20
+  # bits of the Leaf label field". So the low 4 bits of that field are
+  # undescribed and go with the reserved octets and the 7 MBZ bits.
+  #
+  # Nothing validates. Section 6.1 has two send side rules this does not
+  # enforce, per Conventions, because a test has to be able to break
+  # them: with a MAC/IP Advertisement route the flag "MUST be set to one"
+  # and the label SHOULD be 0, and with an EAD-ES route the label "MUST
+  # be set to a valid MPLS label" and the flag SHOULD be 0. Which route
+  # a community travels with is not visible from the community.
+  class E_tree < Extended_community::Typed
+    TYPE, SUBTYPE = 0x06, 0x05
+    LABEL = 'E-Tree'
+    LEAF = 1 << 40
+    DEFINED_BITS = LEAF | (0xfffff << 4)
+    attr_reader :label
+    def leaf?
+      @leaf
+    end
+    private
+    def build(arg = nil, label: nil, leaf: false, bits: nil)
+      arg = unwrap(arg)
+      if arg.is_a?(Hash)
+        arg, leaf, bits = arg[:label], arg[:leaf], arg[:bits]
+      elsif arg.is_a?(Array)
+        arg, leaf = arg[0], arg[1]
+      end
+      arg = label if arg.nil?
+      return keep_bits(bits) if bits
+      @label, @leaf = check('leaf label', arg.to_i, 0xfffff), leaf ? true : false
+    end
+    def value_octets
+      field = @label << 4
+      [@leaf ? 1 : 0, 0, field >> 16, field & 0xffff].pack('CnCn')
+    end
+    def parse_value(v)
+      flags, _, high, low = v.unpack('CnCn')
+      @leaf  = (flags & 1) > 0
+      @label = ((high << 16) | low) >> 4
+    end
+    def value_s
+      with_bits("leaf label #{@label}" + (@leaf ? ', leaf' : ''))
+    end
+    def hash_value
+      return [@label, @leaf] unless undefined_bits?
+      { :label=> @label, :leaf=> @leaf, :bits=> value_bits }
+    end
+  end
+
+  # RFC 8584 section 2.2: the DF Election Extended Community, EVPN
+  # sub-type 0x06, by which "A PE can indicate its willingness to
+  # support HRW and/or AC-DF".
+  #
+  #   | Type = 0x06   | Sub-Type(0x06)| RSV |  DF Alg |    Bitmap     ~
+  #   ~     Bitmap    |            Reserved                           |
+  #
+  # So DF Alg is the low 5 bits of the value's first octet, the Bitmap is
+  # its next two and 3 reserved octets follow. The RSV bits above DF Alg
+  # are "Reserved bits for information that is specific to DF Alg".
+  #
+  # **Two RFCs define bits in that Bitmap and both are read here.** RFC
+  # 8584's own registry gives bit 1, AC-DF, and leaves bits 0 and 2 to 15
+  # unassigned; RFC 9722 section 2.1 adds bit 3, Time Synchronization. A
+  # mask covering only the first would report a T bit as a reserved one.
+  # The RFC numbers the Bitmap's bits from its high order end and states
+  # where each lands in the whole community, which is the cross-check
+  # both bits were placed by: bit 1 is "Bit 25" of the community and bit
+  # 3 is "Bit 27", and the community's third octet is where its value
+  # begins.
+  class Df_election < Extended_community::Typed
+    TYPE, SUBTYPE = 0x06, 0x06
+    LABEL = 'DF Election'
+    # The Bitmap is the value's second and third octets, numbered from
+    # its high order end, so its bit n is bit 39 - n of the value.
+    AC_DF     = 1 << 38  # RFC 8584 section 2.2, Bitmap bit 1
+    TIME_SYNC = 1 << 36  # RFC 9722 section 2.1, Bitmap bit 3
+    CAPABILITIES = { :ac_df=> AC_DF, :time_sync=> TIME_SYNC }.freeze
+    # RFC 8584 section 2.2's "DF Alg" registry. Type 0 is the "Default DF
+    # election algorithm, or modulus-based algorithm as defined in
+    # [RFC7432]", types 2 to 30 are unassigned and 31 is "Reserved for
+    # Experimental Use". Any number from 0 to 31 encodes.
+    ALGORITHMS = { :default=> 0, :hrw=> 1, :experimental=> 31 }.freeze
+    DEFINED_BITS = (0x1f << 40) | AC_DF | TIME_SYNC
+    attr_reader :df_alg
+    def alg_name
+      ALGORITHMS.key(@df_alg)
+    end
+    def ac_df?
+      @ac_df
+    end
+    def time_sync?
+      @time_sync
+    end
+    private
+    def build(arg = nil, df_alg: nil, ac_df: false, time_sync: false, bits: nil)
+      arg = unwrap(arg)
+      if arg.is_a?(Hash)
+        arg, ac_df, time_sync, bits =
+          arg[:df_alg], arg[:ac_df], arg[:time_sync], arg[:bits]
+      elsif arg.is_a?(Array)
+        arg, names = arg[0], arg[1] || []
+        ac_df, time_sync = names.include?(:ac_df), names.include?(:time_sync)
+      end
+      arg = df_alg if arg.nil?
+      return keep_bits(bits) if bits
+      @df_alg = ALGORITHMS[arg] || check('DF algorithm', arg.to_i, 0x1f)
+      @ac_df, @time_sync = ac_df ? true : false, time_sync ? true : false
+    end
+    def value_octets
+      bitmap = (@ac_df ? 0x4000 : 0) | (@time_sync ? 0x1000 : 0)
+      [@df_alg, bitmap, 0, 0].pack('CnCn')
+    end
+    def parse_value(v)
+      alg, bitmap, _, _ = v.unpack('CnCn')
+      @df_alg    = alg & 0x1f
+      @ac_df     = (bitmap & 0x4000) > 0
+      @time_sync = (bitmap & 0x1000) > 0
+    end
+    def capability_names
+      CAPABILITIES.keys.select { |n| send("#{n}?") }
+    end
+    def value_s
+      names = capability_names
+      with_bits("alg #{alg_name || @df_alg}" +
+                (names.empty? ? '' : ', ' + names.join(', ')))
+    end
+    def hash_value
+      alg = alg_name || @df_alg
+      return [alg, capability_names] unless undefined_bits?
+      { :df_alg=> alg, :ac_df=> @ac_df, :time_sync=> @time_sync,
+        :bits=> value_bits }
+    end
+  end
+
+  # RFC 9047 section 2: the EVPN ARP/ND Extended Community, EVPN sub-type
+  # 0x08, "advertised along with EVPN MAC/IP Advertisement routes that
+  # carry an IPv4 or IPv6 address".
+  #
+  #   | Type=0x06     | Sub-Type=0x08 |Flags (1 octet)| Reserved=0    |
+  #   |                       Reserved=0                              |
+  #
+  # Flags is `|       |I| |O|R|`, and the section names each bit twice
+  # over, once in the Flags octet and once in the whole community, which
+  # is the cross-check all three were placed by: R is "Bit 7 of the Flags
+  # field" and "Bit 23 of the Extended Community", O is bit 6 and bit 22,
+  # I is bit 4 and bit 20. The community's third octet is where its value
+  # begins, so those are bits 40, 41 and 43 of the value.
+  #
+  # "Bits 0-3 and 5 are not assigned by this document. They MUST be set
+  # to zero and ignored on receipt", and the 5 reserved octets likewise,
+  # so both come back as a `:bits` entry when a peer set one.
+  class Arp_nd < Extended_community::Typed
+    TYPE, SUBTYPE = 0x06, 0x08
+    LABEL = 'ARP/ND'
+    ROUTER    = 1 << 40  # R, Flags bit 7
+    OVERRIDE  = 1 << 41  # O, Flags bit 6
+    IMMUTABLE = 1 << 43  # I, Flags bit 4
+    FLAGS = { :immutable=> IMMUTABLE, :override=> OVERRIDE, :router=> ROUTER }.freeze
+    DEFINED_BITS = IMMUTABLE | OVERRIDE | ROUTER
+    def router?
+      @router
+    end
+    def override?
+      @override
+    end
+    def immutable?
+      @immutable
+    end
+    private
+    def build(arg = nil, router: false, override: false, immutable: false, bits: nil)
+      arg = unwrap(arg)
+      if arg.is_a?(Hash)
+        router, override, immutable, bits =
+          arg[:router], arg[:override], arg[:immutable], arg[:bits]
+      elsif arg.is_a?(Array)
+        router    = arg.include?(:router)
+        override  = arg.include?(:override)
+        immutable = arg.include?(:immutable)
+      end
+      return keep_bits(bits) if bits
+      @router, @override, @immutable =
+        router ? true : false, override ? true : false, immutable ? true : false
+    end
+    def value_octets
+      flags = (@immutable ? 8 : 0) | (@override ? 2 : 0) | (@router ? 1 : 0)
+      # One Flags octet then 5 reserved: 1 + 4 + 1, not the 1 + 4 + 2 that
+      # a CNn would write, which is 7 and made this community 9 octets.
+      [flags, 0, 0].pack('CNC')
+    end
+    def parse_value(v)
+      flags, _, _ = v.unpack('CNC')
+      @immutable = (flags & 8) > 0
+      @override  = (flags & 2) > 0
+      @router    = (flags & 1) > 0
+    end
+    def flag_names
+      FLAGS.keys.select { |n| send("#{n}?") }
+    end
+    def value_s
+      names = flag_names
+      with_bits(names.empty? ? 'none' : names.join(', '))
+    end
+    def hash_value
+      return flag_names unless undefined_bits?
+      { :router=> @router, :override=> @override, :immutable=> @immutable,
+        :bits=> value_bits }
+    end
+  end
+
+  # RFC 9722 section 2.1: the Service Carving Time, EVPN sub-type 0x0F,
+  # which communicates "the SCT for each Ethernet Segment".
+  #
+  #   | Type = 0x06   | Sub-Type(0x0F)|      Timestamp Seconds        ~
+  #   ~  Timestamp Seconds            |      Timestamp Fraction       |
+  #
+  # **The one EVPN community with no reserved bit anywhere**, so it has
+  # no `DEFINED_BITS` and never grows a `:bits` entry: all 48 value bits
+  # are fields it reads.
+  #
+  # The timestamp "uses the NTP prime epoch of 0 h 1 January 1900 UTC
+  # [RFC5905] and an adapted form of the 64-bit NTP timestamp format":
+  # 32 bits of seconds, then "The high-order 16 bits of the NTP
+  # 'Fraction' field", whose low 16 "are set to 0" when the 64-bit form
+  # is rebuilt. That makes each tick 2^-16 of a second.
+  #
+  # **No calendar date is printed, deliberately.** Section 2.2 says "The
+  # NTP Era value is not exchanged", so the era is not in the community
+  # and any date bgp4r named would be a guess about which 136 year window
+  # the seconds count belongs to.
+  class Service_carving_time < Extended_community::Typed
+    TYPE, SUBTYPE = 0x06, 0x0f
+    LABEL = 'Service Carving Time'
+    attr_reader :seconds, :fraction
+    private
+    def build(arg = nil, fraction = nil, seconds: nil, bits: nil)
+      arg = unwrap(arg)
+      if arg.is_a?(Hash)
+        arg, fraction, bits = arg[:seconds], arg[:fraction], arg[:bits]
+      elsif arg.is_a?(Array)
+        arg, fraction = arg[0], arg[1]
+      end
+      arg = seconds if arg.nil?
+      return keep_bits(bits) if bits
+      @seconds  = check('timestamp seconds', arg.to_i, 0xffffffff)
+      @fraction = check('timestamp fraction', fraction.to_i, 0xffff)
+    end
+    def value_octets
+      [@seconds, @fraction].pack('Nn')
+    end
+    def parse_value(v)
+      @seconds, @fraction = v.unpack('Nn')
+    end
+    # Both fields as they are, and the fraction also as the seconds it
+    # stands for, since 0x8000 is half a second and not 32768 of
+    # anything. One tick is 2^-16 s, so six decimals is more than enough.
+    def value_s
+      format('seconds %d, fraction %d (%.6fs)', @seconds, @fraction,
+             @fraction.to_f / 0x10000)
+    end
+    def hash_value
+      [@seconds, @fraction]
+    end
+  end
+
+  # RFC 7432 section 7.8: the Default Gateway Extended Community, "an
+  # Extended Community of an Opaque Type", type 0x03 sub-type 0x0D.
+  #
+  # **The community with no fields at all**, which is why it is the one
+  # of the eleven that is not an EVPN 0x06 sub-type and is invisible to
+  # anyone counting that registry: "The Value field of this community is
+  # reserved (set to 0 by the senders, ignored by the receivers)."
+  #
+  # So all 48 bits are reserved, `DEFINED_BITS` is 0, and the hash is an
+  # empty list until a peer sets something in there, at which point it is
+  # a `:bits` entry like any other reserved field. A build writes zeros,
+  # which is what the section asks a sender for.
+  class Default_gateway < Extended_community::Typed
+    TYPE, SUBTYPE = OPAQUE, DEFAULT_GATEWAY
+    LABEL = 'Default Gateway'
+    DEFINED_BITS = 0
+    private
+    def build(arg = nil, bits: nil)
+      arg = unwrap(arg)
+      bits = arg[:bits] if arg.is_a?(Hash)
+      keep_bits(bits) if bits
+    end
+    def value_octets
+      [0, 0].pack('Nn')
+    end
+    def parse_value(v)
+      v
+    end
+    def value_s
+      with_bits('reserved')
+    end
+    def hash_value
+      undefined_bits? ? { :bits=> value_bits } : []
+    end
+  end
+
   class Extended_community
     # RFC 4360 section 2 and the IANA "BGP Extended Communities" registry.
     # Key: [type with the transitive bit masked, subtype].
@@ -1412,6 +1819,7 @@ module BGP
       [OPAQUE,        COLOR]            => Color,              # RFC 9012 section 4.3
       [OPAQUE,        BGP_ORIGIN_VALIDATION_STATE] => Origin_validation_state, # RFC 8097
       [OPAQUE,        ENCAPSULATION]    => Encapsulation,      # RFC 9012 section 4.1
+      [OPAQUE,        DEFAULT_GATEWAY]  => Default_gateway,    # RFC 7432 section 7.8
       [0x80, 0x06] => Traffic_rate_bytes,    # RFC 8955 section 7.1
       [0x80, 0x0c] => Traffic_rate_packets,  # RFC 8955 section 7.2
       [0x80, 0x07] => Traffic_action,        # RFC 8955 section 7.3
@@ -1423,11 +1831,16 @@ module BGP
       [0x06, 0x01] => Esi_label,             # RFC 7432 section 7.5
       [0x06, 0x02] => Es_import,             # RFC 7432 section 7.6
       [0x06, 0x03] => Router_mac,            # RFC 9135 section 8.1
+      [0x06, 0x04] => Layer2_attributes,     # RFC 8214 section 3.1
+      [0x06, 0x05] => E_tree,                # RFC 8317 section 6.1
+      [0x06, 0x06] => Df_election,           # RFC 8584 section 2.2
+      [0x06, 0x08] => Arp_nd,                # RFC 9047 section 2
       [0x06, 0x09] => Multicast_flags,       # RFC 9251 section 9.4
       [0x06, 0x0a] => Evi_rt_0,              # RFC 9251 section 9.5
       [0x06, 0x0b] => Evi_rt_1,
       [0x06, 0x0c] => Evi_rt_2,
       [0x06, 0x0d] => Evi_rt_3,
+      [0x06, 0x0f] => Service_carving_time,  # RFC 9722 section 2.1
     }.freeze
   end
 

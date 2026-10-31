@@ -574,6 +574,23 @@ class Extended_communitiesTest < Test::Unit::TestCase
       ['060b', 'ffffffffffff'],
       ['060c', 'ffffffffffff'],
       ['060d', 'ffffffffffff'],
+      # The last six EVPN communities, each with every reserved bit set
+      # that its own RFC leaves over: RFC 8214 section 3.1's 13 MBZ bits
+      # and 2 reserved octets, RFC 8317 section 6.1's 7 MBZ bits, 2
+      # reserved octets and the low 4 bits of the Leaf label, RFC 8584
+      # section 2.2's RSV bits, 14 unassigned Bitmap bits and 3 reserved
+      # octets, and RFC 9047 section 2's 5 unassigned flag bits and 5
+      # reserved octets.
+      ['0604', 'ffff' + 'ffff' + 'ffff'],
+      ['0605', 'ff'   + 'ffff' + 'ffffff'],
+      ['0606', 'ff'   + 'ffff' + 'ffffff'],
+      ['0608', 'ff'   + 'ffffffff' + 'ff'],
+      # RFC 9722 section 2.1 is the one with no reserved bit anywhere, so
+      # all 48 bits here are its two timestamp fields.
+      ['060f', 'ffffffff' + 'ffff'],
+      # RFC 7432 section 7.8 is the opposite: no fields at all, so all 48
+      # are reserved and come back as one :bits entry.
+      ['030d', 'ffffffffffff'],
       # RFC 4360 sections 2 and 4, RFC 7606 section 7.14: a type the
       # factory does not know keeps its octets as they are.
       ['ffff', '000000000000'],
@@ -585,8 +602,8 @@ class Extended_communitiesTest < Test::Unit::TestCase
       t = ts[0,2].to_i(16)
       [format('%02x%s%s', t, ts[2,2], v), format('%02x%s%s', t | 0x40, ts[2,2], v)]
     }.flatten.uniq
-    # One short of 64: 0xff already has the bit set.
-    assert_equal(63, all.size)
+    # One short of 76: 0xff already has the bit set.
+    assert_equal(75, all.size)
     all.each do |hex|
       ec = Extended_community.factory([hex].pack('H*'))
       assert_equal(hex, ec.to_shex, hex)
