@@ -41,6 +41,8 @@
 require 'test/unit'
 require 'bgp/nlris/evpn'
 require 'bgp/path_attributes/extended_community'
+require 'bgp/path_attributes/mp_reach'
+require 'bgp/nlris/nlri'
 
 class EvpnDocTest < Test::Unit::TestCase
 
@@ -292,6 +294,46 @@ class EvpnDocTest < Test::Unit::TestCase
       BGP::Evpn::Esi.new(0xfe, '001122334455667788')
       BGP::Evpn::Ethernet_tag_id.new(0xffffffff)
     end
+  end
+
+  # The wiring, asserted from the library: both gates resolve SAFI 70
+  # and the framing defers to the family. These are library facts, so a
+  # site reverted fails here as well as in the functional test.
+  def test_the_wiring_sites_resolve_safi_70
+    assert_equal(70, IANA::SAFI::EVPN)
+    assert_equal(25, IANA::AFI::L2VPN)
+    assert_match(/It is wired in now/, doc)
+    # nlri_size defers to the family rather than computing a prefix.
+    octets = ['0119' + '00' * 25].pack('H*')
+    assert_equal(27, BGP::Mp_reach.nlri_size(octets, 25, 70),
+                 'the framing is 2 + Length, not the prefix arithmetic')
+    # The parse gate answers an Evpn.
+    one = BGP::Evpn.new(BGP::Evpn::Ethernet_ad.new([1, 1],
+                                                   BGP::Evpn::Esi.new, 0, 500))
+    assert_instance_of(BGP::Evpn,
+                       BGP::Nlri.factory(one.encode, 25, 70))
+    # The build gate fixes the AFI without being told it.
+    mp = BGP::Mp_reach.new(:safi => 70, :nexthop => '10.0.0.1',
+                           :nlris => [one])
+    assert_equal(25, mp.afi, 'section 7 fixes the AFI, so set does not ask')
+  end
+
+  # RFC 7432 section 14's next hop, and the one thing about it that
+  # differs from every family already wired: the AFI is 25 for both
+  # families, so the field length is the only discriminator.
+  def test_the_next_hop_family_comes_from_the_length
+    assert_match(/the AFI cannot say which family it\s*is/, doc)
+    one = BGP::Evpn.new(BGP::Evpn::Ethernet_ad.new([1, 1],
+                                                   BGP::Evpn::Esi.new, 0, 500))
+    v4 = BGP::Mp_reach.new(:safi => 70, :nexthop => '10.0.0.1',
+                           :nlris => [one])
+    v6 = BGP::Mp_reach.new(:safi => 70, :nexthop => '2001:db8::1',
+                           :nlris => [one])
+    assert_equal([25, 25], [v4.afi, v6.afi], 'AFI 25 either way')
+    assert_equal('10.0.0.1',
+                 BGP::Mp_reach.new(v4.encode.is_packed).nexthops)
+    assert_equal('2001:db8::1',
+                 BGP::Mp_reach.new(v6.encode.is_packed).nexthops)
   end
 
   # Interoperability is not measured yet and the document must not

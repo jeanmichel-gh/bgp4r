@@ -580,15 +580,21 @@ class Path_attribute_Test < Test::Unit::TestCase # :nodoc:
   def wire(hex) [hex.delete(' ')].pack('H*') end
   GOOD = '40010100 4002060201fa56ea01 4003040a000001'
 
-  # A correct MP_REACH for EVPN: AFI 25, SAFI 70 (RFC 7432 section 7),
-  # flags 0x80 as MP_REACH must have, a 4 octet next hop, the reserved
-  # octet, then one Inclusive Multicast Ethernet Tag route, route type 3
-  # with a 17 octet value: an 8 octet RD, a 4 octet Ethernet Tag ID, an
-  # address length of 32 and a 4 octet address (RFC 7432 section 7.3).
-  # bgp4r has no decoder for SAFI 70, so this is a valid attribute it
-  # cannot read.
-  EVPN = '800e1c 0019 46 04 0a000001 00 ' +
-         '03 11 00010a0000010064 00000064 20 0a000001'
+  # A correct MP_REACH for BGP-LS: AFI 16388, SAFI 71 (RFC 9552), flags
+  # 0x80 as MP_REACH must have, a 4 octet next hop, the reserved octet,
+  # then one Link-State NLRI, type 1 with an 8 octet value. bgp4r has no
+  # decoder for SAFI 71, so this is a valid attribute it cannot read.
+  #
+  # **This used to be an EVPN attribute and had to move**, because EVPN
+  # was wired in and the example stopped being one: the four tests below
+  # assert what happens to a family bgp4r *cannot* decode, and SAFI 70
+  # now decodes. The assertions are unchanged; only the family is.
+  # BGP-LS is phase 4 of the breadth plan and so the furthest out, which
+  # makes it the longest-lived choice available. Whoever wires BGP-LS in
+  # will have to move these again, and the same rule applies then:
+  # re-point the example, do not weaken the assertion.
+  UNDECODABLE = '800e15 4004 47 04 0a000001 00 ' +
+                '0001 0008 0000000000000000'
 
   # B9: flags were never checked.
   def test_flags_error_is_reported
@@ -651,25 +657,25 @@ class Path_attribute_Test < Test::Unit::TestCase # :nodoc:
   # attribute came back as an Attr::Raw, and why.
   def test_an_attribute_bgp4r_cannot_decode_is_not_a_protocol_error
     pa = nil
-    assert_nothing_raised { pa = Path_attribute.new(wire(EVPN), :policy=>:strict) }
+    assert_nothing_raised { pa = Path_attribute.new(wire(UNDECODABLE), :policy=>:strict) }
     assert_equal [], pa.errors
     assert_nil pa.action
     assert_equal 1, pa.undecoded.size
     g = pa.undecoded.first
     assert_instance_of BGP::Attr::Gap, g
     assert_equal ATTR::MP_REACH, g.type
-    assert_match(/safi 70/, g.reason)
+    assert_match(/safi 71/, g.reason)
     assert_match(/^attribute 14: bgp4r could not decode it: /, g.to_s)
     assert_kind_of Class, g.error
     assert_instance_of Attr::Raw, pa.attributes.first
     assert_same pa.attributes.first, g.attribute
-    assert_equal EVPN.delete(' '), pa.encode.unpack1('H*')
+    assert_equal UNDECODABLE.delete(' '), pa.encode.unpack1('H*')
   end
 
   # A gap carries nothing the RFC 7606 machinery could act on, so it
   # cannot be mistaken for a Finding or raised on by accident.
   def test_a_gap_is_not_an_rfc_7606_finding
-    g = Path_attribute.new(wire(EVPN)).undecoded.first
+    g = Path_attribute.new(wire(UNDECODABLE)).undecoded.first
     assert_not_kind_of BGP::Attr::Finding, g
     assert !g.respond_to?(:action)
     assert !g.respond_to?(:subcode)
@@ -682,11 +688,12 @@ class Path_attribute_Test < Test::Unit::TestCase # :nodoc:
   # only judge of malformed and runs on the octets whether the decoder
   # succeeds or not, reports the malformation as an error. Here the next
   # hop length of 255 does not fit the attribute, which is malformed
-  # with a session reset (RFC 7606 section 7.11), and the EVPN next hop
+  # with a session reset (RFC 7606 section 7.11), and the BGP-LS next hop
   # is also one bgp4r cannot read. Both are reported, and :strict raises
-  # on the error.
+  # on the error. The family moved from EVPN for the reason UNDECODABLE
+  # records.
   def test_an_attribute_that_is_both_undecodable_and_malformed
-    hex = '800e08 0019 46 ff 0a000001'
+    hex = '800e08 4004 47 ff 0a000001'
     pa = Path_attribute.new(wire(hex))
     assert_equal [[14, 9, :session_reset]], pa.errors.collect { |f| [f.type, f.subcode, f.action] }
     assert_equal 1, pa.undecoded.size
@@ -714,7 +721,7 @@ class Path_attribute_Test < Test::Unit::TestCase # :nodoc:
     assert_equal [], Path_attribute.new(wire(GOOD), true).undecoded
     assert_equal [], Path_attribute.new(Origin.new(0), Next_hop.new('1.1.1.1')).undecoded
     assert_equal [], Path_attribute.new(:origin=>:igp, :next_hop=>'1.1.1.1').undecoded
-    assert_equal [], Path_attribute.new(wire(EVPN), :policy=>:raw).undecoded
+    assert_equal [], Path_attribute.new(wire(UNDECODABLE), :policy=>:raw).undecoded
   end
 
   def test_raw_policy_keeps_every_octet

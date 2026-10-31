@@ -145,6 +145,10 @@ module IANA
     BGP4over6 = 67
     BGP6over4 = 68
     L1_VPN_AUTO_DISCOVERY = 69
+    # RFC 7432 section 11: "IANA has assigned BGP EVPNs a SAFI value of
+    # 70." Carried with AFI 25, L2VPN, which section 7 names in the same
+    # breath: "an AFI of 25 (L2VPN) and a SAFI of 70 (EVPN)".
+    EVPN = 70
     MPLS_VPN_UNICAST = 128
     MPLS_VPN_Multicast = 129
     ROUTE_TARGET_CONSTRAINTS = 132
