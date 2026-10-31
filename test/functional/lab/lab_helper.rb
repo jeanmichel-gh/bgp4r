@@ -275,7 +275,20 @@ module LabHelper
             # Where bgp4r listens, so our side needs no privilege either.
             remote-port = #{@port}
           [neighbors.timers.config]
-            # A caller may give each case its own session, so keep coming back.
+            # These ask the router to come back quickly, for a caller
+            # that gives each case its own session. **GoBGP 3.23.0
+            # ignores both.** Measured on 2026-10-31: asking for
+            # connect-retry 30 instead of 2 does not change the 10 to
+            # 14s it takes to dial back, and asking for
+            # idle-hold-time-after-reset 30 instead of 0 does not
+            # change the 5s it holds a session down before it will
+            # finish an OPEN. Reproduced with a bare TCPServer, so it
+            # is not the harness.
+            #
+            # They stay because they cost nothing and say what is
+            # wanted, and a later GoBGP may honour them. What they do
+            # not do is make a session per case cheap: that is what
+            # fault_matrix.rb --dial is for.
             connect-retry = 2
             idle-hold-time-after-reset = 0
       TOML

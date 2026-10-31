@@ -191,11 +191,25 @@ module BGP
     end
 
     # How long one dial may take, and how long to wait before trying
-    # again. The router may still be tearing down the previous session,
+    # again. The router may still be holding the previous session down,
     # so a refused or unanswered dial is not a failure until
     # connect_timeout is spent.
-    DIAL_TIMEOUT = 3
-    DIAL_RETRY = 0.5
+    #
+    # These two are measured against GoBGP 3.23.0 rather than picked.
+    # It takes the TCP connection at once and then will not finish the
+    # OPEN exchange until 5s after the previous session ended, so 5s is
+    # the floor and the only question is how closely these hit it:
+    #
+    #   1 and 0.25     5.02s     <- here
+    #   3 and 0.5      7.01s
+    #   0.5 and 0.1    5.42s     polling harder overshoots
+    #
+    # 5s is also GoBGP's default idle-hold-time-after-reset, which it
+    # ignores from the config: asking for 0 or for 30 moves nothing.
+    # So the floor is the router's and not ours to set. Measured
+    # 2026-10-31, and do not tighten these without re-measuring.
+    DIAL_TIMEOUT = 1
+    DIAL_RETRY = 0.25
 
     def dial_session
       close_session
