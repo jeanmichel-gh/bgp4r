@@ -110,10 +110,43 @@ jobs:
   # The lab topologies in Docker Compose: real containers, real addresses,
   # TCP 179 bound by the non-root user. See lab/README.md. Plus the fault
   # matrix against a native gobgpd, which needs no container.
+  # The lab tests, a job per group. They used to run as one serial suite,
+  # which made this job the sum of every file and the whole workflow's
+  # clock: 12m42s on 95fe87b where no other job reached 50s. They are
+  # independent, so the cost is the slowest group now and not the total.
+  #
+  # **The grouping is in test/lab_groups.rb and not here**, because a
+  # list in this file would let a new lab test run in no job at all, and
+  # a job that runs nothing exits 0 and reads as a pass.
+  # test/unit/lab_groups_test.rb fails the unit suite until every file
+  # under test/functional/lab is in exactly one group, so the two cannot
+  # drift apart. Add a group there and it needs an entry below; the same
+  # test is what catches a name changed in one place and not the other,
+  # since run_lab.rb raises on a group it does not know.
   lab:
-    name: lab topologies
+    name: lab ${{ matrix.group }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Docker Compose topologies. The fault matrix here is the
+          # GoBGP **4** measurement, where gobgp-matrix is GoBGP 3.
+          - group: compose
+            docker: true
+          - group: gobgp-matrix
+            gobgp: true
+          - group: gobgp-families
+            gobgp: true
+          - group: gobgp-router
+            gobgp: true
+          - group: frr
+            frr: true
+          # No router binary and no Docker, and the one group that runs
+          # a second step: fib_test needs CAP_NET_ADMIN.
+          - group: local
+            netns: true
     env:
       # The version the native fault matrix runs against. The Compose
       # topology pins a 4.x image, so pinning 3.x here measures both, and
@@ -127,9 +160,9 @@ jobs:
         with:
           ruby-version: '3.4'
           bundler-cache: true
-      # For test/functional/lab/fault_matrix_native_test.rb. Two binaries on
-      # PATH, no container: the test puts both ends of the session on ports
-      # of their own, so nothing here needs sudo or
+      # For the gobgp groups. Two binaries on PATH, no container: the
+      # tests put both ends of the session on ports of their own, so
+      # nothing here needs sudo or
       # net.ipv4.ip_unprivileged_port_start.
       #
       # The checksum is not ceremony. This is a third party binary going
@@ -138,6 +171,7 @@ jobs:
       # the amd64 tarball was fetched, and it still fails when that one does
       # not match, or when nothing in the file was verified at all.
       - name: Install gobgpd
+        if: matrix.gobgp
         run: |
           base=https://github.com/osrg/gobgp/releases/download/v$GOBGP_VERSION
           tarball=gobgp_${GOBGP_VERSION}_linux_amd64.tar.gz
@@ -149,13 +183,14 @@ jobs:
           tar -xzf "$tarball" gobgp gobgpd
           echo "$RUNNER_TEMP/gobgp" >> "$GITHUB_PATH"
           ./gobgpd --version
-      # For test/functional/lab/fault_matrix_frr_test.rb. Ubuntu packages
-      # FRR, and 24.04's build is 8.4.4, which is the version that test
-      # asserts against. No container and no zebra: bgpd runs standalone
-      # on loopback, with -S so it keeps the invoking user and needs no
-      # privilege. The daemons are not started as a service, and must not
-      # be: the test runs its own bgpd on ports of its own.
+      # For the frr group. Ubuntu packages FRR, and 24.04's build is
+      # 8.4.4, which is the version those tests assert against. No
+      # container and no zebra: bgpd runs standalone on loopback, with
+      # -S so it keeps the invoking user and needs no privilege. The
+      # daemons are not started as a service, and must not be: the
+      # tests run their own bgpd on ports of their own.
       - name: Install FRR
+        if: matrix.frr
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends frr
@@ -163,10 +198,12 @@ jobs:
       - name: Lab tests
         shell: bash
         env:
-          LAB_REQUIRE_DOCKER: '1' # fail, don't skip, if compose is missing
-          LAB_REQUIRE_GOBGPD: '1' # fail, don't skip, if gobgpd is missing
-          LAB_REQUIRE_FRR: '1'    # fail, don't skip, if FRR bgpd is missing
-        run: bundle exec ruby test/run_lab.rb 2>&1 | tee test.log
+          # Per group, so a group flunks only for the binary it needs.
+          # Each means fail, do not skip, if that dependency is missing.
+          LAB_REQUIRE_DOCKER: ${{ matrix.docker && '1' || '' }}
+          LAB_REQUIRE_GOBGPD: ${{ matrix.gobgp && '1' || '' }}
+          LAB_REQUIRE_FRR: ${{ matrix.frr && '1' || '' }}
+        run: bundle exec ruby test/run_lab.rb ${{ matrix.group }} 2>&1 | tee test.log
       # The FIB test is the one lab test that needs a capability rather
       # than a binary: creating a network namespace needs CAP_NET_ADMIN, so
       # it omits itself in the step above, which runs unprivileged. Run it
@@ -177,6 +214,7 @@ jobs:
       # sudo drops the environment, so PATH has to be carried in or the
       # ruby from setup-ruby is not the one that runs.
       - name: FIB in a network namespace
+        if: matrix.netns
         shell: bash
         run: |
           sudo -E env "PATH=$PATH" LAB_REQUIRE_NETNS=1 \
