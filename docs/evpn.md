@@ -496,24 +496,36 @@ the one place in the family where there is no in-band discriminator to
 prefer instead. A body that is neither size is read as IPv4, will not
 reproduce its octets, and falls back to `Unknown`.
 
-**Three of RFC 9136's rules are receive-side and belong to part 9, not
-here.** All three are stated as RFC 7606 treat-as-withdraw, so they are
-error handling rather than policy, and none changes an octet:
+**Three of RFC 9136's rules are receive-side and belong in
+`validation.rb`.** All three are stated as RFC 7606 treat-as-withdraw,
+so they are error handling rather than policy, and none changes an
+octet. One of the three landed with part 9 and two did not:
 
 * section 3.1: "If the received MPLS label value is zero, the route MUST
   contain an Overlay Index ... If the received label is zero and the
   route does not contain an Overlay Index, it MUST be 'treat as
-  withdraw'".
+  withdraw'". **Needs another attribute**, see below.
 * section 3.2: the ESI and the GW IP "MUST NOT both be non-zero at the
   same time. A route containing a non-zero GW IP and a non-zero ESI (at
-  the same time) SHOULD be treat as withdraw".
+  the same time) SHOULD be treat as withdraw". **Checked**, section 8a.
 * section 3.2: "A route where ESI, GW IP, MAC, and Label are all zero at
-  the same time SHOULD be treat as withdraw."
+  the same time SHOULD be treat as withdraw." **Needs another
+  attribute**.
 
-Note the complication before part 9 starts on them: the third reads the
-**EVPN Router's MAC Extended Community**, which is a different path
-attribute, so it is not a check `validation.rb` can make from the
-MP_REACH octets alone. Two of the three are SHOULD rather than MUST.
+**Two of the three need the EVPN Router's MAC Extended Community, not
+one, and an earlier version of this document said it was the third
+alone.** Section 3.2 is where that comes apart: an Overlay Index "can be
+an ESI or IP address in the address space of the tenant or MAC address",
+and it "is indicated along with the RT-5 in the ESI field, GW IP field,
+or EVPN Router's MAC Extended Community". So "the route does not contain
+an Overlay Index" in the first rule cannot be decided without reading
+that community, exactly as the third cannot. Table 1 of section 3.2
+lists every combination the specification allows and has a MAC column
+for this reason. Both are therefore cross-attribute checks, which
+`validation.rb` does not do: `Attr::Check.attribute` is handed one
+attribute's octets, which is the same reason the missing well-known
+mandatory check is not there either. Two of the three are SHOULD rather
+than MUST.
 
 **Route key, for the record and not for implementing**: section 3.1 says
 "The RD, Ethernet Tag ID, IP prefix length, and IP prefix are part of
@@ -630,12 +642,25 @@ carries its six octets and does not split them, since the layout it is
 told to copy does not fit in them; its hash key is `:value` and that is
 what would move if the 18-octet reading is ever settled.
 
-Two receive-side rules in those sections are **part 9's work** and
-nothing here enforces them, per Conventions: section 9.4's "if both M
-and I flags are 0, the router MUST treat this update as malformed", and
-section 9.5's treat-as-withdraw for a route carrying no EVI-RT EC or
-more than one. Building either is a negative test and must stay
-possible.
+Two receive-side rules in those sections are **still to do** and
+nothing here enforces them, per Conventions. They are not in part 9
+because neither is about the EVPN NLRI:
+
+* section 9.4: "When a router receives a BGP update, if both M and I
+  flags are 0, the router MUST treat this update as malformed. The
+  receiver of such an update MUST ignore the extended community." Those
+  two sentences ask for different things, and the second is narrower than
+  any action RFC 7606 has a name for: bgp4r's granularity is the
+  attribute, and the RFC asks a receiver to ignore one community inside
+  it. Worth settling before implementing rather than rounding to
+  attribute discard.
+* section 9.5: an IGMP Membership Report Synch or Leave Synch route
+  "MUST carry exactly one EVI-RT EC", and section 9.6 the same for the
+  ES-Import Route Target. **Cross-attribute**: knowing the route type
+  needs the MP_REACH and counting the communities needs the extended
+  communities attribute, so `validation.rb` cannot see both at once.
+
+Building either is a negative test and must stay possible.
 
 ### The six of part 8b
 
@@ -801,18 +826,99 @@ that disagrees with the octets it came with. A Length that lies is kept
 in `declared_len` and written back, so a malformed capture replays byte
 for byte.
 
-The receive side checks go in `bgp/path_attributes/validation.rb` and
-nowhere else, and arrive with part 9. They will reuse `Evpn.nlri_size`
-and `Evpn::ROUTES` rather than copying either, the way
-`flow_spec_finding` reuses `Flow_spec.nlri_size` and
-`Flow_spec::COMPONENTS`, so a route type class added to the library
-stops being unknown to validation the same day.
-
 The two constructor refusals that do exist are the one Conventions
 allows: an `Esi` built from an Integer of 80 bits or more, and an
 `Ethernet_tag_id` of more than 32 bits, because the alternative is
 silently sending a different value. Both have an octet level route that
 stays open.
+
+## 8a. What validates on the way in
+
+`bgp/path_attributes/validation.rb` and nowhere else, per Conventions,
+reached as `evpn_finding` from both the MP_REACH and the MP_UNREACH arm.
+It reuses `Evpn.nlri_size` for the framing and takes each route type
+number from the class that defines it, so neither can drift from what
+the library encodes.
+
+**Where the action and the subcode come from, because the route type
+RFCs mostly do not say.** RFC 7432 and RFC 9572 contain no error
+handling text at all: neither says "malformed", neither mentions RFC
+7606. Measured, not assumed. RFC 9251 section 9.7, "BGP Error
+Handling", is the only EVPN RFC that does, and what it says agrees with
+what bgp4r already gives a malformed MP_REACH: "If a received BGP update
+is malformed such that BGP route keys cannot be extracted, then the BGP
+update MUST be considered invalid. The receiving PE MUST apply the
+'session reset' procedure per [RFC7606]."
+
+So a framing or length fault is subcode 9 with a session reset, the same
+as the two MP_REACH findings that were already there and for the same
+reason, RFC 7606 section 7.11. Where a route type's own RFC names
+treat-as-withdraw instead, that wins, which is RFC 7606 section 3
+working as intended. The eight checks:
+
+| What | Action | Said in |
+|---|---|---|
+| fewer than 2 octets left for a Route Type and Length | session reset | RFC 7432 section 7 framing, RFC 7606 section 7.11 |
+| a Length that runs past the attribute | session reset | the same |
+| route type 5 whose body is neither 34 nor 58 octets | session reset | RFC 9136 section 3.1 states the lengths and names no action |
+| route type 5 with an IP prefix length above 128 | session reset | RFC 9136 section 3.1 states the bound and names no action |
+| route type 5 with a non-zero ESI and a non-zero GW IP | treat as withdraw | RFC 9136 section 3.2, in those words |
+| route type 6 too short to hold its route key | session reset | RFC 9251 section 9.7 |
+| route type 6 whose address length field runs past the route | session reset | RFC 9251 section 9.7 |
+| route type 6 with no IGMP version flag set | treat as withdraw | RFC 9251 section 4.1, in those words |
+
+**An unknown route type is not reported, where an unknown flow spec
+component type is.** That asymmetry is the RFCs' and not an oversight:
+RFC 8955 section 4.2 says in so many words that an NLRI containing an
+unknown component type "is considered malformed", and no EVPN RFC says
+anything of the kind about a route type outside its own. So an
+unregistered type keeps its octets as an `Evpn::Unknown` and is reported
+nowhere, which is also RFC 4271 section 5's posture toward what a
+receiver does not recognize. Adding it would make bgp4r call a correct
+router malformed the day IANA assigns type 12.
+
+**Two of the eight run on an MP_REACH only, and the reason is the route
+key.** The fields they read are explicitly not part of it: RFC 9136
+section 3.1 says only "The RD, Ethernet Tag ID, IP prefix length, and IP
+prefix are part of the route key", and RFC 9251 section 9.1 says "all
+the fields are considered to be part of the prefix in the NLRI, except
+for the 1-octet Flags field". A withdrawal names a route key, so what it
+carries in the other fields is don't-care. The version flag rule is the
+one where checking a withdrawal would be actively wrong rather than
+merely noisy: section 4.1 asks a PE to withdraw the route rather than
+re-advertise it with the flags reset, so bgp4r would be reporting the
+very withdrawal the RFC asked for.
+
+**What is deliberately not checked, and why**, so the next reader does
+not take the list above for the whole of the RFCs:
+
+* RFC 9136 section 3.1's zero-label rule and section 3.2's all-zero
+  rule, both **cross-attribute**: each turns on whether an EVPN Router's
+  MAC Extended Community is present, which `validation.rb` cannot see
+  from the MP_REACH octets. Section 6 above has the detail.
+* RFC 9251 section 9.4's M-and-I rule and section 9.5's exactly-one
+  EVI-RT rule, for the reasons section 7 gives: the first asks for an
+  action RFC 7606 has no name for, the second is cross-attribute.
+* RFC 9136 Table 1's note that the route "MUST be treat as withdraw in
+  case of an invalid MAC address", broadcast or multicast, in the EVPN
+  Router's MAC Extended Community. That one is **within** the extended
+  communities attribute, so it is checkable, and it is the best
+  candidate for the next piece of work here.
+* RFC 9251 section 10: "IGMPv1 routes are considered invalid, and the PE
+  MUST apply the 'treat-as-withdraw' procedure." Read and left alone,
+  because the section does not say which routes those are: whether a
+  route with v1 and v2 both set is an IGMPv1 route is not stated, and
+  guessing would be inventing a rule rather than implementing one.
+* The three length-prefixed addresses of route types 6 to 8 beyond the
+  bound check. A length field claiming more octets than are left is
+  malformed under any reading of the bit count, which is why that one is
+  reported; ruling on the count itself is not, because RFC 6514 section
+  4.3 gives 32 and 128 and calls other values "outside the scope", so
+  bgp4r echoes any of them.
+* Route types 7 and 8's Flags octet against the version rule. They carry
+  the same octet as route type 6, but RFC 9251 states the rule in SMET's
+  own processing section, section 4.1, and nowhere else. Sections 6 and 7
+  are the multihoming procedures and say nothing about it.
 
 ## 9. Interoperability
 
@@ -828,7 +934,12 @@ preceded it had two wrong rows that read as verified for months.
 `test/unit/evpn_doc_test.rb` keeps this document and the library in
 step. It checks the framing constants, the primitive widths, the
 bits-not-octets claims, the route type 5 arithmetic, the two refusals,
-and the extended community counts.
+the extended community counts, the section 7b bit-number table, and
+section 8a's seven checks with their actions.
+
+Section 8a's table is read out of this document and run against
+`Attr::Check`, so a row claiming an action the library does not give
+fails, and so does a check the library makes that has no row.
 
 The route type table in section 3 is **discovered**, not listed: the
 test enumerates the `Evpn::Route` subclasses the library actually

@@ -830,8 +830,18 @@ class Mp_reach_Test < Test::Unit::TestCase
   # An unknown SAFI still raises, and that raise is what makes
   # Path_attribute keep the octets as an Attr::Raw with an Attr::Gap.
   # Wiring flow spec in must not have changed that for anything else.
+  #
+  # **This test used AFI 25 SAFI 70 as its unimplemented family, and
+  # that expired.** #185 wired EVPN in, so those octets decode now, and
+  # EVPN validation then found the NLRI list malformed as well. The
+  # family moved to BGP-LS, AFI 16388 SAFI 71, which is phase 4 and so
+  # the furthest out; every assertion below is unchanged. Two of #116's
+  # tests needed the same move in #185 and `path_attribute_test.rb`
+  # keeps the same family in its UNDECODABLE constant. Whoever wires
+  # BGP-LS in will have to move all of them again, and the rule is the
+  # same then: re-point the example, do not weaken the assertion.
   def test_an_unimplemented_safi_still_raises_so_the_octets_survive
-    hex = '800e0e' + '001946' + '04' + '0a000001' + '00' + '0102030405'
+    hex = '800e0e' + '400447' + '04' + '0a000001' + '00' + '0102030405'
     pa = BGP::Path_attribute.new([hex].pack('H*').is_packed)
     assert_equal([BGP::Attr::Raw], pa.attributes.collect(&:class))
     assert_equal(hex, pa.to_shex)

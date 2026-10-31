@@ -292,6 +292,182 @@ class TestAttrCheck < Test::Unit::TestCase
     assert_equal [], check('800f05 000104 18c00002')
   end
 
+  # EVPN, AFI 25 SAFI 70. Every hex string below was built with the
+  # library and read back before it was pasted here, rather than typed
+  # from the layout.
+  #
+  # **Where the action and the subcode come from, because the route type
+  # RFCs mostly do not say.** RFC 7432 and RFC 9572 carry no error
+  # handling text at all. RFC 9251 section 9.7 is the only EVPN RFC that
+  # does, and it agrees with what bgp4r already gives a malformed
+  # MP_REACH: a route key that cannot be extracted means "the 'session
+  # reset' procedure per [RFC7606]". Where a route type's own RFC names
+  # treat-as-withdraw instead, that wins.
+
+  # A well formed EVPN route is not reported, which is what the rest of
+  # these are measured against. All eleven route types reach here and
+  # only two have rules, so most of this list is the no-rules path.
+  def test_good_evpn_routes_have_no_findings
+    [ # route type 1, RFC 7432 section 7.1
+      '800e24 001946 04 0a000001 00 0119 00000064000000c8 00000000000000000000 00000000 000641',
+      # route type 5 with IPv4 addresses, RFC 9136 section 3.1
+      '800e2d 001946 04 0a000001 00 0522 00000064000000c8 00000000000000000000 00000000 08 0a000000 00000000 001f41',
+      # and with IPv6 ones, the 58 octet form
+      '800e45 001946 04 0a000001 00 053a 00000064000000c8 00000000000000000000 00000000 20 20010db8000000000000000000000000 ' \
+        '00000000000000000000000000000000 001f41',
+      # route type 5 with an ESI and no GW IP, which section 3.2 allows
+      '800e2d 001946 04 0a000001 00 0522 00000064000000c8 00000000000000000001 00000000 08 0a000000 00000000 001f41',
+      # route type 6 with its v2 flag set, RFC 9251 section 9.1
+      '800e23 001946 04 0a000001 00 0618 00000064000000c8 00000000 00 20 ef010101 20 0a000001 02',
+      # route type 11, whose Route Key is an NLRI of its own
+      '800e29 001946 04 0a000001 00 0b1e 0a17 0000000100000001 00000000 00 20 ef010101 20 0a000001 20 0a000002',
+      # two routes in one attribute
+      '800e69 001946 04 0a000001 00 0522 00000064000000c8 00000000000000000000 00000000 08 0a000000 00000000 001f41 ' \
+        '053a 00000064000000c8 00000000000000000000 00000000 20 20010db8000000000000000000000000 ' \
+        '00000000000000000000000000000000 001f41',
+      # a withdrawal, which is the other parse loop
+      '800f1d 001946 0618 00000064000000c8 00000000 00 20 ef010101 20 0a000001 02',
+      # **and an unregistered route type, which is not an error.** No
+      # EVPN RFC says a route type outside its own is malformed, where
+      # RFC 8955 section 4.2 says exactly that about a flow spec
+      # component type. Types 12 to 255 are unassigned, so reporting one
+      # would call a correct router malformed the day IANA assigns it.
+      '800e0f 001946 04 0a000001 00 0c04 01020304',
+    ].each { |hex| assert_equal [], check(hex), hex }
+  end
+
+  # The RFC 7432 section 7 framing, which is Evpn.nlri_size rather than
+  # a second copy of the rule.
+  def test_evpn_nlri_framing
+    short = '800e25 001946 04 0a000001 00 0119 00000064000000c8 00000000000000000000 00000000 000641 05'
+    assert_equal [[9, RESET]], check(short)
+    assert_equal '1 octet left, too few for an EVPN Route Type and Length (RFC 7432 section 7)',
+                 reason(short)
+    past = '800e24 001946 04 0a000001 00 01ff 00000064000000c8 00000000000000000000 00000000 000641'
+    assert_equal [[9, RESET]], check(past)
+    assert_equal 'EVPN NLRI of 257 octets runs past the attribute, 27 left (RFC 7432 section 7)',
+                 reason(past)
+    # and the same through MP_UNREACH, whose loop is a separate copy
+    assert_equal [[9, RESET]],
+                 check('800f1e 001946 01ff 00000064000000c8 00000000000000000000 00000000 000641')
+  end
+
+  # RFC 9136 section 3.1: "The Length field of the BGP EVPN NLRI for an
+  # EVPN IP Prefix route MUST be either 34 (if IPv4 addresses are
+  # carried) or 58 (if IPv6 addresses are carried)." The two sizes come
+  # from the class, so they cannot drift from what it encodes.
+  def test_an_evpn_ip_prefix_route_of_the_wrong_length
+    hex = '800e2c 001946 04 0a000001 00 0521 00000064000000c8 00000000000000000000 00000000 08 0a000000 00000000 001f'
+    assert_equal [[9, RESET]], check(hex)
+    assert_equal 'EVPN IP Prefix route of 33 octets, must be 34 or 58 (RFC 9136 section 3.1)',
+                 reason(hex)
+    assert_equal [34, 58], [BGP::Evpn::Ip_prefix_route::SIZE_V4,
+                            BGP::Evpn::Ip_prefix_route::SIZE_V6]
+  end
+
+  # RFC 9136 section 3.1: the IP prefix length "specifies the number of
+  # bits in the prefix. The value MUST NOT be greater than 128." The
+  # section names no receiver action, so the generic MP_REACH one
+  # applies, and the prefix length is part of the route key, so this
+  # fires on a withdrawal too.
+  def test_an_evpn_ip_prefix_length_over_128
+    hex = '800e2d 001946 04 0a000001 00 0522 00000064000000c8 00000000000000000000 00000000 c8 0a000000 00000000 001f41'
+    assert_equal [[9, RESET]], check(hex)
+    assert_equal 'IP prefix length 200, must not be greater than 128 (RFC 9136 section 3.1)',
+                 reason(hex)
+    assert_equal [[9, RESET]],
+                 check('800f27 001946 0522 00000064000000c8 00000000000000000000 00000000 c8 0a000000 00000000 001f41')
+  end
+
+  # RFC 9136 section 3.2: "The ESI and GW IP fields may both be zero at
+  # the same time. However, they MUST NOT both be non-zero at the same
+  # time. A route containing a non-zero GW IP and a non-zero ESI (at the
+  # same time) SHOULD be treat as withdraw [RFC7606]."
+  def test_an_evpn_ip_prefix_route_with_both_an_esi_and_a_gw_ip
+    hex = '800e2d 001946 04 0a000001 00 0522 00000064000000c8 00000000000000000001 00000000 08 0a000000 0a000009 001f41'
+    assert_equal [[9, TAW]], check(hex)
+    assert_equal 'a non-zero ESI and a non-zero GW IP at the same time (RFC 9136 section 3.2)',
+                 reason(hex)
+    # **Not on a withdrawal.** Section 3.1 says only "The RD, Ethernet
+    # Tag ID, IP prefix length, and IP prefix are part of the route key",
+    # so a withdrawal's ESI and GW IP are don't-care and reporting them
+    # would be reporting a correct withdrawal.
+    assert_equal [],
+                 check('800f27 001946 0522 00000064000000c8 00000000000000000001 00000000 08 0a000000 0a000009 001f41')
+  end
+
+  # RFC 9251 section 4.1: "the received EVPN route MUST have at least one
+  # version flag set. If all version flags are reset, it is an error
+  # because the PE should have received an EVPN route withdraw for the
+  # last version flag. An error MUST be considered as a BGP error, and
+  # the PE MUST apply the 'treat-as-withdraw' procedure per [RFC7606]."
+  def test_an_evpn_smet_route_with_no_version_flag
+    hex = '800e23 001946 04 0a000001 00 0618 00000064000000c8 00000000 00 20 ef010101 20 0a000001 00'
+    assert_equal [[9, TAW]], check(hex)
+    assert_equal 'an EVPN SMET route with no IGMP version flag set (RFC 9251 section 4.1)',
+                 reason(hex)
+    # **Not on a withdrawal, and this one matters most.** Section 4.1
+    # asks a PE to withdraw the route rather than re-advertise it with
+    # the flags reset, and section 9.1 says the Flags octet is not part
+    # of the prefix in the NLRI. So checking an MP_UNREACH here would
+    # report the very withdrawal the RFC asked for.
+    assert_equal [],
+                 check('800f1d 001946 0618 00000064000000c8 00000000 00 20 ef010101 20 0a000001 00')
+    # The flag mask is the class's own, so it cannot drift from what the
+    # route encodes.
+    assert_equal 0x07, BGP::Evpn::Flags::V1 | BGP::Evpn::Flags::V2 | BGP::Evpn::Flags::V3
+  end
+
+  # RFC 9251 section 9.7: a route key that cannot be extracted gets the
+  # session reset procedure. Two ways an SMET route reaches that.
+  def test_an_evpn_smet_route_too_short_for_its_route_key
+    hex = '800e17 001946 04 0a000001 00 060c 00000064000000c8 00000000'
+    assert_equal [[9, RESET]], check(hex)
+    assert_equal 'EVPN SMET route of 12 octets, too few for its route key, which needs 16 (RFC 9251 section 9.7)',
+                 reason(hex)
+    # A length field claiming more octets than are left. 200 bits is at
+    # least 25 octets under any reading of the bit count, which is what
+    # makes this safe to report where ruling on the count itself would
+    # not be: RFC 6514 section 4.3 gives 32 and 128 and calls other
+    # values "outside the scope", so bgp4r echoes any of them.
+    lying = '800e23 001946 04 0a000001 00 0618 00000064000000c8 00000000 c8 20 ef010101 20 0a000001 02'
+    assert_equal [[9, RESET]], check(lying)
+    assert_equal 'EVPN SMET route address 1 runs past the route, leaving no Flags octet (RFC 9251 section 9.7)',
+                 reason(lying)
+    assert_equal 16, BGP::Evpn::Selective_multicast::FIXED_SIZE
+  end
+
+  # The prefix families and flow spec must be untouched by all of the
+  # above, and an EVPN route must not be flow spec checked either.
+  def test_the_other_families_are_not_evpn_checked
+    assert_equal [], check('800e0d 000101 04 0a000001 00 18c00002')
+    assert_equal [], check('800f05 000102 18c00002')
+    # AFI 25 with a SAFI that is not 70: these rules do not apply, so a
+    # VPLS NLRI is not read as an EVPN route.
+    assert_equal [], check('800f05 001941 18c00002')
+    # and a flow spec rule is still flow spec checked, not EVPN checked
+    assert_equal [[9, RESET]], check('800e0f 000185 0000 09 0119c00002 80638105')
+    assert_equal 'unknown flow spec component type 99 (RFC 8955 section 4.2)',
+                 reason('800e0f 000185 0000 09 0119c00002 80638105')
+  end
+
+  # Building a route no RFC allows must still work, per Conventions:
+  # validation is receive side and nothing on the way out refuses this.
+  def test_building_an_evpn_route_no_rfc_allows_still_works
+    r = BGP::Evpn::Ip_prefix_route.new([100, 200], BGP::Evpn::Esi.new(1), 0,
+                                       '10.0.0.0/8', '10.0.0.9', 500)
+    assert_equal 34, r.encode.size
+    s = BGP::Evpn::Selective_multicast.new([100, 200], 0, nil, '239.1.1.1', '10.0.0.1')
+    assert_equal 0, s.flags.value
+    # And the attribute carrying one replays byte for byte, so bgp4r
+    # reports the fault without changing an octet.
+    hex = '800e2d001946040a00000100052200000064000000c80000000000000000000100000000080a0000000a000009001f41'
+    pa = BGP::Path_attribute.new([hex].pack('H*').is_packed)
+    assert_equal hex, pa.to_shex
+    assert_equal 1, pa.errors.size
+    assert_equal [], pa.undecoded, 'the route decodes, so this is not a coverage gap'
+  end
+
   # The reason of the one finding for hex, so a test can assert which
   # rule fired rather than only that something did.
   def reason(hex)

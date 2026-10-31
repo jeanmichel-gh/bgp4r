@@ -79,7 +79,8 @@ docs/                    protocol-testing.md: using bgp4r to test a router
                          are asserted by test/unit/flow_spec_doc_test.rb
                          evpn.md: RFC 7432 and six more RFCs on the wire. Read it
                          before touching evpn_route.rb or evpn.rb, before adding a
-                         route type or an EVPN extended community, and before
+                         route type or an EVPN extended community, before touching
+                         the EVPN checks in validation.rb, and before
                          changing how mp_reach.rb and mp_unreach.rb frame an NLRI.
                          Its load bearing claims are asserted by
                          test/unit/evpn_doc_test.rb, which **discovers** the route
@@ -163,7 +164,9 @@ ruby -I. test/functional/flow_spec_test.rb
 
 The same for an EVPN UPDATE, AFI 25 SAFI 70, and the only test that
 proves its five wiring sites agree. It also carries the one case that
-puts an NLRI inside an NLRI, route type 11's Route Key. About a second:
+puts an NLRI inside an NLRI, route type 11's Route Key, and the only
+place the receive side checks run on octets that crossed a socket
+rather than ones a test wrote. About a second:
 ```
 ruby -I. test/functional/evpn_test.rb
 ```
@@ -244,7 +247,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. A `lab` job runs the Compose topologies, and installs a `gobgpd` release so the native fault matrix runs there too; it pins 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-10-30: 1703 tests, 24733 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.1%.
+Baseline on 2026-10-30: 1716 tests, 24822 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.1%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -1758,19 +1761,19 @@ Two consequences, both of which change the plan rather than decorate it:
        `[0x80,0x08]`, `[0x81,0x08]` and `[0x82,0x08]`, the section 7.4
        redirect-to-VRF encodings, so nothing there is affected. Checked
        on 2026-10-30.
-3. **EVPN, SAFI 70, RFC 7432 and six more. Parts 1 to 8 done**, so all
+3. **EVPN, SAFI 70, RFC 7432 and six more. Parts 1 to 9 done**, so all
    eleven route types read and write on the wire, an EVPN UPDATE
-   crosses a session, and **every EVPN extended community with an RFC
-   behind it is in**: all eleven, five with RFC 9251 and six with the
-   rest. Parts 9 and 10 are left, validation and the lab. Ten parts,
-   planned on 2026-10-30 from eleven RFCs read in full, attached to the
-   session rather than fetched.
+   crosses a session, **every EVPN extended community with an RFC
+   behind it is in** (all eleven, five with RFC 9251 and six with the
+   rest), and a malformed route is reported on receive. Only part 10 is
+   left, the lab. Ten parts, planned on 2026-10-30 from eleven RFCs
+   read in full, attached to the session rather than fetched.
 
    By the measure this plan set itself, which is the wire and not the
-   table, the family is done: bgp4r parses an EVPN capture, replays it
-   byte for byte, and builds one from field values that no RFC allows.
-   What parts 9 and 10 add is reporting a malformed route on receive and
-   a second implementation's opinion of what we send.
+   table, the family was done at part 5: bgp4r parses an EVPN capture,
+   replays it byte for byte, and builds one from field values that no
+   RFC allows. What part 10 adds is a second implementation's opinion
+   of what we send.
 
    **Two counts in the earlier version of this entry were wrong, and
    both were wrong by reading one RFC where the registry spans seven.**
@@ -2359,11 +2362,89 @@ Two consequences, both of which change the plan rather than decorate it:
           guard working. It was re-pointed at the new truth rather than
           weakened, the same way #185 re-pointed #116's undecodable
           family from EVPN to BGP-LS.
-   9. **Validation**, in `validation.rb` and nowhere else per
-      Conventions, reusing the family's own tables the way
-      `flow_spec_finding` reuses `Flow_spec.nlri_size` and
-      `Flow_spec::COMPONENTS`, so a route type class added to the
-      library stops being unknown the same day.
+   9. **Validation. Done**, in #191, in `validation.rb` and nowhere
+      else per Conventions. `evpn_finding` is reached from both the
+      MP_REACH and the MP_UNREACH arm, reuses `Evpn.nlri_size` for the
+      framing and takes each route type number from the class that
+      defines it. Eight checks; `docs/evpn.md` section 8a is the guide
+      and has them in a table the doc test reads.
+      * **Three of the eleven route type RFCs were measured for error
+        handling text and two have none at all.** RFC 7432 and RFC 9572
+        never say "malformed" and never mention RFC 7606. **RFC 9251
+        section 9.7, "BGP Error Handling", is the only EVPN RFC that
+        does**, and what it says agrees with what bgp4r already gives a
+        malformed MP_REACH: "If a received BGP update is malformed such
+        that BGP route keys cannot be extracted, then the BGP update
+        MUST be considered invalid. The receiving PE MUST apply the
+        'session reset' procedure per [RFC7606]." So the framing and
+        length findings are subcode 9 with a session reset, citing RFC
+        7606 section 7.11 as the two MP_REACH findings already there
+        do, and the two that a route type's own RFC calls
+        treat-as-withdraw get that instead, which is RFC 7606 section 3
+        working as intended. **Inventing a subcode was the trap here**,
+        the same one flow spec part 4 recorded.
+      * **An unknown route type is reported nowhere, where an unknown
+        flow spec component type is malformed.** The asymmetry is the
+        RFCs' and is worth knowing before anyone "fixes" it: RFC 8955
+        section 4.2 says in so many words that an NLRI with an unknown
+        component type "is considered malformed", and no EVPN RFC says
+        anything of the kind. Types 12 to 255 are unassigned, so
+        reporting one would make bgp4r call a correct router malformed
+        the day IANA assigns type 12. A test pins the decision, and
+        sabotaging it to report one fails.
+      * **Two of the eight run on an MP_REACH only, and the route key
+        is the reason.** RFC 9136 section 3.1 says only "The RD,
+        Ethernet Tag ID, IP prefix length, and IP prefix are part of
+        the route key", and RFC 9251 section 9.1 says "all the fields
+        are considered to be part of the prefix in the NLRI, except for
+        the 1-octet Flags field". So a withdrawal's ESI, GW IP and
+        Flags are don't-care. The version flag rule is the one where
+        checking a withdrawal would be **actively wrong** rather than
+        noisy: section 4.1 asks a PE to withdraw the route rather than
+        re-advertise it with the flags reset, so bgp4r would report the
+        very withdrawal the RFC asked for. Both guards are sabotaged
+        and both fail when removed.
+      * **A correction to `docs/evpn.md`, which part 4 had wrong.** It
+        said one of RFC 9136's three treat-as-withdraw rules needs the
+        EVPN Router's MAC Extended Community. **Two do.** Section 3.2
+        lets an Overlay Index be "an ESI or IP address in the address
+        space of the tenant or MAC address", and says it is indicated
+        "in the ESI field, GW IP field, or EVPN Router's MAC Extended
+        Community", so the zero-label rule cannot be decided without
+        reading that community either. Both are cross-attribute and
+        `Attr::Check.attribute` is handed one attribute at a time,
+        which is the same reason the missing well-known mandatory check
+        is not there. Only section 3.2's ESI-and-GW-IP rule is in.
+      * **Two tests elsewhere had examples that expired, and both were
+        re-pointed rather than weakened.**
+        `mp_reach_test.rb`'s `test_an_unimplemented_safi_still_raises`
+        used AFI 25 SAFI 70, which stopped being unimplemented at #185;
+        it now uses BGP-LS, as #116's two tests already do, and every
+        assertion is unchanged. And the doc test's "the three RFC 9136
+        rules are still to do" assertion failed the moment one landed,
+        which is the guard working.
+      * **A bug this found in `test/functional/evpn_test.rb`.** Its
+        IPv6 route type 5 case passed a non-zero ESI **and** a non-zero
+        gateway, which is exactly what RFC 9136 section 3.2 forbids, so
+        the test had been sending a route no RFC allows by accident
+        while asserting no protocol error. The ESI is zero there now,
+        which changes none of its assertions, and the forbidden
+        combination has a case of its own where it is the subject. The
+        `crosses` helper takes an expected error count instead of
+        asserting zero, which is stronger rather than weaker.
+      * `validation.rb` is at 100% line coverage.
+      * **What is deliberately left, each with its reason in
+        `docs/evpn.md` section 8a**: RFC 9136's other two rules and RFC
+        9251 section 9.5's exactly-one-EVI-RT rule, all cross-attribute;
+        RFC 9251 section 9.4's M-and-I rule, because its two sentences
+        ask for different things and the second is narrower than any
+        action RFC 7606 names, so it wants a decision rather than a
+        patch; RFC 9136 Table 1's invalid-MAC rule, which is **within**
+        the extended communities attribute and so is the best candidate
+        for the next piece of work here; and RFC 9251 section 10's
+        "IGMPv1 routes are considered invalid", because the section does
+        not say whether a route with v1 and v2 both set is one, and
+        guessing would be inventing a rule rather than implementing it.
    10. **The lab**, against GoBGP and FRR, the twin of
        `flow_spec_gobgp_test.rb` and `flow_spec_frr_test.rb`. **Probe
        before recording a block**, which is the lesson three Docker
