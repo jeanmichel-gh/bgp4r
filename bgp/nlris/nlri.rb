@@ -185,6 +185,23 @@ module BGP
           # family. withdrawn means nothing here either, since there is
           # no label for RFC 8277 section 2.4 to replace.
           Evpn.new_ntop(s.is_packed, path_id)
+        when IANA::SAFI::ROUTE_TARGET_CONSTRAINTS
+          # RFC 4684 section 4: "The NLRI field in the MP_REACH_NLRI and
+          # MP_UNREACH_NLRI is a prefix of 0 to 96 bits, encoded as
+          # defined in Section 4 of [5]", its [5] being RFC 2858, which
+          # RFC 4760 obsoletes. So the octets handed here are one whole
+          # prefix, its length octet included, and
+          # MpReachCommon::ClassMethods#nlri_size needed no arm of its
+          # own to work that out: the prefix arithmetic in its else
+          # branch is already this family's framing. That is what makes
+          # this family cheaper to wire than flow spec or EVPN.
+          #
+          # No AFI is passed down. Section 4 fixes it at 1 and nothing
+          # inside the prefix reads differently per family, since what is
+          # in there is an origin AS and a route target rather than an
+          # address. withdrawn means nothing here either: there is no
+          # label for RFC 8277 section 2.4 to replace.
+          Rt_constrain.new_ntop(s.is_packed, path_id)
         when 133,134
           # RFC 8955 section 4 and section 8. The octets handed here are
           # one whole 2-tuple, length field included, because

@@ -267,8 +267,42 @@ class Mp_unreach_Test < Test::Unit::TestCase
     assert_equal('203.0.113.0/24', back.nlris[1].components[0].prefix.to_s)
   end
 
+  # RT-constrain withdrawals, RFC 4684 section 4, AFI 1 SAFI 132. **This
+  # loop is an independent copy of the one in mp_reach.rb**, so wiring
+  # the reach side proves nothing about this one: the functional test
+  # measured that reverting only this loop fails exactly its one
+  # withdrawal case, the same signature flow spec and EVPN each measured.
+  #
+  # Several prefixes of mixed length on purpose, including section 4's
+  # zero-length default, because the last NLRI has nothing behind it to
+  # over-read into and so a single-prefix case passes against framing
+  # arithmetic that is wrong by a constant.
+  def test_rt_constrain_withdrawals_frame_one_after_another
+    u = BGP::Mp_unreach.new(
+      :safi => 132,
+      :nlris => [BGP::Rt_constrain.new(65000, [65000, 100]),
+                 BGP::Rt_constrain.new(65000),
+                 BGP::Rt_constrain.new])
+    # 0x16 is 22 octets: the AFI and SAFI are 3 of them and the three
+    # NLRIs 13, 5 and 1. Written as 0x13 first, counting the NLRIs and
+    # forgetting the AFI and SAFI, which the library was right about.
+    assert_equal('800f16' + '0001' + '84' +
+                 '60' + '0000fde8' + '0002fde800000064' +
+                 '20' + '0000fde8' +
+                 '00', u.to_shex)
+    back = BGP::Attr.factory(u.encode.is_packed)
+    assert_equal(u.to_shex, back.to_shex)
+    assert_equal(1, back.afi, 'section 4 fixes the AFI at 1')
+    assert_equal(132, back.safi)
+    assert_equal([BGP::Rt_constrain] * 3, back.nlris.collect(&:class))
+    assert_equal([96, 32, 0], back.nlris.collect(&:mlen))
+    assert_equal('Route target: 65000:100',
+                 back.nlris[0].route_target.to_s)
+    assert(back.nlris[2].default?, "section 4's default route target")
+  end
+
   private
-  
+
    def attr_len(attr)
      attr.encode[2,1].unpack('C')[0]
    end
