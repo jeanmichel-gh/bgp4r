@@ -168,6 +168,78 @@ class TestPmsiTunnel < Test::Unit::TestCase
     assert_equal 'c0', c.to_shex[0, 2]
   end
 
+  # **The whole assigned part of IANA's "P-Multicast Service Interface
+  # Tunnel (PMSI Tunnel) Tunnel Types" registry**, read there on
+  # 2026-10-31. These numbers are the registry's own, which is the point
+  # of asserting them: they are not this reader's arithmetic. RFC 6514
+  # section 5 gave 0 to 7 and five more have been assigned since.
+  def test_every_assigned_tunnel_type_has_its_registry_name
+    { 0x00 => :no_tunnel,            # RFC 6514 section 5
+      0x01 => :rsvp_te_p2mp,
+      0x02 => :mldp_p2mp,
+      0x03 => :pim_ssm,
+      0x04 => :pim_sm,
+      0x05 => :bidir_pim,
+      0x06 => :ingress_replication,
+      0x07 => :mldp_mp2mp,
+      0x08 => :transport,            # Transport Tunnel, RFC 7524
+      0x0a => :assisted_replication, # Assisted Replication Tunnel, RFC 9574
+      0x0b => :bier,                 # BIER, RFC 8556
+      0x0c => :sr_mpls_p2mp,         # SR-MPLS P2MP Tree, RFC 10018
+      0x0d => :srv6_p2mp,            # SRv6 P2MP Tree, RFC 10018
+    }.each do |value, name|
+      assert_equal name, Pmsi_tunnel.new(value).tunnel_name,
+                   format('tunnel type 0x%02x', value)
+      assert_equal value, Pmsi_tunnel::TYPES[name], name.inspect
+    end
+    # And nothing else is named, so the table is exactly the registry.
+    assert_equal 13, Pmsi_tunnel::TYPES.size
+    # 0x09 is still Unassigned there, which is why it is this file's
+    # example of a type bgp4r has no name for.
+    assert_nil Pmsi_tunnel.new(0x09).tunnel_name
+    # 0x0e to 0x7a are Unassigned too.
+    [0x0e, 0x40, 0x7a].each { |t| assert_nil Pmsi_tunnel.new(t).tunnel_name }
+  end
+
+  # A derived guard rather than a second list: every symbol has to build
+  # the octets its own number builds, so an entry added with the wrong
+  # constant cannot pass.
+  def test_every_tunnel_type_symbol_builds_what_its_number_builds
+    Pmsi_tunnel::TYPES.each do |name, value|
+      assert_equal Pmsi_tunnel.new(value, '10.0.0.1').to_shex,
+                   Pmsi_tunnel.new(name, '10.0.0.1').to_shex, name.inspect
+      # And naming a type changed none of its octets.
+      assert_equal format('c01609000%x0000000a000001', value),
+                   Pmsi_tunnel.new(name, '10.0.0.1').to_shex, name.inspect
+    end
+  end
+
+  # **0xff is not a 7 bit type**, because its high bit is the composite
+  # tunnel bit, so it is not in TYPES and `wildcard?` reads the whole
+  # octet. RFC 8317 section 8.1 anticipated exactly this when it
+  # reserved 0x7f: "The value 0x7F, which is the mirror image of (0xFF),
+  # is reserved in this document."
+  def test_the_wildcard_transport_tunnel_type_names_the_whole_octet
+    assert_equal 0xff, Pmsi_tunnel::WILDCARD
+    w = Pmsi_tunnel.new(Pmsi_tunnel::WILDCARD, '10.0.0.1')
+    assert w.wildcard?
+    assert w.composite?, 'the high bit of 0xff is the composite bit'
+    assert_equal 0x7f, w.tunnel_type
+    assert_nil w.tunnel_name, '0xff is not in TYPES'
+    assert_equal 'c0160900ff0000000a000001', w.to_shex
+    assert_match(/wildcard transport tunnel type/, w.to_s)
+    refute_match(/composite type 127/, w.to_s)
+    # The hash carries the two halves and new reassembles the octet.
+    h = w.to_hash[:pmsi_tunnel]
+    assert_equal [0x7f, true], [h[:tunnel_type], h[:composite]]
+    assert_equal w.encode, Pmsi_tunnel.new(h).encode, h.inspect
+    # 0x7f on its own is RFC 8317's Reserved and not the wildcard.
+    plain = Pmsi_tunnel.new(0x7f, '10.0.0.1')
+    refute plain.wildcard?
+    refute plain.composite?
+    assert_equal 'c01609007f0000000a000001', plain.to_shex
+  end
+
   # **RFC 8317 section 6.2's composite tunnel bit is a layout change and
   # not only a name.** "the high-order bit of the Tunnel Type field
   # (composite tunnel bit) is set while the remaining low-order seven

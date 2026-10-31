@@ -40,16 +40,36 @@ module BGP
   # building: a test can send any type with any identifier.
   class Pmsi_tunnel < Attr
 
-    # RFC 6514 section 5 defines tunnel types 0 to 7, and these are they.
-    # IANA's "P-Multicast Service Interface Tunnel (PMSI Tunnel) Tunnel
-    # Types" registry has since assigned five more, which bgp4r does not
-    # name: 8 Transport Tunnel (RFC 7524), 10 Assisted Replication Tunnel
-    # (RFC 9574), 11 BIER (RFC 8556), 12 SR-MPLS P2MP Tree and 13 SRv6
-    # P2MP Tree (both RFC 10018). 9 is unassigned, 0x7b to 0x7e and 0xfb
-    # to 0xfe are experimental, 0x7f is reserved, 0x80 to 0xfa are
-    # reserved for Composite Tunnel (see COMPOSITE) and 0xff is the
-    # wildcard transport tunnel type (RFC 8338). An unnamed type still
-    # round trips: pass its number to send it.
+    # RFC 6514 section 5 defines tunnel types 0 to 7, and five more are
+    # assigned. The whole of IANA's "P-Multicast Service Interface Tunnel
+    # (PMSI Tunnel) Tunnel Types" registry, read there on 2026-10-31, and
+    # its column is headed Meaning rather than Name:
+    #
+    #   0x00 no tunnel information present   RFC 6514
+    #   0x01 RSVP-TE P2MP LSP                RFC 6514
+    #   0x02 mLDP P2MP LSP                   RFC 6514
+    #   0x03 PIM-SSM Tree                    RFC 6514
+    #   0x04 PIM-SM Tree                     RFC 6514
+    #   0x05 BIDIR-PIM Tree                  RFC 6514
+    #   0x06 Ingress Replication             RFC 6514
+    #   0x07 mLDP MP2MP LSP                  RFC 6514
+    #   0x08 Transport Tunnel                RFC 7524
+    #   0x09 Unassigned
+    #   0x0a Assisted Replication Tunnel     RFC 9574
+    #   0x0b BIER                            RFC 8556
+    #   0x0c SR-MPLS P2MP Tree               RFC 10018
+    #   0x0d SRv6 P2MP Tree                  RFC 10018
+    #   0x0e to 0x7a Unassigned
+    #   0x7b to 0x7e Reserved for Experimental Use   RFC 8317
+    #   0x7f Reserved                                RFC 8317
+    #   0x80 to 0xfa Reserved for Composite Tunnel   RFC 8317 (see COMPOSITE)
+    #   0xfb to 0xfe Reserved for Experimental Use   RFC 7385
+    #   0xff wildcard transport tunnel type          RFC 8338 (see WILDCARD)
+    #
+    # The symbols drop the generic trailing noun the way the original
+    # eight do, so "PIM-SSM Tree" is `:pim_ssm` and "Assisted Replication
+    # Tunnel" is `:assisted_replication`. An unnamed type still round
+    # trips: pass its number to send it.
     NO_TUNNEL            = 0
     RSVP_TE_P2MP         = 1
     MLDP_P2MP            = 2
@@ -58,6 +78,11 @@ module BGP
     BIDIR_PIM            = 5
     INGRESS_REPLICATION  = 6
     MLDP_MP2MP           = 7
+    TRANSPORT            = 8
+    ASSISTED_REPLICATION = 10
+    BIER                 = 11
+    SR_MPLS_P2MP         = 12
+    SRV6_P2MP            = 13
 
     TYPES = {
       :no_tunnel            => NO_TUNNEL,
@@ -68,7 +93,21 @@ module BGP
       :bidir_pim            => BIDIR_PIM,
       :ingress_replication  => INGRESS_REPLICATION,
       :mldp_mp2mp           => MLDP_MP2MP,
+      :transport            => TRANSPORT,
+      :assisted_replication => ASSISTED_REPLICATION,
+      :bier                 => BIER,
+      :sr_mpls_p2mp         => SR_MPLS_P2MP,
+      :srv6_p2mp            => SRV6_P2MP,
     }
+
+    # **0xff is not a 7 bit type and so is not in TYPES**, because its
+    # high bit is the composite tunnel bit: `tunnel_type` answers 0x7f
+    # for it and `composite?` answers true. That is not an accident of
+    # this reader, it is what RFC 8317 section 8.1 anticipated when it
+    # reserved 0x7f, in its own words "The value 0x7F, which is the
+    # mirror image of (0xFF), is reserved in this document." So the
+    # whole octet is what names the wildcard, and `wildcard?` reads it.
+    WILDCARD = 0xff
 
     # **The composite tunnel bit, RFC 8317 section 6.2**, which is why
     # `tunnel_type` answers 7 bits and not the whole octet. Section 8.1
@@ -170,6 +209,12 @@ module BGP
       @composite
     end
 
+    # Whether the whole Tunnel Type octet is RFC 8338's wildcard, which
+    # is the composite bit over the 0x7f RFC 8317 reserved for it.
+    def wildcard?
+      @composite && @tunnel_type == (WILDCARD & ~COMPOSITE)
+    end
+
     # The leading 3 octet label a composite tunnel puts in front of the
     # Tunnel Identifier, its high 20 bits, or nil when there is no such
     # field. **Absent is a real answer**, and not only for a
@@ -201,8 +246,7 @@ module BGP
     end
 
     def to_s(method=:default)
-      super("#{@composite ? 'composite ' : ''}" \
-            "#{tunnel_name || "type #{@tunnel_type}"}: #{identifier_s}" \
+      super("#{type_s}: #{identifier_s}" \
             "#{@label ? ", label #{@label}" : ''}" \
             "#{@ir_label ? ", ir label #{@ir_label}" : ''}" \
             "#{leaf_info_required? ? ', leaf info required' : ''}", method)
@@ -256,8 +300,18 @@ module BGP
 
     private
 
+    # The wildcard names the whole octet, so it is not "composite type
+    # 127"; anything else is the 7 bit type with the bit said in front.
+    def type_s
+      return 'wildcard transport tunnel type' if wildcard?
+      "#{@composite ? 'composite ' : ''}#{tunnel_name || "type #{@tunnel_type}"}"
+    end
+
     # Two addresses for the PIM trees, one for ingress replication,
-    # octets otherwise.
+    # octets otherwise. **The five types named since RFC 6514 print
+    # hex**, because none of their shapes has been read here: RFC 7524,
+    # RFC 8556, RFC 9574 and RFC 10018 are not in hand, and inventing a
+    # shape would print a confident wrong answer where hex is honest.
     def identifier_s
       case @tunnel_type
       when PIM_SSM, PIM_SM, BIDIR_PIM
