@@ -488,11 +488,34 @@ class EvpnDocTest < Test::Unit::TestCase
                  BGP::Mp_reach.new(v6.encode.is_packed).nexthops)
   end
 
-  # Interoperability is not measured yet and the document must not
-  # pretend otherwise. The flow spec table names its asserting test per
-  # row; until this one can, it says so.
-  def test_interoperability_is_recorded_as_unmeasured
-    assert_match(/Not measured yet/, doc)
+  # **This test asked for "Not measured yet" until part 10 landed**, and
+  # failed the moment it did, which is the third guard in this file to
+  # catch its own document going stale rather than a reader catching it.
+  # Re-pointed at the new truth rather than weakened.
+  #
+  # Section 9's claims rest on two versions, and the two lab tests assert
+  # against the same two in their own constants. So this reads the
+  # versions out of the document and out of the tests and requires them
+  # to agree: a pin moved in one place and not the other is the way this
+  # table would go quietly wrong, since both tests omit themselves on a
+  # version they were not measured against and a reader would see the
+  # table and no failure.
+  def test_section_9_names_the_versions_its_two_tests_assert_against
+    assert_match(/Measured on 2026-10-30 against \*\*GoBGP 3\.23\.0\*\*/, doc)
+    assert_match(/\*\*FRR 8\.4\.4\*\*/, doc)
+    lab = File.expand_path('../functional/lab', __dir__)
+    gobgp = File.read(File.join(lab, 'evpn_gobgp_test.rb'), :encoding => 'UTF-8')
+    frr   = File.read(File.join(lab, 'evpn_frr_test.rb'), :encoding => 'UTF-8')
+    assert_match(/MEASURED_MAJOR = 3\b/, gobgp,
+                 "#{DOC} says GoBGP 3.23.0 and the test asserts another major")
+    assert_match(/MEASURED = \(8\.\.8\)/, frr,
+                 "#{DOC} says FRR 8.4.4 and the test asserts another major")
+    # And the two findings the document leans on hardest, each the reason
+    # one of the tests reads the way it does.
+    assert_match(/Both implement route types 1 to 5 and neither knows 6 to 11/, doc)
+    assert_match(/\*\*Both tests send only/, doc,
+                 "#{DOC} must keep the caveat: nlri_size is on the parse path, " \
+                 'so reverting it leaves both lab tests passing')
   end
 
   def test_claude_md_points_at_the_document

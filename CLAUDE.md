@@ -117,7 +117,14 @@ test/functional/lab/     lab tests: loopback speaker test and one Compose test p
                          flow spec rule to each and assert what it reads back,
                          which is the only check on our components, operator
                          octets and section 4.1 length that is not bgp4r's own
-                         opinion. They send only; see docs/flow-spec.md section 12
+                         opinion. They send only; see docs/flow-spec.md section 12;
+                         evpn_gobgp_test.rb and evpn_frr_test.rb do the same for
+                         EVPN, and both routers know route types 1 to 5 only, so
+                         the other six are asserted as ignored without the session
+                         dying. GoBGP is the only check on route type 5's GW IP,
+                         and FRR is the one that sends 3/9 on a malformed NLRI,
+                         which is what part 9 chose. They send only too; see
+                         docs/evpn.md section 9
 ```
 
 ## Running tests
@@ -223,6 +230,17 @@ ruby -I. test/functional/lab/flow_spec_gobgp_test.rb
 ruby -I. test/functional/lab/flow_spec_frr_test.rb
 ```
 
+The same for EVPN. Both routers know route types 1 to 5 only, so the
+other six are asserted as ignored without the session dying. GoBGP is
+the only check on route type 5's GW IP Address, since FRR prints a
+constant there, and FRR is the one that answers a malformed NLRI with
+3/9, which is what `validation.rb` reports for the same octets. About 70
+seconds and a minute:
+```
+ruby -I. test/functional/lab/evpn_gobgp_test.rb
+ruby -I. test/functional/lab/evpn_frr_test.rb
+```
+
 Which `#to_hash` read back and which do not, printed from
 `test/unit/to_hash_catalog.rb` rather than written down anywhere:
 ```
@@ -247,7 +265,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. A `lab` job runs the Compose topologies, and installs a `gobgpd` release so the native fault matrix runs there too; it pins 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-10-30: 1716 tests, 24822 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.1%.
+Baseline on 2026-10-30: 1716 tests, 24827 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.1%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -1263,7 +1281,7 @@ true here is the shape of the gap:
   prints the registered code points, against the 115 the IANA registries
   listed when this was last counted by hand.
 
-### Breadth, the one SAFI lever. Phase 2 done
+### Breadth, the one SAFI lever. Phases 2 and 3 done
 
 The section above deferred breadth and named the single limit. This is the
 plan for lifting it, recorded before the work starts.
@@ -1761,19 +1779,22 @@ Two consequences, both of which change the plan rather than decorate it:
        `[0x80,0x08]`, `[0x81,0x08]` and `[0x82,0x08]`, the section 7.4
        redirect-to-VRF encodings, so nothing there is affected. Checked
        on 2026-10-30.
-3. **EVPN, SAFI 70, RFC 7432 and six more. Parts 1 to 9 done**, so all
+3. **EVPN, SAFI 70, RFC 7432 and six more. Done**, all ten parts: all
    eleven route types read and write on the wire, an EVPN UPDATE
    crosses a session, **every EVPN extended community with an RFC
    behind it is in** (all eleven, five with RFC 9251 and six with the
-   rest), and a malformed route is reported on receive. Only part 10 is
-   left, the lab. Ten parts, planned on 2026-10-30 from eleven RFCs
-   read in full, attached to the session rather than fetched.
+   rest), a malformed route is reported on receive, and two real
+   routers have said what they make of what we send. Planned on
+   2026-10-30 from eleven RFCs read in full, attached to the session
+   rather than fetched, and finished the same week.
 
    By the measure this plan set itself, which is the wire and not the
    table, the family was done at part 5: bgp4r parses an EVPN capture,
    replays it byte for byte, and builds one from field values that no
-   RFC allows. What part 10 adds is a second implementation's opinion
-   of what we send.
+   RFC allows. Parts 9 and 10 added the receive side verdict and the
+   outside opinion of it, and part 10 is where the two met: FRR sends
+   the same subcode and takes the same action part 9 had to derive with
+   no RFC naming either.
 
    **Two counts in the earlier version of this entry were wrong, and
    both were wrong by reading one RFC where the registry spans seven.**
@@ -2445,12 +2466,81 @@ Two consequences, both of which change the plan rather than decorate it:
         "IGMPv1 routes are considered invalid", because the section does
         not say whether a route with v1 and v2 both set is one, and
         guessing would be inventing a rule rather than implementing it.
-   10. **The lab**, against GoBGP and FRR, the twin of
-       `flow_spec_gobgp_test.rb` and `flow_spec_frr_test.rb`. **Probe
-       before recording a block**, which is the lesson three Docker
-       entries in this file taught by coming apart, and which paid again
-       in #178 where both routers turned out to accept a flowspec rule
-       the plan had treated as uncertain.
+   10. **The lab. Done**, in #192, which finishes the EVPN plan.
+       `test/functional/lab/evpn_gobgp_test.rb`, 11 cases and 65
+       assertions in about 70 seconds, and `evpn_frr_test.rb`, 9 cases
+       and 55 assertions in about a minute. No Docker. Both are picked
+       up by `test/run_lab.rb`, which globs the directory, so CI needed
+       no change. `docs/evpn.md` section 9 has the measurements.
+       * **Probing paid again, and it answered a question this plan had
+         guessed at.** Both routers implement **route types 1 to 5 and
+         neither knows 6 to 11**: GoBGP logs `Unknown EVPN Route type:
+         N` and FRR says nothing at all. So the recorded decision that
+         "types 1 to 5 are what a router will actually send" was right,
+         and bgp4r having all eleven is the point of a protocol testing
+         tool rather than a gap in the routers.
+       * **The best result is corroboration of a decision part 9 had to
+         make alone.** FRR answers a malformed EVPN NLRI with `3/9
+         (UPDATE Message Error/Optional Attribute Error)` and resets,
+         which is exactly the subcode and the action `validation.rb`
+         reports for the same octets. Part 9 derived both rather than
+         copying them: RFC 7432 and RFC 9572 say nothing about error
+         handling, RFC 9251 section 9.7 asks for a reset and names no
+         subcode, and the 9 came from RFC 7606 section 7.11. GoBGP
+         keeps the session up instead, so the two disagree and bgp4r is
+         with FRR. One router agreeing is not a quorum, so both are
+         recorded as what each does.
+       * **GoBGP's "Capability was disabled" overstates what it did.**
+         Measured: after an unknown route type, a route type 3 on the
+         same session still installs. A test that trusted that line
+         would give every case a session of its own for no reason.
+       * **FRR prints a constant for route type 5's GW IP Address**,
+         `gateway IP 2.0.0.0` for every non-zero gateway sent, and
+         nothing when the field is zero. So it tells zero from non-zero
+         and renders the wrong member; 2 is AF_INET. A display bug on
+         FRR's side, recorded and not filed, per the standing decision
+         that the job here is bgp4r catching up. **GoBGP is the only
+         check on those four octets**, which is the one place the two
+         tests are not twins.
+       * **Two harness facts, each measured because each silently voids
+         a run.** GoBGP's config file and its client disagree about the
+         family name for the second time, `l2vpn-evpn` against `evpn`,
+         which is why `FS_CLIENT` in `lab_helper.rb` is `CLIENT_FAMILY`
+         now and no longer flow spec's alone. And FRR's EVPN JSON has
+         **no `routes` key** and is keyed by Route Distinguisher at the
+         top level, where every other family nests under `routes`, so
+         `Frr#rib` answers `{}` for this family however many routes are
+         in it: a wrong answer rather than a missing one. `Frr#evpn_rib`
+         and `#evpn_count` exist for that.
+       * **Which JSON keys FRR carries is per route type, not uniform**,
+         which is worth knowing before writing another of these: a route
+         type 2 path has `ethTag`, `macLen`, `mac`, `ipLen`, `ip` and
+         `esi` as separate keys, more than GoBGP's one rendered string
+         gives, and a route type 1 path has **none of them**. Found by
+         an assertion on `path['ethTag']` answering nil.
+       * **Both tests send only, and the sabotage that passed is the one
+         to know about.** Reverting `nlri_size` to the pre-wiring prefix
+         arithmetic leaves both passing, because that method is on the
+         parse path and `test/functional/evpn_test.rb` covers it. The
+         flow spec lab tests record the same caveat and it holds here
+         for the same reason. What does fail them is an encode-side
+         slip: the section 7 Length one short fails 2 GoBGP cases,
+         swapping route type 5's GW IP with its prefix fails the gateway
+         case, and shifting the MPLS label 3 bits instead of 4 fails
+         both label assertions.
+       * **Both routers read the 3-octet MPLS Label field whole**, 1601
+         for our label 100, so two implementations agree on the `Label`
+         reuse down to the bottom bit. Do not "fix" either assertion
+         to 100.
+       * The doc test's "interoperability is not measured yet"
+         assertion failed the moment this landed, the third guard in
+         that file to catch its own document going stale this week. It
+         now reads the two versions out of the document and out of the
+         two tests' own constants and requires them to agree, since a
+         pin moved in one place and not the other is how this table
+         would go quietly wrong: both tests omit themselves on an
+         unmeasured version, so a reader would see the table and no
+         failure.
 
    Decisions taken before this starts:
    * **Route types 6 to 11 are in, and that is a change from the
@@ -2525,6 +2615,7 @@ Lab and conformance:
   * Be precise about what that adds, because #115 already pinned the direction inside bgp4r by writing the field value literally on one side: inverting `_send_recv` today also fails `test/functional/add_path_test.rb` and two unit files. What survived for years was the *behaviour*, where bgp4r against bgp4r cancels the error out. So the new part is a second implementation's reading of the field, plus the data path nothing had checked against anyone else: that GoBGP accepts a Path Identifier from us, holds two paths for one prefix because of it, and understands a withdrawal that names one of them.
   * **`Neighbor#capability :add_path` takes its arguments in the order `(send_recv, afi, safi)`**, which is what `CAP::Add_path#add` takes. This file used to give the example `capabilities: [{add_path: [1, 1, 3]}]`, which is SAFI 3, NSAP, and a Send/Receive of 1. For IPv4 unicast both ways it is `[3, 1, 1]`, or `[:send_and_receive, 1, 1]`, which says it better. The wrong example was never run.
   * A Compose topology on `lab/speaker.rb` is still possible and is two pieces, neither needed by the native test: an announce block has no way to give a prefix a Path Identifier, since `build_update` calls `Nlri.new` with plain prefix strings; and `Lab::Recorder#record_routes` keys received routes by prefix alone, so two paths for one prefix overwrite each other and the state file cannot show a Path Identifier arrived. Worth doing only if the lab speaker itself needs add-path.
+* **EVPN interop lives in `docs/evpn.md` section 9**, measured and asserted rather than written down here. The short version: **both routers implement route types 1 to 5 and neither knows 6 to 11**, GoBGP logging `Unknown EVPN Route type: N` and FRR saying nothing at all; FRR answers a malformed NLRI with **3/9 and a reset**, which is what `validation.rb` reports for the same octets, where GoBGP keeps the session up. Three harness facts worth knowing before writing another EVPN lab test: GoBGP's config file and its client disagree about the family name again, `l2vpn-evpn` against `evpn`; FRR's EVPN JSON has **no `routes` key** and is keyed by Route Distinguisher, so `Frr#rib` answers `{}` for it however many routes are in it and `Frr#evpn_rib` exists for that; and FRR prints `gateway IP 2.0.0.0` for every non-zero route type 5 gateway, so GoBGP is the only check on those octets.
 * **Flow spec interop lives in `docs/flow-spec.md` section 12**, measured and asserted rather than written down here, the same way the fault matrix columns are. The short version: both routers accept a rule from bgp4r and read it back, and they disagree on every part of RFC 8955 section 4.2. Two harness facts worth knowing before writing another flow spec lab test: GoBGP's **config file and its client use different names for the VPN family**, `l3vpn-ipv4-flowspec` and `ipv4-l3vpn-flowspec`, each rejecting the other; and **FRR 8.4.4 has no VPN flow spec family**, refusing a session that offers SAFI 134 alone with 2/7 and silently discarding the rule when SAFI 133 is there too.
 * Lowest coverage (unit suite): `neighbor/neighbor.rb` 91%, `messages/update.rb` 92%, `neighbor/add_path_cap.rb` 93%, `path_attributes/mp_unreach.rb` 93%, `path_attributes/ipv6_extended_communities.rb` 93%, `optional_parameters/graceful_restart.rb` 93%.
 
