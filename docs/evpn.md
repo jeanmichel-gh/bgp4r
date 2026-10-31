@@ -32,7 +32,8 @@ Seven RFCs matter for the octets:
 | 9572 | route types 9, 10 and 11 |
 | 8214 | the EVPN layer 2 attributes community |
 | 8584 | the DF Election community |
-| 9135, 9047, 9722, 9785 | further communities and procedures |
+| 9785 | the DF Election community's D bit, DF Alg 2 and 3, and DF Preference |
+| 9135, 9047, 9722 | further communities and procedures |
 
 ## 2. The NLRI framing
 
@@ -560,7 +561,7 @@ behind it is implemented.
 | 0x03 | EVPN Router's MAC | RFC 9135 section 8.1 | yes |
 | 0x04 | EVPN Layer 2 Attributes | RFC 8214 section 3.1 | yes |
 | 0x05 | E-Tree | RFC 8317 section 6.1 | yes |
-| 0x06 | DF Election | RFC 8584 section 2.2 | yes |
+| 0x06 | DF Election | RFC 8584 section 2.2 and RFC 9785 section 3 | yes |
 | 0x07 | Reserved | none | no |
 | 0x08 | ARP/ND | RFC 9047 section 2 | yes |
 | 0x09 | Multicast Flags | RFC 9251 section 9.4 | yes |
@@ -683,39 +684,72 @@ and needs nothing new:
   sits: "The value of the 20-bit MPLS label is encoded in the high-order
   20 bits of the Leaf label field", which leaves the low 4 bits of that
   field undescribed, so they go with the reserved octets.
-* **DF Election, 0x06** (RFC 8584 section 2.2): 3 RSV bits and a 5-bit DF
-  Alg in one octet, a 2-octet Bitmap, 3 reserved octets. Its "DF Alg"
-  registry gives 0 for the default or modulus algorithm, 1 for HRW, 2 to
-  30 unassigned and 31 experimental.
+* **DF Election, 0x06** (RFC 8584 section 2.2, extended by RFC 9785
+  section 3): 3 RSV bits and a 5-bit DF Alg in one octet, a 2-octet
+  Bitmap, then what RFC 8584 gave as 3 reserved octets and RFC 9785
+  **takes the last two of** for a DF Preference, leaving one reserved:
+
+  ```
+  | Type=0x06     | Sub-Type(0x06)| RSV |  DF Alg |    Bitmap     ~
+  ~     Bitmap    |   Reserved    |   DF Preference (2 octets)    |
+  ```
+
+  Its "DF Alg" registry gives 0 for the default or modulus algorithm, 1
+  for HRW, 31 experimental, and **2 Highest-Preference and 3
+  Lowest-Preference, which RFC 9785 section 6 allocated**, leaving 4 to
+  30 unassigned.
+
+  The DF Preference is "specific to Highest-Preference and
+  Lowest-Preference Algorithms", where "the default value MUST be
+  32767", and for any other algorithm RFC 9785 says only that "these 2
+  octets can be encoded differently". So bgp4r **reads the field
+  whatever the algorithm**, which is what makes those octets replay,
+  and names it a preference only for algorithms 2 and 3: `to_s` prints
+  `pref 32767` there and `last octets 0x1234` elsewhere, rather than
+  claiming a meaning the RFC withholds.
 * **ARP/ND, 0x08** (RFC 9047 section 2): one Flags octet, `|       |I|
   |O|R|`, then 5 reserved octets. "Bits 0-3 and 5 are not assigned by
   this document."
 
-**Two RFCs define bits in the one DF Election Bitmap, and both are
-read.** RFC 8584's own registry gives bit 1, AC-DF, and leaves bits 0
-and 2 to 15 unassigned; **RFC 9722 section 2.1 adds bit 3**, Time
-Synchronization, and nothing in RFC 8584 points forward to it. A mask
-covering only the first would report a correct T bit as a reserved one.
-This is the `Pmsi_tunnel` flags registry again: a field one RFC leaves
-unassigned is a field a later RFC can fill.
+**Three RFCs define bits in the one DF Election Bitmap, and all three
+are read.** RFC 8584's own registry gives bit 1, AC-DF, and leaves bits
+0 and 2 to 15 unassigned; **RFC 9722 section 2.1 adds bit 3**, Time
+Synchronization; **RFC 9785 section 3 adds bit 0**, the D or "Don't
+Preempt" bit, which "determines if the PE advertising the Ethernet
+Segment route requests the remote PEs in the Ethernet Segment to not
+preempt it as the Designated Forwarder". Nothing in RFC 8584 points
+forward to either, and a mask covering only RFC 8584 reports a correct
+T or D bit as a reserved one.
 
-**Four of the six RFCs number their flag bits twice over**, once in
-their own field and once in the whole 8-octet community, and that second
-number is what the bit placements here were checked against:
+This is the `Pmsi_tunnel` flags registry again: **a bit one RFC leaves
+unassigned is a bit a later RFC can fill**, so go by the registry and
+not by the defining RFC alone. The D bit is what that lesson cost here:
+part 8b wrote the sentence down and then shipped a mask without bit 0,
+with RFC 9785 sitting unread in the same pile of RFCs as the rest.
+Nothing was broken on the wire, because keep-and-echo replayed the
+octets as reserved bits; what was missing was the meaning, which is the
+whole of what a breadth phase is for.
+
+**Four RFCs number their flag bits twice over**, once in their own
+field and once in the whole 8-octet community, and that second number
+is what the bit placements here were checked against:
 
 | Bit | Its own field | The whole community | Said in |
 |---|---|---|---|
 | ARP/ND R | Flags bit 7 | Bit 23 | RFC 9047 section 2 |
 | ARP/ND O | Flags bit 6 | Bit 22 | RFC 9047 section 2 |
 | ARP/ND I | Flags bit 4 | Bit 20 | RFC 9047 section 2 |
+| DF D | Bitmap bit 0 | Bit 24 | RFC 9785 section 3 |
 | DF AC-DF | Bitmap bit 1 | Bit 25, bit 0 being 24 | RFC 8584 section 2.2 |
 | DF T | Bitmap bit 3 | Bit 27 | RFC 9722 section 2.1 |
 
 That is worth more than it looks, for the same reason the five flow spec
 vectors are: the number is the document's own, so asserting it checks
 the layout against the RFC and not against this reader's arithmetic.
+The last three rows also cross-check each other, since RFC 8584 and RFC
+9785 state the Bitmap's own origin from opposite ends and agree on 24.
 `test_each_flag_sits_at_the_bit_number_its_own_rfc_gives_it` asserts all
-five.
+six.
 
 **One has no reserved bit anywhere.** Service Carving Time, 0x0f (RFC
 9722 section 2.1) is 4 octets of NTP seconds and 2 of fraction, both

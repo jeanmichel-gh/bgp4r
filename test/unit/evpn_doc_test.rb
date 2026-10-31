@@ -314,6 +314,7 @@ class EvpnDocTest < Test::Unit::TestCase
       'ARP/ND R' => BGP::Arp_nd.new(:router => true),
       'ARP/ND O' => BGP::Arp_nd.new(:override => true),
       'ARP/ND I' => BGP::Arp_nd.new(:immutable => true),
+      'DF D'     => BGP::Df_election.new(0, :dont_preempt => true),
       'DF AC-DF' => BGP::Df_election.new(0, :ac_df => true),
       'DF T'     => BGP::Df_election.new(0, :time_sync => true),
     }
@@ -322,7 +323,7 @@ class EvpnDocTest < Test::Unit::TestCase
       h[m[1]] = m[2].to_i if m
     end
     assert_equal(communities.keys.sort, rows.keys.sort,
-                 "#{DOC} section 7b's bit table does not name the five flags")
+                 "#{DOC} section 7b's bit table does not name the six flags")
     rows.each do |flag, bit|
       # The RFCs number a community's bits from the high bit of the type
       # octet, so bit n is 0x80 >> (n % 8) in octet n / 8.
@@ -344,13 +345,47 @@ class EvpnDocTest < Test::Unit::TestCase
            "#{DOC} says Service Carving Time has no DEFINED_BITS")
     assert_match(/One has no fields at all/, doc)
     assert_equal(0, BGP::Default_gateway::DEFINED_BITS)
-    # And RFC 9722 adding a bit to RFC 8584's Bitmap, which a mask
-    # covering only the first RFC would report as a reserved one.
+    # And the two later RFCs adding a bit to RFC 8584's Bitmap, either
+    # of which a mask covering only RFC 8584 reports as a reserved bit.
     assert_match(/RFC 9722 section 2\.1 adds bit 3\*\*/, doc)
     df = BGP::Extended_community.factory(['0606001000000000'].pack('H*'))
     assert(df.time_sync?)
     assert_equal({ :df_election => [:default, [:time_sync]] }, df.to_hash,
                  'a T bit reads as a reserved bit, so the mask is short')
+    assert_match(/RFC 9785 section 3 adds bit 0\*\*/, doc)
+    d = BGP::Extended_community.factory(['0606008000000000'].pack('H*'))
+    assert(d.dont_preempt?)
+    assert_equal({ :df_election => [:default, [:dont_preempt]] }, d.to_hash,
+                 'a D bit reads as a reserved bit, so the mask is short')
+  end
+
+  # Section 7b's claims about the DF Preference RFC 9785 section 3 put
+  # in RFC 8584's last two reserved octets: the two algorithms it
+  # belongs to, its default, and that it is read under every algorithm
+  # but named a preference only under those two.
+  def test_the_df_preference_is_what_the_document_says
+    assert_match(/2 Highest-Preference and 3\s+Lowest-Preference/, doc)
+    assert_equal({ :highest_preference => 2, :lowest_preference => 3 },
+                 BGP::Df_election::ALGORITHMS
+                   .select { |_, v| BGP::Df_election::PREFERENCE_ALGORITHMS.include?(v) },
+                 "#{DOC} says algorithms 2 and 3 carry the preference")
+    assert_match(/the default value MUST be\s+32767/, doc)
+    assert_equal(32767, BGP::Df_election::DEFAULT_PREFERENCE)
+    assert_equal(32767, BGP::Df_election.new(:highest_preference).df_pref)
+    # Read under every algorithm, so the octets replay either way.
+    assert_match(/reads the field\s+whatever the algorithm/, doc)
+    %w[0606020000001234 0606000000001234].each do |hex|
+      c = BGP::Extended_community.factory([hex].pack('H*'))
+      assert_equal(0x1234, c.df_pref)
+      assert_equal(hex, c.to_shex, "#{hex} did not replay")
+    end
+    # But only called a preference where the RFC gives it one.
+    assert_match(/`pref 32767` there and `last octets 0x1234` elsewhere/, doc)
+    assert_equal('DF Election: alg highest_preference, pref 32767',
+                 BGP::Df_election.new(:highest_preference).to_s)
+    assert_equal('DF Election: alg default, last octets 0x1234',
+                 BGP::Extended_community
+                   .factory(['0606000000001234'].pack('H*')).to_s)
   end
 
   # Section 7's sub-type table, as {sub-type => the "In bgp4r" cell}.

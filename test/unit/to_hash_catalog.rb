@@ -1078,10 +1078,11 @@ module ToHashCatalog
   end
 
   ENTRIES['BGP::Df_election'] = entry(:ok, nil, nil) do
-    # RFC 8584 section 2.2 and RFC 9722 section 2.1: the 3 RSV bits, the
-    # DF Alg, both defined Bitmap bits, 14 unassigned ones and 3 reserved
-    # octets.
-    BGP::Extended_community.factory(['0606ff5fffffffff'].pack('H*'))
+    # RFC 8584 section 2.2, RFC 9722 section 2.1 and RFC 9785 section 3:
+    # the 3 RSV bits, the DF Alg, all three defined Bitmap bits, 13
+    # unassigned ones (bit 2 is the clear one), the reserved octet and
+    # the DF Preference.
+    BGP::Extended_community.factory(['0606ffdfffffffff'].pack('H*'))
   end
 
   ENTRIES['BGP::Arp_nd'] = entry(:ok, nil, nil) do

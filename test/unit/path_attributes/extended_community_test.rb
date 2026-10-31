@@ -1149,7 +1149,10 @@ class Extended_community_Test < Test::Unit::TestCase
   # uses it.** RFC 9047 section 2 says R is "Bit 23 of the Extended
   # Community", O is 22 and I is 20; RFC 8584 section 2.2 says the
   # Bitmap's bit 0 "corresponds to Bit 24"; RFC 9722 section 2.1 says its
-  # T bit "corresponds to Bit 27". Those numbers are the document's own,
+  # T bit "corresponds to Bit 27"; RFC 9785 section 3 says its D bit is
+  # Bitmap "Bit 0 (corresponds to Bit 24 of the DF Election Extended
+  # Community)", which is the same sentence from the other end and so
+  # pins the Bitmap's own origin twice. Those numbers are the document's own,
   # so asserting them checks the layout against the RFC rather than
   # against this reader's arithmetic, which is what the five RFC flow
   # spec vectors buy for that family.
@@ -1166,6 +1169,7 @@ class Extended_community_Test < Test::Unit::TestCase
     [[BGP::Arp_nd.new(:router => true),        23, 'RFC 9047 R'],
      [BGP::Arp_nd.new(:override => true),      22, 'RFC 9047 O'],
      [BGP::Arp_nd.new(:immutable => true),     20, 'RFC 9047 I'],
+     [BGP::Df_election.new(0, :dont_preempt => true), 24, 'RFC 9785 D'],
      [BGP::Df_election.new(0, :ac_df => true), 25, 'RFC 8584 bitmap bit 1, bit 0 being 24'],
      [BGP::Df_election.new(0, :time_sync => true), 27, 'RFC 9722 T'],
     ].each do |c, bit, what|
@@ -1194,8 +1198,10 @@ class Extended_community_Test < Test::Unit::TestCase
         BGP::Layer2_attributes.new(0xffff, :control_word => true,
                                    :primary => true, :backup => true),
       BGP::E_tree       => BGP::E_tree.new(0xfffff, :leaf => true),
-      BGP::Df_election  => BGP::Df_election.new(0x1f, :ac_df => true,
-                                                :time_sync => true),
+      BGP::Df_election  => BGP::Df_election.new(0x1f, :dont_preempt => true,
+                                                :ac_df => true,
+                                                :time_sync => true,
+                                                :df_pref => 0xffff),
       BGP::Arp_nd       => BGP::Arp_nd.new(:router => true, :override => true,
                                            :immutable => true),
       BGP::Default_gateway => BGP::Default_gateway.new,
@@ -1294,28 +1300,110 @@ class Extended_community_Test < Test::Unit::TestCase
     refute(BGP::E_tree.new(16).leaf?)
   end
 
-  # **Two RFCs define bits in one Bitmap and both are read.** RFC 8584
-  # section 2.2 gives bit 1, AC-DF; RFC 9722 section 2.1 adds bit 3, Time
-  # Synchronization. A mask covering only the first would report a T bit
-  # as a reserved one.
-  def test_df_election_reads_the_bitmap_bits_of_both_rfcs
+  # **Three RFCs define bits in one Bitmap and all three are read.** RFC
+  # 8584 section 2.2 gives bit 1, AC-DF; RFC 9722 section 2.1 adds bit 3,
+  # Time Synchronization; RFC 9785 section 3 adds bit 0, the D or "Don't
+  # Preempt" bit. A mask covering only the first would report either of
+  # the others as a reserved one, which is what #190 shipped for the D
+  # bit until RFC 9785 was read.
+  def test_df_election_reads_the_bitmap_bits_of_all_three_rfcs
     assert_equal([0x06, 0x06],
                  [BGP::Df_election::TYPE, BGP::Df_election::SUBTYPE])
-    # RSV and DF Alg in one octet, the 2-octet Bitmap, 3 reserved octets.
-    assert_equal('0606' + '01' + '4000' + '000000',
+    # RSV and DF Alg in one octet, the 2-octet Bitmap, one reserved octet
+    # and the 2-octet DF Preference, which is 0 under these algorithms.
+    assert_equal('0606' + '01' + '4000' + '00' + '0000',
                  BGP::Df_election.new(:hrw, :ac_df => true).to_shex)
-    assert_equal('0606' + '00' + '1000' + '000000',
+    assert_equal('0606' + '00' + '1000' + '00' + '0000',
                  BGP::Df_election.new(:default, :time_sync => true).to_shex)
-    assert_equal('0606' + '1f' + '5000' + '000000',
-                 BGP::Df_election.new(:experimental, :ac_df => true,
+    assert_equal('0606' + '00' + '8000' + '00' + '0000',
+                 BGP::Df_election.new(:default, :dont_preempt => true).to_shex)
+    assert_equal('0606' + '1f' + 'd000' + '00' + '0000',
+                 BGP::Df_election.new(:experimental, :dont_preempt => true,
+                                      :ac_df => true,
                                       :time_sync => true).to_shex)
-    # Section 2.2's own registry: 0 default or modulus, 1 HRW, 2 to 30
-    # unassigned, 31 experimental. An unassigned one still encodes.
-    assert_equal({ :default => 0, :hrw => 1, :experimental => 31 },
+    # The "DF Alg" registry RFC 8584 section 2.2 created: 0 default or
+    # modulus, 1 HRW, 31 experimental, and 2 and 3 which **RFC 9785
+    # section 6 allocated**, leaving 4 to 30 unassigned. An unassigned
+    # one still encodes.
+    assert_equal({ :default => 0, :hrw => 1, :highest_preference => 2,
+                   :lowest_preference => 3, :experimental => 31 },
                  BGP::Df_election::ALGORITHMS)
-    assert_equal('0606' + '0f' + '0000' + '000000', BGP::Df_election.new(15).to_shex)
+    assert_equal('0606' + '0f' + '0000' + '00' + '0000',
+                 BGP::Df_election.new(15).to_shex)
     assert_nil(BGP::Df_election.new(15).alg_name)
     assert_raise(ArgumentError) { BGP::Df_election.new(32) }
+  end
+
+  # **RFC 9785 section 3 replaces "the last two reserved octets of the DF
+  # Election Extended Community when the DF algorithm is set to Highest-
+  # Preference or Lowest-Preference"** with a DF Preference, whose
+  # "allowed values are within the range 0-65535, and the default value
+  # MUST be 32767".
+  def test_df_election_carries_the_rfc_9785_preference
+    assert_equal([2, 3], BGP::Df_election::PREFERENCE_ALGORITHMS)
+    assert_equal(32767, BGP::Df_election::DEFAULT_PREFERENCE)
+    # The MUST, for both algorithms it belongs to, as the last 2 octets.
+    [:highest_preference, :lowest_preference].each do |alg|
+      c = BGP::Df_election.new(alg)
+      assert(c.preference_alg?, "#{alg} carries a DF Preference")
+      assert_equal(32767, c.df_pref)
+      assert_equal('0606' + format('%02x', BGP::Df_election::ALGORITHMS[alg]) +
+                   '0000' + '00' + '7fff', c.to_shex)
+    end
+    # Any value in the range, 0 included, so the default never overrides
+    # one the caller asked for.
+    c = BGP::Df_election.new(:highest_preference, :df_pref => 0)
+    assert_equal(0, c.df_pref)
+    assert_equal('0606' + '02' + '0000' + '00' + '0000', c.to_shex)
+    assert_equal('0606' + '03' + '0000' + '00' + 'ffff',
+                 BGP::Df_election.new(:lowest_preference,
+                                      :df_pref => 0xffff).to_shex)
+    assert_raise(ArgumentError) do
+      BGP::Df_election.new(:highest_preference, :df_pref => 0x10000)
+    end
+    # Under any other algorithm the field is RFC 8584's reserved octets,
+    # so it defaults to 0 and is not called a preference.
+    plain = BGP::Df_election.new(:hrw)
+    refute(plain.preference_alg?)
+    assert_equal(0, plain.df_pref)
+    assert_equal('DF Election: alg hrw', plain.to_s)
+    # But octets a peer put there are still read, and still replay.
+    odd = BGP::Extended_community.factory(['0606000000001234'].pack('H*'))
+    assert_equal(0x1234, odd.df_pref)
+    refute(odd.preference_alg?)
+    assert_equal('DF Election: alg default, last octets 0x1234', odd.to_s)
+    assert_equal('0606000000001234', odd.to_shex)
+  end
+
+  # The four build paths, for the two fields RFC 9785 added, including
+  # the hash the class answers with.
+  def test_df_election_builds_the_rfc_9785_fields_four_ways
+    c = BGP::Df_election.new(:highest_preference, :dont_preempt => true,
+                             :df_pref => 100)
+    assert_equal(2, c.df_alg)
+    assert(c.dont_preempt?)
+    refute(c.ac_df?)
+    assert_equal(100, c.df_pref)
+    assert_equal('DF Election: alg highest_preference, dont_preempt, pref 100',
+                 c.to_s)
+    # The preference rides as a third element, after the capabilities.
+    assert_equal({ :df_election => [:highest_preference, [:dont_preempt], 100] },
+                 c.to_hash)
+    assert_equal(c.to_shex, BGP::Df_election.new(c.to_hash[:df_election]).to_shex)
+    assert_equal(c.to_shex, BGP::Df_election.new(c.to_hash).to_shex)
+    assert_equal(c.to_shex,
+                 BGP::Extended_community.factory([c.to_shex].pack('H*')).to_shex)
+    assert_equal(c.to_shex,
+                 BGP::Extended_communities.new(c.to_hash).communities[0].to_shex)
+    # A preference algorithm always carries the element, so a preference
+    # of 0 cannot be read back as the section 3 default of 32767.
+    zero = BGP::Df_election.new(:highest_preference, :df_pref => 0)
+    assert_equal({ :df_election => [:highest_preference, [], 0] }, zero.to_hash)
+    assert_equal(zero.to_shex,
+                 BGP::Df_election.new(zero.to_hash).to_shex)
+    # And an ordinary community hashes as the pair it always did.
+    assert_equal({ :df_election => [:hrw, [:ac_df]] },
+                 BGP::Df_election.new(:hrw, :ac_df => true).to_hash)
   end
 
   def test_df_election_builds_four_ways
