@@ -362,30 +362,22 @@ There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Cove
 * **A "won't fix" has to record the mechanism, not the verdict.** One was written in this session and reversed an hour later by a single question from the owner: "order should not matter when you recreate an object from a hash, care to explain the concern?" The premise was true, that a Hash keyed by attribute type cannot hold two of a type or say which came first. The conclusion, that nothing readable could be done, did not follow from it, and the prose had carried the premise's authority over to the conclusion. Two things would have caught it. State the premise and the conclusion as separate sentences and check the second follows from the first. And name the bar you are measuring against, because the real mistake was taking byte-exact octets as the bar for a hash whose job is to rebuild instance state.
 * **An IANA registry is reachable from this sandbox, so "check the registry" is a real instruction and not a wish.** Several entries in this file were written as though it were not. The catch is the fetch tool's allowlist: a URL **built by editing a path** is refused, so `https://www.rfc-editor.org/rfc/rfc8556.html` fails even right after `rfc9574.html` succeeded. Search first and fetch a **result link**. `https://www.iana.org/assignments/bgp-parameters` came back from a search and served the whole BGP parameters page, registry by registry. Measured on 2026-10-31, where it settled all six PMSI tunnel type names at once. Two things that went with it: a third party mirror, codepoints.org, was **stale and wrong** on a name it did carry, hyphenating "Assisted Replication Tunnel" where RFC 9574's own IANA table does not, so corroboration from a mirror is worth less than one read of the defining document; and #120's hand measurement of that registry, which this file had flagged as second hand and to be re-checked, turned out **right in every particular**. Re-checking it was still the correct move, since that is what turned "probably right" into something a test could state.
 * Cite the RFC section in a comment when you implement or fix wire format logic. Open the RFC and check the section number against its text; do not write one from memory. Six citations in this file and in the code were found wrong on 2026-10-27. One of them, "RFC 5291 section 5" for the ROUTE-REFRESH and ORF layout, is section 4, and it had been copied forward into two pull requests before anyone read the RFC. **Both numbers are live in that RFC and mean different things**, which is how the mix up happened and how it could happen again: section 4 is the ORF entry inside a ROUTE-REFRESH, whose Reserved is 5 bits of one octet and is "set to 0 on transmit and ignored on receipt", and section 5 is the Outbound Route Filtering Capability, whose Reserved is a whole octet that the section labels in Figure 3 and never describes. Do not quote section 4's sentence about the capability's octet. Figure 3 also says "Number of ORFs" where section 5's own text says "Number of ORF Types"; they are one field. Another called 0x02 and 0x03 extended community types when they are sub-types. A wrong citation is worse than none, because it reads as verified and sends the next person to the wrong page.
-* **`b"""..."""` in Python is a bytes literal, not an assignment, and it
-  corrupted this file once.** #188 edited CLAUDE.md with a heredoc Python
-  script whose replacements read `a="""old"""` then `b"""new"""`, missing
-  the `=` on four of them. Python accepts that line as an expression
-  statement and discards it, so `b` kept the value from the **previous**
-  edit and each `s.replace(a, b)` pasted the wrong block: the part 8 entry
-  landed inside the BGP-LS bullet and again below it, and the baseline line
-  replaced the phase 3 heading. Three sections were mangled and the file
-  grew 241 lines. Every `assert s.count(a)==1` passed, because the bug was
-  in `b` and nothing checked `b`.
-  * What makes it worse than a typo is that it is **silent and valid**: no
-    syntax error, no exception, no failing test, since no test reads this
-    file. It was found only when the next session re-read CLAUDE.md and the
-    text did not make sense.
-  * So when a script edits a document, **assert on the result and not only
-    on the match**: count the headings that should appear once, and print
-    the line count. A rebuild from the last good version is the repair,
-    because a patch on top of mangled text leaves residue. #189 did that:
-    `git show <last good>:CLAUDE.md` into a temporary file, the intended
-    edits re-applied from a table of (old, new) pairs so neither side can
-    be dropped, then the duplicate count checked.
-  * The same shape would bite `r`, `f` and `u` prefixed strings. Prefer a
-    list of pairs iterated with `for old, new in EDITS`, which has nowhere
-    to lose an assignment, and keep the `Edit` tool for anything short.
+* **Edit this file with the `Edit` tool, one passage at a time.** Nothing
+  in bgp4r is written in anything but Ruby; this is about an agent's own
+  scratch tooling. A script that rewrites several passages of a long
+  document at once corrupted CLAUDE.md in #188: three sections were
+  mangled, the file grew 241 lines, and one entry appeared three times. The
+  script asserted that each passage it searched for occurred once, and
+  every one of those assertions passed, because the fault was in the
+  replacement text and nothing checked that. #189's commit message has the
+  mechanism if it is ever wanted again.
+  * **That failure is silent and leaves valid text**: no exception, no
+    failing test, since no test reads this file. It surfaced only when the
+    next session re-read CLAUDE.md and the prose did not make sense.
+  * So a scripted document edit must **assert on the result and not only on
+    the match**: count the headings that should appear once and print the
+    line count. Repair by rebuilding from the last good version, `git show
+    <rev>:CLAUDE.md`, because a patch on top of mangled text leaves residue.
 * Do not delete or weaken existing tests to make a change pass.
 * If you find a bug you are not fixing, list it in the PR description.
 * A plan that spans more than one session goes under "Where the work is going" as phases with their status, before the work starts. A plan that lives only in a chat is lost the moment the context is: the RIB plan below had to be recovered from a transcript because nothing in this file recorded it, or recorded that phase 1 was finished.
