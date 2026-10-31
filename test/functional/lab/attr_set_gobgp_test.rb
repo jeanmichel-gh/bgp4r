@@ -21,7 +21,6 @@
 #++
 
 require 'test/unit'
-require 'base64'
 require 'bgp4r'
 require 'test/functional/lab/lab_helper'
 
@@ -207,7 +206,16 @@ class AttrSetGobgpTest < Test::Unit::TestCase
     # calls for and what our header writes.
     assert_equal(0xc0, a['flags'], 'read as optional transitive')
     assert_equal(128, a['type'])
-    value = Base64.strict_decode64(a['value']).unpack1('H*')
+    # `unpack1('m0')` and **not** Base64.strict_decode64, because
+    # **base64 is a bundled gem from Ruby 3.4** and so does not load
+    # under Bundler unless declared. The first draft of this file
+    # required it, passed on the 3.3 here where it is still a default
+    # gem, and failed CI on 3.4 with "cannot load such file -- base64"
+    # before a single test ran. `m0` is core, needs no require, and is
+    # the strict form, which is what strict_decode64 meant. See
+    # Conventions: observer went in 3.4 and logger in 4.0, so check
+    # before requiring a standard library.
+    value = a['value'].unpack1('m0').unpack1('H*')
     # The attribute minus its 3 octet header, which is the value field.
     assert_equal(sent.to_shex[6..-1], value,
                  'the value GoBGP stored is the value we encoded')
