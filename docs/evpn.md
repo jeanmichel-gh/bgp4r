@@ -292,12 +292,15 @@ extended community**, which was measured rather than assumed. Reusing
 reused for the MPLS Label, and two things rule it out. It **cannot be
 rebuilt from its own `to_hash`**: neither `Extended_community.factory`
 nor `.new` takes a Hash, so route type 9's hash round trip would break
-and have to be recorded as a loss. And it would buy no meaning anyway,
-because **all three of section 6.2's own examples read back as
-`Extended_community::Unknown` today**: two use sub-type 0x09, Source AS
-of RFC 6514 section 4.5, which bgp4r's `FACTORY` does not register, and
-the third is "a Transitive IPv4-Address-specific EC of any sub-type".
-Registering Source AS is its own small piece of work.
+and have to be recorded as a loss. And when this was written it would
+have bought no meaning either, because **all three of section 6.2's own
+examples read back as `Extended_community::Unknown`**: two use sub-type
+0x09, Source AS of RFC 6514 section **6**, and the third is "a
+Transitive IPv4-Address-specific EC of any sub-type". Sub-type 0x09 is
+registered now, so the first two read back as a `BGP::Source_as` and
+only the third is still Unknown. The verdict is unchanged, since it
+rests on the hash round trip. The citation here said section 4.5 until
+2026-10-31, and 4.5 is "Source Active A-D Route".
 
 **Route type 10**, the S-PMSI A-D route, is route type 6 without its
 Flags octet: RD (8), Ethernet Tag ID (4), then the address triple. So it

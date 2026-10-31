@@ -198,7 +198,61 @@ class Extended_community_Test < Test::Unit::TestCase
     assert_equal("Route origin: 2.2.2.2:333",Route_origin.new('2.2.2.2', 333).to_s)
     assert_equal("Route origin: 10:20",Route_origin.new(10, 20).to_s)
     assert_equal("000300ff00deadbe",Route_origin.new(0xff,0xdeadbe).to_shex)
-    
+
+  end
+
+  # RFC 6514 section 6: the Global Administrator "MUST be set to the ASN
+  # of the PE" and the Local Administrator "MUST be set to 0".
+  def test_source_as
+    assert_equal('0009fde800000000', Source_as.new(65000).to_shex)
+    assert_equal('Source as: 65000:0', Source_as.new(65000).to_s)
+    # RFC 5668 section 2: an AS above 65535 takes the 4 octet AS
+    # specific type octet, with a 2 octet local administrator.
+    assert_equal('0209000186a00000', Source_as.new(100000).to_shex)
+    assert_equal('Source as: 100000:0', Source_as.new(100000).to_s)
+    assert_equal('0209ffffffff0000', Source_as.new(0xffffffff).to_shex)
+    assert_raise(ArgumentError) { Source_as.new(100000, 0x10000) }
+    wire = Source_as.new(['00090000fde80000'].pack('H*'))
+    assert_equal('Source as: 0:4259840000', wire.to_s)
+    assert_equal('00090000fde80000', wire.to_shex)
+  end
+
+  # The one argument form is section 6's MUST supplying the 0, so a
+  # local administrator no RFC allows needs the two argument form.
+  def test_source_as_builds_a_local_administrator_no_rfc_allows
+    assert_equal('0009fde800000007', Source_as.new(65000, 7).to_shex)
+    assert_equal('0209000186a00007', Source_as.new(100000, 7).to_shex)
+  end
+
+  # IANA assigns sub-type 0x09 in the Transitive Two-Octet AS-Specific
+  # and Transitive Four-Octet AS-Specific registries and in neither
+  # IPv4-Address-Specific one, read there on 2026-10-31. So the factory
+  # names the two it assigns, and an address specific build still
+  # encodes, because building never validates, and reads back as an
+  # Unknown rather than bgp4r naming a code point IANA has not.
+  def test_only_the_two_assigned_source_as_structures_are_named
+    assert_equal(Source_as,
+      Extended_community.factory(['0009fde800000000'].pack('H*')).class)
+    assert_equal(Source_as,
+      Extended_community.factory(['0209000186a00000'].pack('H*')).class)
+    addr = Source_as.new('172.21.0.0')
+    assert_equal('0109ac1500000000', addr.to_shex)
+    assert_equal(Extended_community::Unknown,
+      Extended_community.factory([addr.to_shex].pack('H*')).class)
+  end
+
+  # RFC 4360 section 2: the transitive bit is masked before the factory
+  # is asked, so a non-transitive one is named too, and the type octet
+  # is echoed. Nothing in [100000, 7] says which of the two AS specific
+  # forms it came from, nor whether the T bit was set, so the hash
+  # carries the octet.
+  def test_a_source_as_hash_carries_its_type_octet_when_the_value_cannot
+    assert_equal({ :source_as => [65000, 0] }, Source_as.new(65000).to_hash)
+    assert_equal({ :source_as => [100000, 7] },
+                 Source_as.new(100000, 7).to_hash)
+    wire = Source_as.new(['4209000186a00007'].pack('H*'))
+    assert_equal({ :source_as => [100000, 7], :type => 0x42 }, wire.to_hash)
+    assert_equal('4209000186a00007', wire.to_shex)
   end
 
   def test_ospf_domain_id

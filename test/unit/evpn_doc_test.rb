@@ -669,14 +669,19 @@ class EvpnDocTest < Test::Unit::TestCase
     ec = BGP::Extended_community.factory(['00090000fde80000'].pack('H*'))
     assert_raise(ArgumentError) { BGP::Extended_community.new(ec.to_hash) }
     assert_raise(NoMethodError) { BGP::Extended_community.factory(ec.to_hash) }
-    # And all three of section 6.2's examples are Unknown today, which
-    # is the other half: sub-type 0x09 Source AS is unregistered.
-    ['00090000fde80000', '0209000186a00000', '0101000000010000'].each do |h|
-      assert_instance_of(BGP::Extended_community::Unknown,
+    # And when this was written all three of section 6.2's examples were
+    # Unknown, which was the other half. Sub-type 0x09 is registered
+    # now, so two of them are a Source_as and only the third is still
+    # Unknown. The document says so; the verdict above is what holds.
+    ['00090000fde80000', '0209000186a00000'].each do |h|
+      assert_instance_of(BGP::Source_as,
                          BGP::Extended_community.factory([h].pack('H*')),
                          h)
     end
-    assert_match(/sub-type 0x09, Source AS/, doc)
+    assert_instance_of(BGP::Extended_community::Unknown,
+      BGP::Extended_community.factory(['0101000000010000'].pack('H*')))
+    assert_match(/sub-type\s+0x09, Source AS of RFC 6514 section \*\*6\*\*/, doc)
+    assert_match(/only the third is still Unknown/, doc)
     # Where Region_id does round trip through its own hash.
     r = BGP::Evpn::Region_id.new('00090000fde80000')
     assert_equal(r.to_shex, BGP::Evpn::Region_id.new(r.to_hash).to_shex)

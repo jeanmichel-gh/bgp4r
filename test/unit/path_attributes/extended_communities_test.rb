@@ -536,6 +536,23 @@ class Extended_communitiesTest < Test::Unit::TestCase
   # carry a :bits entry now, all 48 bits of the value, the way
   # Traffic_action always has. The forms with those fields at 0, which is
   # what the RFCs ask an encoder for, are in the list above.
+  # RFC 6514 section 6. The hash is read here and nowhere else, since no
+  # individual community class has a Hash branch, so a FACTORY entry
+  # with no HASH_BUILDERS entry beside it is half a wiring.
+  def test_the_collection_reads_and_names_a_source_as
+    ecs = BGP::Extended_communities.new(BGP::Source_as.new(65000),
+                                        BGP::Source_as.new(100000, 7))
+    assert_equal('Source as: 65000:0', ecs.source_as[0].to_s)
+    assert_equal({ :extended_communities =>
+                   [{ :source_as => [65000, 0] },
+                    { :source_as => [100000, 7] }] }, ecs.to_hash)
+    assert_equal(ecs.to_shex,
+                 BGP::Extended_communities.new(ecs.to_hash).to_shex)
+    # replace changes the first of a class, so both are still there.
+    ecs.source_as = 65001
+    assert_equal('Source as: 65001:0', ecs.source_as[0].to_s)
+  end
+
   def test_every_wire_form_the_factory_knows_survives_its_own_hash
     forms = [
       ['0002', '000100000001'], # RFC 4360 section 4, 2 octet AS specific
@@ -550,6 +567,11 @@ class Extended_communitiesTest < Test::Unit::TestCase
       ['0205', '000100020003'],
       ['0107', '010203040009'],
       ['0008', '006400000064'], # RFC 4384
+      # RFC 6514 section 6. Both AS specific structures, since IANA
+      # assigns 0x09 in those two registries and in neither IPv4
+      # address specific one.
+      ['0009', 'ffffffffffff'],
+      ['0209', 'ffffffffffff'],
       ['030b', '000000000064'], # RFC 9012 section 4.3
       ['0300', '000000000001'], # RFC 8097 section 2
       ['030c', 'ffffffff0008'], # RFC 9012 section 4.1, 4 reserved octets set
@@ -602,8 +624,8 @@ class Extended_communitiesTest < Test::Unit::TestCase
       t = ts[0,2].to_i(16)
       [format('%02x%s%s', t, ts[2,2], v), format('%02x%s%s', t | 0x40, ts[2,2], v)]
     }.flatten.uniq
-    # One short of 76: 0xff already has the bit set.
-    assert_equal(75, all.size)
+    # One short of 80: 0xff already has the bit set.
+    assert_equal(79, all.size)
     all.each do |hex|
       ec = Extended_community.factory([hex].pack('H*'))
       assert_equal(hex, ec.to_shex, hex)

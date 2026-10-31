@@ -365,6 +365,7 @@ module ToHashCatalog
   {
     'Route_target'            => '4102010101010064',
     'Route_origin'            => '4203000000640001',
+    'Source_as'               => '4209000186a00007',
     'Link_bandwidth'          => '00040064447a0000',
     'Bgp_data_collect'        => '4008fde800deadbe',
     'Ospf_domain_id'          => '0205000100020003',
