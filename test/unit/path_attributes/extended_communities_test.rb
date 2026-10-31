@@ -564,6 +564,16 @@ class Extended_communitiesTest < Test::Unit::TestCase
       ['0601', 'ffffff00064f'], # RFC 7432 section 7.5, flags, reserved and low 4 bits set
       ['0602', 'aabbccddeeff'], # RFC 7432 section 7.6
       ['0603', 'aabbccddeeff'], # RFC 9135 section 8.1
+      # RFC 9251 section 9.4: both flags and all 14 reserved bits of the
+      # Flags field and all 4 reserved octets set.
+      ['0609', 'ffff'  + 'ffffffff'],
+      # RFC 9251 section 9.5, the four EVI-RT types. Every value octet is
+      # a field of the RT they copy, so none of these has a reserved bit
+      # to set; type 3 cannot split its six octets at all.
+      ['060a', 'ffffffffffff'],
+      ['060b', 'ffffffffffff'],
+      ['060c', 'ffffffffffff'],
+      ['060d', 'ffffffffffff'],
       # RFC 4360 sections 2 and 4, RFC 7606 section 7.14: a type the
       # factory does not know keeps its octets as they are.
       ['ffff', '000000000000'],
@@ -575,8 +585,8 @@ class Extended_communitiesTest < Test::Unit::TestCase
       t = ts[0,2].to_i(16)
       [format('%02x%s%s', t, ts[2,2], v), format('%02x%s%s', t | 0x40, ts[2,2], v)]
     }.flatten.uniq
-    # One short of 54: 0xff already has the bit set.
-    assert_equal(53, all.size)
+    # One short of 64: 0xff already has the bit set.
+    assert_equal(63, all.size)
     all.each do |hex|
       ec = Extended_community.factory([hex].pack('H*'))
       assert_equal(hex, ec.to_shex, hex)

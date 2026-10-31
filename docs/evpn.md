@@ -526,27 +526,113 @@ goes in one.
 bgp4r needs **eleven** added, not ten, and the extra one is the reason
 to count carefully.
 
-Ten are EVPN sub-types under type 0x06, each with an RFC. Three more of
-the fourteen in that registry cite only drafts and one is Reserved, so
-those are out.
+**The registry, measured on 2026-10-30 rather than recalled.** The
+"EVPN Extended Community Sub-Types" subregistry under type 0x06 has 18
+assigned entries, 0x00 to 0x10 and 0x15. **Fourteen have an RFC**, three
+cite only drafts, and one is Reserved. bgp4r had four of the fourteen,
+so ten were missing. Both of the figures `CLAUDE.md` carried were right
+about different things and its prose read as though they disagreed: the
+fourteen is the count with an RFC, and the ten is the count still to
+write.
+
+| Sub-type | Name | Reference | In bgp4r |
+|---|---|---|---|
+| 0x00 | MAC Mobility | RFC 7432 section 7.7 | yes |
+| 0x01 | ESI Label | RFC 7432 section 7.5 | yes |
+| 0x02 | ES-Import Route Target | RFC 7432 section 7.6 | yes |
+| 0x03 | EVPN Router's MAC | RFC 9135 section 8.1 | yes |
+| 0x04 | EVPN Layer 2 Attributes | RFC 8214 section 3.1 | no |
+| 0x05 | E-Tree | RFC 8317 section 6.1 | no |
+| 0x06 | DF Election | RFC 8584 section 2.2 | no |
+| 0x07 | Reserved | none | no |
+| 0x08 | ARP/ND | RFC 9047 section 2 | no |
+| 0x09 | Multicast Flags | RFC 9251 section 9.4 | yes |
+| 0x0a | EVI-RT Type 0 | RFC 9251 section 9.5 | yes |
+| 0x0b | EVI-RT Type 1 | RFC 9251 section 9.5 | yes |
+| 0x0c | EVI-RT Type 2 | RFC 9251 section 9.5 | yes |
+| 0x0d | EVI-RT Type 3 | RFC 9251 section 9.5 | yes |
+| 0x0e | EVPN Attachment Circuit | draft only | no |
+| 0x0f | Service Carving Time | RFC 9722 section 2.1 | no |
+| 0x10 | EVPN Link Bandwidth | draft only | no |
+| 0x15 | RT-derived-EC | draft only | no |
+
+**That table is discovered, not listed.** `test/unit/evpn_doc_test.rb`
+reads `Extended_community::FACTORY` and cross-checks the "In bgp4r"
+column against it in both directions, the way the route type table is
+checked, so a community added to the library without this table being
+told fails, and a row claiming one that is not there fails too. **The
+DF Election citation was wrong in a draft of this table and reading
+RFC 8584 is what caught it**: the DF Election Extended Community is
+section **2.2**, not section 5.1. Section 5 is "Solution Benefits".
 
 **The eleventh is not an EVPN sub-type at all.** RFC 7432 section 7.8
 puts the Default Gateway community at **type 0x03 sub-type 0x0d**, a
 Transitive Opaque community. It is invisible to anyone counting only the
 0x06 registry, which is how the figure of fourteen in `CLAUDE.md` came
-to be one short.
+to be one short. IANA gives its reference as an author's name rather
+than an RFC.
 
-bgp4r registers four of the 0x06 sub-types today, 0x00 to 0x03, and
-three Opaque ones, `[0x03, 0x00]` Origin Validation State,
-`[0x03, 0x0b]` Color and `[0x03, 0x0c]` Encapsulation. Sub-type 0x0d is
-not among them, so Default Gateway is the one missing and the Opaque
-type itself is already reached. **An earlier draft of this document said
-bgp4r registered no 0x03 sub-types at all, which was wrong**, and the
-only reason it did not ship is that the doc test printed `FACTORY`'s
-keys rather than taking the claim on trust. Same failure as a wrong RFC
-citation: it would have read as verified.
+bgp4r registers three Opaque sub-types, `[0x03, 0x00]` Origin
+Validation State, `[0x03, 0x0b]` Color and `[0x03, 0x0c]`
+Encapsulation. Sub-type 0x0d is not among them, so Default Gateway is
+the one missing and the Opaque type itself is already reached. **An
+earlier draft of this document said bgp4r registered no 0x03 sub-types
+at all, which was wrong**, and the only reason it did not ship is that
+the doc test printed `FACTORY`'s keys rather than taking the claim on
+trust. Same failure as a wrong RFC citation: it would have read as
+verified.
 
-These arrive with part 8.
+### The five of RFC 9251
+
+Part 8a took these first, because route types 7 and 8 need them: section
+9.5 says each "MUST carry exactly one EVI-RT EC".
+
+**Multicast Flags, 0x09**, is a 2-octet Flags field then 4 reserved
+octets. The two defined bits are the least significant of the Flags
+field, which the section says rather than leaving to the figure: "Bit 15
+(shown as I) defines IGMP Proxy Support" and "Bit 14 (shown as M)
+defines MLD Proxy Support", with its section 12.3 registry numbering the
+bits "0-15, from high order to low order". So in the 48-bit value I is
+bit 32 and M is bit 33, and `DEFINED_BITS` is those two. Everything else
+is reserved and comes back as a `:bits` entry when a peer set it.
+
+**The four EVI-RT types, 0x0a to 0x0d**, carry a value "identical to the
+value field of RT1", the Route Target of the EVI, and the sub-type says
+which kind of RT that was. So the six octets split the way that RT's own
+structure splits them: 2 plus 4 for a Two-Octet AS-specific RT (type 0),
+4 plus 2 for an IPv4-Address-specific one (type 1) and for a Four-Octet
+AS-specific one (type 2). None of the three has a reserved bit, because
+every octet is a field of the RT.
+
+Section 9.5 is why these are their own classes and not `Route_target`
+under another sub-type: "an EVI-RT EC is not a Route Target extended
+community, is not visible to the RT Constrain mechanism [RFC4684], and
+is not intended to influence the propagation of routes by BGP".
+
+**Type 3 is the one RFC 9251 contradicts itself about.** Section 9.5
+says its value is identical to the value field of "a Transitive
+IPv6-Address-specific EC", and RFC 5701 section 2 makes that community
+20 octets with an **18-octet** value field. An EVPN extended community
+has 6. The figure in that same section shows the 8-octet form, and
+section 12.1 registers 0x0D in the 0x06 subregistry, which is the
+8-octet family.
+
+**bgp4r follows the figure and the registry**, because that is where the
+code point lives: a 20-octet community would need one in the
+IPv6-address-specific registry and IANA lists none. Checked on
+2026-10-30, and there is no erratum on RFC 9251 about it. So `Evi_rt_3`
+carries its six octets and does not split them, since the layout it is
+told to copy does not fit in them; its hash key is `:value` and that is
+what would move if the 18-octet reading is ever settled.
+
+Two receive-side rules in those sections are **part 9's work** and
+nothing here enforces them, per Conventions: section 9.4's "if both M
+and I flags are 0, the router MUST treat this update as malformed", and
+section 9.5's treat-as-withdraw for a route carrying no EVI-RT EC or
+more than one. Building either is a negative test and must stay
+possible.
+
+The other six arrive with part 8b.
 
 ## 7a. The wiring, and the next hop
 

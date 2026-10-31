@@ -1019,6 +1019,46 @@ module ToHashCatalog
       :flags => [:v2, { :bits => 0xf2 }])
   end
 
+  # RFC 9251 section 9.4, the Multicast Flags Extended Community. Two
+  # flags and two reserved fields, and the recipe sets a reserved bit as
+  # well as a flag, so it exercises the `:bits` entry the plain list
+  # cannot carry: a community built from flag names alone would round
+  # trip without ever showing that half of the hash. Built from the wire
+  # because that is the only way reserved bits arrive.
+  #
+  # **:ok where its four EVPN siblings are :elsewhere**, and the reason
+  # is `Traffic_action`'s. These five unwrap their own hash key, so the
+  # own route works; without that the outer hash gives nil for every
+  # field and a community of zeros is built in silence, which is the
+  # failure that comment records and which was measured here before the
+  # unwrap went in. Mac_mobility, Esi_label, Es_import and Router_mac
+  # raise instead of building a wrong one, so nothing there is quiet and
+  # NO_HASH_BRANCH stands for them.
+  ENTRIES['BGP::Multicast_flags'] = entry(:ok, nil, nil) do
+    BGP::Extended_community.factory(['060900010000ffff'].pack('H*'))
+  end
+
+  # RFC 9251 section 9.5, the four EVI-RT Extended Communities. Each
+  # carries the value field of the Route Target the sub-type names, so
+  # the recipes set every octet of it. Types 0, 1 and 2 split it into
+  # the pair their RT structure gives; type 3 cannot, for the reason
+  # recorded in docs/evpn.md, and hashes as its six octets instead.
+  ENTRIES['BGP::Evi_rt_0'] = entry(:ok, nil, nil) do
+    BGP::Evi_rt_0.new(0xffff, 0xffffffff)
+  end
+
+  ENTRIES['BGP::Evi_rt_1'] = entry(:ok, nil, nil) do
+    BGP::Evi_rt_1.new('255.255.255.255', 0xffff)
+  end
+
+  ENTRIES['BGP::Evi_rt_2'] = entry(:ok, nil, nil) do
+    BGP::Evi_rt_2.new(0xffffffff, 0xffff)
+  end
+
+  ENTRIES['BGP::Evi_rt_3'] = entry(:ok, nil, nil) do
+    BGP::Evi_rt_3.new('aabbccddeeff')
+  end
+
   # The Region ID of route type 9, RFC 9572 sections 3.1 and 6.2. One
   # field, and the recipe uses the first of section 6.2's three example
   # encodings, a Transitive Two-Octet AS-specific EC of sub-type 0x09
@@ -1070,6 +1110,15 @@ module ToHashCatalog
   # sensible instance belongs here; a class merely awkward to build does
   # not.
   NO_RECIPE = {
+    # The abstract base of the four EVI-RT communities, RFC 9251 section
+    # 9.5. It supplies TYPE and a default GLOBAL_WIDTH but no SUBTYPE or
+    # LABEL, so a build raises NameError inside Typed#initialize, the
+    # same way Extended_community::Typed itself does. Its four
+    # subclasses are measured instead.
+    'BGP::Evi_rt' =>
+      'an abstract base with no sensible instance. SUBTYPE and LABEL ' \
+      'are supplied only by subclasses, so every build path raises ' \
+      'NameError. Evi_rt_0 to Evi_rt_3 are measured instead.',
     'BGP::Extended_community::Typed' =>
       'an abstract base with no sensible instance. All three build ' \
       'paths fail inside it: TYPE and SUBTYPE are supplied only by ' \

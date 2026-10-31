@@ -281,8 +281,77 @@ class EvpnDocTest < Test::Unit::TestCase
       assert(f.has_key?(k),
              "#{DOC} says #{k.inspect} is registered and it is not")
     end
-    assert_equal(4, f.keys.count { |k| k[0] == 0x06 },
-                 "#{DOC} says four 0x06 sub-types are registered")
+  end
+
+  # Section 7's sub-type table, as {sub-type => the "In bgp4r" cell}.
+  def community_table
+    doc.lines.each_with_object({}) do |l, h|
+      m = l.match(/^\|\s*0x([0-9a-f]{2})\s*\|([^|]*)\|([^|]*)\|\s*(\w+)\s*\|\s*$/)
+      h[m[1].to_i(16)] = m[4].downcase if m
+    end
+  end
+
+  # **The discovery guard for the community table**, the twin of the
+  # route type one, and it fires in both directions: a 0x06 sub-type
+  # registered in FACTORY whose row says no, and a row saying yes with
+  # nothing registered behind it. The hard coded count this replaced
+  # said "four", and adding the five of RFC 9251 is what made it false.
+  def test_the_community_table_says_yes_for_exactly_what_is_registered
+    t = community_table
+    assert_operator(t.size, :>=, 18, "#{DOC} section 7's table lost rows")
+    registered = BGP::Extended_community::FACTORY.keys
+                   .select { |k| k[0] == 0x06 }.collect { |k| k[1] }.sort
+    t.each do |sub, cell|
+      if registered.include?(sub)
+        assert_equal('yes', cell,
+                     format("#{DOC} says %s for sub-type 0x%02x, which is " \
+                            'registered', cell.inspect, sub))
+      else
+        assert_equal('no', cell,
+                     format("#{DOC} says %s for sub-type 0x%02x, which is " \
+                            'not registered', cell.inspect, sub))
+      end
+    end
+    # And no registration without a row at all.
+    registered.each do |sub|
+      assert(t.has_key?(sub),
+             format("#{DOC} section 7 has no row for sub-type 0x%02x", sub))
+    end
+  end
+
+  # The five of RFC 9251, and the two claims about them a reader is
+  # most likely to get backwards.
+  def test_the_rfc_9251_communities_are_what_the_document_says
+    assert_match(/Bit 15\s+\(shown as I\) defines IGMP Proxy Support/, doc)
+    # I is the low bit of the Flags field, so bit 32 of the 48-bit value.
+    assert_equal(1 << 32, BGP::Multicast_flags::IGMP_PROXY)
+    assert_equal(1 << 33, BGP::Multicast_flags::MLD_PROXY)
+    assert_equal('0609000100000000', BGP::Multicast_flags
+                                       .new(:igmp_proxy => true).to_shex)
+    assert_equal('0609000200000000', BGP::Multicast_flags
+                                       .new(:mld_proxy => true).to_shex)
+    # The EVI-RT split, which the sub-type decides.
+    assert_match(/2 plus 4 for a Two-Octet AS-specific RT \(type 0\)/, doc)
+    assert_equal('060a0064000000c8', BGP::Evi_rt_0.new(100, 200).to_shex)
+    assert_equal('060b0a00000100c8', BGP::Evi_rt_1.new('10.0.0.1', 200).to_shex)
+    assert_equal('060c0001117000c8', BGP::Evi_rt_2.new(70_000, 200).to_shex)
+  end
+
+  # Type 3, the contradiction. Both halves are asserted, because the
+  # verdict without the mechanism is what a future audit would reopen.
+  def test_the_evi_rt_type_3_contradiction_is_recorded
+    assert_match(/Type 3 is the one RFC 9251 contradicts itself about/, doc)
+    assert_match(/\*\*18-octet\*\* value field/, doc)
+    assert_match(/follows the figure and the registry/, doc)
+    # Six octets, not eighteen, and no field split.
+    t3 = BGP::Evi_rt_3.new('aabbccddeeff')
+    assert_equal(8, t3.encode.size)
+    assert_nil(t3.global)
+    assert_nil(t3.local)
+    assert_equal({ :evi_rt_3 => { :value => 'aabbccddeeff' } }, t3.to_hash)
+    # Where its three siblings do split.
+    assert_equal(100, BGP::Evi_rt_0.new(100, 200).global)
+    assert_raise(ArgumentError) { BGP::Evi_rt_3.new(100, 200) }
   end
 
   # Conventions' first bullet, as it applies here.

@@ -918,4 +918,184 @@ class Extended_community_Test < Test::Unit::TestCase
                  BGP::Extended_communities.new(:extended_communities => [t.to_hash]).encode[3..])
   end
 
+
+  # ---------------------------------------------------------------
+  # RFC 9251 section 9.4, the Multicast Flags Extended Community.
+  # ---------------------------------------------------------------
+
+  # The two defined bits are the least significant of the 2-octet Flags
+  # field, which section 9.4 says rather than leaving to the figure:
+  # "Bit 15 (shown as I) defines IGMP Proxy Support", "Bit 14 (shown as
+  # M) defines MLD Proxy Support", with section 12.3's registry
+  # numbering the bits "0-15, from high order to low order".
+  def test_multicast_flags_puts_its_two_bits_at_the_bottom_of_the_field
+    assert_equal(0x06, BGP::Multicast_flags::TYPE)
+    assert_equal(0x09, BGP::Multicast_flags::SUBTYPE)
+    assert_equal(1 << 32, BGP::Multicast_flags::IGMP_PROXY)
+    assert_equal(1 << 33, BGP::Multicast_flags::MLD_PROXY)
+    assert_equal('0609000100000000',
+                 BGP::Multicast_flags.new(:igmp_proxy => true).to_shex)
+    assert_equal('0609000200000000',
+                 BGP::Multicast_flags.new(:mld_proxy => true).to_shex)
+    assert_equal('0609000300000000',
+                 BGP::Multicast_flags.new(:igmp_proxy => true,
+                                          :mld_proxy => true).to_shex)
+    assert_equal('0609000000000000', BGP::Multicast_flags.new.to_shex)
+  end
+
+  def test_multicast_flags_builds_four_ways
+    c = BGP::Multicast_flags.new([:igmp_proxy, :mld_proxy])
+    assert(c.igmp_proxy?)
+    assert(c.mld_proxy?)
+    assert_equal('Multicast Flags: IGMP proxy, MLD proxy', c.to_s)
+    assert_equal({ :multicast_flags => [:igmp_proxy, :mld_proxy] }, c.to_hash)
+    # Its own hash, the keyword form, the list form and the wire octets.
+    assert_equal(c.to_shex,
+                 BGP::Multicast_flags.new(c.to_hash[:multicast_flags]).to_shex)
+    assert_equal(c.to_shex, BGP::Multicast_flags
+                              .new(:igmp_proxy => true,
+                                   :mld_proxy => true).to_shex)
+    assert_equal(c.to_shex, BGP::Extended_community
+                              .factory([c.to_shex].pack('H*')).to_shex)
+    # And through the list, which is the path HASH_BUILDERS serves.
+    assert_equal(c.to_shex, BGP::Extended_communities
+                              .new(c.to_hash).communities[0].to_shex)
+    none = BGP::Multicast_flags.new
+    refute(none.igmp_proxy?)
+    refute(none.mld_proxy?)
+    assert_equal('Multicast Flags: none', none.to_s)
+    assert_equal({ :multicast_flags => [] }, none.to_hash)
+  end
+
+  # The keep and echo rule: 14 reserved bits in the Flags field and 4
+  # reserved octets after it, all of which "the receiver MUST ignore"
+  # and all of which come back.
+  def test_multicast_flags_keeps_the_reserved_bits_a_peer_set
+    c = BGP::Extended_community.factory(['060900010000ffff'].pack('H*'))
+    assert_instance_of(BGP::Multicast_flags, c)
+    assert(c.igmp_proxy?)
+    refute(c.mld_proxy?)
+    assert_equal('060900010000ffff', c.to_shex)
+    assert_equal({ :multicast_flags =>
+                   { :igmp_proxy => true, :mld_proxy => false,
+                     :bits => 0x00010000ffff } }, c.to_hash)
+    assert_equal('060900010000ffff',
+                 BGP::Extended_communities.new(c.to_hash)
+                   .communities[0].to_shex)
+    assert_match(/bits 0x00010000ffff/, c.to_s)
+    # No reserved bit set, no :bits entry, so an ordinary one hashes to
+    # the plain list it would have anyway.
+    refute(BGP::Multicast_flags.new([:mld_proxy]).to_hash[:multicast_flags]
+             .is_a?(Hash))
+  end
+
+  # ---------------------------------------------------------------
+  # RFC 9251 section 9.5, the four EVI-RT Extended Communities.
+  # ---------------------------------------------------------------
+
+  # The value is "identical to the value field of RT1" and the sub-type
+  # says which kind of RT that was, so the six octets split the way that
+  # RT's own structure splits them.
+  def test_the_evi_rt_types_split_their_value_the_way_their_rt_does
+    t0 = BGP::Evi_rt_0.new(100, 200)
+    assert_equal(0x0a, BGP::Evi_rt_0::SUBTYPE)
+    assert_equal('060a' + '0064' + '000000c8', t0.to_shex)
+    assert_equal(100, t0.global)
+    assert_equal(200, t0.local)
+    assert_equal('EVI-RT Type 0: 100:200', t0.to_s)
+
+    t1 = BGP::Evi_rt_1.new('10.0.0.1', 200)
+    assert_equal(0x0b, BGP::Evi_rt_1::SUBTYPE)
+    assert_equal('060b' + '0a000001' + '00c8', t1.to_shex)
+    assert_equal('10.0.0.1', t1.global)
+    assert_equal(200, t1.local)
+
+    t2 = BGP::Evi_rt_2.new(70_000, 200)
+    assert_equal(0x0c, BGP::Evi_rt_2::SUBTYPE)
+    assert_equal('060c' + '00011170' + '00c8', t2.to_shex)
+    assert_equal(70_000, t2.global)
+    assert_equal(200, t2.local)
+  end
+
+  # Each is 8 octets whatever its structure, and each round trips four
+  # ways including through the list.
+  def test_the_evi_rt_types_build_four_ways
+    { BGP::Evi_rt_0 => [100, 200],
+      BGP::Evi_rt_1 => ['10.0.0.1', 200],
+      BGP::Evi_rt_2 => [70_000, 200] }.each do |k, args|
+      c = k.new(*args)
+      key = c.to_hash.keys.first
+      assert_equal(8, c.encode.size, k.to_s)
+      assert_equal(args, c.to_hash[key], k.to_s)
+      # The **bare** hash value, which is what new reads. Conventions
+      # records that Klass.new(Klass#to_hash) was never the contract,
+      # since to_hash answers the wrapped form the list merges.
+      assert_equal(c.to_shex, k.new(c.to_hash[key]).to_shex, k.to_s)
+      assert_equal(c.to_shex, BGP::Extended_community
+                                .factory([c.to_shex].pack('H*')).to_shex, k.to_s)
+      assert_equal(c.to_shex, BGP::Extended_communities
+                                .new(c.to_hash).communities[0].to_shex, k.to_s)
+    end
+  end
+
+  # Type 3, which RFC 9251 contradicts itself about: section 9.5 says
+  # its value is identical to an IPv6-Address-specific RT's value field,
+  # which RFC 5701 section 2 makes 18 octets, where the same section's
+  # figure and section 12.1's registration make it an 8-octet community
+  # with 6. bgp4r follows the figure and the registry, and the class
+  # therefore does not split its six octets.
+  def test_evi_rt_type_3_carries_six_octets_and_does_not_split_them
+    t3 = BGP::Evi_rt_3.new('aabbccddeeff')
+    assert_equal(0x0d, BGP::Evi_rt_3::SUBTYPE)
+    assert_equal('060daabbccddeeff', t3.to_shex)
+    assert_equal(8, t3.encode.size)
+    assert_nil(t3.global, 'the layout it copies does not fit in six octets')
+    assert_nil(t3.local)
+    assert_equal('EVI-RT Type 3: aabbccddeeff', t3.to_s)
+    assert_equal({ :evi_rt_3 => { :value => 'aabbccddeeff' } }, t3.to_hash)
+    assert_equal(t3.to_shex, BGP::Evi_rt_3.new(t3.to_hash[:evi_rt_3]).to_shex)
+    assert_equal(t3.to_shex, BGP::Extended_communities
+                               .new(t3.to_hash).communities[0].to_shex)
+    assert_equal(t3.to_shex, BGP::Extended_community
+                               .factory(['060daabbccddeeff'].pack('H*')).to_shex)
+    # Two field values are refused rather than silently packed, since
+    # there is no layout to pack them into.
+    assert_raise(ArgumentError) { BGP::Evi_rt_3.new(100, 200) }
+    assert_raise(ArgumentError) { BGP::Evi_rt_3.new('aabbcc') }
+  end
+
+  # The three that do split refuse a field their width cannot hold,
+  # which is the narrow case Conventions allows a constructor to refuse,
+  # and accept every value it can.
+  def test_the_evi_rt_types_refuse_only_what_their_fields_cannot_hold
+    assert_raise(ArgumentError) { BGP::Evi_rt_0.new(0x10000, 1) }
+    assert_raise(ArgumentError) { BGP::Evi_rt_0.new(1, 0x100000000) }
+    assert_raise(ArgumentError) { BGP::Evi_rt_2.new(1, 0x10000) }
+    # IPAddr raises its own error for a bad address, which is what
+    # Route_target and Ospf_router_id already do, so this is house
+    # behaviour rather than this class's. IPAddr::InvalidAddressError is
+    # an ArgumentError, but assert_raise matches the class exactly.
+    assert_raise_kind_of(ArgumentError) { BGP::Evi_rt_1.new('nope', 1) }
+    assert_equal('060affffffffffff', BGP::Evi_rt_0.new(0xffff, 0xffffffff).to_shex)
+    assert_equal('060cffffffffffff', BGP::Evi_rt_2.new(0xffffffff, 0xffff).to_shex)
+    assert_equal('060bffffffffffff',
+                 BGP::Evi_rt_1.new('255.255.255.255', 0xffff).to_shex)
+  end
+
+  # All five are reached by the factory, which is the half a FACTORY
+  # entry without a HASH_BUILDERS entry would leave broken: the class
+  # parses and the hash cannot build it back. Measured while writing
+  # this, because that is exactly what happened first.
+  def test_the_five_rfc_9251_communities_are_registered_both_ways
+    { 0x09 => BGP::Multicast_flags, 0x0a => BGP::Evi_rt_0,
+      0x0b => BGP::Evi_rt_1, 0x0c => BGP::Evi_rt_2,
+      0x0d => BGP::Evi_rt_3 }.each do |sub, klass|
+      assert_equal(klass, BGP::Extended_community::FACTORY[[0x06, sub]],
+                   format('sub-type 0x%02x', sub))
+      key = klass.to_s.split('::').last.downcase.to_sym
+      assert(BGP::Extended_communities::HASH_BUILDERS.has_key?(key),
+             "#{key} has no HASH_BUILDERS entry, so its hash cannot build back")
+    end
+  end
+
 end
