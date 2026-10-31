@@ -265,7 +265,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. A `lab` job runs the Compose topologies, and installs a `gobgpd` release so the native fault matrix runs there too; it pins 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-10-31: 1731 tests, 25083 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.1%.
+Baseline on 2026-10-31: 1736 tests, 25128 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.1%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -2182,13 +2182,16 @@ Two consequences, both of which change the plan rather than decorate it:
         **cannot be rebuilt from its own `to_hash`**: neither `factory`
         nor `new` takes a Hash, so route type 9's hash round trip would
         break and have to be recorded as a loss. And it buys no meaning
-        anyway, because **all three of section 6.2's own examples read
-        back as `Extended_community::Unknown` today**: two use sub-type
-        0x09, Source AS of RFC 6514 section 4.5, which bgp4r's
-        `FACTORY` does not register, and the third is "a Transitive
-        IPv4-Address-specific EC of any sub-type". Registering Source
-        AS is its own small piece of work and is listed under "Known
-        issues to work on".
+        anyway, because when this was written **all three of section
+        6.2's own examples read back as `Extended_community::Unknown`**:
+        two use sub-type 0x09, Source AS of RFC 6514 section **6**, and
+        the third is "a Transitive IPv4-Address-specific EC of any
+        sub-type". Sub-type 0x09 is registered now, in #197, so the
+        first two read back as a `Source_as`. The third still does not,
+        and the verdict stands either way, since it rests on the hash
+        round trip. **The citation here used to say section 4.5, twice
+        in this file, and 4.5 is "Source Active A-D Route"**: read in
+        the RFC on 2026-10-31 rather than carried forward again.
       * **The Flags moved out of `Multicast_fields`**, where part 6 put
         it. Route type 10 carries the triple and no Flags, so an
         `attr_reader :flags` in the shared module would answer nil for
@@ -2638,8 +2641,6 @@ Found while fixing other bugs, not fixed yet. Verified against master on
 `ruby -I. -e '...'`.
 
 Smaller things:
-
-* **The Source AS extended community, sub-type 0x09, is not registered**, and RFC 9572 section 6.2 is what showed it: two of the three example Region ID encodings it gives are "a Transitive Two-Octet AS-specific EC of sub-type 0x09 (Source AS)" and the four-octet form of the same, and both read back as `Extended_community::Unknown` in bgp4r today. It is RFC 6514 section 4.5, not an EVPN 0x06 community, so it is not part of EVPN part 8; it is its own small piece of work, an entry in `extended_community.rb`'s `FACTORY` with the two type octets `[0x00,0x09]` and `[0x02,0x09]`. Nothing is wrong today, since an unknown sub-type replays byte for byte; what is missing is meaning. Measured on 2026-10-30: `ruby -I. -e 'require "bgp4r"; p BGP::Extended_community.factory(["00090000fde80000"].pack("H*")).class'` prints `BGP::Extended_community::Unknown`.
 
 * `Nsap.new` and `Nsap.new_nsap` disagree on the default prefix length, so the same address string gives two different prefixes depending on which constructor built it: `ruby -I. -e 'require "bgp/nlris/nsap"; p [BGP::Nsap.new("49.0102.0304.0506.0608.0910.1112.1314.1516.1718.ff").mlen, BGP::Nsap.new_nsap("49.0102.0304.0506.0608.0910.1112.1314.1516.1718.ff").mlen]'` prints `[160, 152]`. `Nsap#mlen` falls back to 160, the whole twenty octet address, where `new_nsap` writes `len ||= 152` and so masks the twentieth octet away and encodes nineteen. 160 is the one that matches the rest of the class, including `MAX_MLEN` and `prefix_mask_bits`. It was left alone when the clamp above it was fixed, because `test_new_nsap` and `test_nsap` both pin the 152 default and the fix moves them, which makes it a behaviour change of its own rather than part of that one. Found while raising the clamp from 152 to 160.
 

@@ -33,6 +33,7 @@ module BGP
     LINK_BANDWIDTH = 4
     OSPF_DOMAIN_ID = 5
     OSPF_ROUTER_ID = 7
+    SOURCE_AS = 9
 
     BGP_ORIGIN_VALIDATION_STATE = 0
     BGP_DATA_COLLECT = 8
@@ -401,9 +402,10 @@ module BGP
     # structure of the value, and a build from field values picks them
     # from the values themselves. An IPv4 address with a 2 octet local
     # administrator gives the IPv4 address specific structure; an AS
-    # above 65535 under the route target or route origin sub-types
-    # (RFC 4360 sections 4 and 5) gives the 4 octet AS specific one of
-    # RFC 5668 section 2; anything else the 2 octet AS specific one.
+    # above 65535 under the route target, route origin or source AS
+    # sub-types (RFC 4360 sections 4 and 5, RFC 6514 section 6) gives
+    # the 4 octet AS specific one of RFC 5668 section 2; anything else
+    # the 2 octet AS specific one.
     #
     # The constructor sets the type octet with this, and hash_type asks
     # it again over the values to_hash carries, so the two cannot drift
@@ -411,7 +413,7 @@ module BGP
     def derived_structure(global, local)
       if global.is_a?(String) and local.is_a?(Integer)
         IPV4_ADDR
-      elsif [ROUTE_TARGET, ROUTE_ORIGIN].include?(@subtype) and
+      elsif [ROUTE_TARGET, ROUTE_ORIGIN, SOURCE_AS].include?(@subtype) and
             global.is_a?(Integer) and global > 0xffff
         FOUR_OCTET_AS
       else
@@ -448,6 +450,47 @@ module BGP
       end
     end
     # RFC 4360 section 5, and the same two cases as the route target.
+    def hash_type
+      TRANSITIVE | derived_structure(*hash_value)
+    end
+  end
+
+  # RFC 6514 **section 6**, "Source AS Extended Community". The section
+  # number is worth stating, because this file's own notes cited section
+  # 4.5 in two places and 4.5 is "Source Active A-D Route": checked
+  # against both rfc-editor.org and the datatracker on 2026-10-31.
+  #
+  # Section 6 gives two fields and nothing else. The Global
+  # Administrator "MUST be set to the ASN of the PE" and the Local
+  # Administrator "MUST be set to 0", and it calls the community
+  # "AS-specific, of an extended type, and transitive across AS
+  # boundaries". So it is the RFC 4360 section 3.1 shape with a fixed
+  # Local Administrator, which is why this is a sibling of the route
+  # target and not a class of its own shape.
+  #
+  # IANA assigns sub-type 0x09 in the Transitive Two-Octet AS-Specific
+  # and Transitive Four-Octet AS-Specific registries and **in neither
+  # IPv4-Address-Specific one**, read there on 2026-10-31, so only two
+  # of the three structures are registered below. A build with an
+  # address still encodes, because building never validates; it reads
+  # back as an `Unknown`, since 0x0109 is a code point IANA has not
+  # assigned and bgp4r must not name one.
+  class Source_as < Extended_community
+    def initialize(*args)
+      if args[0].is_a?(String) and args[0].is_packed?
+        super(*args)
+      else
+        # One argument is the ASN, with section 6's MUST supplying the 0,
+        # which is what every correct sender writes. Two are both fields,
+        # the form the hash carries and the one a test wanting a Local
+        # Administrator no RFC allows passes.
+        args = [args[0], 0] if args.size == 1
+        super(*[0, SOURCE_AS, *args].flatten)
+      end
+    end
+    # The same two cases as the route target: a non-transitive one, and a
+    # 4 octet AS specific one whose AS fits in 2 octets, need their type
+    # octet carried, since nothing in [100, 0] says which form it was.
     def hash_type
       TRANSITIVE | derived_structure(*hash_value)
     end
@@ -1870,6 +1913,10 @@ module BGP
       [TWO_OCTET_AS,  ROUTE_ORIGIN]     => Route_origin,       # RFC 4360 section 5
       [IPV4_ADDR,     ROUTE_ORIGIN]     => Route_origin,
       [FOUR_OCTET_AS, ROUTE_ORIGIN]     => Route_origin,       # RFC 5668 section 2
+      # RFC 6514 section 6. IANA assigns 0x09 in the two transitive AS
+      # specific registries only, so there is no IPV4_ADDR row here.
+      [TWO_OCTET_AS,  SOURCE_AS]        => Source_as,
+      [FOUR_OCTET_AS, SOURCE_AS]        => Source_as,
       [TWO_OCTET_AS,  LINK_BANDWIDTH]   => Link_bandwidth,    # RFC 10005 section 2
       # RFC 4577 section 4.2.6: the OSPF domain ID's type "is 0005, 0105,
       # or 0205", so all three are here. 0205 is the 4 octet AS specific

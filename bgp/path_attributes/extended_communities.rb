@@ -99,6 +99,7 @@ module BGP
       :color                   => ->(v) { Color.new(*v) },
       :route_target            => ->(v) { Route_target.new(*v) },
       :route_origin            => ->(v) { Route_origin.new(*v) },
+      :source_as               => ->(v) { Source_as.new(*v) },
       :link_bandwidth          => ->(v) { Link_bandwidth.new(*v) },
       :ospf_domain_id          => ->(v) { Ospf_domain_id.new(*v) },
       :ospf_router_id          => ->(v) { Ospf_router_id.new(*v) },
@@ -237,6 +238,7 @@ module BGP
       encapsulation
       route_origin
       ospf_router_id      
+      source_as
     }.each do |ecom|
       define_method("#{ecom}") do
         ecs = find_all(BGP.const_get(ecom.capitalize))

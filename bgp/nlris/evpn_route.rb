@@ -502,13 +502,15 @@ module BGP
     # rejected for two reasons. **`Extended_community` cannot be rebuilt
     # from its own `to_hash`**: neither `factory` nor `new` takes a
     # Hash, so route type 9's hash round trip would break and have to be
-    # recorded as a loss. And it would buy no meaning anyway, because
-    # **all three of section 6.2's own examples read back as
-    # `Extended_community::Unknown` today**: two of them use sub-type
-    # 0x09, Source AS of RFC 6514 section 4.5, which bgp4r's `FACTORY`
-    # does not register, and the third is "a Transitive IPv4-Address-
-    # specific EC of any sub-type". So this holds the octets, replays
-    # them, and the field's EC reading is left to whoever wants it.
+    # recorded as a loss. And when this was written it would have bought
+    # no meaning either, because **all three of section 6.2's own
+    # examples read back as `Extended_community::Unknown`**: two of them
+    # use sub-type 0x09, Source AS of RFC 6514 section 6, and the third
+    # is "a Transitive IPv4-Address-specific EC of any sub-type".
+    # Sub-type 0x09 is registered now, so the first two read back as a
+    # `Source_as`; the verdict is unchanged, since it rests on the hash
+    # round trip. So this holds the octets, replays them, and the
+    # field's EC reading is left to whoever wants it.
     #
     # Nothing validates. Any 8 octets, including an encoding no RFC
     # describes, which section 6.2 half allows anyway.
