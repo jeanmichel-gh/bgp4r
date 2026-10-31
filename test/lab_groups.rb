@@ -59,11 +59,23 @@ module LabGroups
       fault_matrix_native_test
     ],
 
-    # What GoBGP makes of a family bgp4r learned to speak. A new EVPN or
-    # flow spec lab test goes here. 139s.
+    # What GoBGP makes of a family bgp4r learned to speak. A new EVPN,
+    # flow spec or RT-constrain lab test goes here. 223s as a group, and
+    # **this is the slowest group now**, where it was 139s with two
+    # files: a family costs 60 to 90s, because every case wants a
+    # session of its own. Measured on 2026-10-31, the group timed as a
+    # group rather than summed from its files.
+    #
+    # The rule stays the rule, so a new family test goes here even
+    # though that makes this group the lab job's clock. Splitting it per
+    # family is the next lever if that matters, and it is a line here
+    # plus a matrix entry. Rebalancing instead by moving a file into a
+    # group whose name does not describe it is not, because the names
+    # are what tell the next person where to put things.
     'gobgp-families' => %w[
       evpn_gobgp_test
       flow_spec_gobgp_test
+      rt_constrain_gobgp_test
     ],
 
     # What GoBGP makes of our export side and of RFC 7911. A new

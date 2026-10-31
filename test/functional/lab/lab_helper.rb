@@ -109,8 +109,20 @@ module LabHelper
       @pids = {}
     end
 
-    def self.free_port
-      s = TCPServer.new('127.0.0.1', 0)
+    # A port nothing is listening on, on the address the caller is about
+    # to bind. **This is time-of-check to time-of-use and cannot be made
+    # otherwise**: the socket has to be closed before the port can be
+    # handed to a child process, and anything may take it in between.
+    # So a caller that spawns a daemon has to survive losing the race,
+    # which is what Gobgpd#up's retry is for.
+    #
+    # The host argument is not decoration. Binding 0 on 127.0.0.1 asks
+    # the kernel for a port free **there**, and gobgpd's API listens on
+    # 127.0.0.2, so the probe was answering a different question than
+    # the one its caller asked. Found on 2026-10-31 when CI failed with
+    # "listen tcp 127.0.0.2:37903: bind: address already in use".
+    def self.free_port(host = '127.0.0.1')
+      s = TCPServer.new(host, 0)
       s.addr[1]
     ensure
       s.close if s
@@ -220,8 +232,19 @@ module LabHelper
     # map below is no longer flow spec's alone.
     EVPN = 'l2vpn-evpn'
 
+    # RT-constrain, AFI 1 SAFI 132, RFC 4684. **The two sides agree on
+    # this one**, measured on 2026-10-31: the config file and the client
+    # both take `rtc`, and the client rejects `ipv4-rtc`,
+    # `route-target-constraints`, `rtfilter` and `ipv4-rtfilter` with
+    # "unsupported address family". So this family needs no CLIENT_FAMILY
+    # entry, which is worth saying because the two families above set the
+    # expectation that it would. Checked rather than assumed, after a
+    # first draft of the CLAUDE.md entry guessed the name and was wrong.
+    RTC = 'rtc'
+
     # Config-file name to client name, for the families where the two
-    # disagree. Everything else is spelled alike on both sides.
+    # disagree. Everything else is spelled alike on both sides, RTC
+    # included.
     CLIENT_FAMILY = { FS_VPN => 'ipv4-l3vpn-flowspec', EVPN => 'evpn' }.freeze
 
     # The name to pass the client's -a for a family, which is its own
@@ -243,10 +266,19 @@ module LabHelper
       @add_path = add_path
       @families = families
       @port = port || Local.free_port
-      @listen_port = Local.free_port
-      @api_port = Local.free_port
+      pick_ports
       @dir = Dir.mktmpdir('bgp4r-gobgpd')
     end
+
+    # The two ports this daemon binds, both on its own address. @port is
+    # not picked here: it is the **peer's** port, usually the bgp4r
+    # listener the caller already opened, so re-picking it on a retry
+    # would point the daemon at nothing.
+    def pick_ports
+      @listen_port = Local.free_port(@local)
+      @api_port = Local.free_port(@local)
+    end
+    private :pick_ports
 
     def config
       families = ['ipv4-unicast']
@@ -307,10 +339,62 @@ module LabHelper
       global + afi_safis + add_paths
     end
 
+    # Did the daemon die because something already held a port it tried
+    # to bind? Its own words, and it says them for the gRPC port and for
+    # the BGP one alike:
+    #
+    #   {"Err":"listen tcp 127.0.0.2:37903: bind: address already in
+    #    use","level":"fatal","msg":"failed to listen grpc port"}
+    #
+    # A predicate rather than an inline match so the unit suite can pin
+    # it without a daemon, which matters because this is the half that
+    # decides whether a lost race is retried or reported as a config
+    # error, and the two look nothing alike to a reader of the log.
+    def self.port_conflict?(text)
+      text.to_s.include?('address already in use')
+    end
+
     # Starts the daemon and waits until its API answers, which is the only
     # signal that it read the config at all. Raises with the daemon's log,
     # which names the config key it rejected.
-    def up(timeout: 30)
+    #
+    # **Retries a lost port race, because that race cannot be removed.**
+    # Local.free_port has to close its socket before the port can be
+    # handed to a child, so between the probe and gobgpd's bind anything
+    # may take it, and with a dozen daemons in one group something
+    # eventually does: CI failed on 2026-10-31 with "listen tcp
+    # 127.0.0.2:37903: bind: address already in use", in a flow spec case
+    # that had not changed, because this file's new RT-constrain test
+    # raised the number of daemons in the group from 3 to 12.
+    #
+    # Only a port conflict is retried. Every other way of not coming up
+    # is a config gobgpd rejected, which is a real failure and must still
+    # raise with the log that names the key.
+    def up(timeout: 30, attempts: 3)
+      tried = 0
+      begin
+        tried += 1
+        start_once(timeout: timeout)
+      rescue RuntimeError => e
+        raise unless self.class.port_conflict?(e.message) && tried < attempts
+        # Take two fresh ports, not the ones it lost. **Not `down`**,
+        # which removes @dir in its ensure, so the next attempt had
+        # nowhere to write its config and died with ENOENT on
+        # gobgpd.conf. Measured, by squatting on the port and watching
+        # the first draft of this fail that way.
+        @pid = nil
+        pick_ports
+        retry
+      end
+    end
+
+    # **Stops waiting the moment the daemon dies**, rather than polling a
+    # process that is already gone until the timeout. gobgpd exits at
+    # once on a port conflict and on a config key it rejects, so without
+    # this every such failure costs the full 30s and a retry costs three
+    # of them. It also makes the message true: "did not come up in 30s"
+    # was wrong about a daemon that had been dead for 29 of them.
+    def start_once(timeout: 30)
       path = File.join(@dir, 'gobgpd.conf')
       File.write(path, config)
       @log = File.join(@dir, 'gobgpd.log')
@@ -318,11 +402,26 @@ module LabHelper
                            out: @log, err: [:child, :out])
       deadline = Time.now + timeout
       until neighbors
-        raise "gobgpd did not come up in #{timeout}s:\n#{log}" if Time.now > deadline
+        if exited?
+          raise "gobgpd exited without coming up:\n#{log}"
+        elsif Time.now > deadline
+          raise "gobgpd did not come up in #{timeout}s:\n#{log}"
+        end
         sleep 0.5
       end
       self
     end
+    private :start_once
+
+    # True once the child is gone, reaping it so down has nothing to
+    # wait for. Answers false while it runs and on a pid already reaped.
+    def exited?
+      return false unless @pid
+      !Process.wait(@pid, Process::WNOHANG).nil?
+    rescue Errno::ECHILD
+      true
+    end
+    private :exited?
 
     def down
       @log_text = log
