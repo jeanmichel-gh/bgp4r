@@ -1157,6 +1157,17 @@ module ToHashCatalog
     BGP::Evpn.new_ntop(['09140011223344556677'].pack('H*'), 7)
   end
 
+  # RFC 4684 section 4. The whole prefix, which is the branch where the
+  # two fields of the section's figure reproduce the octets, with a path
+  # identifier on top. The other branch, where they cannot and the hash
+  # carries the length and the octets instead, is a partial route target
+  # or a length no RFC allows, and both are asserted in
+  # test/unit/nlris/rt_constrain_test.rb, which is where a reader looks.
+  ENTRIES['BGP::Rt_constrain'] = entry(:ok, nil, nil) do
+    BGP::Rt_constrain.new(:path_id => 7, :origin_as => 65000,
+                          :route_target => { :route_target => [65000, 100] })
+  end
+
   # Classes with no entry, each with the reason. An abstract base with no
   # sensible instance belongs here; a class merely awkward to build does
   # not.
