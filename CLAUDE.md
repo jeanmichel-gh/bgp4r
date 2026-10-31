@@ -300,7 +300,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. The `lab` job is a matrix, one job per group in `test/lab_groups.rb`, so its cost is the slowest group and not the total: it was 12m42s as one serial suite. Each job installs only what its group needs, which is why the matrix entry carries a `gobgp`, `frr`, `docker` or `netns` flag. The `gobgp` groups pin 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-10-31: 1769 tests, 25398 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.1%.
+Baseline on 2026-10-31: 1777 tests, 25413 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.1%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -2926,6 +2926,47 @@ Lab and conformance:
   * **The CI job is split now, which was the other half.** It used to glob the directory into one serial suite, so the lab job was the sum of 15 files and set the whole workflow's clock: 12m42s on 95fe87b where no other job reached 50s. It is a matrix now, a job per group, so the cost is the slowest group. One group per runner and **not** parallel processes on one machine, because `LabHelper::Local.free_port` binds port 0 and closes it, so two processes can be handed the same port.
     * **The grouping is in `test/lab_groups.rb` and not in the workflow**, and that is the whole point. A list in the YAML would let a new lab test run in no job at all, and a job that runs nothing exits 0 and reads as a pass, which is the failure this file keeps meeting. `test/unit/lab_groups_test.rb` requires every file under `test/functional/lab` to be in exactly one group, every group to have a job in the matrix, and every matrix entry to declare a dependency. Three sabotages, each failing and naming what was wrong.
     * Each group's name is the rule for where a new file goes: `compose` needs Docker, `gobgp-matrix` is the fault matrix, `gobgp-families` is what GoBGP makes of a family bgp4r learned, `gobgp-router` is our export side and RFC 7911, `frr` is everything needing FRR's `bgpd`, and `local` needs no router binary. Measured on 2026-10-31: `gobgp-matrix` 123s, `gobgp-families` 139s, `gobgp-router` 74s, `frr` 87s, `local` 10s. `compose` is the one not measured, because Docker Hub is not reachable from that sandbox; it was about 2m36s of the serial job, so it is most likely the new floor.
+    * **The port race that comment predicted happened, and not between
+      processes.** `Local.free_port` binds port 0, reads the port and
+      closes, so between the probe and the daemon's own bind anything
+      may take it. CI failed on 2026-10-31 with `listen tcp
+      127.0.0.2:37903: bind: address already in use`, in a flow spec
+      case that had not changed, because #203 took the daemons in
+      `gobgp-families` from 3 to 12 and one eventually lost. So the
+      hazard is not only the parallel-processes one recorded above: a
+      single process starting enough daemons hits it too.
+      * **Two faults, and the second is the one that matters.** The
+        probe bound 127.0.0.1 while gobgpd's API binds `@local`, which
+        is 127.0.0.2, so it was answering a different question than its
+        caller asked; `free_port` takes the host now. And the race
+        cannot be removed at all, because the socket has to be closed
+        before the port can go to a child, so `Gobgpd#up` **retries** a
+        lost race with fresh ports, up to 3 attempts. Only a port
+        conflict is retried: a config gobgpd rejected still raises with
+        the log naming the key.
+      * `Gobgpd#up` also **stops waiting the moment the daemon dies**
+        rather than polling a dead process to the timeout. gobgpd exits
+        at once on both failures, so this turned a 30s wait into 1s, and
+        made the message true: "did not come up in 30s" was wrong about
+        a daemon dead for 29 of them. Without it a retry would have cost
+        90s.
+      * **The retry's first draft called `down` to reap the child**,
+        which removes `@dir` in its ensure, so the next attempt died
+        with ENOENT on `gobgpd.conf`. Found by squatting on the port and
+        watching it, which is the only way to meet this deterministically.
+      * `test/unit/lab_helper_test.rb` pins the half that decides
+        retry-or-report, from gobgpd's own two log shapes, and runs in
+        the unit suite because `lab_helper.rb` loads on stdlib alone.
+        **The obvious assertion for the host argument is a weak one**:
+        asking for a port on 127.0.0.2 and binding it there passes
+        against a hardcoded 127.0.0.1 too, since a port free on one
+        loopback address is almost always free on the other. The test
+        uses TEST-NET-1 instead, `free_port('192.0.2.1')`, which is not
+        an address of the machine and so cannot pass by luck.
+      * `Frr` picks a `@vty_port` the same way and has no retry. Not
+        touched here, because nothing has lost that race yet and the
+        `frr` group runs 4 daemons; if it starts failing, this is the
+        shape of the fix.
     * **A lab test file that is pure ASCII is not a style preference.** `to_hash_round_trip_test.rb` reads every test file body and matches regexps against it, and one `\u2192` in a comment made it error with "invalid byte sequence in US-ASCII" from a file it does not own. It passed on its own and failed in the suite, which is the load order trap in Conventions arriving from a third direction. That fragility is `to_hash_round_trip_test.rb`'s and is filed below rather than fixed here.
 * **GoBGP runs natively, so the fault matrix needs no Docker.** `gobgpd` from a release tarball peers with bgp4r on loopback, and `test/functional/lab/fault_matrix_native_test.rb` runs the whole matrix against it. Both sides get a port of their own, so neither needs root nor `net.ipv4.ip_unprivileged_port_start`: the generated config sets `[global.config] port` and `[neighbors.transport.config] remote-port`, both of which GoBGP 3 and 4 honour. `LabHelper::Gobgpd` writes that config and starts the daemon. This is the harness to reach for before assuming a conformance question is blocked. `docs/protocol-testing.md` has the recipe under "On a Linux VM": how to get a particular version from a release tarball, with its checksum, and the two config keys that keep both ends off port 179. **Check which version you have**, because it changes the answers: Ubuntu 24.04's `gobgpd` package is 3.23.0, and GoBGP publishes Linux builds only.
 * The two GoBGP columns and the FRR one in `docs/protocol-testing.md` are asserted by the three fault matrix tests, so they are re-measured rather than recorded by hand. **The versions do not answer alike, and the column used to claim they did.** GoBGP 3.23.0 resets with subcode 5 on `attr_overrun` where RFC 7606 section 4 makes treat-as-withdraw a MUST; GoBGP 4.10.0 fixed it. So 4.10.0 agrees on 16 of the 18 rows, 3.23.0 on 15, and FRR 8.4.4 on 6. The expectations are per router and per version in `test/functional/lab/fault_matrix_scenario.rb`: the native GoBGP test asks the binary, the Compose test reads `GOBGP_IMAGE`, and the FRR test asserts against major 8 only, so keep those in step if a pin moves. **Only the BIRD column is still a hand measurement**, from 2.14, and only the session level outcomes there, since BIRD gives no usable RIB answer over a loopback session. Two rows of the FRR column were wrong when it was asserted in #159, both the hand measurement's fault; see phase 5 above.
