@@ -523,8 +523,9 @@ goes in one.
 
 ## 7. The extended communities
 
-bgp4r needs **eleven** added, not ten, and the extra one is the reason
-to count carefully.
+bgp4r needed **eleven** added, not ten, and the extra one is the reason
+to count carefully. All eleven are in, five with part 8a and six with
+part 8b.
 
 **The registry, measured on 2026-10-30 rather than recalled.** The
 "EVPN Extended Community Sub-Types" subregistry under type 0x06 has 18
@@ -532,8 +533,12 @@ assigned entries, 0x00 to 0x10 and 0x15. **Fourteen have an RFC**, three
 cite only drafts, and one is Reserved. bgp4r had four of the fourteen,
 so ten were missing. Both of the figures `CLAUDE.md` carried were right
 about different things and its prose read as though they disagreed: the
-fourteen is the count with an RFC, and the ten is the count still to
-write.
+fourteen is the count with an RFC, and the ten is the count that was
+still to write.
+
+So the four rows still reading "no" below are the three that cite only a
+draft and the one IANA marks Reserved. Every EVPN community with an RFC
+behind it is implemented.
 
 | Sub-type | Name | Reference | In bgp4r |
 |---|---|---|---|
@@ -541,18 +546,18 @@ write.
 | 0x01 | ESI Label | RFC 7432 section 7.5 | yes |
 | 0x02 | ES-Import Route Target | RFC 7432 section 7.6 | yes |
 | 0x03 | EVPN Router's MAC | RFC 9135 section 8.1 | yes |
-| 0x04 | EVPN Layer 2 Attributes | RFC 8214 section 3.1 | no |
-| 0x05 | E-Tree | RFC 8317 section 6.1 | no |
-| 0x06 | DF Election | RFC 8584 section 2.2 | no |
+| 0x04 | EVPN Layer 2 Attributes | RFC 8214 section 3.1 | yes |
+| 0x05 | E-Tree | RFC 8317 section 6.1 | yes |
+| 0x06 | DF Election | RFC 8584 section 2.2 | yes |
 | 0x07 | Reserved | none | no |
-| 0x08 | ARP/ND | RFC 9047 section 2 | no |
+| 0x08 | ARP/ND | RFC 9047 section 2 | yes |
 | 0x09 | Multicast Flags | RFC 9251 section 9.4 | yes |
 | 0x0a | EVI-RT Type 0 | RFC 9251 section 9.5 | yes |
 | 0x0b | EVI-RT Type 1 | RFC 9251 section 9.5 | yes |
 | 0x0c | EVI-RT Type 2 | RFC 9251 section 9.5 | yes |
 | 0x0d | EVI-RT Type 3 | RFC 9251 section 9.5 | yes |
 | 0x0e | EVPN Attachment Circuit | draft only | no |
-| 0x0f | Service Carving Time | RFC 9722 section 2.1 | no |
+| 0x0f | Service Carving Time | RFC 9722 section 2.1 | yes |
 | 0x10 | EVPN Link Bandwidth | draft only | no |
 | 0x15 | RT-derived-EC | draft only | no |
 
@@ -572,10 +577,10 @@ Transitive Opaque community. It is invisible to anyone counting only the
 to be one short. IANA gives its reference as an author's name rather
 than an RFC.
 
-bgp4r registers three Opaque sub-types, `[0x03, 0x00]` Origin
-Validation State, `[0x03, 0x0b]` Color and `[0x03, 0x0c]`
-Encapsulation. Sub-type 0x0d is not among them, so Default Gateway is
-the one missing and the Opaque type itself is already reached. **An
+bgp4r registered three Opaque sub-types before part 8b, `[0x03, 0x00]`
+Origin Validation State, `[0x03, 0x0b]` Color and `[0x03, 0x0c]`
+Encapsulation, so the Opaque type itself was already reached and 0x0d
+was the one missing. **An
 earlier draft of this document said bgp4r registered no 0x03 sub-types
 at all, which was wrong**, and the only reason it did not ship is that
 the doc test printed `FACTORY`'s keys rather than taking the claim on
@@ -632,7 +637,96 @@ section 9.5's treat-as-withdraw for a route carrying no EVI-RT EC or
 more than one. Building either is a negative test and must stay
 possible.
 
-The other six arrive with part 8b.
+### The six of part 8b
+
+Four shapes among six communities, and the shapes are what to read them
+by rather than the RFC each comes from.
+
+**Four are flags plus reserved fields**, which is `Esi_label`'s shape
+and needs nothing new:
+
+* **Layer 2 Attributes, 0x04** (RFC 8214 section 3.1): 2 octets of
+  Control Flags, a 2-octet L2 MTU, 2 reserved octets. Figure 2 draws the
+  flags as `|   MBZ                   |C|P|B|`, so B is the field's low
+  bit, P the next and C the next, which in the 48-bit value are bits 32,
+  33 and 34. The 13 MBZ bits "MUST be set to zero when sending and MUST
+  be ignored when receiving".
+* **E-Tree, 0x05** (RFC 8317 section 6.1): a Flags octet whose low bit is
+  Leaf-Indication, 2 reserved octets, a 3-octet Leaf Label. The same
+  layout as `Esi_label` and the same mask, `(1 << 40) | (0xfffff << 4)`.
+  Unlike RFC 7432 section 7.5, this section does say where the label
+  sits: "The value of the 20-bit MPLS label is encoded in the high-order
+  20 bits of the Leaf label field", which leaves the low 4 bits of that
+  field undescribed, so they go with the reserved octets.
+* **DF Election, 0x06** (RFC 8584 section 2.2): 3 RSV bits and a 5-bit DF
+  Alg in one octet, a 2-octet Bitmap, 3 reserved octets. Its "DF Alg"
+  registry gives 0 for the default or modulus algorithm, 1 for HRW, 2 to
+  30 unassigned and 31 experimental.
+* **ARP/ND, 0x08** (RFC 9047 section 2): one Flags octet, `|       |I|
+  |O|R|`, then 5 reserved octets. "Bits 0-3 and 5 are not assigned by
+  this document."
+
+**Two RFCs define bits in the one DF Election Bitmap, and both are
+read.** RFC 8584's own registry gives bit 1, AC-DF, and leaves bits 0
+and 2 to 15 unassigned; **RFC 9722 section 2.1 adds bit 3**, Time
+Synchronization, and nothing in RFC 8584 points forward to it. A mask
+covering only the first would report a correct T bit as a reserved one.
+This is the `Pmsi_tunnel` flags registry again: a field one RFC leaves
+unassigned is a field a later RFC can fill.
+
+**Four of the six RFCs number their flag bits twice over**, once in
+their own field and once in the whole 8-octet community, and that second
+number is what the bit placements here were checked against:
+
+| Bit | Its own field | The whole community | Said in |
+|---|---|---|---|
+| ARP/ND R | Flags bit 7 | Bit 23 | RFC 9047 section 2 |
+| ARP/ND O | Flags bit 6 | Bit 22 | RFC 9047 section 2 |
+| ARP/ND I | Flags bit 4 | Bit 20 | RFC 9047 section 2 |
+| DF AC-DF | Bitmap bit 1 | Bit 25, bit 0 being 24 | RFC 8584 section 2.2 |
+| DF T | Bitmap bit 3 | Bit 27 | RFC 9722 section 2.1 |
+
+That is worth more than it looks, for the same reason the five flow spec
+vectors are: the number is the document's own, so asserting it checks
+the layout against the RFC and not against this reader's arithmetic.
+`test_each_flag_sits_at_the_bit_number_its_own_rfc_gives_it` asserts all
+five.
+
+**One has no reserved bit anywhere.** Service Carving Time, 0x0f (RFC
+9722 section 2.1) is 4 octets of NTP seconds and 2 of fraction, both
+fields, so it has no `DEFINED_BITS` and can never grow a `:bits` entry.
+The timestamp "uses the NTP prime epoch of 0 h 1 January 1900 UTC
+[RFC5905]", and the fraction is "The high-order 16 bits of the NTP
+'Fraction' field", so one tick is 2^-16 of a second. **bgp4r prints no
+calendar date**, deliberately: section 2.2 says "The NTP Era value is
+not exchanged", so the era is not in the community and any date would be
+a guess about which 136-year window the seconds count belongs to.
+
+**One has no fields at all.** The Default Gateway, `[0x03, 0x0d]` (RFC
+7432 section 7.8): "The Value field of this community is reserved (set
+to 0 by the senders, ignored by the receivers)." So all 48 bits are
+reserved, `DEFINED_BITS` is 0, and it is the purest keep-and-echo case in
+the library. Its hash is an empty list until a peer sets something in
+there, and a `:bits` entry once one does.
+
+**`DEFINED_BITS` is derived by a test rather than restated**, which is
+the guard worth knowing about before changing any of these:
+`test_every_defined_bits_mask_is_exactly_what_its_own_fields_can_write`
+sets every field of a class to its widest value, ORs the value bits, and
+requires the result to be exactly the mask. Less means `encode` writes a
+bit the class calls reserved, so a community built from values would
+carry a `:bits` entry; more means a field the class reads cannot be
+reached. It covers the four older classes too, and a one-bit typo in any
+of the ten masks fails it.
+
+**Two bugs part 8b found, both in code older than it.** `Arp_nd`'s first
+draft packed its value as `CNn`, which is 7 octets and made the community
+9; and `Multicast_flags`, from part 8a, unwrapped the hash `to_hash`
+answers and then read the list inside it as a Hash, so
+`Multicast_flags.new(its own to_hash)` raised `TypeError`. The second is
+why `Extended_community::Typed#unwrap` exists as one method now: unwrap,
+then dispatch on the shape, in one place for all nine classes that take
+the wrapped form.
 
 ## 7a. The wiring, and the next hop
 

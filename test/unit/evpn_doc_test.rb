@@ -267,20 +267,80 @@ class EvpnDocTest < Test::Unit::TestCase
     assert_match(/not a check `validation\.rb` can make/, doc)
   end
 
-  # Section 7's count, and the community that makes it eleven. The
-  # Opaque claim is read out of FACTORY rather than taken on trust,
-  # which is what caught an earlier draft of this document saying bgp4r
+  # Section 7's count, and the community that makes it eleven. Every
+  # claim here is read out of FACTORY rather than taken on trust, which
+  # is what caught an earlier draft of this document saying bgp4r
   # registered no 0x03 sub-types at all.
-  def test_the_default_gateway_community_is_opaque_and_missing
+  #
+  # **This test read the other way round until part 8b**, asserting the
+  # Default Gateway was *missing*, and it failed the moment the class
+  # landed. That is the guard doing its job: the document said the
+  # community was the one still to write, and it is not. The assertion
+  # moved to the new truth rather than being weakened.
+  def test_the_default_gateway_community_is_an_opaque_type
     assert_match(/type 0x03 sub-type 0x0d/, doc)
     assert_match(/\*\*eleven\*\* added, not ten/, doc)
     f = BGP::Extended_community::FACTORY
-    refute(f.has_key?([0x03, 0x0d]),
-           'Default Gateway is implemented, so the document is stale')
+    assert_equal(BGP::Default_gateway, f[[0x03, 0x0d]])
+    # Not an EVPN 0x06 sub-type, which is the whole reason it is the
+    # eleventh and is invisible to anyone counting that registry.
+    assert_equal(0x03, BGP::Default_gateway::TYPE)
+    refute(f.has_key?([0x06, 0x0d]) && f[[0x06, 0x0d]] == BGP::Default_gateway)
     [[0x03, 0x00], [0x03, 0x0b], [0x03, 0x0c]].each do |k|
       assert(f.has_key?(k),
              "#{DOC} says #{k.inspect} is registered and it is not")
     end
+  end
+
+  # **Section 7b's bit-number table is read out of the document and
+  # checked against the library**, so the two cannot drift. Each row
+  # names a flag, the bit it occupies in its own field, and the bit it
+  # occupies in the whole 8-octet community, which is the number the RFC
+  # itself gives. That second number is the reason the table is worth
+  # asserting: it is the document's own, so this checks the layout
+  # against the RFC rather than against this reader's arithmetic.
+  def test_the_bit_number_table_matches_where_the_library_puts_each_flag
+    communities = {
+      'ARP/ND R' => BGP::Arp_nd.new(:router => true),
+      'ARP/ND O' => BGP::Arp_nd.new(:override => true),
+      'ARP/ND I' => BGP::Arp_nd.new(:immutable => true),
+      'DF AC-DF' => BGP::Df_election.new(0, :ac_df => true),
+      'DF T'     => BGP::Df_election.new(0, :time_sync => true),
+    }
+    rows = doc.lines.each_with_object({}) do |l, h|
+      m = l.match(/^\|\s*((?:ARP\/ND|DF)\s[\w-]+)\s*\|[^|]*\|\s*Bit (\d+)[^|]*\|[^|]*\|\s*$/)
+      h[m[1]] = m[2].to_i if m
+    end
+    assert_equal(communities.keys.sort, rows.keys.sort,
+                 "#{DOC} section 7b's bit table does not name the five flags")
+    rows.each do |flag, bit|
+      # The RFCs number a community's bits from the high bit of the type
+      # octet, so bit n is 0x80 >> (n % 8) in octet n / 8.
+      set = communities[flag].encode.unpack('C8').each_with_index
+                             .flat_map { |o, i|
+        (0..7).select { |b| (o & (0x80 >> b)) > 0 }.collect { |b| i * 8 + b }
+      }
+      # The type and sub-type octets' own bits are below 16.
+      assert_equal([bit], set.reject { |b| b < 16 },
+                   "#{DOC} says #{flag} is community bit #{bit}")
+    end
+  end
+
+  # Section 7b's two claims about which bits a class reads: the one with
+  # no reserved bit anywhere, and the one that is nothing but reserved.
+  def test_the_two_extreme_communities_are_what_the_document_says
+    assert_match(/One has no reserved bit anywhere/, doc)
+    refute(BGP::Service_carving_time.const_defined?(:DEFINED_BITS, false),
+           "#{DOC} says Service Carving Time has no DEFINED_BITS")
+    assert_match(/One has no fields at all/, doc)
+    assert_equal(0, BGP::Default_gateway::DEFINED_BITS)
+    # And RFC 9722 adding a bit to RFC 8584's Bitmap, which a mask
+    # covering only the first RFC would report as a reserved one.
+    assert_match(/RFC 9722 section 2\.1 adds bit 3\*\*/, doc)
+    df = BGP::Extended_community.factory(['0606001000000000'].pack('H*'))
+    assert(df.time_sync?)
+    assert_equal({ :df_election => [:default, [:time_sync]] }, df.to_hash,
+                 'a T bit reads as a reserved bit, so the mask is short')
   end
 
   # Section 7's sub-type table, as {sub-type => the "In bgp4r" cell}.

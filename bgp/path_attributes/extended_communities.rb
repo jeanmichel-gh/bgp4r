@@ -130,6 +130,16 @@ module BGP
       :evi_rt_1                => ->(v) { Evi_rt_1.new(v) },
       :evi_rt_2                => ->(v) { Evi_rt_2.new(v) },
       :evi_rt_3                => ->(v) { Evi_rt_3.new(v) },
+      # The last six EVPN communities. Each hashes as the list of its own
+      # fields, or as a Hash of them when the value also carries a
+      # reserved bit, and both forms go to the one constructor. The
+      # Default Gateway has no fields at all, so its list is empty.
+      :layer2_attributes       => ->(v) { Layer2_attributes.new(v) },
+      :e_tree                  => ->(v) { E_tree.new(v) },
+      :df_election             => ->(v) { Df_election.new(v) },
+      :arp_nd                  => ->(v) { Arp_nd.new(v) },
+      :service_carving_time    => ->(v) { Service_carving_time.new(v) },
+      :default_gateway         => ->(v) { Default_gateway.new(v) },
     }.freeze
 
     attr_reader :communities

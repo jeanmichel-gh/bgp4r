@@ -1059,6 +1059,49 @@ module ToHashCatalog
     BGP::Evi_rt_3.new('aabbccddeeff')
   end
 
+  # The last six EVPN communities. Every recipe sets each field the class
+  # carries **and** every reserved bit its RFC leaves over, since those
+  # only ever arrive by parsing: a hash build writes them as 0, so a
+  # recipe built from field values would pass without measuring the half
+  # of the hash that was hardest to get right. That is the thin-recipe
+  # trap Conventions records, where Label_stack.new(100,101) never set
+  # the Rsrv bits its hash drops.
+  ENTRIES['BGP::Layer2_attributes'] = entry(:ok, nil, nil) do
+    # RFC 8214 section 3.1: 13 MBZ bits, the MTU, 2 reserved octets.
+    BGP::Extended_community.factory(['0604fff805dcffff'].pack('H*'))
+  end
+
+  ENTRIES['BGP::E_tree'] = entry(:ok, nil, nil) do
+    # RFC 8317 section 6.1: 7 MBZ bits, the L bit, 2 reserved octets, and
+    # the label with the low 4 bits of its field set too.
+    BGP::Extended_community.factory(['0605ffffff00064f'].pack('H*'))
+  end
+
+  ENTRIES['BGP::Df_election'] = entry(:ok, nil, nil) do
+    # RFC 8584 section 2.2 and RFC 9722 section 2.1: the 3 RSV bits, the
+    # DF Alg, both defined Bitmap bits, 14 unassigned ones and 3 reserved
+    # octets.
+    BGP::Extended_community.factory(['0606ff5fffffffff'].pack('H*'))
+  end
+
+  ENTRIES['BGP::Arp_nd'] = entry(:ok, nil, nil) do
+    # RFC 9047 section 2: all three flags, the 5 unassigned flag bits and
+    # the 5 reserved octets.
+    BGP::Extended_community.factory(['0608ffffffffffff'].pack('H*'))
+  end
+
+  ENTRIES['BGP::Service_carving_time'] = entry(:ok, nil, nil) do
+    # RFC 9722 section 2.1 has no reserved bit, so both fields at their
+    # widest is every octet of the value.
+    BGP::Service_carving_time.new(0xffffffff, 0xffff)
+  end
+
+  ENTRIES['BGP::Default_gateway'] = entry(:ok, nil, nil) do
+    # RFC 7432 section 7.8 has no fields, so the only thing to measure is
+    # the reserved value a peer set, which is the whole of it.
+    BGP::Extended_community.factory(['030dffffffffffff'].pack('H*'))
+  end
+
   # The Region ID of route type 9, RFC 9572 sections 3.1 and 6.2. One
   # field, and the recipe uses the first of section 6.2's three example
   # encodings, a Transitive Two-Octet AS-specific EC of sub-type 0x09
