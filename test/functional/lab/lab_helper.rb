@@ -204,16 +204,27 @@ module LabHelper
     # "isn't a valid route family name", while the client takes
     # `ipv4-l3vpn-flowspec` and rejects the other with "unsupported
     # address family". So a VPN flow spec test needs both spellings, and
-    # FS_CLIENT below maps one to the other. The two unicast families and
+    # CLIENT_FAMILY below maps one to the other. The two unicast families and
     # the two plain flow spec ones are spelled alike on both sides.
     FS_IPV4 = 'ipv4-flowspec'
     FS_IPV6 = 'ipv6-flowspec'
     FS_VPN  = 'l3vpn-ipv4-flowspec'
-    FS_CLIENT = { FS_VPN => 'ipv4-l3vpn-flowspec' }.freeze
+
+    # EVPN, AFI 25 SAFI 70, and **the same disagreement again**: the
+    # config file takes `l2vpn-evpn` and the client takes `evpn`,
+    # rejecting the other with "unsupported address family: l2vpn-evpn".
+    # Measured on 2026-10-30. So this is the second family where the two
+    # sides of GoBGP 3.23.0 spell one thing two ways, which is why the
+    # map below is no longer flow spec's alone.
+    EVPN = 'l2vpn-evpn'
+
+    # Config-file name to client name, for the families where the two
+    # disagree. Everything else is spelled alike on both sides.
+    CLIENT_FAMILY = { FS_VPN => 'ipv4-l3vpn-flowspec', EVPN => 'evpn' }.freeze
 
     # The name to pass the client's -a for a family, which is its own
     # name except where the two disagree.
-    def self.client_family(name) ; FS_CLIENT[name] || name ; end
+    def self.client_family(name) ; CLIENT_FAMILY[name] || name ; end
 
     # local:    address the router speaks from
     # peer:     address bgp4r listens on, which the router dials
@@ -553,6 +564,10 @@ module LabHelper
     FS_IPV4 = 'ipv4 flowspec'
     FS_IPV6 = 'ipv6 flowspec'
 
+    # EVPN, AFI 25 SAFI 70. FRR spells it the same in its config and in
+    # its show command, so unlike GoBGP there is one name.
+    EVPN = 'l2vpn evpn'
+
     # families: extra address families, each activated for the peer, such
     #           as FS_IPV4. Empty by default, so a config with none is
     #           what it always was.
@@ -744,6 +759,39 @@ module LabHelper
       key, paths = pair
       path = paths.find { |p| p['bestpath'] } || paths.first
       [key, path]
+    end
+
+    # The EVPN table, as prefix => array of paths, flattened across the
+    # Route Distinguishers.
+    #
+    # **This needs its own reader because the EVPN JSON is shaped
+    # differently from every other family's.** `show bgp ipv4 unicast
+    # json` puts everything under a `routes` key, which is what #rib
+    # reads; `show bgp l2vpn evpn json` has no `routes` key at all and
+    # is keyed by RD at the top level, each RD holding its own prefixes
+    # beside scalars like `numPrefix` and `localAS`. So #rib answers {}
+    # for this family however many routes are in it, which is a wrong
+    # answer rather than a missing one. Measured on 2026-10-30.
+    #
+    # The paths are worth reading field by field, which is more than
+    # GoBGP's rendering gives for route type 2: FRR's JSON carries
+    # `routeType`, `ethTag`, `macLen`, `mac`, `ipLen`, `ip` and `esi` as
+    # separate keys, so an assertion names the field RFC 7432 names.
+    def evpn_rib
+      answer = vty_json("show bgp #{EVPN} json") or return nil
+      out = {}
+      answer.each_value do |v|
+        next unless v.is_a?(Hash) and v['rd']
+        v.each { |k, p| out[k] = p['paths'] if p.is_a?(Hash) and p['paths'] }
+      end
+      out
+    end
+
+    # How many prefixes FRR says that table holds, which is its own count
+    # and not this reader's. nil while it is not answering.
+    def evpn_count
+      answer = vty_json("show bgp #{EVPN} json") or return nil
+      answer['numPrefix'].to_i
     end
 
     # One prefix in full, which is a different command and a different
