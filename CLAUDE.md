@@ -1414,7 +1414,7 @@ true here is the shape of the gap:
   prints the registered code points, against the 115 the IANA registries
   listed when this was last counted by hand.
 
-### Breadth, the one SAFI lever. Phases 2 and 3 done, phase 4 parts 1, 2 and 3 done, part 4 planned
+### Breadth, the one SAFI lever. Phases 2 and 3 done, phase 4 parts 1, 2 and 3 done, part 4 planned and unblocked
 
 The section above deferred breadth and named the single limit. This is the
 plan for lifting it, recorded before the work starts.
@@ -3890,8 +3890,12 @@ Two consequences, both of which change the plan rather than decorate it:
    4. **BGP-LS, attribute 29 and AFI 16388 SAFI 71 and 72, RFC 9552.
       Not started**, largest of the four by a long way, and last for the
       reason above. Planned on 2026-10-31 before any code, from RFC
-      9552 read as far as it is fetchable, its two errata, and the IANA
-      registries. Seven parts, the MCAST-VPN shape.
+      9552, its two errata, and the IANA registries. Seven parts, the
+      MCAST-VPN shape. **The plan was drafted from web fetches that
+      truncate the RFC and then audited against the whole document the
+      same evening**; every claim held and the audit is recorded below,
+      because which half of a plan was checked is the part a later
+      reader needs.
 
       **What was read, and what could not be.** RFC 9552, December
       2023, obsoletes RFC 7752 **and RFC 9029**, the second "by
@@ -3908,25 +3912,65 @@ Two consequences, both of which change the plan rather than decorate it:
         cost to explain such a thing with an invented mechanism. Read
         the errata before disbelieving a figure, and cite the erratum.
         EID 8766, section 5.2.2, is a stray "and" and is editorial.
-      * **Sections 5.4 onward are not fetchable, which is the RFC 4271
-        section 9 situation again.** Four sources were tried on
-        2026-10-31 and all four truncate in section 5.2 or 5.3:
-        rfc-editor.org's HTML, datatracker's HTML, a translation
-        mirror, and a PDF mirror. **The two that are missing and
-        wanted are section 8.2.2 "Fault Management", which is where
-        this RFC's error handling lives, and section 9 "TLV/Sub-TLV
-        Code Points Summary".** So part 6 is gated on reading 8.2.2
-        and must not be written from anything else; everything before
-        it needs neither. Ask for the document to be attached, which
-        is how section 9 of RFC 4271 was eventually read.
-      * **The IANA registry stands in for section 9 and is the better
-        source anyway**, since IANA maintains it and a summary in a
-        2023 document does not. `bgp-ls-parameters`, read on
-        2026-10-31: **139 assigned TLV code points** in "BGP-LS NLRI
-        and Attribute TLVs", 7 NLRI types, 9 Protocol-IDs, and five
-        smaller flag and sub-type registries. Do not corroborate it
-        from a third party mirror, which is the codepoints.org lesson
-        in Rules for agents.
+        * **The erratum is unapplied in the published text, measured
+          rather than assumed.** Figure 15 reads `|O|T|E|B|R|V|` and
+          Table 7 lists O Overload, **A Attached**, E External, B ABR,
+          R Router, V V6. So bit 1 is A and the figure is wrong, and
+          an implementer working from the figure alone would name the
+          bit `T` and cite a section that calls it `A`. Six bits are
+          defined of eight, and "The bits that are not defined MUST be
+          set to 0 by the originator and MUST be ignored by the
+          receiver", which is the keep-and-echo shape Conventions
+          already records, so `DEFINED_BITS` is 0xFC when TLV 1024 is
+          written in part 5.
+      * **The whole RFC is readable now, and the plan was audited
+        against it.** Four web sources were tried on 2026-10-31 and
+        all four truncate in section 5.2 or 5.3: rfc-editor.org's
+        HTML, datatracker's HTML, a translation mirror and a PDF
+        mirror. The document was attached the same evening, which is
+        exactly how section 9 of RFC 4271 was eventually read, so
+        **the fetch limit is a durable fact about the tooling and not
+        about this RFC**: expect it for any RFC past about 90,000
+        characters of extracted text, and ask rather than deriving.
+        * **Everything written here from the truncated fetches held**,
+          checked claim by claim against the text: the AFI and SAFI
+          numbers, both NLRI figures, the Total NLRI Length sentence
+          including the VPN Route Distinguisher, the Protocol-ID and
+          8-octet Identifier, the TLV header with its value-only
+          Length and no padding, both keep-and-echo MUSTs, the
+          opaque-objects MUST for unknown NLRI types, the attribute
+          being optional non-transitive at code 29, and section
+          5.2.1.4's once-only sub-TLV sentence. That is a better
+          result than #134's audit of RFC 4271 section 9, where one
+          citation repeated six times was wrong, and the reason is
+          that nothing here was written from memory: a truncated fetch
+          returns less than the document and does not return something
+          else.
+        * **What the missing sections changed is the scope of part 6,
+          not the correctness of parts 1 to 5.** Section 8.2.2 is far
+          more specific than anything that could be derived, and it is
+          summarised under part 6 below rather than here.
+      * **The IANA registry and section 9 answer different questions,
+        so keep both.** `bgp-ls-parameters`, read on 2026-10-31, has
+        **139 assigned TLV code points**, 7 NLRI types, 9 Protocol-IDs
+        and five smaller flag and sub-type registries. Section 9's
+        Table 18 is **the 39 TLVs this RFC itself defines**. So the
+        registry says what exists and section 9 says what is in scope
+        here, and the ratio is the measure of the backlog: **39 of
+        139**, with the other 100 belonging to RFC 9085, RFC 9086, RFC
+        9514, RFC 9294, RFC 8571, RFC 8814 and more. Do not
+        corroborate either from a third party mirror, which is the
+        codepoints.org lesson in Rules for agents.
+        * Those 39 size the parts exactly. **14 are on the NLRI side**:
+          256 and 257, the Local and Remote Node Descriptors; 258 to
+          263, the Link Descriptors; 264 and 265, the Prefix
+          Descriptors; and 512 to 515, the Node Descriptor sub-TLVs.
+          **25 are attribute TLVs**: 1024 to 1031 node, 1088 to 1098
+          link, 1152 to 1157 prefix.
+        * **513, BGP-LS Identifier, is marked deprecated in Table 18
+          itself**, so it is one of the four Node Descriptor sub-TLVs
+          and is not live. Read it and replay it; do not present it as
+          a field to set.
 
       **The framing is the cheapest of the five families and the
       breadth is the dearest.** One TLV rule covers descriptors,
@@ -3982,40 +4026,74 @@ Two consequences, both of which change the plan rather than decorate it:
         Then Local Node Descriptors; Link adds Remote Node Descriptors
         and Link Descriptors, Prefix adds Prefix Descriptors. Figures 7
         to 9.
-      * **Section 5.4, Private Use**: a private-use TLV carries a
-        4-octet Enterprise Code first in its value, and a private-use
-        NLRI type carries the Enterprise Code immediately after Total
-        NLRI Length. **Provenance: this came out of a PDF mirror and
-        not from either HTML source, and the extraction had lost the
-        normative keywords**, so re-read it against an attached
-        document before implementing it. Recorded with its provenance
-        rather than as settled, which is EVPN part 7's rule about a
-        first-hand reading.
+      * **Section 5.4, Private Use**, read in the document and no
+        longer second hand: for a private-use TLV "a 4-octet field
+        MUST be included as the first field in the value to carry the
+        Enterprise Code", and for a private-use NLRI type "a 4-octet
+        field MUST be included as the first field in the NLRI
+        immediately following the Total NLRI Length field". "Multiple
+        instances of private-use TLVs MAY appear in the BGP-LS
+        Attribute." **This was recorded from a PDF mirror whose
+        extraction had dropped the normative keywords, with a note to
+        re-read it**; re-reading confirmed the substance and supplied
+        MUST, MUST and MAY. So the provenance note did its job and is
+        struck, which is what EVPN part 7's rule asks for.
       * The attribute is **optional non-transitive**, code 29, section
         5.3. So the ATTR_SET lab trick is doubly inapplicable: a
         non-transitive attribute does not cross a router that does not
         understand it, where RFC 6368's whole point was that it does.
 
-      **The error handling that is readable, which is not all of it.**
-      Part 6 must read section 8.2.2 before deciding anything, and
-      inventing an action or a subcode is the trap flow spec part 4 and
-      EVPN part 9 each recorded. What the readable text says:
-      * Section 5.1: unordered TLVs **in an NLRI** "MUST be considered
-        as malformed by a BGP-LS Propagator", while unordered TLVs in
-        the BGP-LS Attribute are **not** malformed. Note the role:
-        "by a BGP-LS Propagator", not by every receiver, which is a
-        scope qualifier nothing else in bgp4r's validation has and
-        which wants a decision rather than a patch.
-      * Section 5.2.1.4: "At most, there MUST be one instance of each
-        sub-TLV type present in any Node Descriptor." No action named.
-      * Section 5.3: a propagator whose UPDATE would exceed the maximum
-        message size because of another attribute "MUST consider the
-        BGP-LS Attribute to be malformed" and apply "Attribute
-        Discard", and "MUST first discard the BGP-LS Attribute to
-        enable the detection and diagnosis of this error condition".
-        **That is the only RFC 7606 action in the readable text**, and
-        it is a sender-side condition, so it is not a `validation.rb`
-        rule as it stands.
+      **The ordering rule is three levels and not one, which is worth
+      knowing in part 1 and not only in part 6.** Section 5.1: "all
+      TLVs within the NLRI MUST be ordered in ascending order by TLV
+      Type", and for several TLVs of one type they "MUST be first in
+      ascending order based on the Length field followed by ascending
+      order based on the Value field", with the Value "treating the
+      entire field as opaque binary data and ordered
+      lexicographically". Then "NLRIs having TLVs that do not follow
+      the above ordering rules MUST be considered as malformed by a
+      BGP-LS Propagator." So a sort by type alone satisfies none of
+      the rule's second and third levels, and the reason the rule
+      exists is stated: it "ensures that multiple variant copies of
+      the same NLRI from multiple BGP-LS Producers and the ambiguity
+      arising therefrom is prevented".
+      * **The attribute's rule is a SHOULD and its violation is
+        explicitly not malformed.** Same section: "The TLVs within the
+        BGP-LS Attribute SHOULD be ordered in ascending order by TLV
+        type. The BGP-LS Attribute with unordered TLVs MUST NOT be
+        considered malformed." So the asymmetry between the NLRI and
+        the attribute is the document's and is stated twice.
+      * **Note the role in the NLRI rule, "by a BGP-LS Propagator".**
+        Section 3 defines the roles and section 8.2.2 leans on them
+        heavily, so part 6 has to decide what bgp4r is before it
+        decides what to report. That is a scope qualifier nothing else
+        in bgp4r's validation has.
+
+      **Three other documents are in play, and the third was a
+      surprise.** Section 5.3's size rule cites **RFC 8654**, Extended
+      Message Support for BGP: a propagator "exceeding the maximum BGP
+      message size due to the addition or update of some other BGP
+      Attribute (e.g., AS_PATH)" must apply Attribute Discard, and one
+      reducing size per RFC 8654 section 4 "MUST first discard the
+      BGP-LS Attribute to enable the detection and diagnosis of this
+      error condition". The consequence it draws is a deployment one:
+      consistent propagation above 4096 octets "can only happen along
+      a set of BGP Speakers that all support the contents of
+      [RFC8654]". Both are sender-side, so neither is a
+      `validation.rb` rule.
+      * **RFC 7606 section 5.4 is the one that matters, and three
+        different RFCs have a 5.4 in this neighbourhood.** RFC 9552
+        cites RFC 7606 section 5.4 **twice**: section 5.2 deviates
+        from "the default handling behavior specified by Section 5.4
+        (paragraph 2) of [RFC7606]" for unknown NLRI types, and
+        section 8.2.2 sends a skippable malformed NLRI to "'NLRI
+        discard' (i.e., processing similar to what is described in
+        Section 5.4 of [RFC7606])". RFC 9552's **own** 5.4 is Private
+        Use, unrelated. And **RFC 8955 has no section 5.4 at all**,
+        measured in the document: section 5 is Traffic Filtering and
+        5.1 is the only thing under it. So write the RFC number beside
+        every 5.4; this file carried a bare "section 5.4" for an
+        evening and it was read as RFC 8955's.
 
       **The lab, and this is the part that probing changed.** The
       entry above said BGP-LS was the last family and said nothing
@@ -4093,10 +4171,94 @@ Two consequences, both of which change the plan rather than decorate it:
          either NLRI gate. The node, link and prefix attribute TLVs of
          section 5.3 and no others: the rest of the 139 are other
          RFCs' and are the backlog the measure below excludes.
-      6. **Validation. Gated on section 8.2.2**, above. Do not start
-         it from section 5.1 and 5.3 alone, and do not invent a
-         subcode. The three readable rules and their scope qualifier
-         are listed above so they are not rediscovered.
+      6. **Validation. No longer gated**: section 8.2.2 "Fault
+         Management" is read, and it is the most specific error
+         handling text any family in this plan has had. It opens by
+         saying so: it "describes the fault management actions, as
+         described in [RFC7606], that are to be performed for the
+         handling of BGP UPDATE messages for BGP-LS". **So nothing
+         here is derived and nothing is invented**, which is the trap
+         flow spec part 4 and EVPN part 9 each recorded and which
+         MCAST-VPN part 6 escaped by reading the updating RFC.
+         * **Two MUST NOTs come first and they bound the whole part.**
+           A Link-State NLRI "MUST NOT be considered malformed or
+           invalid based on the inclusion/exclusion of TLVs or
+           contents of the TLV fields (i.e., semantic errors)", and
+           the same sentence is repeated for the BGP-LS Attribute. So
+           this family's validation is **syntax only**, by
+           instruction.
+         * **Seven syntactic checks for the NLRI**, each a MUST: the
+           TLV lengths in MP_REACH_NLRI sum to its length; the same
+           for MP_UNREACH_NLRI; the TLV lengths in one Link-State NLRI
+           sum to its Total NLRI Length; the TLV lengths and, "when
+           the TLV is recognized then", its sub-TLV lengths are valid;
+           the NLRI fields are syntactically correct per RFC 7606; the
+           section 5.1 ordering rule has been followed; and "For NLRIs
+           carrying either a Local or Remote Node Descriptor TLV,
+           there is not more than one instance of a sub-TLV present".
+         * **Three for the attribute**, also MUSTs: its TLV lengths sum
+           to the BGP-LS Attribute length; the attributes are
+           syntactically correct per RFC 7606; and each TLV's length
+           and, when recognized, its sub-TLVs' lengths are valid.
+         * **The actions are not subcode 9 with a reset, which is what
+           every other family here answers.** Three cases, in the
+           document's own words. An error that lets the router "skip
+           the malformed NLRI(s) and continue the processing of the
+           rest of the BGP UPDATE message (e.g., when the TLV ordering
+           rule is violated)" MUST be handled as **'NLRI discard'**.
+           An error that prevents processing the UPDATE "(e.g.,
+           length-related encoding errors)" SHOULD be **'AFI/SAFI
+           disable'** when another AFI/SAFI shares the session, and
+           MUST be a **'session reset'** when the session carries only
+           BGP-LS or AFI/SAFI disable is not possible. A skippable
+           attribute error MUST be **'Attribute Discard'**, and an
+           unskippable one is handled as the NLRI case.
+           * **'NLRI discard' is an action bgp4r has never
+             implemented**, and `Attr::Finding` carries an action and
+             a subcode shaped around the RFC 7606 section 3 set. So
+             part 6 starts with that question and not with a check:
+             what does `validation.rb` report for an action whose
+             whole point is that the session and the rest of the
+             message survive. Answer it before writing a rule.
+           * **The action is conditional on the session, which is new
+             too.** AFI/SAFI disable or reset depends on whether
+             another AFI/SAFI is up, and `Attr::Check.attribute` is
+             handed one attribute and no session. So the honest report
+             may be the pair rather than a single verdict.
+         * **Attribute Discard is all-or-nothing by instruction**, and
+           the document says why: it "results in the loss of all TLVs
+           in the BGP-LS Attribute and not the removal of a specific
+           malformed TLV", because removing one "may give a wrong
+           indication to a BGP-LS Consumer of that specific
+           information being deleted or not available". So do not
+           implement a per-TLV discard that looks tidier.
+         * **An NLRI with no BGP-LS Attribute is not an error**, which
+           the plan had listed as an open question. Section 8.2.2 says
+           it "is most likely an indication that a BGP Speaker
+           preceding it has performed the 'Attribute Discard' fault
+           handling", and an implementation "SHOULD preserve and
+           propagate the Link-State NLRIs" so consumers "detect the
+           loss of link-state information for that object and not
+           assume its deletion/withdrawal".
+         * **The prohibition list is stronger than anything bgp4r has
+           met, and one item sits in tension with a check above.** A
+           Propagator "should not perform semantic validation", and
+           the four named examples are the presence of a mandatory
+           TLV, whether "the length of a fixed-length TLV is correct
+           or the length of a variable length TLV is valid or
+           permissible", whether "the values of TLV fields are valid
+           or permissible", and whether "the inclusion and use of
+           TLVs/sub-TLVs with specific Link-State NLRI types is
+           valid". **Read against the syntactic check that "the length
+           of the TLVs ... are valid", those two need reconciling
+           before either is written.** The reading that makes both
+           true is that the syntactic one is containment, a TLV not
+           overrunning what holds it, and the semantic one is whether
+           a recognized TLV's length equals the width its own
+           definition fixes. That reading is not stated in the
+           document, so record it as a reading and say so in the code,
+           which is what MCAST-VPN part 4 did before RFC 6515 settled
+           its question.
       7. **The lab**, in **both directions** for SAFI 71, which no
          family has had: what GoBGP makes of what we send, and what we
          make of a Link NLRI GoBGP originated. Plus the absence for
