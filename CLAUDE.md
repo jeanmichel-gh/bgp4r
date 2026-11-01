@@ -125,9 +125,21 @@ bgp/nlris/               prefix encodings (inet, labeled, VPN, RD, mapped IPv4)
                          Ipv6_prefix, which are one layout and two
                          type numbers. TLV 263 is registered once and
                          is in both of the RFC's tables.
-                         **Pure: nothing dispatches to any of them
-                         yet**, so a BGP-LS UPDATE still comes back as
-                         an Attr::Raw with an Attr::Gap. A TLV or NLRI
+                         **All four dispatch sites are wired now**,
+                         so a BGP-LS UPDATE reads and writes in both
+                         SAFIs: Nlri.factory and MpReachCommon#set
+                         dispatch on SAFI 71 and 72, the two parse
+                         loops ask nlri_size, and parse_next_hops
+                         reads the section 5.5 next hop, which is
+                         three-way where EVPN's and RT-constrain's are
+                         two-way and whose VPN form prepends one zero
+                         RD to the whole field rather than one per
+                         address. **The SAFI reaches the parse gate**,
+                         which only flow spec also needs: figures 5
+                         and 6 differ by the Route Distinguisher and
+                         by nothing in the octets, so the same capture
+                         is valid read either way. The attribute, code
+                         29, is still part 5. A TLV or NLRI
                          type with no class reads back as its level's
                          Unknown and replays byte for byte. **One flat
                          registry covers TLVs and sub-TLVs alike**,
@@ -347,6 +359,16 @@ as interoperability; see `docs/mcast-vpn.md` section 9. Under a second:
 ruby -I. test/functional/mcast_vpn_test.rb
 ```
 
+The same for a BGP-LS UPDATE, AFI 16388 SAFI 71 and 72, and the only
+test that proves its four wiring sites agree. It carries the only cases
+in this family that send a two-address next hop, a VPN NLRI and an
+unknown NLRI type beside a known one over a socket, and the one that
+reads the same octets under both SAFIs to show the SAFI is a parse time
+input. About a second:
+```
+ruby -I. test/functional/link_state_test.rb
+```
+
 The Loc-RIB in a real kernel routing table, inside a network namespace of
 its own, so nothing can touch the routing table of the machine it runs on.
 No Docker. It needs root, or any way to get CAP_NET_ADMIN, and omits
@@ -463,7 +485,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. The `lab` job is a matrix, one job per group in `test/lab_groups.rb`, so its cost is the slowest group and not the total: it was 12m42s as one serial suite. Each job installs only what its group needs, which is why the matrix entry carries a `gobgp`, `frr`, `docker` or `netns` flag. The `gobgp` groups pin 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-11-01: 2219 tests, 27254 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.4%.
+Baseline on 2026-11-01: 2223 tests, 27288 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.4%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -1455,18 +1477,22 @@ true here is the shape of the gap:
 * **MP_REACH and MP_UNREACH read and write SAFIs 1, 2, 4, 5, 128, 129, 132,
   133 and 134, plus AFI 25 SAFI 70.** 133 and 134 are flowspec, which arrived
   with phase 2 below, AFI 25 SAFI 70 is EVPN, which arrived with phase 3 part
-  5, 132 is RT-constrain, which arrived with phase 4 part 1, and 5 is
-  MCAST-VPN, which arrived with phase 4 part 3. What that
-  one limit still blocks is BGP-LS,
-  VPLS and SR Policy, so it is the single lever if more breadth is wanted.
+  5, 132 is RT-constrain, which arrived with phase 4 part 1, 5 is
+  MCAST-VPN, which arrived with phase 4 part 3, and AFI 16388 SAFI 71
+  and 72 are BGP-LS, which arrived with phase 4 part 4. What that
+  one limit still blocks is VPLS and SR Policy.
   **This bullet said `Mp_reach.new(:afi=>25, :safi=>70, ...)` raises, which
   #185 made false and did not correct here.** It does not raise:
   `ruby -I. -e 'require "bgp4r"; puts BGP::Mp_reach.new(:afi=>25,
   :safi=>70, :nexthop=>["10.0.0.1"], :nlris=>[{:inclusive_multicast=>{:rd=>
   [100,200], :tag=>0, :originator=>"10.0.0.1"}}]).to_shex'` prints the
   attribute. A stale entry sends the next reader after work that is done.
-* BGP-LS (attribute 29, AFI 16388, SAFI 71 and 72, RFC 9552), which is the
-  last one left.
+* **BGP-LS's NLRI is in, and attribute 29 is what is left.** AFI 16388
+  SAFI 71 and 72 read and write since part 4 of phase 4 below, so the
+  "one limit" this section named is lifted for the last family too. The
+  BGP-LS **Attribute**, code 29, is part 5 and is a path attribute
+  rather than an NLRI, so it goes through `Attr.register` and not
+  through either dispatch gate.
   Flowspec, EVPN, RT-constrain, ATTR_SET and MCAST-VPN were all on this list
   and all five are off it, because the
   rule and the route can be sent now: flowspec had every traffic filtering
@@ -2818,8 +2844,8 @@ Two consequences, both of which change the plan rather than decorate it:
    RT-constrain (SAFI 132, RFC 4684), ATTR_SET (attribute 128, RFC
    6368) and MCAST-VPN (SAFI 5, RFC 6514) **are in**; BGP-LS
    (attribute 29, AFI
-   16388, SAFI 71 and 72, RFC 9552) is **under way**, parts 1, 2 and 3
-   of seven done, as the plan under part 4 below. This entry used to
+   16388, SAFI 71 and 72, RFC 9552) is **under way**, parts 1 to 4 of
+   seven done, as the plan under part 4 below. This entry used to
    say "each of
    these is a class and a registration", which held for the first and
    understates the last considerably: BGP-LS is a whole TLV language of
@@ -2830,17 +2856,18 @@ Two consequences, both of which change the plan rather than decorate it:
    more across another, no router here to check them against, and a
    third RFC nobody had noticed updates the first.
 
-   **BGP-LS is the last unimplemented family, so three tests have
-   nowhere left to move.** `mp_reach_test.rb`'s
-   `test_an_unimplemented_safi_still_raises` and the two behind
-   `path_attribute_test.rb`'s `UNDECODABLE` all use BGP-LS as their
-   example of a family bgp4r cannot decode. They were re-pointed once
-   already, from EVPN in #185, and doing MCAST-VPN before BGP-LS is what
-   spared them a second move. **When BGP-LS lands they need a SAFI IANA
-   has not assigned**, since there will be no real unimplemented family
-   to point at. Re-point them, as #185 and #191 did; do not weaken the
-   assertions, which are about #116 and are right. Part 4 of the BGP-LS
-   plan is where that falls due, and says so.
+   **Those three tests have moved for the last time.**
+   `mp_reach_test.rb`'s
+   `test_an_unimplemented_safi_still_raises_so_the_octets_survive` and
+   the two behind `path_attribute_test.rb`'s `UNDECODABLE` used BGP-LS
+   as their example of a family bgp4r cannot decode. BGP-LS was wired in
+   at part 4, and it was the last unimplemented family, so there is
+   nothing left to point them at: they use **SAFI 255**, which IANA has
+   Reserved, so nothing can ever be assigned there and no later part can
+   make the example expire. `UNDECODABLE_SAFI` names it and two tests
+   assert the range. Every assertion is unchanged across all three
+   moves, which is the rule when a test is right and its example is
+   not.
 
    1. **RT-constrain, SAFI 132, RFC 4684. Done**, in #200 and #202: the
       NLRI, then the wiring. bgp4r reads and writes a membership UPDATE
@@ -4521,15 +4548,127 @@ Two consequences, both of which change the plan rather than decorate it:
            fixed-group regexp read one and skipped the other in
            silence, which is the same failure one level up.
       4. **Wiring the NLRI to the dispatch sites, plus a loopback
-         functional test.** The two gates and `nlri_size`, as every
-         family since flow spec. Expect the signature those four
-         measured: reverting only `Mp_unreach`'s own loop fails
-         exactly the withdrawal case. **This is where the three tests
-         that use BGP-LS as their example of an undecodable family
-         have to move**, and there is nowhere left to move them to:
-         they need a SAFI IANA has not assigned, not another real
-         family. Re-point them as #185 and #191 did; the assertions
-         are about #116 and are right.
+         functional test. Done**, in #219. bgp4r reads and writes a
+         BGP-LS UPDATE now, over a real session, in both SAFIs. Four
+         sites, the EVPN and MCAST-VPN count: the framing in
+         `nlri_size`, the two dispatch gates, and the next hop. **Two
+         of them are this family's own and no earlier family has
+         either.**
+         * **The SAFI is a parse-time input, which only flow spec also
+           needs, and it reaches the parse gate alone.** Figures 5 and
+           6 of section 5.2 differ by the 8-octet Route Distinguisher
+           and by **nothing a reader can see in the octets**: no key,
+           no flag, no length. So the same capture is a valid NLRI read
+           either way and only the attribute's SAFI decides, which is
+           why `Link_state.new_ntop(s, safi, path_id)` is told.
+           `test_the_same_octets_read_two_ways_under_the_two_safis`
+           sends that home: one reading gives Protocol-ID 0 with no RD
+           and the other Protocol-ID 2 with RD=100:200, both replaying
+           byte for byte, so a capture is only as good as the SAFI it
+           is read with and nothing on the wire catches a mix-up.
+           `nlri_size` needs none of it, because section 5.2 says the
+           Total NLRI Length "also includes the length of the Route
+           Distinguisher", so one arithmetic frames both.
+         * **The next hop is three-way where the other three families
+           are two-way, and the VPN form differs from SAFI 128 and
+           129.** Section 5.5, verbatim: length 4 is IPv4, 16 a global
+           IPv6 address, and 32 "one global IPv6 address followed by an
+           IPv6 link-local address", which is RFC 2545's form read by
+           the loop turning twice. **This is the first family to ask
+           for that under an AFI other than 1**, so
+           `ipv6_nexthop_length?` could not have answered: it keys on
+           the SAFI, answers false for these two, and nothing claims
+           RFC 8950 applies here.
+           * For SAFI 72, "an 8-byte Route Distinguisher set to all
+             zero is prepended to the next hop". **Prepended to the
+             next hop, singular**, so the lengths are 12, 24 and 40
+             where RFC 8950 gives SAFI 128 and 129 24 or 48 by
+             repeating the RD per address. The 12, 24 and 40 is this
+             reader's arithmetic from that one sentence and not a list
+             the section gives; the sentence is verbatim. **RFC 7752
+             section 3.4 carries the whole passage word for word**,
+             fetched on 2026-11-01 after four attempts on RFC 9552
+             itself truncated at section 5.3.3.4, so it is
+             corroboration of the reading rather than a second source.
+             It adds one sentence RFC 9552 is not known here to carry,
+             cited as RFC 7752's: "The link-local IPv6 address should
+             be used as described in [RFC2545]."
+           * So a 40-octet field is one `Vpn`, which writes its own
+             zero RD, then one bare `Prefix`, which writes none. That
+             makes this **the one place in the library where a next hop
+             class depends on its position**, so `nexthop_klass` takes
+             an index and `set` passes one; every other family ignores
+             it. All six lengths are asserted over a socket.
+         * **Three tests moved off this family and cannot move again.**
+           `mp_reach_test.rb`'s
+           `test_an_unimplemented_safi_still_raises_so_the_octets_survive`
+           and the two behind `path_attribute_test.rb`'s `UNDECODABLE`
+           each used BGP-LS as their example of a family bgp4r cannot
+           decode. They were EVPN until #185 and BGP-LS until this, and
+           there is **no unimplemented family left to point at**. So
+           the third choice is not a family but a SAFI IANA has
+           **Reserved**: the registry gives 255 as Reserved citing RFC
+           4760 and 241 to 254 as Reserved for Private Use and "Not to
+           be assigned", read on 2026-11-01. Nothing can be assigned
+           there, so this example is permanent. `UNDECODABLE_SAFI`
+           names it and two tests assert the range, which is what parts
+           1 to 3 paid four times to learn. Every assertion is
+           unchanged across all three moves.
+           * **One of them failed on the count rather than the family,
+             which is the sharper reading.**
+             `test_an_attribute_that_is_both_undecodable_and_malformed`
+             sends an MP_REACH whose next hop length overruns, so it is
+             malformed and undecodable at once. Wired in, SAFI 71's next
+             hop arm read the 4 octets that did arrive as an IPv4
+             address and raised nothing, so the `Attr::Gap` disappeared
+             and only the `errors` entry was left: `1 expected but was
+             0`. An expired example usually shows as a wrong name; here
+             it showed as a missing channel.
+         * **A bug in part 2's code, found by writing the functional
+           test rather than by reading.**
+           `Igp_router_id#from_hash` used `pack('H*')` where the field
+           value form used `coerce`, which strips separators first. On
+           bare hex the two agree, which is why part 2's tests passed;
+           on the dotted form they do not, because `pack('H*')` maps a
+           separator by its **low nibble** instead of skipping it. So
+           `{:igp_router_id => '1921.6800.1001.02'}` built nine octets,
+           `1921e6800e1001e020`, against the correct seven, every `.`
+           shifting what followed. It surfaced as `node_type` answering
+           nil, since no shape has a width of 9. One method for both
+           forms now, so they cannot disagree again, with a regression
+           test at each level.
+         * **`test/functional/link_state_test.rb` is the proof and the
+           only one there can be**, for the reason
+           `flow_spec_test.rb` records. 16 tests, 173 assertions, about
+           a second. Named in `.github/workflows/test.yml`, which lists
+           each functional test by hand. It carries the only cases in
+           this family that send a two-address next hop, a VPN NLRI and
+           an unknown NLRI type beside a known one over a socket.
+         * **Two guards had to be re-pointed and both were made
+           two-sided rather than weakened.** The no-dispatch one now
+           asserts all four sites, by reading each gate as text with
+           patterns anchored at the start of a line of code **and** by
+           calling through them, since reading a file cannot say the
+           wiring works. The undecodable one now asserts the examples
+           are **not** this family and names the reserved SAFI.
+         * **Two parsing traps in the doc test, both self-inflicted and
+           both already written down.** A guard's phrase straddled a
+           line break, so a literal space did not match: #218 recorded
+           that rule one pull request earlier, and this time the guard
+           failed outright rather than measuring a subset, which is the
+           better of the two outcomes. And the status table parser read
+           the **whole** document, so the new section 9 next hop table,
+           whose rows are three columns starting with a digit, wrote
+           "IPv4" over part 4's status. Part 2 fixed exactly that for
+           the code point tables; the lesson did not carry, and it is
+           scoped by heading now.
+         * **A third shape of the load order trap, in the file that
+           already records two.** The wiring guards stopped reading the
+           gates as text and started calling through them, so
+           `BGP::Nlri` and `BGP::Mp_reach` became code the doc test
+           needs: it errored standalone with `uninitialized constant
+           BGP::Nlri` while the suite stayed green. Requires added with
+           the reason.
       5. **The BGP-LS Attribute, code 29, and the RFC 9552 attribute
          TLVs.** A path attribute, so it goes through `Attr.register`,
          which is the registry that already works, rather than through

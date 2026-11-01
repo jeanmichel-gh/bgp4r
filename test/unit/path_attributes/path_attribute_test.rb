@@ -580,21 +580,29 @@ class Path_attribute_Test < Test::Unit::TestCase # :nodoc:
   def wire(hex) [hex.delete(' ')].pack('H*') end
   GOOD = '40010100 4002060201fa56ea01 4003040a000001'
 
-  # A correct MP_REACH for BGP-LS: AFI 16388, SAFI 71 (RFC 9552), flags
-  # 0x80 as MP_REACH must have, a 4 octet next hop, the reserved octet,
-  # then one Link-State NLRI, type 1 with an 8 octet value. bgp4r has no
-  # decoder for SAFI 71, so this is a valid attribute it cannot read.
+  # A well formed MP_REACH for a SAFI bgp4r will never implement: AFI 1,
+  # **SAFI 255**, flags 0x80 as MP_REACH must have, a 4 octet next hop,
+  # the reserved octet, then eight octets of NLRI. So this is a valid
+  # attribute bgp4r cannot read, which is what the four tests below are
+  # about.
   #
-  # **This used to be an EVPN attribute and had to move**, because EVPN
-  # was wired in and the example stopped being one: the four tests below
-  # assert what happens to a family bgp4r *cannot* decode, and SAFI 70
-  # now decodes. The assertions are unchanged; only the family is.
-  # BGP-LS is phase 4 of the breadth plan and so the furthest out, which
-  # makes it the longest-lived choice available. Whoever wires BGP-LS in
-  # will have to move these again, and the same rule applies then:
-  # re-point the example, do not weaken the assertion.
-  UNDECODABLE = '800e15 4004 47 04 0a000001 00 ' +
-                '0001 0008 0000000000000000'
+  # **The example has moved twice and this time it cannot expire.** It
+  # was EVPN until #185 wired SAFI 70 in, then BGP-LS until #219 wired
+  # SAFI 71 and 72 in, and each time the family stopped being
+  # undecodable and these tests failed. There is no unimplemented
+  # family left to point at, so the third choice is a SAFI IANA has
+  # **Reserved**: the registry gives 255 as Reserved citing RFC 4760,
+  # and 241 to 254 as Reserved for Private Use and "Not to be
+  # assigned", read on 2026-11-01. No family can be assigned there, so
+  # bgp4r will never decode it and this example is permanent.
+  # test_the_undecodable_safi_cannot_be_assigned asserts the range, the
+  # way link_state_tlv_test.rb and link_state_test.rb assert theirs.
+  # Every assertion below is unchanged across all three moves; only the
+  # example moved, which is the rule when a test is right and its
+  # example has expired.
+  UNDECODABLE_SAFI = 255
+  UNDECODABLE = '800e11 0001 ff 04 0a000001 00 ' +
+                '0000000000000000'
 
   # B9: flags were never checked.
   def test_flags_error_is_reported
@@ -664,7 +672,7 @@ class Path_attribute_Test < Test::Unit::TestCase # :nodoc:
     g = pa.undecoded.first
     assert_instance_of BGP::Attr::Gap, g
     assert_equal ATTR::MP_REACH, g.type
-    assert_match(/safi 71/, g.reason)
+    assert_match(/safi #{UNDECODABLE_SAFI}/, g.reason)
     assert_match(/^attribute 14: bgp4r could not decode it: /, g.to_s)
     assert_kind_of Class, g.error
     assert_instance_of Attr::Raw, pa.attributes.first
@@ -688,12 +696,19 @@ class Path_attribute_Test < Test::Unit::TestCase # :nodoc:
   # only judge of malformed and runs on the octets whether the decoder
   # succeeds or not, reports the malformation as an error. Here the next
   # hop length of 255 does not fit the attribute, which is malformed
-  # with a session reset (RFC 7606 section 7.11), and the BGP-LS next hop
-  # is also one bgp4r cannot read. Both are reported, and :strict raises
-  # on the error. The family moved from EVPN for the reason UNDECODABLE
-  # records.
+  # with a session reset (RFC 7606 section 7.11), and the next hop of a
+  # SAFI bgp4r has no code for is also one it cannot read. Both are
+  # reported, and :strict raises on the error.
+  #
+  # **The family has moved twice, for the reason UNDECODABLE records,
+  # and this case is the one that showed why the second move was not
+  # enough on its own.** With BGP-LS wired in, SAFI 71's next hop arm
+  # reads a 4-octet field as an IPv4 address and raises nothing, so the
+  # Gap disappeared and only the error was left: the test failed on the
+  # count rather than on the family, which is a sharper way of saying
+  # the example had expired.
   def test_an_attribute_that_is_both_undecodable_and_malformed
-    hex = '800e08 4004 47 ff 0a000001'
+    hex = '800e08 0001 ff ff 0a000001'
     pa = Path_attribute.new(wire(hex))
     assert_equal [[14, 9, :session_reset]], pa.errors.collect { |f| [f.type, f.subcode, f.action] }
     assert_equal 1, pa.undecoded.size
@@ -701,6 +716,24 @@ class Path_attribute_Test < Test::Unit::TestCase # :nodoc:
     assert_equal hex.delete(' '), pa.encode.unpack1('H*')
     e = assert_raise(Malformed_attribute) { Path_attribute.new(wire(hex), :policy=>:strict) }
     assert_equal :session_reset, e.action
+  end
+
+  # The four tests above rest on that SAFI staying unimplementable, and
+  # the example has already expired twice, so the claim is asserted
+  # rather than left in a comment. IANA gives 255 as Reserved, so
+  # bgp4r's own dispatch can never grow an arm for it: iana.rb has no
+  # name for it where every SAFI bgp4r reads does, and both dispatch
+  # gates refuse it.
+  def test_the_undecodable_safi_cannot_be_assigned
+    assert_nil(IANA.safi?(UNDECODABLE_SAFI))
+    assert_not_nil(IANA.safi?(IANA::SAFI::BGP_LS))
+    assert_raise(RuntimeError) do
+      BGP::Nlri.factory('x'.is_packed, 1, UNDECODABLE_SAFI)
+    end
+    assert_raise(RuntimeError) do
+      BGP::Mp_reach.new(:safi => UNDECODABLE_SAFI, :afi => 1,
+                        :nlris => ['10.0.0.0/24'])
+    end
   end
 
   # A genuinely malformed attribute bgp4r can decode is untouched by

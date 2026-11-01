@@ -79,14 +79,18 @@ require 'bgp/nlris/link_state'
 require 'bgp/nlris/link_state_tlv'
 require 'bgp/nlris/link_state_descriptor'
 require 'bgp/nlris/link_state_nlri'
-# The forward-looking guards read the dispatch gates and validation.rb
-# as text, so they need no requires of their own. These two are reached
-# as code. Required explicitly, per Conventions: run_unit.rb requires
-# every file before any test runs, so a file that leans on another's
-# requires passes in the suite and fails on its own, which is a trap
-# this family's siblings fell into twice.
+# Required explicitly, per Conventions: run_unit.rb requires every file
+# before any test runs, so a file that leans on another's requires
+# passes in the suite and fails on its own. This family's siblings fell
+# into that twice and this file fell into it again in #219, when the
+# wiring guards stopped reading the gates as text and started calling
+# through them: BGP::Nlri and BGP::Mp_reach were suddenly needed as
+# code and the file errored standalone while the suite stayed green.
 require 'bgp/nlris/evpn'
 require 'bgp/nlris/mcast_vpn'
+require 'bgp/nlris/nlri'
+require 'bgp/path_attributes/mp_reach'
+require 'bgp/path_attributes/path_attribute'
 
 class BgpLsDocTest < Test::Unit::TestCase
 
@@ -706,17 +710,48 @@ class BgpLsDocTest < Test::Unit::TestCase
   # and name what to rewrite. The patterns are anchored at the start of
   # a line of code so a comment naming the family cannot satisfy them,
   # which is what a sabotage caught in MCAST-VPN part 7.
-  def test_the_dispatch_gates_know_nothing_of_the_family_yet
-    ['bgp/nlris/nlri.rb', 'bgp/path_attributes/mp_reach.rb'].each do |f|
-      body = source(f)
-      assert_equal(nil, body[/^\s+when .*BGP_LS/],
-                   "#{f} dispatches on BGP-LS now: that is part 4, so " \
-                   "rewrite docs/bgp-ls.md section 7")
-      assert_equal(nil, body[/^\s+Link_state\./],
-                   "#{f} reaches Link_state now: that is part 4, so " \
-                   "rewrite docs/bgp-ls.md section 7")
+  # **This guard was forward-looking and has fired.** Until #219 it
+  # asserted that neither file named BGP_LS or reached Link_state, and
+  # that the document said so. All four sites are wired now, so it
+  # asserts the new truth instead of being weakened: each gate names
+  # the family and reaches it, and the document no longer claims
+  # otherwise. Each pattern is anchored at the start of a line of code,
+  # so a comment naming the family cannot satisfy it, which is the
+  # lesson mcast_vpn_doc_test.rb paid for.
+  def test_all_four_dispatch_sites_are_wired
+    nlri = source('bgp/nlris/nlri.rb')
+    mp = source('bgp/path_attributes/mp_reach.rb')
+    assert_not_equal(nil, nlri[/^\s+when IANA::SAFI::BGP_LS, IANA::SAFI::BGP_LS_VPN$/],
+                     'the parse gate must dispatch on both BGP-LS SAFIs')
+    assert_not_equal(nil, nlri[/^\s+Link_state\.new_ntop\(s\.is_packed, safi, path_id\)$/],
+                     'and must pass the SAFI down, since nothing in the ' \
+                     'octets says whether the section 5.2 RD is there')
+    assert_not_equal(nil, mp[/^\s+Link_state\.nlri_size\(s\)$/],
+                     'nlri_size must ask the family for the framing')
+    assert_not_equal(nil, mp[/^\s+@afi \|\|= IANA::AFI::BGP_LS$/],
+                     'the build gate must set AFI 16388 rather than infer it')
+    assert_equal(3, mp.scan(/^\s+when IANA::SAFI::BGP_LS, IANA::SAFI::BGP_LS_VPN$/).size,
+                 'mp_reach.rb has three such arms: set, nlri_size and ' \
+                 'parse_next_hops. nexthop_klass is the one that splits ' \
+                 'the two SAFIs, because section 5.5 prepends a Route ' \
+                 'Distinguisher for one of them, so it does not match ' \
+                 'this pattern')
+    assert_not_equal(nil, mp[/^\s+when IANA::SAFI::BGP_LS_VPN$/],
+                     'nexthop_klass must split the two SAFIs: section 5.5 ' \
+                     'prepends one RD to a VPN next hop')
+    assert_equal(nil, doc[/\*\*Nothing dispatches to either file\.\*\*/],
+                 'docs/bgp-ls.md section 7 still says nothing dispatches ' \
+                 'to the family: rewrite it, part 4 is done')
+    # And the gates really work, which reading the files cannot say.
+    ls = BGP::Link_state.new(BGP::Link_state::Node.new(1, 0))
+    [IANA::SAFI::BGP_LS, IANA::SAFI::BGP_LS_VPN].each do |safi|
+      m = BGP::Mp_reach.new(:safi => safi, :nexthop => '10.0.0.1',
+                            :nlris => [ls])
+      assert_equal(IANA::AFI::BGP_LS, m.afi)
+      assert_equal(m.to_shex, BGP::Mp_reach.new(m.encode.is_packed).to_shex)
+      assert_equal(BGP::Link_state,
+                   BGP::Mp_reach.new(m.encode.is_packed).nlris.first.class)
     end
-    assert_match(/\*\*Nothing dispatches to either file\.\*\*/, doc)
   end
 
   # **Forward-looking.** Part 6 puts the first check in validation.rb,
@@ -749,18 +784,34 @@ class BgpLsDocTest < Test::Unit::TestCase
   # tests use BGP-LS as their example of a family bgp4r cannot decode,
   # which is true only until part 4. When it fails, the examples need a
   # SAFI IANA has not assigned rather than another real family.
-  def test_the_undecodable_example_is_still_this_family
+  # **The twin of the guard above, and it has fired too.** It used to
+  # assert that the three undecodable examples were still this family.
+  # They have moved to SAFI 255, which IANA has Reserved, so now it
+  # asserts that they are **not** this family and cannot come back:
+  # three moves is enough, and a reserved SAFI is the first choice that
+  # cannot expire.
+  def test_the_undecodable_examples_have_moved_off_this_family
     a = source('test/unit/path_attributes/mp_reach_test.rb')
     b = source('test/unit/path_attributes/path_attribute_test.rb')
-    assert_not_equal(nil, a[/^\s+hex = '800e0e' \+ '400447'/],
-                     'mp_reach_test.rb no longer uses AFI 16388 SAFI 71 ' \
-                     'as its unimplemented family: re-point it, do not ' \
-                     'weaken it, and rewrite docs/bgp-ls.md section 7')
-    assert_not_equal(nil, b[/^\s+UNDECODABLE = '800e15 4004 47/],
-                     'path_attribute_test.rb no longer uses AFI 16388 ' \
-                     'SAFI 71 in UNDECODABLE: re-point it, do not weaken ' \
-                     'it, and rewrite docs/bgp-ls.md section 7')
-    assert_match(/there is nowhere left to point them/, doc)
+    assert_equal(nil, a[/^\s+hex = '800e0e' \+ '400447'/],
+                 'mp_reach_test.rb still uses AFI 16388 SAFI 71 as its ' \
+                 'unimplemented family, which decodes now')
+    assert_equal(nil, b[/^\s+UNDECODABLE = '800e15 4004 47/],
+                 'path_attribute_test.rb still uses AFI 16388 SAFI 71 in ' \
+                 'UNDECODABLE, which decodes now')
+    assert_not_equal(nil, b[/^\s+UNDECODABLE_SAFI = (\d+)$/],
+                     'path_attribute_test.rb must name the SAFI it uses ' \
+                     'in a constant, so the choice can be asserted')
+    safi = $1.to_i
+    assert_nil(IANA.safi?(safi),
+               "SAFI #{safi} has a name in iana.rb, so it is a family " \
+               'bgp4r is behind on rather than one it can never read')
+    assert_raise(RuntimeError) { BGP::Nlri.factory('x'.is_packed, 1, safi) }
+    # `\s+` and not a literal space, because the document wraps and the
+    # phrase straddles a line break. #218 recorded that rule for a guard
+    # that had silently measured three of four rows; this one failed
+    # outright instead, which is the better of the two outcomes.
+    assert_match(/no\s+unimplemented\s+family\s+left\s+to\s+point\s+at/, doc)
   end
 
   # --- the copy constructor measurement -------------------------------
@@ -817,8 +868,16 @@ class BgpLsDocTest < Test::Unit::TestCase
       assert_match(/^\| #{n} \| /, doc,
                    "#{DOC} section 7 must have a row for part #{n}")
     end
+    # **Scoped to section 7, and the unscoped form was wrong.** This
+    # scanned the whole document until #219 added the section 9 next hop
+    # table, whose rows are three columns starting with a digit as these
+    # are: `| 4 | 12 | IPv4 |` overwrote part 4's status with "IPv4".
+    # Part 2 fixed exactly this for the code point tables and the lesson
+    # did not carry: a table parser that reads a whole document reads
+    # every table in it.
     status = {}
-    doc.scan(/^\| ([1-7]) \|[^|]*\|\s*(.+?)\s*\|\s*$/) do
+    section('7. What is in bgp4r today').scan(
+      /^\| ([1-7]) \|[^|]*\|\s*(.+?)\s*\|\s*$/) do
       status[$1.to_i] = $2.delete('*')
     end
     assert_equal(7, status.size)
@@ -828,9 +887,13 @@ class BgpLsDocTest < Test::Unit::TestCase
     assert_equal([1, 2, 3, 4], BGP::Link_state::TYPES.keys.sort)
     assert_equal('done', status[3],
                  'every NLRI type is registered, so part 3 is done')
-    # Parts 4, 6 and 7 are what the forward-looking guards watch, so
+    # Part 4: both gates dispatch and the framing asks the family.
+    assert_not_equal(nil, BGP::Link_state.nlri_size(
+      ['0001000902000000000000000000'].pack('H*')))
+    assert_equal('done', status[4],
+                 'the dispatch gates are wired, so part 4 is done')
+    # Parts 6 and 7 are what the forward-looking guards still watch, so
     # their status here must agree with those still passing.
-    assert_equal('to do', status[4])
     assert_equal('to do', status[6])
     assert_equal('to do', status[7])
   end

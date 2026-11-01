@@ -237,6 +237,26 @@ class TestLinkStateNlri < Test::Unit::TestCase
     assert_nil(BGP::Link_state::Node.new(1, 0).node_type)
   end
 
+  # **The hash build path has to reach the same width as the field value
+  # path, and it did not.** `Igp_router_id#from_hash` used
+  # `pack('H*')`, which maps a separator by its low nibble rather than
+  # skipping it, so `'1921.6800.1001.02'` through a hash built nine
+  # octets and `node_type` answered nil because no shape has that width.
+  # The field value path stripped separators and built the right seven.
+  # Found in #219 by test/functional/link_state_test.rb; the two paths
+  # share one method now and link_state_descriptor_test.rb pins that at
+  # its own level. This is the same bug seen from the top, which is
+  # where it was visible at all.
+  def test_the_node_type_rule_sees_a_dotted_router_id_from_a_hash
+    n = BGP::Link_state::Node.new(
+      :node => { :protocol_id => 1, :identifier => 0,
+                 :tlvs => [{ :local_node_descriptors =>
+                             [{ :igp_router_id => '1921.6800.1001.02' }] }] })
+    r = n.local_node_descriptors.sub_tlvs.first
+    assert_equal(7, r.value.size)
+    assert_equal(:pseudonode, n.node_type)
+  end
+
   # The rule reads the **Local** Node Descriptors and not any Router-ID
   # that happens to be in the NLRI, since the Remote one describes the
   # other end of a link.
