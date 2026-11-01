@@ -75,15 +75,71 @@ class Mcast_vpn_test < Test::Unit::TestCase
     assert_nil(M.nlri_size(['01'].pack('H*')))
   end
 
-  # No route type is registered yet, so every type reads as Unknown.
-  def test_every_route_type_reads_back_as_unknown_in_this_part
-    assert_equal({}, M::ROUTES)
-    (1..7).each do |t|
+  # **This test's example expired when route types 1, 2 and 5 landed**,
+  # and it was re-pointed rather than weakened, the way #185 re-pointed
+  # #116's undecodable family. It used to assert that every type reads
+  # as Unknown, which was true while ROUTES was empty. What it asserts
+  # now is the same thing about the types that still have no class, and
+  # the three that do are covered below.
+  def test_a_route_type_with_no_class_reads_back_as_unknown
+    assert_equal([1, 2, 5], M::ROUTES.keys.sort)
+    [3, 4, 6, 7].each do |t|
       n = M.new([format('%02x0c', t) + BODY].pack('H*').is_packed)
       assert_equal(M::Unknown, n.route.class, "route type #{t}")
       assert_equal(t, n.type)
       assert_equal(format('%02x0c', t) + BODY, n.to_shex)
     end
+  end
+
+  # The three types this part added, read back through the framing.
+  # Every vector is computed with the library and pasted.
+  REGISTERED = {
+    '010c' + '00000064000000c8' + '0a000001' => M::Intra_as_i_pmsi,
+    '0118' + '00000064000000c8' +
+      '20010db8000000000000000000000001'     => M::Intra_as_i_pmsi,
+    '020c' + '00000064000000c8' + '0000fde8' => M::Inter_as_i_pmsi,
+    '0512' + '00000064000000c8' +
+      '20c0000201' + '20e8010101'            => M::Source_active,
+    '050e' + '00000064000000c8' +
+      '00' + '20e8010101'                    => M::Source_active,
+  }.freeze
+
+  def test_the_three_registered_route_types_read_back_as_themselves
+    REGISTERED.each do |hex, klass|
+      n = M.new([hex].pack('H*').is_packed)
+      assert_equal(klass, n.route.class, hex)
+      assert_equal(hex, n.to_shex, "#{hex} must replay")
+      assert_nil(n.declared_len, "#{hex} has an honest Length")
+    end
+  end
+
+  def test_each_registered_route_type_round_trips_through_the_nlri_hash
+    REGISTERED.each_key do |hex|
+      n = M.new([hex].pack('H*').is_packed)
+      assert_equal(hex, M.new(n.to_hash).to_shex, hex)
+      assert_equal(hex, M.new(n).to_shex, hex)
+    end
+  end
+
+  # The encode-matches rule, which is what keeps a registered type from
+  # inventing the fields a short or long body does not hold. A route
+  # type 2 body with two octets too many cannot be reproduced, so the
+  # NLRI keeps the octets whole as an Unknown rather than dropping them.
+  def test_a_body_a_registered_type_cannot_reproduce_falls_back_to_unknown
+    hex = '020e' + '00000064000000c8' + '0000fde8' + 'ffff'
+    n = M.new([hex].pack('H*').is_packed)
+    assert_equal(M::Unknown, n.route.class)
+    assert_equal(2, n.type, 'the type octet is still what arrived')
+    assert_equal(hex, n.to_shex)
+  end
+
+  # Route type 2 is fixed at 12 octets, so a short body is the other
+  # half of that rule.
+  def test_a_body_too_short_for_a_registered_type_falls_back_too
+    hex = '020a' + '00000064000000c8' + '00fd'
+    n = M.new([hex].pack('H*').is_packed)
+    assert_equal(M::Unknown, n.route.class)
+    assert_equal(hex, n.to_shex)
   end
 
   # The three mLDP types of RFC 7441, which are out of scope and replay
@@ -131,10 +187,25 @@ class Mcast_vpn_test < Test::Unit::TestCase
                  M.new(:unknown => { :type => 1, :value => BODY }).to_shex)
   end
 
+  # **Re-pointed when route type 1 landed.** This used to assert the
+  # :unknown hash shape for NLRI1, which was right while no route type
+  # had a class. The shape claim moved to the unregistered type below;
+  # what is asserted here is unchanged, that an NLRI rebuilds from its
+  # own hash.
   def test_an_nlri_round_trips_through_its_own_hash
     n = M.new([NLRI1].pack('H*').is_packed)
-    assert_equal({ :unknown => { :type => 1, :value => BODY } }, n.to_hash)
+    assert_equal({ :intra_as_i_pmsi => { :rd => [100, 200],
+                                         :originator => '10.0.0.1' } },
+                 n.to_hash)
     assert_equal(n.encode, M.new(n.to_hash).encode)
+  end
+
+  # And the :unknown shape, on a type that has no class.
+  def test_an_unregistered_type_hashes_under_the_unknown_key
+    hex = '030c' + BODY
+    n = M.new([hex].pack('H*').is_packed)
+    assert_equal({ :unknown => { :type => 3, :value => BODY } }, n.to_hash)
+    assert_equal(hex, M.new(n.to_hash).to_shex)
   end
 
   # A kept Length rides in the hash as one more key, the way a tail and
@@ -179,10 +250,16 @@ class Mcast_vpn_test < Test::Unit::TestCase
     assert_raise(ArgumentError) { M.new(:no_such_route_type => 1) }
   end
 
+  # Re-pointed when route type 1 landed, as the hash shape test above
+  # was: the registered type names itself now, and the Unknown wording
+  # is asserted on a type that has no class.
   def test_to_s_names_the_route_it_holds
     n = M.new([NLRI1].pack('H*').is_packed)
-    assert_match(/Unknown route type 1/, n.to_s)
-    assert_match(/\[7\]/, M.new_ntop([NLRI1].pack('H*'), 7).to_s)
+    assert_match(/\[1\] Intra-AS I-PMSI A-D/, n.to_s)
+    assert_match(/Unknown route type 3/,
+                 M.new(['030c' + BODY].pack('H*').is_packed).to_s)
+    assert_match(/\[7\]/, M.new_ntop([NLRI1].pack('H*'), 7).to_s,
+                 'the path identifier is printed in front')
   end
 
   # Building from an instance must not empty it, since parse reads with

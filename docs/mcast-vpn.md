@@ -89,22 +89,54 @@ mLDP range, and `base + 0x40` is the result of that rule, not the rule.
 
 | Type | Route type | Defined in | In bgp4r |
 | --- | --- | --- | --- |
-| 1 | Intra-AS I-PMSI A-D route | RFC 6514 section 4.1 | no |
-| 2 | Inter-AS I-PMSI A-D route | RFC 6514 section 4.2 | no |
+| 1 | Intra-AS I-PMSI A-D route | RFC 6514 section 4.1 | yes |
+| 2 | Inter-AS I-PMSI A-D route | RFC 6514 section 4.2 | yes |
 | 3 | S-PMSI A-D route | RFC 6514 section 4.3 | no |
 | 4 | Leaf A-D route | RFC 6514 section 4.4 | no |
-| 5 | Source Active A-D route | RFC 6514 section 4.5 | no |
+| 5 | Source Active A-D route | RFC 6514 section 4.5 | yes |
 | 6 | Shared Tree Join route | RFC 6514 section 4.6 | no |
 | 7 | Source Tree Join route | RFC 6514 section 4.6 | no |
 | 67 | S-PMSI A-D route for C-multicast mLDP | RFC 7441 | no |
 | 68 | Leaf A-D route for C-multicast mLDP | RFC 7441 | no |
 | 71 | Source Tree Join route for C-multicast mLDP | RFC 7441 | no |
 
-Every row says no today, because this part lands the framing and the
-primitives with nothing dispatching to them. A type with no class reads
-back as an `Mcast_vpn::Unknown` that replays byte for byte.
+Three of the seven are in: 1, 2 and 5, the layouts whose bodies split
+with no guess. Route types 3, 6 and 7 come next and route type 4 last,
+because it is the one the documents do not settle (section 7). A type
+with no class reads back as an `Mcast_vpn::Unknown` that replays byte
+for byte.
 
-Two notes on the table.
+### The layouts that are in
+
+| Type | Body | Octets |
+| --- | --- | --- |
+| 1 | RD, Originating Router's IP Address | 12 or 24 |
+| 2 | RD, Source AS | 12, always |
+| 5 | RD, source, group | 18 or 42 |
+
+**None of those octet counts is in the document.** Section 4 gives a
+Length field and no section gives a total, so each is this reader's
+arithmetic from the figure, computed with the library and pasted. See
+section 10.
+
+Two things fall out of them and are worth knowing.
+
+**Route type 1 with an IPv4 address and route type 2 are both 12
+octets.** So nothing in either body tells them apart and the Route Type
+octet is the only discriminator. That is not a problem the framing has
+to solve, since the type is read before the body, but a reader
+comparing lengths across this family should know the collision is
+there.
+
+**Route type 2 is the only fixed length layout in the family**, and it
+carries the one sentence in section 4 that constrains a field's value
+rather than its width: "Two-octet ASNs are encoded in the two
+low-order octets of the Source AS field, with the two high-order octets
+set to zero." `Source_as` writes a 32-bit unsigned integer, so that
+holds by construction and needed no code. A test asserts it rather than
+leaving it assumed.
+
+### Two notes on the table.
 
 Types 6 and 7 share one layout. Section 4.6 is titled "C-Multicast
 Route" and covers both in one subsection: "A Shared Tree Join route and
@@ -244,6 +276,28 @@ An unknown route type is therefore reported nowhere. Types 8 to 66 and
 72 onward are unassigned, so reporting one would make bgp4r call a
 correct router malformed the day IANA assigns one.
 
+### Two receive-side rules that are not error handling
+
+Found while writing route type 5, and recorded here rather than left
+for part 6 to rediscover. Both are in section 4.5 and neither belongs
+in `validation.rb` on today's reading. Say why, not just which.
+
+"Use of the Source Active A-D routes with the Multicast Source Length
+field of 0 is outside the scope of this document." That is the third
+"outside the scope is not an error" sentence in this family, after the
+two in section 4.3, so a wildcard source builds and reads here.
+
+A route whose Multicast Group is in the Source Specific Multicast range
+"MUST NOT be advertised by a router and MUST be discarded if received".
+That one is a real MUST on a receiver and it is still not a
+`validation.rb` rule, for two reasons. It needs the group's **value**
+against a range RFC 6514 does not number, deferring to RFC 4607 and
+letting a router extend it locally, so bgp4r would be asserting a range
+no document here states. And "discarded" is not one of the actions RFC
+7606 names, so there is no subcode and no action to report it as:
+nothing about the octets is wrong. This is the RFC 9117 situation that
+`docs/flow-spec.md` records, route feasibility rather than encoding.
+
 ## 9. No outside reference
 
 **Neither router in the lab implements SAFI 5.** Measured with `strings`
@@ -290,7 +344,11 @@ arithmetic and not against the document.
 ## 11. What is left
 
 The seven parts are in CLAUDE.md under "Breadth, the one SAFI lever".
-This part is the first: the framing, the primitives, `Unknown` and this
-document. Nothing dispatches to any of it yet, so an MCAST-VPN UPDATE
-still comes back as an `Attr::Raw` with an `Attr::Gap`, which is #116
-working as designed.
+Two are done: the framing and the primitives, then route types 1, 2 and
+5. Route types 3, 6 and 7 come next, then route type 4, then the
+wiring.
+
+**Nothing dispatches to any of it yet**, so an MCAST-VPN UPDATE still
+comes back as an `Attr::Raw` with an `Attr::Gap`, which is #116 working
+as designed. A route type built here encodes and a capture of one reads
+back; what cannot happen yet is either crossing a session.

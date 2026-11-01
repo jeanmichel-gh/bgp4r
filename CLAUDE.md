@@ -69,16 +69,21 @@ bgp/nlris/               prefix encodings (inet, labeled, VPN, RD, mapped IPv4)
                          and Group, the 4-octet Source_as, and the
                          Originating_router that has no length field in any
                          document, with the Route base and
-                         Mcast_vpn::Unknown under them;
+                         Mcast_vpn::Unknown under them, and three of the
+                         seven route types: Intra_as_i_pmsi (section 4.1),
+                         Inter_as_i_pmsi (4.2) and Source_active (4.5),
+                         which are the layouts whose bodies split with no
+                         guess;
                          mcast_vpn.rb the NLRI with the section 4 Route Type
                          and Length framing and Mcast_vpn.nlri_size, which
                          is Evpn.nlri_size again because the framing is the
                          same shape. **Nothing dispatches to either yet**:
-                         Mcast_vpn::ROUTES is empty, so every route type
-                         reads back as an Unknown that replays byte for
-                         byte, and an MCAST-VPN UPDATE is still an Attr::Raw
-                         with an Attr::Gap. docs/mcast-vpn.md is the guide,
-                         see also "Breadth, the one SAFI lever"
+                         Mcast_vpn::ROUTES holds route types 1, 2 and 5, a
+                         type outside those reads back as an Unknown that
+                         replays byte for byte, and an MCAST-VPN UPDATE is
+                         still an Attr::Raw with an Attr::Gap because the
+                         wiring is a later part. docs/mcast-vpn.md is the
+                         guide, see also "Breadth, the one SAFI lever"
 bgp/optional_parameters/ OPEN capabilities (4-byte AS, add-path, graceful restart...)
 bgp/orfs/                outbound route filtering
 bgp/neighbor/            the BGP finite state machine and TCP session (neighbor.rb)
@@ -341,7 +346,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. The `lab` job is a matrix, one job per group in `test/lab_groups.rb`, so its cost is the slowest group and not the total: it was 12m42s as one serial suite. Each job installs only what its group needs, which is why the matrix entry carries a `gobgp`, `frr`, `docker` or `netns` flag. The `gobgp` groups pin 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-10-31: 1881 tests, 25794 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.2%.
+Baseline on 2026-11-01: 1912 tests, 25907 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.2%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -3019,9 +3024,10 @@ Two consequences, both of which change the plan rather than decorate it:
             `wait_for`, which overran the foreground limit twice and
             left a patched working tree behind both times. One method
             is about 45s.
-   3. **MCAST-VPN, SAFI 5, RFC 6514. One of seven parts done**, in
-      #208: the framing and the primitives, pure, with nothing
-      dispatching to them. **The RFC is readable now**, which corrects the note
+   3. **MCAST-VPN, SAFI 5, RFC 6514. Two of seven parts done**, in
+      #208 and #209: the framing and the primitives, then route types
+      1, 2 and 5. Still pure, with nothing dispatching to any of it.
+      **The RFC is readable now**, which corrects the note
       this entry used to carry: it was fetched in full on 2026-10-31,
       along with draft-ietf-bess-rfc6514bis-00, which obsoletes it, and
       RFC 7441, which updates it. EVPN part 7's note that the only first
@@ -3210,11 +3216,74 @@ Two consequences, both of which change the plan rather than decorate it:
            above it answers nil for every type. Said in a comment there
            rather than left for a coverage report to raise as a
            question; part 2 is where those lines first run.
-      2. **Route types 1, 2 and 5**, which are the three whose bodies
-         split with no guess. Type 2 is fixed at 12 octets, RD and
-         Source AS. Type 5 is RD, source and group. Type 1 is RD and the
-         trailing address, so it is the first to need the what-is-left
-         rule and the smallest place to get it right.
+      2. **Route types 1, 2 and 5. Done**, in #209, which are the three
+         whose bodies split with no guess. Type 2 is fixed at 12 octets,
+         RD and Source AS. Type 5 is RD, source and group, 18 octets or
+         42. Type 1 is RD and the trailing address, 12 or 24, so it is
+         the first to need the what-is-left rule and was the smallest
+         place to get it right.
+         * **None of those six octet counts is in either document.**
+           Section 4 gives a Length field and no subsection gives a
+           total, so each is this reader's arithmetic from the figure,
+           computed with the library and pasted per the rule #200 and
+           #204 earned. `docs/mcast-vpn.md` section 3 has them in a
+           table the doc test measures against the classes, so the
+           document cannot drift from what they encode.
+         * **Route type 1 with an IPv4 address and route type 2 are
+           both 12 octets**, exactly, so nothing in either body tells
+           them apart and the Route Type octet is the only
+           discriminator. Not a problem the framing has to solve, since
+           the type is read first, but a reader comparing lengths across
+           this family would otherwise meet it by surprise. Asserted
+           rather than noted.
+         * **Section 4.2 carries the one sentence in section 4 that
+           constrains a field's value rather than its width**:
+           "Two-octet ASNs are encoded in the two low-order octets of
+           the Source AS field, with the two high-order octets set to
+           zero." `Source_as` writes a 32-bit unsigned integer, so it
+           holds by construction and needed no code; a test asserts it
+           anyway, because a rule that holds by accident of
+           implementation is one a later change can break in silence.
+         * **Two receive-side rules were found in section 4.5 and
+           neither is a `validation.rb` rule**, which is a correction to
+           part 1's reading rather than a discovery: section 8 of the
+           guide said there was no error handling text, and that is
+           still true, but it read as though there were no receive-side
+           rules at all. There are two, and the guide now says why each
+           is out: "Use of the Source Active A-D routes with the
+           Multicast Source Length field of 0 is outside the scope of
+           this document", which is the third such sentence in this
+           family; and a group in the SSM range "MUST NOT be advertised
+           by a router and MUST be discarded if received", which needs
+           the group's **value** against a range RFC 6514 does not
+           number, deferring to RFC 4607 and letting a router extend it
+           locally, and where "discarded" is not one of the actions RFC
+           7606 names. That is route feasibility rather than encoding,
+           the RFC 9117 situation `docs/flow-spec.md` records. Part 6
+           has it in writing rather than having to rediscover it.
+         * **Three tests had examples that expired and all three were
+           re-pointed rather than weakened**, which is the third time
+           this week after #185 and #191. `mcast_vpn_test.rb`'s
+           "every route type reads back as Unknown" was true only while
+           `ROUTES` was empty, so it now says that of the types that
+           still have no class; its hash-shape and `to_s` assertions
+           moved to route type 3, which has none. And the doc test's
+           "no route type is implemented" guard fired the moment these
+           landed, which is the guard working: it is two-sided now, so
+           the sentence must be gone while any type is in and must come
+           back if ever none is.
+         * **Six sabotages, all landing**, and the two layout ones are
+           the informative pair: swapping the RD and the trailing
+           address in route type 1 fails 4 in the class file and 3 in
+           the NLRI file, and reading `Source_as` as two octets fails 2
+           and 1. Removing the encode-matches rule from `read_route`
+           fails 2 and errors 4, dropping a type from `ROUTES` fails the
+           half-wiring guard and two NLRI cases, swapping route type 5's
+           source and group fails 2, and making one octet count in the
+           document wrong fails the table guard.
+         * Both files are at 100% line coverage. The one gap part 1
+           recorded, `read_route`'s body, is closed: it runs for the
+           first time here.
       3. **Route types 3, 6 and 7.** Type 3 is type 5 with the trailing
          address behind it. Types 6 and 7 share one layout, RD, Source
          AS, source and group, the way RFC 6514 section 4.6 covers both

@@ -1216,6 +1216,32 @@ module ToHashCatalog
     BGP::Mcast_vpn.new_ntop(['01ff0a000001'].pack('H*'), 7)
   end
 
+  # The three route types of RFC 6514 section 4 that are in. Each recipe
+  # exercises every field the class carries, which for these is two or
+  # three.
+  #
+  # Route type 1, section 4.1: the RD and the trailing address. Built
+  # with an IPv6 address, the longer of the two widths, since the hash
+  # carries the address string and the family comes from its octets.
+  ENTRIES['BGP::Mcast_vpn::Intra_as_i_pmsi'] = entry(:ok, nil, nil) do
+    BGP::Mcast_vpn::Intra_as_i_pmsi.new([100, 200], '2001:db8::1')
+  end
+
+  # Route type 2, section 4.2: the RD and the Source AS. Built with a
+  # four-octet AS, since the field never follows the session and a
+  # two-octet value would not show that.
+  ENTRIES['BGP::Mcast_vpn::Inter_as_i_pmsi'] = entry(:ok, nil, nil) do
+    BGP::Mcast_vpn::Inter_as_i_pmsi.new([100, 200], 70013)
+  end
+
+  # Route type 5, section 4.5: the RD, the source and the group. Built
+  # with a wildcard source, which section 4.5 calls outside its scope,
+  # so the recipe covers the absent-field branch of `addr_hash` as well
+  # as the address one.
+  ENTRIES['BGP::Mcast_vpn::Source_active'] = entry(:ok, nil, nil) do
+    BGP::Mcast_vpn::Source_active.new([100, 200], nil, '232.1.1.1')
+  end
+
   # RFC 4684 section 4. The whole prefix, which is the branch where the
   # two fields of the section's figure reproduce the octets, with a path
   # identifier on top. The other branch, where they cannot and the hash

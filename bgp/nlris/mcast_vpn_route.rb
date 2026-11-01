@@ -542,6 +542,241 @@ module BGP
 
     end
 
+    # Route type 1, RFC 6514 section 4.1, the Intra-AS I-PMSI A-D route:
+    #
+    #   +-----------------------------------+
+    #   |      RD   (8 octets)              |
+    #   +-----------------------------------+
+    #   | Originating Router's IP Addr      |
+    #   +-----------------------------------+
+    #
+    # **The first layout in the library whose total length is not
+    # stated anywhere.** Section 4.1 gives no width for the address and
+    # no total, so the route is 12 octets with an IPv4 address and 24
+    # with an IPv6 one, and those numbers are this reader's arithmetic
+    # rather than the document's. `Originating_router` takes what is
+    # left of the body, which the section 4 Length bounds.
+    #
+    # **12 octets is also route type 2's length**, exactly, so the two
+    # are told apart by the Route Type octet alone and by nothing in
+    # the body. That is not a problem the framing has to solve, since
+    # the Route Type is read before the body, but a reader comparing
+    # lengths across this family should know the collision is there.
+    #
+    # Section 4.1 says of the RD only that it "is encoded as described
+    # in [RFC4364]", so `BGP::Rd` is exactly right and no value is
+    # prescribed.
+    class Intra_as_i_pmsi < Route
+
+      TYPE     = 1
+      HASH_KEY = :intra_as_i_pmsi
+
+      attr_reader :rd, :originator
+
+      # new([100, 200], '10.0.0.1')
+      # new(BGP::Rd.new(100, 200), an Originating_router)
+      # this class's own hash, its field hash, or the wire octets.
+      #
+      # **`:originator` holds a different class here than it does in
+      # EVPN**, which is worth knowing before moving between the two
+      # files. `Evpn`'s `:originator` is a length prefixed `Addr`, from
+      # RFC 9251 and RFC 9572; this one has no length octet at all, so
+      # it hashes as a plain address string in the ordinary case. The
+      # key name is shared because the field is the same idea, and the
+      # encoding is not.
+      def initialize(*args)
+        if args.size == 1 and args[0].is_a?(String) and args[0].is_packed?
+          parse(args[0])
+        elsif args.size == 1 and args[0].is_a?(self.class)
+          parse(args[0].encode.is_packed)
+        elsif args.size == 1 and args[0].is_a?(Hash)
+          h = self.class.unwrap(args[0])
+          @rd = coerce(Rd, h[:rd])
+          @originator = coerce_or_default(Originating_router, h[:originator])
+        else
+          @rd = coerce(Rd, args[0])
+          @originator = coerce_or_default(Originating_router, args[1])
+        end
+        self
+      end
+
+      def encode_value
+        @rd.encode + @originator.encode
+      end
+
+      def value_hash
+        { :rd => @rd.to_hash[:rd], :originator => @originator.to_hash }
+      end
+
+      def to_s
+        "[1] Intra-AS I-PMSI A-D: #{@rd.to_s(false)}, " \
+        "originating router #{@originator}"
+      end
+
+      private
+
+      def parse(s)
+        @rd = read_rd(s)
+        @originator = Originating_router.new(s)
+        self
+      end
+
+    end
+
+    # Route type 2, RFC 6514 section 4.2, the Inter-AS I-PMSI A-D route:
+    #
+    #   +-----------------------------------+
+    #   |      RD   (8 octets)              |
+    #   +-----------------------------------+
+    #   |   Source AS (4 octets)            |
+    #   +-----------------------------------+
+    #
+    # The only fixed length layout in this family: 12 octets, always.
+    #
+    # Section 4.2 has the one sentence in the family that constrains a
+    # field's value rather than its width: "Two-octet ASNs are encoded
+    # in the two low-order octets of the Source AS field, with the two
+    # high-order octets set to zero." `Source_as` writes a 32-bit
+    # unsigned integer, so that holds by construction and needed no
+    # code; a test asserts it rather than leaving it to be assumed.
+    class Inter_as_i_pmsi < Route
+
+      TYPE     = 2
+      HASH_KEY = :inter_as_i_pmsi
+
+      attr_reader :rd, :source_as
+
+      # new([100, 200], 65000), this class's own hash, its field hash,
+      # or the wire octets.
+      def initialize(*args)
+        if args.size == 1 and args[0].is_a?(String) and args[0].is_packed?
+          parse(args[0])
+        elsif args.size == 1 and args[0].is_a?(self.class)
+          parse(args[0].encode.is_packed)
+        elsif args.size == 1 and args[0].is_a?(Hash)
+          h = self.class.unwrap(args[0])
+          @rd = coerce(Rd, h[:rd])
+          @source_as = coerce_or_default(Source_as, h[:source_as])
+        else
+          @rd = coerce(Rd, args[0])
+          @source_as = coerce_or_default(Source_as, args[1])
+        end
+        self
+      end
+
+      def encode_value
+        @rd.encode + @source_as.encode
+      end
+
+      # `Source_as#to_hash` merges flat, since `:source_as` collides
+      # with no field of the route. That is the shape `BGP::Label` takes
+      # in EVPN route type 1 for the same reason.
+      def value_hash
+        { :rd => @rd.to_hash[:rd] }.merge(@source_as.to_hash)
+      end
+
+      def to_s
+        "[2] Inter-AS I-PMSI A-D: #{@rd.to_s(false)}, source #{@source_as}"
+      end
+
+      private
+
+      def parse(s)
+        @rd = read_rd(s)
+        @source_as = Source_as.new(s)
+        self
+      end
+
+    end
+
+    # Route type 5, RFC 6514 section 4.5, the Source Active A-D route:
+    #
+    #   +-----------------------------------+
+    #   |      RD   (8 octets)              |
+    #   +-----------------------------------+
+    #   |  Multicast Source Length (1 octet)|
+    #   +-----------------------------------+
+    #   |  Multicast Source (variable)      |
+    #   +-----------------------------------+
+    #   |  Multicast Group Length (1 octet) |
+    #   +-----------------------------------+
+    #   |  Multicast Group (variable)       |
+    #   +-----------------------------------+
+    #
+    # 18 octets with two IPv4 addresses and 42 with two IPv6 ones, and
+    # the two lengths are in bits, as RFC 6514 section 4.3 says by
+    # value for the same two fields. Section 4.5 states no total.
+    #
+    # **Two of section 4.5's own rules are not encoding rules**, and
+    # neither is implemented here. Both are recorded in
+    # `docs/mcast-vpn.md` so a later part can decide rather than
+    # rediscover.
+    #
+    #   "Use of the Source Active A-D routes with the Multicast Source
+    #   Length field of 0 is outside the scope of this document", which
+    #   is the third "outside the scope is not an error" sentence in
+    #   this family. A wildcard source builds here, per Conventions.
+    #
+    #   A route whose group is in the Source Specific Multicast range
+    #   "MUST NOT be advertised by a router and MUST be discarded if
+    #   received". That is route filtering and not error handling: it
+    #   needs the group's value against a range RFC 6514 does not
+    #   number, deferring to RFC 4607 and letting a router extend it
+    #   locally, and "discarded" is not one of the actions RFC 7606
+    #   names. So bgp4r builds and reads such a route.
+    class Source_active < Route
+
+      TYPE     = 5
+      HASH_KEY = :source_active
+
+      attr_reader :rd, :source, :group
+
+      # new([100, 200], '192.0.2.1', '232.1.1.1'), this class's own
+      # hash, its field hash, or the wire octets.
+      def initialize(*args)
+        if args.size == 1 and args[0].is_a?(String) and args[0].is_packed?
+          parse(args[0])
+        elsif args.size == 1 and args[0].is_a?(self.class)
+          parse(args[0].encode.is_packed)
+        elsif args.size == 1 and args[0].is_a?(Hash)
+          h = self.class.unwrap(args[0])
+          @rd = coerce(Rd, h[:rd])
+          @source = coerce_or_default(Addr, h[:source])
+          @group = coerce_or_default(Addr, h[:group])
+        else
+          @rd = coerce(Rd, args[0])
+          @source = coerce_or_default(Addr, args[1])
+          @group = coerce_or_default(Addr, args[2])
+        end
+        self
+      end
+
+      def encode_value
+        @rd.encode + @source.encode + @group.encode
+      end
+
+      def value_hash
+        { :rd     => @rd.to_hash[:rd],
+          :source => addr_hash(@source),
+          :group  => addr_hash(@group) }
+      end
+
+      def to_s
+        "[5] Source Active A-D: #{@rd.to_s(false)}, " \
+        "(#{@source}, #{@group})"
+      end
+
+      private
+
+      def parse(s)
+        @rd = read_rd(s)
+        @source = Addr.new(s)
+        @group = Addr.new(s)
+        self
+      end
+
+    end
+
   end
 
 end

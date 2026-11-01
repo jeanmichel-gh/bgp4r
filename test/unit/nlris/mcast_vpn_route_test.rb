@@ -420,4 +420,239 @@ class Mcast_vpn_route_test < Test::Unit::TestCase
     assert_equal(0, Probe.type)
   end
 
+  # ------------------------------------------------------------------
+  # Route type 1, RFC 6514 section 4.1, the Intra-AS I-PMSI A-D route.
+  # RD then the Originating Router's IP Address, which has no length
+  # field, so the body is 12 octets with an IPv4 address and 24 with an
+  # IPv6 one. Neither number is in the document: both are computed with
+  # the library and pasted.
+
+  RD      = '00000064000000c8'
+  INTRA4  = RD + '0a000001'
+  INTRA6  = RD + '20010db8000000000000000000000001'
+
+  def test_route_type_1_is_an_rd_then_the_trailing_address
+    r = M::Intra_as_i_pmsi.new([100, 200], '10.0.0.1')
+    assert_equal(1, r.type)
+    assert_equal(INTRA4, r.to_shex)
+    assert_equal(12, r.encode.size)
+    assert_equal('10.0.0.1', r.originator.address)
+  end
+
+  def test_route_type_1_with_an_ipv6_address_is_twenty_four_octets
+    r = M::Intra_as_i_pmsi.new([100, 200], '2001:db8::1')
+    assert_equal(INTRA6, r.to_shex)
+    assert_equal(24, r.encode.size)
+  end
+
+  # **Route type 1 with an IPv4 address and route type 2 are both 12
+  # octets.** So nothing in either body tells them apart and the Route
+  # Type octet is the only discriminator. Not a problem the framing has
+  # to solve, since the type is read first, but a reader comparing
+  # lengths across this family should know the collision is there.
+  def test_route_type_1_and_route_type_2_are_the_same_length
+    r = M::Intra_as_i_pmsi.new([100, 200], '10.0.0.1')
+    s = M::Inter_as_i_pmsi.new([100, 200], 65000)
+    assert_equal(r.encode.size, s.encode.size)
+    assert_equal(12, r.encode.size)
+    assert_not_equal(r.type, s.type)
+  end
+
+  def test_route_type_1_round_trips_four_ways
+    r = M::Intra_as_i_pmsi.new([100, 200], '10.0.0.1')
+    assert_equal(INTRA4, M::Intra_as_i_pmsi.new(r.encode.dup.is_packed).to_shex)
+    assert_equal(INTRA4, M::Intra_as_i_pmsi.new(r).to_shex)
+    assert_equal(INTRA4, M::Intra_as_i_pmsi.new(r.to_hash).to_shex)
+    assert_equal(INTRA4,
+                 M::Intra_as_i_pmsi.new(:rd => [100, 200],
+                                        :originator => '10.0.0.1').to_shex)
+  end
+
+  def test_route_type_1_hashes_under_its_own_key
+    r = M::Intra_as_i_pmsi.new([100, 200], '10.0.0.1')
+    assert_equal({ :intra_as_i_pmsi => { :rd => [100, 200],
+                                         :originator => '10.0.0.1' } },
+                 r.to_hash)
+  end
+
+  # The field left out entirely, which no section describes and which
+  # builds, per Conventions.
+  def test_route_type_1_builds_with_no_address_at_all
+    r = M::Intra_as_i_pmsi.new([100, 200])
+    assert_equal(RD, r.to_shex)
+    assert(r.originator.empty?)
+  end
+
+  # The what-is-left rule, and the one place it can be seen: an address
+  # of a width that is neither family is kept rather than refused.
+  def test_route_type_1_keeps_an_address_of_an_odd_width
+    r = M::Intra_as_i_pmsi.new([RD + '0102030405'].pack('H*').is_packed)
+    assert_equal(RD + '0102030405', r.to_shex)
+    assert_nil(r.originator.address)
+    assert_equal(RD + '0102030405',
+                 M::Intra_as_i_pmsi.new(r.to_hash).to_shex)
+  end
+
+  # ------------------------------------------------------------------
+  # Route type 2, RFC 6514 section 4.2, the Inter-AS I-PMSI A-D route.
+  # The one fixed length layout in the family.
+
+  INTER = RD + '0000fde8'
+
+  def test_route_type_2_is_an_rd_then_four_octets_of_source_as
+    s = M::Inter_as_i_pmsi.new([100, 200], 65000)
+    assert_equal(2, s.type)
+    assert_equal(INTER, s.to_shex)
+    assert_equal(12, s.encode.size)
+    assert_equal(65000, s.source_as.value)
+  end
+
+  # Section 4.2: "Two-octet ASNs are encoded in the two low-order
+  # octets of the Source AS field, with the two high-order octets set
+  # to zero." That holds by construction, since Source_as writes a
+  # 32-bit unsigned integer, and this asserts it rather than assuming.
+  def test_a_two_octet_as_sits_in_the_low_order_octets
+    s = M::Inter_as_i_pmsi.new([100, 200], 65000)
+    assert_equal('0000fde8', s.source_as.to_shex)
+    assert_equal('0000', s.source_as.to_shex[0, 4],
+                 'the two high-order octets are zero')
+  end
+
+  def test_a_four_octet_as_fills_the_field
+    s = M::Inter_as_i_pmsi.new([100, 200], 70013)
+    assert_equal(RD + '0001117d', s.to_shex)
+    assert_equal(12, s.encode.size, 'the layout does not grow for a 4-byte AS')
+  end
+
+  def test_route_type_2_round_trips_four_ways
+    s = M::Inter_as_i_pmsi.new([100, 200], 65000)
+    assert_equal(INTER, M::Inter_as_i_pmsi.new(s.encode.dup.is_packed).to_shex)
+    assert_equal(INTER, M::Inter_as_i_pmsi.new(s).to_shex)
+    assert_equal(INTER, M::Inter_as_i_pmsi.new(s.to_hash).to_shex)
+    assert_equal(INTER,
+                 M::Inter_as_i_pmsi.new(:rd => [100, 200],
+                                        :source_as => 65000).to_shex)
+  end
+
+  # Source_as#to_hash merges flat, since :source_as collides with no
+  # field of the route. That is the shape BGP::Label takes in EVPN
+  # route type 1 for the same reason.
+  def test_route_type_2_hashes_its_source_as_flat
+    s = M::Inter_as_i_pmsi.new([100, 200], 65000)
+    assert_equal({ :inter_as_i_pmsi => { :rd => [100, 200],
+                                         :source_as => 65000 } },
+                 s.to_hash)
+  end
+
+  def test_route_type_2_builds_with_no_source_as
+    s = M::Inter_as_i_pmsi.new([100, 200])
+    assert_equal(RD + '00000000', s.to_shex)
+    assert_equal(12, s.encode.size)
+  end
+
+  # ------------------------------------------------------------------
+  # Route type 5, RFC 6514 section 4.5, the Source Active A-D route.
+  # RD, then the source and the group, each a length in bits and that
+  # many bits of value.
+
+  ACTIVE4 = RD + '20c0000201' + '20e8010101'
+  ACTIVE6 = RD + '8020010db8000000000000000000000001' \
+                 '80ff3e0000000000000000000000000001'
+
+  def test_route_type_5_is_an_rd_then_a_source_and_a_group
+    t = M::Source_active.new([100, 200], '192.0.2.1', '232.1.1.1')
+    assert_equal(5, t.type)
+    assert_equal(ACTIVE4, t.to_shex)
+    assert_equal(18, t.encode.size)
+    assert_equal('192.0.2.1', t.source.address)
+    assert_equal('232.1.1.1', t.group.address)
+  end
+
+  def test_route_type_5_with_two_ipv6_addresses_is_forty_two_octets
+    t = M::Source_active.new([100, 200], '2001:db8::1', 'ff3e::1')
+    assert_equal(ACTIVE6, t.to_shex)
+    assert_equal(42, t.encode.size)
+  end
+
+  def test_route_type_5_round_trips_four_ways
+    t = M::Source_active.new([100, 200], '192.0.2.1', '232.1.1.1')
+    assert_equal(ACTIVE4, M::Source_active.new(t.encode.dup.is_packed).to_shex)
+    assert_equal(ACTIVE4, M::Source_active.new(t).to_shex)
+    assert_equal(ACTIVE4, M::Source_active.new(t.to_hash).to_shex)
+    assert_equal(ACTIVE4,
+                 M::Source_active.new(:rd => [100, 200],
+                                      :source => '192.0.2.1',
+                                      :group => '232.1.1.1').to_shex)
+  end
+
+  def test_route_type_5_hashes_under_its_own_key
+    t = M::Source_active.new([100, 200], '192.0.2.1', '232.1.1.1')
+    assert_equal({ :source_active => { :rd => [100, 200],
+                                       :source => '192.0.2.1',
+                                       :group => '232.1.1.1' } },
+                 t.to_hash)
+  end
+
+  # Section 4.5: "Use of the Source Active A-D routes with the
+  # Multicast Source Length field of 0 is outside the scope of this
+  # document." Outside the scope is not an error, the third such
+  # sentence in this family, so a wildcard source builds and replays.
+  def test_a_wildcard_source_is_outside_the_scope_and_still_builds
+    t = M::Source_active.new([100, 200], nil, '232.1.1.1')
+    assert_equal(RD + '00' + '20e8010101', t.to_shex)
+    assert_equal(14, t.encode.size)
+    assert(t.source.empty?)
+    assert_match(/\(\*, 232\.1\.1\.1/, t.to_s)
+    assert_equal(t.to_shex, M::Source_active.new(t.to_hash).to_shex)
+  end
+
+  # Section 4.5 also says a route whose group is in the SSM range
+  # "MUST NOT be advertised by a router and MUST be discarded if
+  # received". That is route filtering and not encoding, so bgp4r
+  # builds one: 232.0.0.0/8 is the IPv4 SSM range of RFC 4607, which
+  # RFC 6514 does not number itself.
+  def test_a_group_in_the_ssm_range_builds
+    t = M::Source_active.new([100, 200], '192.0.2.1', '232.1.1.1')
+    assert_equal('232.1.1.1', t.group.address)
+    assert_equal(ACTIVE4, t.to_shex, 'nothing refuses it')
+  end
+
+  # A source length that claims more than the body holds leaves the
+  # group with nothing, which is what Addr's .to_i guard is for. The
+  # route then cannot reproduce its own body, and Mcast_vpn#read_route
+  # is what catches that; here the class itself just does not raise.
+  def test_a_source_length_that_eats_the_group_does_not_raise
+    t = M::Source_active.new([RD + 'c8' + '0102'].pack('H*').is_packed)
+    assert_equal(200, t.source.bitlen)
+    assert(t.group.empty?)
+    assert_not_equal(RD + 'c80102', t.to_shex,
+                     'so the NLRI falls back to Unknown')
+  end
+
+  # The human readable form, in the house style evpn_route.rb uses:
+  # the type in brackets, the route's name, then the fields. The RD
+  # prints in its short form, since Rd#to_s(false) leaves off the hex.
+  def test_each_route_type_names_itself
+    assert_equal('[1] Intra-AS I-PMSI A-D: RD=100:200, ' \
+                 'originating router 10.0.0.1',
+                 M::Intra_as_i_pmsi.new([100, 200], '10.0.0.1').to_s)
+    assert_equal('[2] Inter-AS I-PMSI A-D: RD=100:200, source AS 65000',
+                 M::Inter_as_i_pmsi.new([100, 200], 65000).to_s)
+    assert_equal('[5] Source Active A-D: RD=100:200, ' \
+                 '(192.0.2.1/32, 232.1.1.1/32)',
+                 M::Source_active.new([100, 200], '192.0.2.1',
+                                      '232.1.1.1').to_s)
+  end
+
+  # Nothing validates, per Conventions: a length no RFC describes on
+  # either field, in one route, on the wire.
+  def test_nothing_validates
+    t = M::Source_active.new(:rd => [100, 200],
+                             :source => { :bitlen => 7, :value => 'ff' },
+                             :group => { :bitlen => 200, :value => 'aabb' })
+    assert_equal(RD + '07ff' + 'c8aabb', t.to_shex)
+    assert_equal(RD + '07ff' + 'c8aabb',
+                 M::Source_active.new(t.to_hash).to_shex)
+  end
+
 end

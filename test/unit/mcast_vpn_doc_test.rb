@@ -297,20 +297,78 @@ class McastVpnDocTest < Test::Unit::TestCase
     assert(!(BGP::Mcast_vpn::Addr < BGP::Evpn::Addr))
   end
 
-  # The claim that is true only in this part. When a route type lands,
-  # the sentence has to go, and this is what says so.
+  # The claim that was true only in part 1. **It fired the moment route
+  # types 1, 2 and 5 landed**, which is the guard working, so it is
+  # re-pointed rather than removed: the sentence must be gone while any
+  # route type is implemented, and must come back if ever none is.
   def test_the_document_says_no_route_type_is_implemented_while_that_holds
     if implemented.empty?
       assert_match(/Every row says no today/, doc,
                    "#{DOC} must say no route type is implemented yet")
-      assert_match(/\*\*Empty in this part\*\*/,
-                   File.read(File.expand_path('../../bgp/nlris/mcast_vpn.rb',
-                                              __dir__)))
     else
       assert(!doc.include?('Every row says no today'),
              "#{DOC} still says no route type is implemented, and " \
              "#{implemented.size} now are")
     end
+  end
+
+  # The octet counts of the layouts that are in. **None is in the
+  # document**, so each is this reader's arithmetic and the table has to
+  # agree with the library rather than the other way round.
+  def test_the_layout_table_agrees_with_what_the_classes_encode
+    assert_match(/\| 1 \| RD, Originating Router's IP Address \| 12 or 24 \|/,
+                 doc)
+    assert_match(/\| 2 \| RD, Source AS \| 12, always \|/, doc)
+    assert_match(/\| 5 \| RD, source, group \| 18 or 42 \|/, doc)
+    rd = [100, 200]
+    assert_equal(12, BGP::Mcast_vpn::Intra_as_i_pmsi
+                       .new(rd, '10.0.0.1').encode.size)
+    assert_equal(24, BGP::Mcast_vpn::Intra_as_i_pmsi
+                       .new(rd, '2001:db8::1').encode.size)
+    assert_equal(12, BGP::Mcast_vpn::Inter_as_i_pmsi
+                       .new(rd, 65000).encode.size)
+    assert_equal(12, BGP::Mcast_vpn::Inter_as_i_pmsi
+                       .new(rd, 70013).encode.size)
+    assert_equal(18, BGP::Mcast_vpn::Source_active
+                       .new(rd, '192.0.2.1', '232.1.1.1').encode.size)
+    assert_equal(42, BGP::Mcast_vpn::Source_active
+                       .new(rd, '2001:db8::1', 'ff3e::1').encode.size)
+  end
+
+  # The length collision the table warns about, which is real and which
+  # a reader comparing lengths would otherwise meet by surprise.
+  def test_route_types_1_and_2_really_are_the_same_length
+    assert_match(/both 12\s+octets/, doc)
+    assert_equal(BGP::Mcast_vpn::Inter_as_i_pmsi.new([100, 200], 1).encode.size,
+                 BGP::Mcast_vpn::Intra_as_i_pmsi
+                   .new([100, 200], '10.0.0.1').encode.size)
+  end
+
+  # Section 4.2's one sentence about a field's value rather than its
+  # width, quoted so a reader can check it, and asserted because it
+  # holds by construction rather than by code.
+  def test_a_two_octet_as_sits_in_the_low_order_octets
+    assert_match(/Two-octet ASNs are encoded in the two\s+low-order octets/,
+                 doc)
+    s = BGP::Mcast_vpn::Source_as.new(65000)
+    assert_equal('0000fde8', s.to_shex)
+  end
+
+  # The two receive-side rules of section 4.5 that are not error
+  # handling. The document has to keep saying **why** each is not a
+  # validation.rb rule, since part 6 is where someone will look.
+  def test_the_two_section_4_5_rules_are_recorded_with_their_reasons
+    assert_match(/Two receive-side rules that are not error handling/, doc)
+    assert_match(/Multicast Source Length\s+field of 0 is outside the scope/,
+                 doc)
+    assert_match(/MUST NOT be advertised by a router and MUST be discarded if received/,
+                 doc)
+    assert_match(/deferring to RFC 4607/, doc)
+    assert_match(/"discarded" is not one of the actions RFC\s+7606 names/, doc)
+    # And neither is enforced: both build.
+    t = BGP::Mcast_vpn::Source_active.new([100, 200], nil, '232.1.1.1')
+    assert(t.source.empty?, 'a wildcard source builds')
+    assert_equal('232.1.1.1', t.group.address, 'an SSM group builds')
   end
 
 end
