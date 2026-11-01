@@ -433,6 +433,33 @@ class TestLinkStatePrefixAttribute < Test::Unit::TestCase
     assert_equal('04840008' + 'aabbccddeeff1122', t.to_shex)
   end
 
+  # **This class's own width check is message-only, where `Addr_tlv`'s
+  # is load bearing, and the difference is which widths each takes.**
+  # `IPAddr.new_ntoh` accepts exactly 4 octets and 16 and answers
+  # `IPAddr::AddressFamilyError` for every other width, measured on
+  # 2026-11-01. So for a class that takes both of those there is no gap
+  # left for a check to close: deleting it leaves every assertion about
+  # the value passing, which is how a sabotage found it. `Addr_tlv`
+  # takes **one** of the two, so there IPAddr accepts a width the class
+  # must not, which is the bug part 3 found in TLV 261.
+  #
+  # The check stays for its message, which names both widths and the
+  # `Tlv::Unknown` route where `AddressFamilyError` says nothing about
+  # TLV 1156, and this is what makes it read by something rather than
+  # dead. Part 5b-ii's two dead constants are the same shape found the
+  # other way round.
+  def test_the_width_refusal_says_which_widths_and_names_the_way_out
+    e = assert_raise_kind_of(ArgumentError) do
+      BGP::Link_state::Tlv::Ospf_forwarding_address
+        .new(['aabbccddeeff1122'].pack('H*').is_packed)
+    end
+    assert_match(/4 or 16 octets/, e.message)
+    assert_match(/this value is 8/, e.message)
+    # Which is more than the layer below says: `AddressFamilyError`
+    # names neither the TLV nor the widths it wanted.
+    assert_equal(nil, IPAddr::AddressFamilyError.new.message[/4 or 16/])
+  end
+
   def test_the_forwarding_address_takes_an_ipaddr
     assert_equal(BGP::Link_state::Tlv::Ospf_forwarding_address
                    .new('10.0.0.1').to_shex,

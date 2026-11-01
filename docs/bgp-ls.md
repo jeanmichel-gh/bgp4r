@@ -1195,6 +1195,18 @@ and the octets are kept whole. **That is not the length check section
 so only the class differs, which is part 1's rule rather than a verdict
 about the sender.
 
+**But its width check is message-only, where `Addr_tlv`'s is load
+bearing, and the difference is which widths each class takes.**
+`IPAddr.new_ntoh` accepts exactly 4 octets and 16 and answers
+`IPAddr::AddressFamilyError` for every other width, measured on
+2026-11-01, so a class taking both of those has no gap left for a check
+to close: a sabotage removing it passed the whole suite, because IPAddr
+refuses the same values one line later. `Addr_tlv` takes **one** of the
+two, so there IPAddr accepts a width the class must not, which is
+exactly the TLV 261 bug part 3 found. The check stays for its message,
+which names both widths and the `Tlv::Unknown` route, and a test reads
+the message so it is not the dead kind part 5b-ii found twice.
+
 ## 11. Interoperability
 
 Measured on 2026-11-01 against GoBGP 3.23.0 and FRR 8.4.4, and

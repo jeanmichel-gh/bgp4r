@@ -343,6 +343,22 @@ module BGP
           self
         end
 
+        # **This width check is message-only, where `Addr_tlv`'s is load
+        # bearing, and the difference is which widths each class
+        # takes.** `IPAddr.new_ntoh` accepts exactly 4 octets and 16 and
+        # answers `IPAddr::AddressFamilyError` for every other width,
+        # measured on 2026-11-01, so for a class that takes both of
+        # those there is no gap left to close: a sabotage removing this
+        # check passed the whole suite, because IPAddr refuses the same
+        # values one line later and `read_tlv` rescues either way.
+        # `Addr_tlv` takes **one** of the two, so there IPAddr accepts a
+        # width the class must not, which is the TLV 261 bug part 3
+        # found.
+        #
+        # It stays for its message, which names both widths and the
+        # `Tlv::Unknown` route where `AddressFamilyError` names neither
+        # the TLV nor the widths wanted. A test reads the message, so
+        # the check is not the dead kind part 5b-ii found twice.
         def parse(s)
           unless WIDTHS.has_key?(s.size)
             raise ArgumentError,
