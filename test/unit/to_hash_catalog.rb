@@ -1287,10 +1287,45 @@ module ToHashCatalog
                           :route_target => { :route_target => [65000, 100] })
   end
 
+  # RFC 9552 section 5.1, the one TLV of the BGP-LS family. The
+  # declared length is set as well as the type and the value, because
+  # it is the field a thin recipe would miss: `to_hash` puts it beside
+  # the class's own key rather than inside it, so a build that unwraps
+  # before reading it loses a Length that lied, silently.
+  ENTRIES['BGP::Link_state::Tlv::Unknown'] = entry(:ok, nil, nil) do
+    BGP::Link_state::Tlv::Unknown.new(
+      :type => 65000, :value => '00000a4c0102', :length => 9999)
+  end
+
+  # RFC 9552 section 5.2, an NLRI type bgp4r does not implement, which
+  # in part 1 is all of them.
+  ENTRIES['BGP::Link_state::Unknown'] = entry(:ok, nil, nil) do
+    BGP::Link_state::Unknown.new(2, ['0102030405'].pack('H*'))
+  end
+
+  # The Link-State NLRI itself, with all four fields it carries set: the
+  # type-specific part, the section 5.2 Route Distinguisher, a Total
+  # NLRI Length that disagrees with the body, and an RFC 7911 path
+  # identifier. The RD is what makes it the SAFI 72 form, since a hash
+  # has nowhere to put a SAFI.
+  ENTRIES['BGP::Link_state'] = entry(:ok, nil, nil) do
+    BGP::Link_state.new(:unknown => { :type => 2, :value => '0102030405' },
+                        :rd => [100, 200], :length => 65535, :path_id => 11)
+  end
+
   # Classes with no entry, each with the reason. An abstract base with no
   # sensible instance belongs here; a class merely awkward to build does
   # not.
   NO_RECIPE = {
+    'BGP::Link_state::Tlv' =>
+      'an abstract base with no sensible instance. type and hash_key ' \
+      'read self.class::TYPE and HASH_KEY and it defines neither, and ' \
+      'encode calls an encode_value it does not have. Unknown is ' \
+      'measured, and the TLV types fill this in later parts.',
+    'BGP::Link_state::Type' =>
+      'an abstract base with no sensible instance, as Link_state::Tlv ' \
+      'is one level down. Unknown is measured, and the four NLRI types ' \
+      'of RFC 9552 Table 1 fill this in later parts.',
     # The abstract base of the four EVI-RT communities, RFC 9251 section
     # 9.5. It supplies TYPE and a default GLOBAL_WIDTH but no SUBTYPE or
     # LABEL, so a build raises NameError inside Typed#initialize, the
