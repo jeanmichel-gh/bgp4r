@@ -1029,6 +1029,162 @@ module BGP
 
     end
 
+    # Route type 4, RFC 6514 section 4.4, the Leaf A-D route:
+    #
+    #   +-----------------------------------+
+    #   |      Route Key (variable)         |
+    #   +-----------------------------------+
+    #   | Originating Router's IP Addr      |
+    #   +-----------------------------------+
+    #
+    # **Two variable length fields in a row and no length for either, so
+    # where one ends is not in the band.** This is the layout the
+    # documents do not settle and the reason this route type came last.
+    #
+    # All section 4.4 says is that "the Route Key of the Leaf A-D route
+    # is set to the NLRI of the received route", and
+    # draft-ietf-bess-rfc6514bis-00, which obsoletes RFC 6514, repeats it
+    # and adds nothing. Both were read for it.
+    #
+    # **So the reading here is a reading and not a rule.** The Route Key
+    # is taken to be a whole nested MCAST-VPN NLRI, Route Type and Length
+    # octets included, which makes it self delimiting and leaves the
+    # address as what is behind it. EVPN route type 11 is the same shape
+    # and RFC 9572 uses the same words, but **it needed its own
+    # terminology section to say "entire NLRI"** before that was more
+    # than a reading. RFC 6514 has no such sentence. I do not know
+    # whether the authors meant the whole NLRI or only the Route Type
+    # specific part, and nothing in either document answers it.
+    #
+    # **What the replay check does and does not catch here, stated
+    # carefully, because the first draft of this comment overstated it.**
+    # That draft said the body could be split anywhere and still replay.
+    # It cannot: the split is **read from** the nested Length octet, so
+    # it is determined by the octets, and two different splits of one
+    # body are not reachable. The reading is injective and self
+    # consistent, and the fields always reproduce the body.
+    #
+    # What follows is weaker and is the point. `Mcast_vpn#read_route`
+    # accepts a route type only when its `encode` reproduces the body,
+    # and here that is satisfied by construction, so it says nothing
+    # about whether the reading is the one the sender meant. It catches
+    # exactly two things: a body too short to frame a Route Key at all,
+    # and a nested Length that overruns the body. A sender using another
+    # rule, the Route Type specific part alone with a fixed width address
+    # behind it, say, writes octets this reads into different fields, and
+    # **nothing on the wire shows the disagreement**. So do not point at
+    # the replay check as what makes the reading safe; it is what makes
+    # the octets safe.
+    #
+    # The one signal available is the remainder's width: the Originating
+    # Router's IP Address is an address, so `originator.address` answers
+    # nil when what is left is neither 4 nor 16 octets, which is a reason
+    # to doubt the split. It is **not** used to pick the split, because
+    # choosing by it would be inventing a rule where the documents have
+    # none. A caller that believes another reading can build it by
+    # handing the Route Key its own octets, since nothing validates.
+    #
+    # **It reaches `Mcast_vpn` at call time and not at load time**, which
+    # is what makes that legal: `Mcast_vpn` is the class around this one,
+    # and `nlri_size` and the NLRI's `initialize` are added by
+    # `bgp/nlris/mcast_vpn.rb`, which requires this file first. So this
+    # class is the one place in the file that does not work against
+    # `mcast_vpn_route.rb` alone, and its tests live in
+    # `test/unit/nlris/mcast_vpn_test.rb` beside the framing they
+    # exercise. `Evpn::Leaf_a_d` is its namesake and records the same
+    # thing for the same reason.
+    #
+    # Nothing validates. Any Route Key, including one carrying a route
+    # type bgp4r does not implement, which comes back as an
+    # `Mcast_vpn::Unknown` inside the Route Key and replays; and a Leaf
+    # A-D route inside a Leaf A-D route, which no RFC describes.
+    class Leaf_a_d < Route
+
+      TYPE     = 4
+      HASH_KEY = :leaf_a_d
+
+      attr_reader :route_key, :originator
+
+      # new(route_key, originator), where the Route Key is an
+      # `Mcast_vpn`, an `Mcast_vpn::Route` one is built around, or its
+      # wire octets
+      # new(:route_key => { :s_pmsi => { ... } },
+      #     :originator => '10.0.0.1')
+      # the wire bytes, or another instance.
+      def initialize(*args)
+        if args.size == 1 and args[0].is_a?(String) and args[0].is_packed?
+          parse(args[0])
+        elsif args.size == 1 and args[0].is_a?(self.class)
+          parse(args[0].encode.is_packed)
+        elsif args.size == 1 and args[0].is_a?(Hash)
+          from_hash(args[0])
+        elsif (1..2).include?(args.size)
+          @route_key  = coerce_route_key(args[0])
+          @originator = coerce_or_default(Originating_router, args[1])
+        elsif args.empty?
+          @route_key  = coerce_route_key(nil)
+          @originator = Originating_router.new
+        else
+          raise ArgumentError, "invalid argument: #{args.inspect}"
+        end
+        self
+      end
+
+      # The nested NLRI's own Length octet is the only thing that says
+      # where the Route Key ends, which is the reading above. A body too
+      # short to frame one cannot be split at all, so it raises and
+      # `Mcast_vpn#read_route` keeps the octets whole as an `Unknown`.
+      # That is the one case the replay check does catch.
+      def parse(s)
+        n = Mcast_vpn.nlri_size(s)
+        raise ArgumentError, 'Route Key too short to frame' if n.nil?
+        if n > s.size
+          raise ArgumentError, 'Route Key Length overruns the Leaf A-D body'
+        end
+        @route_key  = Mcast_vpn.new(s.slice!(0, n).is_packed)
+        @originator = Originating_router.new(s)
+        self
+      end
+
+      def encode_value
+        @route_key.encode + @originator.encode
+      end
+
+      def value_hash
+        { :route_key  => @route_key.to_hash,
+          :originator => @originator.to_hash }
+      end
+
+      def to_s
+        "[4] Leaf A-D: route key #{@route_key.route}, " \
+        "originating router #{@originator}"
+      end
+
+      private
+
+      # An `Mcast_vpn` passes through, an `Mcast_vpn::Route` is wrapped
+      # in one, wire octets are parsed as one, and a Hash is handed to
+      # `Mcast_vpn`, which reads one key per route type. Nothing is a
+      # sensible default, so an absent Route Key is an
+      # `Mcast_vpn::Unknown` of type 0 with no body, which is 2 octets
+      # and replays. Type 0 is Reserved in the registry, so it names no
+      # real route.
+      def coerce_route_key(v)
+        return v if v.is_a?(Mcast_vpn)
+        return Mcast_vpn.new(v) if v.is_a?(Route) or v.is_a?(Hash)
+        return Mcast_vpn.new(v) if v.is_a?(String) and v.is_packed?
+        return Mcast_vpn.new(Unknown.new(0, +'')) if v.nil?
+        raise ArgumentError, "#{v.inspect} is not a Route Key"
+      end
+
+      def from_hash(h)
+        h = self.class.unwrap(h)
+        @route_key  = coerce_route_key(h[:route_key])
+        @originator = coerce_or_default(Originating_router, h[:originator])
+      end
+
+    end
+
   end
 
 end

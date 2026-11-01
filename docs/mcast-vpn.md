@@ -92,7 +92,7 @@ mLDP range, and `base + 0x40` is the result of that rule, not the rule.
 | 1 | Intra-AS I-PMSI A-D route | RFC 6514 section 4.1 | yes |
 | 2 | Inter-AS I-PMSI A-D route | RFC 6514 section 4.2 | yes |
 | 3 | S-PMSI A-D route | RFC 6514 section 4.3 | yes |
-| 4 | Leaf A-D route | RFC 6514 section 4.4 | no |
+| 4 | Leaf A-D route | RFC 6514 section 4.4 | yes |
 | 5 | Source Active A-D route | RFC 6514 section 4.5 | yes |
 | 6 | Shared Tree Join route | RFC 6514 section 4.6 | yes |
 | 7 | Source Tree Join route | RFC 6514 section 4.6 | yes |
@@ -100,10 +100,9 @@ mLDP range, and `base + 0x40` is the result of that rule, not the rule.
 | 68 | Leaf A-D route for C-multicast mLDP | RFC 7441 | no |
 | 71 | Source Tree Join route for C-multicast mLDP | RFC 7441 | no |
 
-Six of the seven are in: every one but route type 4, which comes last
-because it is the one the documents do not settle (section 7). A type
-with no class reads back as an `Mcast_vpn::Unknown` that replays byte
-for byte.
+**All seven of RFC 6514 section 4 are in.** A type outside them reads
+back as an `Mcast_vpn::Unknown` that replays byte for byte, which is
+where RFC 7441's three mLDP types land by decision.
 
 ### The layouts that are in
 
@@ -112,6 +111,7 @@ for byte.
 | 1 | RD, Originating Router's IP Address | 12 or 24 |
 | 2 | RD, Source AS | 12, always |
 | 3 | RD, source, group, Originating Router's IP Address | 22 or 58 |
+| 4 | Route Key, Originating Router's IP Address | neither is stated |
 | 5 | RD, source, group | 18 or 42 |
 | 6 and 7 | RD, Source AS, source, group | 22 or 46 |
 
@@ -277,12 +277,67 @@ route type 11, whose RFC 9572 section 3.3 uses the same words, and
 **RFC 9572 needed its own terminology section to say "entire NLRI"**
 before that was more than a reading. RFC 6514 has no such sentence.
 
-So bgp4r takes that reading and does not assert it. The nested read is
-accepted only where the whole body replays byte for byte, which is the
-rule `Mcast_vpn#read_route` already applies to every route type, and a
-body that fails it is kept whole as an `Unknown`. Say in the code that
-it is a reading and not a rule. "I do not know why this is like this" is
-the honest line until an implementation or a later document answers it.
+So bgp4r takes that reading and says in the code that it is a reading.
+"I do not know why this is like this" is the honest line until an
+implementation or a later document answers it.
+
+### What the replay check buys here, which is less than this section claimed
+
+Until route type 4 was written, this section said the nested read "is
+accepted only where the whole body replays byte for byte", pointing at
+the rule `Mcast_vpn#read_route` applies to every route type. That is
+true and it is not the safeguard it reads as. An earlier draft of the
+class comment went further and said the body could be split anywhere and
+still replay, which is simply wrong. Both are corrected here.
+
+**The split is read from the nested Length octet, so it is injective on
+the octets.** Two different field pairs cannot encode to one body,
+because the Length that decides the split is one of the octets. Take two
+Leaf A-D routes of the same total size: `0101ff` plus a 4-octet address
+is `0101ff0a000001`, and `0104ff0a0000` plus a 1-octet remainder is
+`0104ff0a000001`. Same length, different second octet. So the reading is
+self consistent and the fields always reproduce the body.
+
+**That is exactly why the replay check says nothing about the reading.**
+It is satisfied by construction. What it catches is two things and
+neither is the one that matters: a body too short to frame a Route Key at
+all, and a nested Length that overruns the body. Both raise out of the
+route type, and `read_route` keeps the octets whole as an `Unknown`.
+
+**A sender using another rule is undetectable.** If the authors meant
+the Route Type specific part alone with a fixed width address behind it,
+their octets read into different fields here and nothing on the wire
+shows the disagreement. So do not point at the replay check as what
+makes the reading safe. It is what makes the octets safe.
+
+**A reader using another rule is undetectable too**, which is the
+sharper version of the same point and was measured rather than argued.
+Reading the Route Key two octets short leaves a route type 3 that is
+still a route type 3, with a shorter Originating Router inside it, and
+the outer body still replays byte for byte, because the nested Length
+that lied is echoed. So neither the replay check nor an assertion on the
+class catches it. `test_the_split_is_pinned_by_the_field_values_and_nothing_else`
+in `test/unit/nlris/mcast_vpn_test.rb` is what does, and it is the only
+guard on the split there can be.
+
+### Leaf_a_d is the one class that does not work against its own file
+
+`Leaf_a_d` reaches `Mcast_vpn` at call time and not at load time, which
+is what lets a route type in `mcast_vpn_route.rb` hold an NLRI from
+`mcast_vpn.rb`: `Mcast_vpn` is the class around every route type, and
+the NLRI's own methods are added by the file that requires this one. So
+it is the only route type here that needs `mcast_vpn.rb` loaded, and
+**its tests live in `test/unit/nlris/mcast_vpn_test.rb`** beside the
+framing they exercise. `mcast_vpn_route_test.rb` requires the route
+file alone, which is what proves the other six need no NLRI.
+
+The one signal available is the remainder's width. The Originating
+Router's IP Address is an address, so `originator.address` answers nil
+when what is left is neither 4 nor 16 octets, which is a reason to doubt
+the split. bgp4r does **not** use it to pick the split: choosing by it
+would be inventing a rule where the documents have none. A caller who
+believes another reading can build it by handing the Route Key its own
+octets, since nothing validates.
 
 ## 8. Error handling: there is none to implement
 
@@ -368,8 +423,9 @@ arithmetic and not against the document.
 ## 11. What is left
 
 The seven parts are in CLAUDE.md under "Breadth, the one SAFI lever".
-Three are done: the framing and the primitives, then route types 1, 2
-and 5, then 3, 6 and 7. Route type 4 comes next, then the wiring.
+Four are done, which is **every layout**: the framing and the
+primitives, then route types 1, 2 and 5, then 3, 6 and 7, then 4. The
+wiring comes next, then validation, then the lab.
 
 **Nothing dispatches to any of it yet**, so an MCAST-VPN UPDATE still
 comes back as an `Attr::Raw` with an `Attr::Gap`, which is #116 working

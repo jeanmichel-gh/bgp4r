@@ -69,8 +69,8 @@ module BGP
   # 6514 nor draft-ietf-bess-rfc6514bis-00 says whether the Route Key
   # includes the Route Type and Length octets, where RFC 9572 needed its
   # own terminology section to settle the same question for EVPN route
-  # type 11. Route type 4 arrives in a later part; the framing is
-  # already able to carry it either way.
+  # type 11. `Leaf_a_d` takes that reading and says in its own comment
+  # that it is a reading, which is all the documents support.
   #
   # **Nothing validates.** Any route type, any length, any body,
   # including a Length that disagrees with the octets that came with it.
@@ -87,10 +87,14 @@ module BGP
     # 0x47 from RFC 7441, whose header says `Updates: 6514`. 0x00 and
     # 0x80 to 0xff are Reserved.
     #
-    # **Six of the seven rows so far**, every one but route type 4,
-    # which comes last because it is the one the documents do not
-    # settle. A type with no row reads back as an `Unknown` that
-    # replays byte for byte.
+    # **All seven rows of RFC 6514 section 4.** A type outside them
+    # reads back as an `Unknown` that replays byte for byte, which is
+    # where RFC 7441's three mLDP types land by decision.
+    #
+    # Route type 4 is the recursive one: its Route Key is read by this
+    # same class, so `Mcast_vpn` parses an `Mcast_vpn` from inside a
+    # route it built. See `Leaf_a_d`, which is the one class in
+    # `mcast_vpn_route.rb` that does not work against that file alone.
     #
     # The three mLDP types are **not** rows to fill. Each carries an
     # mLDP FEC Element that RFC 7441 does not lay out, pointing at RFC
@@ -106,6 +110,7 @@ module BGP
       Intra_as_i_pmsi.type  => Intra_as_i_pmsi,
       Inter_as_i_pmsi.type  => Inter_as_i_pmsi,
       S_pmsi.type           => S_pmsi,
+      Leaf_a_d.type         => Leaf_a_d,
       Source_active.type    => Source_active,
       Shared_tree_join.type => Shared_tree_join,
       Source_tree_join.type => Source_tree_join,
@@ -244,16 +249,16 @@ module BGP
     # Unknown, which looks odd and is the honest answer; `declared_len`
     # already records a Length that lied.
     #
-    # **It is also what keeps route type 4's reading from becoming an
-    # assertion**, in the part that adds it: a Route Key read as a
-    # nested NLRI is accepted only where the whole body replays.
-    #
-    # **Nothing reaches the body of this method in this part**, because
-    # `ROUTES` is empty and the guard above answers nil for every type.
-    # So these three lines are the one uncovered piece of this family
-    # today, and the part that adds route types 1, 2 and 5 is where they
-    # first run. Said here rather than left for a coverage report to
-    # raise as a question.
+    # **It does not say anything about route type 4's reading, and this
+    # comment used to claim it did.** The claim was that a Route Key read
+    # as a nested NLRI is accepted only where the whole body replays, so
+    # the replay check was what kept the reading from being an assertion.
+    # It is not. The split is read from the nested Length octet, which is
+    # one of the body's own octets, so the fields always reproduce the
+    # body and the check is satisfied by construction. Worse, a reader
+    # using **another** split replays too, because a nested Length that
+    # lies is echoed. See `Leaf_a_d` and `docs/mcast-vpn.md` section 7;
+    # what pins the split is an assertion on the field values.
     def read_route(t, body)
       klass = ROUTES[t]
       return nil if klass.nil?

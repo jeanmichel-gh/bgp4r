@@ -90,10 +90,16 @@ class Mcast_vpn_test < Test::Unit::TestCase
   # this constant avoids.
   NO_CLASS = 0x43
 
+  # **Route type 4 was in this test's list and came out of it here**,
+  # which is the example expiring a fourth time, exactly as the comment
+  # above predicted when `NO_CLASS` was introduced. The list should have
+  # been `NO_CLASS` alone from the start; keeping route type 4 beside it
+  # bought one part's worth of coverage and one more edit.
   def test_a_route_type_with_no_class_reads_back_as_unknown
-    assert_equal([1, 2, 3, 5, 6, 7], M::ROUTES.keys.sort)
+    assert_equal([1, 2, 3, 4, 5, 6, 7], M::ROUTES.keys.sort,
+                 'all seven of RFC 6514 section 4')
     assert(!M::ROUTES.has_key?(NO_CLASS), 'the mLDP types stay out of scope')
-    [4, NO_CLASS].each do |t|
+    [NO_CLASS].each do |t|
       n = M.new([format('%02x0c', t) + BODY].pack('H*').is_packed)
       assert_equal(M::Unknown, n.route.class, "route type #{t}")
       assert_equal(t, n.type)
@@ -297,10 +303,8 @@ class Mcast_vpn_test < Test::Unit::TestCase
   end
 
   # The framing is recursive, which route type 4 needs: a Route Key read
-  # as a whole nested NLRI has its extent in its own Length octet. That
-  # reading is settled in a later part; what is asserted here is only
-  # that nlri_size can already answer for a nested one.
-  def test_the_framing_can_already_answer_for_a_nested_nlri
+  # as a whole nested NLRI has its extent in its own Length octet.
+  def test_the_framing_answers_for_a_nested_nlri
     inner = NLRI1
     outer = '04' + format('%02x', inner.size / 2 + 4) + inner + '0a000002'
     assert_equal(inner.size / 2, M.nlri_size([inner].pack('H*')))
@@ -308,6 +312,183 @@ class Mcast_vpn_test < Test::Unit::TestCase
     assert_equal(4, n.type)
     assert_equal(outer, n.to_shex)
     assert_equal(inner.size / 2 + 4, n.length)
+  end
+
+  # ------------------------------------------------------------------
+  # Route type 4, RFC 6514 section 4.4, the Leaf A-D route. **Its tests
+  # live here and not in mcast_vpn_route_test.rb**, because it is the
+  # one route type that holds an Mcast_vpn and so cannot be exercised
+  # against mcast_vpn_route.rb alone. Evpn::Leaf_a_d records the same
+  # thing for the same reason.
+
+  # A route type 3 Route Key with an IPv4 address behind it, computed
+  # with the library and pasted.
+  LEAF = '0316' + '00000064000000c8' + '20c0000201' + '20e8010101' +
+         '0a000001' + '0a000002'
+
+  def test_route_type_4_holds_a_whole_nested_nlri_and_the_trailing_address
+    inner = M::S_pmsi.new([100, 200], '192.0.2.1', '232.1.1.1', '10.0.0.1')
+    r = M::Leaf_a_d.new(inner, '10.0.0.2')
+    assert_equal(4, r.type)
+    assert_equal(LEAF, r.to_shex)
+    assert_equal(28, r.encode.size)
+    assert_kind_of(M, r.route_key)
+    assert_kind_of(M::S_pmsi, r.route_key.route)
+    assert_equal('10.0.0.2', r.originator.address)
+  end
+
+  def test_route_type_4_round_trips_four_ways
+    r = M::Leaf_a_d.new(
+      M::S_pmsi.new([100, 200], '192.0.2.1', '232.1.1.1', '10.0.0.1'),
+      '10.0.0.2')
+    assert_equal(LEAF, M::Leaf_a_d.new(r.encode.dup.is_packed).to_shex)
+    assert_equal(LEAF, M::Leaf_a_d.new(r).to_shex)
+    assert_equal(LEAF, M::Leaf_a_d.new(r.to_hash).to_shex)
+    assert_equal(LEAF,
+                 M::Leaf_a_d.new(
+                   :route_key => { :s_pmsi => { :rd => [100, 200],
+                                                :source => '192.0.2.1',
+                                                :group => '232.1.1.1',
+                                                :originator => '10.0.0.1' } },
+                   :originator => '10.0.0.2').to_shex)
+  end
+
+  # **The field values on the parse path are the only thing that pins
+  # the split**, and that is worth a test of its own because sabotage
+  # showed why. Reading the Route Key two octets short leaves a route
+  # type 3 that is still a route type 3, with a shorter Originating
+  # Router inside it, and the outer body still replays byte for byte,
+  # because the nested Length that lied is echoed. So neither the replay
+  # check nor an assertion on the class catches a reader using another
+  # rule. Only the values do.
+  def test_the_split_is_pinned_by_the_field_values_and_nothing_else
+    r = M::Leaf_a_d.new([LEAF].pack('H*').is_packed)
+    assert_equal('192.0.2.1', r.route_key.route.source.address)
+    assert_equal('232.1.1.1', r.route_key.route.group.address)
+    assert_equal('10.0.0.1', r.route_key.route.originator.address,
+                 'the Route Key ends where its own Length says')
+    assert_equal('10.0.0.2', r.originator.address,
+                 'and the address is what is behind it')
+    assert_nil(r.route_key.declared_len, 'with no Length disagreeing')
+  end
+
+  def test_route_type_4_hashes_its_route_key_as_an_nlri_hash
+    r = M::Leaf_a_d.new(M::Inter_as_i_pmsi.new([100, 200], 65000), '10.0.0.2')
+    assert_equal({ :leaf_a_d =>
+                   { :route_key => { :inter_as_i_pmsi =>
+                                     { :rd => [100, 200],
+                                       :source_as => 65000 } },
+                     :originator => '10.0.0.2' } },
+                 r.to_hash)
+  end
+
+  def test_route_type_4_reads_back_through_the_nlri
+    r = M::Leaf_a_d.new(
+      M::S_pmsi.new([100, 200], '192.0.2.1', '232.1.1.1', '10.0.0.1'),
+      '10.0.0.2')
+    hex = M.new(r).to_shex
+    back = M.new([hex].pack('H*').is_packed)
+    assert_equal(M::Leaf_a_d, back.route.class)
+    assert_equal(hex, back.to_shex)
+    assert_equal(M::S_pmsi, back.route.route_key.route.class)
+  end
+
+  # **The split is read from the nested Length octet, so it is injective
+  # on the octets**, and the first draft of the class comment claimed
+  # otherwise: that a body could be split anywhere and still replay. It
+  # cannot. Two field pairs of the same total size encode to different
+  # octets, because the Length that decides the split is one of them.
+  def test_two_different_splits_cannot_share_one_body
+    a = M::Leaf_a_d.new(M::Unknown.new(1, ['ff'].pack('H*')),
+                        ['0a000001'].pack('H*').is_packed)
+    b = M::Leaf_a_d.new(M::Unknown.new(1, ['ff0a0000'].pack('H*')),
+                        ['01'].pack('H*').is_packed)
+    assert_equal(a.encode.size, b.encode.size, 'the same total size')
+    assert_not_equal(a.to_shex, b.to_shex, 'and still different octets')
+    assert_equal('0101ff0a000001', a.to_shex)
+    assert_equal('0104ff0a000001', b.to_shex)
+    [a, b].each do |x|
+      hex = M.new(x).to_shex
+      assert_equal(hex, M.new([hex].pack('H*').is_packed).to_shex)
+    end
+  end
+
+  # **So what the replay check catches here is exactly two things**, and
+  # neither is whether the reading is the one the sender meant. A body
+  # too short to frame a Route Key, and a nested Length that overruns
+  # the body: both raise out of the route type and `read_route` keeps
+  # the octets whole as an `Unknown`.
+  def test_the_two_bodies_route_type_4_cannot_split
+    assert_raise(ArgumentError) { M::Leaf_a_d.new(['01'].pack('H*').is_packed) }
+    assert_raise(ArgumentError) do
+      M::Leaf_a_d.new(['01ff0a'].pack('H*').is_packed)
+    end
+    ['0401' + '01', '0403' + '01ff0a'].each do |hex|
+      n = M.new([hex].pack('H*').is_packed)
+      assert_equal(M::Unknown, n.route.class, hex)
+      assert_equal(4, n.type, 'the type octet is still what arrived')
+      assert_equal(hex, n.to_shex)
+    end
+  end
+
+  # The one signal available on a reading this cannot check: the
+  # Originating Router's IP Address is an address, so a remainder that
+  # is neither 4 nor 16 octets is a reason to doubt the split. It is not
+  # used to pick the split, because that would be inventing a rule.
+  def test_a_remainder_that_is_not_an_address_is_the_only_signal
+    r = M::Leaf_a_d.new(M::Unknown.new(0, +''),
+                        ['0102030405'].pack('H*').is_packed)
+    assert_equal(5, r.originator.size)
+    assert_nil(r.originator.address, 'five octets are neither family')
+    assert_equal('00000102030405', r.to_shex, 'and it still replays')
+  end
+
+  # Nothing validates: a Route Key carrying a route type bgp4r does not
+  # implement, and a Leaf A-D route inside a Leaf A-D route, which no
+  # RFC describes.
+  def test_nothing_validates_about_a_route_key
+    odd = M::Leaf_a_d.new(M::Unknown.new(NO_CLASS, ['0102'].pack('H*')),
+                          '10.0.0.1')
+    hex = M.new(odd).to_shex
+    assert_equal(hex, M.new([hex].pack('H*').is_packed).to_shex)
+    deep = M::Leaf_a_d.new(
+      M::Leaf_a_d.new(M::Unknown.new(0, +''), '10.0.0.1'), '10.0.0.2')
+    hex = M.new(deep).to_shex
+    back = M.new([hex].pack('H*').is_packed)
+    assert_equal(hex, back.to_shex)
+    assert_equal(M::Leaf_a_d, back.route.route_key.route.class)
+  end
+
+  # An absent Route Key is an Unknown of type 0, which IANA reserves, so
+  # it names no real route and is 2 octets that replay.
+  def test_an_absent_route_key_is_a_reserved_type_with_no_body
+    r = M::Leaf_a_d.new
+    assert_equal('0000', r.to_shex)
+    assert_equal(0, r.route_key.type)
+    assert(r.originator.empty?)
+    assert(!M::ROUTES.has_key?(0), 'type 0 is Reserved')
+  end
+
+  def test_a_route_key_that_is_not_one_is_refused
+    assert_raise(ArgumentError) { M::Leaf_a_d.new(42, '10.0.0.1') }
+  end
+
+  # The layout has two fields, so a third argument is not a field it
+  # could go in. This is the one refusal here, and it is the kind
+  # Conventions allows: an input the class cannot represent at all,
+  # rather than a combination that is merely wrong by the RFC.
+  def test_more_arguments_than_the_layout_has_fields_is_refused
+    assert_raise(ArgumentError) do
+      M::Leaf_a_d.new(M::Inter_as_i_pmsi.new([100, 200], 65000),
+                      '10.0.0.2', '10.0.0.3')
+    end
+  end
+
+  def test_route_type_4_names_itself_and_its_route_key
+    r = M::Leaf_a_d.new(M::Inter_as_i_pmsi.new([100, 200], 65000), '10.0.0.2')
+    assert_match(/\A\[4\] Leaf A-D: route key \[2\] Inter-AS I-PMSI A-D:/,
+                 r.to_s)
+    assert_match(/originating router 10\.0\.0\.2\z/, r.to_s)
   end
 
 end

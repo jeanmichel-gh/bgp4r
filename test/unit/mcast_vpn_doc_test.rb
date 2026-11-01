@@ -221,15 +221,56 @@ class McastVpnDocTest < Test::Unit::TestCase
 
   # Route type 4's split, which is a reading and not a rule. The
   # document has to keep saying which, and the recursion has to keep
-  # working, since part 4 rests on both.
+  # working, since the route type rests on both.
   def test_the_leaf_a_d_split_is_recorded_as_a_reading
     assert_match(/the split that is not in the band/, doc)
     assert_match(/is set\s+to the NLRI of the received route/, doc)
     assert_match(/RFC 9572 needed its own terminology section to say "entire NLRI"/,
                  doc)
-    assert_match(/takes that reading and does not assert it/, doc)
+    assert_match(/takes that reading and says in the code that it is a reading/,
+                 doc)
     inner = '010c' + '00000064000000c8' + '0a000001'
     assert_equal(14, BGP::Mcast_vpn.nlri_size([inner].pack('H*')))
+  end
+
+  # And what the replay check does and does not buy here, which both the
+  # document and the class comment overstated in a first draft. The
+  # claim is that the split is injective on the octets, so the two
+  # counter-example bodies the document prints must really differ.
+  def test_the_replay_check_says_nothing_about_the_reading
+    assert_match(/What the replay check buys here, which is less than this section claimed/,
+                 doc)
+    assert_match(/\*\*The split is read from the nested Length octet, so it is injective on\s+the octets\.\*\*/,
+                 doc)
+    assert_match(/\*\*A sender using another rule is undetectable\.\*\*/, doc)
+    assert_match(/\*\*A reader using another rule is undetectable too\*\*/, doc)
+    one = '0101ff' + '0a000001'
+    two = '0104ff0a0000' + '01'
+    assert_equal(one.size, two.size, 'the document says same length')
+    assert_not_equal(one, two, 'and different octets')
+    [one, two].each do |hex|
+      r = BGP::Mcast_vpn::Leaf_a_d.new([hex].pack('H*').is_packed)
+      assert_equal(hex, r.encode.unpack1('H*'),
+                   'so each reads back as itself, which is the injectivity')
+    end
+  end
+
+  # The one class in mcast_vpn_route.rb that does not work against that
+  # file alone. Every route type builds with no NLRI here, since
+  # mcast_vpn.rb is loaded; what the document records is the split of
+  # test files, and that is what this asserts, because the route file's
+  # own test requiring the NLRI would make the claim vacuous.
+  def test_only_the_leaf_a_d_route_needs_the_nlri
+    assert_match(/reaches `Mcast_vpn` at call time and not at load time/, doc)
+    BGP::Mcast_vpn::ROUTES.each do |t, k|
+      assert_nothing_raised("route type #{t} should build") { k.new }
+    end
+    body = File.read(File.expand_path('nlris/mcast_vpn_route_test.rb', __dir__))
+    assert(!body.include?("require 'bgp/nlris/mcast_vpn'"),
+           'mcast_vpn_route_test.rb must not require the NLRI, or the other ' \
+           'six route types are not proved to work without it')
+    assert(!body.include?('Leaf_a_d'),
+           "Leaf_a_d's tests belong in mcast_vpn_test.rb, beside the framing")
   end
 
   # Neither document names a malformed NLRI or a subcode, so there is

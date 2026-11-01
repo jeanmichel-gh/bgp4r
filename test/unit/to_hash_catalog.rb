@@ -1264,6 +1264,18 @@ module ToHashCatalog
                                          'ff3e::1')
   end
 
+  # Route type 4, section 4.4, the recursive one: the Route Key is a
+  # whole nested NLRI, so its hash is a hash inside a hash and the round
+  # trip has to carry both levels. The recipe gives the Route Key a real
+  # route type rather than an Unknown, because an Unknown's hash is a
+  # type number and octets and would not exercise the nesting.
+  ENTRIES['BGP::Mcast_vpn::Leaf_a_d'] = entry(:ok, nil, nil) do
+    BGP::Mcast_vpn::Leaf_a_d.new(
+      BGP::Mcast_vpn::S_pmsi.new([100, 200], '192.0.2.1', '232.1.1.1',
+                                 '10.0.0.1'),
+      '10.0.0.2')
+  end
+
   # RFC 4684 section 4. The whole prefix, which is the branch where the
   # two fields of the section's figure reproduce the octets, with a path
   # identifier on top. The other branch, where they cannot and the hash
