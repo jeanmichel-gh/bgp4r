@@ -4608,6 +4608,7 @@ Found while fixing other bugs, not fixed yet. Verified against master on
 
 Smaller things:
 
+* **Three families still default an octet buffer to `+''`, latent rather than broken.** `Mcast_vpn::Originating_router`, `Rt_constrain` and `Flow_spec::Component::Unknown` each do `@value = +''`, which is US-ASCII, and that is the shape that broke CI on Ruby 3.4 in #218. **None is reachable today**, measured on 2026-11-01: `Mcast_vpn::Originating_router.new.value.encoding` is UTF-8, and its `to_s` guards `when 4, 16` so an empty buffer never reaches `IPAddr`, nothing `<<` an Integer onto any of the three, and `encode` packs them so the octets are right either way. So this is a hazard and not a wrong answer, and it becomes one the day any of them grows a padding call or an `IPAddr` call. The fix is `String.new`, which Conventions explains; it is listed here rather than done because it is three other families and #218 was BGP-LS part 3.
 * **The copy constructor loses an extended NLRI in four families.**
   `Klass.new(an_instance)` re-parses `an_instance.encode`, and `encode`
   writes the RFC 7911 section 3 Path Identifier in front of the NLRI
