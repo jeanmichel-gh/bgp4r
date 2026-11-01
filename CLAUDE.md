@@ -102,15 +102,18 @@ bgp/nlris/               prefix encodings (inet, labeled, VPN, RD, mapped IPv4)
                          section 5.1, which is one rule for the whole
                          family, with its registry, Tlv::Unknown, the
                          list reader, the section 5.1 ordering rule and
-                         the **four shared value shapes** every other
+                         the **five shared value shapes** every other
                          file here builds on: Opaque32 a 32-bit
                          integer, Addr_tlv one address of a fixed
-                         width, Opaque_tlv variable opaque octets and
-                         Text_tlv a 7-bit ASCII name. Each was written
-                         where its first user was and all four moved
-                         here once Table 8 wanted every one of them,
-                         which changed no constant path because every
-                         file in the family reopens
+                         width, Opaque_tlv variable opaque octets,
+                         Text_tlv a 7-bit ASCII name and Int_list_tlv a
+                         list of integers whose element width is stated
+                         once, by the subclass's PACK. Each was written
+                         where its first user was and moved here once a
+                         second of the RFC's tables wanted it, four in
+                         part 5b-i and Int_list_tlv out of Srlg in part
+                         5c, which changed no constant path because
+                         every file in the family reopens
                          BGP::Link_state::Tlv;
                          link_state.rb the NLRI of section 5.2 with the
                          NLRI Type and Total NLRI Length framing,
@@ -157,7 +160,16 @@ bgp/nlris/               prefix encodings (inet, labeled, VPN, RD, mapped IPv4)
                          1088 to 1098, where **Table 8 has no Length
                          column** so five widths are citations to RFC
                          5305 and RFC 5307, and with Float32_tlv, the
-                         IEEE float two of them share. The attribute
+                         IEEE float two of them share;
+                         link_state_prefix_attribute.rb **all six of
+                         section 5.3.3**, 1152 to 1157, where Table 10
+                         does give a Length and disagrees with its own
+                         section about 1156, the OSPF Forwarding
+                         Address, which is 4 or 16 and not the table's
+                         4. 1154 is the family's only 64-bit field.
+                         **So every attribute TLV RFC 9552 defines is
+                         in**, all 25 code points across its three
+                         tables. The attribute
                          that carries all of them is code 29 and is a
                          path attribute, so it lives in
                          bgp/path_attributes/link_state_attribute.rb
@@ -165,8 +177,7 @@ bgp/nlris/               prefix encodings (inet, labeled, VPN, RD, mapped IPv4)
                          either NLRI gate. TLV 263 is in Table 4 and
                          Table 6 and is one class, and 1028 and 1029
                          are in Table 6 and Table 8, which is the flat
-                         registry paying for itself twice. Table 10's
-                         prefix attribute TLVs are part 5c.
+                         registry paying for itself twice.
                          A TLV or NLRI
                          type with no class reads back as its level's
                          Unknown and replays byte for byte. **One flat
@@ -415,8 +426,9 @@ reads the same octets under both SAFIs to show the SAFI is a parse time
 input. Its last two cases are not about a wiring site at all, since the
 BGP-LS Attribute goes through `Attr.register`: they are here because
 this is the only place the NLRI and the attribute that describes it
-travel together over a socket, which part 5b-ii extended to the link
-attribute TLVs beside a Link NLRI. About a second:
+travel together over a socket: part 5b-ii added the link attribute TLVs
+beside a Link NLRI and part 5c the prefix attribute TLVs beside a Prefix
+NLRI, which is the pairing section 5.3.3 names. About a second:
 ```
 ruby -I. test/functional/link_state_test.rb
 ```
@@ -548,7 +560,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. The `lab` job is a matrix, one job per group in `test/lab_groups.rb`, so its cost is the slowest group and not the total: it was 12m42s as one serial suite. Each job installs only what its group needs, which is why the matrix entry carries a `gobgp`, `frr`, `docker` or `netns` flag. The `gobgp` groups pin 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-11-01: 2347 tests, 28058 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.4%.
+Baseline on 2026-11-01: 2388 tests, 28298 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.5%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -1559,7 +1571,9 @@ true here is the shape of the gap:
   BGP-LS **Attribute**, code 29, is a path attribute rather than an
   NLRI, so it goes through `Attr.register` and not through either
   dispatch gate; it landed with Table 6's node attribute TLVs in part
-  5a, and Table 8's and Table 10's are parts 5b and 5c.
+  5a, Table 8's in part 5b and Table 10's in part 5c, so **every
+  attribute TLV RFC 9552 defines is in** and what is left of the family
+  is validation.
   Flowspec, EVPN, RT-constrain, ATTR_SET and MCAST-VPN were all on this list
   and all five are off it, because the
   rule and the route can be sent now: flowspec had every traffic filtering
@@ -1580,7 +1594,7 @@ true here is the shape of the gap:
   prints the registered code points, against the 115 the IANA registries
   listed when this was last counted by hand.
 
-### Breadth, the one SAFI lever. Phases 2 and 3 done, phase 4 parts 1, 2 and 3 done, part 4 under way: BGP-LS parts 1 to 4, 5a and 7 of seven
+### Breadth, the one SAFI lever. Phases 2 and 3 done, phase 4 parts 1, 2 and 3 done, part 4 under way: BGP-LS parts 1 to 5 and 7 of seven, validation left
 
 The section above deferred breadth and named the single limit. This is the
 plan for lifting it, recorded before the work starts.
@@ -2914,8 +2928,9 @@ Two consequences, both of which change the plan rather than decorate it:
    RT-constrain (SAFI 132, RFC 4684), ATTR_SET (attribute 128, RFC
    6368) and MCAST-VPN (SAFI 5, RFC 6514) **are in**; BGP-LS
    (attribute 29, AFI
-   16388, SAFI 71 and 72, RFC 9552) is **under way**, parts 1 to 4, 5a
-   and 7 of seven done, as the plan under part 4 below: part 7 was taken
+   16388, SAFI 71 and 72, RFC 9552) is **under way**, parts 1 to 5 and
+   7 of seven done with only validation left, as the plan under part 4
+   below: part 7 was taken
    out of order on purpose, because what a router does decides which
    checks part 6 is worth writing, and it did. This entry used to
    say "each of
@@ -4057,7 +4072,7 @@ Two consequences, both of which change the plan rather than decorate it:
              check-the-proof rule in Rules for agents paying for
              itself again.
    4. **BGP-LS, attribute 29 and AFI 16388 SAFI 71 and 72, RFC 9552.
-      Parts 1 and 2 of seven done**, largest of the four by a long way, and
+      Six of seven parts done, validation left**, largest of the four by a long way, and
       last for the reason above. Planned on 2026-10-31 before any code,
       from RFC 9552 read as far as it was then fetchable, its two
       errata, and the IANA registries. Seven parts, the MCAST-VPN
@@ -4711,11 +4726,12 @@ Two consequences, both of which change the plan rather than decorate it:
            test at each level.
          * **`test/functional/link_state_test.rb` is the proof and the
            only one there can be**, for the reason
-           `flow_spec_test.rb` records. 16 tests, 173 assertions, about
-           a second. Named in `.github/workflows/test.yml`, which lists
-           each functional test by hand. It carries the only cases in
-           this family that send a two-address next hop, a VPN NLRI and
-           an unknown NLRI type beside a known one over a socket.
+           `flow_spec_test.rb` records. 16 tests and 173 assertions at
+           part 4, 20 and 225 once parts 5b-ii and 5c added a case each,
+           about a second. Named in `.github/workflows/test.yml`, which
+           lists each functional test by hand. It carries the only cases
+           in this family that send a two-address next hop, a VPN NLRI
+           and an unknown NLRI type beside a known one over a socket.
          * **Ten sabotages, each landing, and four of the signatures
            say something the assertions do not.** Reverting only
            `Mp_unreach`'s own loop fails **exactly the two withdrawal
@@ -5056,8 +5072,164 @@ Two consequences, both of which change the plan rather than decorate it:
            also the only variable-width TLV in the family whose widths
            are an enumeration rather than a multiple: 1 for IS-IS
            small, 2 for OSPF, 3 for IS-IS wide.
-         * **5c, Table 10.** The **six** prefix attribute TLVs, 1152
-           to 1157.
+         * **5c, Table 10. Done**, in
+           `bgp/nlris/link_state_prefix_attribute.rb`: the **six**
+           prefix attribute TLVs, 1152 to 1157, so **every attribute
+           TLV RFC 9552 defines is in**, all 25 code points across its
+           three tables. All six round trip through their own hash and
+           all are in the catalog. Section 5.3.3 was read first hand.
+           * **Table 10 has a Length column and five of the six widths
+             are stated twice**, by the table and by the section, and
+             they agree. That is the opposite of Table 8, where not one
+             of fifteen rows carries a width, so 5c needed no outside
+             document for a width: RFC 5130 and RFC 5305 are cited as
+             the origin of the fields rather than as the only statement
+             of their size. Worth knowing before planning this part
+             from Table 8's experience.
+           * **The sixth is 1156 and the table and the section
+             disagree.** Table 10 says 4; section 5.3.3.5 says "The
+             length is 4 for an IPv4 forwarding address and 16 for an
+             IPv6 forwarding address" and Figure 29 says "Forwarding
+             Address (variable)". The prose and the figure agree
+             against the table, which is the reading bgp4r follows, and
+             no erratum covers it. **The guard on it used to assert the
+             document's prose only, which is weaker than it looks**:
+             the phrase was one this guide's own author controls, so
+             rewording section 10c failed the guard with nothing about
+             the claim changing. It asserts the library too now, which
+             is the half a reader cares about.
+           * **A width that is neither 4 nor 16 is not an
+             `Ospf_forwarding_address`**, which is `Addr_tlv`'s rule
+             and right here for the reason part 3 recorded there: the
+             class is a claim about meaning. One holding eight octets
+             and no readable address would claim bgp4r read a
+             forwarding address and found none in it, where
+             `Tlv::Unknown.new(1156, octets)` claims only that these
+             are the octets of TLV 1156. **That is not the length check
+             section 8.2.2 forbids**: nothing is reported either way,
+             so only the class differs. The first draft of the class
+             had the opposite and its own comment said so, which is how
+             it was caught: the comment promised a kept off-width value
+             and the dispatch sent it to `Unknown`, so one of the two
+             was wrong and the comment was.
+           * **It is `Addr_tlv`'s shape with a set of widths and not a
+             subclass of it.** Generalising `WIDTH` to a set for one
+             caller is the anticipation phase 1 warns against, and the
+             two differ in the empty form as well: `Addr_tlv` with no
+             arguments builds the all zeroes address of its own width
+             and this has no width to pick, so there is **no empty
+             form** and `new('0.0.0.0')` is the explicit route. Fourth
+             place in the library where a width alone says which family
+             a field is, after EVPN's IP Prefix route, EVPN route type
+             2's Label2 and MCAST-VPN's Originating Router.
+           * **`Int_list_tlv` came out of `Srlg`**, because 1153 is a
+             4-octet integer list and 1154 an 8-octet one and 1096 is
+             the same shape: three subclasses across two of the RFC's
+             tables, which is the line part 5b-i drew for where a base
+             lives. **Its `PACK` is the only place each element width
+             is stated**, which is part 5b-ii's dead-constant finding
+             applied up front rather than after a sabotage: the `WIDTH
+             = 4` that `Srlg` carried beside its `'N*'` said the same
+             thing twice and nothing read it. A doc guard asserts the
+             base reaches both tables, so a later part that leaves it
+             serving one fails and says to move it back.
+           * **1154 is the family's only 64-bit field**, so it is the
+             one place `'Q>*'` appears and the whole reason the base
+             takes its pack code from the subclass. A tag below 2^32
+             encodes the same either way, so the test and the catalog
+             recipe both use one above it: that is the only assertion
+             that cannot pass against the narrower code.
+           * **An absent 1155 means something, which no other TLV in
+             section 5.3 does.** Section 5.3.3.4: "If not present, it
+             means that the prefix is advertised without any
+             reachability." Nothing in bgp4r acts on it, since it never
+             computes reachability, and section 8.2.2 forbids reporting
+             a mandatory TLV absent in any case. Its "may only appear
+             once" in the same sentence is a sender's rule bgp4r does
+             not enforce, per Conventions, and the attribute's hash is
+             a list so there is somewhere to put the second.
+           * **Table 11 gives no bit numbers**, where Table 7 does for
+             the node flags, so Figure 25's `|D|N|L|P|       |` is the
+             only statement of 1152's bit placement there is. Nothing
+             cross-checks it, which is the opposite of 1024, where a
+             figure and a table disagreed and erratum 7789 settled it.
+             The masks are asserted against the figure's order rather
+             than against a round trip, which passes whenever encoder
+             and decoder share a reversal.
+           * **An assertion that looked right and was not:
+             `assert_raise(ArgumentError)` fails on
+             `IPAddr::InvalidAddressError`**, which is an
+             `ArgumentError` by ancestry, because test-unit matches the
+             exact class. So the refusal satisfied the rule and the
+             test said otherwise. `assert_raise_kind_of` is what says
+             what the rule means, which is that a class refusing an
+             input it cannot read answers an `ArgumentError` descendant
+             and not a `TypeError` or a `NoMethodError`.
+           * `Prefix_metric` is left off that case, as the two
+             `Opaque32` subclasses in part 5b-ii's equivalent are:
+             `Opaque32#coerce` is `v.to_i` and opaque is the RFC's own
+             word for the shape, so it takes anything answering `to_i`.
+             Not reachable from a hash or from the wire, since both
+             hand it a number.
+           * **Coverage found one unreachable line and it is kept**,
+             the way `Fib`'s `:no_next_hop` branch and
+             `Rt_constrain#origin_as`'s length guard are:
+             `Ospf_forwarding_address#coerce` refuses a width outside
+             the section's two, and `IPAddr` has two families whose
+             `hton` is 4 octets or 16, so the check cannot fire. It
+             stays because it is the sentence `Addr_tlv#coerce` makes
+             where it **is** reachable. `parse` is where an off-width
+             value really arrives.
+           * **The load order trap, fourth time in this family**, and
+             now in both directions at once: one case compares a Table
+             10 class against its Table 8 counterpart and another spans
+             all three tables, since the Opaque envelope has a row in
+             each, so the test requires two files the source does not.
+           * `test/functional/link_state_test.rb` gained the case that
+             sends all six beside a **Prefix** NLRI, which is the
+             pairing section 5.3.3 names and the only attribute case
+             there whose NLRI is a prefix. A hand-written expectation
+             was wrong in it, the seventeenth across these families:
+             `Link_state` is the NLRI and `#nlri` is the typed layout
+             inside it, so the type assertion goes one level down.
+           * **Seventeen sabotages: fifteen landed, one was a real
+             finding and one the registry refusing at load.** The
+             finding is the width check above. The load failure is
+             `Igp_route_tag` given `Igp_extended_route_tag`'s hash key,
+             which `register` refuses so the suite dies on the require:
+             that is the duplicate-key guard working rather than the
+             claim, which part 2 met from the type-number side, and the
+             right reading of it is that the registry is what enforces
+             one key per class.
+             * **A second load failure was the sabotage's own fault and
+               is worth separating from that one.** Moving
+               `Int_list_tlv` out of the framing file and into
+               `link_state_prefix_attribute.rb`, to check the placement
+               guard, put it **after** `Srlg`'s use of it in require
+               order, so every test errored on the require and nothing
+               about placement was measured. Moved into
+               `link_state_descriptor.rb` instead, which `nlris.rb`
+               requires before the link attributes, it fails exactly
+               `test_each_shared_base_is_defined_with_the_framing`.
+               **So a sabotage on where a shared class lives has to
+               keep it loading before its first user**, or it tests the
+               require order it just broke.
+             * The fifteen, each on what it was aimed at: the four flag
+               masks reversed fails 4; `'Q>*'` changed to `'N*'` fails
+               5 and the functional case; `WIDTHS` reduced to Table
+               10's single 4 fails 2 and errors 2; `DEFINED_BITS`
+               widened to 0xff fails 3; 1155's type number moved fails
+               9; 1152's and 1157's swapped fails 10; the base moved
+               fails the placement guard; the base given a `TYPE` fails
+               the shared-bases guard; `Srlg` given a `WIDTH` beside
+               its `PACK` fails 2; the list parse keeping its trailing
+               partial group fails the three wire cases; the width
+               refusal's message removed fails 1; a document table row
+               flipped to no, and the document's own 1156 row changed
+               to 4, each fail their discovery guard; the
+               `Int_list_tlv` row cut from `NO_RECIPE` fails the
+               catalog coverage guard; and the attribute not sent
+               beside the prefix NLRI fails the functional case.
          * **The three tables hold 28 rows and 25 distinct new code
            points**, counted from the document rather than added up.
            Table 6 lists 7 and one of them, 263, is already in from
@@ -5445,9 +5617,10 @@ request that added the attribute:
 * Prefix-SID (40): the SRv6 TLVs of RFC 9252, and the RFC 8669 section 4.1 rule for labeled unicast.
 * No check for a missing well known mandatory attribute. That needs `Update`, not `Path_attribute`, because it depends on whether the message carries NLRI.
 * The external peer rules for LOCAL_PREF, ORIGINATOR_ID and CLUSTER_LIST, and the RFC 7311 section 3.2 AIGP checks. bgp4r does not know whether a peer is external where the checks run.
-* BGP-LS (29): the prefix attribute TLVs of RFC 9552 Table 10, which is part
-  5c of the plan above, and every attribute TLV the other RFCs define, which
-  that plan's measure deliberately excludes. The attribute and Tables 6 and 8
-  are in, 19 of RFC 9552's own 25 attribute TLVs, and a TLV with no class is
-  kept and echoed, which section 5.1 requires rather than permits.
+* BGP-LS (29): every attribute TLV the **other** RFCs define, which that
+  plan's measure deliberately excludes and which is most of the 139 assigned
+  code points. The attribute and all three of RFC 9552's own tables are in,
+  so all 25 of its attribute TLVs, and a TLV with no class is kept and
+  echoed, which section 5.1 requires rather than permits: the lab meets one
+  on real traffic, TLV 1101 from RFC 9085, which GoBGP originates.
 * Not started: BGPsec_Path.

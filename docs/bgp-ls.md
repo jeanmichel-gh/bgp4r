@@ -154,9 +154,9 @@ Propagator", not by every receiver. Nothing else in bgp4r's validation
 has a role qualifier, so that is a decision for part 6 rather than a
 patch.
 
-### Four shared bases, which live with the framing
+### Five shared bases, which live with the framing
 
-`link_state_tlv.rb` holds four value shapes that more than one of the
+`link_state_tlv.rb` holds five value shapes that more than one of the
 RFC's tables uses, so a TLV class in any of the family's files is
 usually three constants on top of one of them:
 
@@ -166,12 +166,23 @@ usually three constants on top of one of them:
 | `Addr_tlv` | one IP address of a fixed `WIDTH` | Table 4's four address TLVs |
 | `Opaque_tlv` | opaque octets of no fixed width | Table 6's 1025 and 1027 |
 | `Text_tlv` | a symbolic name in 7-bit ASCII | Table 6's 1026 |
+| `Int_list_tlv` | a list of unsigned integers of one width, from `PACK` | Table 8's 1096 |
 
-**Each was written where its first user was and all four moved here in
-part 5b-i**, once Table 8 turned out to want every one of them: 1088 and
-1092 are `Opaque32`, 1030 and 1031 are `Addr_tlv`, 1097 is `Opaque_tlv`
-and 1098 is `Text_tlv`. Leaving them put would have meant three sideways
-requires and three file names that no longer described what they held.
+**Each was written where its first user was and the first four moved
+here in part 5b-i**, once Table 8 turned out to want every one of them:
+1088 and 1092 are `Opaque32`, 1030 and 1031 are `Addr_tlv`, 1097 is
+`Opaque_tlv` and 1098 is `Text_tlv`. Leaving them put would have meant
+three sideways requires and three file names that no longer described
+what they held.
+
+**`Int_list_tlv` came out of `Srlg` in part 5c for the same reason**,
+once Table 10's two route tags turned out to be the same shape: 1153 is
+a 4-octet element and 1154 an 8-octet one, so three subclasses across
+two tables. **Its `PACK` is the only place each element width is
+stated**, which is part 5b-ii's finding applied up front: the `WIDTH =
+4` that `Srlg` used to carry beside its `'N*'` was a second statement of
+one fact, and a sabotage changing it to 2 passed the whole suite because
+nothing read it.
 
 **The move changed no constant path**, because every file in this family
 reopens `BGP::Link_state::Tlv`, which is also why it was cheap to defer
@@ -627,8 +638,8 @@ arriving from the lexical-scope side rather than the ancestor side.
 
 ## 7. What is in bgp4r today
 
-Seven parts, and parts 1 to 4 and 7 are in, with part 5 under way. The
-plan is in CLAUDE.md under "Breadth, the one SAFI lever".
+Seven parts, and six are in: everything but validation. The plan is in
+CLAUDE.md under "Breadth, the one SAFI lever".
 
 | Part | What | Status |
 |---|---|---|
@@ -636,7 +647,7 @@ plan is in CLAUDE.md under "Breadth, the one SAFI lever".
 | 2 | the Node NLRI and the node descriptor sub-TLVs | **done** |
 | 3 | the Link NLRI and the two Prefix NLRIs | **done** |
 | 4 | wiring the NLRI to the dispatch sites | **done** |
-| 5 | the BGP-LS Attribute, code 29, and RFC 9552's attribute TLVs | **5a and 5b done**, 5c to do |
+| 5 | the BGP-LS Attribute, code 29, and RFC 9552's attribute TLVs | **done**, 5a, 5b and 5c |
 | 6 | validation, from section 8.2.2 | to do |
 | 7 | the lab, in both directions for SAFI 71 | **done** |
 
@@ -644,15 +655,16 @@ plan is in CLAUDE.md under "Breadth, the one SAFI lever".
 does decides which checks are worth writing, and it did: section 11 has
 the finding that settled part 6's scope.
 
-**Every NLRI type and every descriptor TLV RFC 9552 defines is in**,
-which is the whole of sections 5.2.1, 5.2.2 and 5.2.3. **The attribute
-itself is in too**, code 29, with Table 6's node attribute TLVs and
-Table 8's link attribute TLVs; Table 10's prefix attribute TLVs are
-part 5c, and section 10 has all three tables row by row.
-Everything unimplemented reads back as its level's `Unknown` and
-replays byte for byte: a TLV type with no class as
-`Link_state::Tlv::Unknown` and an NLRI type with no class as
-`Link_state::Unknown`.
+**Every NLRI type and every TLV RFC 9552 defines is in**: the whole of
+sections 5.2.1, 5.2.2 and 5.2.3 for the descriptors, and the whole of
+section 5.3 for the attribute, which is code 29 with all three of its
+tables, 6, 8 and 10. Section 10 has them row by row. So what is left
+unimplemented in this family is every attribute TLV the **other** RFCs
+define, which the plan's measure deliberately excludes, and each of
+those reads back as its level's `Unknown` and replays byte for byte: a
+TLV type with no class as `Link_state::Tlv::Unknown` and an NLRI type
+with no class as `Link_state::Unknown`. The lab meets one on real
+traffic, TLV 1101 from RFC 9085; section 11 has it.
 
 **The counts are discovered and not written here**, which is why the
 two tables above carry the "In bgp4r" column rather than a sentence:
@@ -1091,26 +1103,109 @@ all exact. The octets come back either way; only the class differs.
 
 ### 10c. The prefix attribute TLVs, section 5.3.3
 
-Table 10, which has a Length column. Part 5c.
+Table 10, which has a Length column, unlike Table 4 and Table 8. These
+go in the attribute beside a Prefix NLRI of type 3 or 4: section 5.3.3
+says prefixes are "learned from the IGP topology (IS-IS or OSPF) with a
+set of IGP attributes (such as metric, route tags, etc.)". Part 5c.
 
 | Code Point | Description | Length | Where the width is stated | In bgp4r |
 |---|---|---|---|---|
-| 1152 | IGP Flags | 1 | section 5.3.3.1 | no |
-| 1153 | IGP Route Tag | 4*n | RFC 5130 | no |
-| 1154 | IGP Extended Route Tag | 8*n | RFC 5130 | no |
-| 1155 | Prefix Metric | 4 | RFC 5305 | no |
-| 1156 | OSPF Forwarding Address | 4, see below | RFC 2328 | no |
-| 1157 | Opaque Prefix Attribute | variable | section 5.3.3.6 | no |
+| 1152 | IGP Flags | 1 | section 5.3.3.1 | yes |
+| 1153 | IGP Route Tag | 4*n | section 5.3.3.2, RFC 5130 | yes |
+| 1154 | IGP Extended Route Tag | 8*n | section 5.3.3.3, RFC 5130 | yes |
+| 1155 | Prefix Metric | 4 | section 5.3.3.4, RFC 5305 | yes |
+| 1156 | OSPF Forwarding Address | 4 or 16, see below | section 5.3.3.5 | yes |
+| 1157 | Opaque Prefix Attribute | variable | section 5.3.3.6 | yes |
 
-**Table 10 disagrees with its own section about 1156 and no erratum
-covers it.** The table says 4; section 5.3.3.5 says "The length is 4 for
-an IPv4 forwarding address and 16 for an IPv6 forwarding address" and
-its Figure 29 says "Forwarding Address (variable)". So the prose and the
-figure agree with each other against the table, which is the reading 5c
-follows. Checked against the errata on 2026-11-01: the two verified ones
-are 7789 and 8766 and neither is this. **Third self contradiction in
-this document**, after the Node Flag Bits figure and Table 8's missing
-widths, which is worth knowing before trusting any single table of it.
+**Five of the six widths are stated twice**, by Table 10 and by the
+section, and they agree. That is the opposite of Table 8, where not one
+of fifteen rows carries a width at all, and it is why 5c needed no
+outside document for a width: RFC 5130 and RFC 5305 are cited as the
+origin of the fields rather than as the only statement of their size.
+
+**The sixth is where the table and the section disagree, and no erratum
+covers it.** Table 10 says 1156 is 4; section 5.3.3.5 says "The length
+is 4 for an IPv4 forwarding address and 16 for an IPv6 forwarding
+address" and its Figure 29 says "Forwarding Address (variable)". So the
+prose and the figure agree with each other against the table, which is
+the reading bgp4r follows. Checked against the errata on 2026-11-01: the
+two verified ones are 7789 and 8766 and neither is this. **Third self
+contradiction in this document**, after the Node Flag Bits figure and
+Table 8's missing widths, which is worth knowing before trusting any
+single table of it.
+
+#### The bits of Table 11
+
+| Bit | Name | Mask | Reference |
+|---|---|---|---|
+| 0 | IS-IS Up/Down | 0x80 | RFC 5305 |
+| 1 | OSPF "no unicast" | 0x40 | RFC 5340 |
+| 2 | OSPF "local address" | 0x20 | RFC 5340 |
+| 3 | OSPF "propagate NSSA" | 0x10 | RFC 5340 |
+
+**Table 11 names the four and gives no bit numbers**, where Table 7 does
+for the node flags, so Figure 25's `|D|N|L|P|       |` is the only
+statement of the placement there is. The masks above are this guide's
+arithmetic from that figure, which is worth saying because the node
+flags needed erratum 7789 to settle a figure against a table: here
+nothing cross-checks, and the figure and the table list the four in the
+same order. D is the most significant bit, so this numbers from the top
+as every bitfield in the family but 1088 does.
+
+`DEFINED_BITS` is 0xf0 and the low nibble is kept and echoed, which
+section 5.3.3.1 asks for in the words 1024 and 1094 use: "The bits that
+are not defined MUST be set to 0 by the originator and MUST be ignored
+by the receiver."
+
+#### Three things in this table that no other TLV in the family does
+
+**An absent 1155 means something.** Section 5.3.3.4: "If not present, it
+means that the prefix is advertised without any reachability." Every
+other TLV in section 5.3 is absent or present and nothing more. Nothing
+in bgp4r acts on it, since it never computes reachability, and section
+8.2.2 forbids reporting a mandatory TLV absent in any case; it is
+recorded because a reader of a prefix attribute set will want it. Its
+"may only appear once" in the same sentence is a sender's rule that
+bgp4r does not enforce, per Conventions, and the attribute's hash is a
+list so there is somewhere to put the second.
+
+**1154 is the only 64-bit field in the family**, so it is the one place
+`'Q>*'` appears and the whole reason `Int_list_tlv` takes its pack code
+from its subclass rather than fixing one. A reader carrying 1153's shape
+across gets every element half the width it should be, and a tag below
+2^32 encodes either way, so the test uses one above it.
+
+**1156 is the fourth place in the library where a width alone says which
+family a field is**, after EVPN's IP Prefix route, EVPN route type 2's
+optional Label2 and MCAST-VPN's Originating Router. It is `Addr_tlv`'s
+shape with a set of widths rather than one number, and not a subclass of
+it: generalising `WIDTH` to a set for one caller is the anticipation
+phase 1 of the breadth plan warns against, and the two differ in the
+empty form as well, since with two widths allowed there is no all zeroes
+address to default to that would not be inventing a family.
+
+**A width that is neither 4 nor 16 is not one of these**, which is
+`Addr_tlv`'s rule and right here for the reason part 3 recorded there:
+the class is a claim about meaning. An `Ospf_forwarding_address` holding
+eight octets and no readable address would claim bgp4r read a forwarding
+address and found none in it, where `Tlv::Unknown.new(1156, octets)`
+claims only that these are the octets of TLV 1156. So `parse` refuses it
+and the octets are kept whole. **That is not the length check section
+8.2.2 forbids**: nothing is reported either way and no finding exists,
+so only the class differs, which is part 1's rule rather than a verdict
+about the sender.
+
+**But its width check is message-only, where `Addr_tlv`'s is load
+bearing, and the difference is which widths each class takes.**
+`IPAddr.new_ntoh` accepts exactly 4 octets and 16 and answers
+`IPAddr::AddressFamilyError` for every other width, measured on
+2026-11-01, so a class taking both of those has no gap left for a check
+to close: a sabotage removing it passed the whole suite, because IPAddr
+refuses the same values one line later. `Addr_tlv` takes **one** of the
+two, so there IPAddr accepts a width the class must not, which is
+exactly the TLV 261 bug part 3 found. The check stays for its message,
+which names both widths and the `Tlv::Unknown` route, and a test reads
+the message so it is not the dead kind part 5b-ii found twice.
 
 ## 11. Interoperability
 

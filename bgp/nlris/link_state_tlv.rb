@@ -782,6 +782,88 @@ module BGP
 
       end
 
+      # A TLV whose whole value is a list of unsigned integers of one
+      # width, so its length is a multiple of that width and a value of
+      # nothing is a list of none. Its subclasses differ in the type
+      # number, the hash key, how each prints and **the pack code**,
+      # which is the only place the element width is stated.
+      #
+      # Three subclasses across two of the RFC's tables, which is why
+      # this is here with the framing rather than beside any of them,
+      # per the line part 5b-i drew: Table 8's 1096, the SRLG, whose
+      # section 5.3.2.5 is where the shape came from, and Table 10's
+      # 1153 and 1154, the two route tags.
+      #
+      # **No WIDTH constant beside PACK.** The 4 octets of an `'N*'`
+      # element and the 8 of a `'Q>*'` one are what those pack codes
+      # are, and a constant repeating it is a second statement of one
+      # fact: part 5b-ii found exactly that, where a sabotage changing
+      # `Srlg`'s own `WIDTH = 4` to 2 passed the whole suite because
+      # nothing read it.
+      #
+      # A length that is not a multiple of the element width cannot be
+      # one of these: `unpack` leaves the trailing partial group behind,
+      # so `Tlv.factory` finds the value does not reproduce itself and
+      # keeps the octets as a `Tlv::Unknown`, which is part 1's rule.
+      class Int_list_tlv < Tlv
+
+        attr_reader :values
+
+        # new(100, 200), new([100, 200]), the wire value octets, this
+        # class's own hash, or another instance.
+        def initialize(*args)
+          @values = []
+          args = args[0] if args.size == 1 and args[0].is_a?(Array)
+          if args.size == 1 and args[0].is_a?(String) and args[0].is_packed?
+            parse(args[0])
+          elsif args.size == 1 and args[0].is_a?(self.class)
+            self.declared_len = args[0].declared_len
+            @values = args[0].values.dup
+          elsif args.size == 1 and args[0].is_a?(Hash)
+            from_hash(args[0])
+          elsif args.all? { |a| a.is_a?(Integer) }
+            # An empty list lands here, which is the zero-length value
+            # each section's own arithmetic produces for no elements.
+            @values = args
+          else
+            raise ArgumentError, "invalid argument: #{args.inspect}, " \
+                                 'expected integers, a list or a hash'
+          end
+          self
+        end
+
+        def parse(s)
+          @values = s.slice!(0, s.size).unpack(self.class::PACK)
+          self
+        end
+
+        def encode_value
+          @values.pack(self.class::PACK)
+        end
+
+        def value_hash
+          @values
+        end
+
+        def self.label
+          self::LABEL
+        end
+
+        def to_s
+          "#{self.class.label} " \
+            "#{@values.empty? ? 'none' : @values.join(',')}"
+        end
+
+        private
+
+        def from_hash(h)
+          read_declared_len(h)
+          h = self.class.unwrap(h)
+          @values = h.is_a?(Hash) ? [] : [*h].collect { |a| a.to_i }
+        end
+
+      end
+
       private
 
       # The one refusal this class makes, and it is the kind
