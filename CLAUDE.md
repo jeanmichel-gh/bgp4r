@@ -289,6 +289,17 @@ docs/                    protocol-testing.md: using bgp4r to test a router
                          constructor or chasing an object that does not come back.
                          Its load-bearing claims are asserted by
                          test/unit/building_objects_test.rb
+                         routescope-labs.md: how bgp4r becomes a node the
+                         routescope console can drive, and the eight labs
+                         worth building once it is. A **design**: nothing in
+                         its sections 6 to 9 exists yet, and every fact in
+                         it about routescope or ospfv2 is a read of another
+                         repository at a named commit, which this suite
+                         cannot assert. Its section 11 says which claims
+                         become assertable here and when. Read it before
+                         adding an executable, a state dump, a capture
+                         command or a lab topology, because each of those
+                         has a contract in it
 examples/                runnable scripts
 test/unit/               unit tests, mirroring bgp/
 test/functional/         tests that open real TCP sessions
@@ -5707,6 +5718,117 @@ Decisions taken before this starts, so they are not re-litigated:
   part of this and are not a prerequisite. They are single field losses
   in a convenience form for test code, each with a reason recorded, and
   clearing the list to empty it is not worth a phase.
+
+### routescope labs, a phase with no pull request yet
+
+**`docs/routescope-labs.md` is the design**, written on 2026-11-01
+against routescope `7eabde1` and ospfv2 `2dfc03a`, both read first hand.
+Read it before any of this work. The short version, so the direction is
+visible here:
+
+* **routescope already speaks BGP**, and that is the finding that
+  shapes the plan. Its FRR and BIRD drivers read sessions and the BGP
+  table, node health counts an established session, and the front end
+  has columns for both. So bgp4r is not filling a gap in its BGP
+  support, and parity with FRR is not the goal.
+* **bgp4r is two node kinds, not one.** `bgp4r`, a router whose Loc-RIB
+  and decision a console can read, and `bgp4r-sim`, an injector and
+  fault source driven by actions. The second is what no real router can
+  substitute for, and routescope's own `docs/protocols.md` names the
+  shape: "A BGP route injector would be one more."
+* **The largest item is that the lab speaker becomes a router.**
+  `lab/README.md` states the limit and `bgp/rib/` has the answer
+  finished, tested and unwired: the speaker predates it. That one piece
+  unblocks the best path, transit, route reflection, convergence and
+  forwarding labs at once.
+* **The highest-value item for a console is a JSON dump of the RIB**,
+  which is already a decision recorded in this file and never
+  implemented. The decision process already returns the winner, the
+  step that decided it and why each other route lost, so only the
+  serialisation is missing, and "why did this route win" is a question
+  no other implementation in a lab can answer about itself.
+* **Match ospfv2's capture contract rather than inventing one.**
+  routescope runs `IMAGE capture -i IFACE` with the subcommand and the
+  flag hard-coded and no filter passed, so a bgp4r image taking the
+  same argv and writing the same newline-delimited JSON costs one
+  environment variable instead of a change to shared code.
+* Eight labs, phased, with phase 0 costing nothing: an unknown `kind`
+  renders as `linux` in routescope, so a bgp4r container is useful
+  there before either repository changes.
+
+The document's section 11 says what it does not assert and when each
+claim becomes assertable, because every fact in it about those two
+repositories is a read at a commit and this suite cannot check one.
+
+### Vendor style `to_s`, a phase with no pull request yet
+
+Recorded on 2026-11-01 by the owner, who said it was the thing the
+original plan missed: the plan's emphasis was on `initialize` and
+`to_hash` and said nothing about `to_s`. The idea is that `to_s` should
+be able to offer **several representations of one object**, so an
+attribute, an NLRI or a whole UPDATE can print the way a Cisco router
+shows it or the way a Junos router does.
+
+**There is already a precedent and it is only half the job.**
+`bgp/rib/show.rb` does exactly this for the Loc-RIB: `rib.show`,
+`rib.show(:junos)` and `rib.show(:iosxr)`, three styles, with
+`STYLES = %i[ios junos iosxr]`. What it does not do is objects. A
+`Path_attribute`, an `Mp_reach`, an `Evpn` route type or an `Update`
+each have one `to_s` and it is bgp4r's own wording. So the work is
+taking show.rb's shape down a level, and the 185 `def to_s` in `bgp/`
+are the scale of it.
+
+**The design question to settle first, because it decides everything
+after it.** `to_s` takes no argument today and 185 classes define one,
+with tests asserting on many of them. Three shapes, and the choice is
+not obvious:
+* `to_s(style = nil)` on every class. Smallest to call, largest to
+  write, and it changes a method signature the whole library and its
+  tests already use.
+* A second method, `to_vendor_s(style)` or similar, leaving `to_s`
+  alone. Additive and safe, and it means two methods per class that
+  mostly agree.
+* A renderer object, `Show::Ios.new.render(obj)`, dispatching on class.
+  One place per style rather than one method per class, which is how
+  show.rb is already built, and it keeps vendor wording out of the
+  protocol classes entirely. This is the one that matches the existing
+  precedent, and it is the one to cost first.
+
+**Three constraints that are already settled and must not be
+reopened.**
+* `to_shex` stays the canonical form for tests, `to_hash` stays the
+  round trip, `to_s` stays the human form. A vendor style is a fourth
+  job and is additive to the third, never a replacement for either of
+  the first two. Nothing in a test should start asserting on vendor
+  text where it asserts on hex today.
+* show.rb's honesty rule carries down: these are **in the style of**
+  those commands and not copies. Only strings traceable to a sample in
+  a vendor's own documentation are quoted; everything invented prints
+  bgp4r's own symbol in snake_case, so an invention cannot be read as a
+  quote from a router. `:med` is deliberately not labelled "IGP
+  metric" for that reason, and the same discipline applies to every
+  field name a style would print.
+* Nothing anywhere is diffed against a real device, so **no test may
+  depend on this text byte for byte** beyond what a cited sample
+  supports. That is already written on show.rb and it is the thing a
+  reader of a new style will want to forget.
+
+**Where the samples come from is the real cost**, not the code. Part 4
+of RIB phase 4 records what that took for three styles of one command:
+the IOS and Junos layouts came from samples in the vendors' own
+documentation, the IOS-XR one waited a whole phase because the sample
+could not be found, and when it was found three details differed from
+IOS in ways only the sample could have told anyone. So this phase is
+paced by how many commands can be sourced, and a style with no sample
+behind it is not worth having: inventing a format while calling it
+IOS-XR is worse than not having it.
+
+**What it buys, so the phase has a measure.** A person reading a
+capture in bgp4r sees what a router operator would see, which makes a
+bgp4r session usable as a teaching and debugging tool rather than only
+as an encoder. And a lab or console that renders bgp4r's state beside a
+real router's output can put the two side by side, which is where this
+meets the routescope work: see `docs/routescope-labs.md`.
 
 ## Known issues to work on
 
