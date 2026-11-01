@@ -1603,10 +1603,63 @@ module ToHashCatalog
     BGP::Link_state::Tlv::Link_name.new(:link_name => 'to-core-1')
   end
 
+  # Table 10, section 5.3.3, part 5c.
+
+  # One named flag and a reserved bit set, so the recipe reaches the
+  # `:bits` entry a names-only hash would drop. Which is the
+  # exercise-every-field rule: the catalog allows one entry per class,
+  # so the one recipe has to reach the field, and the names-only path
+  # is left to the class's own test file.
+  ENTRIES['BGP::Link_state::Tlv::Igp_flags'] = entry(:ok, nil, nil) do
+    BGP::Link_state::Tlv::Igp_flags
+      .new(:igp_flags => [:down, { :bits => 0x8f }])
+  end
+
+  ENTRIES['BGP::Link_state::Tlv::Igp_route_tag'] = entry(:ok, nil, nil) do
+    BGP::Link_state::Tlv::Igp_route_tag.new(:igp_route_tag => [100, 200])
+  end
+
+  # A tag above 32 bits, which is the field that cannot survive the
+  # narrower element 1153 uses, so the recipe exercises the 64-bit pack
+  # code rather than a value both would carry.
+  ENTRIES['BGP::Link_state::Tlv::Igp_extended_route_tag'] =
+    entry(:ok, nil, nil) do
+      BGP::Link_state::Tlv::Igp_extended_route_tag
+        .new(:igp_extended_route_tag => [1, 2**63])
+    end
+
+  ENTRIES['BGP::Link_state::Tlv::Prefix_metric'] = entry(:ok, nil, nil) do
+    BGP::Link_state::Tlv::Prefix_metric.new(:prefix_metric => 42)
+  end
+
+  # The IPv6 width, which is the one Table 10's Length column does not
+  # admit: it says 4 where section 5.3.3.5 says 4 or 16. So the recipe
+  # is the width that only the section and the figure allow.
+  ENTRIES['BGP::Link_state::Tlv::Ospf_forwarding_address'] =
+    entry(:ok, nil, nil) do
+      BGP::Link_state::Tlv::Ospf_forwarding_address
+        .new(:ospf_forwarding_address => '2001:db8::1')
+    end
+
+  ENTRIES['BGP::Link_state::Tlv::Opaque_prefix_attribute'] =
+    entry(:ok, nil, nil) do
+      BGP::Link_state::Tlv::Opaque_prefix_attribute
+        .new(:opaque_prefix_attribute => 'deadbeef')
+    end
+
   # Classes with no entry, each with the reason. An abstract base with no
   # sensible instance belongs here; a class merely awkward to build does
   # not.
   NO_RECIPE = {
+    'BGP::Link_state::Tlv::Int_list_tlv' =>
+      'an abstract base, as Opaque32 is: it holds the list of ' \
+      'fixed-width unsigned integers that Table 8 row 1096 and Table ' \
+      '10 rows 1153 and 1154 share, and defines neither TYPE nor ' \
+      'HASH_KEY nor LABEL nor PACK, so every encode raises NameError. ' \
+      'Srlg, Igp_route_tag and Igp_extended_route_tag are measured ' \
+      'instead, and PACK is where each states its element width. It ' \
+      'lives with the framing rather than with either table, since ' \
+      'two of the RFC\'s tables use it.',
     'BGP::Link_state::Tlv::Float32_tlv' =>
       'an abstract base, as Opaque32 is: it holds the one 32-bit IEEE ' \
       'float that Table 8 rows 1089 and 1090 share and defines neither ' \

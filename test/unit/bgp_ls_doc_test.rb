@@ -858,14 +858,16 @@ class BgpLsDocTest < Test::Unit::TestCase
 
   # --- section 2's shared bases, part 5b-i -----------------------------
 
-  # The table in section 2 names four bases and where each was first
-  # used. Read out of the document and held against the library, both
-  # ways, so a fifth base or a renamed one fails here.
+  # The table in section 2 names the shared bases and where each was
+  # first used. Read out of the document and held against the library,
+  # both ways, so a new base or a renamed one fails here. **It has fired
+  # once already**, when part 5c lifted `Int_list_tlv` out of `Srlg`.
   def test_the_shared_bases_table_matches_the_library
     said = []
     section('2. The TLV').scan(/^\| `(\w+)` \| /) { said << $1 }
-    assert_equal(%w[Addr_tlv Opaque32 Opaque_tlv Text_tlv], said.sort,
-                 "#{DOC} section 2 must name the four shared bases")
+    assert_equal(%w[Addr_tlv Int_list_tlv Opaque32 Opaque_tlv Text_tlv],
+                 said.sort,
+                 "#{DOC} section 2 must name the five shared bases")
     # **Two things this guard cannot do, each found by trying.**
     # Inheriting `Tlv` directly is not what makes a class a base: six
     # concrete classes do too, among them `Node_flag_bits` and
@@ -882,11 +884,11 @@ class BgpLsDocTest < Test::Unit::TestCase
       next false if k == BGP::Link_state::Tlv::Unknown
       !k.const_defined?(:TYPE)
     end.collect(&:to_s).sort
-    assert_equal(%w[Addr_tlv Float32_tlv Node_descriptors Opaque32
-                    Opaque_tlv Text_tlv],
+    assert_equal(%w[Addr_tlv Float32_tlv Int_list_tlv Node_descriptors
+                    Opaque32 Opaque_tlv Text_tlv],
                  bases,
                  'the abstract TLV bases in the library')
-    # **Two of the six are not shared, and that is the line part 5b-i
+    # **Two of the seven are not shared, and that is the line part 5b-i
     # drew**: shared means more than one of the RFC's tables, not merely
     # abstract. `Node_descriptors` serves Table 3's 256 and 257 and
     # `Float32_tlv` serves Table 8's 1089 and 1090, so each stays with
@@ -904,28 +906,49 @@ class BgpLsDocTest < Test::Unit::TestCase
                  BGP::Link_state::Tlv::REGISTRY.select { |_, k|
                    k < BGP::Link_state::Tlv::Float32_tlv }.keys.sort,
                  'Float32_tlv serves Table 8 and nothing else')
+    # And the one that earned its place in section 2 by being used from
+    # two tables: 1096 is Table 8's and 1153 and 1154 are Table 10's. A
+    # base reaching only one table belongs with that table, so this is
+    # the assertion that would send it back.
+    serves = BGP::Link_state::Tlv::REGISTRY.select { |_, k|
+      k < BGP::Link_state::Tlv::Int_list_tlv }.keys.sort
+    assert_equal([1096, 1153, 1154], serves)
+    assert(serves.any? { |t| t < 1152 } && serves.any? { |t| t >= 1152 },
+           'Int_list_tlv is shared only while two tables use it')
+    # **`PACK` and no `WIDTH`**, which is where each subclass states its
+    # element width, once. Part 5b-ii found a `WIDTH` beside it saying
+    # the same thing and nothing reading it.
+    serves.each do |t|
+      k = BGP::Link_state::Tlv::REGISTRY[t]
+      assert(k.const_defined?(:PACK, false), "#{k} must state its PACK")
+      assert(!k.const_defined?(:WIDTH, false),
+             "#{k} states its element width twice")
+    end
   end
 
   # **And each really is in `link_state_tlv.rb` and not in one of the
   # table files**, which reading the document cannot say. Part 5b-i
-  # moved all four there; the point of the move is that requiring the
-  # framing file alone is enough for any of them.
+  # moved four there and part 5c a fifth; the point is that requiring
+  # the framing file alone is enough for any of them.
   def test_each_shared_base_is_defined_with_the_framing
+    shared = %w[Opaque32 Addr_tlv Opaque_tlv Text_tlv Int_list_tlv]
     body = source('bgp/nlris/link_state_tlv.rb')
-    %w[Opaque32 Addr_tlv Opaque_tlv Text_tlv].each do |name|
+    shared.each do |name|
       assert_not_equal(nil, body[/^\s+class #{name} < Tlv$/],
                        "link_state_tlv.rb must define #{name}")
     end
     ['bgp/nlris/link_state_descriptor.rb',
      'bgp/nlris/link_state_link_descriptor.rb',
      'bgp/nlris/link_state_node_attribute.rb',
-     'bgp/nlris/link_state_link_attribute.rb'].each do |path|
-      %w[Opaque32 Addr_tlv Opaque_tlv Text_tlv].each do |name|
+     'bgp/nlris/link_state_link_attribute.rb',
+     'bgp/nlris/link_state_prefix_attribute.rb'].each do |path|
+      shared.each do |name|
         assert_equal(nil, source(path)[/^\s+class #{name} < Tlv$/],
                      "#{path} must not define #{name} any more")
       end
     end
-    assert_match(/all four moved here in\s+part 5b-i/, doc)
+    assert_match(/the first four moved\s+here in part 5b-i/, doc)
+    assert_match(/`Int_list_tlv` came out of `Srlg` in part 5c/, doc)
   end
 
   # --- section 5.3, what part 5 claims ---------------------------------
@@ -1021,32 +1044,61 @@ class BgpLsDocTest < Test::Unit::TestCase
 
   # The third self contradiction in RFC 9552, recorded with the erratum
   # check that rules out an erratum covering it.
+  #
+  # **This asserted only the document's prose until part 5c, which is
+  # weaker than it looks**: the phrase was one this guide's own author
+  # controls, so rewording the section failed the guard without anything
+  # about the claim changing, which is what happened. Now the class
+  # exists, so the substance is held against the **library** as well,
+  # which is the half a reader cares about: bgp4r follows the section
+  # and the figure rather than the table.
   def test_the_1156_disagreement_is_recorded
-    assert_match(/Table 10 disagrees with its own section about 1156/, doc)
+    assert_match(/1156 is 4; section 5\.3\.3\.5 says/, doc)
     # `\s+` and not a literal space: the phrase wraps in the document
     # and a literal space misses it, which #218 recorded and #219 met
     # again one pull request later.
-    assert_match(/the two verified ones\s+are 7789 and 8766/, doc)
+    assert_match(/the\s+two verified ones\s+are 7789 and 8766/, doc)
+    # The table's own row says both widths rather than the 4 the RFC's
+    # table gives, so a reader of the guide is not sent to the wrong one.
+    assert_match(/^\| 1156 \|[^|]*\| 4 or 16, see below \|/,
+                 section('10. The attribute'))
+    # And the library takes both, which is the reading the section and
+    # Figure 29 give. A class following Table 10 would refuse the second.
+    { '10.0.0.1' => 4, '2001:db8::1' => 16 }.each do |addr, width|
+      t = BGP::Link_state::Tlv::Ospf_forwarding_address.new(addr)
+      assert_equal(width, t.encode_value.size,
+                   "1156 must carry #{addr}, which section 5.3.3.5 allows")
+    end
   end
 
-  # **This guard has fired once and is re-pointed rather than
-  # weakened.** Until part 5b-ii it said Table 6 was in and Tables 8 and
-  # 10 were not. Table 8 is in now, so it asserts the new split: Table 6
-  # and Table 8 complete, Table 10 outstanding. It holds the count, so
-  # part 5c landing one class quietly is not possible either, and the
-  # document's own "no" rows in section 10c are what the table guard
-  # above checks against.
-  def test_tables_6_and_8_are_in_and_table_10_is_not
+  # **This guard has fired twice and been re-pointed both times rather
+  # than weakened.** It said Table 6 was in and Tables 8 and 10 were
+  # not; part 5b-ii made that the Table 8 half, and part 5c the rest. So
+  # it asserts the finished state: **all 25 of RFC 9552's own attribute
+  # TLV code points**, across all three tables of section 5.3, with
+  # nothing forward-looking left in it.
+  #
+  # It is the count that makes it worth keeping now that nothing is
+  # outstanding: a class deleted or a type number changed fails it and
+  # names which table and part to look at.
+  def test_all_three_attribute_tlv_tables_are_in
     built = BGP::Link_state::Tlv::REGISTRY.keys
-    ((1024..1031).to_a + (1088..1098).to_a).each do |t|
-      assert(built.include?(t),
-             "TLV #{t} is Table 6's or Table 8's, so part 5a or 5b-ii")
+    { '6 (part 5a)'    => (1024..1029).to_a,
+      '8 (part 5b-ii)' => (1030..1031).to_a + (1088..1098).to_a,
+      '10 (part 5c)'   => (1152..1157).to_a }.each do |table, types|
+      types.each do |t|
+        assert(built.include?(t),
+               "TLV #{t} is Table #{table} and is not registered")
+      end
     end
-    (1152..1157).each do |t|
-      assert(!built.include?(t),
-             "TLV #{t} is registered: that is part 5c, so rewrite " \
-             "#{DOC} section 10c and move part 5 on in section 7")
-    end
+    # 263 is Table 4's and Table 6's both, registered once in part 3,
+    # and 1028 and 1029 are Table 6's and Table 8's both, so the 28
+    # rows of the three tables are 25 distinct code points of their own
+    # plus that one. Counted from the document rather than added up.
+    own = ((1024..1031).to_a + (1088..1098).to_a + (1152..1157).to_a)
+    assert_equal(25, own.size)
+    assert_equal([], own - built)
+    assert(built.include?(263), 'TLV 263 is in Table 6 as well as Table 4')
   end
 
   # **Forward-looking.** Part 6 puts the first check in validation.rb,
@@ -1265,13 +1317,19 @@ class BgpLsDocTest < Test::Unit::TestCase
       ['0001000902000000000000000000'].pack('H*')))
     assert_equal('done', status[4],
                  'the dispatch gates are wired, so part 4 is done')
-    # Part 5: tied to Table 6 being registered and Tables 8 and 10 not,
-    # which `test_table_6_is_in_and_tables_8_and_10_are_not` holds. The
-    # status is a phrase and not a word, so this matches rather than
-    # compares.
-    assert_match(/5a and 5b done.*5c to do/, status[5],
-                 'Tables 6 and 8 are registered and Table 10 is not, so ' \
-                 'part 5 is 5a and 5b done')
+    # Part 5: tied to all three of section 5.3's tables being
+    # registered, which `test_all_three_attribute_tlv_tables_are_in`
+    # holds against the library. **This has been re-pointed twice**,
+    # once per sub-part that landed, and each time the observation moved
+    # with it rather than the phrase being edited to match: that is what
+    # the paragraph above this method asks for.
+    assert_equal([], ((1024..1031).to_a + (1088..1098).to_a +
+                      (1152..1157).to_a) -
+                     BGP::Link_state::Tlv::REGISTRY.keys,
+                 'every attribute TLV of section 5.3 is registered')
+    assert_match(/\Adone\b/, status[5],
+                 'all three tables of section 5.3 are registered, so ' \
+                 'part 5 is done')
     # Part 6 is what the forward-looking validation guard still watches,
     # so its status here must agree with that one still passing.
     assert_equal('to do', status[6])

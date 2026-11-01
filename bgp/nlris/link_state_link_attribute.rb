@@ -829,70 +829,18 @@ module BGP
       # and the IPv6 SRLG TLV (Type 139) defined in [RFC6119]. Both IPv4
       # and IPv6 SRLG information is carried in a single TLV." So
       # nothing here is per family and there is no second class.
-      class Srlg < Tlv
-
+      #
+      # Its own body was lifted into `Int_list_tlv` when Table 10's two
+      # route tags wanted the same shape, which is part 5b-i's line
+      # applied a second time: shared means more than one of the RFC's
+      # tables. `PACK` is the whole of what is left besides identity,
+      # and it is where "each element in the list has 4 octets" is
+      # stated.
+      class Srlg < Int_list_tlv
         TYPE = 1096
         HASH_KEY = :srlg
         LABEL = 'SRLG'
-
-        # **No WIDTH constant**, for the reason `Unreserved_bandwidth`
-        # records: section 5.3.2.5's "each element in the list has 4
-        # octets" is what `pack('N*')` is, and a constant beside it is
-        # a second statement of one fact that a sabotage proved nothing
-        # read.
-        attr_reader :values
-
-        # new(100, 200) or new([100, 200]), the wire value octets, this
-        # class's own hash, or another instance.
-        def initialize(*args)
-          @values = []
-          args = args[0] if args.size == 1 and args[0].is_a?(Array)
-          if args.size == 1 and args[0].is_a?(String) and args[0].is_packed?
-            parse(args[0])
-          elsif args.size == 1 and args[0].is_a?(self.class)
-            self.declared_len = args[0].declared_len
-            @values = args[0].values.dup
-          elsif args.size == 1 and args[0].is_a?(Hash)
-            from_hash(args[0])
-          elsif args.all? { |a| a.is_a?(Integer) }
-            # An empty list lands here, which is the zero-length value
-            # the section's own arithmetic produces for no SRLGs.
-            @values = args
-          else
-            raise ArgumentError, "invalid argument: #{args.inspect}, " \
-                                 'expected SRLG values, a list or a hash'
-          end
-          self
-        end
-
-        # `unpack('N*')` takes each whole 4-octet group and leaves a
-        # trailing partial one, so a value that is not a multiple of 4
-        # cannot reproduce itself and is kept as a `Tlv::Unknown`.
-        def parse(s)
-          @values = s.slice!(0, s.size).unpack('N*')
-          self
-        end
-
-        def encode_value
-          @values.pack('N*')
-        end
-
-        def value_hash
-          @values
-        end
-
-        def to_s
-          "#{LABEL} #{@values.empty? ? 'none' : @values.join(',')}"
-        end
-
-        private
-
-        def from_hash(h)
-          read_declared_len(h)
-          h = self.class.unwrap(h)
-          @values = h.is_a?(Hash) ? [] : [*h].collect { |a| a.to_i }
-        end
-
+        PACK = 'N*'
       end
       register Srlg
 

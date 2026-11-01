@@ -663,6 +663,63 @@ class LinkStateSessionTest < Test::Unit::TestCase
     assert_equal('to-core-1', a.tlv(1098).name)
   end
 
+  # **Table 10's six beside a Prefix NLRI**, which is the pairing section
+  # 5.3.3 names: these attributes go with "Prefix NLRI types 3 and 4".
+  # So this is the third attribute case here and the only one whose NLRI
+  # is a prefix, which matters because the IP Reachability TLV inside it
+  # holds no family and the NLRI type is what says which one it is.
+  #
+  # Every shape in the table is here: the flags octet, both widths of
+  # integer list, the 32-bit metric, the two-width address and the
+  # opaque envelope.
+  def test_the_prefix_attribute_tlvs_cross_a_session
+    session
+    attr29 = BGP::Link_state_attribute.new(
+      BGP::Link_state::Tlv::Igp_flags.new(:down, :propagate_nssa),
+      BGP::Link_state::Tlv::Igp_route_tag.new(100, 200),
+      BGP::Link_state::Tlv::Igp_extended_route_tag.new(1, 2**63),
+      BGP::Link_state::Tlv::Prefix_metric.new(4242),
+      BGP::Link_state::Tlv::Ospf_forwarding_address.new('2001:db8::1'),
+      BGP::Link_state::Tlv::Opaque_prefix_attribute
+        .new(['deadbeef'].pack('H*')))
+    sent = BGP::Update.new(
+      BGP::Path_attribute.new(
+        BGP::Origin.new(0),
+        BGP::As_path.new(CLIENT_AS),
+        BGP::Mp_reach.new(:safi => SAFI,
+                          :nexthop => ['10.0.0.1'],
+                          :nlris => [{ :ipv4_prefix =>
+                                       { :protocol_id => 2, :identifier => 7,
+                                         :tlvs => [local] } }]),
+        attr29))
+    got = crosses(sent)
+    a = got.path_attribute.find(BGP::Link_state_attribute)
+    assert_not_nil(a, 'a Link_state_attribute, not an Attr::Unknown')
+    assert_equal([1152, 1153, 1154, 1155, 1156, 1157],
+                 a.tlvs.collect { |t| t.type })
+    assert(a.ordered?, 'section 5.1 asks a sender for ascending type order')
+    assert_equal([:down, :propagate_nssa], a.tlv(1152).names)
+    assert_equal([100, 200], a.tlv(1153).values)
+    # **The assertion that says 1154's element is 8 octets and not 4**,
+    # which is the one thing a reader carrying 1153's shape across gets
+    # wrong, and the only place it is checked over a socket.
+    assert_equal([1, 2**63], a.tlv(1154).values)
+    assert_equal(4242, a.tlv(1155).value)
+    # The IPv6 width, which Table 10's Length column does not admit and
+    # section 5.3.3.5 does.
+    assert_equal('2001:db8::1', a.tlv(1156).address.to_s)
+    assert_equal(:ipv6, a.tlv(1156).family)
+    assert_equal('deadbeef', a.tlv(1157).value.unpack1('H*'))
+    # The NLRI it describes crossed with it, which is the whole reason
+    # this case is here rather than in the unit file. `Link_state` is
+    # the NLRI and `#nlri` is the typed layout inside it, so the type
+    # assertion goes one level down.
+    nlri = got.path_attribute.find(BGP::Mp_reach).nlris.first
+    assert_instance_of(BGP::Link_state, nlri)
+    assert_equal(3, nlri.type)
+    assert_instance_of(BGP::Link_state::Ipv4_prefix, nlri.nlri)
+  end
+
   # Not a test method: a helper, kept below every test and with no
   # `private` above it, because a test method after `private` never runs
   # and nothing says so.
