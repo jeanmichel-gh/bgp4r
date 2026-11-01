@@ -32,6 +32,20 @@ class TestLinkState < Test::Unit::TestCase
 
   include BGP
 
+  # **The NLRI type this file uses cannot expire, and part 1's choice
+  # did.** Table 12 of section 7.1.1 reserves NLRI type 0, so no
+  # document will ever define it and no part of this plan can register
+  # a class for it. Part 1 used types 1, 2 and 5 for its framing cases;
+  # part 2 registered type 1 and part 3 will take 2, 3 and 4, so one of
+  # its cases broke and several others began building a `Node` where
+  # they meant "a type with no class".
+  #
+  # Type 0 rather than the 65000 to 65535 Private Use range, which is
+  # equally permanent: section 5.4 puts a 4-octet Enterprise Code at
+  # the front of a private-use NLRI type, so using one as the generic
+  # example would imply a structure the body here does not have.
+  NO_CLASS = 0
+
   # A registered NLRI type, for the parts of this file that are about
   # the registry. Nested in the test class so it is invisible to
   # `BGP.constants`, which the to_hash catalog and the doc test walk.
@@ -69,9 +83,9 @@ class TestLinkState < Test::Unit::TestCase
   # NLRI Type 1 (0x0001), Total NLRI Length 5 (0x0005), five octets of
   # body.
   def test_the_framing_is_two_octets_two_octets_and_the_body
-    hex = '0001' + '0005' + '0102030405'
+    hex = '0000' + '0005' + '0102030405'
     n = BGP::Link_state.new_ntop([hex].pack('H*'))
-    assert_equal(1, n.type)
+    assert_equal(0, n.type)
     assert_equal(5, n.length)
     assert_equal(hex, n.to_shex)
     assert_equal(9, n.size)
@@ -82,7 +96,7 @@ class TestLinkState < Test::Unit::TestCase
   # Type field or itself."
   def test_the_length_counts_neither_the_type_nor_itself
     n = BGP::Link_state.new(BGP::Link_state::Unknown.new(
-      1, ['0102030405'].pack('H*')))
+      0, ['0102030405'].pack('H*')))
     assert_equal(5, n.length)
     assert_equal(5, n.encode[2, 2].unpack1('n'))
     assert_equal(9, n.encode.size)
@@ -93,7 +107,7 @@ class TestLinkState < Test::Unit::TestCase
   # RD and not 5, which is the single detail most likely to be got
   # wrong here.
   def test_the_length_counts_the_route_distinguisher_too
-    hex = '0001' + '000d' + '00000064000000c8' + '0102030405'
+    hex = '0000' + '000d' + '00000064000000c8' + '0102030405'
     n = BGP::Link_state.new_ntop([hex].pack('H*'), IANA::SAFI::BGP_LS_VPN)
     assert(n.vpn?)
     assert_equal(13, n.length)
@@ -107,8 +121,8 @@ class TestLinkState < Test::Unit::TestCase
   # NLRI Length covers the RD, so one arithmetic frames both SAFIs and
   # a VPN NLRI is simply eight octets longer.
   def test_nlri_size_frames_both_safis_with_no_safi_of_its_own
-    plain = ['0001' + '0005' + '0102030405'].pack('H*')
-    vpn   = ['0001' + '000d' + '00000064000000c8' + '0102030405'].pack('H*')
+    plain = ['0000' + '0005' + '0102030405'].pack('H*')
+    vpn   = ['0000' + '000d' + '00000064000000c8' + '0102030405'].pack('H*')
     assert_equal(9, BGP::Link_state.nlri_size(plain))
     assert_equal(plain.size, BGP::Link_state.nlri_size(plain))
     assert_equal(17, BGP::Link_state.nlri_size(vpn))
@@ -116,7 +130,7 @@ class TestLinkState < Test::Unit::TestCase
   end
 
   def test_nlri_size_counts_the_four_framing_octets
-    assert_equal(4, BGP::Link_state.nlri_size(['00010000'].pack('H*')))
+    assert_equal(4, BGP::Link_state.nlri_size(['00000000'].pack('H*')))
   end
 
   def test_nlri_size_answers_nil_for_octets_too_short_to_frame
@@ -135,7 +149,7 @@ class TestLinkState < Test::Unit::TestCase
   # see. So the same octets read as SAFI 71 put the RD inside the body,
   # and both readings replay byte for byte.
   def test_the_same_octets_read_two_ways_by_safi
-    hex = '0001' + '000d' + '00000064000000c8' + '0102030405'
+    hex = '0000' + '000d' + '00000064000000c8' + '0102030405'
     plain = BGP::Link_state.new_ntop([hex].pack('H*'))
     vpn = BGP::Link_state.new_ntop([hex].pack('H*'), IANA::SAFI::BGP_LS_VPN)
     assert_equal(false, plain.vpn?)
@@ -149,7 +163,7 @@ class TestLinkState < Test::Unit::TestCase
   end
 
   def test_safi_71_is_the_default
-    n = BGP::Link_state.new_ntop(['00010000'].pack('H*'))
+    n = BGP::Link_state.new_ntop(['00000000'].pack('H*'))
     assert_equal(IANA::SAFI::BGP_LS, n.safi)
     assert_equal(false, n.vpn?)
   end
@@ -158,7 +172,7 @@ class TestLinkState < Test::Unit::TestCase
   # gets no RD at all, so it still replays. Ordinary negative testing
   # rather than a malformed capture.
   def test_a_vpn_body_too_short_for_an_rd_keeps_its_octets
-    hex = '0001' + '0006' + '010203040506'
+    hex = '0000' + '0006' + '010203040506'
     n = BGP::Link_state.new_ntop([hex].pack('H*'), IANA::SAFI::BGP_LS_VPN)
     assert_nil(n.rd)
     assert_equal('010203040506', n.nlri.value.unpack1('H*'))
@@ -167,7 +181,7 @@ class TestLinkState < Test::Unit::TestCase
 
   # Eight octets exactly is a whole RD and an empty body.
   def test_a_vpn_body_of_exactly_an_rd_has_an_empty_type_specific_part
-    hex = '0001' + '0008' + '00000064000000c8'
+    hex = '0000' + '0008' + '00000064000000c8'
     n = BGP::Link_state.new_ntop([hex].pack('H*'), IANA::SAFI::BGP_LS_VPN)
     assert_equal('RD=100:200', n.rd.to_s(false))
     assert_equal('', n.nlri.value)
@@ -177,7 +191,7 @@ class TestLinkState < Test::Unit::TestCase
   # --- a Length that lies ----------------------------------------------
 
   def test_a_length_that_overruns_is_clamped_and_kept
-    hex = '0001' + 'ffff' + '0102'
+    hex = '0000' + 'ffff' + '0102'
     n = BGP::Link_state.new_ntop([hex].pack('H*'))
     assert_equal(65535, n.declared_len)
     assert_equal(65535, n.length)
@@ -186,7 +200,7 @@ class TestLinkState < Test::Unit::TestCase
   end
 
   def test_a_length_that_agrees_records_no_declared_length
-    n = BGP::Link_state.new_ntop(['000100020102'].pack('H*'))
+    n = BGP::Link_state.new_ntop(['000000020102'].pack('H*'))
     assert_nil(n.declared_len)
   end
 
@@ -194,9 +208,9 @@ class TestLinkState < Test::Unit::TestCase
   # leaves the rest, so a second NLRI behind it is read by the caller
   # rather than swallowed here.
   def test_a_length_shorter_than_the_octets_leaves_the_rest
-    s = ['000100020102' + '000200020304'].pack('H*').is_packed
+    s = ['000000020102' + '000200020304'].pack('H*').is_packed
     a = BGP::Link_state.new(s)
-    assert_equal('000100020102', a.to_shex)
+    assert_equal('000000020102', a.to_shex)
     assert_equal('000200020304', s.unpack1('H*'))
   end
 
@@ -205,7 +219,7 @@ class TestLinkState < Test::Unit::TestCase
   # RFC 7911 section 3 prepends four octets to the NLRI, which is a
   # property of the session and not of this family.
   def test_a_path_identifier_rides_in_front
-    hex = '0001' + '0002' + '0102'
+    hex = '0000' + '0002' + '0102'
     n = BGP::Link_state.new_ntop([hex].pack('H*'), IANA::SAFI::BGP_LS, 7)
     assert(n.extended?)
     assert_equal('00000007' + hex, n.to_shex)
@@ -214,7 +228,7 @@ class TestLinkState < Test::Unit::TestCase
 
   def test_no_path_identifier_is_the_default
     assert_equal(false, BGP::Link_state.new_ntop(
-      ['00010000'].pack('H*')).extended?)
+      ['00000000'].pack('H*')).extended?)
   end
 
   # --- the registry ----------------------------------------------------
@@ -222,13 +236,23 @@ class TestLinkState < Test::Unit::TestCase
   # Part 1 implements no NLRI type, so every type reads back as
   # Unknown. `bgp_ls_doc_test.rb` is what fails when that stops being
   # true, so this case is about the parse answer and not about a count.
-  def test_no_nlri_type_is_implemented_yet
-    (1..4).each do |t|
-      hex = format('%04x0002abcd', t)
-      n = BGP::Link_state.new_ntop([hex].pack('H*'))
-      assert_equal(BGP::Link_state::Unknown, n.nlri.class,
-                   "type #{t} should still read back as Unknown")
-      assert_equal(hex, n.to_shex)
+  # **A type with no class reads back as Unknown, and the type this
+  # file uses for that cannot acquire one.** Discovered from
+  # `Link_state::TYPES` rather than listed, so it says the same thing
+  # whatever parts 2 and 3 have registered.
+  def test_a_type_with_no_class_reads_back_as_unknown
+    hex = format('%04x0002abcd', NO_CLASS)
+    n = BGP::Link_state.new_ntop([hex].pack('H*'))
+    assert_equal(BGP::Link_state::Unknown, n.nlri.class)
+    assert_equal(hex, n.to_shex)
+    assert_nil(BGP::Link_state::TYPES[NO_CLASS],
+               'the example type must have no registered class')
+    assert_equal([], BGP::Link_state::TYPES.keys - (1..4).to_a,
+                 'Table 1 defines NLRI types 1 to 4, so anything else in ' \
+                 'TYPES has no row in docs/bgp-ls.md to put it in')
+    BGP::Link_state::TYPES.each do |t, k|
+      assert_operator(k, :<, BGP::Link_state::Type,
+                      "type #{t} must be registered as a Link_state::Type")
     end
   end
 
@@ -281,18 +305,18 @@ class TestLinkState < Test::Unit::TestCase
 
   def test_builds_from_an_nlri_type_instance
     n = BGP::Link_state.new(BGP::Link_state::Unknown.new(
-      5, ['abcd'].pack('H*')))
-    assert_equal('00050002abcd', n.to_shex)
+      0, ['abcd'].pack('H*')))
+    assert_equal('00000002abcd', n.to_shex)
   end
 
   def test_builds_from_a_hash
-    n = BGP::Link_state.new(:unknown => { :type => 5, :value => 'abcd' })
-    assert_equal('00050002abcd', n.to_shex)
+    n = BGP::Link_state.new(:unknown => { :type => 0, :value => 'abcd' })
+    assert_equal('00000002abcd', n.to_shex)
   end
 
   def test_builds_from_wire_bytes
-    assert_equal('00050002abcd',
-                 BGP::Link_state.new_ntop(['00050002abcd'].pack('H*')).to_shex)
+    assert_equal('00000002abcd',
+                 BGP::Link_state.new_ntop(['00000002abcd'].pack('H*')).to_shex)
   end
 
   # **The copy carries the Path Identifier, which is the one part of
@@ -303,7 +327,7 @@ class TestLinkState < Test::Unit::TestCase
   # `Rt_constrain` all answer garbage for that today.
   def test_builds_from_another_link_state
     a = BGP::Link_state.new_ntop(
-      ['0001000d00000064000000c80102030405'].pack('H*'),
+      ['0000000d00000064000000c80102030405'].pack('H*'),
       IANA::SAFI::BGP_LS_VPN, 9)
     b = BGP::Link_state.new(a)
     assert_equal(a.to_shex, b.to_shex)
@@ -313,7 +337,7 @@ class TestLinkState < Test::Unit::TestCase
   end
 
   def test_builds_from_another_link_state_with_no_path_identifier
-    a = BGP::Link_state.new_ntop(['00010002abcd'].pack('H*'))
+    a = BGP::Link_state.new_ntop(['00000002abcd'].pack('H*'))
     b = BGP::Link_state.new(a)
     assert_equal(a.to_shex, b.to_shex)
     assert_equal(false, b.extended?)
@@ -338,9 +362,9 @@ class TestLinkState < Test::Unit::TestCase
   # The type-specific part answers its own hex, which is the Type base's
   # `to_shex` and is what a reader printing one field of an NLRI gets.
   def test_the_nlri_type_answers_its_own_hex
-    n = BGP::Link_state.new_ntop(['00050002abcd'].pack('H*'))
+    n = BGP::Link_state.new_ntop(['00000002abcd'].pack('H*'))
     assert_equal('abcd', n.nlri.to_shex)
-    assert_equal('00050002abcd', n.to_shex)
+    assert_equal('00000002abcd', n.to_shex)
   end
 
   # One `Unknown` per level, which is the family of classes Conventions
@@ -358,8 +382,8 @@ class TestLinkState < Test::Unit::TestCase
   end
 
   def test_two_nlris_with_the_same_octets_are_equal
-    a = BGP::Link_state.new_ntop(['00050002abcd'].pack('H*'))
-    b = BGP::Link_state.new_ntop(['00050002abcd'].pack('H*'))
+    a = BGP::Link_state.new_ntop(['00000002abcd'].pack('H*'))
+    b = BGP::Link_state.new_ntop(['00000002abcd'].pack('H*'))
     c = BGP::Link_state.new_ntop(['00050002abce'].pack('H*'))
     assert_equal(a, b)
     assert_not_equal(a, c)
@@ -396,9 +420,9 @@ class TestLinkState < Test::Unit::TestCase
   # An `Rd` instance in the hash is taken as it is, where an Array is
   # splatted. Both are shapes a test writes.
   def test_an_rd_instance_in_the_hash_is_taken_as_it_is
-    n = BGP::Link_state.new(:unknown => { :type => 1, :value => 'abcd' },
+    n = BGP::Link_state.new(:unknown => { :type => 0, :value => 'abcd' },
                             :rd => BGP::Rd.new(100, 200))
-    assert_equal('0001000a00000064000000c8abcd', n.to_shex)
+    assert_equal('0000000a00000064000000c8abcd', n.to_shex)
   end
 
   # --- to_hash ---------------------------------------------------------
@@ -408,10 +432,10 @@ class TestLinkState < Test::Unit::TestCase
   # the class carries are exercised, since an assertion that misses one
   # passes for the wrong reason.
   def test_rebuilds_from_its_own_hash_with_every_field_set
-    hex = '0002' + 'ffff' + '00000064000000c8' + '0102030405'
+    hex = '0000' + 'ffff' + '00000064000000c8' + '0102030405'
     n = BGP::Link_state.new_ntop([hex].pack('H*'),
                                  IANA::SAFI::BGP_LS_VPN, 11)
-    assert_equal({ :unknown => { :type => 2, :value => '0102030405' },
+    assert_equal({ :unknown => { :type => 0, :value => '0102030405' },
                    :rd => [100, 200],
                    :length => 65535,
                    :path_id => 11 }, n.to_hash)
@@ -422,19 +446,19 @@ class TestLinkState < Test::Unit::TestCase
   # hash has nowhere else to put the SAFI. `Flow_spec` answers the same
   # question the same way for SAFI 134.
   def test_an_rd_in_the_hash_makes_it_a_vpn_nlri
-    n = BGP::Link_state.new(:unknown => { :type => 1, :value => 'abcd' },
+    n = BGP::Link_state.new(:unknown => { :type => 0, :value => 'abcd' },
                             :rd => [100, 200])
     assert(n.vpn?)
     assert_equal(IANA::SAFI::BGP_LS_VPN, n.safi)
-    assert_equal('0001000a00000064000000c8abcd', n.to_shex)
+    assert_equal('0000000a00000064000000c8abcd', n.to_shex)
   end
 
   # No RD, no declared length and no path id, so an ordinary NLRI
   # hashes as the one key it has always been. Same rule as `:tail` and
   # `:bits` elsewhere in the library.
   def test_an_ordinary_hash_carries_one_key
-    n = BGP::Link_state.new_ntop(['00010002abcd'].pack('H*'))
-    assert_equal({ :unknown => { :type => 1, :value => 'abcd' } },
+    n = BGP::Link_state.new_ntop(['00000002abcd'].pack('H*'))
+    assert_equal({ :unknown => { :type => 0, :value => 'abcd' } },
                  n.to_hash)
   end
 
@@ -477,21 +501,21 @@ class TestLinkState < Test::Unit::TestCase
   end
 
   def test_to_s_says_which_kind_of_unknown_it_is
-    plain = BGP::Link_state.new_ntop(['00050002abcd'].pack('H*'))
-    assert_match(/Unknown NLRI type 5, 2 octets/, plain.to_s)
+    plain = BGP::Link_state.new_ntop(['00000002abcd'].pack('H*'))
+    assert_match(/Unknown NLRI type 0, 2 octets/, plain.to_s)
     priv = BGP::Link_state.new_ntop(['fde80002abcd'].pack('H*'))
     assert_match(/Private use NLRI type 65000/, priv.to_s)
     vpn = BGP::Link_state.new_ntop(
-      ['0001000800000064000000c8'].pack('H*'), IANA::SAFI::BGP_LS_VPN)
+      ['0000000800000064000000c8'].pack('H*'), IANA::SAFI::BGP_LS_VPN)
     assert_match(/^RD=100:200 /, vpn.to_s)
     assert_match(/^\[9\] /, BGP::Link_state.new_ntop(
-      ['00050002abcd'].pack('H*'), IANA::SAFI::BGP_LS, 9).to_s)
+      ['00000002abcd'].pack('H*'), IANA::SAFI::BGP_LS, 9).to_s)
   end
 
   # --- the one refusal, and nothing else -------------------------------
 
   def test_a_length_the_field_cannot_hold_is_refused
-    n = BGP::Link_state.new(BGP::Link_state::Unknown.new(1, 'x' * 70000))
+    n = BGP::Link_state.new(BGP::Link_state::Unknown.new(0, 'x' * 70000))
     assert_raise(ArgumentError) { n.encode }
   end
 
@@ -503,8 +527,8 @@ class TestLinkState < Test::Unit::TestCase
       BGP::Link_state::Unknown.new(0, '')).to_shex)
     # A Total NLRI Length that disagrees with the body, built rather
     # than parsed.
-    assert_equal('0001000a01',
-                 BGP::Link_state.new(:unknown => { :type => 1,
+    assert_equal('0000000a01',
+                 BGP::Link_state.new(:unknown => { :type => 0,
                                                    :value => '01' },
                                      :length => 10).to_shex)
     # An RD on a SAFI 71 NLRI, which no RFC describes. The constructor
@@ -512,12 +536,12 @@ class TestLinkState < Test::Unit::TestCase
     # the one to use: the eight octets go in the body, which is what
     # Conventions means by the octet level staying open.
     n = BGP::Link_state.new(BGP::Link_state::Unknown.new(
-      1, ['00000064000000c8' + 'abcd'].pack('H*')))
+      0, ['00000064000000c8' + 'abcd'].pack('H*')))
     assert_equal(false, n.vpn?)
-    assert_equal('0001000a00000064000000c8abcd', n.to_shex)
+    assert_equal('0000000a00000064000000c8abcd', n.to_shex)
     # An empty NLRI, type and length and nothing else.
-    assert_equal('00010000', BGP::Link_state.new(
-      BGP::Link_state::Unknown.new(1, '')).to_shex)
+    assert_equal('00000000', BGP::Link_state.new(
+      BGP::Link_state::Unknown.new(0, '')).to_shex)
   end
 
   # Not a test method: a helper, kept below every test and with no

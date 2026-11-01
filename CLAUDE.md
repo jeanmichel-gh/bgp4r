@@ -105,15 +105,25 @@ bgp/nlris/               prefix encodings (inet, labeled, VPN, RD, mapped IPv4)
                          link_state.rb the NLRI of section 5.2 with the
                          NLRI Type and Total NLRI Length framing,
                          Link_state.nlri_size, the SAFI 72 Route
-                         Distinguisher and Link_state::Unknown. **Pure:
-                         nothing dispatches to either yet**, so a
-                         BGP-LS UPDATE still comes back as an Attr::Raw
-                         with an Attr::Gap. Both registries are empty,
-                         so every TLV and every NLRI type reads back as
-                         its level's Unknown and replays byte for byte.
-                         Two Unknowns one level apart, so write both
-                         names in full. docs/bgp-ls.md is the guide,
-                         see also "Breadth, the one SAFI lever"
+                         Distinguisher and Link_state::Unknown;
+                         link_state_descriptor.rb the whole of section
+                         5.2.1, TLV 256 and 257 and the four sub-TLVs
+                         of 5.2.1.4, where 256 and 257 are one layout
+                         and two type numbers; link_state_nlri.rb the
+                         NLRI types, with Headed carrying the
+                         Protocol-ID, Identifier and TLV list that
+                         figures 7 to 9 share and Node on top of it.
+                         **Pure: nothing dispatches to any of them
+                         yet**, so a BGP-LS UPDATE still comes back as
+                         an Attr::Raw with an Attr::Gap. A TLV or NLRI
+                         type with no class reads back as its level's
+                         Unknown and replays byte for byte. **One flat
+                         registry covers TLVs and sub-TLVs alike**,
+                         which is IANA's doing: a sub-TLV number means
+                         the same thing under every parent. Two
+                         Unknowns one level apart, so write both names
+                         in full. docs/bgp-ls.md is the guide, see also
+                         "Breadth, the one SAFI lever"
 bgp/optional_parameters/ OPEN capabilities (4-byte AS, add-path, graceful restart...)
 bgp/orfs/                outbound route filtering
 bgp/neighbor/            the BGP finite state machine and TCP session (neighbor.rb)
@@ -188,8 +198,16 @@ docs/                    protocol-testing.md: using bgp4r to test a router
                          makes for other families and says not to make
                          them here. Its load bearing claims are asserted
                          by test/unit/bgp_ls_doc_test.rb, whose NLRI type
-                         table is **discovered** and which carries six
-                         forward-looking guards for the later parts
+                         and TLV code point tables are both
+                         **discovered** and which carries
+                         forward-looking guards for the later parts.
+                         **It requires every file that registers**, and
+                         that is a requirement rather than tidiness: the
+                         two registries are mutable and filled across
+                         files, so a run that loaded only some of them
+                         measures a subset and says so with confidence.
+                         Part 2's two guards passed standalone and
+                         failed in the suite for exactly that reason
                          building-objects.md: the three ways into every class and how
                          initialize dispatches between them; read it before changing a
                          constructor or chasing an object that does not come back.
@@ -429,7 +447,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. The `lab` job is a matrix, one job per group in `test/lab_groups.rb`, so its cost is the slowest group and not the total: it was 12m42s as one serial suite. Each job installs only what its group needs, which is why the matrix entry carries a `gobgp`, `frr`, `docker` or `netns` flag. The `gobgp` groups pin 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-11-01: 2074 tests, 26536 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.3%.
+Baseline on 2026-11-01: 2145 tests, 26852 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.4%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -2780,8 +2798,8 @@ Two consequences, both of which change the plan rather than decorate it:
    RT-constrain (SAFI 132, RFC 4684), ATTR_SET (attribute 128, RFC
    6368) and MCAST-VPN (SAFI 5, RFC 6514) **are in**; BGP-LS
    (attribute 29, AFI
-   16388, SAFI 71 and 72, RFC 9552) is **under way**, part 1 of seven
-   done, as the plan under part 4 below. This entry used to
+   16388, SAFI 71 and 72, RFC 9552) is **under way**, parts 1 and 2 of
+   seven done, as the plan under part 4 below. This entry used to
    say "each of
    these is a class and a registration", which held for the first and
    understates the last considerably: BGP-LS is a whole TLV language of
@@ -3920,7 +3938,7 @@ Two consequences, both of which change the plan rather than decorate it:
              check-the-proof rule in Rules for agents paying for
              itself again.
    4. **BGP-LS, attribute 29 and AFI 16388 SAFI 71 and 72, RFC 9552.
-      Part 1 of seven done**, largest of the four by a long way, and
+      Parts 1 and 2 of seven done**, largest of the four by a long way, and
       last for the reason above. Planned on 2026-10-31 before any code,
       from RFC 9552 read as far as it was then fetchable, its two
       errata, and the IANA registries. Seven parts, the MCAST-VPN
@@ -4202,11 +4220,120 @@ Two consequences, both of which change the plan rather than decorate it:
            `validation.rb`, a lab file created, the undecodable example
            moved, the copy constructor fixed in `Mcast_vpn`, and the
            TLV test file given a require of the NLRI level.
-      2. **The Node NLRI, type 1, and the Node Descriptor sub-TLVs.**
-         First because Link and Prefix both carry Local Node
-         Descriptors, so this is the smallest place to get that
-         shape right. Section 5.2.1 and its sub-sections, including
-         the once-only sub-TLV rule of 5.2.1.4.
+      2. **The Node NLRI, type 1, and the Node Descriptor sub-TLVs.
+         Done**, in #217, which is the whole of section 5.2.1.
+         `bgp/nlris/link_state_descriptor.rb` holds TLV 256 and 257 and
+         the four sub-TLVs of section 5.2.1.4;
+         `bgp/nlris/link_state_nlri.rb` holds `Headed`, the head that
+         figures 7 to 9 share, and `Node` on top of it. Still pure:
+         the dispatch gates are part 4. All four BGP-LS files at 100%
+         line coverage.
+         * **Taken first because Link and Prefix both carry Local Node
+           Descriptors**, which is what the plan said, and the shape
+           that came out of it is worth more than the one TLV: reading
+           figures 7, 8 and 9 together, the three layouts share a
+           Protocol-ID octet, an 8-octet Identifier and a set of
+           descriptor TLVs, and differ only in which TLVs follow. So
+           `Headed` carries all of that and part 3 is three type
+           numbers and three hash keys on top of it.
+         * **The body after the head is a TLV list and not named
+           fields**, which is section 5.1 rather than convenience: an
+           unknown TLV "MUST be preserved and propagated" and must not
+           make the NLRI malformed, and a layout of named fields has
+           nowhere to put one. It also means a Node NLRI with no Local
+           Node Descriptors builds and parses, which is right twice
+           over, since section 8.2.2 names "presence of a mandatory
+           TLV" among the semantic validations not to perform.
+         * **One flat registry covers TLVs and sub-TLVs alike, and that
+           is IANA's doing rather than a simplification.** The registry
+           is "BGP-LS NLRI and Attribute TLVs", one space for both, and
+           Table 18 lists 256 and 257 beside 512 to 515 with no column
+           saying which is which. So a sub-TLV number means the same
+           thing under every parent, the opposite of the EVPN extended
+           community sub-types and of the IS-IS sub-TLVs where the
+           parent decides, and part 1's single `Tlv::REGISTRY` needed
+           nothing here.
+         * **TLV 256 and 257 are one layout and two type numbers**,
+           which is what sections 5.2.1.2 and 5.2.1.3 say: the same
+           sentence with "local end" and "remote end", and figures 10
+           and 11 identical. `Mcast_vpn::Shared_tree_join` and
+           `Source_tree_join` are the same shape for the same reason.
+         * **513 is deprecated and implemented anyway.** Table 18
+           carries the row and marks it deprecated, and section 5.2.1.4
+           says implementations "SHOULD support the advertisement of
+           this sub-TLV for backward compatibility" with RFC 7752
+           producers. A deprecated code point a peer still sends is
+           what a protocol testing tool has to read.
+         * **The node type rule needs two levels and is implemented
+           across them.** Section 5.2.1.4: "The TLV size in combination
+           with the protocol identifier enables the decoder to
+           determine the type of the node."
+           `Igp_router_id::SHAPES` holds the width half, keyed by width
+           with the Protocol-IDs each belongs to, and
+           `Headed#node_type` combines them, because that is the one
+           place with the Protocol-ID. Threading the Protocol-ID down
+           into the sub-TLV would buy nothing, since the octets replay
+           without it, and a class that accepted it would eventually
+           use it. **nil is an answer**: a 6-octet Router-ID under
+           Protocol-ID 4, 'Direct', is legal and the section describes
+           no node kind for it, so reporting one would be inventing it.
+         * **Section 5.2.1.4's ordering rule is section 5.1's with the
+           tiebreakers made unnecessary**, and noticing why is worth
+           more than the two sentences: 5.1 orders by type, then Length,
+           then Value, because several TLVs of one type can share an
+           NLRI, and here the once-only rule means two sub-TLVs never
+           share a type. So `Node_descriptors#ordered?` asks
+           `Tlv.ordered?` rather than keeping a second comparison, and
+           `#duplicate_types` reports the other rule. Both report and
+           neither refuses; part 6 is where a check reads them.
+         * **Part 1 chose test examples from the ranges parts 2 to 5
+           fill, and this part paid for it.** Its TLV cases used types
+           256, 513 and 1024, which are a node descriptor, a node
+           descriptor sub-TLV and a node attribute, so four broke the
+           day the first descriptor landed and a fifth would have broken
+           in part 5; its NLRI cases used types 1, 2 and 5. Both files
+           now use a type that **cannot** acquire a class, named in a
+           constant with the range asserted: Table 17 reserves TLV code
+           points 0 to 255 as "not to be allocated", and Table 12
+           reserves NLRI type 0. **The lesson was already written down**
+           in `docs/mcast-vpn.md`, four times, and part 1 did it anyway:
+           pick an example that cannot expire rather than re-pointing
+           one later.
+         * **A third shape of the load order trap, and it cost two
+           guards their first firing.** `bgp_ls_doc_test.rb` discovers
+           from `Tlv::REGISTRY` and `Link_state::TYPES`, which are
+           **mutable** and filled by `register` calls spread across
+           files. It required part 1's two files only, so when this part
+           landed its two forward-looking guards **passed standalone and
+           failed in the suite**, where the registering file had been
+           loaded. The two traps Conventions records fail in opposite
+           directions and are about constants; this one is about global
+           mutable state, so the answer is not "run it both ways" but
+           **require every file that writes to what you read**. The
+           sibling doc tests do not have it, because each discovers from
+           a frozen hash literal one file defines.
+         * **The doc test's table parser had to be scoped for the same
+           reason.** Part 1's read four-column numeric rows out of the
+           whole document, and part 2 added a second such table, so one
+           regexp would have read each table's rows into the other's
+           answer, silently. It slices by heading now.
+         * Nineteen sabotages, each landing on the guard it was aimed
+           at: twelve on the library, including `Opaque32::WIDTH`, the
+           `SHAPES` protocol lists, the container's tail, `ordered?`,
+           `duplicate_types`, the 256 and 257 type numbers swapped, a
+           missing `register`, `Headed::ID_WIDTH`, the Identifier packed
+           as 4 octets, `node_type` skipping the Protocol-ID check, the
+           head parse dropping its tail, and `Ospf_area_id` refusing a
+           dotted quad; and seven on the doc guards.
+           * **One missed first and the reason is #205's again.**
+             Swapping the two node descriptor type numbers with one
+             `sed` rule set both to 256, so `register` raised at load
+             and every test errored on the require. That is the
+             duplicate-type guard working, not the claim, and a
+             sabotage that breaks something unrelated to the claim is
+             the same miss as one that passes. Redone with both numbers
+             changed at once: 10 failures in one file and 7 in the
+             other.
       3. **The Link NLRI, type 2, and the two Prefix NLRIs, types 3
          and 4**, with their descriptor TLVs. Taken together because
          both are the Node NLRI plus a descriptor set, and the two

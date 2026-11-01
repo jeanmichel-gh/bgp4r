@@ -1313,10 +1313,75 @@ module ToHashCatalog
                         :rd => [100, 200], :length => 65535, :path_id => 11)
   end
 
+  # The four node descriptor sub-TLVs of RFC 9552 section 5.2.1.4.
+  # Three are a 32-bit opaque value in a 4-octet TLV; the fourth is
+  # variable, so its recipe uses the 7-octet IS-IS pseudonode width,
+  # which is the one that carries a PSN identifier as well.
+  ENTRIES['BGP::Link_state::Tlv::Autonomous_system'] = entry(:ok, nil, nil) do
+    BGP::Link_state::Tlv::Autonomous_system.new(70001)
+  end
+
+  ENTRIES['BGP::Link_state::Tlv::Bgp_ls_identifier'] = entry(:ok, nil, nil) do
+    BGP::Link_state::Tlv::Bgp_ls_identifier.new(42)
+  end
+
+  ENTRIES['BGP::Link_state::Tlv::Ospf_area_id'] = entry(:ok, nil, nil) do
+    BGP::Link_state::Tlv::Ospf_area_id.new('0.0.1.0')
+  end
+
+  ENTRIES['BGP::Link_state::Tlv::Igp_router_id'] = entry(:ok, nil, nil) do
+    BGP::Link_state::Tlv::Igp_router_id.new('1921.6800.1001.02')
+  end
+
+  # The two node descriptor TLVs of sections 5.2.1.2 and 5.2.1.3. The
+  # recipe carries a sub-TLV list, a Length that disagrees with it and a
+  # tail, which are the three things these classes hold: a thin one with
+  # a single sub-TLV would pass while the other two were dropped.
+  ENTRIES['BGP::Link_state::Tlv::Local_node_descriptors'] =
+    entry(:ok, nil, nil) do
+      BGP::Link_state::Tlv::Local_node_descriptors.new(
+        :local_node_descriptors => [{ :autonomous_system => 65000 },
+                                    { :igp_router_id => '0a000001' }],
+        :length => 9999, :tail => 'ff')
+    end
+
+  ENTRIES['BGP::Link_state::Tlv::Remote_node_descriptors'] =
+    entry(:ok, nil, nil) do
+      BGP::Link_state::Tlv::Remote_node_descriptors.new(
+        BGP::Link_state::Tlv::Ospf_area_id.new(2))
+    end
+
+  # NLRI type 1 of section 5.2, with every field the class carries: a
+  # Protocol-ID, an 8-octet Identifier, a descriptor TLV and the tail
+  # that octets too short to frame a TLV become.
+  ENTRIES['BGP::Link_state::Node'] = entry(:ok, nil, nil) do
+    BGP::Link_state::Node.new(
+      :node => { :protocol_id => 2, :identifier => 0x0102030405060708,
+                 :tlvs => [{ :local_node_descriptors =>
+                             [{ :igp_router_id => '1921.6800.1001' }] }],
+                 :tail => 'ffffff' })
+  end
+
   # Classes with no entry, each with the reason. An abstract base with no
   # sensible instance belongs here; a class merely awkward to build does
   # not.
   NO_RECIPE = {
+    'BGP::Link_state::Tlv::Opaque32' =>
+      'an abstract base with no sensible instance. It supplies WIDTH ' \
+      'and nothing else, so type and hash_key read a TYPE and a ' \
+      'HASH_KEY it does not define and every encode raises NameError. ' \
+      'Autonomous_system, Bgp_ls_identifier and Ospf_area_id are ' \
+      'measured instead.',
+    'BGP::Link_state::Tlv::Node_descriptors' =>
+      'an abstract base, as Opaque32 is: sections 5.2.1.2 and 5.2.1.3 ' \
+      'are one layout and two type numbers, and the base supplies ' \
+      'neither. Local_node_descriptors and Remote_node_descriptors are ' \
+      'measured.',
+    'BGP::Link_state::Headed' =>
+      'an abstract base: it carries the Protocol-ID, Identifier and ' \
+      'TLV list that figures 7 to 9 share and defines no TYPE, ' \
+      'HASH_KEY or LABEL. Node is measured, and the Link and Prefix ' \
+      'NLRI types fill this in part 3.',
     'BGP::Link_state::Tlv' =>
       'an abstract base with no sensible instance. type and hash_key ' \
       'read self.class::TYPE and HASH_KEY and it defines neither, and ' \
