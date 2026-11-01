@@ -242,9 +242,23 @@ module LabHelper
     # first draft of the CLAUDE.md entry guessed the name and was wrong.
     RTC = 'rtc'
 
+    # BGP-LS, AFI 16388 SAFI 71, RFC 9552. **The two sides agree on the
+    # name and the client takes a second one**, measured on 2026-11-01,
+    # which is a third shape after "they disagree" and "they agree": the
+    # config file takes only `ls`, and the client takes `ls` **and**
+    # `linkstate`. So this needs no CLIENT_FAMILY entry either, and a
+    # reader who meets `linkstate` in client output is looking at this
+    # family and not a second one.
+    #
+    # There is **no name for SAFI 72** on either side: the config
+    # refuses `ls-vpn` and every other spelling tried, and a live
+    # session reads the pair back as `UnknownFamily(1074004040)`. See
+    # link_state_gobgp_test.rb.
+    LS = 'ls'
+
     # Config-file name to client name, for the families where the two
-    # disagree. Everything else is spelled alike on both sides, RTC
-    # included.
+    # disagree. Everything else is spelled alike on both sides, RTC and
+    # LS included.
     CLIENT_FAMILY = { FS_VPN => 'ipv4-l3vpn-flowspec', EVPN => 'evpn' }.freeze
 
     # The name to pass the client's -a for a family, which is its own
@@ -462,6 +476,20 @@ module LabHelper
     ensure
       @pid = nil
       FileUtils.rm_rf(@dir)
+    end
+
+    # Runs the client against this daemon and answers [output, status].
+    #
+    # The readers below cover what a test usually wants from the RIB.
+    # This is for the one thing they cannot do, which is make the router
+    # **originate** something: `gobgp global rib add` is how a test gets
+    # a second implementation's encoder to feed bgp4r's decoder, and
+    # until BGP-LS no family here could be measured in that direction at
+    # all. It answers the status rather than nil on failure, because a
+    # caller asserting on a refusal wants the client's own words.
+    def client_run(*args)
+      Open3.capture2e(self.class.client, '-u', @local,
+                      '-p', @api_port.to_s, *args)
     end
 
     # The client's neighbor table, or nil while the daemon is not answering.

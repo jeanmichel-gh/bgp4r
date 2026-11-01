@@ -228,7 +228,16 @@ docs/                    protocol-testing.md: using bgp4r to test a router
                          by test/unit/bgp_ls_doc_test.rb, whose NLRI type
                          and TLV code point tables are both
                          **discovered** and which carries
-                         forward-looking guards for the later parts.
+                         forward-looking guards for the later parts;
+                         four of six have now fired and been re-pointed.
+                         Section 11 is interoperability, and it is the
+                         only one of the four family guides whose lab
+                         measures **both** directions: GoBGP can
+                         originate a BGP-LS route, so its encoder feeds
+                         our decoder. Read it before trusting either
+                         direction, because what each vouches for is
+                         not the same and the receive one cannot check
+                         the framing at all.
                          **It requires every file that registers**, and
                          that is a requirement rather than tidiness: the
                          two registries are mutable and filled across
@@ -291,7 +300,18 @@ test/functional/lab/     lab tests: loopback speaker test and one Compose test p
                          what it does with an MCAST-VPN UPDATE sent
                          anyway, where GoBGP discards it and FRR resets
                          the session. They vouch for nothing about our
-                         octets
+                         octets;
+                         link_state_gobgp_test.rb is the **only one here
+                         that measures both directions**, since GoBGP
+                         can originate a BGP-LS route, so its encoder
+                         feeds our decoder as well as its parser reading
+                         what we send. It also carries the two GoBGP
+                         3.23.0 faults this family found and the
+                         ordering finding that decided part 6's scope;
+                         link_state_frr_test.rb is an absence again,
+                         FRR 8.4.4 having neither SAFI, and FRR cannot
+                         name the AFI either where for MCAST-VPN it
+                         could
 ```
 
 ## Running tests
@@ -453,12 +473,23 @@ that way. 50 seconds, measured on 2026-10-31 against gobgpd 3.23.0:
 ruby -I. test/functional/lab/attr_set_gobgp_test.rb
 ```
 
-The only two that measure an **absence**: neither router has SAFI 5, so
+The two that measure an **absence**: neither router has SAFI 5, so
 these assert how each says so and what it does with an MCAST-VPN UPDATE
 sent anyway, where the two disagree. 30 and 7 seconds:
 ```
 ruby -I. test/functional/lab/mcast_vpn_gobgp_test.rb
 ruby -I. test/functional/lab/mcast_vpn_frr_test.rb
+```
+
+BGP-LS, and the **only lab test here measured in both directions**:
+GoBGP 3.23.0 can originate a BGP-LS route, so its encoder feeds our
+decoder as well as its parser reading what we send. It carries the two
+GoBGP faults this family found, both deterministic and both asserted,
+and the ordering finding that decided part 6's scope. Its FRR twin is
+an absence again, FRR 8.4.4 having neither SAFI. 85 and 6 seconds:
+```
+ruby -I. test/functional/lab/link_state_gobgp_test.rb
+ruby -I. test/functional/lab/link_state_frr_test.rb
 ```
 
 Which `#to_hash` read back and which do not, printed from
@@ -485,7 +516,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. The `lab` job is a matrix, one job per group in `test/lab_groups.rb`, so its cost is the slowest group and not the total: it was 12m42s as one serial suite. Each job installs only what its group needs, which is why the matrix entry carries a `gobgp`, `frr`, `docker` or `netns` flag. The `gobgp` groups pin 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-11-01: 2223 tests, 27288 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.4%.
+Baseline on 2026-11-01: 2226 tests, 27312 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.4%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -1512,7 +1543,7 @@ true here is the shape of the gap:
   prints the registered code points, against the 115 the IANA registries
   listed when this was last counted by hand.
 
-### Breadth, the one SAFI lever. Phases 2 and 3 done, phase 4 parts 1, 2 and 3 done, part 4 under way
+### Breadth, the one SAFI lever. Phases 2 and 3 done, phase 4 parts 1, 2 and 3 done, part 4 under way: BGP-LS parts 1 to 4 and 7 of seven
 
 The section above deferred breadth and named the single limit. This is the
 plan for lifting it, recorded before the work starts.
@@ -2846,8 +2877,10 @@ Two consequences, both of which change the plan rather than decorate it:
    RT-constrain (SAFI 132, RFC 4684), ATTR_SET (attribute 128, RFC
    6368) and MCAST-VPN (SAFI 5, RFC 6514) **are in**; BGP-LS
    (attribute 29, AFI
-   16388, SAFI 71 and 72, RFC 9552) is **under way**, parts 1 to 4 of
-   seven done, as the plan under part 4 below. This entry used to
+   16388, SAFI 71 and 72, RFC 9552) is **under way**, parts 1 to 4 and
+   7 of seven done, as the plan under part 4 below: part 7 was taken
+   out of order on purpose, because what a router does decides which
+   checks part 6 is worth writing, and it did. This entry used to
    say "each of
    these is a class and a registration", which held for the first and
    understates the last considerably: BGP-LS is a whole TLV language of
@@ -4732,13 +4765,154 @@ Two consequences, both of which change the plan rather than decorate it:
            part 9 and MCAST-VPN part 6 each recorded. This is the one
            family whose own RFC names the actions outright, so there is
            less excuse here than in any of them.
-      7. **The lab**, in **both directions** for SAFI 71, which no
-         family has had: what GoBGP makes of what we send, and what we
-         make of a Link NLRI GoBGP originated. Plus the absence for
-         SAFI 72 and for FRR entirely, which is
-         `mcast_vpn_gobgp_test.rb`'s shape. Take it **before** part 6
-         if what GoBGP does decides which checks are worth having,
-         which is what flow spec part 5 and EVPN part 10 both found.
+      7. **The lab. Done**, in #220, and taken **before** part 6
+         because what GoBGP does decides which checks are worth
+         having, which is what flow spec part 5 and EVPN part 10 both
+         found and what it found again here.
+         `test/functional/lab/link_state_gobgp_test.rb`, 12 cases and
+         119 assertions in 85 seconds, and `link_state_frr_test.rb`,
+         3 cases and 24 assertions in 6. No Docker. **Those figures
+         were wrong twice**, and both ways are worth knowing because
+         CLAUDE.md asks for counts copied out of a run and both of
+         these were. First 126 and 124, from a run with two cases
+         failing and waiting out their 30s timeouts: a timing taken
+         from a red run measures the timeouts and not the work. Then
+         118, from a green run of a version of the file that was two
+         assertions shorter, so the count was a measurement of
+         something that no longer existed. **Re-measure after the last
+         edit, not after the last green run**; what settled it was
+         running each case in its own process, where the twelve counts
+         are deterministic and sum to 119, which is also what CI
+         reports.
+         `docs/bgp-ls.md` section 11 has the measurements and the
+         table.
+         * **The first lab test here where the router encodes the
+           family under test**, which is what the plan promised. Every
+           lab test since flow spec sends only and records that caveat
+           in its own comments. GoBGP can originate a BGP-LS route, so
+           its own octets feed bgp4r's decoder: the head of figure 8
+           with its Protocol-ID and Identifier, both node descriptors,
+           five of the six link descriptors and the 4-octet next hop
+           of section 5.5, all read from octets this reader did not
+           write.
+           * **Be exact about that first**, because
+             `attr_set_gobgp_test.rb` is the nearest precedent and is
+             not this: its far speaker parses an UPDATE GoBGP built,
+             so the ORIGIN, AS_PATH, next hop and NLRI are GoBGP's,
+             but attribute 128, the thing under test, is copied
+             verbatim and never parsed by the router. Here GoBGP
+             builds the NLRI itself.
+         * **The client's grammar, since nothing documents it.**
+           `gobgp global rib add -a ls link` wants **sixteen** keyword
+           and value pairs, not the 26 tokens its own error names,
+           which is a minimum: every pair is read without a presence
+           check, so leaving one out is an error rather than a
+           default. `node` and `prefix` are refused outright, so NLRI
+           type 2 is the only one it can be made to originate.
+           `LINK_ARGS` in the test has the list. Found by reading
+           `cmd/gobgp/global.go` at the tag after probing the error
+           messages got as far as 23 tokens.
+         * **The keep-and-echo MUST of section 5.1 met real traffic
+           for the first time.** GoBGP sends sub-TLV **516**, the BGP
+           Router Identifier of RFC 9086, which part 2 left out
+           because Table 3 is RFC 9552's, and the NLRI still replays
+           byte for byte with no protocol error and no coverage gap.
+           The BGP-LS Attribute arrives too and comes back as an
+           `Attr::Unknown` with neither, which is #116 one level up
+           and what part 5 gives meaning to.
+         * **A library bug the measurement found: Protocol-ID 7 read
+           as Unassigned.** `Headed::PROTOCOLS` carried **Table 2** of
+           section 5.2, 1 to 6, where the IANA registry has nine: 7
+           BGP from RFC 9086, 8 RSVP-TE from a draft and 9 Segment
+           Routing from RFC 9857. GoBGP originates with 7. Nothing in
+           the library turns on a Protocol-ID, so this was a wrong
+           answer about a correct router in `to_s` and nothing worse,
+           which is still the thing this file most wants not to give.
+           **Read the registry and not a table in the document that
+           asked for it**, which `docs/bgp-ls.md` section 4 already
+           said one paragraph above the row that was wrong.
+         * **Two faults in GoBGP 3.23.0, recorded and not filed**, per
+           the standing decision. Both deterministic and both
+           asserted, because a lab test that quietly sends only the
+           shape that works is the unchecked claim this file keeps
+           getting burned by.
+           * **It requires a sub-TLV RFC 9552 does not, and refusing
+             it costs the whole family.** Every node descriptor must
+             carry either an IGP Router-ID or both a BGP Router-ID and
+             an Autonomous System, whatever the Protocol-ID; one
+             holding only an Autonomous System is answered with
+             "Required TLV missing" and `Capability was disabled`.
+             Section 5.2.1.4 makes the IGP Router-ID mandatory **when
+             originating** from IS-IS, OSPF, Direct or Static
+             configuration, names no receiver action, and calls the
+             Autonomous System optional. **Section 8.2.2 names
+             "presence of a mandatory TLV" among the semantic
+             validations a BGP-LS Propagator should not perform.**
+           * **Its client panics rendering an IP Reachability TLV
+             whose prefix is more than one octet**, `index out of
+             range [1] with length 1` in `ToIPNet`. The daemon stores
+             the route either way and a /8 renders, so it is the
+             renderer; /16, /24 and /32 all panic. That is why the
+             send-direction prefix case uses a /8.
+         * **What it decided for part 6, which is why it came first.**
+           GoBGP's own node descriptors are **not in ascending
+           sub-TLV order**, 512 then 516 then 513, where section
+           5.2.1.4 says they MUST be. bgp4r reports the order through
+           `Node_descriptors#ordered?` and refuses nothing, so the
+           route parses and replays. So the only router available here
+           breaks a rule bgp4r could check, on traffic it originates
+           itself, **and** makes a check section 8.2.2 forbids. Both
+           point one way: part 6 follows the RFC and not the router.
+           One router agreeing is not a quorum, and this one disagrees
+           with the document in both directions at once.
+         * **FRR 8.4.4 has neither SAFI**, so its file measures an
+           absence, which is `mcast_vpn_frr_test.rb`'s shape. One
+           thing reads differently from that family and is asserted
+           rather than assumed alike: for SAFI 5 FRR logged
+           `afi/safi: IPv4/unknown`, naming the AFI, where AFI 16388
+           is outside its table too, so it logs **`bad-value/unknown`**
+           and can name neither half. A BGP-LS UPDATE sent anyway
+           gets the MCAST-VPN answer: `Attribute MP_REACH_NLRI, parse
+           error`, the whole UPDATE failed, the session reset with no
+           NOTIFICATION, and FRR back within a second or two. So the
+           two routers part company again, from a different starting
+           point: there neither had the family, here one does.
+         * **What the receive direction cannot check, measured by
+           sabotage rather than argued.** GoBGP originates one NLRI
+           per UPDATE, and the only NLRI in an attribute has nothing
+           behind it to over-read into, so `Link_state.nlri_size`
+           wrong by a constant leaves **every** receive case passing.
+           That is RT-constrain's lesson arriving from the other side,
+           and it is why the multi-NLRI cases in
+           `test/functional/link_state_test.rb` must not be thinned
+           out: they are the only cover the parse-side framing has.
+           The send direction does catch it, because GoBGP reads the
+           length and a wrong one sends the UPDATE to RFC 7606 rather
+           than to its RIB.
+         * **Ten sabotages, eight landing first time and two
+           missing**, and both misses are #205's shape again. One
+           inserted `def ordered? ; true ; end` at the top of the
+           class, where the real method later in the same class
+           overrode it, so nothing changed: patch the method body, not
+           the class. The other dropped `Tlv::Unknown`'s octets and
+           made the case **error** on a missing method rather than
+           fail on its own claim, because the NLRI then failed
+           `read_route`'s encode-matches rule and came back as a
+           `Link_state::Unknown`; the case asserts the route type
+           first now, so the failure names the claim. The eight:
+           Protocol-ID 7 dropped from the table, `coerce` back to
+           `pack('H*')` (which fails the node case against GoBGP's own
+           rendering, so part 4's fix is now checked from outside),
+           `Tlv.ordered?` stubbed true, the required-TLV case given a
+           conformant descriptor, the panic case given a /8, the
+           capability not offered to FRR, the FRR reset case sending
+           SAFI 1, and the send-side Total NLRI Length one short.
+         * `gobgp-families` is **399s** now, measured rather than
+           added up, and 3.2 times the next group, where
+           `test/lab_groups.rb` called splitting "the obvious next
+           lever" at 291s. The rule stays the rule, so the file went
+           in that group; the note there says the split is overdue and
+           that the obvious cut is by direction.
 
 Decisions taken before this starts, so they are not re-litigated:
 
@@ -4863,6 +5037,7 @@ Lab and conformance:
 * **RT-constrain interop found two GoBGP 3.23.0 crashes**, asserted in `test/functional/lab/rt_constrain_gobgp_test.rb` and detailed in phase 4 part 1 above. The short version, because one of them matters more than any other divergence in this file: **the zero-length default route target followed by any second membership route GoBGP accepts panics the daemon**, a nil pointer dereference in `propagateUpdate`, and **both routes are entirely conformant** — RFC 4684 section 4 blesses the zero-length default and says it is what a route reflector's PE client sends. The second crash needs a malformed NLRI: a prefix length demanding more octets than the NLRI holds, 104 bits over 12 octets. Also measured: GoBGP drops a 32-bit or 64-bit partial prefix in silence, so the family's headline use does not work there; it reads the prefix as `mlen / 8` octets where the RFC rounds up, which is why that test cannot vouch for our length octet; and **the config and the client agree on `rtc`**, unlike VPN flow spec and EVPN. FRR 8.4.4 has no RT-constrain family at all, so this is the second family with one reference rather than two.
 * **ATTR_SET interop is the one that runs a router in the middle.** Neither GoBGP 3.23.0 nor FRR 8.4.4 implements attribute 128, measured with `strings` before the test was written, so there is no FRR twin and the question became what a router that has never heard of it can still vouch for. The answer is the property the attribute exists for: RFC 6368 section 5 makes it optional transitive so a customer's attributes cross the provider network. `attr_set_gobgp_test.rb` puts a gobgpd between two bgp4r speakers through `LabHelper::Gobgpd`'s `peer2`, and GoBGP carries the attribute to the far side **byte for byte** with the nested 4-octet AGGREGATOR intact, storing the value base64 encoded meanwhile. **What it does not vouch for**: GoBGP never parses the attributes inside, so the meaning of the 4-octet AS rule is still bgp4r's own opinion and only another ATTR_SET implementation could change that. What it does vouch for is the framing, since a wrong length or wrong flags would send the UPDATE to RFC 7606 rather than the RIB. One measurement recorded and not filed: **GoBGP propagates it with the Partial bit clear**, flags 0xc0 rather than 0xe0, on an attribute it does not recognize; RFC 4271 section 9 would settle whether that is a divergence and this file records that both fetchable sources truncate before it, so nothing is claimed.
 * **MCAST-VPN is the one family with no outside reference, and that absence is asserted rather than written down.** `mcast_vpn_gobgp_test.rb` and `mcast_vpn_frr_test.rb` are the only two lab tests here that measure an absence; `docs/mcast-vpn.md` section 9 has the table. Neither GoBGP 3.23.0 nor FRR 8.4.4 has SAFI 5: GoBGP's config parser refuses every plausible name (`mcast-vpn isn't a valid route family name`) and FRR's grammar has no such `address-family` command. **The two disagree about what to do with an MCAST-VPN UPDATE sent anyway**, which is the finding: GoBGP counts it under `Discarded`, logs `unknown route family. AFI: 1, SAFI: 5`, and keeps the session and an installed route; FRR calls it `Attribute MP_REACH_NLRI, parse error`, fails the whole UPDATE and **resets the session with no NOTIFICATION**, where RFC 4271 section 6 wants one. **Neither test vouches for anything about our octets**, because a router with no parser for the family never reads them, so this family's wire format is still bgp4r's own opinion against the field widths RFC 6514 and RFC 6515 state. Two harness facts: **`is_established?` cannot see FRR's reset**, since it reconnects within a second or two and the first measurement here read the new session and concluded nothing happened, so both tests watch `on_state_change`; and **GoBGP stops printing `UnknownFamily(65541)` once an UPDATE in the family arrives**, so the capability has to be read before sending.
+* **BGP-LS is the only family measured in both directions, and `docs/bgp-ls.md` section 11 has it.** GoBGP 3.23.0 can originate a BGP-LS route, so its encoder feeds our decoder: `gobgp global rib add -a ls link` wants sixteen keyword and value pairs (`LINK_ARGS` in the test has them) and refuses `node` and `prefix`, so NLRI type 2 is the only one. What that bought: sub-TLV 516 kept and echoed on real traffic, the Protocol-ID table corrected because GoBGP originates with 7 and bgp4r said Unassigned, and the finding that decided part 6's scope, which is that **GoBGP's own node descriptors break section 5.2.1.4's ascending-order MUST** while GoBGP also enforces a mandatory-TLV check section 8.2.2 forbids. So part 6 follows the RFC and not the router. **Two GoBGP faults, recorded and not filed**: a node descriptor carrying only an Autonomous System is refused with "Required TLV missing" and costs the whole capability, and the client panics rendering an IP Reachability TLV whose prefix is more than one octet, which is why the send-side prefix case uses a /8. **What the receive direction cannot check**: GoBGP sends one NLRI per UPDATE, so `Link_state.nlri_size` wrong by a constant leaves every receive case passing; the multi-NLRI cases in `test/functional/link_state_test.rb` are the only cover the parse-side framing has. FRR 8.4.4 has neither SAFI and logs `afi/safi: bad-value/unknown`, naming neither half where for MCAST-VPN it named the AFI, then resets on a BGP-LS UPDATE as it does for SAFI 5. SAFI 72 has no reference at all.
 * **Flow spec interop lives in `docs/flow-spec.md` section 12**, measured and asserted rather than written down here, the same way the fault matrix columns are. The short version: both routers accept a rule from bgp4r and read it back, and they disagree on every part of RFC 8955 section 4.2. Two harness facts worth knowing before writing another flow spec lab test: GoBGP's **config file and its client use different names for the VPN family**, `l3vpn-ipv4-flowspec` and `ipv4-l3vpn-flowspec`, each rejecting the other; and **FRR 8.4.4 has no VPN flow spec family**, refusing a session that offers SAFI 134 alone with 2/7 and silently discarding the rule when SAFI 133 is there too.
 * **`to_hash_round_trip_test.rb` cannot read a test file that is not pure ASCII.** `test_every_working_round_trip_is_asserted_in_a_class_test_file` reads every test file body and matches regexps against it, and a single non-ASCII character in any of them makes it error with `ArgumentError: invalid byte sequence in US-ASCII`, pointing at its own line 190 and naming neither the file nor the character. Found on 2026-10-31 by putting one arrow in a comment in a new test file: that file passed on its own and the suite errored in a test it has nothing to do with. Every test file is ASCII today, so nothing is wrong now; what is wrong is the diagnosis the next person gets. The fix is an encoding on the read or a `scrub`, and it is one line in a file this change does not otherwise touch.
 * Lowest coverage (unit suite): `neighbor/neighbor.rb` 91%, `messages/update.rb` 92%, `neighbor/add_path_cap.rb` 93%, `path_attributes/mp_unreach.rb` 93%, `path_attributes/ipv6_extended_communities.rb` 93%, `optional_parameters/graceful_restart.rb` 93%.

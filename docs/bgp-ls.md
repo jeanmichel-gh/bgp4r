@@ -479,7 +479,17 @@ which is the codepoints.org lesson in Rules for agents.
 |---|---|---|---|
 | BGP-LS NLRI Types, Table 12 | 1 to 4 | 65000 to 65535 | 0 Reserved, 5 to 64999 unassigned, two octets wide |
 | BGP-LS TLVs, Table 17 | see below | 65000 to 65535 | **0 to 255 is "Reserved (not to be allocated)"** |
-| BGP-LS Protocol-IDs, Table 13 | 1 to 6 | 200 to 255 | 0 Reserved |
+| BGP-LS Protocol-IDs, Table 13 | 1 to 9 | 200 to 255 | 0 Reserved, 10 to 199 unassigned |
+
+**The Protocol-ID row is the one place a table in this RFC is narrower
+than its registry, and the lab found it the hard way.** Table 13 is RFC
+9552's own request, 1 to 6; the registry, read on 2026-11-01, carries
+three more: 7 BGP from RFC 9086, 8 RSVP-TE from
+draft-ietf-idr-bgp-ls-te-path-01 and 9 Segment Routing from RFC 9857.
+GoBGP originates with Protocol-ID 7, so bgp4r printed Unassigned for a
+real router's traffic until `Headed::PROTOCOLS` was fixed in part 7.
+Read the registry, not a table in the document that asked for it, which
+is this file's own instruction one paragraph above.
 
 **39 against 139.** RFC 9552's own Table 18 defines 39 TLV code points:
 14 on the NLRI side (256 and 257 node descriptors, 258 to 263 link
@@ -835,37 +845,130 @@ condition". That is the only RFC 7606 action in the pre-8.2.2 text.
 
 ## 11. Interoperability
 
-**Not measured yet.** Part 7. What the probe on 2026-10-31 found,
-before planning rather than after, which is the
-probe-before-recording-a-block lesson that has now paid five times in
-this file's neighbourhood:
+Measured on 2026-11-01 against GoBGP 3.23.0 and FRR 8.4.4, and
+asserted by `test/functional/lab/link_state_gobgp_test.rb` and
+`link_state_frr_test.rb` rather than written down here. Both omit
+themselves on an unmeasured version, so `bgp_ls_doc_test.rb` holds the
+two versions against the tests' own constants: a pin moved in one place
+and not the other is how this table would go quietly wrong.
 
-* **GoBGP 3.23.0 has BGP-LS and FRR 8.4.4 does not.** GoBGP's config
-  name is `ls` and a live session negotiates AFI 16388 SAFI 71. FRR's
-  `bgp_nlri_parse_` functions are evpn, flowspec, ip, label and vpn,
-  with none for this. So this family gets **one** outside reference,
-  like RT-constrain and VPN flow spec, and is not the MCAST-VPN case of
-  none.
-* **SAFI 72 has no reference, inside a family whose SAFI 71 does.**
-  GoBGP has no `ls-vpn`: the config refuses that name and a live session
-  reads SAFI 72 back as `UnknownFamily(1074004040)`, which is its
-  `afi << 16 | safi` packing for 16388 and 72. That is the VPN flow spec
-  shape again, one SAFI of a pair checkable and the other not.
-* **The third config-and-client naming divergence, and the first of its
-  shape.** The config accepts only `ls`; the **client** accepts `ls` and
-  `linkstate`. So `CLIENT_FAMILY` in `lab_helper.rb` needs no entry,
-  where VPN flow spec and EVPN each cost a mapping. Recorded all the
-  same, so a reader meeting `linkstate` in client output does not take
-  it for a second family.
-* **GoBGP can originate a BGP-LS route**, so the parse direction is
-  checkable against a router for the first time since flow spec.
-  `gobgp global rib add -a ls link ...` builds a Link NLRI and wants at
-  least 26 tokens after `link`, while `node` and `prefix` are refused
-  outright with "invalid nlriType. expect [link]". Every lab test since
-  flow spec sends only and records that caveat; here GoBGP's encoder can
-  feed our decoder for NLRI type 2. Finding the exact invocation is part
-  7's first step.
+| | GoBGP 3.23.0 | FRR 8.4.4 |
+|---|---|---|
+| SAFI 71 | config name `ls`, negotiated | no grammar at all |
+| SAFI 72 | no config name, `UnknownFamily(1074004040)` | no grammar at all |
+| Can originate one | yes, NLRI type 2 only | no |
+| A SAFI 71 UPDATE | parsed, installed, read back | fails the UPDATE, resets with no NOTIFICATION |
+| A SAFI 72 UPDATE | discarded, session kept | the same reset |
 
-Until part 7 lands, this family's wire format is bgp4r's own opinion
-against the field widths RFC 9552 states, and nothing in
-`test/unit/nlris/` says otherwise.
+**This is the first family here where the router encodes the family
+under test, so its own octets feed bgp4r's decoder.** Every lab test
+since flow spec sends only: it asserts a router's reading of what bgp4r
+put on the wire and records in its own comments that the parse direction
+is covered by the loopback functional test alone.
+
+Be exact about the first, because `attr_set_gobgp_test.rb` is the
+nearest precedent and is not this. There a gobgpd sits between two bgp4r
+speakers and the far one parses an UPDATE GoBGP built, so its ORIGIN,
+AS_PATH, next hop and NLRI are GoBGP's; but attribute 128, the thing
+under test, is **copied verbatim** and never parsed by the router, so
+those octets are still ours. Here GoBGP builds the NLRI itself.
+
+**The client's grammar for it, since nothing documents it.** `gobgp
+global rib add -a ls link` wants sixteen keyword and value pairs, and
+`node` and `prefix` are refused outright with "invalid nlriType. expect
+[link]", so NLRI type 2 is the only one GoBGP can be made to originate.
+Every pair is read without a presence check, so leaving one out is an
+error rather than a default. `LINK_ARGS` in the GoBGP test has the list.
+
+**What the receive direction vouches for**, which nothing in
+`test/unit/nlris/` can: the head of figure 8 with its Protocol-ID and
+Identifier, both node descriptors of section 5.2.1, five of the six
+link descriptors of section 5.2.2, and the 4-octet next hop of section
+5.5, all read from octets this reader did not write. **Not the framing
+arithmetic**, which it looks like it should and does not; the last part
+of this section says why. It is also
+where the keep-and-echo MUST of section 5.1 meets real traffic: GoBGP
+sends sub-TLV **516**, the BGP Router Identifier of RFC 9086, which
+part 2 left out because Table 3 is RFC 9552's, and the NLRI still
+replays byte for byte with no protocol error and no coverage gap. The
+BGP-LS Attribute arrives too, as an `Attr::Unknown` with neither, which
+is what part 5 gives meaning to.
+
+**And the send direction**: GoBGP names our Autonomous System, BGP-LS
+Identifier, IGP Router-ID, Protocol-ID, the two IPv4 link addresses,
+the OSPF route type and the prefix back, each from its own field. The
+IGP Router-ID is the one worth having, because part 4 found
+`Igp_router_id#from_hash` packing the dotted form with `pack('H*')`,
+which maps a separator by its low nibble: GoBGP printing
+`1921.6800.1001` back is the only check on those six octets that is not
+bgp4r's own arithmetic.
+
+### What the measurement changed in bgp4r
+
+**Protocol-ID 7 read as Unassigned.** GoBGP originates with Protocol-ID
+7, which is RFC 9086's and not in Table 2 of section 5.2, and
+`Headed::PROTOCOLS` carried Table 2 rather than the registry. Section 4
+has the correction and the other two values it brought with it. Nothing
+in the library turns on a Protocol-ID, so this was a wrong answer about
+a correct router and nothing worse, which is still the thing this
+repository most wants not to give.
+
+### Two faults in GoBGP, recorded and not filed
+
+Per the standing decision that the job here is bgp4r catching up. Both
+are deterministic and both are asserted, because a lab test that
+quietly sends only the shape that works is the unchecked claim this
+repository keeps getting burned by.
+
+* **It requires a sub-TLV RFC 9552 does not, and refusing it costs the
+  whole family.** Every node descriptor must carry either an IGP
+  Router-ID or both a BGP Router-ID and an Autonomous System, whatever
+  the Protocol-ID; a descriptor holding only an Autonomous System is
+  answered with "Required TLV missing" and `Capability was disabled`.
+  Section 5.2.1.4 makes the IGP Router-ID "a mandatory TLV when
+  originating information from IS-IS, OSPF, 'Direct', or 'Static
+  configuration'", which binds an **originator** and names no receiver
+  action, and makes the Autonomous System "an optional TLV". **Section
+  8.2.2 names "presence of a mandatory TLV" among the semantic
+  validations a BGP-LS Propagator should not perform.** So this is one
+  implementation doing what this family's own RFC says not to.
+* **Its client panics rendering an IP Reachability TLV whose prefix is
+  more than one octet.** `index out of range [1] with length 1`, in
+  `ToIPNet`. The daemon accepts and stores the route either way and a
+  /8 renders, so it is the renderer and not the parser; /16, /24 and /32
+  all panic. That is why the prefix in the send-direction case is a /8.
+
+### What it means for part 6, which is the reason this part came first
+
+**GoBGP's own node descriptors are not in ascending sub-TLV order**:
+512, then 516, then 513, where section 5.2.1.4 says "The sub-TLVs within
+a Node Descriptor MUST be arranged in ascending order by sub-TLV type".
+bgp4r reports the order through `Node_descriptors#ordered?` and refuses
+nothing, so the route parses and replays.
+
+So the only router available here breaks a rule bgp4r could check, on
+traffic it originates itself, and makes a check section 8.2.2 tells a
+Propagator not to make. Both point the same way: **part 6 follows the
+RFC and not the router**. One router agreeing is not a quorum, and
+here it disagrees with the document in both directions at once.
+
+### What is still not checked
+
+SAFI 72 by anyone, so figure 6 and the 8-octet Route Distinguisher of
+section 5.2 are bgp4r's own reading, as is the VPN next hop of section
+5.5 with its one prepended zero Route Distinguisher. NLRI types 1, 3
+and 4 in the receive direction, since GoBGP will not originate them.
+The attribute of section 5.3, which is part 5. And nothing in either
+test says anything about the TLVs bgp4r does not implement beyond that
+they survive.
+
+**And the framing, in the receive direction only, which sabotage
+measured rather than argued.** GoBGP originates one NLRI per UPDATE,
+and the only NLRI in an attribute has nothing behind it to over-read
+into, so `Link_state.nlri_size` wrong by a constant leaves every
+receive case passing. That is RT-constrain's lesson arriving from the
+other side, and it is why the multi-NLRI cases in
+`test/functional/link_state_test.rb` must not be thinned out: they are
+the only cover the parse-side framing has. The send direction does
+catch it, because GoBGP reads the length and a wrong one sends the
+UPDATE to RFC 7606 rather than to its RIB.

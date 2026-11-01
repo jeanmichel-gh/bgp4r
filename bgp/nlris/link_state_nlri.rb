@@ -81,9 +81,27 @@ module BGP
       HEAD = 9
       ID_WIDTH = 8
 
-      # Table 2 of section 5.2, "Protocol Identifiers", with the IANA
-      # registry's ranges around it: 0 is Reserved, 1 to 6 are these,
-      # and 200 to 255 is Private Use. Read on 2026-10-31.
+      # The IANA "BGP-LS Protocol-IDs" registry, read on 2026-11-01:
+      # 0 is Reserved, 1 to 9 are these, 10 to 199 is Unassigned and
+      # 200 to 255 is Private Use.
+      #
+      # **Table 2 of section 5.2 gives only 1 to 6, and that is not the
+      # whole registry**, which is what this table used to carry and why
+      # bgp4r called a real router's traffic Unassigned. GoBGP 3.23.0
+      # originates with Protocol-ID 7; see
+      # test/functional/lab/link_state_gobgp_test.rb. So the three
+      # outside RFC 9552 each cite the document that assigned it, which
+      # is the registry's own reference and not this one's:
+      #
+      #   7  BGP              RFC 9086 section 4
+      #   8  RSVP-TE          draft-ietf-idr-bgp-ls-te-path-01
+      #   9  Segment Routing  RFC 9857
+      #
+      # 8's reference is a draft, so it is a name and nothing more. It
+      # is here all the same, because what this table decides is what
+      # `protocol` prints, and printing Unassigned for a value IANA has
+      # assigned is a wrong answer where printing the registry's name is
+      # not. Nothing in the library turns on a Protocol-ID.
       PROTOCOLS = {
         1 => 'IS-IS Level 1',
         2 => 'IS-IS Level 2',
@@ -91,6 +109,9 @@ module BGP
         4 => 'Direct',
         5 => 'Static configuration',
         6 => 'OSPFv3',
+        7 => 'BGP',
+        8 => 'RSVP-TE',
+        9 => 'Segment Routing',
       }.freeze
 
       PRIVATE_USE = (200..255)
