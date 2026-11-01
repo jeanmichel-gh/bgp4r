@@ -1101,35 +1101,179 @@ class BgpLsDocTest < Test::Unit::TestCase
     assert(built.include?(263), 'TLV 263 is in Table 6 as well as Table 4')
   end
 
-  # **Forward-looking, and it has fired once.** It said validation knew
-  # nothing of this family; part 6a landed the action vocabulary those
-  # checks need, so the split it watches now is 6a in and 6b out.
+  # **Forward-looking, and it has now fired twice.** It said validation
+  # knew nothing of this family; part 6a landed the action vocabulary
+  # and part 6b the checks, so both halves are in and the guard is
+  # two-sided rather than retired.
   #
-  # Both halves are tied to an observation rather than to a phrase,
-  # which is what this file has paid for three times: the vocabulary is
-  # read out of `Attr::ACTIONS` and the absence of the checks out of
-  # `validation.rb`'s own text.
-  def test_the_action_vocabulary_is_in_and_the_checks_are_not
+  # Every half is tied to an observation rather than to a phrase, which
+  # is what this file has paid for three times: the vocabulary out of
+  # `Attr::ACTIONS`, the checks out of `validation.rb`'s own text, and
+  # the wiring by calling through it.
+  def test_the_action_vocabulary_and_the_checks_are_both_in
     body = source('bgp/path_attributes/validation.rb')
-    # 6b is what puts a check here. Patterns anchored at the start of a
-    # line of code, so a comment naming the family cannot match: the
-    # file already names `Link_state` in part 6a's own comments.
-    assert_equal(nil, body[/^\s+def link_state/],
-                 'a BGP-LS check landed in validation.rb: that is part ' \
-                 "6b, so rewrite #{DOC} section 8 and move part 6 on in " \
-                 'section 7')
-    assert_equal(nil, body[/^\s+Link_state(::|\.)\w/],
-                 'validation.rb reaches Link_state now: that is part 6b, ' \
-                 "so rewrite #{DOC} section 8")
-    # 6a, which is in: both of section 8.2.2's actions are rankable.
+    # Patterns anchored at the start of a line of code, so a comment
+    # naming the family cannot match: the file names `Link_state` in its
+    # prose as well.
+    assert_not_nil(body[/^\s+def link_state_finding/],
+                   "part 6b's NLRI checks left validation.rb: strike the " \
+                   "table in #{DOC} section 8")
+    assert_not_nil(body[/^\s+def link_state_attribute_finding/],
+                   "part 6b's attribute check left validation.rb")
+    assert_not_nil(body[/^\s+def link_state_next_hop_finding/],
+                   "part 6b's next hop check left validation.rb")
+    # 6a: both of section 8.2.2's actions are rankable.
     [:nlri_discard, :afi_safi_disable].each do |a|
       assert(BGP::Attr::ACTIONS.include?(a),
              "#{a} is RFC 9552 section 8.2.2's and part 6a adds it")
     end
     assert_equal(:nlri_discard, BGP::Attr::ACTIONS.first,
                  'the weakest, for the reason section 8 records')
-    assert_match(/^\*\*The checks are not implemented, and the action/, doc)
+    assert_match(/^\*\*Both halves are done\.\*\*/, doc)
+    assert_match(/### The checks bgp4r makes, part 6b/, doc)
     assert_match(/### The action vocabulary, part 6a/, doc)
+  end
+
+  # **One row per place the library can report, discovered from the
+  # library.** Every row of section 8's table is one `Finding.new` in
+  # the BGP-LS block of validation.rb, so counting them there catches
+  # what a listed table cannot, which is a check added with no row to
+  # describe it.
+  #
+  # The slice markers are asserted before the count so the slice cannot
+  # silently become empty and make this vacuous, which is the lesson
+  # the flow spec and EVPN guards each learned by sabotage.
+  #
+  # **The block is at the end of `Check` and not beside the families it
+  # resembles**, because the two sibling doc tests slice this same file
+  # by method name: EVPN from `def evpn_finding` to `def nonzero?`, and
+  # MCAST-VPN from `def mcast_vpn_next_hop_finding` to `def
+  # flow_spec_component_size`. A BGP-LS check written in either window
+  # is counted as that family's and fails its guard. `validation.rb`
+  # says so where the block starts.
+  def test_section_8_has_one_row_per_check_the_library_makes
+    src = source('bgp/path_attributes/validation.rb')
+    first = src.index('def link_state_next_hop_finding')
+    last  = src.index('class Malformed_attribute')
+    assert(first, 'validation.rb has no link_state_next_hop_finding to count')
+    assert(last && last > first,
+           'the slice markers moved, so this guard is measuring nothing')
+    block = src[first...last]
+    assert_equal(block.scan('Finding.new(').size, check_rows.size,
+                 "#{DOC} section 8 does not have one row per check in the " \
+                 'BGP-LS block of validation.rb')
+    assert_operator(check_rows.size, :>=, 8, 'not vacuous either way')
+  end
+
+  # The two rows whose walk is shared answer attribute discard when it
+  # is reached from the BGP-LS Attribute instead of from an NLRI, which
+  # is the one place in section 8's table where the action depends on
+  # the caller. The Action column gives the NLRI side, so the document
+  # has to say that and the library has to agree.
+  def test_the_shared_walk_answers_attribute_discard_from_the_attribute
+    shared = check_rows.select { |r| r[1].include?('attr') }
+    assert_equal(2, shared.size,
+                 "#{DOC} section 8 should have two rows naming an attribute " \
+                 'bullet, which are the walk the two levels share')
+    assert_equal(['nlri discard'], shared.collect { |r| r[2] }.uniq,
+                 'the Action column is the NLRI side')
+    assert_match(/answer \*\*attribute discard\*\* when the same walk is/, doc)
+    a = BGP::Link_state_attribute.new(
+          BGP::Link_state::Tlv::Node_name.new('r1')).to_shex
+    { 'runs past the BGP-LS Attribute' => a[0, 10] + 'ff' + a[12..],
+      'too few for a TLV Type'         => '801d07' + a[6..] + 'ff',
+    }.each do |phrase, hex|
+      f = BGP::Attr::Check.attribute([hex].pack('H*').is_packed)
+      assert_equal(1, f.size, f.collect(&:reason).inspect)
+      assert_equal(:attribute_discard, f.first.action, phrase)
+      assert_match(/#{Regexp.escape(phrase)}/, f.first.reason)
+    end
+  end
+
+  # Every bullet section 8.2.2 lists is answered by at least one row,
+  # and every row names a bullet that exists. The NLRI list has seven
+  # and the attribute three, and the attribute's second is a FLAGS entry
+  # rather than a row, so the table names nine of the ten and the
+  # tenth is asserted below.
+  def test_every_bullet_of_section_8_2_2_is_named_by_a_row
+    named = check_rows.collect { |r| r[1] }.join(' ')
+    (1..7).each do |n|
+      assert_match(/nlri [\d, ]*#{n}/, named,
+                   "no row of #{DOC} section 8 answers NLRI bullet #{n}")
+    end
+    [1, 3].each do |n|
+      assert_match(/attr [\d, ]*#{n}/, named,
+                   "no row answers attribute bullet #{n}")
+    end
+    # The attribute's second bullet is one FLAGS entry rather than a
+    # row, so the document has to say that and the library has to have
+    # the entry. The library half is the one that matters: part 5c
+    # recorded that a guard asserting only this guide's own prose fails
+    # on a rewording with nothing about the claim changing, so the
+    # phrase match is deliberately loose.
+    # `\s+` and not a literal space: the document wraps, and a phrase
+    # straddling a line break is the trap #218 and #219 each paid for.
+    assert_match(/one `FLAGS`\s+entry/, doc)
+    assert_equal(BGP::ATTR::OPTIONAL,
+                 BGP::Attr::Check::FLAGS[BGP::ATTR::BGP_LS],
+                 'section 5.3: optional, non-transitive')
+  end
+
+  # Each row's Action cell against what the library answers for octets
+  # built to trip it. The probes are keyed by a distinctive phrase of
+  # the row's own first cell, so a reworded row fails loudly rather
+  # than quietly matching nothing.
+  def test_every_row_of_section_8_gets_the_action_it_claims
+    one = ls_nlri
+    a   = BGP::Link_state_attribute.new(
+            BGP::Link_state::Tlv::Node_name.new('r1')).to_shex
+    probes = {
+      'too few octets for an NLRI Type' => ls_reach(one + '0001'),
+      'runs past the attribute'         => ls_reach('0001ff15' + one[8..]),
+      'too short for its Protocol-ID'   => ls_reach('000100050000000000'),
+      'too short to frame a TLV'        => ls_reach('00010017' + one[8..] + '0001'),
+      'runs past its container'         => ls_reach(one[0, 26] + '0100ffff' + one[34..]),
+      'sub-TLV type twice'              => ls_reach(ls_dup),
+      'not in section 5.1 order'        => ls_reach(ls_swap),
+      'next hop that is not'            => ls_reach(one, 71, '050000000000'),
+    }
+    assert_equal(check_rows.size, probes.size,
+                 'one probe per row of section 8')
+    check_rows.each do |cell, _bullet, action, _cite|
+      key = probes.keys.find { |k| cell.include?(k) }
+      assert(key, "no probe for #{DOC} section 8 row #{cell.inspect}")
+      f = BGP::Attr::Check.attribute([probes[key].delete(' ')].pack('H*').is_packed)
+      assert_equal(1, f.size, "#{cell}: #{f.collect(&:reason).inspect}")
+      assert_equal(action.tr(' ', '_').to_sym, f.first.action, cell)
+      assert_equal(9, f.first.subcode, cell)
+    end
+  end
+
+  # And the four semantic shapes section 8.2.2 says not to check, which
+  # is the half of this part that is an instruction rather than code.
+  # The document has to name all four, and the library has to report
+  # none of them.
+  def test_the_forbidden_semantic_checks_are_recorded_and_not_made
+    body = doc[/### What is deliberately not checked.*?\n### /m]
+    assert(body, "#{DOC} section 8 has no 'not checked' subsection")
+    ['presence of a mandatory TLV', "fixed-length TLV's length is correct",
+     'TLV field values are permissible',
+     'valid with a particular NLRI type'].each do |phrase|
+      assert_match(/#{Regexp.escape(phrase)}/i, body,
+                   "section 8 does not record that #{phrase.inspect} is " \
+                   'forbidden')
+    end
+    # A Node NLRI with no descriptors, Protocol-ID 0, and a prefix
+    # descriptor in it: three of the four shapes in one NLRI.
+    bare = BGP::Link_state.new(BGP::Link_state::Node.new(
+             0, 1, BGP::Link_state::Tlv::Ip_reachability.new('192.0.2.0/24'))
+           ).to_shex
+    assert_equal([], BGP::Attr::Check.attribute(
+      [ls_reach(bare)].pack('H*').is_packed).collect(&:reason))
+    # And an off-width TLV 1156, the fourth.
+    odd = '801d0c' + '04840008' + '00' * 8
+    assert_equal([], BGP::Attr::Check.attribute(
+      [odd].pack('H*').is_packed).collect(&:reason))
   end
 
   # **This guard has fired and is re-pointed rather than weakened**, the
@@ -1348,18 +1492,16 @@ class BgpLsDocTest < Test::Unit::TestCase
     assert_match(/\Adone\b/, status[5],
                  'all three tables of section 5.3 are registered, so ' \
                  'part 5 is done')
-    # Part 6: tied to the same split the forward-looking validation
-    # guard watches, the vocabulary in and the checks out, so the two
-    # cannot disagree. **Re-pointed once**, when 6a landed.
+    # Part 6: tied to the same observation the validation guard watches,
+    # so the two cannot disagree. **Re-pointed twice**, once when 6a
+    # landed and once when 6b did.
     assert(BGP::Attr::ACTIONS.include?(:nlri_discard),
            "part 6a's vocabulary is in")
-    assert_equal(nil,
-                 source('bgp/path_attributes/validation.rb')[
-                   /^\s+def link_state/],
-                 "part 6b's checks are not")
-    assert_match(/\A6a done.*6b to do\z/, status[6],
-                 'the vocabulary is in and the checks are not, so part 6 ' \
-                 'is 6a done')
+    assert_not_nil(source('bgp/path_attributes/validation.rb')[
+                     /^\s+def link_state_finding/],
+                   "part 6b's checks are in")
+    assert_equal('done', status[6],
+                 'both halves are in, so part 6 is done')
     # **Part 7's row was stale and so was this line.** #220 landed the
     # lab, rewrote section 11 and left both the table row and this
     # assertion saying "to do", and nothing caught it because the two
@@ -1370,6 +1512,58 @@ class BgpLsDocTest < Test::Unit::TestCase
                  'the two BGP-LS lab files are on disk')
     assert_equal('done', status[7],
                  'the lab is measured, so part 7 is done')
+  end
+
+  # Section 8's check table: the first cell, the bullets it answers, the
+  # action and the citation. Read out of the document, so a row added or
+  # reworded moves what the three guards above measure.
+  # **Not written with /x.** Free-spacing mode drops the literal spaces
+  # inside `nlri discard` as well as the ones between the pieces, so the
+  # action alternation never matched and the table read as empty. The
+  # three guards above then passed nothing and failed on their own floor
+  # assertions, which is why those floors are there.
+  ACTION = /nlri discard|attribute discard|session reset/
+
+  def check_rows
+    doc[/### The checks bgp4r makes, part 6b.*?\n### /m]
+      .to_s.each_line.inject([]) do |a, l|
+        m = l.match(/^\|\s*([a-z][^|]*?)\s*\|\s*((?:nlri|attr)[^|]*?)\s*\|\s*(#{ACTION})\s*\|\s*([^|]+?)\s*\|\s*$/)
+        a << [m[1], m[2], m[3], m[4]] if m
+        a
+      end
+  end
+
+  # A clean Node NLRI, built with the library: RFC 9552 carries no hex
+  # anywhere, so a hand written vector here would check this reader's
+  # arithmetic and not the document.
+  def ls_nlri(*tlvs)
+    tlvs = [BGP::Link_state::Tlv::Local_node_descriptors.new(
+              BGP::Link_state::Tlv::Autonomous_system.new(65000))] if tlvs.empty?
+    BGP::Link_state.new(BGP::Link_state::Node.new(0, 1, *tlvs)).to_shex
+  end
+
+  # The same NLRI with one sub-TLV type twice, and with its two Node
+  # Descriptor TLVs written 257 before 256. The head is 9 octets after
+  # the 4 framing ones, so the TLVs start at character 26.
+  def ls_dup
+    ls_nlri(BGP::Link_state::Tlv::Local_node_descriptors.new(
+              BGP::Link_state::Tlv::Autonomous_system.new(65000),
+              BGP::Link_state::Tlv::Autonomous_system.new(65001)))
+  end
+
+  def ls_swap
+    two = ls_nlri(BGP::Link_state::Tlv::Local_node_descriptors.new(
+                    BGP::Link_state::Tlv::Autonomous_system.new(65000)),
+                  BGP::Link_state::Tlv::Remote_node_descriptors.new(
+                    BGP::Link_state::Tlv::Autonomous_system.new(65001)))
+    two[0, 26] + two[50..] + two[26, 24]
+  end
+
+  # An MP_REACH around one Link-State NLRI: AFI 16388, the SAFI, a next
+  # hop and the reserved octet (RFC 4760 section 3).
+  def ls_reach(nlri, safi = IANA::SAFI::BGP_LS, nh = '040a000001')
+    v = '4004' + format('%02x', safi) + nh + '00' + nlri
+    '800e' + format('%02x', v.size / 2) + v
   end
 
 end
