@@ -87,11 +87,11 @@ module BGP
     # 0x47 from RFC 7441, whose header says `Updates: 6514`. 0x00 and
     # 0x80 to 0xff are Reserved.
     #
-    # **Empty in this part**, which lands the framing and the primitives
-    # with nothing dispatching to them, the way #181 did for EVPN and
-    # #156 for the FIB planner. Every type therefore reads back as an
-    # `Unknown` that replays byte for byte. Later parts fill the rows:
-    # 1, 2 and 5 first, then 3, 6 and 7, then 4.
+    # **Three of the seven rows so far**, 1, 2 and 5: the layouts whose
+    # bodies split with no guess. Route types 3, 6 and 7 come next and
+    # route type 4 last, because it is the one the documents do not
+    # settle. A type with no row reads back as an `Unknown` that
+    # replays byte for byte.
     #
     # The three mLDP types are **not** rows to fill. Each carries an
     # mLDP FEC Element that RFC 7441 does not lay out, pointing at RFC
@@ -103,7 +103,11 @@ module BGP
     # than listing it, so a route type class cannot join the library
     # without `docs/mcast-vpn.md` being told, and a class registered
     # here with no row, or a row with no class, fails either way.
-    ROUTES = {}.freeze
+    ROUTES = {
+      Intra_as_i_pmsi.type => Intra_as_i_pmsi,
+      Inter_as_i_pmsi.type => Inter_as_i_pmsi,
+      Source_active.type   => Source_active,
+    }.freeze
 
     # Hash key back to class, for the hash build path. `Unknown` is in
     # here and in no row above, which is the whole point of it: no type
