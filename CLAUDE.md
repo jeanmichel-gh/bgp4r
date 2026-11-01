@@ -101,7 +101,17 @@ bgp/nlris/               prefix encodings (inet, labeled, VPN, RD, mapped IPv4)
                          link_state_tlv.rb: the one TLV of RFC 9552
                          section 5.1, which is one rule for the whole
                          family, with its registry, Tlv::Unknown, the
-                         list reader and the section 5.1 ordering rule;
+                         list reader, the section 5.1 ordering rule and
+                         the **four shared value shapes** every other
+                         file here builds on: Opaque32 a 32-bit
+                         integer, Addr_tlv one address of a fixed
+                         width, Opaque_tlv variable opaque octets and
+                         Text_tlv a 7-bit ASCII name. Each was written
+                         where its first user was and all four moved
+                         here once Table 8 wanted every one of them,
+                         which changed no constant path because every
+                         file in the family reopens
+                         BGP::Link_state::Tlv;
                          link_state.rb the NLRI of section 5.2 with the
                          NLRI Type and Total NLRI Length framing,
                          Link_state.nlri_size, the SAFI 72 Route
@@ -531,7 +541,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. The `lab` job is a matrix, one job per group in `test/lab_groups.rb`, so its cost is the slowest group and not the total: it was 12m42s as one serial suite. Each job installs only what its group needs, which is why the matrix entry carries a `gobgp`, `frr`, `docker` or `netns` flag. The `gobgp` groups pin 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-11-01: 2288 tests, 27645 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.4%.
+Baseline on 2026-11-01: 2294 tests, 27690 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.4%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -4870,7 +4880,80 @@ Two consequences, both of which change the plan rather than decorate it:
              request later.
          * **5b, Table 8.** The **thirteen** link attribute TLVs that
            are new: 1030 and 1031, the remote Router-IDs, then 1088 to
-           1098.
+           1098. **Two pull requests**, because 5a's deferred refactor
+           is now a measured need and is its own topic.
+           * **5b-i, the shared bases lifted into
+             `link_state_tlv.rb`. Done**, in #222. No new TLV and no
+             behaviour change. `Opaque32` was in `link_state_descriptor.rb`,
+             `Addr_tlv` in `link_state_link_descriptor.rb` and
+             `Opaque_tlv` in `link_state_node_attribute.rb`, each
+             written where its first user was, and Table 8 wants all
+             three: 1088 and 1092 are `Opaque32`, 1030 and 1031 are
+             `Addr_tlv`, 1097 is `Opaque_tlv`. 1098 Link Name is
+             1026's shape, so `Node_name`'s text handling comes out as
+             a `Text_tlv` base in the same move. 5a's entry said to do
+             this when a second file reached for `Opaque32`, and that
+             is now; the alternative is three sideways requires and
+             file names that stop describing what they hold. **The
+             move changes no constant path**, since every one of these
+             files reopens `BGP::Link_state::Tlv`, so the test is the
+             suite passing unchanged.
+             * **`Node_descriptors` stayed with Table 3**, which is
+               the line the move draws: it is a base too, and only
+               Table 3 uses it. Shared means more than one of the
+               RFC's tables, not merely abstract.
+             * **Two guards could not be written the obvious way.**
+               Inheriting `Tlv` directly does not make a class a
+               base, since six concrete classes do too; a base is one
+               with no `TYPE`. And **`constants(false)` cannot say
+               which file defined a constant**, because every file
+               here reopens `class Tlv`, so the file placement is
+               held by a text guard and nothing else can hold it.
+               That is the same fact that made the move free,
+               arriving as a limit on checking it.
+             * **Removing a sideways require is where the load order
+               trap bites**, and it bit twice in one change: the node
+               attribute test file and the attribute test file each
+               leaned on `link_state_link_descriptor.rb` arriving
+               transitively through the source's require of it, and
+               both failed standalone while the suite stayed green.
+               The files that lean on a transitive require are not
+               the file being edited, so run every file in the family
+               on its own after a move, not just the ones changed.
+           * **5b-ii, the thirteen classes.** Against bases that are
+             not moving under them.
+         * **Five of Table 8's widths read first hand on 2026-11-01,
+           and two are not what memory gives.** 1091 Unreserved
+           bandwidth is **32 octets**, not 4: RFC 5305 section 3.6 is
+           "eight 32-bit IEEE floating point numbers", one per setup
+           priority 0 to 7, priority 0 first. And 1093 Link Protection
+           Type is **2 octets**, RFC 5307 section 1.2, a protection
+           capability octet then one the section says "SHOULD be set
+           to zero by the sender, and SHOULD be ignored by the
+           receiver", which is keep and echo. The other three are 4
+           each: 1088 a bit mask (section 3.1), 1089 and 1090 single
+           IEEE floats (sections 3.4 and 3.5). **The units are "bytes
+           (not bits!) per second"** in all three bandwidth sections,
+           which is RFC 10005's phrase for the Link Bandwidth
+           extended community and the same trap.
+           * **RFC 5305 fetched from a search result and RFC 5307
+             refused when its URL was reached by editing that path**,
+             one call later. That is the allowlist rule in Rules for
+             agents met again: search first and fetch a result link,
+             every time, not once per session.
+         * **Three of RFC 9552's own link attribute TLVs carry
+           reserved bits**, so 5b-ii is where this family's
+           keep-and-echo rule gets most of its work. 1094 MPLS
+           Protocol Mask is `|L|R| Reserved |`, so `DEFINED_BITS` is
+           0xc0 and "The bits that are not defined MUST be set to 0 by
+           the originator and MUST be ignored by the receiver"; 1093's
+           second octet, above; and **1095 IGP Metric in its 1-octet
+           form**, where "IS-IS small metrics are 6 bits in size but
+           are encoded in a 1-octet field; therefore, the two most
+           significant bits of the field MUST be set to 0". 1095 is
+           also the only variable-width TLV in the family whose widths
+           are an enumeration rather than a multiple: 1 for IS-IS
+           small, 2 for OSPF, 3 for IS-IS wide.
          * **5c, Table 10.** The **six** prefix attribute TLVs, 1152
            to 1157.
          * **The three tables hold 28 rows and 25 distinct new code

@@ -1518,6 +1518,13 @@ module ToHashCatalog
   # sensible instance belongs here; a class merely awkward to build does
   # not.
   NO_RECIPE = {
+    'BGP::Link_state::Tlv::Text_tlv' =>
+      'an abstract base, as Opaque_tlv is: sections 5.3.1.3 and ' \
+      '5.3.2.7 are one shape and two type numbers, the same three ' \
+      'paragraphs with "router node" and "router link" swapped, and ' \
+      'the base supplies neither TYPE nor HASH_KEY nor LABEL, so ' \
+      'every encode raises NameError. Node_name is measured, and ' \
+      'Link_name joins it in part 5b-ii.',
     'BGP::Link_state::Tlv::Opaque_tlv' =>
       'an abstract base, as Opaque32 and Addr_tlv are: it holds the ' \
       'variable-width opaque value that Table 6 rows 1025 and 1027 ' \

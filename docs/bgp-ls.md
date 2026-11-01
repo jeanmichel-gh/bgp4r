@@ -154,6 +154,37 @@ Propagator", not by every receiver. Nothing else in bgp4r's validation
 has a role qualifier, so that is a decision for part 6 rather than a
 patch.
 
+### Four shared bases, which live with the framing
+
+`link_state_tlv.rb` holds four value shapes that more than one of the
+RFC's tables uses, so a TLV class in any of the family's files is
+usually three constants on top of one of them:
+
+| Base | Value | First used by |
+|---|---|---|
+| `Opaque32` | one 32-bit unsigned integer, 4 octets | Table 3's 512, 513 and 514 |
+| `Addr_tlv` | one IP address of a fixed `WIDTH` | Table 4's four address TLVs |
+| `Opaque_tlv` | opaque octets of no fixed width | Table 6's 1025 and 1027 |
+| `Text_tlv` | a symbolic name in 7-bit ASCII | Table 6's 1026 |
+
+**Each was written where its first user was and all four moved here in
+part 5b-i**, once Table 8 turned out to want every one of them: 1088 and
+1092 are `Opaque32`, 1030 and 1031 are `Addr_tlv`, 1097 is `Opaque_tlv`
+and 1098 is `Text_tlv`. Leaving them put would have meant three sideways
+requires and three file names that no longer described what they held.
+
+**The move changed no constant path**, because every file in this family
+reopens `BGP::Link_state::Tlv`, which is also why it was cheap to defer
+until a second table needed one. Phase 1 of the breadth plan in
+`CLAUDE.md` is the same argument one level up: build the shared thing
+when the second caller arrives, not before.
+
+`Text_tlv` came out of `Node_name` in that move rather than being found
+first, and the two sections it serves say why it is one shape: sections
+5.3.1.3 and 5.3.2.7 are the same three paragraphs with "router node" and
+"router link" swapped, down to the 7-bit ASCII rule and the 255 whose
+scope neither settles.
+
 ## 3. The NLRI, section 5.2
 
 ```

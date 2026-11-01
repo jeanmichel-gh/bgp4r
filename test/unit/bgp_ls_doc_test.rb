@@ -856,6 +856,66 @@ class BgpLsDocTest < Test::Unit::TestCase
     end
   end
 
+  # --- section 2's shared bases, part 5b-i -----------------------------
+
+  # The table in section 2 names four bases and where each was first
+  # used. Read out of the document and held against the library, both
+  # ways, so a fifth base or a renamed one fails here.
+  def test_the_shared_bases_table_matches_the_library
+    said = []
+    section('2. The TLV').scan(/^\| `(\w+)` \| /) { said << $1 }
+    assert_equal(%w[Addr_tlv Opaque32 Opaque_tlv Text_tlv], said.sort,
+                 "#{DOC} section 2 must name the four shared bases")
+    # **Two things this guard cannot do, each found by trying.**
+    # Inheriting `Tlv` directly is not what makes a class a base: six
+    # concrete classes do too, among them `Node_flag_bits` and
+    # `Ospf_route_type`. A base is a class with no identity, so no
+    # TYPE. And **`constants(false)` cannot say which file defined
+    # one**, because every file in this family reopens `class Tlv`, so
+    # `Node_descriptors` is in that list from
+    # `link_state_descriptor.rb`. That is the same fact that made the
+    # move free, arriving as a limit on checking it: the file placement
+    # is held by the text guard below and nothing else can hold it.
+    bases = BGP::Link_state::Tlv.constants(false).select do |c|
+      k = BGP::Link_state::Tlv.const_get(c)
+      next false unless k.is_a?(Class) and k <= BGP::Link_state::Tlv
+      next false if k == BGP::Link_state::Tlv::Unknown
+      !k.const_defined?(:TYPE)
+    end.collect(&:to_s).sort
+    assert_equal(%w[Addr_tlv Node_descriptors Opaque32 Opaque_tlv Text_tlv],
+                 bases,
+                 'the abstract TLV bases in the library')
+    assert_equal(said.sort, (bases - %w[Node_descriptors]).sort,
+                 "#{DOC} section 2 names every shared base")
+    # `Node_descriptors` is the one that is **not** shared: only Table
+    # 3 uses it, so it stays with its table, which is the line this
+    # whole move draws.
+    assert_equal([256, 257],
+                 BGP::Link_state::Tlv::REGISTRY.select { |_, k|
+                   k < BGP::Link_state::Tlv::Node_descriptors }.keys.sort)
+  end
+
+  # **And each really is in `link_state_tlv.rb` and not in one of the
+  # table files**, which reading the document cannot say. Part 5b-i
+  # moved all four there; the point of the move is that requiring the
+  # framing file alone is enough for any of them.
+  def test_each_shared_base_is_defined_with_the_framing
+    body = source('bgp/nlris/link_state_tlv.rb')
+    %w[Opaque32 Addr_tlv Opaque_tlv Text_tlv].each do |name|
+      assert_not_equal(nil, body[/^\s+class #{name} < Tlv$/],
+                       "link_state_tlv.rb must define #{name}")
+    end
+    ['bgp/nlris/link_state_descriptor.rb',
+     'bgp/nlris/link_state_link_descriptor.rb',
+     'bgp/nlris/link_state_node_attribute.rb'].each do |path|
+      %w[Opaque32 Addr_tlv Opaque_tlv Text_tlv].each do |name|
+        assert_equal(nil, source(path)[/^\s+class #{name} < Tlv$/],
+                     "#{path} must not define #{name} any more")
+      end
+    end
+    assert_match(/all four moved here in\s+part 5b-i/, doc)
+  end
+
   # --- section 5.3, what part 5 claims ---------------------------------
 
   # The attribute is a path attribute, so what says it works is that it

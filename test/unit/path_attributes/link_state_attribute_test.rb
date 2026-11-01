@@ -28,6 +28,16 @@ require 'bgp/path_attributes/link_state_attribute'
 # which is the load order trap Conventions records and which this
 # family's doc test met three times.
 require 'bgp/path_attributes/path_attribute'
+# `test_nothing_validates` puts a link descriptor TLV in this attribute,
+# which no table of the RFC does, so it needs that file as code. It used
+# to arrive transitively, because `link_state_attribute.rb` required the
+# node attribute file which required the link descriptor file for
+# `Addr_tlv`. Part 5b-i moved `Addr_tlv` to `link_state_tlv.rb` and that
+# chain went with it. **Removing a sideways require is where the load
+# order trap bites**, because the files that leaned on it are not the
+# file being edited: this and the node attribute test file both broke
+# standalone while the suite stayed green.
+require 'bgp/nlris/link_state_link_descriptor'
 
 # **RFC 9552 carries no worked example and no hex anywhere**, measured
 # in part 1. So every expectation here is this reader's arithmetic from

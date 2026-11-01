@@ -22,6 +22,13 @@
 
 require 'test/unit'
 require 'bgp/nlris/link_state_node_attribute'
+# TLV 263 is Table 4's and Table 6's and is registered by the link
+# descriptor file, so the case asserting that it is shared needs that
+# file as code. **The source no longer requires it**: part 5b-i moved
+# `Addr_tlv` into `link_state_tlv.rb`, which was the only reason it
+# did. So the require moved to where the claim is, which is here, and
+# running this file on its own is what said so.
+require 'bgp/nlris/link_state_link_descriptor'
 
 # **RFC 9552 carries no worked example and no hex anywhere**, measured
 # in part 1: the six occurrences of "0x" in the document are the OSPF

@@ -21,7 +21,6 @@
 #++
 
 require 'bgp/nlris/link_state'
-require 'bgp/nlris/link_state_link_descriptor'
 
 module BGP
 
@@ -51,98 +50,19 @@ module BGP
   # NLRI, and a node attribute TLV in a link attribute set builds and
   # encodes.
   #
-  # **The shared bases live with their first user**, so `Addr_tlv` comes
-  # from `link_state_link_descriptor.rb`, which is why this file
-  # requires it. Lifting `Addr_tlv` and `Opaque32` into
-  # `link_state_tlv.rb`, where the framing is, is the obvious tidy and
-  # is deliberately not done here: the move changes no constant path,
-  # since every one of these files reopens `BGP::Link_state::Tlv`, so it
-  # costs nothing to do later and it is a second topic today. Part 5b
-  # wants `Opaque32` as well, which is when the need is real.
+  # **The shared bases are in `link_state_tlv.rb` with the framing**,
+  # so this file requires nothing but `link_state`. `Addr_tlv` came
+  # from `link_state_link_descriptor.rb` when 5a was written, and
+  # `Opaque_tlv` and `Text_tlv` were written here; part 5b-i moved all
+  # four, once Table 8 turned out to want every one of them. The move
+  # changed no constant path, since every one of these files reopens
+  # `BGP::Link_state::Tlv`.
   #
   # **Nothing validates.** Any flag bit, any width, any value, in any
   # order, repeated as often as a caller likes.
   class Link_state
 
     class Tlv
-
-      # A TLV whose whole value is opaque octets of no fixed width.
-      # Table 6 has two, 1025 and 1027, and they differ only in the type
-      # number, the hash key and how each prints.
-      #
-      # **The field form takes raw octets and the hash form takes hex**,
-      # which is `Tlv::Unknown`'s split and is kept here so the family
-      # reads one way. Each path round trips through itself, and a
-      # caller holding hex writes `['0102'].pack('H*')`, which is the
-      # library's own idiom.
-      #
-      # **There is no `is_packed?` branch and no `parse` here, which is
-      # the one place this family's constructor shape does not apply.**
-      # For a fixed-width class that test tells a wire value from a
-      # field value, because the wire branch slices its own octets and
-      # leaves the rest. A variable-width value **is** the octets: both
-      # branches would take everything and reach the same value, and
-      # the only thing left for the test to decide is whether the
-      # caller's String is consumed. Two branches differing in that and
-      # in nothing else is a trap rather than a feature, especially
-      # since `Array#pack` marks its result packed, so almost every
-      # octet string a caller holds would take the consuming one
-      # without the caller choosing it. So one branch, and it copies,
-      # which is what `Tlv::Unknown` does with the same kind of
-      # argument. Do not add a `parse` here without a caller for it.
-      class Opaque_tlv < Tlv
-
-        attr_reader :value
-
-        # new, new(octets), this class's own hash, or another instance.
-        # Wire octets are the `new(octets)` form, marked or not.
-        def initialize(*args)
-          @value = String.new
-          if args.size == 1 and args[0].is_a?(self.class)
-            self.declared_len = args[0].declared_len
-            @value = args[0].value.dup
-          elsif args.size == 1 and args[0].is_a?(Hash)
-            from_hash(args[0])
-          elsif args.size == 1 and args[0].is_a?(String)
-            @value = args[0].dup.b
-          elsif args.empty?
-            # The empty value, which section 5.1 permits outright: "a
-            # TLV with no value portion would have a length of zero".
-          else
-            raise ArgumentError, "invalid argument: #{args.inspect}"
-          end
-          self
-        end
-
-        # A copy, so building from an instance cannot empty the instance
-        # it is copying: the list reader reads with `slice!`.
-        def encode_value
-          @value.dup
-        end
-
-        def value_hash
-          @value.unpack1('H*')
-        end
-
-        def self.label
-          self::LABEL
-        end
-
-        def to_s
-          s = "#{self.class.label} #{@value.size} octets"
-          s += " [#{@value.unpack1('H*')}]" unless @value.empty?
-          s
-        end
-
-        private
-
-        def from_hash(h)
-          read_declared_len(h)
-          h = self.class.unwrap(h)
-          @value = [h.to_s].pack('H*')
-        end
-
-      end
 
       # TLV 1024, section 5.3.1.1: "The Node Flag Bits TLV carries a
       # bitmask describing node attributes. The value is a
@@ -367,68 +287,10 @@ module BGP
       # and 255 of TLV are both readings of that sentence and the
       # section settles neither. So nothing here enforces either, and a
       # longer name builds, which the 2-octet Length field can carry.
-      class Node_name < Tlv
-
+      class Node_name < Text_tlv
         TYPE = 1026
         HASH_KEY = :node_name
         LABEL = 'Node name'
-
-        # The section's number, kept as the figure it gives rather than
-        # as a check. Which of the two readings it means is open, above.
-        MAX_LEN = 255
-
-        attr_reader :name
-
-        # new('router1'), this class's own hash, or another instance.
-        # No `is_packed?` branch and no `parse`, for the reason
-        # `Opaque_tlv`'s comment gives: the value is the octets.
-        def initialize(*args)
-          @name = String.new
-          if args.size == 1 and args[0].is_a?(self.class)
-            self.declared_len = args[0].declared_len
-            @name = args[0].name.dup
-          elsif args.size == 1 and args[0].is_a?(Hash)
-            from_hash(args[0])
-          elsif args.size == 1 and args[0].is_a?(String)
-            @name = args[0].dup.b
-          elsif args.empty?
-            # The empty name, which section 5.1's zero-length value
-            # permits and which the section calls optional.
-          else
-            raise ArgumentError, "invalid argument: #{args.inspect}"
-          end
-          self
-        end
-
-        def encode_value
-          @name.dup
-        end
-
-        # True when every octet is in the 7-bit ASCII the section asks
-        # for. A reader only: nothing refuses a name that is not.
-        def ascii?
-          @name.each_byte.all? { |b| b < 0x80 }
-        end
-
-        # The name as text, for a reader. Binary on the wire, so the
-        # encoding is forced rather than guessed, and a name that is not
-        # ASCII still comes back whole.
-        def value_hash
-          @name.dup.force_encoding(Encoding::UTF_8)
-        end
-
-        def to_s
-          "#{LABEL} '#{@name}'"
-        end
-
-        private
-
-        def from_hash(h)
-          read_declared_len(h)
-          h = self.class.unwrap(h)
-          @name = h.to_s.dup.b
-        end
-
       end
       register Node_name
 

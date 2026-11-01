@@ -585,6 +585,70 @@ class TestLinkStateTlv < Test::Unit::TestCase
     assert_equal(Object, BGP::Link_state::Tlv.superclass)
   end
 
+  # --- the four shared bases, part 5b-i --------------------------------
+
+  # **This file is required on its own, so this is the whole content of
+  # the move.** Before part 5b-i, requiring `link_state_tlv` alone gave
+  # you `Tlv` and `Tlv::Unknown`; `Opaque32` came with the node
+  # descriptors, `Addr_tlv` with the link descriptors and `Opaque_tlv`
+  # with the node attributes. A TLV class in any of the family's files
+  # now has its base from here, which is what stops a fourth file
+  # requiring a third one sideways for a value shape.
+  def test_this_file_defines_the_four_shared_bases
+    [:Opaque32, :Addr_tlv, :Opaque_tlv, :Text_tlv].each do |name|
+      assert(BGP::Link_state::Tlv.const_defined?(name, false),
+             "Link_state::Tlv must define #{name} in link_state_tlv.rb")
+      assert_equal(BGP::Link_state::Tlv,
+                   BGP::Link_state::Tlv.const_get(name).superclass,
+                   "#{name} is a base directly under Tlv")
+    end
+  end
+
+  # Each is abstract: it supplies the value shape and no identity, so
+  # `type`, `hash_key` and therefore `encode` all read a constant it
+  # does not define. That is why each has a NO_RECIPE entry in
+  # `to_hash_catalog.rb` rather than a round trip.
+  def test_each_shared_base_is_abstract
+    [BGP::Link_state::Tlv::Opaque32,
+     BGP::Link_state::Tlv::Addr_tlv,
+     BGP::Link_state::Tlv::Opaque_tlv,
+     BGP::Link_state::Tlv::Text_tlv,
+    ].each do |klass|
+      assert_raise(NameError, klass.to_s) { klass.type }
+      assert_raise(NameError, klass.to_s) { klass.hash_key }
+    end
+  end
+
+  # And none of them is registered, so a base cannot read back as a TLV
+  # type of its own. `Prefix_nlri` has the same guard one level up.
+  def test_no_shared_base_is_registered
+    bases = [BGP::Link_state::Tlv::Opaque32,
+             BGP::Link_state::Tlv::Addr_tlv,
+             BGP::Link_state::Tlv::Opaque_tlv,
+             BGP::Link_state::Tlv::Text_tlv]
+    assert_equal([], BGP::Link_state::Tlv::REGISTRY.values & bases)
+    assert_equal([], BGP::Link_state::Tlv::BY_KEY.values & bases)
+  end
+
+  # A base is usable from here with three constants on top, which is
+  # what every TLV class in the family is. Built and parsed through the
+  # registry, so this exercises the shape rather than restating it.
+  def test_a_base_takes_three_constants_and_works
+    klass = Class.new(BGP::Link_state::Tlv::Opaque32) do
+      const_set(:TYPE, 60200)
+      const_set(:HASH_KEY, :tlv_test_opaque)
+      const_set(:LABEL, 'Probe')
+    end
+    with_registered(klass) do
+      t = klass.new(65000)
+      assert_equal('eb28' + '0004' + '0000fde8', t.to_shex)
+      assert_equal('Probe 65000', t.to_s)
+      assert_equal(t.to_shex,
+                   BGP::Link_state::Tlv.factory([t.to_shex].pack('H*')).to_shex)
+      assert_equal(t.to_shex, klass.new(t.to_hash).to_shex)
+    end
+  end
+
   # Not a test method: a helper, kept below every test and with no
   # `private` above it, because a test method after `private` never
   # runs and nothing says so.
