@@ -73,20 +73,23 @@ bgp/nlris/               prefix encodings (inet, labeled, VPN, RD, mapped IPv4)
                          Source_and_group module that carries the Multicast
                          Source and Group pair for the four layouts that
                          have it, the C_multicast module that is the whole
-                         of section 4.6, and six of the seven route types:
+                         of section 4.6, and **all seven route types**:
                          Intra_as_i_pmsi (4.1), Inter_as_i_pmsi (4.2),
-                         S_pmsi (4.3), Source_active (4.5) and
-                         Shared_tree_join with Source_tree_join (4.6, one
-                         layout and two type numbers). Only route type 4 is
-                         left, and it is the one the documents do not
-                         settle;
+                         S_pmsi (4.3), Leaf_a_d (4.4), Source_active (4.5)
+                         and Shared_tree_join with Source_tree_join (4.6,
+                         one layout and two type numbers). Route type 4's
+                         Route Key is a whole nested NLRI on a reading the
+                         documents do not settle, so Leaf_a_d reaches
+                         Mcast_vpn at call time and is the one class here
+                         that does not work against mcast_vpn_route.rb
+                         alone;
                          mcast_vpn.rb the NLRI with the section 4 Route Type
                          and Length framing and Mcast_vpn.nlri_size, which
                          is Evpn.nlri_size again because the framing is the
                          same shape. **Nothing dispatches to either yet**:
-                         Mcast_vpn::ROUTES holds every route type but 4, a
-                         type outside those reads back as an Unknown that
-                         replays byte for byte, and an MCAST-VPN UPDATE is
+                         Mcast_vpn::ROUTES holds all seven, a type outside
+                         them reads back as an Unknown that replays byte
+                         for byte, and an MCAST-VPN UPDATE is
                          still an Attr::Raw with an Attr::Gap because the
                          wiring is a later part. docs/mcast-vpn.md is the
                          guide, see also "Breadth, the one SAFI lever"
@@ -133,10 +136,16 @@ docs/                    protocol-testing.md: using bgp4r to test a router
                          before putting an MCAST-VPN check in validation.rb.
                          Its load bearing claims are asserted by
                          test/unit/mcast_vpn_doc_test.rb, whose route type
-                         table is **discovered** rather than listed. Three of
+                         table is **discovered** rather than listed. Two of
                          its guards are true only while this family is half
                          built and fail the day the next part lands, which is
-                         deliberate: they name what to update
+                         deliberate: they name what to update.
+                         test_nothing_dispatches_to_safi_5_yet goes with the
+                         wiring and
+                         test_there_is_no_receive_side_check_yet_and_the_document_says_why
+                         with validation; a third,
+                         test_the_document_says_no_route_type_is_implemented_while_that_holds,
+                         is two-sided and already fired
                          building-objects.md: the three ways into every class and how
                          initialize dispatches between them; read it before changing a
                          constructor or chasing an object that does not come back.
@@ -352,7 +361,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. The `lab` job is a matrix, one job per group in `test/lab_groups.rb`, so its cost is the slowest group and not the total: it was 12m42s as one serial suite. Each job installs only what its group needs, which is why the matrix entry carries a `gobgp`, `frr`, `docker` or `netns` flag. The `gobgp` groups pin 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-11-01: 1930 tests, 26017 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.2%.
+Baseline on 2026-11-01: 1945 tests, 26082 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.3%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -3030,12 +3039,12 @@ Two consequences, both of which change the plan rather than decorate it:
             `wait_for`, which overran the foreground limit twice and
             left a patched working tree behind both times. One method
             is about 45s.
-   3. **MCAST-VPN, SAFI 5, RFC 6514. Three of seven parts done**, in
-      #208, #209 and #210: the framing and the primitives, then route
-      types 1, 2 and 5, then 3, 6 and 7. **Every layout but route type
-      4 is in**, and that one is last because it is the one the
-      documents do not settle. Still pure, with nothing dispatching to
-      any of it.
+   3. **MCAST-VPN, SAFI 5, RFC 6514. Four of seven parts done**, in
+      #208, #209, #210 and #211: the framing and the primitives, then
+      route types 1, 2 and 5, then 3, 6 and 7, then 4. **Every layout of
+      section 4 is in**, including the one the documents do not settle.
+      Still pure, with nothing dispatching to any of it, so the wiring
+      is next.
       **The RFC is readable now**, which corrects the note
       this entry used to carry: it was fetched in full on 2026-10-31,
       along with draft-ietf-bess-rfc6514bis-00, which obsoletes it, and
@@ -3105,13 +3114,13 @@ Two consequences, both of which change the plan rather than decorate it:
           needed its own terminology section to say "entire NLRI"**
           before it was more than a reading. RFC 6514 has no such
           sentence.
-        * So part 4 takes that reading and does not assert it: the
-          nested read is accepted only when the result replays byte for
-          byte, which is the rule `Evpn#read_route` already applies, and
-          a body that fails it is kept whole. **Say in the code that it
-          is a reading and not a rule**, per Rules for agents: "I do not
-          know why this is like this" is the honest line until an
-          implementation or a later document answers it.
+        * So part 4 takes that reading and says in the code that it is a
+          reading, per Rules for agents: "I do not know why this is like
+          this" is the honest line until an implementation or a later
+          document answers it. **This bullet used to say the replay
+          check is what keeps the reading from being an assertion, and
+          part 4 found that wrong**; the correction, and what does guard
+          the split, are in part 4's own entry below.
       * **The Originating Router's IP Address has no length field in any
         of the three types that carry it**, 1, 3 and 4, and neither
         document states its width or derives one. Section 8 only asks
@@ -3360,10 +3369,91 @@ Two consequences, both of which change the plan rather than decorate it:
              `class Multicast < Route` with no `TYPE` errors both
              discovery guards with `NameError: uninitialized constant
              BGP::Mcast_vpn::Multicast::TYPE`, naming the constant.
-      4. **Route type 4, the Leaf A-D route**, last of the layouts
-         because it is the one the documents do not settle. The nested
-         read, the replay check that stops it being an assertion, and
-         the fallback that keeps the body.
+      4. **Route type 4, the Leaf A-D route. Done**, in #211, so **every
+         layout of RFC 6514 section 4 is in**. Last because it is the one
+         the documents do not settle: a Route Key of no stated length
+         followed by an Originating Router's IP Address of no stated
+         length, so where one ends is not readable from the octets.
+         `Leaf_a_d` takes the readable reading, that the Route Key is a
+         whole nested NLRI whose extent comes from its own Length octet,
+         and says in the code that it is a reading.
+         * **This entry's own middle clause was wrong and that is the
+           finding of the part.** It read "the replay check that stops it
+           being an assertion", and the replay check does no such thing.
+           The split is read from the nested Length octet, which is one
+           of the body's own octets, so the fields always reproduce the
+           body and `read_route`'s check is satisfied **by
+           construction**. What it catches is a body too short to frame a
+           Route Key at all, and a nested Length that overruns the body.
+           Neither is the thing that matters.
+           * **An earlier draft of the class comment went further and
+             was flatly wrong**, saying the body could be split anywhere
+             and still replay. It cannot: two field pairs of one total
+             size encode to different octets, because the Length that
+             decides the split is one of them. `0101ff` plus a 4-octet
+             address is `0101ff0a000001`; `0104ff0a0000` plus a 1-octet
+             remainder is `0104ff0a000001`. Same length, second octet
+             different. So the reading is at least self consistent.
+           * **The sharper fact, found by sabotage: a reader using
+             another split replays too.** Reading the Route Key two
+             octets short leaves a route type 3 that is still a route
+             type 3, with a shorter Originating Router inside it, and the
+             outer body comes back byte for byte, because the nested
+             Length that lied is echoed. So neither the replay check nor
+             an assertion on the **class** catches a mis-split. Only an
+             assertion on the field values does, which is what
+             `test_the_split_is_pinned_by_the_field_values_and_nothing_else`
+             is for, and it is the only guard on the split there can be.
+             Without it that sabotage failed one unrelated test.
+         * **A sender using another rule is undetectable**, which is the
+           same point from the other end: if the authors meant the Route
+           Type specific part alone with a fixed width address behind it,
+           their octets read into different fields here and nothing on
+           the wire shows it. The one signal available is the remainder's
+           width, since `originator.address` answers nil when what is
+           left is neither 4 nor 16 octets. bgp4r does **not** pick the
+           split by it: choosing by it would be inventing a rule where
+           the documents have none.
+         * **`Leaf_a_d` reaches `Mcast_vpn` at call time and not at load
+           time**, which is what lets a route type in
+           `mcast_vpn_route.rb` hold an NLRI from `mcast_vpn.rb`. So it
+           is the one class there that does not work against that file
+           alone, and **its tests live in
+           `test/unit/nlris/mcast_vpn_test.rb`** beside the framing they
+           exercise. `Evpn::Leaf_a_d` records the same thing for the same
+           reason. The doc test asserts the placement rather than the
+           claim, by reading `mcast_vpn_route_test.rb` for a require of
+           the NLRI and for the class name: a test of it in that file
+           would make the other six route types' independence vacuous.
+           Sabotaged by adding one, which fails the doc guard and errors
+           that file on its own.
+         * **The recursion cost nothing, as part 1 predicted**, and it is
+           the second instance of the shape after EVPN route type 11. A
+           Leaf A-D route inside a Leaf A-D route builds and replays,
+           which no RFC describes and nothing validates.
+         * **The expiring-example count reached four in this family** and
+           the fix was not another re-point. `mcast_vpn_test.rb`'s
+           Unknown cases had already moved off route type 1 in #209 and
+           off route type 3 in #210, where the list was `[4, NO_CLASS]`;
+           route type 4 landing made the 4 wrong. `NO_CLASS`, which is
+           0x43, is assigned and out of scope by **decision** rather than
+           by backlog, so it cannot expire, and the list should have been
+           `NO_CLASS` alone from the start.
+         * Seven sabotages, all landing: the two fields written in the
+           other order fails 5 and errors 1 in the NLRI file plus 1 doc
+           guard; the Route Key read two octets short fails the field
+           value test and `test_nothing_validates_about_a_route_key`; the
+           overrun guard removed fails 1; the too-short-to-frame guard
+           removed fails 1; route type 4 dropped from `ROUTES` fails 2
+           and errors 1 plus the half-wiring guard; the document's table
+           row flipped to no fails the discovery guard; and a `Leaf_a_d`
+           test added to `mcast_vpn_route_test.rb` fails the placement
+           guard and errors that file standalone.
+         * Both files are at 100% line coverage. The last uncovered line
+           was `Leaf_a_d`'s refusal of a third argument, which the layout
+           has no field for, and that is the kind Conventions allows: an
+           input the class cannot represent, not a combination the RFC
+           forbids.
       5. **Wiring to the dispatch sites, plus a loopback functional
          test.** `nlri_size`, `Nlri.factory`, `MpReachCommon#set`, and
          the next hop, where the question is whether two AFIs let this
