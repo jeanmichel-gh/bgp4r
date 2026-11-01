@@ -202,6 +202,28 @@ module BGP
           # address. withdrawn means nothing here either: there is no
           # label for RFC 8277 section 2.4 to replace.
           Rt_constrain.new_ntop(s.is_packed, path_id)
+        when IANA::SAFI::MCAST_VPN
+          # RFC 6514 section 4. The octets handed here are one whole
+          # NLRI, both framing octets included, because
+          # MpReachCommon::ClassMethods#nlri_size asked the family how
+          # long it was, the same as for EVPN.
+          #
+          # **No AFI is passed down, and here that is a measurement
+          # rather than the section fixing one value.** Section 4 allows
+          # AFI 1 or 2, and RFC 6515 section 1.1 says what the choice
+          # decides: AFI 1 means the customer multicast addresses are
+          # IPv4 and AFI 2 means IPv6. But the Multicast Source and
+          # Group fields carry their own length in bits, 32 or 128 by
+          # RFC 6514 section 4.3, so the octets already say which they
+          # are and the AFI would only repeat it. Preferring the in band
+          # field over the outer one is the house rule, the same as
+          # route type 2's IP Address Length against the EVPN NLRI's own
+          # Length. So a capture reads back correctly under either AFI,
+          # which is what no AFI argument means here.
+          #
+          # withdrawn means nothing to this family either: there is no
+          # label for RFC 8277 section 2.4 to replace.
+          Mcast_vpn.new_ntop(s.is_packed, path_id)
         when 133,134
           # RFC 8955 section 4 and section 8. The octets handed here are
           # one whole 2-tuple, length field included, because
