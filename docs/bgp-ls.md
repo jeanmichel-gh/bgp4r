@@ -649,7 +649,7 @@ under "Breadth, the one SAFI lever".
 | 3 | the Link NLRI and the two Prefix NLRIs | **done** |
 | 4 | wiring the NLRI to the dispatch sites | **done** |
 | 5 | the BGP-LS Attribute, code 29, and RFC 9552's attribute TLVs | **done**, 5a, 5b and 5c |
-| 6 | validation, from section 8.2.2 | **6a done**, 6b to do |
+| 6 | validation, from section 8.2.2, as 6a then 6b | **done** |
 | 7 | the lab, in both directions for SAFI 71 | **done** |
 
 **Part 7 came before parts 5 and 6 on purpose**, because what a router
@@ -757,11 +757,9 @@ identifier off before the re-parse and has a test for it.
 
 ## 8. Error handling, section 8.2.2
 
-**The checks are not implemented, and the action vocabulary they need
-is.** Part 6 is two pull requests: 6a, the vocabulary, is done, and 6b
-is the ten checks. The section is readable, so neither is gated on
-anything. What it says, so 6b starts from the document rather than from
-section 5.1 alone:
+**Both halves are done.** Part 6 was two pull requests: 6a the action
+vocabulary and 6b the ten checks on top of it. What the section says,
+read verbatim:
 
 **Two MUST NOTs first.** Neither the Link-State NLRI nor the BGP-LS
 Attribute "MUST NOT be considered malformed or invalid based on the
@@ -800,6 +798,195 @@ described in Section 5.4 of [RFC7606]"; `AFI/SAFI disable`, a SHOULD
 when another AFI/SAFI shares the session; `session reset`, a MUST on a
 BGP-LS-only session; and `Attribute Discard`, a MUST for a skippable
 attribute error, all or nothing by instruction.
+
+### The checks bgp4r makes, part 6b
+
+One row per place the library can report, with the bullets each answers
+and the action it carries. `bgp_ls_doc_test.rb` counts `Finding.new` in
+the BGP-LS block of `validation.rb` against the row count, so a check
+added with no row fails the suite.
+
+**The ten bullets are not ten findings**, because several of them
+describe one walk from a different angle: a Length that overruns its
+container breaks the sum of the lengths *and* is an invalid length, so
+NLRI bullets 3 and 4 are one loop, and the attribute's bullets 1 and 3
+are that same loop reached from the attribute. Hence the two rows whose
+bullet cell names both.
+
+| Check | Bullet | Action | Citation |
+|---|---|---|---|
+| too few octets for an NLRI Type and Total NLRI Length | nlri 1, 2 | session reset | section 5.2 |
+| an NLRI whose Total NLRI Length runs past the attribute | nlri 1, 2 | session reset | section 5.2 |
+| a body too short for its Protocol-ID and Identifier | nlri 3 | nlri discard | section 5.2 |
+| a remainder too short to frame a TLV | nlri 3, 4, attr 1, 3 | nlri discard | section 5.1 |
+| a TLV Length that runs past its container | nlri 3, 4, attr 1, 3 | nlri discard | section 5.1 |
+| a Node Descriptor carrying a sub-TLV type twice | nlri 7 | nlri discard | sections 5.2.1.4 and 8.2.2 |
+| an NLRI whose TLVs are not in section 5.1 order | nlri 6 | nlri discard | sections 5.1 and 8.2.2 |
+| a next hop that is not 4, 16 or 32, or 12, 24 or 40 | nlri 5 | session reset | sections 5.5 and 8.2.2, RFC 7606 section 7.11 |
+
+The Action column is what the check answers inside an NLRI. The two
+shared rows answer **attribute discard** when the same walk is reached
+from the BGP-LS Attribute, which is the one place in this table where
+the action depends on the caller rather than on the check.
+
+The attribute's second bullet is not a row, because it is one `FLAGS`
+entry rather than a check of its own: section 5.3 makes the attribute
+"optional, non-transitive", so `flags_finding` answers a transitive one
+with treat-as-withdraw, as it does for every attribute whose flags it
+knows. Without that entry it takes any optional attribute it does not
+recognize and says nothing.
+
+**The whole NLRI set runs on MP_UNREACH too**, which is new here:
+EVPN's and MCAST-VPN's route checks are MP_REACH only. Bullets 1 and 2
+name MP_REACH_NLRI and MP_UNREACH_NLRI in two sentences of one shape,
+and the rest are about the NLRI, which is the same object in either. So
+`link_state_finding` takes no `reach` argument; only the next hop is
+MP_REACH's alone and it has a method of its own.
+
+### The actions come from the section's criterion, not its examples
+
+8.2.2 gives a criterion and then an example in brackets, and the two do
+not agree. The criterion: an error is `NLRI discard` when it "allows
+for the router to skip the malformed NLRI(s) and continue the
+processing of the rest of the BGP UPDATE message". The example of the
+other case: "length-related encoding errors".
+
+Read the criterion. While each NLRI's Total NLRI Length lands inside
+the attribute, every other NLRI in it is locatable, so skipping one and
+going on is possible and the error is skippable. The two framing
+findings are the case where that fails, and they get a session reset
+through the branch below. A TLV Length that overruns one NLRI's body is
+length-related and still leaves every other NLRI locatable, so by the
+criterion it is skippable even though the parenthetical would put it
+the other way.
+
+Both of the section's own examples fall out of the criterion: an
+ordering violation leaves framing intact and it names that one as
+skippable, and framing that is lost is the non-skippable case it means
+by length-related. The parenthetical is simply looser than the sentence
+it illustrates.
+
+**Every attribute finding is attribute discard**, and that is the same
+criterion one level across. The section's own skippable example is
+"when the BGP-LS Attribute length and the total Path Attribute Length
+are correct but some TLV/sub-TLV length within the BGP-LS Attribute is
+invalid", which is exactly what the attribute check reports. The
+non-skippable case is the attribute's own length against the Path
+Attribute Length, and that is not this family's: `next_attribute` and
+`attribute` answer it for every attribute already.
+
+### The next hop is in scope here and the citation is a chain of three
+
+`mcast_vpn_next_hop_finding` records why MCAST-VPN has this check and
+EVPN and RT-constrain do not: the difference is which RFC states the
+error, not which has an expectation. BGP-LS sits between them.
+
+Bullet 5 asks that "the syntactic correctness of the NLRI fields has
+been verified as per [RFC7606]". RFC 7606 section 7.11 carries the rule
+and leaves the expectation to the family: a next hop length
+"inconsistent with that which was expected" makes the attribute
+malformed, and because "the next hop precedes the NLRI field in the
+attribute" the NLRI cannot be located, so a session reset. Section 5.5
+states the expectation. So nothing is derived except the link between
+them, and that link is 8.2.2's own instruction.
+
+**The one reading it rests on**: "the NLRI fields" means the fields of
+the MP_REACH_NLRI attribute and not only the Link-State NLRI's own.
+Bullets 1 and 2 name "the BGP MP_REACH_NLRI attribute" and its length,
+so the list does range over the attribute; and under the narrow reading
+bullet 5 would say nothing bullets 3 and 4 do not. A bullet with no
+content of its own is the weaker reading of the two.
+
+**The VPN lengths are arithmetic from one sentence** and not a list the
+section gives: 12, 24 and 40, from "an 8-byte Route Distinguisher set
+to all zero is prepended to the next hop", singular. RFC 8950's 48 is
+wrong here, because that repeats the Route Distinguisher per address.
+`mp_reach.rb`'s own next hop arm carries the same reading.
+
+**The Route Distinguisher's value is not checked.** "Set to all zero"
+binds a sender, and a non-zero one is a value rather than a length, so
+the forbidden list below keeps bgp4r out of it.
+
+### Section 5.2.1.4's ordering rule is not in the list, and that is what keeps GoBGP conformant
+
+Bullet 6 cites section 5.1, whose rule is "all TLVs within the NLRI".
+Section 5.2.1.4 states a **separate** ascending-order MUST for the
+sub-TLVs within a Node Descriptor, and section 8.2.2 does not list it.
+That 8.2.2 takes only the other half of 5.2.1.4, the once-only rule of
+bullet 7, is what says its authors had that section open and chose.
+
+So an unordered Node Descriptor is reported by
+`Node_descriptors#ordered?` and by nothing in `validation.rb`. Section
+11 measured why that matters: GoBGP 3.23.0 sends 512, 516, 513 on every
+route it originates, so a check here would call the only router that
+can originate BGP-LS malformed on all of its traffic. The document and
+the measurement agree without either moving, which is the outcome part
+7 was taken early to find.
+
+**Section 5.1's own ordering rule has a scope qualifier and 8.2.2
+settles it.** 5.1 ends "NLRIs having TLVs that do not follow the above
+ordering rules MUST be considered as malformed by a BGP-LS
+Propagator", and bgp4r propagates no BGP-LS so it would not be one.
+8.2.2 introduces its list with "A BGP-LS Speaker MUST perform the
+following syntactic validation of the Link-State NLRI to determine if
+it is malformed" and puts the ordering rule in it. Speaker, not
+Propagator, in the section whose subject is fault management. So the
+check is in scope by the document's own word rather than by a reading
+of it.
+
+### What is deliberately not checked
+
+Each of these is a shape bgp4r reports for EVPN or MCAST-VPN, so each
+is an instruction not to rather than a gap. All four are asserted in
+`validation_test.rb`, and three of them in
+`test/functional/link_state_test.rb` as well, in a case written four
+parts before these checks existed.
+
+* **The presence of a mandatory TLV.** A Node NLRI with no Local Node
+  Descriptors, which section 5.2.1.2 calls mandatory, and an absent TLV
+  1155, whose absence section 5.3.3.4 gives a meaning.
+* **Whether a fixed-length TLV's length is correct.** An off-width TLV
+  1156 becomes a `Tlv::Unknown` with nothing reported, so the
+  keep-and-echo design satisfies this by construction. Note that this
+  and bullet 4 sound alike and are opposite: the bullet asks whether a
+  Length is consistent with the framing around it, this asks whether it
+  matches the width a class expects. Getting them the wrong way round
+  would make bgp4r report what the section forbids.
+* **Whether TLV field values are permissible.** A Protocol-ID of 0,
+  which Table 2 marks Reserved, and a reserved Node Flag Bit arriving
+  set.
+* **Whether a TLV is valid with a particular NLRI type.** A prefix
+  descriptor inside a Node NLRI.
+
+Three more, each for its own reason:
+
+* **The BGP-LS Attribute's TLV ordering**, because section 5.1 makes it
+  a MUST NOT: "The BGP-LS Attribute with unordered TLVs MUST NOT be
+  considered malformed." Reporting it would be an error bgp4r invented.
+  That is why `Tlv.ordered?` makes its caller say which level it is
+  asking about.
+* **An unknown NLRI type's body**, because section 5.2 makes it opaque:
+  nothing establishes that it holds TLVs, so framing one out of it
+  would invent structure, and reporting it would call a correct speaker
+  malformed the day IANA assigns a type.
+* **An MP_REACH with Link-State NLRIs and no BGP-LS Attribute**,
+  because 8.2.2 says it "is most likely an indication that a BGP
+  Speaker preceding it has performed the 'Attribute Discard' fault
+  handling" and that an implementation "SHOULD preserve and propagate"
+  them. The absence is a diagnosis to pass on, not a fault to report.
+
+### A functional case was sending an NLRI no RFC allows
+
+`test_an_unknown_tlv_inside_an_nlri_crosses_a_session` put TLV 255
+after TLV 256, so it was breaking section 5.1's ordering MUST while
+asserting no protocol error. The ordering check found it. The octets
+move, every assertion stays, and the unordered case gets a test of its
+own where it is the subject.
+
+That is the accident `evpn_test.rb` had with RFC 9136 section 3.2 and
+the same fix. It is also the argument for writing a check at all: a
+test suite that only sends what it means to send cannot tell you
+whether it did.
 
 ### The action vocabulary, part 6a
 

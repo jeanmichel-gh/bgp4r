@@ -370,17 +370,61 @@ class LinkStateSessionTest < Test::Unit::TestCase
   # and propagated within both the NLRI and the BGP-LS Attribute", and
   # their presence "MUST NOT result in the NLRI or the BGP-LS Attribute
   # being considered malformed". So no finding either.
+  #
+  # **The unknown TLV comes first, and it has to.** Type 255 sorts
+  # before 256, and section 5.1 wants the NLRI's TLVs in ascending type
+  # order, so written the other way round this case was sending an NLRI
+  # that breaks that MUST while asserting no protocol error. Part 6b's
+  # ordering check is what found it, which is the same accident
+  # `evpn_test.rb` had with RFC 9136 section 3.2 and the same fix: the
+  # octets move, every assertion stays, and the unordered case gets a
+  # test of its own where it is the subject. Type 255 is kept because
+  # Table 17 reserves TLV code points 0 to 255 as "not to be
+  # allocated", so this example cannot expire.
   def test_an_unknown_tlv_inside_an_nlri_crosses_a_session
     session
-    hex = '01000008020000040000fde8' + '00ff0004deadbeef'
+    hex = '00ff0004deadbeef' + '01000008020000040000fde8'
     node = BGP::Link_state::Node.new(
       ['02' + '0000000000000000' + hex].pack('H*').is_packed)
     got = crosses(reach([BGP::Link_state.new(node)]))
     n = mpr(got).nlris.first.nlri
+    assert_equal([BGP::Link_state::Tlv::Unknown,
+                  BGP::Link_state::Tlv::Local_node_descriptors],
+                 n.tlvs.collect(&:class))
+    assert_equal('deadbeef', n.tlvs.first.value.unpack1('H*'))
+  end
+
+  # The same NLRI the other way round, where the breach is the subject
+  # rather than an accident. Section 8.2.2 names this one as its own
+  # example of an error a router can skip, so the action is the RFC's
+  # and not derived: "when the error that is determined allows for the
+  # router to skip the malformed NLRI(s) and continue the processing of
+  # the rest of the BGP UPDATE message (e.g., when the TLV ordering rule
+  # is violated), then it MUST handle such malformed NLRIs as 'NLRI
+  # discard'".
+  #
+  # **This is the only place a BGP-LS check runs on octets that crossed
+  # a socket**, which is what `evpn_test.rb` and `mcast_vpn_test.rb`
+  # each carry one case for: every unit test on the receive side reads
+  # octets the test itself wrote.
+  def test_an_unordered_nlri_is_reported_over_a_session
+    session
+    hex = '01000008020000040000fde8' + '00ff0004deadbeef'
+    node = BGP::Link_state::Node.new(
+      ['02' + '0000000000000000' + hex].pack('H*').is_packed)
+    got = crosses(reach([BGP::Link_state.new(node)]), 1)
+    f = got.path_attribute.errors.first
+    assert_equal(:nlri_discard, f.action,
+                 'section 8.2.2 names the ordering rule as its skippable ' \
+                 'example')
+    assert_equal(9, f.subcode)
+    assert_match(/not in section 5\.1 order/, f.reason)
+    # And the attribute still parsed, so the two channels of #116 are
+    # visibly independent: a protocol error is not a coverage gap.
+    assert_equal(0, got.path_attribute.undecoded.size)
     assert_equal([BGP::Link_state::Tlv::Local_node_descriptors,
                   BGP::Link_state::Tlv::Unknown],
-                 n.tlvs.collect(&:class))
-    assert_equal('deadbeef', n.tlvs.last.value.unpack1('H*'))
+                 mpr(got).nlris.first.nlri.tlvs.collect(&:class))
   end
 
   # --- the next hop, section 5.5 -------------------------------------
@@ -533,6 +577,15 @@ class LinkStateSessionTest < Test::Unit::TestCase
   # among the semantic validations a BGP-LS Propagator should **not**
   # perform. So a Node NLRI with no Local Node Descriptors, a Link NLRI
   # carrying a prefix descriptor and descending TLV order all travel.
+  # **This case is load bearing against part 6b and was written four
+  # parts before it.** Three of the four semantic checks section 8.2.2
+  # says not to make are in these two NLRIs: a Node NLRI with no Local
+  # Node Descriptors, which section 5.2.1.2 calls mandatory; a
+  # Protocol-ID of 0, which Table 2 marks Reserved; and a prefix
+  # descriptor inside a Link NLRI, which is "the inclusion and use of
+  # TLVs/sub-TLVs with specific Link-State NLRI types". So the zero
+  # below is not an absence of coverage, it is the instruction, and a
+  # check that made any of the three an error fails here.
   def test_an_nlri_no_rfc_allows_crosses_a_session
     session
     got = crosses(reach([{ :node => { :protocol_id => 0, :identifier => 0,

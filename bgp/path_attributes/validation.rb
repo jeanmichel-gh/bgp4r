@@ -160,6 +160,14 @@ module BGP
         PMSI_TUNNEL      => OPTIONAL | TRANSITIVE,
         TUNNEL_ENCAP     => OPTIONAL | TRANSITIVE,
         ATTR_SET         => OPTIONAL | TRANSITIVE,   # RFC 6368 section 5
+        # RFC 9552 section 5.3: "The BGP-LS Attribute is an optional,
+        # non-transitive BGP attribute". This one entry is the whole of
+        # section 8.2.2's second attribute bullet, "the syntactic
+        # correctness of the Attributes (including the BGP-LS Attribute)
+        # have been verified as per [RFC7606]", that is this family's to
+        # add: without it flags_finding takes any optional attribute it
+        # does not know and says nothing.
+        BGP_LS           => OPTIONAL,
       }
 
       extend self
@@ -293,7 +301,8 @@ module BGP
           # in. See mcast_vpn_next_hop_finding for which family and why
           # only one.
           f = mcast_vpn_next_hop_finding(type, v.unpack1('n'), v.getbyte(2),
-                                         v.getbyte(3))
+                                         v.getbyte(3)) ||
+              link_state_next_hop_finding(type, v.getbyte(2), v.getbyte(3))
           return f if f
           # Each answers nil for the other's family, so the prefix
           # families pay one comparison each and nothing else.
@@ -302,7 +311,9 @@ module BGP
                  evpn_finding(type, v.byteslice(nlri_at, n - nlri_at),
                               v.unpack1('n'), v.getbyte(2), true) ||
                  mcast_vpn_finding(type, v.byteslice(nlri_at, n - nlri_at),
-                                   v.unpack1('n'), v.getbyte(2), true)
+                                   v.unpack1('n'), v.getbyte(2), true) ||
+                 link_state_finding(type, v.byteslice(nlri_at, n - nlri_at),
+                                    v.getbyte(2))
         when MP_UNREACH
           return Finding.new(type, 9, RESET, "length #{n}, AFI and SAFI need 3 (RFC 7606 section 7.11)") if n < 3
           return flow_spec_finding(type, v.byteslice(3, n - 3),
@@ -310,9 +321,12 @@ module BGP
                  evpn_finding(type, v.byteslice(3, n - 3),
                               v.unpack1('n'), v.getbyte(2), false) ||
                  mcast_vpn_finding(type, v.byteslice(3, n - 3),
-                                   v.unpack1('n'), v.getbyte(2), false)
+                                   v.unpack1('n'), v.getbyte(2), false) ||
+                 link_state_finding(type, v.byteslice(3, n - 3), v.getbyte(2))
         when ATTR_SET
           return attr_set_finding(type, v)
+        when BGP_LS
+          return link_state_attribute_finding(type, v)
         end
         nil
       end
@@ -1020,6 +1034,378 @@ module BGP
         else
           Finding.new(type, 1, DISCARD, "appears more than once, the first one counts (RFC 7606 section 3 (g))")
         end
+      end
+
+      # **The BGP-LS checks sit last and not beside the families they
+      # resemble, which is the second time this file has had to say
+      # so.** Two sibling doc tests slice this file by method name and
+      # count `Finding.new` in between: `evpn_doc_test.rb` from `def
+      # evpn_finding` to `def nonzero?`, and `mcast_vpn_doc_test.rb`
+      # from `def mcast_vpn_next_hop_finding` to `def
+      # flow_spec_component_size`. So a BGP-LS check written in either
+      # window is counted as that family's and fails its guard. The end
+      # of `Check` is in neither, and `bgp_ls_doc_test.rb` slices from
+      # `def link_state_next_hop_finding` to `class
+      # Malformed_attribute`.
+      #
+      # **`BGP_LS` is three different numbers and this module sees the
+      # wrong one.** `ATTR::BGP_LS` is 29 and `include ATTR` is in
+      # effect here, so a bare `BGP_LS` means the attribute code;
+      # `IANA::AFI::BGP_LS` is 16388 and `IANA::SAFI::BGP_LS` is 71.
+      # `iana.rb` warns about the first two sharing a bare name, and
+      # inside `Check` there is a third. Every SAFI below is written out
+      # in full for that reason.
+      #
+      # The MP_REACH next hop's length, SAFI 71 and 72. nil for every
+      # other family, so the rest pay one comparison.
+      #
+      # **The citation is a chain of three and the middle link is this
+      # family's own fault management section**, which is what puts
+      # BGP-LS on the near side of the line `mcast_vpn_next_hop_finding`
+      # draws. RFC 9552 section 8.2.2 asks a BGP-LS Speaker to verify
+      # "The syntactic correctness of the NLRI fields has been verified
+      # as per [RFC7606]"; RFC 7606 section 7.11 says a next hop length
+      # "inconsistent with that which was expected" makes the attribute
+      # malformed and leaves the expectation to the family; and RFC 9552
+      # section 5.5 states the expectation: "If the next-hop length is
+      # 4, then the next hop is an IPv4 address; if the next-hop length
+      # is 16, then it is a global IPv6 address; and if the next-hop
+      # length is 32, then there is one global IPv6 address followed by
+      # an IPv6 link-local address", with "For VPN Subsequent Address
+      # Family Identifier (SAFI), as per custom, an 8-byte Route
+      # Distinguisher set to all zero is prepended to the next hop."
+      #
+      # So this sits between MCAST-VPN, where RFC 6515 states the error
+      # itself, and EVPN and RT-constrain, where neither the family RFC
+      # nor anything else points at RFC 7606 for it. `docs/bgp-ls.md`
+      # section 8 records that ordering and the one reading it rests on,
+      # which is that "the NLRI fields" of bullet 5 means the fields of
+      # the MP_REACH_NLRI attribute and not only the Link-State NLRI's
+      # own. Bullets 1 and 2 name "the BGP MP_REACH_NLRI attribute" and
+      # its length, so the list does range over the attribute; and under
+      # the narrow reading bullet 5 would say nothing bullets 3 and 4 do
+      # not.
+      #
+      # **The VPN lengths are arithmetic from that one sentence**, 8 + 4,
+      # 8 + 16 and 8 + 16 + 16, since section 5.5 gives no list for the
+      # VPN case. One Route Distinguisher for the whole field, not one
+      # per address, which is why these are 12, 24 and 40 where RFC 8950
+      # gives SAFI 128 and 129 24 or 48. `mp_reach.rb`'s own next hop arm
+      # carries the same reading and the same note.
+      #
+      # **The Route Distinguisher's value is not checked.** Section 5.5
+      # says it is "set to all zero", which binds a sender, and a
+      # non-zero one is a value and not a length: section 8.2.2's
+      # forbidden list keeps bgp4r out of values.
+      #
+      # **MP_UNREACH is not checked** because it carries no next hop.
+      def link_state_next_hop_finding(type, safi, len)
+        want = case safi
+               when IANA::SAFI::BGP_LS     then [4, 16, 32]
+               when IANA::SAFI::BGP_LS_VPN then [12, 24, 40]
+               end
+        return nil if want.nil? or want.include?(len)
+        Finding.new(type, 9, RESET,
+          "BGP-LS next hop of #{len} octets, must be " \
+          "#{want[0, 2].join(', ')} or #{want[2]} " \
+          '(RFC 9552 sections 5.5 and 8.2.2, RFC 7606 section 7.11)')
+      end
+
+      # The Link-State NLRI list of an MP_REACH or MP_UNREACH, SAFI 71
+      # and 72. nil for every other family.
+      #
+      # **Every check here is syntactic, by instruction.** RFC 9552
+      # section 8.2.2 opens with two MUST NOTs: neither the NLRI nor the
+      # BGP-LS Attribute "MUST NOT be considered malformed or invalid
+      # based on the inclusion/exclusion of TLVs or contents of the TLV
+      # fields (i.e., semantic errors)". It then names four shapes of
+      # check a BGP-LS Propagator "should not perform": the presence of
+      # a mandatory TLV, whether a fixed-length TLV's length is correct
+      # or a variable one's is permissible, whether TLV field values are
+      # permissible, and whether a TLV is valid with a particular NLRI
+      # type. bgp4r writes checks of all four shapes for EVPN and
+      # MCAST-VPN, so for this family that is an instruction not to
+      # rather than a gap. `docs/bgp-ls.md` section 8 lists them.
+      #
+      # **Which is why "the length of the TLVs are valid" below is not
+      # the length check that is forbidden**, and the two sound alike.
+      # The bullet asks whether a Length field is consistent with the
+      # framing around it, so a TLV claiming more octets than its
+      # container holds. The forbidden one asks whether a Length matches
+      # the width a class expects, which is how an off-width TLV 1156
+      # becomes a `Tlv::Unknown` here with nothing reported at all.
+      #
+      # **The whole set runs on MP_UNREACH too, where EVPN's and
+      # MCAST-VPN's route checks do not.** Bullets 1 and 2 name
+      # MP_REACH_NLRI and MP_UNREACH_NLRI in two sentences of the same
+      # shape, and the rest are about the NLRI, which is the same object
+      # in both. So this takes no `reach` argument: only the next hop is
+      # MP_REACH's alone, and it has a method of its own above.
+      #
+      # **Section 8.2.2's two actions, chosen by its own criterion.**
+      # "When the error that is determined allows for the router to skip
+      # the malformed NLRI(s) and continue the processing of the rest of
+      # the BGP UPDATE message (e.g., when the TLV ordering rule is
+      # violated), then it MUST handle such malformed NLRIs as 'NLRI
+      # discard'". Otherwise "the router SHOULD handle such malformed
+      # NLRIs as 'AFI/SAFI disable' when other AFI/SAFI besides BGP-LS
+      # are being advertised over the same session. Alternately, the
+      # router MUST perform a 'session reset' when the session is only
+      # being used for BGP-LS or if 'AFI/SAFI disable' action is not
+      # possible."
+      #
+      # So the criterion is whether the rest of the UPDATE can still be
+      # read, and that is the outer framing: while each NLRI's Total
+      # NLRI Length lands inside the attribute, every other NLRI is
+      # locatable and the error is skippable. The two framing findings
+      # are the case where it does not, and they get a session reset,
+      # which is the RFC's own alternate branch: `Attr::Check` is handed
+      # one attribute at a time and cannot know what else the session
+      # carries, so AFI/SAFI disable is not possible and the RFC says
+      # what to do then. Part 6a added `:afi_safi_disable` to `ACTIONS`
+      # all the same, for a caller that does have the session.
+      #
+      # **The criterion decides, not the parenthetical.** Section 8.2.2
+      # offers "length-related encoding errors" as its example of the
+      # non-skippable case, and that is looser than the criterion it
+      # illustrates: a TLV Length that overruns one NLRI's body is
+      # length-related and still leaves every other NLRI locatable, so
+      # it is skippable. Read the sentence, not the example in brackets.
+      def link_state_finding(type, nlri, safi)
+        return nil unless safi == IANA::SAFI::BGP_LS or
+                          safi == IANA::SAFI::BGP_LS_VPN
+        framing = ::BGP::Link_state::FRAMING
+        while nlri.size > 0
+          size = ::BGP::Link_state.nlri_size(nlri)
+          # Bullets 1 and 2: the NLRI list has to land on the attribute's
+          # own end, or no sum over it can correspond to the attribute
+          # length. Not skippable, so a session reset.
+          if size.nil?
+            return Finding.new(type, 9, RESET,
+              "#{nlri.size} octet left, too few for a Link-State NLRI Type " \
+              'and Total NLRI Length (RFC 9552 section 5.2)')
+          end
+          if size > nlri.size
+            return Finding.new(type, 9, RESET,
+              "Link-State NLRI of #{size} octets runs past the attribute, " \
+              "#{nlri.size} left (RFC 9552 section 5.2)")
+          end
+          f = link_state_nlri_finding(type, nlri.getbyte(0) << 8 | nlri.getbyte(1),
+                                     nlri.byteslice(framing, size - framing),
+                                     safi)
+          return f if f
+          nlri = nlri.byteslice(size, nlri.size - size)
+        end
+        nil
+      end
+
+      # One Link-State NLRI's body, after its Type and Total NLRI Length.
+      #
+      # **An unknown NLRI type reports nothing, and that is section
+      # 5.2's instruction rather than this family's posture.** "An
+      # implementation MUST handle unknown Link-State NLRI types as
+      # opaque objects and MUST preserve and propagate them." Nothing
+      # establishes that such a body holds TLVs at all, so framing one
+      # out of it would invent structure, and reporting it would make
+      # bgp4r call a correct speaker malformed the day IANA assigns a
+      # type. The four defined types come from `Link_state::TYPES` rather
+      # than being written again here, so they cannot drift from it.
+      #
+      # The head is the Protocol-ID and the 8-octet Identifier that
+      # figures 7 to 9 share, and for SAFI 72 a Route Distinguisher
+      # before it (figure 6).
+      def link_state_nlri_finding(type, nlri_type, body, safi)
+        return nil if ::BGP::Link_state::TYPES[nlri_type].nil?
+        head = ::BGP::Link_state::Headed::HEAD
+        head += ::BGP::Link_state::RD_SIZE if safi == IANA::SAFI::BGP_LS_VPN
+        # Bullet 3, from the bottom: a body with no room for the fields
+        # that precede its TLVs cannot have a TLV sum at all.
+        if body.size < head
+          return Finding.new(type, 9, NLRI_DISCARD,
+            "Link-State NLRI type #{nlri_type} has #{body.size} octets, too " \
+            "few for its #{head} octet header (RFC 9552 section 5.2)")
+        end
+        tlvs = body.byteslice(head, body.size - head)
+        link_state_tlv_finding(type, "NLRI type #{nlri_type}", tlvs, true) ||
+          link_state_order_finding(type, nlri_type, tlvs)
+      end
+
+      # Bullets 3 and 4, and the attribute's 1 and 3, which are one walk:
+      # "The sum of all TLV lengths found in a Link-State NLRI
+      # corresponds to the Total NLRI Length field of all its
+      # descriptors" and "The length of the TLVs and, when the TLV is
+      # recognized then, the length of its sub-TLVs in the NLRI are
+      # valid". A Length that overruns its container breaks the sum, and
+      # a remainder too short to frame a TLV is the same failure from the
+      # other end, so one walk answers both.
+      #
+      # _where_ names the container for the reason, and _nlri_ picks the
+      # action: NLRI discard inside an NLRI, attribute discard inside the
+      # BGP-LS Attribute. The framing octet counts and the sub-TLV
+      # descent are the library's, so neither can drift from the classes.
+      #
+      # **"when the TLV is recognized" has exactly two cases in the
+      # NLRI and none in the attribute.** The Node Descriptor TLVs, 256
+      # and 257, are the only recognized TLVs in this family that carry
+      # sub-TLVs, and no attribute TLV of RFC 9552's three tables carries
+      # any. So the descent below is reachable only from an NLRI, and the
+      # attribute half of that clause has no case to run on. An
+      # unrecognized TLV's value is opaque and is not descended into,
+      # which is what "when the TLV is recognized" says.
+      def link_state_tlv_finding(type, where, tlvs, nlri)
+        action = nlri ? NLRI_DISCARD : DISCARD
+        f = ::BGP::Link_state::FRAMING
+        i = 0
+        while i < tlvs.size
+          if tlvs.size - i < f
+            return Finding.new(type, 9, action,
+              "#{tlvs.size - i} octet left in #{where}, too few for a TLV " \
+              'Type and Length (RFC 9552 section 5.1)')
+          end
+          t   = tlvs.byteslice(i, 2).unpack1('n')
+          len = tlvs.byteslice(i + 2, 2).unpack1('n')
+          if i + f + len > tlvs.size
+            return Finding.new(type, 9, action,
+              "TLV type #{t} of #{len} octets runs past #{where}, " \
+              "#{tlvs.size - i - f} left (RFC 9552 section 5.1)")
+          end
+          if nlri and node_descriptor?(t)
+            g = link_state_tlv_finding(type, "TLV type #{t} in #{where}",
+                                       tlvs.byteslice(i + f, len), true) ||
+                link_state_duplicate_finding(type, t, tlvs.byteslice(i + f, len))
+            return g if g
+          end
+          i += f + len
+        end
+        nil
+      end
+
+      # The two TLVs whose sub-TLVs bullets 4 and 7 reach into, taken
+      # from the classes so they cannot drift from the registry.
+      def node_descriptor?(t)
+        t == ::BGP::Link_state::Tlv::Local_node_descriptors.type or
+          t == ::BGP::Link_state::Tlv::Remote_node_descriptors.type
+      end
+
+      # Bullet 7: "For NLRIs carrying either a Local or Remote Node
+      # Descriptor TLV, there is not more than one instance of a sub-TLV
+      # present." Section 5.2.1.4 is where the rule itself is: "At most,
+      # there MUST be one instance of each sub-TLV type present in any
+      # Node Descriptor."
+      #
+      # The counting is `Node_descriptors#duplicate_types`, so the rule
+      # lives with the class that owns it, which is the house style
+      # `flow_spec_rule_finding` records. The value is reparsed here
+      # rather than taken from the decoder's output, because
+      # `Attr::Check` runs on octets and the two channels stay
+      # independent; the walk above has already bounded it.
+      def link_state_duplicate_finding(type, t, value)
+        dup = ::BGP::Link_state::Tlv::Local_node_descriptors
+                .new(value.dup.is_packed).duplicate_types
+        return nil if dup.empty?
+        Finding.new(type, 9, NLRI_DISCARD,
+          "TLV type #{t} carries sub-TLV type #{dup.join(', ')} more than " \
+          'once (RFC 9552 sections 5.2.1.4 and 8.2.2)')
+      end
+
+      # Bullet 6: "The rule regarding the ordering of TLVs has been
+      # followed as described in Section 5.1." Section 5.1: "all TLVs
+      # within the NLRI MUST be ordered in ascending order by TLV Type.
+      # If there are multiple TLVs of the same type within a single
+      # NLRI, then the TLVs sharing the same type MUST be first in
+      # ascending order based on the Length field followed by ascending
+      # order based on the Value field." The comparison is
+      # `Tlv.ordered?`, in one place, so this asks rather than
+      # reimplementing it.
+      #
+      # This is the one check section 8.2.2 names as its own example of
+      # a skippable error, so the action is not derived.
+      #
+      # **Section 5.1 qualifies the rule by role and section 8.2.2
+      # overrides that.** 5.1 ends "NLRIs having TLVs that do not follow
+      # the above ordering rules MUST be considered as malformed by a
+      # BGP-LS Propagator", where bgp4r propagates no BGP-LS and would
+      # not be one. 8.2.2 introduces its list with "A BGP-LS Speaker
+      # MUST perform the following syntactic validation of the
+      # Link-State NLRI to determine if it is malformed" and puts the
+      # ordering rule in it. Speaker, not Propagator, in the section
+      # whose subject is fault management, so the check is in scope and
+      # the qualifier is settled by the document rather than by a
+      # reading of it.
+      #
+      # **It is the NLRI's own TLVs and not their sub-TLVs**, which is
+      # what keeps GoBGP's own traffic conformant here. Bullet 6 cites
+      # section 5.1, whose rule is "all TLVs within the NLRI"; section
+      # 5.2.1.4 states a separate ascending-order MUST for the sub-TLVs
+      # within a Node Descriptor, and section 8.2.2 does not list it.
+      # That it takes only the other half of 5.2.1.4, the once-only rule
+      # of bullet 7, is what says its authors had that section open and
+      # chose. So an unordered Node Descriptor is reported by
+      # `Node_descriptors#ordered?` and by nothing here, which is also
+      # the finding `docs/bgp-ls.md` section 11 measured: GoBGP 3.23.0
+      # sends 512, 516, 513 on every route it originates.
+      def link_state_order_finding(type, nlri_type, tlvs)
+        list = ::BGP::Link_state::Tlv.parse_list(tlvs.dup.is_packed)
+        return nil if ::BGP::Link_state::Tlv.ordered?(list)
+        Finding.new(type, 9, NLRI_DISCARD,
+          "Link-State NLRI type #{nlri_type} has TLV types " \
+          "#{list.collect(&:type).join(', ')}, which are not in section 5.1 " \
+          'order (RFC 9552 sections 5.1 and 8.2.2)')
+      end
+
+      # The BGP-LS Attribute, code 29, against the three bullets section
+      # 8.2.2 gives it. They are the NLRI's 1, 3 and 4 over again one
+      # level across: the TLV lengths must sum to the attribute's length,
+      # each TLV's Length must be valid, and the attributes must be
+      # syntactically correct per RFC 7606.
+      #
+      # **Every finding here is attribute discard, and that falls out of
+      # the same criterion.** "When the error that is determined allows
+      # for the router to skip the malformed BGP-LS Attribute and
+      # continue the processing of the rest of the BGP UPDATE message
+      # (e.g., when the BGP-LS Attribute length and the total Path
+      # Attribute Length are correct but some TLV/sub-TLV length within
+      # the BGP-LS Attribute is invalid), then it MUST handle such
+      # malformed BGP-LS Attribute as 'Attribute Discard'." The
+      # non-skippable case is the attribute's own length disagreeing with
+      # the Path Attribute Length, and that is not this method's: it is
+      # `next_attribute` and `attribute` above, which already answer it
+      # for every attribute. So what is left for this family is the
+      # skippable half.
+      #
+      # **Attribute discard is all or nothing by instruction**, which is
+      # worth knowing before anyone tries to drop one bad TLV: "Note
+      # that the 'Attribute Discard' action results in the loss of all
+      # TLVs in the BGP-LS Attribute and not the removal of a specific
+      # malformed TLV. The removal of specific malformed TLVs may give a
+      # wrong indication to a BGP-LS Consumer of that specific
+      # information being deleted or not available."
+      #
+      # **Bullet 2 is `flags_finding`'s, through one `FLAGS` entry.**
+      # Section 5.3 makes the attribute "optional, non-transitive", so
+      # `FLAGS[BGP_LS] = OPTIONAL` is the whole of "the syntactic
+      # correctness of the Attributes (including the BGP-LS Attribute)
+      # have been verified as per [RFC7606]" that is this family's to
+      # add. Without the entry `flags_finding` takes any optional
+      # attribute it does not know and says nothing.
+      #
+      # **The attribute's own TLV ordering is not checked and must not
+      # be.** Section 5.1: "The TLVs within the BGP-LS Attribute SHOULD
+      # be ordered in ascending order by TLV type. The BGP-LS Attribute
+      # with unordered TLVs MUST NOT be considered malformed." A MUST
+      # NOT, so reporting it would be a protocol error bgp4r invented.
+      # That is why `Tlv.ordered?` makes its caller say which level it
+      # is asking about.
+      #
+      # **An MP_REACH carrying Link-State NLRIs with no BGP-LS Attribute
+      # is not an error either.** Section 8.2.2: it "is most likely an
+      # indication that a BGP Speaker preceding it has performed the
+      # 'Attribute Discard' fault handling", and an implementation
+      # "SHOULD preserve and propagate the Link-State NLRIs". So the
+      # absence is a diagnosis to pass on, not a fault to report, and
+      # there is deliberately no check for it.
+      def link_state_attribute_finding(type, v)
+        link_state_tlv_finding(type, 'the BGP-LS Attribute', v, false)
       end
 
     end

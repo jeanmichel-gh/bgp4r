@@ -805,6 +805,285 @@ class TestAttrCheck < Test::Unit::TestCase
     assert_equal [[9, RESET]], check('800f06 000105 01ff 0a000001')
   end
 
+  # --- BGP-LS, RFC 9552 section 8.2.2 ---------------------------------
+  #
+  # **Every vector here is built with the library and pasted**, which is
+  # the rule these families have paid for seventeen times: RFC 9552
+  # carries no worked example and no hex anywhere, so a hand written
+  # expectation checks this reader's arithmetic and not the document.
+  # Only the malformed ones are built by hand, because the library will
+  # not encode those, and each says which octet it moved.
+  #
+  # NDL and NDR are a Local and a Remote Node Descriptors TLV, 256 and
+  # 257, each holding one Autonomous System sub-TLV. ONE is a Node NLRI
+  # carrying NDL; TWO carries both, in order.
+  LS   = BGP::Link_state
+  def self.nlri(*tlvs) ; LS.new(LS::Node.new(0, 1, *tlvs)).to_shex ; end
+  def self.as(n) ; LS::Tlv::Autonomous_system.new(n) ; end
+  NDL  = LS::Tlv::Local_node_descriptors.new(as(65000)).to_shex
+  NDR  = LS::Tlv::Remote_node_descriptors.new(as(65001)).to_shex
+  ONE  = nlri(LS::Tlv::Local_node_descriptors.new(as(65000)))
+  TWO  = nlri(LS::Tlv::Local_node_descriptors.new(as(65000)),
+              LS::Tlv::Remote_node_descriptors.new(as(65001)))
+  DUP  = nlri(LS::Tlv::Local_node_descriptors.new(as(65000), as(65001)))
+  # The same two descriptors with 257 written before 256. The head is 9
+  # octets after the 4 framing ones, so the TLVs start at character 26.
+  SWAP = TWO[0, 26] + TWO[50..] + TWO[26, 24]
+  # ONE again under SAFI 72, where figure 6 puts a Route Distinguisher
+  # before the head. The same octets read under SAFI 71 are a different
+  # valid NLRI, which is why the SAFI is a parse-time input here.
+  VPN  = LS.new(:rd => [100, 200],
+                :node => { :protocol_id => 0, :identifier => 1,
+                           :tlvs => [{ :local_node_descriptors =>
+                                       [{ :autonomous_system => 65000 }] }] }
+               ).to_shex
+
+  # An MP_REACH or MP_UNREACH around one or more Link-State NLRIs:
+  # AFI 16388, the SAFI, and for MP_REACH a next hop and the reserved
+  # octet (RFC 4760 section 3).
+  def ls_reach(nlri, safi = IANA::SAFI::BGP_LS, nh = '040a000001')
+    v = '4004' + format('%02x', safi) + nh + '00' + nlri
+    '800e' + format('%02x', v.size / 2) + v
+  end
+
+  def ls_unreach(nlri, safi = IANA::SAFI::BGP_LS)
+    v = '4004' + format('%02x', safi) + nlri
+    '800f' + format('%02x', v.size / 2) + v
+  end
+
+  def test_a_clean_bgp_ls_update_has_no_findings
+    [ls_reach(ONE), ls_reach(TWO), ls_unreach(ONE), ls_unreach(TWO),
+     # SAFI 72, where the NLRI carries a Route Distinguisher and the
+     # next hop is 12, 24 or 40 octets.
+     ls_reach(VPN, IANA::SAFI::BGP_LS_VPN, '0c' + '00' * 12),
+     ls_unreach(VPN, IANA::SAFI::BGP_LS_VPN),
+     # and the BGP-LS Attribute itself
+     BGP::Link_state_attribute.new(LS::Tlv::Node_name.new('r1')).to_shex,
+     BGP::Link_state_attribute.new(LS::Tlv::Node_flag_bits.new(:overload),
+                                   LS::Tlv::Node_name.new('r1')).to_shex,
+    ].each { |hex| assert_equal [], check(hex), hex }
+  end
+
+  # Bullets 1 and 2: "The sum of all TLV lengths found in the BGP
+  # MP_REACH_NLRI attribute corresponds to the BGP MP_REACH_NLRI
+  # length", and the same sentence for MP_UNREACH_NLRI. Broken framing
+  # is the case where no other NLRI in the attribute is locatable, so it
+  # is the non-skippable one and gets a session reset.
+  def test_the_nlri_list_has_to_land_on_the_attributes_end
+    short = ls_reach(ONE + '0001')
+    assert_equal [[9, RESET]], check(short)
+    assert_match(/too few for a Link-State NLRI Type and Total NLRI Length/,
+                 reason(short))
+    # Total NLRI Length 0xff15 where 0x0015 arrived.
+    over = ls_reach('0001ff15' + ONE[8..])
+    assert_equal [[9, RESET]], check(over)
+    assert_match(/runs past the attribute, 25 left/, reason(over))
+    # Both on a withdrawal too, since bullet 2 is bullet 1's sentence.
+    assert_equal [[9, RESET]], check(ls_unreach(ONE + '0001'))
+    assert_equal [[9, RESET]], check(ls_unreach('0001ff15' + ONE[8..]))
+  end
+
+  # Bullet 3, from the bottom: a body with no room for the Protocol-ID
+  # and Identifier of figures 7 to 9 cannot have a TLV sum at all. The
+  # outer framing is intact here, so the error is skippable.
+  def test_a_body_too_short_for_its_head
+    hex = ls_reach('000100050000000000')
+    assert_equal [[9, Attr::Check::NLRI_DISCARD]], check(hex)
+    assert_match(/has 5 octets, too few for its 9 octet header/, reason(hex))
+    # SAFI 72 wants 8 more for the Route Distinguisher (figure 6), so
+    # the same body is short there and says so with the larger number.
+    vpn = ls_reach('0001000d' + '000000000000000000' + '00000064',
+                   IANA::SAFI::BGP_LS_VPN, '0c' + '00' * 12)
+    assert_equal [[9, Attr::Check::NLRI_DISCARD]], check(vpn)
+    assert_match(/too few for its 17 octet header/, reason(vpn))
+  end
+
+  # Bullets 3 and 4, which are one walk: a Length that overruns its
+  # container breaks the sum, and a remainder too short to frame a TLV
+  # is the same failure from the other end.
+  def test_a_tlv_length_that_overruns_its_container
+    # TLV 256's own Length made 0xffff.
+    tlv = ls_reach(ONE[0, 26] + '0100ffff' + ONE[34..])
+    assert_equal [[9, Attr::Check::NLRI_DISCARD]], check(tlv)
+    assert_match(/TLV type 256 of 65535 octets runs past NLRI type 1, 8 left/,
+                 reason(tlv))
+    # "when the TLV is recognized then, the length of its sub-TLVs":
+    # sub-TLV 512 inside TLV 256, which is one of the two recognized
+    # TLVs in this family that carry any.
+    sub = ls_reach(ONE[0, 34] + '0200ffff' + ONE[42..])
+    assert_equal [[9, Attr::Check::NLRI_DISCARD]], check(sub)
+    assert_match(/TLV type 512 of 65535 octets runs past TLV type 256 in NLRI type 1/,
+                 reason(sub))
+    # A remainder too short to frame a TLV, which is two octets of tail
+    # inside an NLRI whose own Total NLRI Length covers them.
+    tail = ls_reach('00010017' + ONE[8..] + '0001')
+    assert_equal [[9, Attr::Check::NLRI_DISCARD]], check(tail)
+    assert_match(/2 octet left in NLRI type 1, too few for a TLV Type and Length/,
+                 reason(tail))
+  end
+
+  # Bullet 6, and section 8.2.2 names this one as its own example of a
+  # skippable error, so neither the action nor the citation is derived.
+  def test_the_section_5_1_ordering_rule
+    assert_equal [[9, Attr::Check::NLRI_DISCARD]], check(ls_reach(SWAP))
+    assert_match(/has TLV types 257, 256, which are not in section 5\.1 order/,
+                 reason(ls_reach(SWAP)))
+    assert_equal [[9, Attr::Check::NLRI_DISCARD]], check(ls_unreach(SWAP))
+  end
+
+  # Bullet 7: "For NLRIs carrying either a Local or Remote Node
+  # Descriptor TLV, there is not more than one instance of a sub-TLV
+  # present."
+  def test_a_node_descriptor_with_a_sub_tlv_twice
+    assert_equal [[9, Attr::Check::NLRI_DISCARD]], check(ls_reach(DUP))
+    assert_match(/TLV type 256 carries sub-TLV type 512 more than once/,
+                 reason(ls_reach(DUP)))
+    # Two different sub-TLV types is not a duplicate.
+    ok = TestAttrCheck.nlri(LS::Tlv::Local_node_descriptors.new(
+           LS::Tlv::Autonomous_system.new(65000),
+           LS::Tlv::Bgp_ls_identifier.new(1)))
+    assert_equal [], check(ls_reach(ok))
+  end
+
+  # Bullet 5, by way of bullet 5's own pointer: "The syntactic
+  # correctness of the NLRI fields has been verified as per [RFC7606]",
+  # RFC 7606 section 7.11 for the rule, RFC 9552 section 5.5 for the
+  # expectation. Section 7.11 has the next hop precede the NLRI, so the
+  # NLRI cannot be located and the action is a session reset.
+  def test_the_next_hop_length
+    [[IANA::SAFI::BGP_LS, [4, 16, 32], '4, 16 or 32', ONE],
+     [IANA::SAFI::BGP_LS_VPN, [12, 24, 40], '12, 24 or 40', VPN]
+    ].each do |safi, ok, words, nlri|
+      ok.each do |len|
+        hex = ls_reach(nlri, safi, format('%02x', len) + '00' * len)
+        assert_equal [], check(hex), "#{safi} next hop of #{len}"
+      end
+      [0, 1, 5, 17, 31, 33, 48].each do |len|
+        next if ok.include?(len)
+        hex = ls_reach(nlri, safi, format('%02x', len) + '00' * len)
+        assert_equal [[9, RESET]], check(hex), "#{safi} next hop of #{len}"
+        assert_equal "BGP-LS next hop of #{len} octets, must be #{words} " \
+                     '(RFC 9552 sections 5.5 and 8.2.2, RFC 7606 section 7.11)',
+                     reason(hex)
+      end
+    end
+    # RFC 8950's 48, which SAFI 128 and 129 allow by repeating the Route
+    # Distinguisher per address, is wrong here: section 5.5 prepends one
+    # to the whole field, so the two-address VPN form is 40.
+    assert_match(/of 48 octets/,
+                 reason(ls_reach(VPN, IANA::SAFI::BGP_LS_VPN, '30' + '00' * 48)))
+  end
+
+  # The BGP-LS Attribute's three bullets. Every finding is attribute
+  # discard, because the non-skippable case is the attribute's own
+  # length against the Path Attribute Length and that is next_attribute
+  # and attribute, which answer it for every attribute already.
+  def test_the_bgp_ls_attribute_tlv_lengths
+    a = BGP::Link_state_attribute.new(LS::Tlv::Node_name.new('r1')).to_shex
+    over = a[0, 10] + 'ff' + a[12..]
+    assert_equal [[9, DISCARD]], check(over)
+    assert_match(/TLV type 1026 of 65282 octets runs past the BGP-LS Attribute/,
+                 reason(over))
+    tail = '801d07' + a[6..] + 'ff'
+    assert_equal [[9, DISCARD]], check(tail)
+    assert_match(/1 octet left in the BGP-LS Attribute, too few for a TLV Type/,
+                 reason(tail))
+  end
+
+  # The second attribute bullet, "the syntactic correctness of the
+  # Attributes (including the BGP-LS Attribute) have been verified as
+  # per [RFC7606]", which for this family is one FLAGS entry: section
+  # 5.3 makes the attribute "optional, non-transitive".
+  def test_the_bgp_ls_attribute_is_optional_non_transitive
+    a = BGP::Link_state_attribute.new(LS::Tlv::Node_name.new('r1')).to_shex
+    assert_equal '80', a[0, 2], 'what the library writes'
+    assert_equal [[4, TAW]], check('c0' + a[2..]), 'transitive'
+    assert_equal [[4, TAW]], check('e0' + a[2..]), 'transitive and partial'
+    assert_equal [[4, TAW]], check('40' + a[2..]), 'well-known'
+  end
+
+  # **What section 8.2.2 says not to check**, which narrows this family
+  # further than any other here. Each of these is a shape bgp4r reports
+  # for EVPN or MCAST-VPN and must not report for BGP-LS, so this is the
+  # instruction asserted rather than a gap.
+  def test_the_semantic_checks_section_8_2_2_forbids
+    # "the length of a fixed-length TLV is correct": TLV 1156 is 4 or 16
+    # by section 5.3.3.5, and eight octets reads back as a Tlv::Unknown
+    # with nothing reported.
+    odd = '801d0c' + '04840008' + '00' * 8
+    assert_equal [], check(odd)
+    # "the values of TLV fields are valid or permissible": Protocol-ID 0
+    # is Reserved in Table 2, which every vector in this block carries,
+    # and a Node Flag Bits TLV with a bit outside DEFINED_BITS set.
+    assert_equal 0, LS::Node.new([ONE].pack('H*')[4..].is_packed).protocol_id
+    assert_equal [], check(ls_reach(ONE))
+    bits = LS::Tlv::Node_flag_bits.new(['02'].pack('H*').is_packed)
+    assert_equal({ :bits => 2 }, bits.to_hash[:node_flag_bits].first,
+                 'a reserved bit arrived set and is kept')
+    assert_equal [], check(BGP::Link_state_attribute.new(bits).to_shex)
+    # "presence of a mandatory TLV": a Node NLRI with no Local Node
+    # Descriptors, which section 5.2.1.2 calls mandatory.
+    assert_equal [], check(ls_reach(TestAttrCheck.nlri))
+    # "the inclusion and use of TLVs/sub-TLVs with specific Link-State
+    # NLRI types": a prefix descriptor inside a Node NLRI.
+    assert_equal [], check(ls_reach(TestAttrCheck.nlri(
+      LS::Tlv::Ip_reachability.new('192.0.2.0/24'))))
+  end
+
+  # Section 5.1 twice over: an unknown TLV type and an unknown NLRI type
+  # are both MUSTs to preserve, and "The presence of unknown or
+  # unexpected TLVs MUST NOT result in the NLRI or the BGP-LS Attribute
+  # being considered malformed".
+  def test_unknown_types_are_never_malformed
+    # An unknown NLRI type's body is opaque by section 5.2, so no TLV is
+    # framed out of it and nothing in it can be reported.
+    assert_equal [], check(ls_reach('00630004deadbeef'))
+    assert_equal [], check(ls_reach('006300090000000000000000ff'))
+    # An unknown TLV in an NLRI, written before 256 so the NLRI is in
+    # section 5.1 order.
+    unk = TestAttrCheck.nlri(LS::Tlv::Unknown.new(255, ['deadbeef'].pack('H*')),
+                             LS::Tlv::Local_node_descriptors.new(
+                               LS::Tlv::Autonomous_system.new(65000)))
+    assert_equal [], check(ls_reach(unk))
+    # And an unknown TLV in the attribute, which is where the lab meets
+    # one: GoBGP sends TLV 1101, the Adjacency SID of RFC 9085.
+    assert_equal [], check(BGP::Link_state_attribute.new(
+      LS::Tlv::Unknown.new(1101, ['00' * 8].pack('H*'))).to_shex)
+  end
+
+  # **The attribute's own TLV ordering is a MUST NOT, not a check.**
+  # Section 5.1: "The TLVs within the BGP-LS Attribute SHOULD be ordered
+  # in ascending order by TLV type. The BGP-LS Attribute with unordered
+  # TLVs MUST NOT be considered malformed." So reporting it would be an
+  # error bgp4r invented.
+  def test_unordered_attribute_tlvs_are_not_malformed
+    a = BGP::Link_state_attribute.new(LS::Tlv::Node_name.new('r1'),
+                                      LS::Tlv::Node_flag_bits.new(:overload))
+    assert_equal [1026, 1024], a.tlvs.collect(&:type), 'descending'
+    assert_equal [], check(a.to_shex)
+  end
+
+  # **And section 5.2.1.4's sub-TLV ordering rule is not in section
+  # 8.2.2's list**, which is what keeps the one router that can
+  # originate BGP-LS conformant here. Bullet 6 cites section 5.1, whose
+  # rule is "all TLVs within the NLRI"; 5.2.1.4 states a separate
+  # ascending-order MUST for a Node Descriptor's sub-TLVs, and 8.2.2
+  # takes only the other half of that section, the once-only rule of
+  # bullet 7. GoBGP 3.23.0 sends 512, 516, 513 on every route it
+  # originates, so a check here would call it malformed on all of them.
+  def test_unordered_node_descriptor_sub_tlvs_are_not_reported
+    # 512, then an unknown 516, then 513: GoBGP's own order.
+    subs = LS::Tlv::Autonomous_system.new(65000).to_shex +
+           LS::Tlv::Unknown.new(516, ['0a000002'].pack('H*')).to_shex +
+           LS::Tlv::Bgp_ls_identifier.new(1).to_shex
+    nd = LS::Tlv::Local_node_descriptors.new([subs].pack('H*').is_packed)
+    assert_equal [512, 516, 513], nd.sub_tlvs.collect(&:type)
+    assert_equal false, nd.ordered?, 'section 5.2.1.4 is broken'
+    assert_equal [], nd.duplicate_types, 'and the other rule holds'
+    assert_equal [], check(ls_reach(TestAttrCheck.nlri(nd))),
+                 'reported by Node_descriptors#ordered? and by nothing here'
+  end
+
   # The reason of the one finding for hex, so a test can assert which
   # rule fired rather than only that something did.
   def reason(hex)
