@@ -560,7 +560,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. The `lab` job is a matrix, one job per group in `test/lab_groups.rb`, so its cost is the slowest group and not the total: it was 12m42s as one serial suite. Each job installs only what its group needs, which is why the matrix entry carries a `gobgp`, `frr`, `docker` or `netns` flag. The `gobgp` groups pin 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-11-01: 2388 tests, 28298 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.5%.
+Baseline on 2026-11-01: 2393 tests, 28318 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.5%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -1594,7 +1594,7 @@ true here is the shape of the gap:
   prints the registered code points, against the 115 the IANA registries
   listed when this was last counted by hand.
 
-### Breadth, the one SAFI lever. Phases 2 and 3 done, phase 4 parts 1, 2 and 3 done, part 4 under way: BGP-LS parts 1 to 5 and 7 of seven, validation left
+### Breadth, the one SAFI lever. Phases 2 and 3 done, phase 4 parts 1, 2 and 3 done, part 4 under way: BGP-LS parts 1 to 5, 6a and 7 of seven, the validation checks left
 
 The section above deferred breadth and named the single limit. This is the
 plan for lifting it, recorded before the work starts.
@@ -2928,9 +2928,9 @@ Two consequences, both of which change the plan rather than decorate it:
    RT-constrain (SAFI 132, RFC 4684), ATTR_SET (attribute 128, RFC
    6368) and MCAST-VPN (SAFI 5, RFC 6514) **are in**; BGP-LS
    (attribute 29, AFI
-   16388, SAFI 71 and 72, RFC 9552) is **under way**, parts 1 to 5 and
-   7 of seven done with only validation left, as the plan under part 4
-   below: part 7 was taken
+   16388, SAFI 71 and 72, RFC 9552) is **under way**, parts 1 to 5, 6a
+   and 7 of seven done with only the validation checks left, as the
+   plan under part 4 below: part 7 was taken
    out of order on purpose, because what a router does decides which
    checks part 6 is worth writing, and it did. This entry used to
    say "each of
@@ -4072,7 +4072,8 @@ Two consequences, both of which change the plan rather than decorate it:
              check-the-proof rule in Rules for agents paying for
              itself again.
    4. **BGP-LS, attribute 29 and AFI 16388 SAFI 71 and 72, RFC 9552.
-      Six of seven parts done, validation left**, largest of the four by a long way, and
+      Six of seven parts done and 6a of the seventh, so the validation
+      checks are what is left**, largest of the four by a long way, and
       last for the reason above. Planned on 2026-10-31 before any code,
       from RFC 9552 read as far as it was then fetchable, its two
       errata, and the IANA registries. Seven parts, the MCAST-VPN
@@ -5300,9 +5301,9 @@ Two consequences, both of which change the plan rather than decorate it:
            alternative, a second TLV namespace under the attribute,
            would need a second registry and would make TLV 263 two
            classes.
-      6. **Validation. No longer gated**, since section 8.2.2 is read.
-         `docs/bgp-ls.md` section 8 has its substance; the shape of the
-         work, so it is not rediscovered:
+      6. **Validation. 6a done, 6b to do**, and no longer gated since
+         section 8.2.2 is read. `docs/bgp-ls.md` section 8 has its
+         substance; the shape of the work, so it is not rediscovered:
          * **Every check is syntactic.** Two MUST NOTs open the
            section: neither the NLRI nor the attribute may "be
            considered malformed or invalid based on the
@@ -5318,19 +5319,83 @@ Two consequences, both of which change the plan rather than decorate it:
            type all named as examples. **bgp4r writes checks of all
            four shapes for EVPN and MCAST-VPN**, so this is an
            instruction not to rather than a gap to fill.
-         * **Two things bgp4r has never done.** `NLRI discard` is an
-           action no part of the library implements, where
-           `Attr::Finding` carries an action and a subcode shaped
-           around RFC 7606 section 3. And the choice between
-           `AFI/SAFI disable` and `session reset` depends on what else
-           is up on the session, which `Attr::Check.attribute` cannot
-           see, since it is handed one attribute at a time. Both want a
-           decision rather than a patch, which is the strongest reason
-           to take part 7 first.
+         * **Two things bgp4r has never done, and reading RFC 7606
+           first hand settled both.** They are why this part is **two
+           pull requests, 6a and 6b**, the way 5b was split: 6a is the
+           action vocabulary alone and 6b the ten checks on top of it,
+           so the checks land against machinery that is not moving
+           under them. That is #125's and #156's shape, and 5b-i's.
+           * **`ACTIONS` is missing one of RFC 7606 section 2's
+             four.** Section 2 lists them "from the one with the
+             'strongest' action to the one with the 'weakest'":
+             session reset, **AFI/SAFI disable**, treat-as-withdraw,
+             attribute discard. bgp4r has the other three in exactly
+             that relative order, reversed, since `strongest` is
+             `max_by` over the index. So `:afi_safi_disable` goes
+             between `:treat_as_withdraw` and `:session_reset` and
+             nothing else moves.
+           * **`NLRI discard` is not one of section 2's four at all**,
+             which is the finding that matters. Section 2 is about
+             **attributes**; 9552 section 8.2.2 calls NLRI discard
+             "processing similar to what is described in Section 5.4
+             of [RFC7606]", and **section 5.4 is "Typed NLRI"**,
+             about discarding one unrecognized typed NLRI and carrying
+             on. So it is per-NLRI where every action bgp4r has is
+             per-attribute, and `Attr::Finding`'s granularity is the
+             attribute. 6a adds it and **records the granularity gap**
+             rather than pretending it is not there: the Finding says
+             the attribute carries a malformed NLRI and the reason
+             names which, and a caller that wants to act per-NLRI
+             reads the reason.
+           * **Where it sits in `ACTIONS` is a decision and not the
+             RFC's**, so record the mechanism. Section 2 does not rank
+             it, since it is not in section 2. What 8.2.2 does say is
+             that it is the case where the router "continue[s] the
+             processing of the rest of the BGP UPDATE message", which
+             is the property section 2 gives attribute discard, so
+             both are continue-actions and neither escalates. It goes
+             **first**, weakest, because it loses one NLRI where
+             attribute discard loses every TLV of an attribute.
+           * **A Finding whose action is not in `ACTIONS` crashes
+             `strongest`**, since `ACTIONS.index` answers nil and
+             `max_by` then compares nil. So the two have to be added to
+             the list and not only used, and that is what makes 6a
+             worth landing on its own. A test pins the crash, so the
+             next action added to a Finding alone fails there rather
+             than in whatever reads the findings.
+           * **`Neighbor` acts on `:session_reset` by name**, in
+             `bgp/neighbor/neighbor.rb`, so neither new action resets a
+             session and neither should: 8.2.2 reaches session reset
+             through its own branch, below.
+           * **bgp4r cannot choose between AFI/SAFI disable and session
+             reset**, because 8.2.2 keys it on whether other AFI/SAFIs
+             are up on the session and `Attr::Check.attribute` is
+             handed one attribute at a time. **That is not a gap to
+             paper over: the RFC provides the branch.** "Alternately,
+             the router MUST perform a 'session reset' when the session
+             is only being used for BGP-LS or if 'AFI/SAFI disable'
+             action is not possible." Not possible is bgp4r's case, so
+             session reset is the RFC's own answer and not a guess, and
+             it is what bgp4r already reports for a malformed MP_REACH.
+             `:afi_safi_disable` is still added, since a caller with
+             session state may want it and the vocabulary is
+             incomplete without it.
          * **Do not invent a subcode**, the trap flow spec part 4, EVPN
            part 9 and MCAST-VPN part 6 each recorded. This is the one
            family whose own RFC names the actions outright, so there is
            less excuse here than in any of them.
+         * **What 8.2.2 forbids, bgp4r already does not do, and that is
+           worth knowing before writing a check.** Its forbidden list
+           includes "the length of a fixed-length TLV is correct", and
+           part 5c's 1156 is exactly that case: a width that is neither
+           4 nor 16 becomes a `Tlv::Unknown` and **nothing is
+           reported**. So the keep-and-echo design satisfies the
+           instruction by construction. The syntactic check 8.2.2 does
+           ask for, "The length of the TLVs ... are valid", is about the
+           length field being consistent with its framing, not about
+           matching a class's expected width. **Those two sound alike
+           and are opposite**, and getting them the wrong way round
+           would make bgp4r report what the section forbids.
       7. **The lab. Done**, in #220, and taken **before** part 6
          because what GoBGP does decides which checks are worth
          having, which is what flow spec part 5 and EVPN part 10 both

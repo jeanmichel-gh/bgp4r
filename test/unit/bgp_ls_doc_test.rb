@@ -1101,17 +1101,35 @@ class BgpLsDocTest < Test::Unit::TestCase
     assert(built.include?(263), 'TLV 263 is in Table 6 as well as Table 4')
   end
 
-  # **Forward-looking.** Part 6 puts the first check in validation.rb,
-  # and section 8 of the document says there is none yet.
-  def test_validation_knows_nothing_of_the_family_yet
+  # **Forward-looking, and it has fired once.** It said validation knew
+  # nothing of this family; part 6a landed the action vocabulary those
+  # checks need, so the split it watches now is 6a in and 6b out.
+  #
+  # Both halves are tied to an observation rather than to a phrase,
+  # which is what this file has paid for three times: the vocabulary is
+  # read out of `Attr::ACTIONS` and the absence of the checks out of
+  # `validation.rb`'s own text.
+  def test_the_action_vocabulary_is_in_and_the_checks_are_not
     body = source('bgp/path_attributes/validation.rb')
+    # 6b is what puts a check here. Patterns anchored at the start of a
+    # line of code, so a comment naming the family cannot match: the
+    # file already names `Link_state` in part 6a's own comments.
     assert_equal(nil, body[/^\s+def link_state/],
-                 'a BGP-LS check landed in validation.rb: that is part 6, ' \
-                 'so rewrite docs/bgp-ls.md section 8')
-    assert_equal(nil, body[/^\s+Link_state\./],
-                 'validation.rb reaches Link_state now: that is part 6, ' \
-                 'so rewrite docs/bgp-ls.md section 8')
-    assert_match(/^\*\*Not implemented\.\*\* Part 6/, doc)
+                 'a BGP-LS check landed in validation.rb: that is part ' \
+                 "6b, so rewrite #{DOC} section 8 and move part 6 on in " \
+                 'section 7')
+    assert_equal(nil, body[/^\s+Link_state(::|\.)\w/],
+                 'validation.rb reaches Link_state now: that is part 6b, ' \
+                 "so rewrite #{DOC} section 8")
+    # 6a, which is in: both of section 8.2.2's actions are rankable.
+    [:nlri_discard, :afi_safi_disable].each do |a|
+      assert(BGP::Attr::ACTIONS.include?(a),
+             "#{a} is RFC 9552 section 8.2.2's and part 6a adds it")
+    end
+    assert_equal(:nlri_discard, BGP::Attr::ACTIONS.first,
+                 'the weakest, for the reason section 8 records')
+    assert_match(/^\*\*The checks are not implemented, and the action/, doc)
+    assert_match(/### The action vocabulary, part 6a/, doc)
   end
 
   # **This guard has fired and is re-pointed rather than weakened**, the
@@ -1330,9 +1348,18 @@ class BgpLsDocTest < Test::Unit::TestCase
     assert_match(/\Adone\b/, status[5],
                  'all three tables of section 5.3 are registered, so ' \
                  'part 5 is done')
-    # Part 6 is what the forward-looking validation guard still watches,
-    # so its status here must agree with that one still passing.
-    assert_equal('to do', status[6])
+    # Part 6: tied to the same split the forward-looking validation
+    # guard watches, the vocabulary in and the checks out, so the two
+    # cannot disagree. **Re-pointed once**, when 6a landed.
+    assert(BGP::Attr::ACTIONS.include?(:nlri_discard),
+           "part 6a's vocabulary is in")
+    assert_equal(nil,
+                 source('bgp/path_attributes/validation.rb')[
+                   /^\s+def link_state/],
+                 "part 6b's checks are not")
+    assert_match(/\A6a done.*6b to do\z/, status[6],
+                 'the vocabulary is in and the checks are not, so part 6 ' \
+                 'is 6a done')
     # **Part 7's row was stale and so was this line.** #220 landed the
     # lab, rewrote section 11 and left both the table row and this
     # assertion saying "to do", and nothing caught it because the two
