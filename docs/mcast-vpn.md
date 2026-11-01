@@ -583,8 +583,15 @@ nothing about the octets is wrong. This is the RFC 9117 situation that
 
 ## 9. No outside reference
 
-**Neither router in the lab implements SAFI 5.** Measured with `strings`
-before any of this was written, the way ATTR_SET's absence was.
+**Neither router in the lab implements SAFI 5.** First measured with
+`strings` before any of this was written, the way ATTR_SET's absence
+was, and **asserted** since, by `mcast_vpn_gobgp_test.rb` and
+`mcast_vpn_frr_test.rb` under `test/functional/lab`. Those two are the
+only lab tests here that measure an absence, and they exist because this
+absence is load bearing: the scope of section 8 and the weakness of the
+loopback test both rest on it, and a fact nothing checks reads as
+verified. If a later release grows the family, they fail and say to come
+back.
 
 GoBGP 3.23.0's address family list is `ipv4-unicast`, `ipv6-unicast`,
 `ipv4-multicast`, `ipv4-labelled-unicast`, `l3vpn-ipv4-unicast`,
@@ -592,12 +599,69 @@ GoBGP 3.23.0's address family list is `ipv4-unicast`, `ipv6-unicast`,
 `l2vpn-evpn`, the flow spec entries and the BGP-LS ones. Its
 `l3vpn-ipv4-multicast` is SAFI 129, not this. FRR 8.4.4 carries five
 `bgp_nlri_parse_` functions, for evpn, flowspec, ip, label and vpn, and
-none for this.
+none for this, and its `address-family` grammar offers `ipv4
+[<unicast|multicast|vpn|labeled-unicast|flowspec>]`, the ipv6 twin and
+`l2vpn evpn`.
 
 So this is the first family in bgp4r with **no outside reference at
 all**, and that is weaker than every family since flow spec. The wire
 format here is bgp4r's own opinion checked against the field widths the
-documents state, and nothing else.
+documents state, and nothing else. **The two lab tests do not change
+that**, which has to be said plainly because a lab test for a family
+usually means the opposite: a router with no parser for SAFI 5 never
+reads our octets, so neither test says anything about whether the
+encoding is right.
+
+### How each router says it does not have the family
+
+Three readings each, because no one of them says it alone, and the
+config half is the cheapest and strongest: the family is not in the
+router's vocabulary, so there is nothing to negotiate.
+
+| | GoBGP 3.23.0 | FRR 8.4.4 |
+|---|---|---|
+| its config | `gobgpd` refuses the file and exits: `mcast-vpn isn't a valid route family name` | `bgpd` logs `No such command on config line N:  address-family ipv4 mcast-vpn` and comes up without it |
+| the capability we offer | records it as `UnknownFamily(65541): received`, which is afi << 16 \| safi | logs `MultiProtocol Extensions capability for afi/safi: IPv4/unknown`, and negotiates nothing: one key in its capability list, not two |
+| an MCAST-VPN UPDATE sent anyway | **discards the message, keeps the session** | **tears the session down, with no NOTIFICATION** |
+
+**The last row is the finding.** Two routers with the same gap answer
+differently, so neither behaviour is bgp4r's to copy, which is the
+flow spec section 4.2 situation again. GoBGP counts the message under
+`Discarded` rather than `Updates`, logs `unknown route family. AFI: 1,
+SAFI: 5`, and leaves the session and an already installed route alone.
+FRR calls it `Attribute MP_REACH_NLRI, parse error`, then `BGP UPDATE
+receipt failed for peer`, then `BGP_Stop (Established->Clearing)`. RFC
+4271 section 6 wants a NOTIFICATION before a close and FRR's path here
+sends none. Recorded and not filed.
+
+**`is_established?` cannot see FRR's reset**, and that is the trap these
+two tests were written through rather than a note for the reader. FRR
+dials back in within a second or two, so a read a few seconds after the
+send finds a session established and concludes nothing happened. The
+first measurement taken here said exactly that, and it was wrong about
+the verdict and not just the detail. Both tests watch
+`Neighbor#on_state_change`, which is what phase 2 of the RIB work added
+it for: a message observer cannot see a drop, and here there is not even
+a NOTIFICATION to observe.
+
+Two more things each test needs, both measured:
+
+* **Read GoBGP's capability before sending anything in the family.** It
+  stops printing `UnknownFamily(65541)` once an MCAST-VPN UPDATE
+  arrives, logging `Capability was disabled`. A test reading it
+  afterwards would find nothing and could conclude the capability was
+  never received. Be exact about that log line, because EVPN section 9
+  records it overstating what GoBGP did: there a route type 3 still
+  installed on the same session after it. Here the family really is
+  dropped from the neighbor output. What it never means either way is
+  that the session is over.
+* **The control route is an MP_REACH_NLRI for SAFI 1, not an RFC 4271
+  section 4.3 UPDATE.** That holds the attribute, the next hop and the
+  AS_PATH constant and varies only the SAFI, so a discard or a reset
+  cannot be the router objecting to MP_REACH or to our encoding of it.
+  Measured: both routers install it. FRR's needs a non-loopback next
+  hop, `Frr::NEXT_HOP`, for the reason `rib_router_frr_test.rb`
+  records.
 
 **RFC 6515 narrowed that gap without closing it**, which is the one
 qualification worth adding. Reading it turned the next hop rule and the
