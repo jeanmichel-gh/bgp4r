@@ -107,6 +107,13 @@ module IANA
     FCWWNN = 23
     GWID = 24
     L2VPN = 25
+    # RFC 9552 section 7: "IANA has assigned address family number 16388
+    # (BGP-LS) in the 'Address Family Numbers' registry."
+    #
+    # **SAFI::BGP_LS is a different number under the same name**, 71,
+    # because that is what both registries call their entry. Write these
+    # two fully qualified, never as a bare BGP_LS.
+    BGP_LS = 16388
     def self.set_h_afis
       h_afis = Hash.new
       constants.each do |c|
@@ -149,6 +156,18 @@ module IANA
     # 70." Carried with AFI 25, L2VPN, which section 7 names in the same
     # breath: "an AFI of 25 (L2VPN) and a SAFI of 70 (EVPN)".
     EVPN = 70
+    # RFC 9552 section 7: "IANA has assigned SAFI values 71 (BGP-LS) and
+    # 72 (BGP-LS-VPN) in the 'SAFI Values' registry". Both are carried
+    # with AFI 16388, which section 5.2 says in so many words: "All
+    # non-VPN link, node, and prefix information SHALL be encoded using
+    # AFI 16388 / SAFI 71. VPN link, node, and prefix information SHALL
+    # be encoded using AFI 16388 / SAFI 72."
+    #
+    # **AFI::BGP_LS is a different number under the same name**, 16388,
+    # because that is what both registries call their entry. Write these
+    # two fully qualified, never as a bare BGP_LS.
+    BGP_LS = 71
+    BGP_LS_VPN = 72
     MPLS_VPN_UNICAST = 128
     MPLS_VPN_Multicast = 129
     ROUTE_TARGET_CONSTRAINTS = 132

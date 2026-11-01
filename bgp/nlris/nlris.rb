@@ -13,4 +13,6 @@
   mcast_vpn_route
   mcast_vpn
   rt_constrain
+  link_state_tlv
+  link_state
 }.each { |n| require "bgp/nlris/#{n}" }

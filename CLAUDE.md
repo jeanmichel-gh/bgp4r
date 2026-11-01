@@ -98,6 +98,22 @@ bgp/nlris/               prefix encodings (inet, labeled, VPN, RD, mapped IPv4)
                          three mLDP types land by decision.
                          docs/mcast-vpn.md is the
                          guide, see also "Breadth, the one SAFI lever"
+                         link_state_tlv.rb: the one TLV of RFC 9552
+                         section 5.1, which is one rule for the whole
+                         family, with its registry, Tlv::Unknown, the
+                         list reader and the section 5.1 ordering rule;
+                         link_state.rb the NLRI of section 5.2 with the
+                         NLRI Type and Total NLRI Length framing,
+                         Link_state.nlri_size, the SAFI 72 Route
+                         Distinguisher and Link_state::Unknown. **Pure:
+                         nothing dispatches to either yet**, so a
+                         BGP-LS UPDATE still comes back as an Attr::Raw
+                         with an Attr::Gap. Both registries are empty,
+                         so every TLV and every NLRI type reads back as
+                         its level's Unknown and replays byte for byte.
+                         Two Unknowns one level apart, so write both
+                         names in full. docs/bgp-ls.md is the guide,
+                         see also "Breadth, the one SAFI lever"
 bgp/optional_parameters/ OPEN capabilities (4-byte AS, add-path, graceful restart...)
 bgp/orfs/                outbound route filtering
 bgp/neighbor/            the BGP finite state machine and TCP session (neighbor.rb)
@@ -158,6 +174,22 @@ docs/                    protocol-testing.md: using bgp4r to test a router
                          of mcast_vpn_route_finding's case rather than by
                          Finding.new, because RFC 6515 states one sentence
                          four times and the library answers it once
+                         bgp-ls.md: RFC 9552 on the wire, the whole
+                         document, which was attached rather than fetched
+                         because four sources truncate it in section 5.2
+                         or 5.3. Read it before touching
+                         link_state_tlv.rb or link_state.rb, before
+                         adding a TLV type or an NLRI type, before
+                         changing how mp_reach.rb and mp_unreach.rb frame
+                         an NLRI or read a next hop, and before putting a
+                         BGP-LS check in validation.rb, whose scope
+                         section 8.2.2 **narrows** rather than widens:
+                         it lists four kinds of semantic check bgp4r
+                         makes for other families and says not to make
+                         them here. Its load bearing claims are asserted
+                         by test/unit/bgp_ls_doc_test.rb, whose NLRI type
+                         table is **discovered** and which carries six
+                         forward-looking guards for the later parts
                          building-objects.md: the three ways into every class and how
                          initialize dispatches between them; read it before changing a
                          constructor or chasing an object that does not come back.
@@ -397,7 +429,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. The `lab` job is a matrix, one job per group in `test/lab_groups.rb`, so its cost is the slowest group and not the total: it was 12m42s as one serial suite. Each job installs only what its group needs, which is why the matrix entry carries a `gobgp`, `frr`, `docker` or `netns` flag. The `gobgp` groups pin 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-11-01: 1958 tests, 26203 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.3%.
+Baseline on 2026-11-01: 2074 tests, 26536 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.3%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -1414,7 +1446,7 @@ true here is the shape of the gap:
   prints the registered code points, against the 115 the IANA registries
   listed when this was last counted by hand.
 
-### Breadth, the one SAFI lever. Phases 2 and 3 done, phase 4 parts 1, 2 and 3 done, part 4 planned
+### Breadth, the one SAFI lever. Phases 2 and 3 done, phase 4 parts 1, 2 and 3 done, part 4 under way
 
 The section above deferred breadth and named the single limit. This is the
 plan for lifting it, recorded before the work starts.
@@ -2748,8 +2780,8 @@ Two consequences, both of which change the plan rather than decorate it:
    RT-constrain (SAFI 132, RFC 4684), ATTR_SET (attribute 128, RFC
    6368) and MCAST-VPN (SAFI 5, RFC 6514) **are in**; BGP-LS
    (attribute 29, AFI
-   16388, SAFI 71 and 72, RFC 9552) is **planned and not started**, as
-   seven parts under part 4 below. This entry used to
+   16388, SAFI 71 and 72, RFC 9552) is **under way**, part 1 of seven
+   done, as the plan under part 4 below. This entry used to
    say "each of
    these is a class and a registration", which held for the first and
    understates the last considerably: BGP-LS is a whole TLV language of
@@ -3888,10 +3920,11 @@ Two consequences, both of which change the plan rather than decorate it:
              check-the-proof rule in Rules for agents paying for
              itself again.
    4. **BGP-LS, attribute 29 and AFI 16388 SAFI 71 and 72, RFC 9552.
-      Not started**, largest of the four by a long way, and last for the
-      reason above. Planned on 2026-10-31 before any code, from RFC
-      9552 read as far as it is fetchable, its two errata, and the IANA
-      registries. Seven parts, the MCAST-VPN shape.
+      Part 1 of seven done**, largest of the four by a long way, and
+      last for the reason above. Planned on 2026-10-31 before any code,
+      from RFC 9552 read as far as it was then fetchable, its two
+      errata, and the IANA registries. Seven parts, the MCAST-VPN
+      shape.
 
       **What was read, and what could not be.** RFC 9552, December
       2023, obsoletes RFC 7752 **and RFC 9029**, the second "by
@@ -3908,17 +3941,19 @@ Two consequences, both of which change the plan rather than decorate it:
         cost to explain such a thing with an invented mechanism. Read
         the errata before disbelieving a figure, and cite the erratum.
         EID 8766, section 5.2.2, is a stray "and" and is editorial.
-      * **Sections 5.4 onward are not fetchable, which is the RFC 4271
-        section 9 situation again.** Four sources were tried on
-        2026-10-31 and all four truncate in section 5.2 or 5.3:
-        rfc-editor.org's HTML, datatracker's HTML, a translation
-        mirror, and a PDF mirror. **The two that are missing and
-        wanted are section 8.2.2 "Fault Management", which is where
+      * **Sections 5.4 onward were not fetchable, and the answer was
+        to ask**, which is the RFC 4271 section 9 situation twice over.
+        Four sources were tried on 2026-10-31 and all four truncate in
+        section 5.2 or 5.3: rfc-editor.org's HTML, datatracker's HTML,
+        a translation mirror, and a PDF mirror. The two that were
+        missing and wanted were section 8.2.2 "Fault Management", where
         this RFC's error handling lives, and section 9 "TLV/Sub-TLV
-        Code Points Summary".** So part 6 is gated on reading 8.2.2
-        and must not be written from anything else; everything before
-        it needs neither. Ask for the document to be attached, which
-        is how section 9 of RFC 4271 was eventually read.
+        Code Points Summary". **Both are read now**, because the
+        document was attached to the session, which is how section 9 of
+        RFC 4271 was eventually read as well. So nothing in this plan
+        is second hand any more and part 6 is no longer gated.
+        **The lesson is that asking took one message and four fetches
+        bought nothing**, so for an RFC whose tail matters, ask early.
       * **The IANA registry stands in for section 9 and is the better
         source anyway**, since IANA maintains it and a summary in a
         2023 document does not. `bgp-ls-parameters`, read on
@@ -3985,21 +4020,27 @@ Two consequences, both of which change the plan rather than decorate it:
       * **Section 5.4, Private Use**: a private-use TLV carries a
         4-octet Enterprise Code first in its value, and a private-use
         NLRI type carries the Enterprise Code immediately after Total
-        NLRI Length. **Provenance: this came out of a PDF mirror and
-        not from either HTML source, and the extraction had lost the
-        normative keywords**, so re-read it against an attached
-        document before implementing it. Recorded with its provenance
-        rather than as settled, which is EVPN part 7's rule about a
-        first-hand reading.
+        NLRI Length. **Read first hand in part 1**, which discharges
+        the provenance note this entry carried: the claim had come out
+        of a PDF mirror whose extraction had lost the normative
+        keywords, and both are MUSTs. **The TLV rule is settled and the
+        NLRI one is not**: for SAFI 72 that sentence and figure 6 both
+        claim the octets immediately after the Total NLRI Length, and
+        nothing in the document settles which comes first. So
+        `Link_state::Tlv::Unknown` reads an Enterprise Code and
+        `Link_state::Unknown` deliberately does not. Whoever implements
+        a private-use NLRI type decides that, and the doc test asserts
+        the asymmetry so the decision cannot be made by accident.
       * The attribute is **optional non-transitive**, code 29, section
         5.3. So the ATTR_SET lab trick is doubly inapplicable: a
         non-transitive attribute does not cross a router that does not
         understand it, where RFC 6368's whole point was that it does.
 
-      **The error handling that is readable, which is not all of it.**
-      Part 6 must read section 8.2.2 before deciding anything, and
-      inventing an action or a subcode is the trap flow spec part 4 and
-      EVPN part 9 each recorded. What the readable text says:
+      **The error handling outside section 8.2.2.** All of it is
+      readable now and 8.2.2's own substance is in the part 6 entry
+      below; these three are elsewhere in the document and are easy to
+      miss from there. Inventing an action or a subcode is still the
+      trap flow spec part 4 and EVPN part 9 each recorded.
       * Section 5.1: unordered TLVs **in an NLRI** "MUST be considered
         as malformed by a BGP-LS Propagator", while unordered TLVs in
         the BGP-LS Attribute are **not** malformed. Note the role:
@@ -4055,19 +4096,112 @@ Two consequences, both of which change the plan rather than decorate it:
         feed our decoder for NLRI type 2. Finding the exact invocation
         is part 7's first step and was deliberately left there.
 
-      1. **The TLV primitive and the NLRI framing, pure.** One TLV
-         class for the whole family, since section 5.1 is one rule,
-         with its own `Unknown`; `Link_state.nlri_size` for the Total
-         NLRI Length framing, the analogue of `Evpn.nlri_size`; and
-         `Link_state::Unknown` for an unknown NLRI type, which section
-         5.2 requires rather than permits. Nothing dispatches to it,
-         the way #181 and #208 landed their families' primitives.
-         `docs/bgp-ls.md` is the guide and
-         `test/unit/bgp_ls_doc_test.rb` asserts its load-bearing
-         claims, with the NLRI type and TLV tables **discovered** and
-         not listed, and with forward-looking guards for the parts
-         below, which is what part 1 of MCAST-VPN did and what made
-         all four of its guards fire on time.
+      1. **The TLV primitive and the NLRI framing, pure. Done**, in
+         #216. `bgp/nlris/link_state_tlv.rb` holds the one TLV of
+         section 5.1 with its registry, its `Unknown`, the list reader
+         and the ordering rule; `bgp/nlris/link_state.rb` holds the
+         NLRI of section 5.2 with `Link_state.nlri_size`, the section
+         5.2 Route Distinguisher and `Link_state::Unknown`. Nothing
+         dispatches to either, the way #181 and #208 landed their
+         families' primitives. `docs/bgp-ls.md` is the guide and
+         `test/unit/bgp_ls_doc_test.rb` asserts its load bearing
+         claims, with the NLRI type table **discovered** and six
+         forward-looking guards for the parts below. Both files at 100%
+         line coverage.
+         * **A registry, not a `case`, which departs from the four
+           families before this one and is measured rather than
+           assumed.** `Link_state::Tlv.register` and
+           `Link_state.register`, both refusing a type or a hash key
+           already taken. Phase 1 above records why a lookup was not
+           worth building for flow spec, EVPN, RT-constrain and
+           MCAST-VPN, where each added one arm to each of two `case`
+           statements. These numbers are not those numbers: 39 TLV code
+           points in RFC 9552's own Table 18 and 139 assigned in the
+           registry. This is `Attr.register`'s shape one and two levels
+           down.
+         * **The whole RFC is readable, so two things the plan recorded
+           as provisional are discharged.** It was attached to the
+           session rather than fetched, the way section 9 of RFC 4271
+           eventually was. Section 5.4's normative keywords, which a
+           PDF mirror had lost, read as the plan guessed: a 4-octet
+           Enterprise Code MUST be first in a private-use TLV's value.
+           And section 8.2.2 is read, so **part 6 is no longer gated**;
+           its substance is in `docs/bgp-ls.md` section 8 and in the
+           part 6 entry below.
+         * **The SAFI is a parse-time input, which is flow spec's
+           situation rather than EVPN's.** Nothing in the octets says
+           whether the section 5.2 RD is there, since figures 5 and 6
+           differ by eight octets and by nothing a reader can see. So
+           `Link_state.new(octets, safi)` takes it, defaulting to 71,
+           and the same capture read either way replays byte for byte.
+           **`nlri_size` needs none of that**, because the Total NLRI
+           Length covers the RD, so one arithmetic frames both SAFIs.
+           That pair is asserted in the doc test.
+         * **Two `Unknown`s, one per level, and this is the first
+           family where both are required by the document** rather than
+           decided by bgp4r: section 5.1 for an unknown TLV type and
+           section 5.2 for an unknown NLRI type, each a MUST. The NLRI
+           one keeps **opaque** octets and frames no TLVs out of them,
+           which is the RFC's own word: the four defined types start
+           with a Protocol-ID octet and an 8-octet Identifier before
+           any TLV, so a reader that framed from the first octet would
+           invent structure. Mind the names, since a bare `Unknown`
+           means a different class inside `Link_state` than inside
+           `Link_state::Tlv`.
+         * **Keep and echo is mandated here, which inverts flow spec.**
+           Section 5.1: unknown types "MUST be preserved and
+           propagated", and their presence "MUST NOT result in the NLRI
+           or the BGP-LS Attribute being considered malformed", where
+           RFC 8955 section 4.2 makes an unknown component type
+           malformed in so many words. Each is its own RFC's
+           instruction. Worth knowing before anyone files bgp4r's
+           keep-and-echo rule as over-engineering: here an RFC agrees
+           with it outright.
+         * **The ordering rule lives with the TLV**, so part 6 asks
+           rather than reimplementing it, which is the lesson flow spec
+           part 4 recorded. Three levels, and two details a readable
+           implementation gets wrong: the second level is the **Length
+           field** and not the value's real size, so a TLV whose
+           declared Length lies sorts by the lie, and the third is
+           bytewise and numerical, which the section spells out. The
+           attribute's own ordering rule is a SHOULD whose breach is
+           explicitly not malformed, so `ordered?` answers the question
+           and not the policy.
+         * **A bug found and not fixed, because it is four other
+           families and its own topic**:
+           `Klass.new(an_extended_instance)` answers garbage for
+           `Evpn`, `Mcast_vpn`, `Flow_spec` and `Rt_constrain`. It is
+           under "Known issues to work on" with the reproduction and
+           the two-line fix. `Link_state` takes the Path Identifier off
+           before the re-parse and has a test for it, and the doc test
+           asserts the other four still have it, so a fix fails that
+           guard and says to strike the paragraph.
+         * **The twelfth wrong hand-written expectation, within the
+           hour.** RFC 9552 carries no worked example and no hex
+           anywhere, measured: the six occurrences of "0x" are section
+           5.2.3.1's OSPF route type values. So this is the RFC 4684,
+           RFC 6368 and RFC 6514 situation, and the first hand-written
+           vector here was wrong, asserting 77865 for `0x00013039`
+           where it is 77881. Both test files say in their header that
+           the arithmetic is the thing to doubt first. That case now
+           uses Enterprise Number 2636, which is checkable outside this
+           repository.
+         * **The TLV level stands on its own**, which is what says it
+           is a primitive rather than half of a pair:
+           `link_state_tlv_test.rb` requires `link_state_tlv` alone and
+           asserts nothing about the NLRI level, so the cross-level
+           cases live in `link_state_test.rb`. That is the independence
+           `mcast_vpn_route_test.rb` keeps by putting `Leaf_a_d`'s
+           tests in the NLRI file, and the doc test asserts it, since
+           it is the kind of thing a later part erodes by adding one
+           convenient require.
+         * Eleven sabotages, each landing on the guard it was aimed at:
+           each registry given a class, a table row flipped to yes,
+           `nlri_size` grown a SAFI argument, `sort_key` using the real
+           size, a dispatch arm added to `nlri.rb`, a check added to
+           `validation.rb`, a lab file created, the undecodable example
+           moved, the copy constructor fixed in `Mcast_vpn`, and the
+           TLV test file given a require of the NLRI level.
       2. **The Node NLRI, type 1, and the Node Descriptor sub-TLVs.**
          First because Link and Prefix both carry Local Node
          Descriptors, so this is the smallest place to get that
@@ -4093,10 +4227,37 @@ Two consequences, both of which change the plan rather than decorate it:
          either NLRI gate. The node, link and prefix attribute TLVs of
          section 5.3 and no others: the rest of the 139 are other
          RFCs' and are the backlog the measure below excludes.
-      6. **Validation. Gated on section 8.2.2**, above. Do not start
-         it from section 5.1 and 5.3 alone, and do not invent a
-         subcode. The three readable rules and their scope qualifier
-         are listed above so they are not rediscovered.
+      6. **Validation. No longer gated**, since section 8.2.2 is read.
+         `docs/bgp-ls.md` section 8 has its substance; the shape of the
+         work, so it is not rediscovered:
+         * **Every check is syntactic.** Two MUST NOTs open the
+           section: neither the NLRI nor the attribute may "be
+           considered malformed or invalid based on the
+           inclusion/exclusion of TLVs or contents of the TLV fields
+           (i.e., semantic errors)". **Seven syntactic NLRI checks** are
+           listed, and three attribute ones of the same shape.
+         * **And a list of checks it says not to make**, which narrows
+           this part further than any other family's: a BGP-LS
+           Propagator "should not perform semantic validation", with
+           the presence of a mandatory TLV, whether a fixed-length
+           TLV's length is correct, whether field values are
+           permissible, and whether a TLV is valid with a given NLRI
+           type all named as examples. **bgp4r writes checks of all
+           four shapes for EVPN and MCAST-VPN**, so this is an
+           instruction not to rather than a gap to fill.
+         * **Two things bgp4r has never done.** `NLRI discard` is an
+           action no part of the library implements, where
+           `Attr::Finding` carries an action and a subcode shaped
+           around RFC 7606 section 3. And the choice between
+           `AFI/SAFI disable` and `session reset` depends on what else
+           is up on the session, which `Attr::Check.attribute` cannot
+           see, since it is handed one attribute at a time. Both want a
+           decision rather than a patch, which is the strongest reason
+           to take part 7 first.
+         * **Do not invent a subcode**, the trap flow spec part 4, EVPN
+           part 9 and MCAST-VPN part 6 each recorded. This is the one
+           family whose own RFC names the actions outright, so there is
+           less excuse here than in any of them.
       7. **The lab**, in **both directions** for SAFI 71, which no
          family has had: what GoBGP makes of what we send, and what we
          make of a Link NLRI GoBGP originated. Plus the absence for
@@ -4138,6 +4299,22 @@ Found while fixing other bugs, not fixed yet. Verified against master on
 
 Smaller things:
 
+* **The copy constructor loses an extended NLRI in four families.**
+  `Klass.new(an_instance)` re-parses `an_instance.encode`, and `encode`
+  writes the RFC 7911 section 3 Path Identifier in front of the NLRI
+  where `parse` does not expect one, so those four octets are read as a
+  type and a length and the copy is garbage. `Evpn`, `Mcast_vpn`,
+  `Flow_spec` and `Rt_constrain` all have it; an unextended instance
+  copies correctly in all four, which is why it went unnoticed.
+  `ruby -I. -e 'require "bgp4r"; a = BGP::Mcast_vpn.new_ntop(["020c00000064000000c80001117f"].pack("H*"), 9); p [a.to_shex, BGP::Mcast_vpn.new(a).to_shex]'`
+  prints the NLRI and then `"0000"`. Found while writing BGP-LS part 1,
+  which takes the identifier off before the re-parse and has a test for
+  it, so the fix shape is known and is two lines per family:
+  `@path_id = args[0].path_id`, then `s.slice!(0, 4) if
+  args[0].extended?` before parsing. Left alone there because it is
+  four other families and its own topic. `bgp_ls_doc_test.rb` asserts
+  the four still have it, so a fix fails that guard and says to strike
+  the paragraph in `docs/bgp-ls.md` section 7.
 * `Nsap.new` and `Nsap.new_nsap` disagree on the default prefix length, so the same address string gives two different prefixes depending on which constructor built it: `ruby -I. -e 'require "bgp/nlris/nsap"; p [BGP::Nsap.new("49.0102.0304.0506.0608.0910.1112.1314.1516.1718.ff").mlen, BGP::Nsap.new_nsap("49.0102.0304.0506.0608.0910.1112.1314.1516.1718.ff").mlen]'` prints `[160, 152]`. `Nsap#mlen` falls back to 160, the whole twenty octet address, where `new_nsap` writes `len ||= 152` and so masks the twentieth octet away and encodes nineteen. 160 is the one that matches the rest of the class, including `MAX_MLEN` and `prefix_mask_bits`. It was left alone when the clamp above it was fixed, because `test_new_nsap` and `test_nsap` both pin the 152 default and the fix moves them, which makes it a behaviour change of its own rather than part of that one. Found while raising the clamp from 152 to 160.
 
 * **The `to_hash` round trips are not listed here, and their counts are not written down anywhere.** `test/unit/to_hash_catalog.rb` holds one entry per class and `rake to_hash:pending` prints the ones still to fix, each with what it loses and a reproduction; `rake to_hash:status` prints the lot. `test/unit/to_hash_round_trip_test.rb` measures every declared verdict against the library, so that list shortens only when a fix lands and its entry is struck, and it cannot go stale the way a written list does. **The root cause behind every entry on it is one sentence**: a hash is an argument to `initialize`, so what has to come back is the instance state, and a field that lives in an instance variable no key sets cannot survive a hash build however reasonable the hash looks. **No entry is wrong wholesale any more**: `Path_attribute` was the last, with three losses, and all three are closed. ATOMIC_AGGREGATE disappearing, the tail `parse_wire` keeps, and two attributes of one type collapsing into the last, which was recorded here as a shape decision and a won't fix and should not have been. **The reasoning that reached won't fix is worth keeping, because it was wrong in an ordinary way**: a Hash keyed by attribute type genuinely cannot hold two of a type, and the conclusion that nothing readable could be done did not follow from it. A hash is an argument to `initialize`, so what has to come back is the instance state, and `@attributes` holds a repeat perfectly well once the hash has somewhere to put it: `:duplicates`, a list of the occurrences after the first, which is what `:unknown` had always done for attributes with no key of their own, in the same constructor. What made a readable fix look impossible was taking byte-exact octets as the bar, where the order of two of a type is incidental and `Path_attribute#<=>` already says so by sorting each side before comparing. Two more things it corrected that had been recorded here as fact:
