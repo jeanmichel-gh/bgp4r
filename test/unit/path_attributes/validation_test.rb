@@ -153,6 +153,87 @@ class TestAttrCheck < Test::Unit::TestCase
     assert_nil Attr.strongest([n])
   end
 
+  # **The order is RFC 7606 section 2's own and the section names the
+  # direction**, read first hand on 2026-11-01: the approaches are
+  # listed "from the one with the 'strongest' action to the one with the
+  # 'weakest' action", which is session reset, AFI/SAFI disable,
+  # treat-as-withdraw, attribute discard. `ACTIONS` is that reversed,
+  # since `strongest` is `max_by` over the index.
+  #
+  # Asserted as the whole list rather than pairwise, because the thing
+  # that would go wrong is an insertion in the wrong place, and that
+  # moves a verdict for every family rather than for the one being
+  # added to.
+  def test_the_action_order_is_rfc_7606_section_2_reversed
+    assert_equal([:nlri_discard, :attribute_discard, :treat_as_withdraw,
+                  :afi_safi_disable, :session_reset],
+                 Attr::ACTIONS)
+    # Section 2's four, strongest first, as the section prints them.
+    assert_equal([:session_reset, :afi_safi_disable, :treat_as_withdraw,
+                  :attribute_discard],
+                 (Attr::ACTIONS - [:nlri_discard]).reverse)
+  end
+
+  # **The three that existed keep their relative order**, which is what
+  # says adding two moved no other family's verdict. Part 6a is a change
+  # to machinery every family's findings go through, so this is the
+  # assertion that bounds it.
+  def test_adding_two_actions_moved_neither_of_the_other_three
+    assert_equal([:attribute_discard, :treat_as_withdraw, :session_reset],
+                 Attr::ACTIONS.select { |a|
+                   [:attribute_discard, :treat_as_withdraw,
+                    :session_reset].include?(a) })
+  end
+
+  # RFC 9552 section 8.2.2's two, which part 6b is the first caller of.
+  # `:afi_safi_disable` outranks treat-as-withdraw and is outranked by a
+  # session reset, which is section 2's order; `:nlri_discard` is the
+  # weakest, which is **this library's decision and not the RFC's**,
+  # since the RFC does not rank it: 8.2.2 makes it the case where the
+  # router continues processing the rest of the UPDATE, as attribute
+  # discard is, and it loses one NLRI where that loses every TLV of an
+  # attribute.
+  def test_the_two_new_actions_rank_where_they_should
+    nd = Attr::Finding.new(29, nil, Attr::Check::NLRI_DISCARD, 'one nlri')
+    ad = Attr::Finding.new(29, nil, DISCARD, 'the attribute')
+    t  = Attr::Finding.new(1, 5, TAW, 'y')
+    fd = Attr::Finding.new(14, 9, Attr::Check::AFI_DISABLE, 'the family')
+    r  = Attr::Finding.new(14, 9, RESET, 'the session')
+    assert_equal ad, Attr.strongest([nd, ad])
+    assert_equal t,  Attr.strongest([nd, ad, t])
+    assert_equal fd, Attr.strongest([nd, ad, t, fd])
+    assert_equal r,  Attr.strongest([nd, ad, t, fd, r])
+    assert_equal nd, Attr.strongest([nd]), 'and on its own it is the one'
+  end
+
+  # **A Finding whose action is not in `ACTIONS` crashes `strongest`**,
+  # because `index` answers nil and `max_by` then compares nil against
+  # an Integer. That is why an action is added to the list and not only
+  # used, and it is worth pinning: the next one added to a Finding alone
+  # fails here rather than in whatever reads the findings.
+  def test_an_action_outside_the_list_cannot_be_ranked
+    bogus = Attr::Finding.new(1, nil, :no_such_action, 'x')
+    assert_raise_kind_of(StandardError) do
+      Attr.strongest([bogus, Attr::Finding.new(1, nil, DISCARD, 'y')])
+    end
+  end
+
+  # **Neither new action resets a session, and neither should.**
+  # `Neighbor#rcv_malformed` keys on `:session_reset` by name, so this
+  # is what says the vocabulary grew without the FSM's behaviour
+  # changing. RFC 9552 section 8.2.2 reaches a reset through its own
+  # branch, which part 6b reports as `:session_reset` like every other
+  # family's framing finding.
+  def test_only_a_session_reset_sends_a_notification
+    body = File.read('bgp/neighbor/neighbor.rb')
+    assert_not_equal(nil, body[/e\.action == :session_reset/],
+                     'the FSM keys on :session_reset by name')
+    [Attr::Check::NLRI_DISCARD, Attr::Check::AFI_DISABLE].each do |a|
+      assert_not_equal(:session_reset, a)
+      assert(Attr::ACTIONS.include?(a), "#{a} must be rankable")
+    end
+  end
+
   def test_finding_notification
     f = Attr::Finding.new(1, 6, TAW, 'x')
     assert_equal [3, 6], f.notification.to_hash.values_at(:code, :subcode)

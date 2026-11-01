@@ -638,8 +638,9 @@ arriving from the lexical-scope side rather than the ancestor side.
 
 ## 7. What is in bgp4r today
 
-Seven parts, and six are in: everything but validation. The plan is in
-CLAUDE.md under "Breadth, the one SAFI lever".
+Seven parts, and six are in: everything but the validation checks,
+whose action vocabulary is in as part 6a. The plan is in CLAUDE.md
+under "Breadth, the one SAFI lever".
 
 | Part | What | Status |
 |---|---|---|
@@ -648,7 +649,7 @@ CLAUDE.md under "Breadth, the one SAFI lever".
 | 3 | the Link NLRI and the two Prefix NLRIs | **done** |
 | 4 | wiring the NLRI to the dispatch sites | **done** |
 | 5 | the BGP-LS Attribute, code 29, and RFC 9552's attribute TLVs | **done**, 5a, 5b and 5c |
-| 6 | validation, from section 8.2.2 | to do |
+| 6 | validation, from section 8.2.2 | **6a done**, 6b to do |
 | 7 | the lab, in both directions for SAFI 71 | **done** |
 
 **Part 7 came before parts 5 and 6 on purpose**, because what a router
@@ -756,9 +757,11 @@ identifier off before the re-parse and has a test for it.
 
 ## 8. Error handling, section 8.2.2
 
-**Not implemented.** Part 6, and the section is readable now, so it is
-not gated on anything. What it says, so part 6 starts from the document
-rather than from section 5.1 alone:
+**The checks are not implemented, and the action vocabulary they need
+is.** Part 6 is two pull requests: 6a, the vocabulary, is done, and 6b
+is the ten checks. The section is readable, so neither is gated on
+anything. What it says, so 6b starts from the document rather than from
+section 5.1 alone:
 
 **Two MUST NOTs first.** Neither the Link-State NLRI nor the BGP-LS
 Attribute "MUST NOT be considered malformed or invalid based on the
@@ -798,15 +801,65 @@ when another AFI/SAFI shares the session; `session reset`, a MUST on a
 BGP-LS-only session; and `Attribute Discard`, a MUST for a skippable
 attribute error, all or nothing by instruction.
 
-Two of those are work bgp4r has not done before. **`NLRI discard` is an
-action no part of the library implements**: `Attr::Finding` carries an
-action and a subcode shaped around RFC 7606 section 3, and discarding
-one NLRI out of a list is not among them. And **the choice between
-`AFI/SAFI disable` and `session reset` depends on what else is up on
-the session**, which `Attr::Check.attribute` cannot see, since it is
-handed one attribute at a time. Both want a decision rather than a
-patch, which is why part 6 is its own part and why taking part 7 first
-may be the better order.
+### The action vocabulary, part 6a
+
+Two of those four were work bgp4r had not done, so **part 6 is two
+pull requests**: 6a the vocabulary alone and 6b the ten checks on top
+of it, which is 5b's split and #125's and #156's shape. 6a is **done**,
+and reading RFC 7606 section 2 first hand is what settled it.
+
+**`ACTIONS` was missing one of section 2's four.** The section lists
+them "from the one with the 'strongest' action to the one with the
+'weakest' action": session reset, **AFI/SAFI disable**,
+treat-as-withdraw, attribute discard. bgp4r had the other three in
+exactly that relative order, reversed, since `Attr.strongest` is
+`max_by` over the index, so `:afi_safi_disable` slots between
+`:treat_as_withdraw` and `:session_reset` and nothing else moves. A
+test asserts the whole list rather than pairs, because the thing that
+goes wrong is an insertion in the wrong place and that moves a verdict
+for every family.
+
+**`NLRI discard` is not one of section 2's four at all**, which is the
+finding worth keeping. Section 2 is about **attributes**. Section 8.2.2
+calls this "processing similar to what is described in Section 5.4 of
+[RFC7606]", and **section 5.4 is "Typed NLRI"**, which has a speaker
+"handle routes with unrecognized NLRI types within that address family
+by discarding them". So it is per-NLRI where every action bgp4r has is
+per-attribute, and `Attr::Finding`'s granularity is the attribute.
+bgp4r adds it and **records the gap rather than hiding it**: a Finding
+carrying it says the attribute holds a malformed NLRI and its reason
+names which one, and a caller wanting to act per-NLRI reads the reason.
+
+**Where it sits in the list is this library's decision and not the
+RFC's**, so here is the mechanism rather than the verdict. The RFC does
+not rank it, since it is not in section 2. What 8.2.2 does say is that
+it is the case that "allows for the router to skip the malformed
+NLRI(s) and continue the processing of the rest of the BGP UPDATE
+message", which is the property section 2 gives attribute discard, so
+both are continue-actions and neither escalates. It goes first,
+weakest, because it loses one NLRI where attribute discard loses every
+TLV of an attribute.
+
+**bgp4r cannot choose between AFI/SAFI disable and session reset, and
+the RFC provides the branch rather than leaving a gap.** 8.2.2 keys the
+choice on whether other AFI/SAFIs are up on the session, which
+`Attr::Check.attribute` cannot see. But the section continues:
+"Alternately, the router MUST perform a 'session reset' when the
+session is only being used for BGP-LS or if 'AFI/SAFI disable' action
+is not possible." Not possible is bgp4r's case, so session reset is the
+RFC's own answer and not a guess, and it is already what bgp4r reports
+for a malformed MP_REACH. `:afi_safi_disable` is in the vocabulary all
+the same, since a caller holding session state may want it.
+
+**Neither new action resets a session, and neither should.**
+`Neighbor#rcv_malformed` keys on `:session_reset` by name, so the
+vocabulary grew without the FSM's behaviour changing, and 8.2.2 reaches
+a reset through the branch above.
+
+**And a Finding whose action is not in `ACTIONS` crashes
+`Attr.strongest`**, because `index` answers nil and `max_by` then
+compares nil against an Integer. So an action is added to the list and
+not only used, which is most of why 6a is worth landing on its own.
 
 Two more things worth having before part 6 starts. An NLRI arriving
 with no BGP-LS Attribute at all is explicitly **not** an error: it "is

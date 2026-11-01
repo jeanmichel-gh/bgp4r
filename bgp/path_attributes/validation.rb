@@ -31,9 +31,12 @@ module BGP
     # type     the attribute type code, nil when the header itself is cut
     # subcode  the UPDATE Message Error subcode (RFC 4271 section 6.3),
     #          nil when no NOTIFICATION applies
-    # action   what RFC 7606 says a receiver does: :session_reset,
-    #          :treat_as_withdraw or :attribute_discard. nil when the
-    #          finding is not an error a peer would act on.
+    # action   what RFC 7606 says a receiver does, one of ACTIONS:
+    #          :session_reset, :afi_safi_disable, :treat_as_withdraw,
+    #          :attribute_discard or :nlri_discard. nil when the
+    #          finding is not an error a peer would act on. See ACTIONS
+    #          for which of those are RFC 7606 section 2's own and
+    #          which is RFC 9552's.
     # reason   plain words, with the RFC section
     Finding = Struct.new(:type, :subcode, :action, :reason) do
       def to_s
@@ -72,7 +75,43 @@ module BGP
     end
 
     # The RFC 7606 section 3 (h) order: the strongest action wins.
-    ACTIONS = [:attribute_discard, :treat_as_withdraw, :session_reset]
+    # Weakest first, so `strongest` is `max_by` over the index.
+    #
+    # **Section 2 lists four and names the direction**, read first hand:
+    # the approaches are given "from the one with the 'strongest' action
+    # to the one with the 'weakest' action", which is session reset,
+    # AFI/SAFI disable, treat-as-withdraw, attribute discard. So
+    # :afi_safi_disable sits between :treat_as_withdraw and
+    # :session_reset and the other three keep their places. It is
+    # section 7 of RFC 4760's option, which section 2 quotes as
+    # "ignore all the subsequent routes with that AFI/SAFI received over
+    # that session" and names "'disabling a particular AFI/SAFI' or
+    # 'AFI/SAFI disable'".
+    #
+    # **:nlri_discard is not one of section 2's four**, and that is the
+    # thing to know about it. Section 2 is about attributes; RFC 9552
+    # section 8.2.2 asks for "'NLRI discard' (i.e., processing similar
+    # to what is described in Section 5.4 of [RFC7606])", and section
+    # 5.4 is "Typed NLRI", which has a speaker "handle routes with
+    # unrecognized NLRI types within that address family by discarding
+    # them". So it discards one NLRI and goes on, where every other
+    # action here is about the attribute as a whole.
+    #
+    # **Its place in this list is a decision and not the RFC's**, since
+    # the RFC does not rank it. What 8.2.2 says is that it is the case
+    # where the router "allows for the router to skip the malformed
+    # NLRI(s) and continue the processing of the rest of the BGP UPDATE
+    # message", which is the property section 2 gives attribute discard
+    # ("the UPDATE message continues to be processed"). So both are
+    # continue-actions and neither escalates, and this one is first,
+    # weakest, because it loses one NLRI where attribute discard loses
+    # every TLV of an attribute.
+    #
+    # **A Finding whose action is not in this list crashes `strongest`**,
+    # because `index` answers nil and `max_by` then compares nil, so an
+    # action is added here and not only used.
+    ACTIONS = [:nlri_discard, :attribute_discard, :treat_as_withdraw,
+               :afi_safi_disable, :session_reset]
 
     def self.strongest(findings)
       findings.select(&:action).max_by { |f| ACTIONS.index(f.action) }
@@ -88,6 +127,13 @@ module BGP
       TAW     = :treat_as_withdraw
       DISCARD = :attribute_discard
       RESET   = :session_reset
+      # RFC 9552 section 8.2.2's two, which part 6b is the first caller
+      # of. `NLRI_DISCARD` is per-NLRI where every other action here is
+      # per-attribute, so a Finding carrying it says the attribute holds
+      # a malformed NLRI and its reason names which one: `Finding`'s
+      # granularity is the attribute and this does not change it.
+      NLRI_DISCARD = :nlri_discard
+      AFI_DISABLE  = :afi_safi_disable
 
       # The Optional and Transitive bits each known attribute must have.
       FLAGS = {
