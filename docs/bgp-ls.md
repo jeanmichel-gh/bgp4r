@@ -538,6 +538,8 @@ RFC 9085, RFC 9086, RFC 9514, RFC 9294, RFC 8571, RFC 8814 and more.
 
 **So the framing is a part and the code points are an open-ended
 backlog.** Part 5 does RFC 9552's own attribute TLVs and no others, and
+19 of its 25 are in; the rest come from RFC 9085, RFC 9086 and the
+others above, and
 the measure of the family deliberately does not require the other
 hundred. The earlier plan's remark that "each of these is a class and a
 registration" understated BGP-LS by about that much.
@@ -634,7 +636,7 @@ plan is in CLAUDE.md under "Breadth, the one SAFI lever".
 | 2 | the Node NLRI and the node descriptor sub-TLVs | **done** |
 | 3 | the Link NLRI and the two Prefix NLRIs | **done** |
 | 4 | wiring the NLRI to the dispatch sites | **done** |
-| 5 | the BGP-LS Attribute, code 29, and RFC 9552's attribute TLVs | **5a done**, 5b and 5c to do |
+| 5 | the BGP-LS Attribute, code 29, and RFC 9552's attribute TLVs | **5a and 5b done**, 5c to do |
 | 6 | validation, from section 8.2.2 | to do |
 | 7 | the lab, in both directions for SAFI 71 | **done** |
 
@@ -644,9 +646,9 @@ the finding that settled part 6's scope.
 
 **Every NLRI type and every descriptor TLV RFC 9552 defines is in**,
 which is the whole of sections 5.2.1, 5.2.2 and 5.2.3. **The attribute
-itself is in too**, code 29, with Table 6's node attribute TLVs; Table
-8's and Table 10's are parts 5b and 5c, and section 10 has all three
-tables row by row.
+itself is in too**, code 29, with Table 6's node attribute TLVs and
+Table 8's link attribute TLVs; Table 10's prefix attribute TLVs are
+part 5c, and section 10 has all three tables row by row.
 Everything unimplemented reads back as its level's `Unknown` and
 replays byte for byte: a TLV type with no class as
 `Link_state::Tlv::Unknown` and an NLRI type with no class as
@@ -996,23 +998,96 @@ place it lives. Part 5b.
 |---|---|---|---|
 | 1028 | IPv4 Router-ID of Local Node | RFC 5305 section 4.3 | yes |
 | 1029 | IPv6 Router-ID of Local Node | RFC 6119 section 4.1 | yes |
-| 1030 | IPv4 Router-ID of Remote Node | RFC 5305 section 4.3 | no |
-| 1031 | IPv6 Router-ID of Remote Node | RFC 6119 section 4.1 | no |
-| 1088 | Administrative group (color) | RFC 5305 section 3.1 | no |
-| 1089 | Maximum link bandwidth | RFC 5305 section 3.4 | no |
-| 1090 | Max. reservable link bandwidth | RFC 5305 section 3.5 | no |
-| 1091 | Unreserved bandwidth | RFC 5305 section 3.6 | no |
-| 1092 | TE Default Metric | section 5.3.2.3 | no |
-| 1093 | Link Protection Type | RFC 5307 section 1.2 | no |
-| 1094 | MPLS Protocol Mask | section 5.3.2.2 | no |
-| 1095 | IGP Metric | section 5.3.2.4 | no |
-| 1096 | Shared Risk Link Group | section 5.3.2.5 | no |
-| 1097 | Opaque Link Attribute | section 5.3.2.6 | no |
-| 1098 | Link Name | section 5.3.2.7 | no |
+| 1030 | IPv4 Router-ID of Remote Node | 4, RFC 5305 section 4.3 | yes |
+| 1031 | IPv6 Router-ID of Remote Node | 16, RFC 6119 section 4.1 | yes |
+| 1088 | Administrative group (color) | 4, RFC 5305 section 3.1 | yes |
+| 1089 | Maximum link bandwidth | 4, RFC 5305 section 3.4 | yes |
+| 1090 | Max. reservable link bandwidth | 4, RFC 5305 section 3.5 | yes |
+| 1091 | Unreserved bandwidth | 32, RFC 5305 section 3.6 | yes |
+| 1092 | TE Default Metric | 4, section 5.3.2.3 | yes |
+| 1093 | Link Protection Type | 2, RFC 5307 section 1.2 | yes |
+| 1094 | MPLS Protocol Mask | 1, section 5.3.2.2 | yes |
+| 1095 | IGP Metric | 1, 2 or 3, section 5.3.2.4 | yes |
+| 1096 | Shared Risk Link Group | 4*n, section 5.3.2.5 | yes |
+| 1097 | Opaque Link Attribute | variable, section 5.3.2.6 | yes |
+| 1098 | Link Name | variable, section 5.3.2.7 | yes |
 
+The Width column here is this guide's and not the RFC's, since Table 8
+has none, so each entry names the document the width was read in.
 **1028 and 1029 are Table 6's rows again** and are in from part 5a,
 since a local Router-ID is a node attribute and a link attribute both.
-Table 8's own pair is 1030 and 1031, the **remote** ones.
+Table 8's own pair is 1030 and 1031, the **remote** ones, and section
+5.3.2.1 describes all four in one paragraph.
+
+**Two of the five external widths are not what memory gives**, which is
+why they were fetched rather than recalled:
+
+* **1091 is 32 octets, not 4.** RFC 5305 section 3.6: "this sub-TLV
+  contains eight 32-bit IEEE floating point numbers", one per setup
+  priority, "arranged in increasing order with priority 0 occurring at
+  the start of the sub-TLV, and priority 7 at the end of the sub-TLV".
+  Its three neighbours 1089, 1090 and 1092 are 4 each, so it is the odd
+  one in a run of similar rows, which is how it gets written as 4.
+* **1093 is 2 octets.** RFC 5307 section 1.2 is a protection capability
+  bit vector then one octet it disposes of in a sentence: "The second
+  octet SHOULD be set to zero by the sender, and SHOULD be ignored by
+  the receiver."
+
+**The units of 1089, 1090 and 1091 are bytes per second and not bits**,
+which RFC 5305 puts as "The units are bytes (not bits!) per second" in
+each of sections 3.4, 3.5 and 3.6. The same trap and the same
+exclamation mark as RFC 10005 section 2 for the Link Bandwidth extended
+community.
+
+### The bitfields of Table 8, and one is numbered the other way up
+
+| TLV | Field | Defined bits | Reserved |
+|---|---|---|---|
+| 1088 | Administrative group | all 32, **numbered from the bottom** | none |
+| 1093 | Link Protection Type | 0x3f of octet 1 | 0xc0 of octet 1, all of octet 2 |
+| 1094 | MPLS Protocol Mask | 0xc0 | 0x3f |
+| 1095 | IGP Metric, 1-octet form | 0x3f | 0xc0 |
+
+**TLV 1088 numbers its bits from the least significant and every other
+bitfield in this family numbers from the most**, which RFC 5305 section
+3.1 says outright: "By convention, the least significant bit is referred
+to as 'group 0', and the most significant bit is referred to as 'group
+31'." So the mask for group 0 is 0x00000001. Read the sentence rather
+than carrying the family's convention across.
+
+It is also the only one of the four with nothing reserved: all 32 bits
+are administrative groups, so `Administrative_group` has no
+`DEFINED_BITS` and its hash never gains a `:bits` entry. The other
+three keep and echo what they do not define, which each section asks
+for in so many words.
+
+**1095's reserved bits belong to one of its three widths.** "IS-IS small
+metrics are 6 bits in size but are encoded in a 1-octet field;
+therefore, the two most significant bits of the field MUST be set to 0
+by the originator and MUST be ignored by the receiver." The 2-octet and
+3-octet forms reserve nothing, so `undefined_bits` answers 0 there
+however the value's own high bits read.
+
+**And the width of 1095 is a fact about the source IGP rather than about
+the value**, so bgp4r carries it: a metric of 10 is legal at all three
+widths and nothing in the section picks one. `Igp_metric.new(10)`
+defaults to 3, the only width that holds any 24-bit metric, and the hash
+carries `:width` beside `:metric`. Inferring the width from the
+magnitude would be a rule the section does not have.
+
+**TLV 1096 carries both address families in one TLV**, which section
+5.3.2.5 says and IS-IS does not do: "In IS-IS, the SRLG information is
+carried in two different TLVs: the GMPLS-SRLG TLV (for IPv4) (Type 138)
+... and the IPv6 SRLG TLV (Type 139) ... Both IPv4 and IPv6 SRLG
+information is carried in a single TLV." So there is one class and
+nothing in it is per family.
+
+**A NaN with a payload is the one value in this table that does not
+replay as its own class.** `unpack1('g')` on `7fc00001` gives NaN and
+packing that back gives `7fc00000`, so the value fails the
+encode-matches rule and `Tlv::Unknown` keeps it whole instead. Measured
+on 2026-11-01, where 0, -0, both infinities and the canonical NaN are
+all exact. The octets come back either way; only the class differs.
 
 ### 10c. The prefix attribute TLVs, section 5.3.3
 
@@ -1155,12 +1230,17 @@ SAFI 72 by anyone, so figure 6 and the 8-octet Route Distinguisher of
 section 5.2 are bgp4r's own reading, as is the VPN next hop of section
 5.5 with its one prepended zero Route Distinguisher. NLRI types 1, 3
 and 4 in the receive direction, since GoBGP will not originate them.
-**The attribute TLVs of Table 8**, which GoBGP does send and which part
-5a does not implement, so they arrive inside a
-`Link_state_attribute` as `Tlv::Unknown` and replay; 5b is what gives
-them meaning and this measurement will then say more. And nothing in
-either test says anything about the TLVs bgp4r does not implement beyond
-that they survive.
+**Every attribute TLV, in both directions, and that claim was written
+wrong once.** Part 5a's version of this paragraph said GoBGP sends
+Table 8's TLVs, so part 5b would give the measurement more to say. It
+does not: measured again at part 5b-ii, the one TLV GoBGP puts in the
+attribute is **1101**, the Adjacency SID of RFC 9085, which is in no
+table of RFC 9552 and which no part of this plan implements. So
+Table 8's thirteen classes landed and this measurement says exactly
+what it said before. A claim about what a router sends is a measurement
+like any other, and that one was an inference from the attribute being
+present. And nothing in either test says anything about the TLVs bgp4r
+does not implement beyond that they survive.
 
 **And the framing, in the receive direction only, which sabotage
 measured rather than argued.** GoBGP originates one NLRI per UPDATE,

@@ -1514,10 +1514,106 @@ module ToHashCatalog
                       { :tail => 'ffff' }])
   end
 
+  # --- the link attribute TLVs of section 5.3.2, Table 8 ---------------
+  #
+  # Thirteen classes, and all thirteen round trip. The two reserved-bit
+  # recipes reach their reserved bits on purpose, which is the
+  # exercise-every-field rule: a hash of names alone would pass while
+  # losing nothing.
+
+  ENTRIES['BGP::Link_state::Tlv::Ipv4_remote_router_id'] =
+    entry(:ok, nil, nil) do
+      BGP::Link_state::Tlv::Ipv4_remote_router_id
+        .new(:ipv4_remote_router_id => '10.0.0.2')
+    end
+
+  ENTRIES['BGP::Link_state::Tlv::Ipv6_remote_router_id'] =
+    entry(:ok, nil, nil) do
+      BGP::Link_state::Tlv::Ipv6_remote_router_id
+        .new(:ipv6_remote_router_id => '2001:db8::2')
+    end
+
+  # Group 0 and group 31 both set, so the bit numbering RFC 5305 section
+  # 3.1 gives is exercised at each end rather than in the middle.
+  ENTRIES['BGP::Link_state::Tlv::Administrative_group'] =
+    entry(:ok, nil, nil) do
+      BGP::Link_state::Tlv::Administrative_group
+        .new(:administrative_group => 0x80000001)
+    end
+
+  ENTRIES['BGP::Link_state::Tlv::Maximum_link_bandwidth'] =
+    entry(:ok, nil, nil) do
+      BGP::Link_state::Tlv::Maximum_link_bandwidth
+        .new(:maximum_link_bandwidth => 1_250_000.0)
+    end
+
+  ENTRIES['BGP::Link_state::Tlv::Max_reservable_link_bandwidth'] =
+    entry(:ok, nil, nil) do
+      BGP::Link_state::Tlv::Max_reservable_link_bandwidth
+        .new(:max_reservable_link_bandwidth => 1_000_000.0)
+    end
+
+  # All eight priorities, since the list is what the hash carries and a
+  # recipe of one would not measure the order.
+  ENTRIES['BGP::Link_state::Tlv::Unreserved_bandwidth'] =
+    entry(:ok, nil, nil) do
+      BGP::Link_state::Tlv::Unreserved_bandwidth
+        .new(:unreserved_bandwidth => (1..8).collect { |i| i * 1000.0 })
+    end
+
+  ENTRIES['BGP::Link_state::Tlv::Te_default_metric'] =
+    entry(:ok, nil, nil) do
+      BGP::Link_state::Tlv::Te_default_metric.new(:te_default_metric => 10)
+    end
+
+  # A named bit plus a `:bits` entry, so the two reserved places RFC
+  # 5307 section 1.2 leaves are both in the recipe: the 0xc0 of the
+  # first octet and the whole second octet.
+  ENTRIES['BGP::Link_state::Tlv::Link_protection_type'] =
+    entry(:ok, nil, nil) do
+      BGP::Link_state::Tlv::Link_protection_type
+        .new(:link_protection_type => [:shared, { :bits => 0xe4ff }])
+    end
+
+  ENTRIES['BGP::Link_state::Tlv::Mpls_protocol_mask'] =
+    entry(:ok, nil, nil) do
+      BGP::Link_state::Tlv::Mpls_protocol_mask
+        .new(:mpls_protocol_mask => [:ldp, { :bits => 0x81 }])
+    end
+
+  # The 1-octet form with its two reserved bits set, which is the only
+  # width of the three that reserves anything, and the width itself,
+  # which is the field a metric-only hash would drop.
+  ENTRIES['BGP::Link_state::Tlv::Igp_metric'] = entry(:ok, nil, nil) do
+    BGP::Link_state::Tlv::Igp_metric
+      .new(:igp_metric => { :metric => 0xc3, :width => 1, :bits => 0xc3 })
+  end
+
+  ENTRIES['BGP::Link_state::Tlv::Srlg'] = entry(:ok, nil, nil) do
+    BGP::Link_state::Tlv::Srlg.new(:srlg => [100, 200])
+  end
+
+  ENTRIES['BGP::Link_state::Tlv::Opaque_link_attribute'] =
+    entry(:ok, nil, nil) do
+      BGP::Link_state::Tlv::Opaque_link_attribute
+        .new(:opaque_link_attribute => 'deadbeef')
+    end
+
+  ENTRIES['BGP::Link_state::Tlv::Link_name'] = entry(:ok, nil, nil) do
+    BGP::Link_state::Tlv::Link_name.new(:link_name => 'to-core-1')
+  end
+
   # Classes with no entry, each with the reason. An abstract base with no
   # sensible instance belongs here; a class merely awkward to build does
   # not.
   NO_RECIPE = {
+    'BGP::Link_state::Tlv::Float32_tlv' =>
+      'an abstract base, as Opaque32 is: it holds the one 32-bit IEEE ' \
+      'float that Table 8 rows 1089 and 1090 share and defines neither ' \
+      'TYPE nor HASH_KEY nor LABEL, so every encode raises NameError. ' \
+      'Maximum_link_bandwidth and Max_reservable_link_bandwidth are ' \
+      'measured instead. It stays with Table 8 rather than joining the ' \
+      'four shared bases, since only Table 8 has floats.',
     'BGP::Link_state::Tlv::Text_tlv' =>
       'an abstract base, as Opaque_tlv is: sections 5.3.1.3 and ' \
       '5.3.2.7 are one shape and two type numbers, the same three ' \

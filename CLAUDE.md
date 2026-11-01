@@ -151,16 +151,22 @@ bgp/nlris/               prefix encodings (inet, labeled, VPN, RD, mapped IPv4)
                          is valid read either way.
                          link_state_node_attribute.rb the six node
                          attribute TLVs of section 5.3.1 that are new,
-                         1024 to 1029, with the Opaque_tlv base the two
-                         variable ones share; the attribute that
-                         carries them is code 29 and is a path
-                         attribute, so it lives in
+                         1024 to 1029;
+                         link_state_link_attribute.rb the thirteen of
+                         section 5.3.2 that are new, 1030, 1031 and
+                         1088 to 1098, where **Table 8 has no Length
+                         column** so five widths are citations to RFC
+                         5305 and RFC 5307, and with Float32_tlv, the
+                         IEEE float two of them share. The attribute
+                         that carries all of them is code 29 and is a
+                         path attribute, so it lives in
                          bgp/path_attributes/link_state_attribute.rb
                          and goes through Attr.register rather than
                          either NLRI gate. TLV 263 is in Table 4 and
-                         Table 6 and is one class, which is the flat
-                         registry paying for itself. Table 8's and
-                         Table 10's attribute TLVs are parts 5b and 5c.
+                         Table 6 and is one class, and 1028 and 1029
+                         are in Table 6 and Table 8, which is the flat
+                         registry paying for itself twice. Table 10's
+                         prefix attribute TLVs are part 5c.
                          A TLV or NLRI
                          type with no class reads back as its level's
                          Unknown and replays byte for byte. **One flat
@@ -409,7 +415,8 @@ reads the same octets under both SAFIs to show the SAFI is a parse time
 input. Its last two cases are not about a wiring site at all, since the
 BGP-LS Attribute goes through `Attr.register`: they are here because
 this is the only place the NLRI and the attribute that describes it
-travel together over a socket. About a second:
+travel together over a socket, which part 5b-ii extended to the link
+attribute TLVs beside a Link NLRI. About a second:
 ```
 ruby -I. test/functional/link_state_test.rb
 ```
@@ -541,7 +548,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. The `lab` job is a matrix, one job per group in `test/lab_groups.rb`, so its cost is the slowest group and not the total: it was 12m42s as one serial suite. Each job installs only what its group needs, which is why the matrix entry carries a `gobgp`, `frr`, `docker` or `netns` flag. The `gobgp` groups pin 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-11-01: 2294 tests, 27690 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.4%.
+Baseline on 2026-11-01: 2347 tests, 28058 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.4%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -4929,8 +4936,94 @@ Two consequences, both of which change the plan rather than decorate it:
                The files that lean on a transitive require are not
                the file being edited, so run every file in the family
                on its own after a move, not just the ones changed.
-           * **5b-ii, the thirteen classes.** Against bases that are
-             not moving under them.
+           * **5b-ii, the thirteen classes. Done**, in #223, in
+             `bgp/nlris/link_state_link_attribute.rb`, against bases
+             that were not moving under them. All thirteen round trip
+             through their own hash and all are in the catalog.
+             * **`Float32_tlv` is a fifth base and stays with Table
+               8**, which is 5b-i's line deciding its first case
+               rather than a judgement: shared means more than one of
+               the RFC's tables, and only Table 8 has floats. The doc
+               guard asserts each single-table base's registered
+               subclasses, so a third table reaching for one fails and
+               says to move it.
+             * **TLV 1088 numbers its bits from the least
+               significant**, which RFC 5305 section 3.1 says
+               outright: "the least significant bit is referred to as
+               'group 0', and the most significant bit is referred to
+               as 'group 31'". Every other bitfield in this family
+               numbers from the most significant, so the mask for
+               group 0 is 0x00000001 and a reader carrying the
+               family's convention across gets all 32 backwards. It is
+               also the only one of the four bitfields here with
+               nothing reserved: all 32 bits are groups.
+             * **The width of TLV 1095 is a fact about the source IGP
+               and not about the value**, so it is carried rather than
+               inferred: a metric of 10 is legal at 1, 2 and 3 octets
+               and section 5.3.2.4 picks none. `Igp_metric.new(10)`
+               defaults to 3 and the hash carries `:width` beside
+               `:metric`. Inferring from the magnitude would be a rule
+               the section does not have. Its two reserved bits belong
+               to the 1-octet form alone, so `undefined_bits` answers
+               0 at the wider widths however the value's high bits
+               read.
+             * **A NaN with a payload is the one value here that does
+               not replay as its own class**, and it is Ruby rather
+               than the library: `unpack1('g')` on `7fc00001` gives
+               NaN and packing that back gives `7fc00000`. So it fails
+               the encode-matches rule and `Tlv::Unknown` keeps it
+               whole. Measured on 2026-11-01, where 0, -0, both
+               infinities and the canonical NaN are all exact. **This
+               was found by probing before writing the class**, which
+               is the only reason the comment is a measurement rather
+               than a guess.
+             * **A claim part 5a wrote was wrong and this part
+               disproved it.** `docs/bgp-ls.md` section 11 said GoBGP
+               sends Table 8's TLVs, so part 5b would give that
+               measurement more to say. It does not: the one TLV GoBGP
+               puts in the attribute is **1101**, the Adjacency SID of
+               RFC 9085, which is in no table of RFC 9552. The claim
+               was an inference from the attribute being present, and
+               a claim about what a router sends is a measurement like
+               any other.
+             * **Coverage found a real gap rather than a cosmetic
+               one.** Nine lines were uncovered and one was
+               `Srlg#parse`: every other class here had a case that
+               parsed it from octets and the SRLG had none, so its
+               whole wire path was untested. The other eight were
+               refusals and a `to_s`.
+             * **Two of thirteen sabotages passed, and both found a
+               dead constant rather than a weak test.** Setting
+               `Unreserved_bandwidth::PRIORITIES` to 1 passed the
+               whole suite, because nothing read it; setting
+               `Srlg::WIDTH` to 2 passed too, because the 4 octets of
+               an element are what `pack('N*')` is and the constant
+               only moved a truncation boundary that `unpack` already
+               enforced. **Both were a second statement of a fact the
+               pack format already made**, which is the drift shape
+               this file records for a document beside a table. The
+               fix is not a test: `Srlg::WIDTH` is gone, both `parse`
+               methods consume the whole value and let `unpack` group
+               it, and `PRIORITIES` earned a reader, `full?`, which
+               answers whether the value carries section 3.6's eight
+               and which a test asserts both ways. So a sabotage that
+               passes is worth reading twice: here it was neither a
+               miss nor a weak test but a constant with no job.
+             * **The load order trap, third time in this family and
+               now predictable.** Three cases compare a Table 8 class
+               against its Table 6 counterpart, since `Text_tlv` and
+               `Opaque_tlv` each serve one of each, so the test needs
+               the node attribute file and the source does not. The
+               shape to expect: a cross-table claim needs the other
+               table's file in the test.
+             * **Four guards fired and all four were re-pointed.** The
+               shared-bases table gained `Float32_tlv` as a
+               single-table base, the forward-looking Tables-8-and-10
+               guard became a Table-10 one, the code point table's
+               thirteen rows went to yes, and the five-widths guard
+               now asserts **the width beside the citation**, which is
+               the half that matters: 1091 at 32 and 1093 at 2 are
+               what memory gives as 4.
          * **Five of Table 8's widths read first hand on 2026-11-01,
            and two are not what memory gives.** 1091 Unreserved
            bandwidth is **32 octets**, not 4: RFC 5305 section 3.6 is
@@ -5352,10 +5445,9 @@ request that added the attribute:
 * Prefix-SID (40): the SRv6 TLVs of RFC 9252, and the RFC 8669 section 4.1 rule for labeled unicast.
 * No check for a missing well known mandatory attribute. That needs `Update`, not `Path_attribute`, because it depends on whether the message carries NLRI.
 * The external peer rules for LOCAL_PREF, ORIGINATOR_ID and CLUSTER_LIST, and the RFC 7311 section 3.2 AIGP checks. bgp4r does not know whether a peer is external where the checks run.
-* BGP-LS (29): the link attribute TLVs of RFC 9552 Table 8 and the prefix
-  attribute TLVs of Table 10, which are parts 5b and 5c of the plan above,
-  and every attribute TLV the other RFCs define, which that plan's measure
-  deliberately excludes. The attribute and Table 6's node attribute TLVs are
-  in, and a TLV with no class is kept and echoed, which section 5.1 requires
-  rather than permits.
+* BGP-LS (29): the prefix attribute TLVs of RFC 9552 Table 10, which is part
+  5c of the plan above, and every attribute TLV the other RFCs define, which
+  that plan's measure deliberately excludes. The attribute and Tables 6 and 8
+  are in, 19 of RFC 9552's own 25 attribute TLVs, and a TLV with no class is
+  kept and echoed, which section 5.1 requires rather than permits.
 * Not started: BGPsec_Path.
