@@ -395,6 +395,32 @@ class McastVpnSessionTest < Test::Unit::TestCase
     assert_equal('0102030405', r.value.unpack1('H*'))
   end
 
+  # **The one case where a receive side check runs on octets that
+  # crossed a socket** rather than ones a test wrote. RFC 6515 section 2
+  # item 2: route type 1's Originating Router's IP Address is what the
+  # NLRI length leaves over, and "If the inferred length ... is neither
+  # 4 nor 16, the MP_REACH_NLRI attribute MUST be considered to be
+  # 'incorrect'". Eight octets here, so one finding, subcode 9 and a
+  # session reset per RFC 7606 section 7.11.
+  #
+  # The session stays up because this test's receive policy is not
+  # `:strict`; what is asserted is the verdict, not a reset.
+  def test_an_originating_router_of_the_wrong_width_is_reported
+    session
+    hex = '0110' + '00000064000000c8' + 'aabbccddeeff0011'
+    got = crosses(reach([BGP::Mcast_vpn.new([hex].pack('H*').is_packed)]), 1)
+
+    f = got.path_attribute.errors.first
+    assert_equal(9, f.subcode)
+    assert_equal(:session_reset, f.action)
+    assert_match(/leaves 8 octets for its Originating Router's IP Address/,
+                 f.reason)
+    # And the attribute still parsed, which is what says the two channels
+    # of #116 are independent: a protocol error is not a coverage gap.
+    assert_instance_of(BGP::Mcast_vpn::Intra_as_i_pmsi,
+                       mpr(got).nlris.first.route)
+  end
+
   # **A route no RFC allows crosses too**, per Conventions: building and
   # encoding never validate, so a test can put a Length that disagrees
   # with its body on the wire and watch the far side.
@@ -408,12 +434,22 @@ class McastVpnSessionTest < Test::Unit::TestCase
   # outside the body, and `declared_len` echoes that so `encode` gives
   # the peer's octets back. Only a body a registered type cannot
   # reproduce falls back to Unknown, which the unit tests cover.
+  #
+  # **The expected finding count was 0 when the wiring part wrote this
+  # case, and the validation part made it 1**, which is that part
+  # working rather than this case breaking: a Length that overruns the
+  # attribute is the framing check `mcast_vpn_finding` now makes. The
+  # count is re-pointed and the reason asserted, which is stronger than
+  # the zero it replaced. The two channels stay independent either way:
+  # a protocol error in `errors` and no coverage gap in `undecoded`.
   def test_a_route_no_rfc_allows_crosses_a_session
     session
     # Route type 1 with a Length of 20 over a 12-octet body.
     hex = '0114' + '00000064000000c8' + '0a000001'
-    got = crosses(reach([BGP::Mcast_vpn.new([hex].pack('H*').is_packed)]))
+    got = crosses(reach([BGP::Mcast_vpn.new([hex].pack('H*').is_packed)]), 1)
 
+    assert_match(/runs past the attribute/,
+                 got.path_attribute.errors.first.reason)
     n = mpr(got).nlris.first
     assert_equal(1, n.type)
     assert_instance_of(BGP::Mcast_vpn::Intra_as_i_pmsi, n.route,

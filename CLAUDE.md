@@ -144,16 +144,20 @@ docs/                    protocol-testing.md: using bgp4r to test a router
                          before putting an MCAST-VPN check in validation.rb.
                          Its load bearing claims are asserted by
                          test/unit/mcast_vpn_doc_test.rb, whose route type
-                         table is **discovered** rather than listed. One of
-                         its guards is true only while this family is half
-                         built and fails the day validation lands, which is
-                         deliberate: it names what to update, and it is
-                         test_there_is_no_receive_side_check_yet_and_the_document_says_why.
-                         Three others have already fired and been
-                         re-pointed rather than weakened: the no-route-type
-                         one, the no-dispatch one, and the one that said no
-                         document gives the Originating Router a width,
-                         which RFC 6515 does
+                         table **and** section 8 check table are
+                         **discovered** rather than listed. **All four of
+                         part 1's forward-looking guards have now fired
+                         and been re-pointed rather than weakened**, which
+                         is what they were for: the no-route-type one, the
+                         no-dispatch one, the one that said no document
+                         gives the Originating Router a width, and the one
+                         that said validation.rb knew nothing of this
+                         family. So nothing here is waiting on a later
+                         part any more. The section 8 count is discovered
+                         differently from evpn_doc_test.rb's, by the arms
+                         of mcast_vpn_route_finding's case rather than by
+                         Finding.new, because RFC 6515 states one sentence
+                         four times and the library answers it once
                          building-objects.md: the three ways into every class and how
                          initialize dispatches between them; read it before changing a
                          constructor or chasing an object that does not come back.
@@ -377,7 +381,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. The `lab` job is a matrix, one job per group in `test/lab_groups.rb`, so its cost is the slowest group and not the total: it was 12m42s as one serial suite. Each job installs only what its group needs, which is why the matrix entry carries a `gobgp`, `frr`, `docker` or `netns` flag. The `gobgp` groups pin 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-11-01: 1948 tests, 26107 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.3%.
+Baseline on 2026-11-01: 1957 tests, 26182 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.3%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -1394,7 +1398,7 @@ true here is the shape of the gap:
   prints the registered code points, against the 115 the IANA registries
   listed when this was last counted by hand.
 
-### Breadth, the one SAFI lever. Phases 2 and 3 done, phase 4 parts 1 to 3 in progress
+### Breadth, the one SAFI lever. Phases 2 and 3 done, phase 4 parts 1 and 2 done, part 3 all but the lab
 
 The section above deferred breadth and named the single limit. This is the
 plan for lifting it, recorded before the work starts.
@@ -2727,7 +2731,8 @@ Two consequences, both of which change the plan rather than decorate it:
 4. **The rest, as appetite allows. Two and a half of four done.**
    RT-constrain (SAFI 132, RFC 4684) and ATTR_SET (attribute 128, RFC
    6368) **are in**; MCAST-VPN (SAFI 5, RFC 6514) reads and writes on
-   the wire with validation and the lab left; BGP-LS (attribute 29, AFI
+   the wire and reports a malformed route, with only the lab left;
+   BGP-LS (attribute 29, AFI
    16388, SAFI 71 and 72, RFC 9552) is not started. This entry used to
    say "each of
    these is a class and a registration", which held for the first and
@@ -3063,11 +3068,12 @@ Two consequences, both of which change the plan rather than decorate it:
             `wait_for`, which overran the foreground limit twice and
             left a patched working tree behind both times. One method
             is about 45s.
-   3. **MCAST-VPN, SAFI 5, RFC 6514. Five of seven parts done**, in
-      #208, #209, #210, #211 and #212: the framing and the primitives,
-      then route types 1, 2 and 5, then 3, 6 and 7, then 4, then the
-      wiring. **Every layout of section 4 is in and an MCAST-VPN UPDATE
-      crosses a session.** Validation is next, then the lab.
+   3. **MCAST-VPN, SAFI 5, RFC 6514. Six of seven parts done**, in
+      #208, #209, #210, #211, #212 and #213: the framing and the
+      primitives, then route types 1, 2 and 5, then 3, 6 and 7, then 4,
+      then the wiring, then validation. **Every layout of section 4 is
+      in, an MCAST-VPN UPDATE crosses a session, and a malformed one is
+      reported on receive.** Only the lab is left.
       **The RFC is readable now**, which corrects the note
       this entry used to carry: it was fetched in full on 2026-10-31,
       along with draft-ietf-bess-rfc6514bis-00, which obsoletes it, and
@@ -3186,14 +3192,16 @@ Two consequences, both of which change the plan rather than decorate it:
         what this entry said.** "Malformed" appears in RFC 6514 and the
         bis draft only for the PMSI Tunnel attribute and the PE
         Distinguisher Labels attribute, and neither references RFC 7606
-        for an NLRI, so that much holds. **RFC 6515 section 2 has one
-        rule**, repeated per item: an address length that "is neither 4
-        nor 16" makes the MP_REACH_NLRI "incorrect", handled per section
-        7 of RFC 4760. So part 6 has exactly one check to consider
-        rather than a decision to record, and the question it has to
-        answer rather than assume is what RFC 4760 section 7's
-        "incorrect" means now, since RFC 7606 revised that ground
-        afterwards and RFC 6515 names no subcode. Everything else about
+        for an NLRI, so that much holds. **RFC 6515 section 2 states one
+        rule four times**, once per place a provider address appears: an
+        address length that "is neither 4 nor 16" makes the
+        MP_REACH_NLRI "incorrect", handled per section 7 of RFC 4760. So
+        part 6 is four checks and not the decision this plan expected,
+        and not the one check part 5 reported either: **this bullet said
+        one until part 6 read section 2 properly**. The subcode and the
+        action came out of RFC 7606 section 7.11, which updates RFC 4760
+        and states 6515's sentence generally, so nothing was derived;
+        part 6's entry has it. Everything else about
         a bad MCAST-VPN NLRI is still not these RFCs' to give, which is
         the RFC 7432, RFC 9572 and RFC 4684 situation and not RFC
         8955's.
@@ -3647,13 +3655,127 @@ Two consequences, both of which change the plan rather than decorate it:
            the doc test's new guards reach `Mp_reach`, which that file
            did not require, so it passed in the suite and errored on its
            own. Run a file you changed both ways.
-      6. **Validation**, in `validation.rb` and nowhere else per
-         Conventions, and the first question is whether there is
-         anything to put there. On today's reading neither document
-         names a malformed NLRI or a subcode, so this part may be a
-         recorded decision with its reason rather than a check. If it is,
-         say so in `docs/mcast-vpn.md` and have the doc test hold it,
-         so the next audit does not read the absence as an oversight.
+      6. **Validation. Done**, in #213, in `validation.rb` and nowhere
+         else per Conventions. **Four checks, not the nothing this plan
+         expected and not the one part 5 found**, and all four are RFC
+         6515 section 2's, one per item. `docs/mcast-vpn.md` section 8
+         is the guide and has them in a table the doc test reads.
+         * **The count went 0, then 1, then 4 across three parts, and
+           that history is the lesson.** Part 1 recorded "there is no
+           error handling text", measured by reading RFC 6514 and the
+           bis draft. Part 5 found RFC 6515 and corrected it to one
+           rule, the next hop. Part 6 read section 2 properly: it names
+           **four** places a provider address appears in an MCAST-VPN
+           route and repeats the same sentence for each, so there are
+           four checks. An absence recorded as measured is the claim
+           that stops the next reader looking, and it did that twice.
+         * **The subcode and the action are RFC 7606's, not derived, and
+           that was part 5's open question.** Part 5 left it as: RFC
+           6515 points at RFC 4760 section 7, names no subcode, and RFC
+           4760 predates RFC 7606, so what "incorrect" means now has to
+           be answered rather than assumed. The answer is that **the
+           rule bgp4r already had is this rule**. RFC 7606's header says
+           `Updates: 4760`, and section 7.11 states it generally: "If
+           the Length of Next Hop Network Address field of the MP_REACH
+           attribute is inconsistent with that which was expected, the
+           attribute is considered malformed", and because "the next hop
+           precedes the NLRI field in the attribute" the NLRI cannot be
+           located, so "the 'session reset' or 'AFI/SAFI disable'
+           approach MUST be used". So subcode 9 with a reset, which is
+           what the two MP_REACH findings already answer.
+           * **7.11 leaves the expectation to the family and gives the
+             worked example in RFC 6515's own words**: "'That which was
+             expected' ... is potentially modified by any extensions in
+             use. For example, if [RFC5549] is in use, then the next hop
+             would have to have a length of 4 or 16." So this is 7.11's
+             clause with one family's expectation filled in rather than
+             a new rule. **Inventing a subcode was the trap**, the one
+             flow spec part 4 and EVPN part 9 each recorded, and the way
+             out was reading the RFC that updates the one being pointed
+             at. That is the same rule that found RFC 6515 one part
+             earlier, applied one level further down the chain.
+         * **Only this family's next hop length is checked, and the
+           reason is which RFC names the error.** Three families share
+           the length-only next hop arm in `mp_reach.rb`. RFC 7432
+           section 14 says an EVPN next hop "MUST be set to the IPv4 or
+           IPv6 address of the advertising PE", binding a sender and
+           naming no receiver action; RFC 4684 section 4 tells a reader
+           how to read the field and says nothing about other lengths;
+           RFC 6515 states the error and the handling. Extending the
+           check to the other two is deriving from 7.11 alone, which is
+           legitimate and is a **decision rather than an
+           implementation**, so it is recorded in the guide as the
+           obvious next piece of work with the citations in hand.
+         * **All four checks are MP_REACH only, and that is the
+           document's choice rather than a reading of the route key.**
+           Every one of section 2's items names the MP_REACH_NLRI
+           attribute and none mentions MP_UNREACH_NLRI, measured by
+           reading them. EVPN's two reach-only rules had to be derived
+           from what its RFCs call the route key; this is simply what
+           RFC 6515 says. The framing findings run on both, because
+           octets that cannot be split are not a question about which
+           attribute holds them.
+         * **The row count guard counts something other than
+           `Finding.new`, and the difference is the library's shape.**
+           `evpn_doc_test.rb` counts findings because each EVPN check has
+           its own. RFC 6515 states one sentence four times, so
+           `originator_finding` is one `Finding.new` reached by three
+           route types: counting findings gives 2 where the table has 4
+           rows. What matches the rows is the next hop check plus the
+           arms of `mcast_vpn_route_finding`'s case, and those are as
+           discoverable from the library as a finding is, each naming its
+           route type through the class.
+         * **The four methods sit after `nonzero?` rather than beside
+           the EVPN checks, and the guard is why.**
+           `evpn_doc_test.rb`'s row count slices validation.rb from `def
+           evpn_finding` to `def nonzero?`, so code written in that
+           window counts as an EVPN check. Writing them there is what
+           happened first and the guard caught it, which is a discovered
+           count working in a direction nobody designed it for.
+           `nonzero?` is EVPN's own helper and nothing else calls it, so
+           that window is exactly the EVPN block and is worth leaving
+           exact. Said in a comment there.
+         * **One expired example, re-pointed and made stronger.** Part
+           5's `test_a_route_no_rfc_allows_crosses_a_session` sent a
+           route type 1 whose Length overran its body and asserted no
+           finding, because none existed then. That is now the framing
+           check, so the case expects one finding and asserts which,
+           which is stronger than the zero it replaced. Fifth expired
+           example in this family and the first that moved a count
+           rather than an octet.
+         * **`test/functional/mcast_vpn_test.rb` gained the one case
+           where a check runs on octets that crossed a socket**, the way
+           EVPN's does: a route type 1 with an 8-octet Originating
+           Router, reported once with subcode 9 and a reset, with the
+           attribute still parsing so the two channels of #116 are
+           visibly independent.
+         * Eight sabotages, all landing, each on the check it was aimed
+           at: the next hop check removed, the MP_REACH call removed, the
+           MP_UNREACH call removed, `originator_finding` accepting any
+           width, `reach` ignored so the route checks run on a
+           withdrawal, one route type arm dropped from the case, route
+           type 3's two `Addr` widths not walked, and one row cut from
+           the document's table.
+         * **A hand written attribute length was wrong again**, the
+           tenth time across this family's six parts and the library
+           right every time. RFC 6514 carries no hex, so there is
+           nothing to check a reading against; the clean vectors in the
+           tests are built with the library and pasted, and only the
+           malformed ones are hand built, because the library will not
+           encode those. Compute even those with a script rather than
+           counting nibbles.
+         * **A load order trap, for the second part running.** The doc
+           test's new guards build an attribute set to read its findings,
+           so they reach `Path_attribute`, which that file did not
+           require: it passed in the suite and errored on its own. Part 5
+           did the same thing with `Mp_reach`. Both requires are there
+           now with a comment saying why.
+         * `validation.rb` is back at 100% line coverage.
+         * **What is deliberately left, with its reason in the guide.**
+           The two receive side rules of section 4.5 that part 2 found,
+           one an "outside the scope" sentence and the other needing a
+           multicast range RFC 6514 does not number; and extending the
+           next hop length check to EVPN and RT-constrain, above.
       7. **The lab**, which for this family is a measurement rather than
          a test, for the reason above. Assert that neither router
          negotiates SAFI 5, since that is the fact the whole scope of

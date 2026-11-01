@@ -231,18 +231,40 @@ module BGP
             return Finding.new(type, 9, RESET, "next hop does not fit in #{n} octets (RFC 7606 section 7.11)")
           end
           nlri_at = 5 + v.getbyte(3)
+          # **The next hop's own length, where a family states what it
+          # expects.** Section 7.11 carries the rule and leaves the
+          # expectation to the family: "If the Length of Next Hop
+          # Network Address field of the MP_REACH attribute is
+          # inconsistent with that which was expected, the attribute is
+          # considered malformed", and "'That which was expected', while
+          # somewhat vague, is intended to encompass the next hop
+          # specified for the Address Family Identifier and Subsequent
+          # Address Family Identifier fields and is potentially modified
+          # by any extensions in use. For example, if [RFC5549] is in
+          # use, then the next hop would have to have a length of 4 or
+          # 16." So this is not a new rule and needs no new subcode: it
+          # is 7.11's own clause with one family's expectation filled
+          # in. See mcast_vpn_next_hop_finding for which family and why
+          # only one.
+          f = mcast_vpn_next_hop_finding(type, v.unpack1('n'), v.getbyte(2),
+                                         v.getbyte(3))
+          return f if f
           # Each answers nil for the other's family, so the prefix
           # families pay one comparison each and nothing else.
           return flow_spec_finding(type, v.byteslice(nlri_at, n - nlri_at),
                                    v.unpack1('n'), v.getbyte(2)) ||
                  evpn_finding(type, v.byteslice(nlri_at, n - nlri_at),
-                              v.unpack1('n'), v.getbyte(2), true)
+                              v.unpack1('n'), v.getbyte(2), true) ||
+                 mcast_vpn_finding(type, v.byteslice(nlri_at, n - nlri_at),
+                                   v.unpack1('n'), v.getbyte(2), true)
         when MP_UNREACH
           return Finding.new(type, 9, RESET, "length #{n}, AFI and SAFI need 3 (RFC 7606 section 7.11)") if n < 3
           return flow_spec_finding(type, v.byteslice(3, n - 3),
                                    v.unpack1('n'), v.getbyte(2)) ||
                  evpn_finding(type, v.byteslice(3, n - 3),
-                              v.unpack1('n'), v.getbyte(2), false)
+                              v.unpack1('n'), v.getbyte(2), false) ||
+                 mcast_vpn_finding(type, v.byteslice(3, n - 3),
+                                   v.unpack1('n'), v.getbyte(2), false)
         when ATTR_SET
           return attr_set_finding(type, v)
         end
@@ -590,6 +612,190 @@ module BGP
       # True when any of n octets of s from i is not zero.
       def nonzero?(s, i, n)
         s.byteslice(i, n).each_byte.any? { |b| b > 0 }
+      end
+
+      # **These four sit after `nonzero?` and not beside the EVPN checks
+      # they resemble, which is deliberate.**
+      # `evpn_doc_test.rb`'s row count slices validation.rb from `def
+      # evpn_finding` to `def nonzero?` and counts `Finding.new(` in
+      # between, so anything put in that window is counted as an EVPN
+      # check and fails the guard. Writing them there is what happened
+      # first, and the guard caught it. `nonzero?` is EVPN's own helper
+      # and nothing else calls it, so that window is exactly the EVPN
+      # block and is worth leaving exact.
+      #
+      # The MP_REACH next hop's length, for the one family whose RFC says
+      # what it expects and what to do when it is not that. nil for every
+      # other, so the prefix families pay one comparison.
+      #
+      # **RFC 6515, "IPv4 and IPv6 Infrastructure Addresses in BGP
+      # Updates for Multicast VPN", February 2012, header `Updates:
+      # 6514`.** Section 2 lists the four places a provider address
+      # appears in an MCAST-VPN route; item 1 is this field: "it is
+      # always clear whether the address is an IPv4 address (length is 4)
+      # or an IPv6 address (length is 16)", and if it is neither "the
+      # MP_REACH_NLRI attribute MUST be considered to be 'incorrect', and
+      # MUST be handled as specified in Section 7 of [BGP-MP]".
+      #
+      # **The action and the subcode are RFC 7606's and not derived.**
+      # RFC 6515 points at RFC 4760 section 7, and RFC 7606's header says
+      # `Updates: 4760`: its section 7.11 is the same rule stated
+      # generally, a next hop length "inconsistent with that which was
+      # expected" is malformed and "the 'session reset' or 'AFI/SAFI
+      # disable' approach MUST be used", because "the next hop precedes
+      # the NLRI field in the attribute" so the NLRI cannot be located.
+      # Its own worked example is the same sentence from the other end:
+      # "if [RFC5549] is in use, then the next hop would have to have a
+      # length of 4 or 16". So this is subcode 9 with a session reset,
+      # which is exactly what the "next hop does not fit" finding above
+      # already answers and for the same citation.
+      #
+      # **Why only this family, when three share the next hop arm in
+      # `mp_reach.rb`.** The difference is which RFC names the error, not
+      # which has an expectation. RFC 7432 section 14 says an EVPN next
+      # hop "MUST be set to the IPv4 or IPv6 address of the advertising
+      # PE", which binds a sender and names no receiver action; RFC 4684
+      # section 4 says the field "shall be interpreted as an IPv4 address
+      # whenever the length of NextHop address is 4 octets", which tells
+      # a reader how to read it and says nothing about other lengths. RFC
+      # 6515 is the only one of the three that states the error and the
+      # handling. Extending this to the other two would be deriving from
+      # 7.11 alone, which is legitimate and is a decision rather than an
+      # implementation; `docs/mcast-vpn.md` section 8 records it as the
+      # obvious next piece of work with the citations already in hand.
+      #
+      # **MP_UNREACH is not checked and that is the RFC's choice.** All
+      # four of section 2's items name the MP_REACH_NLRI attribute and
+      # none mentions MP_UNREACH_NLRI, measured by reading them. An
+      # MP_UNREACH carries no next hop at all, so item 1 could not apply
+      # there anyway.
+      def mcast_vpn_next_hop_finding(type, afi, safi, len)
+        return nil unless safi == IANA::SAFI::MCAST_VPN
+        return nil if len == 4 or len == 16
+        Finding.new(type, 9, RESET,
+          "MCAST-VPN next hop of #{len} octets, must be 4 or 16 " \
+          '(RFC 6515 section 2, RFC 7606 section 7.11)')
+      end
+
+      # The MCAST-VPN NLRI list of an MP_REACH or MP_UNREACH, SAFI 5.
+      # nil for every other family, so this costs the prefix families one
+      # comparison. AFI 1 and 2 both reach here, which RFC 6514 section 4
+      # allows and nothing below reads differently.
+      #
+      # **Where the action and the subcode come from, because RFC 6514
+      # says nothing at all.** Neither RFC 6514 nor
+      # draft-ietf-bess-rfc6514bis-00 contains any NLRI error handling
+      # text: "malformed" appears only for the PMSI Tunnel attribute and
+      # the PE Distinguisher Labels attribute, and neither references RFC
+      # 7606 for an NLRI. That is the RFC 7432, RFC 9572 and RFC 4684
+      # situation and not RFC 8955's. So the framing findings get what
+      # bgp4r already gives a malformed MP_REACH, subcode 9 with a
+      # session reset, citing RFC 7606 section 7.11 as the two MP_REACH
+      # findings and the EVPN ones do.
+      #
+      # **The route body findings are RFC 6515's, with its own action.**
+      # Section 2 items 2, 3 and 4 cover the Originating Router's IP
+      # Address in route types 1, 3 and 4, the three that carry it, and
+      # each says the same thing: the field's width is what the NLRI
+      # length leaves over, and "If the inferred length of the
+      # 'Originating Router's IP Address' field is neither 4 nor 16, the
+      # MP_REACH_NLRI attribute MUST be considered to be 'incorrect', and
+      # MUST be handled as specified in Section 7 of [BGP-MP]". Item 2
+      # also gives the only octet count any document in this family
+      # states, for route type 1: the NLRI length field "will be either
+      # 12 or 24, respectively".
+      #
+      # **An unknown route type is not an error here.** No MCAST-VPN RFC
+      # says it is, where RFC 8955 section 4.2 says exactly that of a flow
+      # spec component type, so this is the EVPN posture and for the same
+      # reason: types 8 to 66 and 72 onward are unassigned, so reporting
+      # one would make bgp4r call a correct router malformed the day IANA
+      # assigns one. RFC 7441's three mLDP types are out of scope by
+      # decision and land here too, so reporting would be worse than
+      # noisy: it would call a conformant mLDP speaker malformed.
+      #
+      # **`reach` is why this takes the argument, and what it gates.**
+      # All four of section 2's items name MP_REACH_NLRI and none
+      # mentions MP_UNREACH_NLRI, measured by reading them rather than
+      # inferred from the route key the way EVPN's two `reach` rules
+      # were. The framing findings run on both, because octets that
+      # cannot be split are not a question about which attribute holds
+      # them.
+      def mcast_vpn_finding(type, nlri, afi, safi, reach)
+        return nil unless safi == IANA::SAFI::MCAST_VPN
+        framing = ::BGP::Mcast_vpn::FRAMING
+        while nlri.size > 0
+          size = ::BGP::Mcast_vpn.nlri_size(nlri)
+          if size.nil?
+            return Finding.new(type, 9, RESET,
+              "#{nlri.size} octet left, too few for an MCAST-VPN Route Type " \
+              'and Length (RFC 6514 section 4)')
+          end
+          if size > nlri.size
+            return Finding.new(type, 9, RESET,
+              "MCAST-VPN NLRI of #{size} octets runs past the attribute, " \
+              "#{nlri.size} left (RFC 6514 section 4)")
+          end
+          if reach
+            f = mcast_vpn_route_finding(type, nlri.getbyte(0),
+                                        nlri.byteslice(framing, size - framing))
+            return f if f
+          end
+          nlri = nlri.byteslice(size, nlri.size - size)
+        end
+        nil
+      end
+
+      # One MCAST-VPN route's body, against RFC 6515 section 2. The route
+      # type numbers come from the classes rather than being written again
+      # here, so they cannot drift from `Mcast_vpn::ROUTES`.
+      #
+      # Three of the seven carry an Originating Router's IP Address and
+      # so have a rule a receiver can check; the other four have no
+      # receive side rule in any of the three documents. Section 4.5 has
+      # two that are not these, and `docs/mcast-vpn.md` section 8 says
+      # why each is out: one is an "outside the scope" sentence, and the
+      # other needs a multicast range RFC 6514 does not number.
+      def mcast_vpn_route_finding(type, route_type, body)
+        case route_type
+        when ::BGP::Mcast_vpn::Intra_as_i_pmsi.type
+          # Item 2: an RD, then the address. Nothing in between, which is
+          # why this is the item that can state a total.
+          originator_finding(type, route_type, body.size - ::BGP::Mcast_vpn::RD_SIZE)
+        when ::BGP::Mcast_vpn::S_pmsi.type
+          # Item 3: an RD, the Multicast Source and Group, then the
+          # address. Each of the two is a length in bits and that many
+          # bits of value, so the walk is theirs and the remainder is the
+          # address. A length claiming more than the body holds leaves
+          # nothing behind it, which answers a width of 0 and is reported
+          # for that reason rather than needing a rule of its own.
+          i = ::BGP::Mcast_vpn::RD_SIZE
+          2.times do
+            break if i >= body.size
+            i += 1 + ::BGP::Mcast_vpn::Addr.octets_for(body.getbyte(i))
+          end
+          originator_finding(type, route_type, body.size - i)
+        when ::BGP::Mcast_vpn::Leaf_a_d.type
+          # Item 4: "the 'NLRI length' field is following by a
+          # variable-length 'route key', which is followed by the
+          # 'Originating Router's IP' address. The Route Key has its own
+          # length field. From the NLRI length and the route key length,
+          # one can compute the length" of the address. So the nested
+          # NLRI's own framing gives the split, which is the same reading
+          # `Mcast_vpn::Leaf_a_d` takes.
+          key = ::BGP::Mcast_vpn.nlri_size(body)
+          return nil if key.nil? or key > body.size
+          originator_finding(type, route_type, body.size - key)
+        end
+      end
+
+      # RFC 6515 section 2, the sentence items 2, 3 and 4 share.
+      def originator_finding(type, route_type, width)
+        return nil if width == 4 or width == 16
+        Finding.new(type, 9, RESET,
+          "MCAST-VPN route type #{route_type} leaves #{width} octets for its " \
+          "Originating Router's IP Address, must be 4 or 16 " \
+          '(RFC 6515 section 2)')
       end
 
       # The whole size of the component at i, type octet included, or nil

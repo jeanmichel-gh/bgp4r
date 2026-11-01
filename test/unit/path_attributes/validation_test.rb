@@ -585,6 +585,145 @@ class TestAttrCheck < Test::Unit::TestCase
     assert_equal [[4, TAW]], check('40 80 04 0000fde8'), 'transitive, not optional'
   end
 
+  # MCAST-VPN, SAFI 5, AFI 1 or 2. Every clean hex string below was
+  # built with the library and pasted, which is the rule this family
+  # earned: RFC 6514 carries no worked example and no hex, and typing
+  # one by hand has been wrong nine times across its six parts and the
+  # library right every time. The malformed ones are hand built, because
+  # the library will not encode them.
+  #
+  # **Where the action and the subcode come from, which is not a
+  # derivation.** RFC 6514 and the bis draft carry no NLRI error
+  # handling text at all. The four checks are RFC 6515 section 2's, one
+  # per item, each saying the MP_REACH_NLRI attribute "MUST be
+  # considered to be 'incorrect', and MUST be handled as specified in
+  # Section 7 of [BGP-MP]". RFC 7606's header says `Updates: 4760` and
+  # its section 7.11 states that generally: a next hop length
+  # "inconsistent with that which was expected" is malformed, and
+  # because the next hop precedes the NLRI the "session reset" approach
+  # MUST be used. Its own example is RFC 6515's sentence from the other
+  # end, "if [RFC5549] is in use, then the next hop would have to have a
+  # length of 4 or 16". So subcode 9 with a reset, the same as the two
+  # MP_REACH findings this file already asserts.
+
+  # A well formed MCAST-VPN route is not reported, which is what the
+  # rest of these are measured against. All seven route types reach
+  # here and three have rules, so most of this list is the no-rules
+  # path.
+  def test_good_mcast_vpn_routes_have_no_findings
+    [ # route type 1, RFC 6514 section 4.1, and the 12 octet NLRI length
+      # RFC 6515 section 2 item 2 states
+      '800e17 000105 04 0a000001 00 010c 00000064000000c8 0a000001',
+      # the same with IPv6 throughout, which is its 24
+      '800e2f 000105 10 20010db80000000000000000000000010001 1800000064000000c8' \
+        '20010db8000000000000000000000009',
+      # route type 2, section 4.2, which carries no address of its own
+      '800e17 000105 04 0a000001 00 020c 00000064000000c8 0000fde8',
+      # route type 3, section 4.3, with IPv6 source, group and originator
+      '800e45 000105 04 0a000001 00 033a 00000064000000c8 8020010db8000000000000000000000001' \
+        '80ff3e0000000000000000000000000001 20010db8000000000000000000000009',
+      # route type 4, section 4.4, whose Route Key is an NLRI of its own
+      '800e1d 000105 04 0a000001 00 0412 020c00000064000000c80000fde8 0a000001',
+      # route types 5 and 6 in one attribute, neither of which carries an
+      # Originating Router and so neither of which has a rule
+      '800e35 000105 04 0a000001 00 0512 00000064000000c8 200a010101 20e8010101' \
+        ' 0616 00000064000000c8 0000fde8 200a010101 20e8010101',
+      # **an mLDP route type, which is not an error.** No MCAST-VPN RFC
+      # says a route type outside its own is malformed, where RFC 8955
+      # section 4.2 says exactly that about a flow spec component type.
+      # 0x43 is assigned, as RFC 7441's form of route type 3, and out of
+      # scope by decision, so reporting it would call a conformant mLDP
+      # speaker malformed.
+      '800e10 000105 04 0a000001 00 4305 0102030405',
+      # a withdrawal, which is the other parse loop
+      '800f1b 000105 0316 00000064000000c8 200a010101 20e8010101 0a000001',
+      # and AFI 2, which RFC 6514 section 4 allows and nothing reads
+      # differently
+      '800e2f 000205 10 20010db80000000000000000000000010001 1800000064000000c8' \
+        '20010db8000000000000000000000009',
+    ].each { |hex| assert_equal [], check(hex), hex }
+  end
+
+  # RFC 6515 section 2 item 1, through RFC 7606 section 7.11: the next
+  # hop length is 4 or 16 and nothing else. **This is the one next hop
+  # length check in the library**, and the reason it is only this family
+  # is which RFC names the error: RFC 7432 section 14 and RFC 4684
+  # section 4 each state an expectation and no receiver action, where
+  # RFC 6515 states both. See docs/mcast-vpn.md section 8.
+  def test_an_mcast_vpn_next_hop_of_the_wrong_length
+    { 8  => 'aaaaaaaaaaaaaaaa',
+      12 => 'aaaaaaaaaaaaaaaaaaaaaaaa',
+      0  => '' }.each do |len, nh|
+      body = '000105' + format('%02x', len) + nh + '00' +
+             '010c00000064000000c80a000001'
+      hex = '800e' + format('%02x', body.size / 2) + body
+      assert_equal [[9, RESET]], check(hex), "next hop of #{len} octets"
+      assert_equal "MCAST-VPN next hop of #{len} octets, must be 4 or 16 " \
+                   '(RFC 6515 section 2, RFC 7606 section 7.11)',
+                   reason(hex)
+    end
+  end
+
+  # The RFC 6514 section 4 framing, which is Mcast_vpn.nlri_size rather
+  # than a second copy of the rule. No MCAST-VPN RFC asks for this, so
+  # it takes the generic action for the reason above.
+  def test_mcast_vpn_nlri_framing
+    short = '800e18 000105 04 0a000001 00 010c 00000064000000c8 0a000001 05'
+    assert_equal [[9, RESET]], check(short)
+    assert_equal '1 octet left, too few for an MCAST-VPN Route Type and Length ' \
+                 '(RFC 6514 section 4)', reason(short)
+    past = '800e17 000105 04 0a000001 00 01ff 00000064000000c8 0a000001'
+    assert_equal [[9, RESET]], check(past)
+    assert_equal 'MCAST-VPN NLRI of 257 octets runs past the attribute, 14 left ' \
+                 '(RFC 6514 section 4)', reason(past)
+    # and the same through MP_UNREACH, whose loop is a separate copy
+    assert_equal [[9, RESET]], check('800f11 000105 01ff 00000064000000c8 0a000001')
+  end
+
+  # RFC 6515 section 2 items 2, 3 and 4: the Originating Router's IP
+  # Address is 4 or 16 octets, and its width is what the NLRI length
+  # leaves over. One sentence stated three times, so the library answers
+  # it in one place reached by three route types.
+  def test_an_mcast_vpn_originating_router_of_the_wrong_width
+    { # route type 1: 8 octets left after the RD
+      1 => ['800e1b 000105 04 0a000001 00 0110 00000064000000c8 aabbccddeeff0011', 8],
+      # route type 3: 8 left after the RD, source and group
+      3 => ['800e25 000105 04 0a000001 00 031a 00000064000000c8 200a010101 20e8010101' \
+            ' aabbccddeeff0011', 8],
+      # route type 4: 2 left after the Route Key, whose own Length says
+      # where it ends
+      4 => ['800e1b 000105 04 0a000001 00 0410 020c00000064000000c80000fde8 aabb', 2],
+    }.each do |rt, (hex, width)|
+      assert_equal [[9, RESET]], check(hex), "route type #{rt}"
+      assert_equal "MCAST-VPN route type #{rt} leaves #{width} octets for its " \
+                   "Originating Router's IP Address, must be 4 or 16 " \
+                   '(RFC 6515 section 2)', reason(hex)
+    end
+    # Nothing left at all is the same rule and not a special case.
+    none = '800e13 000105 04 0a000001 00 0108 00000064000000c8'
+    assert_equal [[9, RESET]], check(none)
+    assert_match(/leaves 0 octets/, reason(none))
+  end
+
+  # **All four checks are MP_REACH only, and that is RFC 6515's choice
+  # rather than a reading of the route key.** Every one of its section 2
+  # items names the MP_REACH_NLRI attribute and none mentions
+  # MP_UNREACH_NLRI. EVPN's two reach-only rules were derived from what
+  # its RFCs call the route key; this one is simply what the document
+  # says.
+  def test_the_mcast_vpn_route_checks_are_mp_reach_only
+    [ # route type 1 with an 8 octet originator, withdrawn
+      '800f15 000105 0110 00000064000000c8 aabbccddeeff0011',
+      # route type 3, withdrawn
+      '800f1f 000105 031a 00000064000000c8 200a010101 20e8010101 aabbccddeeff0011',
+      # route type 4, withdrawn
+      '800f15 000105 0410 020c00000064000000c80000fde8 aabb',
+    ].each { |hex| assert_equal [], check(hex), hex }
+    # And the framing is reported either way, because octets that cannot
+    # be split are not a question about which attribute holds them.
+    assert_equal [[9, RESET]], check('800f06 000105 01ff 0a000001')
+  end
+
   # The reason of the one finding for hex, so a test can assert which
   # rule fired rather than only that something did.
   def reason(hex)

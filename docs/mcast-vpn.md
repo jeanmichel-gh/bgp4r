@@ -445,42 +445,119 @@ would be inventing a rule where the documents have none. A caller who
 believes another reading can build it by handing the Route Key its own
 octets, since nothing validates.
 
-## 8. Error handling: almost none, and the one rule is RFC 6515's
+## 8. Error handling: four checks, and RFC 6515 is where all four come from
 
-**This section used to say there is none, measured by reading RFC 6514
-and the bis draft. There is one, and it is in RFC 6515.** Corrected here
-rather than left standing, because an absence recorded as measured is
-the kind of claim that stops the next reader looking.
+**This section has now said three different things and the history is
+the point.** Part 1 said there is no error handling text, measured by
+reading RFC 6514 and the bis draft. Part 5 found RFC 6515 and corrected
+that to one rule. Part 6 read RFC 6515's section 2 properly and the
+answer is **four**, one per item, because the rule it states is repeated
+for each of the four places a provider address appears in an MCAST-VPN
+route. An absence recorded as measured is the kind of claim that stops
+the next reader looking, which is exactly what happened twice here.
 
-The one rule is section 2's, repeated for each of its four items: if the
-address length it describes "is neither 4 nor 16", the MP_REACH_NLRI
-attribute "MUST be considered to be 'incorrect'" and handled per section
-7 of RFC 4760. For the next hop that is a length field of its own; for
-the Originating Router's IP Address it is the width the NLRI length
-leaves over. So it is a real receive side rule with a named action, and
-it is **part 6's work and not the wiring's**: `parse_next_hops` keeps
-what it is given either way, which is what makes `encode` byte for byte,
-and reporting is `validation.rb`'s business in exactly one place.
+What every item says, in its own words for item 2: "If the inferred
+length of the 'Originating Router's IP Address' field is neither 4 nor
+16, the MP_REACH_NLRI attribute MUST be considered to be 'incorrect',
+and MUST be handled as specified in Section 7 of [BGP-MP]." Item 1 says
+the same of the next hop, where the length is a field of its own rather
+than inferred.
 
-Worth being exact about what RFC 4760 section 7 gives, since RFC 6515
-does not name a subcode: that section is "Error Handling", and whether
-"incorrect" there still means what it said in 2007 is the question part 6
-has to answer rather than assume, since RFC 7606 revised that ground
-afterwards.
+| what | where | action |
+| --- | --- | --- |
+| a next hop length that is neither 4 nor 16 | item 1 | session reset |
+| route type 1's Originating Router neither 4 nor 16 | item 2 | session reset |
+| route type 3's Originating Router neither 4 nor 16 | item 3 | session reset |
+| route type 4's Originating Router neither 4 nor 16 | item 4 | session reset |
 
-Everything else holds. "Malformed" appears nowhere in RFC 6514 or the bis
-draft but for the PMSI Tunnel attribute and the PE Distinguisher Labels
-attribute, and neither document references RFC 7606 for an NLRI at all.
+Plus the framing, which every family gets and no MCAST-VPN RFC asks for:
+octets too few to hold a Route Type and Length, and a Length that
+overruns the attribute. Those take the action below for the reason below.
 
-So what a receiver answers for a bad MCAST-VPN NLRI is not this RFC's to
-give, and bgp4r does not invent one. That is the RFC 7432, RFC 9572 and
+### Where the subcode and the action come from, which is not a derivation
+
+Part 5 left this as the open question: RFC 6515 points at RFC 4760
+section 7 and names no subcode, and RFC 4760 predates RFC 7606, so what
+"incorrect" means now had to be answered rather than assumed.
+
+It is answered by the document that already governs this, and the
+answer is that **bgp4r's existing finding is the same rule**. RFC 7606's
+header says `Updates: 4760`, and its section 7.11 states RFC 6515's
+sentence generally:
+
+> If the Length of Next Hop Network Address field of the MP_REACH
+> attribute is inconsistent with that which was expected, the attribute
+> is considered malformed.
+
+and, on the action, that because "the next hop precedes the NLRI field
+in the attribute" the NLRI cannot be reliably located, so "the 'session
+reset' or 'AFI/SAFI disable' approach MUST be used".
+
+Section 7.11 then leaves the expectation to the family, and its worked
+example is RFC 6515's sentence from the other end: "'That which was
+expected', while somewhat vague, is intended to encompass the next hop
+specified for the Address Family Identifier and Subsequent Address
+Family Identifier fields and is potentially modified by any extensions
+in use. For example, if [RFC5549] is in use, then the next hop would
+have to have a length of 4 or 16."
+
+So this is not a new rule and needs no new subcode. It is 7.11's own
+clause with one family's expectation filled in, and bgp4r already
+reports 7.11 as subcode 9 with a session reset for a next hop that does
+not fit. **Inventing a subcode was the trap here**, the one flow spec
+part 4 and EVPN part 9 each recorded, and the way out was reading the
+RFC that updates the one being pointed at.
+
+### Only this family's next hop is checked, and the reason is the RFCs
+
+Three families share the length-only next hop arm in `mp_reach.rb`:
+EVPN, RT-constrain and MCAST-VPN. Only MCAST-VPN's length is checked,
+and the difference is **which RFC names the error**, not which has an
+expectation.
+
+- RFC 7432 section 14: an EVPN next hop "MUST be set to the IPv4 or IPv6
+  address of the advertising PE". That binds a sender and names no
+  receiver action.
+- RFC 4684 section 4: the field "shall be interpreted as an IPv4 address
+  whenever the length of NextHop address is 4 octets". That tells a
+  reader how to read it and says nothing about other lengths.
+- RFC 6515 section 2 item 1 states the error and the handling.
+
+Extending the check to the other two would be deriving from 7.11 alone.
+That is legitimate, since 7.11's rule is general, but it is a decision
+rather than an implementation and so is **the obvious next piece of work
+here**, with the citations already in hand.
+
+### MP_UNREACH is not checked, and that is the RFC's choice
+
+All four of section 2's items name the MP_REACH_NLRI attribute and none
+mentions MP_UNREACH_NLRI, measured by reading them. So the four checks
+above run on an MP_REACH only, which is the `reach` argument EVPN's
+checks already use, reached here by the RFC saying so rather than by
+reasoning about the route key the way EVPN's two did. An MP_UNREACH
+carries no next hop at all, so item 1 could not apply there anyway.
+
+The framing findings do run on both, because octets that cannot be split
+are not a question about which attribute holds them.
+
+### What is still not checked
+
+"Malformed" appears nowhere in RFC 6514 or the bis draft but for the
+PMSI Tunnel attribute and the PE Distinguisher Labels attribute, and
+neither document references RFC 7606 for an NLRI at all. So everything
+about a bad MCAST-VPN NLRI beyond the four above is not these RFCs' to
+give, and bgp4r does not invent it. That is the RFC 7432, RFC 9572 and
 RFC 4684 situation, and not RFC 8955's, whose section 4.2 says in so
 many words that an NLRI with an unknown component type "is considered
 malformed".
 
 An unknown route type is therefore reported nowhere. Types 8 to 66 and
 72 onward are unassigned, so reporting one would make bgp4r call a
-correct router malformed the day IANA assigns one.
+correct router malformed the day IANA assigns one. **RFC 7441's three
+mLDP types land here too**, and that makes the decision sharper rather
+than softer: they are assigned and out of scope by decision, so
+reporting an unknown type would call a conformant mLDP speaker
+malformed.
 
 ### Two receive-side rules that are not error handling
 
@@ -580,9 +657,9 @@ any document" was true only of the two documents that had been read.
 ## 11. What is left
 
 The seven parts are in CLAUDE.md under "Breadth, the one SAFI lever".
-Five are done: the framing and the primitives, then route types 1, 2 and
-5, then 3, 6 and 7, then 4, then the wiring. Validation comes next, then
-the lab.
+Six are done: the framing and the primitives, then route types 1, 2 and
+5, then 3, 6 and 7, then 4, then the wiring, then validation. Only the
+lab is left.
 
 **Both dispatch gates know SAFI 5 now**, so an MCAST-VPN UPDATE reads
 and writes over a real session: `Nlri.factory` and `MpReachCommon#set`
@@ -591,6 +668,12 @@ an NLRI is, and `parse_next_hops` and `nexthop_klass` read the next hop
 by its length per RFC 6515. It is no longer an `Attr::Raw` with an
 `Attr::Gap`.
 
-What is left is a receive side check, which is now one rule rather than
-none (section 8), and a lab measurement that asserts the absence section
-9 rests on.
+**And a malformed route is reported on receive**, four checks, all of
+them RFC 6515 section 2's: section 8 has them with where each comes
+from. So by this plan's own measure the family is finished on the wire
+in both directions.
+
+What is left is one lab measurement, which for this family is not a test
+of bgp4r at all: it asserts that neither router negotiates SAFI 5, since
+that absence is what the whole scope of section 8 and the weakness of
+section 9 rest on, and a fact nothing checks reads as verified.
