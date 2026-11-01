@@ -4644,6 +4644,30 @@ Two consequences, both of which change the plan rather than decorate it:
            each functional test by hand. It carries the only cases in
            this family that send a two-address next hop, a VPN NLRI and
            an unknown NLRI type beside a known one over a socket.
+         * **Ten sabotages, each landing, and four of the signatures
+           say something the assertions do not.** Reverting only
+           `Mp_unreach`'s own loop fails **exactly the two withdrawal
+           cases**, which is the signature flow spec, EVPN,
+           RT-constrain and MCAST-VPN each measured: the two parse
+           loops are independent copies and those two cases are all
+           the cover the second has. The next hop arm deleted fails
+           **13 of 16**, sparing the two withdrawals, which carry no
+           next hop, and the one case that works on octets directly,
+           which is #185's EVPN signature again. The parse gate's arm
+           deleted fails **15**, sparing only that same direct case.
+           And **not passing the SAFI down fails exactly 2**,
+           `test_a_vpn_nlri_crosses_a_session` and
+           `test_a_vpn_withdrawal_crosses_a_session`, which is the
+           narrowest signature in the family and says precisely what
+           that argument is for: nothing but a VPN NLRI can tell.
+           * The other six: the framing reverted to the prefix
+             arithmetic fails 15, the build gate's arm made
+             unreachable errors 15, inferring the AFI errors 15 and
+             fails a doc guard, repeating the RD per address on build
+             fails exactly the 40-octet case, reading an RD per
+             address on parse fails the same one, and
+             `Igp_router_id#from_hash` back to `pack('H*')` fails one
+             test at each of the three levels that now pin it.
          * **Two guards had to be re-pointed and both were made
            two-sided rather than weakened.** The no-dispatch one now
            asserts all four sites, by reading each gate as text with

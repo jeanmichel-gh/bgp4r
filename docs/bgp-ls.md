@@ -803,6 +803,13 @@ hop class depends on its **position**, so the index is passed down;
 every other family ignores it. All six lengths were measured against
 the table above, and each replays.
 
+Two sabotages pin the VPN half and both fail **exactly the 40-octet
+case**: repeating the RD per address on the build side, which is RFC
+8950's rule, and reading one per address on the parse side. Nothing
+else in `test/functional/link_state_test.rb` notices either, which is
+what says that case is the only cover there is for the difference
+between the two conventions.
+
 Which family the session is does not decide it either: "BGP link-state
 information for both IPv4 and IPv6 networks can be carried over either
 an IPv4 BGP session or an IPv6 BGP session", and the next hop SHOULD
