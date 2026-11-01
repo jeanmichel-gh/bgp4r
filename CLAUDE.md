@@ -560,7 +560,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. The `lab` job is a matrix, one job per group in `test/lab_groups.rb`, so its cost is the slowest group and not the total: it was 12m42s as one serial suite. Each job installs only what its group needs, which is why the matrix entry carries a `gobgp`, `frr`, `docker` or `netns` flag. The `gobgp` groups pin 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-11-01: 2387 tests, 28294 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.5%.
+Baseline on 2026-11-01: 2388 tests, 28298 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.5%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -5192,6 +5192,44 @@ Two consequences, both of which change the plan rather than decorate it:
              was wrong in it, the seventeenth across these families:
              `Link_state` is the NLRI and `#nlri` is the typed layout
              inside it, so the type assertion goes one level down.
+           * **Seventeen sabotages: fifteen landed, one was a real
+             finding and one the registry refusing at load.** The
+             finding is the width check above. The load failure is
+             `Igp_route_tag` given `Igp_extended_route_tag`'s hash key,
+             which `register` refuses so the suite dies on the require:
+             that is the duplicate-key guard working rather than the
+             claim, which part 2 met from the type-number side, and the
+             right reading of it is that the registry is what enforces
+             one key per class.
+             * **A second load failure was the sabotage's own fault and
+               is worth separating from that one.** Moving
+               `Int_list_tlv` out of the framing file and into
+               `link_state_prefix_attribute.rb`, to check the placement
+               guard, put it **after** `Srlg`'s use of it in require
+               order, so every test errored on the require and nothing
+               about placement was measured. Moved into
+               `link_state_descriptor.rb` instead, which `nlris.rb`
+               requires before the link attributes, it fails exactly
+               `test_each_shared_base_is_defined_with_the_framing`.
+               **So a sabotage on where a shared class lives has to
+               keep it loading before its first user**, or it tests the
+               require order it just broke.
+             * The fifteen, each on what it was aimed at: the four flag
+               masks reversed fails 4; `'Q>*'` changed to `'N*'` fails
+               5 and the functional case; `WIDTHS` reduced to Table
+               10's single 4 fails 2 and errors 2; `DEFINED_BITS`
+               widened to 0xff fails 3; 1155's type number moved fails
+               9; 1152's and 1157's swapped fails 10; the base moved
+               fails the placement guard; the base given a `TYPE` fails
+               the shared-bases guard; `Srlg` given a `WIDTH` beside
+               its `PACK` fails 2; the list parse keeping its trailing
+               partial group fails the three wire cases; the width
+               refusal's message removed fails 1; a document table row
+               flipped to no, and the document's own 1156 row changed
+               to 4, each fail their discovery guard; the
+               `Int_list_tlv` row cut from `NO_RECIPE` fails the
+               catalog coverage guard; and the attribute not sent
+               beside the prefix NLRI fails the functional case.
          * **The three tables hold 28 rows and 25 distinct new code
            points**, counted from the document rather than added up.
            Table 6 lists 7 and one of them, 263, is already in from
