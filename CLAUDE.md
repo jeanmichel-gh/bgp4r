@@ -429,7 +429,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. The `lab` job is a matrix, one job per group in `test/lab_groups.rb`, so its cost is the slowest group and not the total: it was 12m42s as one serial suite. Each job installs only what its group needs, which is why the matrix entry carries a `gobgp`, `frr`, `docker` or `netns` flag. The `gobgp` groups pin 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-11-01: 2072 tests, 26532 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.3%.
+Baseline on 2026-11-01: 2074 tests, 26536 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.3%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -4186,12 +4186,22 @@ Two consequences, both of which change the plan rather than decorate it:
            the arithmetic is the thing to doubt first. That case now
            uses Enterprise Number 2636, which is checkable outside this
            repository.
-         * Ten sabotages, each landing on the guard it was aimed at:
+         * **The TLV level stands on its own**, which is what says it
+           is a primitive rather than half of a pair:
+           `link_state_tlv_test.rb` requires `link_state_tlv` alone and
+           asserts nothing about the NLRI level, so the cross-level
+           cases live in `link_state_test.rb`. That is the independence
+           `mcast_vpn_route_test.rb` keeps by putting `Leaf_a_d`'s
+           tests in the NLRI file, and the doc test asserts it, since
+           it is the kind of thing a later part erodes by adding one
+           convenient require.
+         * Eleven sabotages, each landing on the guard it was aimed at:
            each registry given a class, a table row flipped to yes,
            `nlri_size` grown a SAFI argument, `sort_key` using the real
            size, a dispatch arm added to `nlri.rb`, a check added to
            `validation.rb`, a lab file created, the undecodable example
-           moved, and the copy constructor fixed in `Mcast_vpn`.
+           moved, the copy constructor fixed in `Mcast_vpn`, and the
+           TLV test file given a require of the NLRI level.
       2. **The Node NLRI, type 1, and the Node Descriptor sub-TLVs.**
          First because Link and Prefix both carry Local Node
          Descriptors, so this is the smallest place to get that

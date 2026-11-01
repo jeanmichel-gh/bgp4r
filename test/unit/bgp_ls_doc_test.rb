@@ -238,6 +238,22 @@ class BgpLsDocTest < Test::Unit::TestCase
     assert_match(/^\| `Link_state::Tlv::Unknown` \|/, doc)
   end
 
+  # **The TLV level stands on its own**, which is what makes it a
+  # primitive rather than half of a pair, and is the same independence
+  # `mcast_vpn_route_test.rb` keeps by putting `Leaf_a_d`'s tests in
+  # the NLRI file. Read as text, anchored at the start of a line of
+  # code so a comment naming the NLRI level cannot satisfy it.
+  def test_the_tlv_test_file_stays_independent_of_the_nlri_level
+    body = source('test/unit/nlris/link_state_tlv_test.rb')
+    assert_equal(nil, body[/^\s*require 'bgp\/nlris\/link_state'/],
+                 'link_state_tlv_test.rb requires the NLRI level now, so ' \
+                 'it no longer says the TLV is a primitive. Move the ' \
+                 'cross-level case to link_state_test.rb instead')
+    assert_equal(nil, body[/^\s+assert.*BGP::Link_state::(Unknown|Type)\b/],
+                 'link_state_tlv_test.rb asserts on the NLRI level now: ' \
+                 'same thing, move the case')
+  end
+
   # Section 5.2's word is "opaque objects", so the NLRI level Unknown
   # frames no TLVs out of a body that happens to be one.
   def test_an_unknown_nlri_type_keeps_opaque_octets

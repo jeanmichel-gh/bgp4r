@@ -343,6 +343,20 @@ class TestLinkState < Test::Unit::TestCase
     assert_equal('00050002abcd', n.to_shex)
   end
 
+  # One `Unknown` per level, which is the family of classes Conventions
+  # describes, and the pair this family's naming hazard is about: a
+  # bare `Unknown` inside `Link_state` resolves to the NLRI one and
+  # inside `Link_state::Tlv` to the TLV one, so both are written in
+  # full everywhere. Asserted here rather than in the TLV test file,
+  # which requires `link_state_tlv` alone and stays independent of this
+  # level, the way `mcast_vpn_route_test.rb` does.
+  def test_the_two_unknown_classes_are_distinct
+    assert_not_equal(BGP::Link_state::Unknown, BGP::Link_state::Tlv::Unknown)
+    assert_equal(BGP::Link_state::Type, BGP::Link_state::Unknown.superclass)
+    assert_equal(BGP::Link_state::Tlv,
+                 BGP::Link_state::Tlv::Unknown.superclass)
+  end
+
   def test_two_nlris_with_the_same_octets_are_equal
     a = BGP::Link_state.new_ntop(['00050002abcd'].pack('H*'))
     b = BGP::Link_state.new_ntop(['00050002abcd'].pack('H*'))

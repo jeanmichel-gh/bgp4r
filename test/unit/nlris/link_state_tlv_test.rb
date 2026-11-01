@@ -541,18 +541,21 @@ class TestLinkStateTlv < Test::Unit::TestCase
     assert_equal('fde80000', BGP::Link_state::Tlv::Unknown.new(65000, '').to_shex)
   end
 
-  # --- the two Unknowns ------------------------------------------------
+  # --- this level on its own -------------------------------------------
 
-  # One per level, which is the family of classes Conventions describes,
-  # and the pair this family's `const_defined?` hazard is about: a bare
-  # `Unknown` inside `Link_state` resolves to the NLRI one and inside
-  # `Link_state::Tlv` to the TLV one.
-  def test_the_two_unknown_classes_are_distinct
-    require 'bgp/nlris/link_state'
-    assert_not_equal(BGP::Link_state::Unknown, BGP::Link_state::Tlv::Unknown)
+  # **Nothing here reaches the NLRI level**, which is why this file
+  # requires `link_state_tlv` alone and no test in it mentions
+  # `Link_state::Unknown` or `Link_state::Type`. That is the
+  # independence `mcast_vpn_route_test.rb` keeps by putting
+  # `Leaf_a_d`'s tests in the NLRI file instead, and it is worth
+  # keeping for the same reason: it is what says the TLV is a
+  # primitive rather than half of a pair. The cross-level assertions,
+  # including that the two `Unknown` classes are distinct, are in
+  # `link_state_test.rb` and in `bgp_ls_doc_test.rb`.
+  def test_the_tlv_level_needs_nothing_from_the_nlri_level
     assert_equal(BGP::Link_state::Tlv,
                  BGP::Link_state::Tlv::Unknown.superclass)
-    assert_equal(BGP::Link_state::Type, BGP::Link_state::Unknown.superclass)
+    assert_equal(Object, BGP::Link_state::Tlv.superclass)
   end
 
   # Not a test method: a helper, kept below every test and with no
