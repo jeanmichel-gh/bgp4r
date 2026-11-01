@@ -623,6 +623,63 @@ class TestBgpNeighbor < Test::Unit::TestCase
     end
   end
 
+  # **The sibling of the guard above, and the second way a test can be
+  # skipped in silence.** Conventions records the first: a test method
+  # after `private` is never collected, and the tell is a test count
+  # lower than `grep -c 'def test_'`. A method defined twice in one
+  # class has exactly that tell and a different cause, because the
+  # second definition replaces the first and Ruby says nothing. It cost
+  # a cycle in #226, where a new case in
+  # `test/functional/link_state_test.rb` took the name of one already
+  # there: the file reported 20 tests with 21 defined, and the case
+  # that disappeared was the one being asserted against.
+  #
+  # It lives beside the include guard because that is already this
+  # repo's home for a guard over every test file in the suite, for the
+  # reason given above it. The reading is textual rather than by
+  # reflection, since a replaced method leaves nothing to reflect on.
+  #
+  # **Two drafts of this guard were wrong before one was right, and both
+  # times the failure named the tree while the fault was the guard.**
+  # That is the mirror of the rule in Rules for agents about an
+  # assertion that can pass by luck, and reading what it named is what
+  # settled each one. Worth knowing before writing another textual
+  # guard over source: sabotage it, and also check what it reports on a
+  # clean tree.
+  #
+  # It has to be scoped per class, because ten files here hold more than
+  # one test case and `test_1` in each of `Label_Test` and
+  # `Label_stack_Test` is two methods rather than a redefinition.
+  #
+  # And the name pattern has to take a trailing `!` or `?`, because
+  # `\w+` stops before it: `test_sort!` then reads as `test_sort` and
+  # collides with the `test_sort` beside it in
+  # `extended_communities_test.rb`.
+  def test_no_test_file_defines_a_test_method_twice
+    root = File.expand_path('../../..', __dir__)
+    files = Dir.glob(File.join(root, 'test', '**', '*_test.rb')).sort
+    # The floor is asserted before the loop, so a glob that finds
+    # nothing fails here rather than making the loop vacuous. There were
+    # 142 when this was written.
+    assert_operator files.size, :>=, 120, 'the glob found too few test files'
+    seen = 0
+    files.each do |path|
+      body = File.read(path, :encoding => 'UTF-8')
+      # One segment per class, since a name repeated in two classes of
+      # one file is two methods.
+      body.split(/^class\s+/).each do |segment|
+        names = segment.scan(/^\s*def (test_\w+[!?]?)/).flatten
+        seen += names.size
+        dup = names.tally.select { |_, n| n > 1 }.keys
+        assert_equal [], dup,
+                     "#{path.sub(root + '/', '')} defines #{dup.join(', ')} " \
+                     'twice in one class, so only the last one runs and the ' \
+                     'others are skipped in silence'
+      end
+    end
+    assert_operator seen, :>=, 2000, 'the scan found too few test methods'
+  end
+
   def test_auto_as4_default_and_setter
     n = Neighbor.new(4, 100, 180, '0.0.0.2', '127.0.0.1', '127.0.0.1')
     assert n.auto_as4?
