@@ -629,6 +629,170 @@ class Mcast_vpn_route_test < Test::Unit::TestCase
                      'so the NLRI falls back to Unknown')
   end
 
+  # ------------------------------------------------------------------
+  # Route type 3, RFC 6514 section 4.3, the S-PMSI A-D route: route
+  # type 5 with the trailing address behind it, so it is the first
+  # layout in this family with a variable field after a variable field.
+
+  SPMSI4 = RD + '20c0000201' + '20e8010101' + '0a000001'
+  SPMSI6 = RD + '8020010db8000000000000000000000001' \
+                '80ff3e0000000000000000000000000001' \
+                '20010db8000000000000000000000002'
+
+  def test_route_type_3_is_route_type_5_with_a_trailing_address
+    r = M::S_pmsi.new([100, 200], '192.0.2.1', '232.1.1.1', '10.0.0.1')
+    assert_equal(3, r.type)
+    assert_equal(SPMSI4, r.to_shex)
+    assert_equal(22, r.encode.size)
+    assert_equal('192.0.2.1', r.source.address)
+    assert_equal('232.1.1.1', r.group.address)
+    assert_equal('10.0.0.1', r.originator.address)
+  end
+
+  # The same body as route type 5 is in there, which is what the shared
+  # module amounts to on the wire.
+  def test_route_type_3_carries_route_type_5s_body_in_front_of_its_address
+    r = M::S_pmsi.new([100, 200], '192.0.2.1', '232.1.1.1', '10.0.0.1')
+    t = M::Source_active.new([100, 200], '192.0.2.1', '232.1.1.1')
+    assert_equal(t.to_shex + '0a000001', r.to_shex)
+  end
+
+  def test_route_type_3_all_ipv6_is_fifty_eight_octets
+    r = M::S_pmsi.new([100, 200], '2001:db8::1', 'ff3e::1', '2001:db8::2')
+    assert_equal(SPMSI6, r.to_shex)
+    assert_equal(58, r.encode.size)
+  end
+
+  def test_route_type_3_round_trips_four_ways
+    r = M::S_pmsi.new([100, 200], '192.0.2.1', '232.1.1.1', '10.0.0.1')
+    assert_equal(SPMSI4, M::S_pmsi.new(r.encode.dup.is_packed).to_shex)
+    assert_equal(SPMSI4, M::S_pmsi.new(r).to_shex)
+    assert_equal(SPMSI4, M::S_pmsi.new(r.to_hash).to_shex)
+    assert_equal(SPMSI4,
+                 M::S_pmsi.new(:rd => [100, 200],
+                               :source => '192.0.2.1',
+                               :group => '232.1.1.1',
+                               :originator => '10.0.0.1').to_shex)
+  end
+
+  def test_route_type_3_hashes_under_its_own_key
+    r = M::S_pmsi.new([100, 200], '192.0.2.1', '232.1.1.1', '10.0.0.1')
+    assert_equal({ :s_pmsi => { :rd => [100, 200],
+                                :source => '192.0.2.1',
+                                :group => '232.1.1.1',
+                                :originator => '10.0.0.1' } },
+                 r.to_hash)
+  end
+
+  # **The order is what makes this layout readable at all**: the two
+  # lengths are read first and each takes what it claims, so the
+  # trailing address gets what is left. A length that claims more than
+  # the body holds therefore eats the fields behind it, which is the
+  # one way this layout can go wrong and is ordinary negative testing
+  # rather than a malformed capture.
+  def test_a_source_length_that_overruns_leaves_the_address_empty
+    r = M::S_pmsi.new([RD + 'c8' + '20e8010101' + '0a000001']
+                        .pack('H*').is_packed)
+    assert_equal(200, r.source.bitlen)
+    assert(r.group.empty?)
+    assert(r.originator.empty?)
+    assert_not_equal(RD + 'c820e80101010a000001', r.to_shex,
+                     'so the NLRI falls back to Unknown')
+  end
+
+  # ------------------------------------------------------------------
+  # Route types 6 and 7, RFC 6514 section 4.6, the C-Multicast Route.
+  # One layout and two route type numbers.
+
+  CMCAST = RD + '0000fde8' + '20c0000201' + '20e8010101'
+
+  def test_route_type_6_is_an_rd_a_source_as_then_the_pair
+    x = M::Shared_tree_join.new([100, 200], 65000, '192.0.2.1', '232.1.1.1')
+    assert_equal(6, x.type)
+    assert_equal(CMCAST, x.to_shex)
+    assert_equal(22, x.encode.size)
+    assert_equal(65000, x.source_as.value)
+    assert_equal('192.0.2.1', x.source.address)
+    assert_equal('232.1.1.1', x.group.address)
+  end
+
+  # **The whole point of section 4.6 being one subsection**: the two
+  # route types encode identically and differ only in the Route Type
+  # octet, which the NLRI writes and the body does not carry.
+  def test_route_types_6_and_7_encode_identically
+    a = M::Shared_tree_join.new([100, 200], 65000, '192.0.2.1', '232.1.1.1')
+    b = M::Source_tree_join.new([100, 200], 65000, '192.0.2.1', '232.1.1.1')
+    assert_equal(a.to_shex, b.to_shex)
+    assert_equal(6, a.type)
+    assert_equal(7, b.type)
+    assert_not_equal(a.to_hash.keys, b.to_hash.keys, 'but the keys differ')
+  end
+
+  def test_route_type_7_is_the_same_layout
+    x = M::Source_tree_join.new([100, 200], 65000, '192.0.2.1', '232.1.1.1')
+    assert_equal(7, x.type)
+    assert_equal(CMCAST, x.to_shex)
+    assert_equal(22, x.encode.size)
+  end
+
+  def test_the_c_multicast_layout_all_ipv6_is_forty_six_octets
+    [M::Shared_tree_join, M::Source_tree_join].each do |k|
+      x = k.new([100, 200], 65000, '2001:db8::1', 'ff3e::1')
+      assert_equal(46, x.encode.size, k.to_s)
+    end
+  end
+
+  def test_the_c_multicast_layout_round_trips_four_ways
+    [M::Shared_tree_join, M::Source_tree_join].each do |k|
+      x = k.new([100, 200], 65000, '192.0.2.1', '232.1.1.1')
+      assert_equal(CMCAST, k.new(x.encode.dup.is_packed).to_shex, k.to_s)
+      assert_equal(CMCAST, k.new(x).to_shex, k.to_s)
+      assert_equal(CMCAST, k.new(x.to_hash).to_shex, k.to_s)
+      assert_equal(CMCAST,
+                   k.new(:rd => [100, 200], :source_as => 65000,
+                         :source => '192.0.2.1',
+                         :group => '232.1.1.1').to_shex, k.to_s)
+    end
+  end
+
+  def test_the_c_multicast_types_hash_under_their_own_keys
+    fields = { :rd => [100, 200], :source_as => 65000,
+               :source => '192.0.2.1', :group => '232.1.1.1' }
+    assert_equal({ :shared_tree_join => fields },
+                 M::Shared_tree_join.new([100, 200], 65000,
+                                         '192.0.2.1', '232.1.1.1').to_hash)
+    assert_equal({ :source_tree_join => fields },
+                 M::Source_tree_join.new([100, 200], 65000,
+                                         '192.0.2.1', '232.1.1.1').to_hash)
+  end
+
+  # **Route type 3 and the C-Multicast layout are both 22 octets with
+  # IPv4 addresses.** The second length collision in this family, after
+  # route type 1 against route type 2, and harmless for the same
+  # reason: the Route Type octet is read before the body.
+  def test_route_type_3_and_the_c_multicast_layout_are_the_same_length
+    r = M::S_pmsi.new([100, 200], '192.0.2.1', '232.1.1.1', '10.0.0.1')
+    x = M::Shared_tree_join.new([100, 200], 65000, '192.0.2.1', '232.1.1.1')
+    assert_equal(22, r.encode.size)
+    assert_equal(22, x.encode.size)
+    assert_not_equal(r.to_shex, x.to_shex, 'the same length, different octets')
+  end
+
+  # The module is shared by four route types, so it is worth asserting
+  # that all four really do read the pair, and that it is a module
+  # rather than a class, which is what keeps the doc test's discovery
+  # from counting it as a route type.
+  def test_four_route_types_share_the_source_and_group_pair
+    [M::S_pmsi, M::Source_active, M::Shared_tree_join,
+     M::Source_tree_join].each do |k|
+      assert(k.include?(M::Source_and_group), k.to_s)
+    end
+    assert_kind_of(Module, M::Source_and_group)
+    assert(!M::Source_and_group.is_a?(Class),
+           'a Class here would read as a route type with no row')
+    assert(!M::C_multicast.is_a?(Class), 'the same for the 4.6 layout')
+  end
+
   # The human readable form, in the house style evpn_route.rb uses:
   # the type in brackets, the route's name, then the fields. The RD
   # prints in its short form, since Rd#to_s(false) leaves off the hex.
@@ -642,6 +806,24 @@ class Mcast_vpn_route_test < Test::Unit::TestCase
                  '(192.0.2.1/32, 232.1.1.1/32)',
                  M::Source_active.new([100, 200], '192.0.2.1',
                                       '232.1.1.1').to_s)
+    assert_equal('[3] S-PMSI A-D: RD=100:200, ' \
+                 '(192.0.2.1/32, 232.1.1.1/32), ' \
+                 'originating router 10.0.0.1',
+                 M::S_pmsi.new([100, 200], '192.0.2.1', '232.1.1.1',
+                               '10.0.0.1').to_s)
+  end
+
+  # Route types 6 and 7 share one `to_s`, so the name a reader sees
+  # comes off the class rather than being written twice.
+  def test_the_c_multicast_types_name_themselves_from_the_class
+    assert_equal('[6] Shared Tree Join: RD=100:200, AS 65000, ' \
+                 '(192.0.2.1/32, 232.1.1.1/32)',
+                 M::Shared_tree_join.new([100, 200], 65000, '192.0.2.1',
+                                         '232.1.1.1').to_s)
+    assert_equal('[7] Source Tree Join: RD=100:200, AS 65000, ' \
+                 '(192.0.2.1/32, 232.1.1.1/32)',
+                 M::Source_tree_join.new([100, 200], 65000, '192.0.2.1',
+                                         '232.1.1.1').to_s)
   end
 
   # Nothing validates, per Conventions: a length no RFC describes on

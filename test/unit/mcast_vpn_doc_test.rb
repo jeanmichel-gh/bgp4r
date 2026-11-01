@@ -319,7 +319,12 @@ class McastVpnDocTest < Test::Unit::TestCase
     assert_match(/\| 1 \| RD, Originating Router's IP Address \| 12 or 24 \|/,
                  doc)
     assert_match(/\| 2 \| RD, Source AS \| 12, always \|/, doc)
+    assert_match(
+      /\| 3 \| RD, source, group, Originating Router's IP Address \| 22 or 58 \|/,
+      doc)
     assert_match(/\| 5 \| RD, source, group \| 18 or 42 \|/, doc)
+    assert_match(/\| 6 and 7 \| RD, Source AS, source, group \| 22 or 46 \|/,
+                 doc)
     rd = [100, 200]
     assert_equal(12, BGP::Mcast_vpn::Intra_as_i_pmsi
                        .new(rd, '10.0.0.1').encode.size)
@@ -329,19 +334,80 @@ class McastVpnDocTest < Test::Unit::TestCase
                        .new(rd, 65000).encode.size)
     assert_equal(12, BGP::Mcast_vpn::Inter_as_i_pmsi
                        .new(rd, 70013).encode.size)
+    assert_equal(22, BGP::Mcast_vpn::S_pmsi
+                       .new(rd, '192.0.2.1', '232.1.1.1', '10.0.0.1')
+                       .encode.size)
+    assert_equal(58, BGP::Mcast_vpn::S_pmsi
+                       .new(rd, '2001:db8::1', 'ff3e::1', '2001:db8::2')
+                       .encode.size)
     assert_equal(18, BGP::Mcast_vpn::Source_active
                        .new(rd, '192.0.2.1', '232.1.1.1').encode.size)
     assert_equal(42, BGP::Mcast_vpn::Source_active
                        .new(rd, '2001:db8::1', 'ff3e::1').encode.size)
+    [BGP::Mcast_vpn::Shared_tree_join,
+     BGP::Mcast_vpn::Source_tree_join].each do |k|
+      assert_equal(22, k.new(rd, 65000, '192.0.2.1', '232.1.1.1').encode.size,
+                   k.to_s)
+      assert_equal(46, k.new(rd, 65000, '2001:db8::1', 'ff3e::1').encode.size,
+                   k.to_s)
+    end
   end
 
-  # The length collision the table warns about, which is real and which
-  # a reader comparing lengths would otherwise meet by surprise.
-  def test_route_types_1_and_2_really_are_the_same_length
-    assert_match(/both 12\s+octets/, doc)
-    assert_equal(BGP::Mcast_vpn::Inter_as_i_pmsi.new([100, 200], 1).encode.size,
+  # The two length collisions the table warns about, both real and both
+  # something a reader comparing lengths would otherwise meet by
+  # surprise.
+  def test_both_length_collisions_are_real
+    assert_match(/\*\*Two pairs collide on length\.\*\*/, doc)
+    rd = [100, 200]
+    assert_equal(BGP::Mcast_vpn::Inter_as_i_pmsi.new(rd, 1).encode.size,
                  BGP::Mcast_vpn::Intra_as_i_pmsi
-                   .new([100, 200], '10.0.0.1').encode.size)
+                   .new(rd, '10.0.0.1').encode.size)
+    assert_equal(BGP::Mcast_vpn::S_pmsi
+                   .new(rd, '192.0.2.1', '232.1.1.1', '10.0.0.1').encode.size,
+                 BGP::Mcast_vpn::Shared_tree_join
+                   .new(rd, 65000, '192.0.2.1', '232.1.1.1').encode.size)
+  end
+
+  # The pair four layouts share, and the module-not-a-class rule that
+  # keeps the discovery guard above from counting it as a route type.
+  def test_the_shared_pair_is_a_module_and_four_types_use_it
+    assert_match(/\*\*The Multicast Source and Multicast Group pair is in four of the seven\s+layouts\*\*/,
+                 doc)
+    assert_match(/\*\*module and not a base class\*\*/, doc)
+    [BGP::Mcast_vpn::S_pmsi, BGP::Mcast_vpn::Source_active,
+     BGP::Mcast_vpn::Shared_tree_join,
+     BGP::Mcast_vpn::Source_tree_join].each do |k|
+      assert(k.include?(BGP::Mcast_vpn::Source_and_group), k.to_s)
+    end
+    [BGP::Mcast_vpn::Source_and_group, BGP::Mcast_vpn::C_multicast].each do |m|
+      assert(!m.is_a?(Class), "#{m} must be a module, not a Class")
+      assert(!implemented.include?(m), "#{m} must not be discovered as a type")
+    end
+  end
+
+  # Section 4.6 defines two route types with one layout, so the two
+  # classes are identity and nothing else. The document says so and
+  # this is what makes it true.
+  def test_route_types_6_and_7_differ_only_in_identity
+    assert_match(/\*\*identity and nothing else\*\*/, doc)
+    rd = [100, 200]
+    a = BGP::Mcast_vpn::Shared_tree_join.new(rd, 65000, '192.0.2.1', '232.1.1.1')
+    b = BGP::Mcast_vpn::Source_tree_join.new(rd, 65000, '192.0.2.1', '232.1.1.1')
+    assert_equal(a.encode, b.encode)
+    assert_equal(6, a.type)
+    assert_equal(7, b.type)
+  end
+
+  # Route type 3's ordering claim, which is what makes the layout
+  # readable: two lengths first, then whatever is left is the address.
+  def test_route_type_3_reads_its_lengths_before_the_trailing_address
+    assert_match(/first layout with a variable field after a\s+variable field/,
+                 doc)
+    r = BGP::Mcast_vpn::S_pmsi.new([100, 200], '192.0.2.1', '232.1.1.1',
+                                   '10.0.0.1')
+    t = BGP::Mcast_vpn::Source_active.new([100, 200], '192.0.2.1', '232.1.1.1')
+    assert_equal(t.to_shex + '0a000001', r.to_shex,
+                 'route type 3 is route type 5 with the address behind it')
   end
 
   # Section 4.2's one sentence about a field's value rather than its

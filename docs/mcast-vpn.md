@@ -91,17 +91,16 @@ mLDP range, and `base + 0x40` is the result of that rule, not the rule.
 | --- | --- | --- | --- |
 | 1 | Intra-AS I-PMSI A-D route | RFC 6514 section 4.1 | yes |
 | 2 | Inter-AS I-PMSI A-D route | RFC 6514 section 4.2 | yes |
-| 3 | S-PMSI A-D route | RFC 6514 section 4.3 | no |
+| 3 | S-PMSI A-D route | RFC 6514 section 4.3 | yes |
 | 4 | Leaf A-D route | RFC 6514 section 4.4 | no |
 | 5 | Source Active A-D route | RFC 6514 section 4.5 | yes |
-| 6 | Shared Tree Join route | RFC 6514 section 4.6 | no |
-| 7 | Source Tree Join route | RFC 6514 section 4.6 | no |
+| 6 | Shared Tree Join route | RFC 6514 section 4.6 | yes |
+| 7 | Source Tree Join route | RFC 6514 section 4.6 | yes |
 | 67 | S-PMSI A-D route for C-multicast mLDP | RFC 7441 | no |
 | 68 | Leaf A-D route for C-multicast mLDP | RFC 7441 | no |
 | 71 | Source Tree Join route for C-multicast mLDP | RFC 7441 | no |
 
-Three of the seven are in: 1, 2 and 5, the layouts whose bodies split
-with no guess. Route types 3, 6 and 7 come next and route type 4 last,
+Six of the seven are in: every one but route type 4, which comes last
 because it is the one the documents do not settle (section 7). A type
 with no class reads back as an `Mcast_vpn::Unknown` that replays byte
 for byte.
@@ -112,21 +111,42 @@ for byte.
 | --- | --- | --- |
 | 1 | RD, Originating Router's IP Address | 12 or 24 |
 | 2 | RD, Source AS | 12, always |
+| 3 | RD, source, group, Originating Router's IP Address | 22 or 58 |
 | 5 | RD, source, group | 18 or 42 |
+| 6 and 7 | RD, Source AS, source, group | 22 or 46 |
 
 **None of those octet counts is in the document.** Section 4 gives a
 Length field and no section gives a total, so each is this reader's
 arithmetic from the figure, computed with the library and pasted. See
 section 10.
 
-Two things fall out of them and are worth knowing.
+Three things fall out of them and are worth knowing.
 
-**Route type 1 with an IPv4 address and route type 2 are both 12
-octets.** So nothing in either body tells them apart and the Route Type
-octet is the only discriminator. That is not a problem the framing has
-to solve, since the type is read before the body, but a reader
-comparing lengths across this family should know the collision is
-there.
+**Two pairs collide on length.** Route type 1 with an IPv4 address and
+route type 2 are both 12 octets, and route type 3 with IPv4 addresses
+and the type 6 and 7 layout with IPv4 addresses are both 22. So nothing
+in either body of either pair tells them apart and the Route Type octet
+is the only discriminator. That is not a problem the framing has to
+solve, since the type is read before the body, but a reader comparing
+lengths across this family should know both collisions are there.
+
+**The Multicast Source and Multicast Group pair is in four of the seven
+layouts**, types 3, 5, 6 and 7, always in that order and always as a
+length in bits then that many bits of value. `Mcast_vpn::Source_and_group`
+is that pair in one place, which `Evpn::Multicast_fields` is for the
+EVPN address triple. It is a **module and not a base class**, and that
+is the EVPN lesson rather than a style choice: the doc test discovers
+the route type table from the `Route` subclasses the library defines, so
+an abstract `Multicast < Route` would read as a route type with no row
+to put it in.
+
+**Route type 3 is the first layout with a variable field after a
+variable field.** The two lengths are read first and each takes what it
+claims, so the trailing address gets what is left and needs no
+arithmetic. The cost is that a length claiming more than the body holds
+eats the fields behind it and leaves the address empty, which is
+ordinary negative testing: the route then cannot reproduce its own body
+and `Mcast_vpn#read_route` keeps the octets as an `Unknown`.
 
 **Route type 2 is the only fixed length layout in the family**, and it
 carries the one sentence in section 4 that constrains a field's value
@@ -141,7 +161,11 @@ leaving it assumed.
 Types 6 and 7 share one layout. Section 4.6 is titled "C-Multicast
 Route" and covers both in one subsection: "A Shared Tree Join route and
 a Source Tree Join Route Type specific MCAST-VPN NLRI consists of the
-following". So they are one class apart from the type number.
+following". So `Mcast_vpn::C_multicast` holds the whole layout and the
+two classes are **identity and nothing else**, a `TYPE`, a `HASH_KEY`
+and a `NAME`. That is the honest statement of what section 4.6 says:
+they differ in their Route Type octet and in the name a reader sees, and
+in nothing on the wire. A test asserts they encode identically.
 
 **The three mLDP rows are deliberately out of scope and will stay no.**
 The reason is that they are not BGP. Each carries an mLDP FEC Element,
@@ -344,9 +368,8 @@ arithmetic and not against the document.
 ## 11. What is left
 
 The seven parts are in CLAUDE.md under "Breadth, the one SAFI lever".
-Two are done: the framing and the primitives, then route types 1, 2 and
-5. Route types 3, 6 and 7 come next, then route type 4, then the
-wiring.
+Three are done: the framing and the primitives, then route types 1, 2
+and 5, then 3, 6 and 7. Route type 4 comes next, then the wiring.
 
 **Nothing dispatches to any of it yet**, so an MCAST-VPN UPDATE still
 comes back as an `Attr::Raw` with an `Attr::Gap`, which is #116 working

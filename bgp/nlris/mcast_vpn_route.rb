@@ -689,6 +689,57 @@ module BGP
 
     end
 
+    # The Multicast Source and Multicast Group pair, which route types
+    # 3, 5, 6 and 7 all carry in that order:
+    #
+    #   +-----------------------------------+
+    #   |  Multicast Source Length (1 octet)|
+    #   +-----------------------------------+
+    #   |  Multicast Source (variable)      |
+    #   +-----------------------------------+
+    #   |  Multicast Group Length (1 octet) |
+    #   +-----------------------------------+
+    #   |  Multicast Group (variable)       |
+    #   +-----------------------------------+
+    #
+    # Four of the seven layouts, so it is worth one place rather than
+    # four copies. `Evpn::Multicast_fields` is the same move for the
+    # EVPN address triple, and it was lifted there for the same reason.
+    #
+    # **A module and not a base class**, which is the EVPN lesson and
+    # not a style choice: `test/unit/mcast_vpn_doc_test.rb` discovers
+    # the route type table from the `Route` subclasses the library
+    # defines, so an abstract `Multicast < Route` would read as a route
+    # type with no row to put it in. A module is not a Class and that
+    # guard does not count it.
+    module Source_and_group
+
+      attr_reader :source, :group
+
+      private
+
+      def coerce_source_and_group(src, grp)
+        @source = coerce_or_default(Addr, src)
+        @group  = coerce_or_default(Addr, grp)
+      end
+
+      # Each `Addr` reads its own length octet and consumes what it
+      # takes, so the pair walks forward by itself.
+      def read_source_and_group(s)
+        @source = Addr.new(s)
+        @group  = Addr.new(s)
+      end
+
+      def source_and_group_octets
+        @source.encode + @group.encode
+      end
+
+      def source_and_group_hash
+        { :source => addr_hash(@source), :group => addr_hash(@group) }
+      end
+
+    end
+
     # Route type 5, RFC 6514 section 4.5, the Source Active A-D route:
     #
     #   +-----------------------------------+
@@ -726,10 +777,12 @@ module BGP
     #   names. So bgp4r builds and reads such a route.
     class Source_active < Route
 
+      include Source_and_group
+
       TYPE     = 5
       HASH_KEY = :source_active
 
-      attr_reader :rd, :source, :group
+      attr_reader :rd
 
       # new([100, 200], '192.0.2.1', '232.1.1.1'), this class's own
       # hash, its field hash, or the wire octets.
@@ -741,24 +794,20 @@ module BGP
         elsif args.size == 1 and args[0].is_a?(Hash)
           h = self.class.unwrap(args[0])
           @rd = coerce(Rd, h[:rd])
-          @source = coerce_or_default(Addr, h[:source])
-          @group = coerce_or_default(Addr, h[:group])
+          coerce_source_and_group(h[:source], h[:group])
         else
           @rd = coerce(Rd, args[0])
-          @source = coerce_or_default(Addr, args[1])
-          @group = coerce_or_default(Addr, args[2])
+          coerce_source_and_group(args[1], args[2])
         end
         self
       end
 
       def encode_value
-        @rd.encode + @source.encode + @group.encode
+        @rd.encode + source_and_group_octets
       end
 
       def value_hash
-        { :rd     => @rd.to_hash[:rd],
-          :source => addr_hash(@source),
-          :group  => addr_hash(@group) }
+        { :rd => @rd.to_hash[:rd] }.merge(source_and_group_hash)
       end
 
       def to_s
@@ -770,10 +819,213 @@ module BGP
 
       def parse(s)
         @rd = read_rd(s)
-        @source = Addr.new(s)
-        @group = Addr.new(s)
+        read_source_and_group(s)
         self
       end
+
+    end
+
+    # Route type 3, RFC 6514 section 4.3, the S-PMSI A-D route:
+    #
+    #   +-----------------------------------+
+    #   |      RD   (8 octets)              |
+    #   +-----------------------------------+
+    #   |  Multicast Source Length (1 octet)|
+    #   +-----------------------------------+
+    #   |  Multicast Source (variable)      |
+    #   +-----------------------------------+
+    #   |  Multicast Group Length (1 octet) |
+    #   +-----------------------------------+
+    #   |  Multicast Group (variable)       |
+    #   +-----------------------------------+
+    #   | Originating Router's IP Addr      |
+    #   +-----------------------------------+
+    #
+    # Route type 5 with the trailing address behind it, so it is the
+    # first layout in this family with a variable field **after** a
+    # variable field. 22 octets all IPv4 and 58 all IPv6, neither of
+    # which the document states.
+    #
+    # **This is the section that says the two lengths are in bits**, by
+    # value rather than by the word, and the four sentences are quoted
+    # in `docs/mcast-vpn.md` section 4: "If the Multicast Source field
+    # contains an IPv4 address, then the value of the Multicast Source
+    # Length field is 32", 128 for IPv6, and the same pair for the
+    # Multicast Group. Route types 5, 6 and 7 carry the same two fields
+    # and say nothing about them, so this is where to look.
+    #
+    # **22 octets is also what route types 6 and 7 are with IPv4
+    # addresses.** The second length collision in this family, after
+    # route type 1 against route type 2, and harmless for the same
+    # reason: the Route Type octet is read before the body.
+    class S_pmsi < Route
+
+      include Source_and_group
+
+      TYPE     = 3
+      HASH_KEY = :s_pmsi
+
+      attr_reader :rd, :originator
+
+      # new([100, 200], '192.0.2.1', '232.1.1.1', '10.0.0.1'), this
+      # class's own hash, its field hash, or the wire octets.
+      def initialize(*args)
+        if args.size == 1 and args[0].is_a?(String) and args[0].is_packed?
+          parse(args[0])
+        elsif args.size == 1 and args[0].is_a?(self.class)
+          parse(args[0].encode.is_packed)
+        elsif args.size == 1 and args[0].is_a?(Hash)
+          h = self.class.unwrap(args[0])
+          @rd = coerce(Rd, h[:rd])
+          coerce_source_and_group(h[:source], h[:group])
+          @originator = coerce_or_default(Originating_router, h[:originator])
+        else
+          @rd = coerce(Rd, args[0])
+          coerce_source_and_group(args[1], args[2])
+          @originator = coerce_or_default(Originating_router, args[3])
+        end
+        self
+      end
+
+      def encode_value
+        @rd.encode + source_and_group_octets + @originator.encode
+      end
+
+      def value_hash
+        { :rd => @rd.to_hash[:rd] }
+          .merge(source_and_group_hash)
+          .merge(:originator => @originator.to_hash)
+      end
+
+      def to_s
+        "[3] S-PMSI A-D: #{@rd.to_s(false)}, (#{@source}, #{@group}), " \
+        "originating router #{@originator}"
+      end
+
+      private
+
+      # **The order is what makes this layout readable at all.** The two
+      # lengths are read first and each takes what it claims, so the
+      # trailing address gets what is left and needs no arithmetic. A
+      # source or group length that claims more than the body holds eats
+      # the fields behind it, which leaves the address empty, and the
+      # route then cannot reproduce its own body: `Mcast_vpn#read_route`
+      # catches that and keeps the octets as an `Unknown`.
+      def parse(s)
+        @rd = read_rd(s)
+        read_source_and_group(s)
+        @originator = Originating_router.new(s)
+        self
+      end
+
+    end
+
+    # Route types 6 and 7, RFC 6514 section 4.6, the C-Multicast Route:
+    #
+    #   +-----------------------------------+
+    #   |      RD   (8 octets)              |
+    #   +-----------------------------------+
+    #   |   Source AS (4 octets)            |
+    #   +-----------------------------------+
+    #   |  Multicast Source Length (1 octet)|
+    #   +-----------------------------------+
+    #   |  Multicast Source (variable)      |
+    #   +-----------------------------------+
+    #   |  Multicast Group Length (1 octet) |
+    #   +-----------------------------------+
+    #   |  Multicast Group (variable)       |
+    #   +-----------------------------------+
+    #
+    # **One layout and two route type numbers.** Section 4.6 is titled
+    # "C-Multicast Route" and covers both in one subsection, in one
+    # sentence: "A Shared Tree Join route and a Source Tree Join Route
+    # Type specific MCAST-VPN NLRI consists of the following". So the
+    # whole layout is here and the two classes below are identity and
+    # nothing else, which is the honest statement that they differ only
+    # in their Route Type octet and the name a reader sees.
+    #
+    # 22 octets all IPv4 and 46 all IPv6. The 22 is route type 3's IPv4
+    # length as well; see that class.
+    #
+    # A module rather than a base class, for the reason
+    # `Source_and_group` gives: the doc test discovers `Route`
+    # subclasses, so an abstract one would read as a route type with no
+    # row.
+    module C_multicast
+
+      include Source_and_group
+
+      attr_reader :rd, :source_as
+
+      # new([100, 200], 65000, '192.0.2.1', '232.1.1.1'), the class's
+      # own hash, its field hash, or the wire octets.
+      def initialize(*args)
+        if args.size == 1 and args[0].is_a?(String) and args[0].is_packed?
+          parse(args[0])
+        elsif args.size == 1 and args[0].is_a?(self.class)
+          parse(args[0].encode.is_packed)
+        elsif args.size == 1 and args[0].is_a?(Hash)
+          h = self.class.unwrap(args[0])
+          @rd = coerce(Rd, h[:rd])
+          @source_as = coerce_or_default(Source_as, h[:source_as])
+          coerce_source_and_group(h[:source], h[:group])
+        else
+          @rd = coerce(Rd, args[0])
+          @source_as = coerce_or_default(Source_as, args[1])
+          coerce_source_and_group(args[2], args[3])
+        end
+        self
+      end
+
+      def encode_value
+        @rd.encode + @source_as.encode + source_and_group_octets
+      end
+
+      def value_hash
+        { :rd => @rd.to_hash[:rd] }
+          .merge(@source_as.to_hash)
+          .merge(source_and_group_hash)
+      end
+
+      # The one thing that differs between the two, read off the class
+      # rather than written twice.
+      def to_s
+        "[#{type}] #{self.class::NAME}: #{@rd.to_s(false)}, " \
+        "#{@source_as}, (#{@source}, #{@group})"
+      end
+
+      private
+
+      def parse(s)
+        @rd = read_rd(s)
+        @source_as = Source_as.new(s)
+        read_source_and_group(s)
+        self
+      end
+
+    end
+
+    # Route type 6, RFC 6514 section 4.6, the Shared Tree Join route.
+    # The layout is `C_multicast`.
+    class Shared_tree_join < Route
+
+      include C_multicast
+
+      TYPE     = 6
+      HASH_KEY = :shared_tree_join
+      NAME     = 'Shared Tree Join'
+
+    end
+
+    # Route type 7, RFC 6514 section 4.6, the Source Tree Join route.
+    # The same layout, and the same section defines both.
+    class Source_tree_join < Route
+
+      include C_multicast
+
+      TYPE     = 7
+      HASH_KEY = :source_tree_join
+      NAME     = 'Source Tree Join'
 
     end
 
