@@ -52,11 +52,15 @@ module BGP
       # Multicast Source and Group are length prefixed and everything
       # else is an RD, an AS or a trailing address, so this arm defaults
       # rather than infers and an explicit :afi still wins.
+      # A Link-State NLRI holds a Protocol-ID, an Identifier and a list
+      # of TLVs, so there is no address in it either, and RFC 9552
+      # section 5.2 fixes AFI 16388 for both its SAFIs.
       @afi ||= self.class.afi_from_nlris(h[:nlris]) unless
         [IANA::SAFI::FLOW_SPEC_RULES_1, IANA::SAFI::FLOW_SPEC_RULES_2,
          IANA::SAFI::EVPN,
          IANA::SAFI::ROUTE_TARGET_CONSTRAINTS,
-         IANA::SAFI::MCAST_VPN].include?(safi)
+         IANA::SAFI::MCAST_VPN,
+         IANA::SAFI::BGP_LS, IANA::SAFI::BGP_LS_VPN].include?(safi)
       case safi
       when 1,2
         pfx_klass = prefix_klass(afi, safi)
@@ -191,10 +195,47 @@ module BGP
           m
         end
         @afi ||= IANA::AFI::IPv4
+      when IANA::SAFI::BGP_LS, IANA::SAFI::BGP_LS_VPN
+        # RFC 9552 section 5.2. An NLRI is given either as a
+        # Link_state, used as it stands, or as the hash Link_state
+        # reads, one key for the NLRI type. Section 5.2 fixes AFI 16388
+        # for both SAFIs, so the arm sets it rather than asking the
+        # NLRIs, as the EVPN and RT-constrain arms do.
+        #
+        # **A hash says VPN by carrying an :rd and not by the SAFI
+        # here**, which is Flow_spec's answer to the same question for
+        # SAFI 134 and is Link_state#from_hash's rule. So a caller
+        # writing :rd gets an NLRI that encodes the section 5.2 Route
+        # Distinguisher whatever :safi says, and the two can disagree:
+        # :safi => 71 with an :rd writes the RD inside an attribute
+        # whose header says non-VPN, and :safi => 72 without one writes
+        # no RD. Both build, because building never validates, and both
+        # are negative tests a conformance script wants.
+        #
+        # **A next hop is written here, and its rule is three-way where
+        # EVPN's and RT-constrain's are two-way**: see parse_next_hops
+        # and nexthop_klass for section 5.5.
+        @nlris = [h[:nlris]].flatten.compact.collect do |n|
+          next n if n.is_a?(Link_state)
+          # Link_state.new takes a Type, a hash or wire bytes, so one
+          # call covers every form a caller can pass. An Array of field
+          # values cannot travel inside :nlris, for the reason the
+          # RT-constrain arm above records: the flatten is deep.
+          ls = Link_state.new(n)
+          ls.path_id ||= @path_id
+          ls
+        end
+        @afi ||= IANA::AFI::BGP_LS
       else
         raise "SAFI #{safi} not implemented!"
       end
-      @nexthops = [h[:nexthop]].flatten.collect { |nh| nexthop_klass(afi,safi,nh).new(nh) } if h[:nexthop]
+      # The index is passed because one family's next hop class depends
+      # on the position: RFC 9552 section 5.5 prepends one Route
+      # Distinguisher to a VPN next hop rather than one per address, so
+      # only the first of a two-address SAFI 72 next hop is a Vpn. Every
+      # other family ignores it.
+      @nexthops = [h[:nexthop]].flatten.each_with_index.collect { |nh, i|
+        nexthop_klass(afi,safi,nh,i).new(nh) } if h[:nexthop]
       self
     end
 
@@ -270,6 +311,21 @@ module BGP
           # octet. So Mcast_vpn.nlri_size is Evpn.nlri_size again, and
           # it lives with the family for the same reason.
           Mcast_vpn.nlri_size(s)
+        when IANA::SAFI::BGP_LS, IANA::SAFI::BGP_LS_VPN
+          # RFC 9552 section 5.2: an NLRI Type of 2 octets, a Total NLRI
+          # Length of 2, and "the cumulative length, in octets, of the
+          # rest of the NLRI, not including the NLRI Type field or
+          # itself". So an NLRI is 4 + Total NLRI Length octets.
+          #
+          # **One arm covers both SAFIs, which is not true of the parse
+          # gate below.** The same section says that "For VPN
+          # applications, it also includes the length of the Route
+          # Distinguisher", so the 8 RD octets of SAFI 72 are already
+          # inside the count and the arithmetic does not change. The
+          # SAFI still has to reach Link_state.new_ntop, because
+          # nothing in the octets says whether those 8 octets are
+          # there; it just does not have to reach this method.
+          Link_state.nlri_size(s)
         else
           (s.getbyte(0) + 7) / 8 + 1
         end
@@ -555,6 +611,67 @@ module BGP
           else
             @nexthops << Prefix.new_ntop([32,s.slice!(0,4)].pack('Ca*'),1)
           end
+        when IANA::SAFI::BGP_LS, IANA::SAFI::BGP_LS_VPN
+          # RFC 9552 section 5.5, and this is the **three-way** rule
+          # where the three families above are two-way: "The Length
+          # field of the next-hop address will specify the next-hop
+          # address family. If the next-hop length is 4, then the next
+          # hop is an IPv4 address; if the next-hop length is 16, then
+          # it is a global IPv6 address; and if the next-hop length is
+          # 32, then there is one global IPv6 address followed by an
+          # IPv6 link-local address."
+          #
+          # So 32 octets is RFC 2545's two-address form, read by this
+          # loop turning twice, which is what it already does for
+          # SAFI 1, 2 and 4 under RFC 8950. **This is the first family
+          # to ask for it under an AFI other than 1**, and the AFI is
+          # 16388 here, so ipv6_nexthop_length? could not have answered:
+          # it keys on the SAFI and answers false for these two, and
+          # nothing claims RFC 8950 applies to BGP-LS.
+          #
+          # Which family the session is does not decide it either.
+          # Section 5.5: "BGP link-state information for both IPv4 and
+          # IPv6 networks can be carried over either an IPv4 BGP
+          # session or an IPv6 BGP session", with the next hop a SHOULD
+          # on the session's own family rather than on the networks
+          # described. So the length is the only discriminator, as for
+          # EVPN, RT-constrain and MCAST-VPN, with one more case.
+          #
+          # **SAFI 72 prepends one Route Distinguisher to the whole
+          # next hop, not one per address, and that differs from SAFI
+          # 128 and 129.** Section 5.5: "For VPN Subsequent Address
+          # Family Identifier (SAFI), as per custom, an 8-byte Route
+          # Distinguisher set to all zero is prepended to the next
+          # hop." Prepended to the next hop, singular, so the lengths
+          # are 12, 24 and 40 and the 40-octet form is 8 + 16 + 16 with
+          # one RD. Where RFC 8950 gives SAFI 128 and 129 lengths of 24
+          # or 48, repeating the RD per address, which is why
+          # ipv6_nexthop_length? lists 48 and this arm does not reuse
+          # it. The 12, 24 and 40 arithmetic is this reader's from that
+          # one sentence and not a list section 5.5 gives; the sentence
+          # itself is verbatim, and RFC 7752 section 3.4, which RFC
+          # 9552 obsoletes, carries it word for word.
+          #
+          # A Vpn writes its own zero RD in encode_next_hop and a
+          # Prefix writes none, so one Vpn then one bare Prefix is what
+          # replays a 40-octet field byte for byte. nexthop_klass does
+          # the same split on the build side.
+          if @safi == IANA::SAFI::BGP_LS_VPN && @nexthops.empty?
+            # The first address of a VPN next hop carries the RD.
+            if s.size >= 24
+              @nexthops << Vpn.new([64+128,s.slice!(0,24)].pack('Ca*'), 2)
+            else
+              @nexthops << Vpn.new([64+32,s.slice!(0,12)].pack('Ca*'))
+            end
+          elsif s.size >= 16
+            @nexthops << Prefix.new_ntop([128,s.slice!(0,16)].pack('Ca*'),2)
+          else
+            # A field too short for either reads as IPv4 and Prefix pads
+            # it out, which is what SAFI 1 already does with a short
+            # next hop. Consistent with the library rather than a new
+            # rule, and it ends the loop either way.
+            @nexthops << Prefix.new_ntop([32,s.slice!(0,4)].pack('Ca*'),1)
+          end
         else
           raise RuntimeError, "cannot parse nexthop for safi #{@safi}"
         end
@@ -589,7 +706,7 @@ module BGP
     
     private
     
-    def nexthop_klass(afi, safi, nh)
+    def nexthop_klass(afi, safi, nh, index=0)
       case afi
       when 3
         ::BGP::const_get('Iso_ip_mapped')
@@ -624,6 +741,28 @@ module BGP
           # MCAST-VPN next hop under AFI 2 is still a plain 4-octet IPv4
           # address when that is what the PE has.
           ::BGP::const_get('Prefix')
+        when IANA::SAFI::BGP_LS
+          # RFC 9552 section 5.5 takes an IPv4 address, a global IPv6
+          # one, or a global IPv6 one followed by a link-local IPv6
+          # address, so this is an ordinary Prefix and the address the
+          # caller gave decides the family. Two addresses give the
+          # 32-octet form, which is RFC 2545's and which parse_next_hops
+          # reads by turning its loop twice. No Ipv4_mapped branch, for
+          # the reason the three families above record: nothing here
+          # writes an IPv4 address as a mapped IPv6 one.
+          ::BGP::const_get('Prefix')
+        when IANA::SAFI::BGP_LS_VPN
+          # **Only the first address is a Vpn, and that is section 5.5's
+          # sentence rather than a convenience.** "an 8-byte Route
+          # Distinguisher set to all zero is prepended to the next hop",
+          # prepended to the next hop and not to each address, so a
+          # two-address VPN next hop is 8 + 16 + 16 and carries one RD.
+          # Vpn#encode_next_hop writes a zero RD and the address;
+          # Prefix#encode_next_hop writes the address alone. So Vpn then
+          # Prefix gives 40 octets, where Vpn twice would give 48, which
+          # is what RFC 8950 asks for under SAFI 128 and 129 and is
+          # wrong here.
+          index.zero? ? ::BGP::const_get('Vpn') : ::BGP::const_get('Prefix')
         when 133,134
           # RFC 8955 section 4 wants the length set to 0, so a flowspec
           # MP_REACH is normally built with no :nexthop at all and encode

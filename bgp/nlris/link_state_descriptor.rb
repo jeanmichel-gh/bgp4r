@@ -334,10 +334,24 @@ module BGP
           [v.gsub(/[^0-9a-fA-F]/, '')].pack('H*')
         end
 
+        # **`coerce` and not `pack('H*')`, because the two disagreed and
+        # one of them mangled its input in silence.** `coerce` strips
+        # every non-hex character first, so it reads a dotted System ID
+        # as well as bare hex; `pack('H*')` does not, and on a String
+        # carrying separators it maps each one by its low nibble rather
+        # than skipping it. So `{:igp_router_id => '1921.6800.1001.02'}`
+        # built **nine** octets, `1921e6800e1001e020`, where the field
+        # value form built the right seven: a `.` became 0xe and shifted
+        # everything after it. Found in #219 by a functional test
+        # asserting `node_type`, which answered nil because no shape has
+        # a width of 9. Part 2's tests used '0a000001', pure hex with no
+        # separators, which both paths read alike, so nothing caught it.
+        # One method for both forms now, which is why they cannot
+        # disagree again.
         def from_hash(h)
           read_declared_len(h)
           h = self.class.unwrap(h)
-          @value = [h.to_s].pack('H*')
+          @value = coerce(h.to_s)
         end
 
       end

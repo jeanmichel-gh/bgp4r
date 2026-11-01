@@ -831,22 +831,52 @@ class Mp_reach_Test < Test::Unit::TestCase
   # Path_attribute keep the octets as an Attr::Raw with an Attr::Gap.
   # Wiring flow spec in must not have changed that for anything else.
   #
-  # **This test used AFI 25 SAFI 70 as its unimplemented family, and
-  # that expired.** #185 wired EVPN in, so those octets decode now, and
-  # EVPN validation then found the NLRI list malformed as well. The
-  # family moved to BGP-LS, AFI 16388 SAFI 71, which is phase 4 and so
-  # the furthest out; every assertion below is unchanged. Two of #116's
-  # tests needed the same move in #185 and `path_attribute_test.rb`
-  # keeps the same family in its UNDECODABLE constant. Whoever wires
-  # BGP-LS in will have to move all of them again, and the rule is the
-  # same then: re-point the example, do not weaken the assertion.
+  # **The example has moved twice and this time it cannot expire.** It
+  # was AFI 25 SAFI 70 until #185 wired EVPN in, then AFI 16388 SAFI 71
+  # until #219 wired BGP-LS in, and each time those octets started to
+  # decode and this test failed. There is no unimplemented family left
+  # to point at, so the third choice is a SAFI IANA has **Reserved**:
+  # the registry gives 255 as Reserved citing RFC 4760, and 241 to 254
+  # as Reserved for Private Use and "Not to be assigned", read on
+  # 2026-11-01. No family can be assigned there, so this one is
+  # permanent. `path_attribute_test.rb` made the same move and asserts
+  # the range in its own file. Every assertion below is unchanged
+  # across all three moves; only the example moved.
   def test_an_unimplemented_safi_still_raises_so_the_octets_survive
-    hex = '800e0e' + '400447' + '04' + '0a000001' + '00' + '0102030405'
+    hex = '800e0e' + '0001ff' + '04' + '0a000001' + '00' + '0102030405'
     pa = BGP::Path_attribute.new([hex].pack('H*').is_packed)
     assert_equal([BGP::Attr::Raw], pa.attributes.collect(&:class))
     assert_equal(hex, pa.to_shex)
     assert_equal(0, pa.errors.size)
     assert_equal([BGP::Attr::Gap], pa.undecoded.collect(&:class))
+  end
+
+  # The example above is permanent only if that SAFI stays unassignable,
+  # so the claim is asserted rather than left in a comment: 255 is the
+  # one bgp4r can never implement.
+  def test_the_unimplemented_safi_example_cannot_expire
+    assert_equal(255, 0x0001ff & 0xff)
+    # Neither gate knows it, which is what makes the attribute above an
+    # Attr::Raw with a Gap. The parse gate is the load bearing half: its
+    # raise is the mechanism Path_attribute#decode_attribute rescues.
+    # **`['01'].pack('H*')` and not `'x'.is_packed`.** `is_packed` sets
+    # an instance variable, so it is a mutation, and CI runs the suite
+    # with `--enable-frozen-string-literal`, where a literal cannot
+    # take one: the call raised FrozenError before reaching the gate,
+    # so under that flag this asserted nothing about the claim. It
+    # passed locally and for the right reason, which is why only CI
+    # caught it. `Array#pack` marks its result packed already, so the
+    # library's own route needs no mutation.
+    assert_raise(RuntimeError) { BGP::Nlri.factory(['01'].pack('H*'), 1, 255) }
+    assert_raise(RuntimeError) do
+      BGP::Mp_reach.new(:safi => 255, :afi => 1, :nlris => ['10.0.0.0/24'])
+    end
+    # And it is not a SAFI bgp4r is merely behind on: IANA has it
+    # Reserved, so no family can be assigned there and no later part can
+    # wire it in. iana.rb names every SAFI bgp4r knows of and answers
+    # nil here, where SAFI 71 has a name.
+    assert_nil(IANA.safi?(255))
+    assert_not_nil(IANA.safi?(IANA::SAFI::BGP_LS))
   end
 
   # RT-constrain, RFC 4684 section 4, AFI 1 SAFI 132. The whole

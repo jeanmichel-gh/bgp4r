@@ -162,6 +162,32 @@ class TestLinkStateDescriptor < Test::Unit::TestCase
     assert_match(/OSPF Router-ID/, r.to_s)
   end
 
+  # **The two build paths read a String the same way, and they did not.**
+  # `from_hash` used `pack('H*')` where the field value form used
+  # `coerce`, which strips separators first. On bare hex the two agreed,
+  # which is why part 2's tests passed; on the dotted form they did not,
+  # because `pack('H*')` maps a separator by its low nibble instead of
+  # skipping it. `{:igp_router_id => '1921.6800.1001.02'}` built nine
+  # octets, `1921e6800e1001e020`, against the correct seven, so every
+  # `.` shifted everything after it. Found in #219 by
+  # test/functional/link_state_test.rb asserting `node_type`, which
+  # answered nil because no shape has a width of 9. Deleting the
+  # `coerce` call in `from_hash` fails this test and that one.
+  def test_both_build_paths_read_a_router_id_alike
+    { '1921.6800.1001.02' => '19216800100102',
+      '19216800100102'    => '19216800100102',
+      '1921.6800.1001'    => '192168001001',
+      '0a000001'          => '0a000001',
+      '0a:00:00:01'       => '0a000001' }.each do |given, octets|
+      field = BGP::Link_state::Tlv::Igp_router_id.new(given)
+      hash  = BGP::Link_state::Tlv::Igp_router_id.new(
+        :igp_router_id => given)
+      assert_equal(octets, field.value.unpack1('H*'), given)
+      assert_equal(field.to_shex, hash.to_shex,
+                   "the two build paths disagree about #{given.inspect}")
+    end
+  end
+
   # **A String is hex and separators are stripped**, so the dotted form
   # a router prints an ISO System-ID in reads back as its six octets.
   # That works because the form is hex groups, not because this class

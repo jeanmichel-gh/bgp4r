@@ -71,6 +71,9 @@ jobs:
       - name: Functional test (an MCAST-VPN UPDATE over loopback)
         run: bundle exec ruby -I. test/functional/mcast_vpn_test.rb
         timeout-minutes: 2
+      - name: Functional test (a BGP-LS UPDATE over loopback)
+        run: bundle exec ruby -I. test/functional/link_state_test.rb
+        timeout-minutes: 2
       - name: Lab speaker over loopback
         run: bundle exec ruby -I. test/functional/lab/speaker_test.rb
         timeout-minutes: 3

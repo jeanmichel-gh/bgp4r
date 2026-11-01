@@ -231,6 +231,31 @@ module BGP
           # long it was. withdrawn means nothing to this family: there
           # is no label for RFC 8277 section 2.4 to replace.
           Flow_spec.new_ntop(s.is_packed, afi, safi, path_id)
+        when IANA::SAFI::BGP_LS, IANA::SAFI::BGP_LS_VPN
+          # RFC 9552 section 5.2. The octets handed here are one whole
+          # NLRI, the NLRI Type and Total NLRI Length included, because
+          # MpReachCommon::ClassMethods#nlri_size asked the family how
+          # long it was.
+          #
+          # **The SAFI is passed down, and this is the first family
+          # since flow spec where it is a parse time input rather than
+          # decoration.** Figures 5 and 6 differ by the 8-octet Route
+          # Distinguisher of a VPN NLRI and by nothing a reader can see
+          # in the octets: there is no key, no flag and no length that
+          # says whether it is there, so the same capture is a valid
+          # NLRI read either way and only the SAFI decides. EVPN,
+          # RT-constrain and MCAST-VPN each pass none, because each has
+          # one layout; flow spec passes the AFI because RFC 8956
+          # section 8.1.2 gives component type 13 two meanings.
+          #
+          # No AFI is passed down. Section 5.2 fixes it at 16388 for
+          # both SAFIs, and nothing inside a Link-State NLRI reads
+          # differently per family: the IP Reachability Information TLV
+          # of section 5.2.3.2 is the one field that would, and the
+          # **NLRI type** decides that, 3 for IPv4 and 4 for IPv6.
+          # withdrawn means nothing here either, since there is no label
+          # for RFC 8277 section 2.4 to replace.
+          Link_state.new_ntop(s.is_packed, safi, path_id)
         else
           # **This raise is load bearing: do not return an object
           # instead.** Path_attribute#decode_attribute rescues
