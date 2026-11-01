@@ -4441,31 +4441,45 @@ Two consequences, both of which change the plan rather than decorate it:
            and names `Tlv::Unknown.new(259, octets)` as the open
            octet-level route, which Conventions requires and which the
            test exercises.
-         * **Eleven sabotages, and the pass itself went wrong in a way
-           worth recording.** The script reverted with `git checkout`
-           after each one, and the two new library files were
-           **untracked**, so that command aborted on an unknown
-           pathspec and reverted **nothing at all**, including the
-           tracked files. Eleven sabotages accumulated into one broken
-           tree that took four repairs to unpick, and two of them
-           reported failures that were really earlier sabotages still
-           in place. **Commit before sabotaging**, or revert from a
-           copy rather than from git. Same family as the scripted
-           CLAUDE.md edit in #188: a script that asserts on its match
-           and not on its result.
-           * Once that was fixed each one landed on what it was aimed
-             at: a width swapped fails 4 and errors 7 in the link
-             descriptor file; TLV 258's local and remote written the
-             other way round fails 6; the MT-ID mask one nibble wider
-             fails 9; `octets_for` flooring fails the prefix
-             descriptor file and the document's own quoted list;
+         * **Thirteen sabotages, and the pass itself went wrong twice
+           before any of them meant anything.** First the script
+           reverted with `git checkout` after each one, and the two
+           new library files were **untracked**, so that command
+           aborted on an unknown pathspec and reverted **nothing at
+           all**, including the tracked files. Eleven sabotages
+           accumulated into one broken tree that took four repairs to
+           unpick, and two of them reported failures that were really
+           earlier sabotages still in place. **Commit before
+           sabotaging**, or revert from a copy rather than from git,
+           and assert the tree is clean after each revert rather than
+           hoping. Same family as the scripted CLAUDE.md edit in
+           #188: a script that asserts on its match and not on its
+           result.
+           * **Then one of the thirteen passed, and it was the script
+             again rather than a weak test.** Swapping TLV 258's
+             local and remote on encode changed nothing, because the
+             `@` in the replacement was escaped wrong for the
+             heredoc and the pattern never matched. Applied by hand
+             it fails 3 and errors 1. A sabotage that passes means
+             the sabotage missed, which Rules for agents already
+             says; what this adds is that a script of `perl -pi`
+             rules is exactly where the missing happens, so read the
+             diff before reading the result.
+           * Each one then lands on what it was aimed at: a width
+             swapped fails 4 and errors 7 in the link descriptor
+             file; the MT-ID mask one nibble wider fails 3;
+             `Addr_tlv` accepting any width fails 1; `octets_for`
+             flooring fails the prefix descriptor file and the
+             document's own quoted list; route type 6 dropped from
+             the table fails 1; `trailing_bits_set?` stubbed to false
+             fails 1; TLV 265 unregistered fails across four files;
              `prefix` reading the other family fails 5 in the NLRI
              file; the two prefix type numbers swapped **both at
-             once** fails 7, where changing one would have been
+             once** fails 3, where changing one would have been
              #205's miss, since `register` refuses a duplicate and
-             the file would die at load; and a document row or the
-             status table made wrong fails the matching discovery
-             guard.
+             the file would die at load; and a document width row,
+             the status table or a cut table row each fails the
+             matching discovery guard.
          * **A doc guard that reads a document has to say how many
            rows it expected**, which cost one of these its first
            firing. The octet count guard used a literal space in
