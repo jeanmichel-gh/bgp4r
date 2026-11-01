@@ -54,6 +54,12 @@ require 'bgp/iana'
 # every file before any test runs, so a file that leans on another's
 # requires passes in the suite and fails on its own.
 require 'bgp/path_attributes/mp_reach'
+# And the validation part's guards build an attribute set to read its
+# findings, which is where Attr::Check runs. Required explicitly for the
+# same reason: this file passed in the suite and errored on its own when
+# the wiring part's guards reached Mp_reach without saying so, and it
+# did it again here.
+require 'bgp/path_attributes/path_attribute'
 
 class McastVpnDocTest < Test::Unit::TestCase
 
@@ -292,15 +298,155 @@ class McastVpnDocTest < Test::Unit::TestCase
   # nothing for validation.rb to carry. **This assertion is true only
   # while that is true**: the day an MCAST-VPN check lands, it fails and
   # says to rewrite section 8.
-  def test_there_is_no_receive_side_check_yet_and_the_document_says_why
-    assert_match(/Error handling: almost none, and the one rule is RFC 6515's/,
+  # **This guard asserted that validation.rb did not know about
+  # MCAST-VPN, and the validation part made it fire**, which is the last
+  # of part 1's four forward-looking guards to go and exactly what it
+  # was for. Re-pointed at the new truth rather than weakened.
+  #
+  # What it holds now is the half of section 8 that cannot be read off
+  # the table: that the subcode and the action are RFC 7606's rather
+  # than invented, and that the document says so.
+  def test_the_action_and_the_subcode_are_not_derived
+    assert_match(/Error handling: four checks, and RFC 6515 is where all four come from/,
                  doc)
+    assert_match(/Where the subcode and the action come from, which is not a derivation/,
+                 doc)
+    assert_match(/is considered malformed/, doc)
+    assert_match(/have to have a length of 4 or 16/, doc)
+    assert_match(/Inventing a subcode was the trap here\*\*/, doc)
     assert_match(/neither document references RFC 7606 for an NLRI at all/, doc)
-    body = File.read(File.expand_path('../../bgp/path_attributes/validation.rb',
-                                      __dir__))
-    assert(!body.include?('Mcast_vpn'),
-           'validation.rb now knows about MCAST-VPN; rewrite section 8 of ' \
-           "#{DOC}, which says there is nothing to check")
+    body = validation
+    assert(body.include?('Mcast_vpn'),
+           'validation.rb no longer knows about MCAST-VPN; section 8 of ' \
+           "#{DOC} says it does")
+    assert(body.include?('RFC 7606 section 7.11'),
+           'the MCAST-VPN next hop finding must cite the section it reuses')
+  end
+
+  def validation
+    File.read(File.expand_path('../../bgp/path_attributes/validation.rb',
+                               __dir__))
+  end
+
+  # Section 8's table, as [what, action] per row.
+  def check_rows
+    doc.lines.each_with_object([]) do |l, a|
+      m = l.match(/^\|\s*([a-z][^|]*?)\s*\|\s*item \d\s*\|\s*(session reset|treat as withdraw)\s*\|\s*$/)
+      a << [m[1], m[2].tr(' ', '_').to_sym] if m
+    end
+  end
+
+  # **The row count is discovered from the library, not from this test**,
+  # the twin of `evpn_doc_test.rb`'s guard: every check is one
+  # `Finding.new` in the MCAST-VPN block of validation.rb, so counting
+  # them there and comparing against the table catches what a listed
+  # table cannot, which is a check added with no row to describe it.
+  #
+  # The slice markers are asserted before the count so the slice cannot
+  # silently become empty and make this vacuous.
+  #
+  # **What is counted is not `Finding.new` the way EVPN's guard counts
+  # it, and the difference is the library's shape rather than a weaker
+  # guard.** RFC 6515 section 2 states one sentence four times, so
+  # `originator_finding` is one `Finding.new` reached by three route
+  # types: counting findings gives 2 where the table has 4 rows. What
+  # matches the rows one for one is the next hop check plus the arms of
+  # `mcast_vpn_route_finding`'s case, and those are as discoverable from
+  # the library as a finding is. Each arm names its route type through
+  # the class, so they cannot drift from `Mcast_vpn::ROUTES` either.
+  def test_section_8_has_one_row_per_rfc_6515_check_the_library_makes
+    src = validation
+    first = src.index('def mcast_vpn_next_hop_finding')
+    last  = src.index('def flow_spec_component_size')
+    assert(first, 'validation.rb has no mcast_vpn_next_hop_finding to count')
+    assert(last && last > first,
+           'the slice markers moved, so this guard is measuring nothing')
+    block = src[first...last]
+    arms = block.scan(/^\s*when ::BGP::Mcast_vpn::\w+\.type$/).size
+    assert_equal(arms + 1, check_rows.size,
+                 "#{DOC} section 8 does not have one row per RFC 6515 check: " \
+                 "#{arms} route type arms plus the next hop")
+    assert_equal(4, check_rows.size, 'one row per item of RFC 6515 section 2')
+    # And the framing findings, which no MCAST-VPN RFC asks for and which
+    # therefore have no row, are still there and still cite section 4.
+    assert_equal(2, block.scan(/Finding\.new\([^)]*RFC 6514 section 4/m).size,
+                 'the two framing findings')
+  end
+
+  # Every row's action against what the library answers for octets built
+  # to trip it. The probes are octets rather than objects, because that
+  # is what Attr::Check sees.
+  def test_every_row_of_section_8_gets_the_action_it_claims
+    rows = check_rows
+    assert(rows.all? { |_, action| action == :session_reset },
+           'every row claims a session reset')
+    [['next hop', mp_reach(NLRI_RT1, 8)],
+     ['route type 1', mp_reach(BAD_RT1)],
+     ['route type 3', mp_reach(BAD_RT3)],
+     ['route type 4', mp_reach(BAD_RT4)]].each do |what, hex|
+      f = BGP::Path_attribute.new([hex].pack('H*').is_packed).errors
+      assert_equal(1, f.size, "#{what} is reported once")
+      assert_equal(9, f.first.subcode, "#{what} gets subcode 9")
+      assert_equal(:session_reset, f.first.action,
+                   "#{what} gets the action its row claims")
+    end
+  end
+
+  # A clean route of every type reports nothing, which is the other half
+  # of the claim and the half a wrong check would break.
+  def test_a_clean_mcast_vpn_update_is_reported_nowhere
+    [NLRI_RT1, NLRI_RT1_V6, NLRI_RT2, NLRI_RT3, NLRI_RT4, NLRI_MLDP].each do |n|
+      [4, 16].each do |nh|
+        a = BGP::Path_attribute.new([mp_reach(n, nh)].pack('H*').is_packed)
+        assert_equal(0, a.errors.size,
+                     "clean NLRI #{n} with a #{nh} octet next hop: " \
+                     "#{a.errors.collect(&:reason).inspect}")
+      end
+    end
+  end
+
+  # RFC 6515 section 2 names MP_REACH_NLRI in all four items and never
+  # MP_UNREACH_NLRI, so the same bad route withdrawn is reported nowhere
+  # while the framing, which no item mentions, is reported in both.
+  def test_the_four_checks_are_mp_reach_only
+    assert_match(/MP_UNREACH is not checked, and that is the RFC's choice/, doc)
+    [BAD_RT1, BAD_RT3, BAD_RT4].each do |n|
+      a = BGP::Path_attribute.new([mp_unreach(n)].pack('H*').is_packed)
+      assert_equal(0, a.errors.size,
+                   "withdrawn #{n}: #{a.errors.collect(&:reason).inspect}")
+    end
+    %w[01 0114].each do |n|
+      [mp_reach(n), mp_unreach(n)].each do |hex|
+        a = BGP::Path_attribute.new([hex].pack('H*').is_packed)
+        assert_equal(1, a.errors.size, "framing #{n} is reported either way")
+      end
+    end
+  end
+
+  RD           = '00000064000000c8'
+  NLRI_RT1     = '010c' + RD + '0a000001'
+  NLRI_RT1_V6  = '0118' + RD + '20010db8000000000000000000000009'
+  NLRI_RT2     = '020c' + RD + '0000fde8'
+  NLRI_RT3     = '0316' + RD + '200a010101' + '20e8010101' + '0a000001'
+  NLRI_RT4     = '0412' + NLRI_RT2 + '0a000001'
+  NLRI_MLDP    = '4305' + '0102030405'
+  # One octet too few and too many for an address, per route type.
+  BAD_RT1      = '0110' + RD + 'aabbccddeeff0011'
+  BAD_RT3      = '031a' + RD + '200a010101' + '20e8010101' + 'aabbccddeeff0011'
+  BAD_RT4      = '0410' + NLRI_RT2 + 'aabb'
+
+  # RFC 4760 section 3: AFI, SAFI, the next hop length and the next hop,
+  # a reserved octet, then the NLRI. Built here rather than through
+  # Mp_reach so a next hop length no RFC allows can be written.
+  def mp_reach(nlri, nh = 4)
+    body = '0001' + '05' + format('%02x', nh) + ('aa' * nh) + '00' + nlri
+    '800e' + format('%02x', body.size / 2) + body
+  end
+
+  # Section 4: AFI, SAFI, then the withdrawn NLRI. No next hop.
+  def mp_unreach(nlri)
+    body = '0001' + '05' + nlri
+    '800f' + format('%02x', body.size / 2) + body
   end
 
   # RFC 6515 is the document the plan missed, so the guide has to name
