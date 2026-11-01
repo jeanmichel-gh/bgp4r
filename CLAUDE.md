@@ -5367,6 +5367,18 @@ Two consequences, both of which change the plan rather than decorate it:
              `bgp/neighbor/neighbor.rb`, so neither new action resets a
              session and neither should: 8.2.2 reaches session reset
              through its own branch, below.
+           * **Six sabotages, all landing, and two say more than their
+             assertions do.** Dropping `:nlri_discard` from the list
+             while keeping the constant **errors** rather than fails,
+             which is the nil-compare crash above demonstrated instead
+             of argued. And reordering the three older actions fails
+             `test_strongest` and `test_malformed_attribute`, **tests
+             that predate this change**, which is what says the
+             insertion moved neither: had it, those two would have
+             caught it. The other four: `:afi_safi_disable` put below
+             treat-as-withdraw, `:nlri_discard` made the strongest, the
+             FSM keyed on `:afi_safi_disable`, and the guide's 6a
+             heading removed.
            * **bgp4r cannot choose between AFI/SAFI disable and session
              reset**, because 8.2.2 keys it on whether other AFI/SAFIs
              are up on the session and `Attr::Check.attribute` is
