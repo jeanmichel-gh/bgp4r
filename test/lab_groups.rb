@@ -89,8 +89,16 @@ module LabGroups
     # So is `link_state_gobgp_test`, for the same reason and one more:
     # it is the only lab test here that measures **both** directions,
     # since GoBGP can originate a BGP-LS route, so GoBGP's opinion is
-    # also GoBGP's encoder. 124s of the group on its own, which is what
-    # took it past the split threshold below.
+    # also GoBGP's encoder. **87s run on its own**, and the group went
+    # from 291s to 399s when it was added, which is what took it past
+    # the split threshold above.
+    #
+    # This said "124s of the group on its own" until part 5a, and that
+    # number came from the red run CLAUDE.md's own part 7 entry
+    # disowns: two cases failing and waiting out their 30s timeouts, so
+    # it measured the timeouts. The correction landed in CLAUDE.md and
+    # not here, which is the ordinary way a number drifts in this
+    # repository. Measure the file, and fix every copy.
     'gobgp-families' => %w[
       attr_set_gobgp_test
       evpn_gobgp_test

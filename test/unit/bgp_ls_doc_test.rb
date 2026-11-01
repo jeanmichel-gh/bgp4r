@@ -164,14 +164,18 @@ class BgpLsDocTest < Test::Unit::TestCase
       cells = l.strip.split('|').collect { |c| c.strip }
       cells.shift
       next unless cells.size >= 2 and cells.first =~ /\A\d+\z/
-      # **Exactly yes or no, where this was `\A\w+\z`.** Part 5 put a
-      # bit-mask table in section 10 whose rows are `| 0 | Overload |
-      # 0x80 | ISO 10589 |`: a digit in the first cell and a word in
-      # the last, so the looser form read bit numbers as code points
-      # and was kept out of this answer only by the space in "ISO
-      # 10589". That is the fragility part 2 and part 4 each paid for
-      # once. Saying what the cell has to be is cheaper than scoping
-      # around every table somebody adds later.
+      # **Exactly yes or no, where this was `\A\w+\z`, and this is
+      # defensive rather than load bearing.** Part 5 put a bit-mask
+      # table in section 10 whose rows are `| 0 | Overload | 0x80 | ISO
+      # 10589 |`: a digit in the first cell and a word in the last, so
+      # the looser form came within one character of reading bit
+      # numbers as code points and was saved by the space in "ISO
+      # 10589". Measured: loosening this back passes the whole suite
+      # today, because every Reference cell in that table has a space
+      # in it. It is kept because the next table somebody adds may not,
+      # and that is the fragility part 2 and part 4 each paid for once
+      # already. Saying what the cell has to be is cheaper than scoping
+      # around every table.
       next unless cells.last =~ /\A(?:yes|no)\z/i
       h[cells.first.to_i] = cells.last.downcase
     end
@@ -214,6 +218,7 @@ class BgpLsDocTest < Test::Unit::TestCase
       cells = l.strip.split('|').collect { |c| c.strip }
       cells.shift
       next unless cells.size >= 2 and cells.first =~ /\A\d+\z/
+      # Same test as `rows`, and the comment there says why.
       next unless cells.last =~ /\A(?:yes|no)\z/i
       a << [cells.first.to_i, cells.last.downcase]
     end

@@ -501,7 +501,7 @@ GoBGP 3.23.0 can originate a BGP-LS route, so its encoder feeds our
 decoder as well as its parser reading what we send. It carries the two
 GoBGP faults this family found, both deterministic and both asserted,
 and the ordering finding that decided part 6's scope. Its FRR twin is
-an absence again, FRR 8.4.4 having neither SAFI. 85 and 6 seconds:
+an absence again, FRR 8.4.4 having neither SAFI. 87 and 6 seconds:
 ```
 ruby -I. test/functional/lab/link_state_gobgp_test.rb
 ruby -I. test/functional/lab/link_state_frr_test.rb
@@ -4842,6 +4842,25 @@ Two consequences, both of which change the plan rather than decorate it:
              "ISO 10589". Part 2 and part 4 each paid for that shape
              once already. Saying what the cell has to be is cheaper
              than scoping around every table somebody adds later.
+           * **Fifteen sabotages, fourteen landing, and the one that
+             passed is a guard that is defensive rather than load
+             bearing.** The fourteen: the six flag masks reversed, bit
+             1 named T rather than Attached, `DEFINED_BITS` widened to
+             0xff, `Node_name` hashing as hex, `Opaque_tlv` reading
+             its hash as raw octets, the attribute's hash keyed by
+             type, the attribute's parse dropping the tail, the
+             attribute's flags made transitive, TLV 1028's width made
+             16, a `from_hash` dropping the declared length, a
+             document table row flipped to no, the document's mask
+             table saying T, a seventh class registered at 1030, and
+             the attribute registered at the wrong code point. The
+             miss: **loosening the doc test's row parser back to
+             `\w+` passes the whole suite**, because every Reference
+             cell in the section 10a mask table has a space in it, so
+             the loose form never read a bit number as a code point.
+             The tightening is kept for the next table somebody adds
+             and the comment on it now says that rather than implying
+             it catches something today.
            * **The load order trap, fourth shape in that one file.**
              The new guards need `Link_state_attribute` as code and the
              registries are filled by a fifth file, so both requires
@@ -4960,20 +4979,19 @@ Two consequences, both of which change the plan rather than decorate it:
          having, which is what flow spec part 5 and EVPN part 10 both
          found and what it found again here.
          `test/functional/lab/link_state_gobgp_test.rb`, 12 cases and
-         119 assertions in 85 seconds, and `link_state_frr_test.rb`,
-         3 cases and 24 assertions in 6. No Docker. **Those figures
-         were wrong twice**, and both ways are worth knowing because
-         CLAUDE.md asks for counts copied out of a run and both of
-         these were. First 126 and 124, from a run with two cases
-         failing and waiting out their 30s timeouts: a timing taken
-         from a red run measures the timeouts and not the work. Then
-         118, from a green run of a version of the file that was two
-         assertions shorter, so the count was a measurement of
+         122 assertions in 87 seconds, and `link_state_frr_test.rb`,
+         3 cases and 24 assertions in 6. No Docker. It was 119 in 85
+         until part 5a re-pointed its attribute case, which is the
+         ordinary reason a count here moves. **Those figures were
+         wrong twice before that**, and both ways are worth knowing
+         because CLAUDE.md asks for counts copied out of a run and
+         both of these were. First 126 and 124, from a run with two
+         cases failing and waiting out their 30s timeouts: a timing
+         taken from a red run measures the timeouts and not the work.
+         Then 118, from a green run of a version of the file that was
+         two assertions shorter, so the count was a measurement of
          something that no longer existed. **Re-measure after the last
-         edit, not after the last green run**; what settled it was
-         running each case in its own process, where the twelve counts
-         are deterministic and sum to 119, which is also what CI
-         reports.
+         edit, not after the last green run.**
          `docs/bgp-ls.md` section 11 has the measurements and the
          table.
          * **The first lab test here where the router encodes the
