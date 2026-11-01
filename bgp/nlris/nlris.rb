@@ -15,4 +15,6 @@
   rt_constrain
   link_state_tlv
   link_state
+  link_state_descriptor
+  link_state_nlri
 }.each { |n| require "bgp/nlris/#{n}" }

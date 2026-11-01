@@ -37,6 +37,23 @@ class TestLinkStateTlv < Test::Unit::TestCase
 
   include BGP
 
+  # **The type numbers here cannot expire, and part 1 chose ones that
+  # did.** Every case below that is about a type with no registered
+  # class uses 255 or 254, because Table 17 of section 7.1.7 reserves
+  # TLV code points 0 to 255 and says they are "not to be allocated":
+  # no document will ever define one and no part of this plan can
+  # register a class for one.
+  #
+  # Part 1 used 256, 513 and 1024 for the same cases, which are a node
+  # descriptor, a node descriptor sub-TLV and a node attribute, so part
+  # 2 broke four of them the day the first descriptor landed and part 5
+  # would have broken another. That is the fifth expiring example in
+  # this plan after the four `docs/mcast-vpn.md` records, and the
+  # lesson there was already written down: pick an example that cannot
+  # expire rather than re-pointing it again.
+  UNREGISTERED = 255
+  UNREGISTERED_LOWER = 254
+
   # A registered TLV class, for the parts of this file that are about
   # the registry and about a type the library does implement. Nested in
   # the test class so it is invisible to `BGP.constants`, which is what
@@ -73,10 +90,10 @@ class TestLinkStateTlv < Test::Unit::TestCase
 
   # --- section 5.1, the framing ----------------------------------------
 
-  # Type 256 (0x0100), length 4, value c0000201.
+  # Type 255 (0x00ff), length 4, value c0000201.
   def test_the_triplet_is_two_octets_two_octets_and_the_value
-    t = BGP::Link_state::Tlv::Unknown.new(256, ['c0000201'].pack('H*'))
-    assert_equal('01000004c0000201', t.to_shex)
+    t = BGP::Link_state::Tlv::Unknown.new(255, ['c0000201'].pack('H*'))
+    assert_equal('00ff0004c0000201', t.to_shex)
     assert_equal(8, t.size)
   end
 
@@ -84,8 +101,8 @@ class TestLinkStateTlv < Test::Unit::TestCase
   # portion in octets (thus, a TLV with no value portion would have a
   # length of zero)."
   def test_a_tlv_with_no_value_has_a_length_of_zero
-    t = BGP::Link_state::Tlv::Unknown.new(256, '')
-    assert_equal('01000000', t.to_shex)
+    t = BGP::Link_state::Tlv::Unknown.new(255, '')
+    assert_equal('00ff0000', t.to_shex)
     assert_equal(0, t.length)
     assert_equal(4, t.size)
   end
@@ -94,8 +111,8 @@ class TestLinkStateTlv < Test::Unit::TestCase
   # one-octet value gives a five-octet TLV and not an eight-octet one,
   # which is where the neighbouring IGP encodings differ.
   def test_the_tlv_is_not_padded_to_four_octet_alignment
-    t = BGP::Link_state::Tlv::Unknown.new(513, ['ff'].pack('H*'))
-    assert_equal('020100 01 ff'.delete(' '), t.to_shex)
+    t = BGP::Link_state::Tlv::Unknown.new(255, ['ff'].pack('H*'))
+    assert_equal('00ff 00 01 ff'.delete(' '), t.to_shex)
     assert_equal(5, t.size)
   end
 
@@ -104,7 +121,7 @@ class TestLinkStateTlv < Test::Unit::TestCase
   # counting the framing in is the commonest way to get a TLV length
   # wrong, and it reads plausibly either way.
   def test_the_length_counts_the_value_and_not_the_framing
-    t = BGP::Link_state::Tlv::Unknown.new(1024, ['0a0b0c0d'].pack('H*'))
+    t = BGP::Link_state::Tlv::Unknown.new(255, ['0a0b0c0d'].pack('H*'))
     assert_equal(4, t.length)
     assert_equal(8, t.encode.size)
     assert_equal(4, t.encode[2, 2].unpack1('n'))
@@ -113,10 +130,10 @@ class TestLinkStateTlv < Test::Unit::TestCase
   # --- factory, and the bounded parse ----------------------------------
 
   def test_factory_reads_one_tlv_and_leaves_the_rest
-    s = ['01000004c000020102000002abcd'].pack('H*').is_packed
+    s = ['00ff0004c000020100ff0002abcd'].pack('H*').is_packed
     t = BGP::Link_state::Tlv.factory(s)
-    assert_equal('01000004c0000201', t.to_shex)
-    assert_equal('02000002abcd', s.unpack1('H*'))
+    assert_equal('00ff0004c0000201', t.to_shex)
+    assert_equal('00ff0002abcd', s.unpack1('H*'))
   end
 
   # Fewer than four octets cannot frame a TLV, so the list loop stops
@@ -139,7 +156,7 @@ class TestLinkStateTlv < Test::Unit::TestCase
   # the Evpn and Mcast_vpn rule and it is what makes a malformed
   # capture replayable.
   def test_a_length_that_overruns_is_clamped_and_kept
-    hex = '0100270f0102'          # type 256, length 9999, two octets
+    hex = '00ff270f0102'          # type 256, length 9999, two octets
     t = BGP::Link_state::Tlv.factory([hex].pack('H*').is_packed)
     assert_equal(9999, t.declared_len)
     assert_equal(9999, t.length)
@@ -148,18 +165,18 @@ class TestLinkStateTlv < Test::Unit::TestCase
   end
 
   def test_a_length_that_agrees_records_no_declared_length
-    t = BGP::Link_state::Tlv.factory(['01000002abcd'].pack('H*').is_packed)
+    t = BGP::Link_state::Tlv.factory(['00ff0002abcd'].pack('H*').is_packed)
     assert_nil(t.declared_len)
   end
 
   # --- parse_list ------------------------------------------------------
 
   def test_parse_list_reads_every_tlv_in_order
-    hex = '01000004c0000201' + '02000000' + 'fde8000401020304'
+    hex = '00ff0004c0000201' + '00fe0000' + 'fde8000401020304'
     s = [hex].pack('H*').is_packed
     l = BGP::Link_state::Tlv.parse_list(s)
     assert_equal(3, l.size)
-    assert_equal([256, 512, 65000], l.collect { |t| t.type })
+    assert_equal([255, 254, 65000], l.collect { |t| t.type })
     assert_equal(hex, l.collect { |t| t.to_shex }.join)
     assert_equal(0, s.size, 'parse_list should consume what it read')
   end
@@ -168,7 +185,7 @@ class TestLinkStateTlv < Test::Unit::TestCase
   # caller above keeps them as a tail. Three octets is the widest such
   # remainder there can be.
   def test_parse_list_leaves_a_short_tail_alone
-    s = ['01000002abcd' + 'ffffff'].pack('H*').is_packed
+    s = ['00ff0002abcd' + 'ffffff'].pack('H*').is_packed
     l = BGP::Link_state::Tlv.parse_list(s)
     assert_equal(1, l.size)
     assert_equal('ffffff', s.unpack1('H*'))
@@ -179,14 +196,14 @@ class TestLinkStateTlv < Test::Unit::TestCase
   # consumes the four framing octets, and a Length that overruns takes
   # everything left so the next call sees nothing.
   def test_a_zero_length_tlv_makes_progress
-    s = ['01000000' * 3].pack('H*').is_packed
+    s = ['00ff0000' * 3].pack('H*').is_packed
     l = BGP::Link_state::Tlv.parse_list(s)
     assert_equal(3, l.size)
     assert_equal(0, s.size)
   end
 
   def test_a_length_that_overruns_ends_the_list
-    s = ['0100ffff0102'].pack('H*').is_packed
+    s = ['00ffffff0102'].pack('H*').is_packed
     l = BGP::Link_state::Tlv.parse_list(s)
     assert_equal(1, l.size)
     assert_equal(0, s.size)
@@ -195,7 +212,7 @@ class TestLinkStateTlv < Test::Unit::TestCase
   # --- section 5.1, the ordering rule ----------------------------------
 
   def test_ascending_by_type_is_ordered
-    a = BGP::Link_state::Tlv::Unknown.new(256, 'a')
+    a = BGP::Link_state::Tlv::Unknown.new(255, 'a')
     b = BGP::Link_state::Tlv::Unknown.new(257, 'a')
     assert(BGP::Link_state::Tlv.ordered?([a, b]))
     assert_equal(false, BGP::Link_state::Tlv.ordered?([b, a]))
@@ -205,8 +222,8 @@ class TestLinkStateTlv < Test::Unit::TestCase
   # then the TLVs sharing the same type MUST be first in ascending
   # order based on the Length field".
   def test_the_same_type_orders_by_length_next
-    a = BGP::Link_state::Tlv::Unknown.new(256, ['01'].pack('H*'))
-    b = BGP::Link_state::Tlv::Unknown.new(256, ['0000'].pack('H*'))
+    a = BGP::Link_state::Tlv::Unknown.new(255, ['01'].pack('H*'))
+    b = BGP::Link_state::Tlv::Unknown.new(255, ['0000'].pack('H*'))
     assert(BGP::Link_state::Tlv.ordered?([a, b]),
            'a shorter value sorts first even when its bytes are larger')
     assert_equal(false, BGP::Link_state::Tlv.ordered?([b, a]))
@@ -222,15 +239,15 @@ class TestLinkStateTlv < Test::Unit::TestCase
   # by numerical byte value is most likely to disagree across the
   # signed boundary.
   def test_the_same_type_and_length_order_by_value_bytewise
-    a = BGP::Link_state::Tlv::Unknown.new(256, ['7f'].pack('H*'))
-    b = BGP::Link_state::Tlv::Unknown.new(256, ['80'].pack('H*'))
+    a = BGP::Link_state::Tlv::Unknown.new(255, ['7f'].pack('H*'))
+    b = BGP::Link_state::Tlv::Unknown.new(255, ['80'].pack('H*'))
     assert(BGP::Link_state::Tlv.ordered?([a, b]))
     assert_equal(false, BGP::Link_state::Tlv.ordered?([b, a]))
   end
 
   def test_the_whole_value_is_compared_and_not_its_first_octet
-    a = BGP::Link_state::Tlv::Unknown.new(256, ['0100'].pack('H*'))
-    b = BGP::Link_state::Tlv::Unknown.new(256, ['01ff'].pack('H*'))
+    a = BGP::Link_state::Tlv::Unknown.new(255, ['0100'].pack('H*'))
+    b = BGP::Link_state::Tlv::Unknown.new(255, ['01ff'].pack('H*'))
     assert(BGP::Link_state::Tlv.ordered?([a, b]))
     assert_equal(false, BGP::Link_state::Tlv.ordered?([b, a]))
   end
@@ -240,8 +257,8 @@ class TestLinkStateTlv < Test::Unit::TestCase
   # because the readable implementation uses the real size and passes
   # every other ordering test here.
   def test_the_order_follows_the_length_field_and_not_the_real_size
-    long = BGP::Link_state::Tlv.factory(['0100270f01'].pack('H*').is_packed)
-    short = BGP::Link_state::Tlv::Unknown.new(256, ['0000'].pack('H*'))
+    long = BGP::Link_state::Tlv.factory(['00ff270f01'].pack('H*').is_packed)
+    short = BGP::Link_state::Tlv::Unknown.new(255, ['0000'].pack('H*'))
     assert_equal(9999, long.declared_len)
     assert_equal(1, long.value.size)
     assert(BGP::Link_state::Tlv.ordered?([short, long]),
@@ -252,7 +269,7 @@ class TestLinkStateTlv < Test::Unit::TestCase
   def test_an_empty_list_and_a_single_tlv_are_ordered
     assert(BGP::Link_state::Tlv.ordered?([]))
     assert(BGP::Link_state::Tlv.ordered?(
-      [BGP::Link_state::Tlv::Unknown.new(256, 'a')]))
+      [BGP::Link_state::Tlv::Unknown.new(255, 'a')]))
   end
 
   # --- the registry ----------------------------------------------------
@@ -260,10 +277,20 @@ class TestLinkStateTlv < Test::Unit::TestCase
   # Part 1 implements no TLV type, so every TLV reads back as Unknown.
   # `bgp_ls_doc_test.rb` is what fails when that stops being true, so
   # this case is about the parse answer rather than about the count.
-  def test_no_tlv_type_is_implemented_yet
-    assert_equal(BGP::Link_state::Tlv::Unknown,
-                 BGP::Link_state::Tlv.factory(
-                   ['01000004c0000201'].pack('H*').is_packed).class)
+  # **The two type numbers this file leans on cannot be registered**,
+  # which is what keeps every case above from expiring as part 1's did.
+  # Both halves matter: the range is reserved by Table 17, and nothing
+  # has registered one anyway.
+  def test_the_example_types_cannot_expire
+    [UNREGISTERED, UNREGISTERED_LOWER].each do |t|
+      assert(BGP::Link_state::Tlv::Unknown::RESERVED.include?(t),
+             "#{t} must be in the range Table 17 reserves")
+      assert_nil(BGP::Link_state::Tlv::REGISTRY[t],
+                 "#{t} must have no registered class")
+      assert_equal(BGP::Link_state::Tlv::Unknown,
+                   BGP::Link_state::Tlv.factory(
+                     [format('%04x0002abcd', t)].pack('H*').is_packed).class)
+    end
   end
 
   def test_a_registered_type_reads_back_as_its_own_class
@@ -348,19 +375,19 @@ class TestLinkStateTlv < Test::Unit::TestCase
   # --- Unknown, the four ways in ---------------------------------------
 
   def test_unknown_builds_from_field_values
-    assert_equal('01000002abcd',
+    assert_equal('00ff0002abcd',
                  BGP::Link_state::Tlv::Unknown.new(
-                   256, ['abcd'].pack('H*')).to_shex)
+                   255, ['abcd'].pack('H*')).to_shex)
   end
 
   def test_unknown_builds_from_wire_bytes_through_the_factory
-    hex = '01000002abcd'
+    hex = '00ff0002abcd'
     assert_equal(hex, BGP::Link_state::Tlv.factory(
       [hex].pack('H*').is_packed).to_shex)
   end
 
   def test_unknown_builds_from_another_instance
-    a = BGP::Link_state::Tlv.factory(['0100270f0102'].pack('H*').is_packed)
+    a = BGP::Link_state::Tlv.factory(['00ff270f0102'].pack('H*').is_packed)
     b = BGP::Link_state::Tlv::Unknown.new(a)
     assert_equal(a.to_shex, b.to_shex)
     assert_equal(9999, b.declared_len)
@@ -374,9 +401,9 @@ class TestLinkStateTlv < Test::Unit::TestCase
   end
 
   def test_two_tlvs_with_the_same_octets_are_equal
-    a = BGP::Link_state::Tlv::Unknown.new(256, ['abcd'].pack('H*'))
-    b = BGP::Link_state::Tlv::Unknown.new(256, ['abcd'].pack('H*'))
-    c = BGP::Link_state::Tlv::Unknown.new(256, ['abce'].pack('H*'))
+    a = BGP::Link_state::Tlv::Unknown.new(255, ['abcd'].pack('H*'))
+    b = BGP::Link_state::Tlv::Unknown.new(255, ['abcd'].pack('H*'))
+    c = BGP::Link_state::Tlv::Unknown.new(255, ['abce'].pack('H*'))
     assert_equal(a, b)
     assert_not_equal(a, c)
     assert_not_equal(a, 'not a tlv')
@@ -404,10 +431,10 @@ class TestLinkStateTlv < Test::Unit::TestCase
   # --- to_s ------------------------------------------------------------
 
   def test_to_s_says_which_kind_of_tlv_it_is
-    plain = BGP::Link_state::Tlv::Unknown.new(256, ['abcd'].pack('H*'))
-    assert_equal('Unknown TLV 256, 2 octets [abcd]', plain.to_s)
-    empty = BGP::Link_state::Tlv::Unknown.new(256, '')
-    assert_equal('Unknown TLV 256, 0 octets', empty.to_s)
+    plain = BGP::Link_state::Tlv::Unknown.new(255, ['abcd'].pack('H*'))
+    assert_equal('Unknown TLV 255, 2 octets [abcd]', plain.to_s)
+    empty = BGP::Link_state::Tlv::Unknown.new(255, '')
+    assert_equal('Unknown TLV 255, 0 octets', empty.to_s)
     priv = BGP::Link_state::Tlv::Unknown.new(65000, ['00000a4c'].pack('H*'))
     assert_equal('Private use TLV 65000, 4 octets [00000a4c], ' \
                  'enterprise 2636', priv.to_s)
@@ -422,8 +449,8 @@ class TestLinkStateTlv < Test::Unit::TestCase
   # class carries is exercised, the declared length included, since an
   # assertion that misses a field passes for the wrong reason.
   def test_unknown_rebuilds_from_its_own_hash
-    t = BGP::Link_state::Tlv.factory(['0100270f0102'].pack('H*').is_packed)
-    assert_equal({ :unknown => { :type => 256, :value => '0102' },
+    t = BGP::Link_state::Tlv.factory(['00ff270f0102'].pack('H*').is_packed)
+    assert_equal({ :unknown => { :type => 255, :value => '0102' },
                    :length => 9999 }, t.to_hash)
     assert_equal(t.to_shex,
                  BGP::Link_state::Tlv::Unknown.new(t.to_hash).to_shex)
@@ -434,8 +461,8 @@ class TestLinkStateTlv < Test::Unit::TestCase
   # pair it has always been. That is the same rule as `:tail` and
   # `:bits` elsewhere in the library.
   def test_an_ordinary_hash_carries_no_length_key
-    t = BGP::Link_state::Tlv::Unknown.new(256, ['abcd'].pack('H*'))
-    assert_equal({ :unknown => { :type => 256, :value => 'abcd' } },
+    t = BGP::Link_state::Tlv::Unknown.new(255, ['abcd'].pack('H*'))
+    assert_equal({ :unknown => { :type => 255, :value => 'abcd' } },
                  t.to_hash)
   end
 
@@ -443,9 +470,9 @@ class TestLinkStateTlv < Test::Unit::TestCase
   # wrapped form. Both build, which Conventions records as the ordinary
   # state of affairs rather than an asymmetry to fix.
   def test_a_bare_field_hash_builds_too
-    t = BGP::Link_state::Tlv::Unknown.new(:type => 256, :value => 'abcd',
+    t = BGP::Link_state::Tlv::Unknown.new(:type => 255, :value => 'abcd',
                                           :length => 9999)
-    assert_equal('0100270fabcd', t.to_shex)
+    assert_equal('00ff270fabcd', t.to_shex)
   end
 
   # --- the two code point ranges ---------------------------------------
@@ -486,7 +513,7 @@ class TestLinkStateTlv < Test::Unit::TestCase
   end
 
   def test_a_type_outside_the_private_use_range_has_no_enterprise_code
-    t = BGP::Link_state::Tlv::Unknown.new(256, ['00013039'].pack('H*'))
+    t = BGP::Link_state::Tlv::Unknown.new(255, ['00013039'].pack('H*'))
     assert_nil(t.enterprise_code)
   end
 
@@ -508,7 +535,7 @@ class TestLinkStateTlv < Test::Unit::TestCase
   # length on the wire than the caller asked for. Flow_spec refuses an
   # RFC 8955 section 4.1 length over 4095 in the same place.
   def test_a_length_the_field_cannot_hold_is_refused
-    t = BGP::Link_state::Tlv::Unknown.new(256, 'x' * 70000)
+    t = BGP::Link_state::Tlv::Unknown.new(255, 'x' * 70000)
     assert_raise(ArgumentError) { t.encode }
     t2 = BGP::Link_state::Tlv::Unknown.new(:type => 256, :value => 'ab',
                                            :length => 70000)
@@ -516,7 +543,7 @@ class TestLinkStateTlv < Test::Unit::TestCase
   end
 
   def test_a_length_at_the_limit_encodes
-    t = BGP::Link_state::Tlv::Unknown.new(256, 'x' * 0xffff)
+    t = BGP::Link_state::Tlv::Unknown.new(255, 'x' * 0xffff)
     assert_equal(0xffff + 4, t.encode.size)
   end
 
@@ -526,16 +553,16 @@ class TestLinkStateTlv < Test::Unit::TestCase
     # A type IANA reserves and will never allocate.
     assert_equal('00000000', BGP::Link_state::Tlv::Unknown.new(0, '').to_shex)
     # A Length that disagrees with the value, built rather than parsed.
-    assert_equal('0100000a01',
+    assert_equal('00ff000a01',
                  BGP::Link_state::Tlv::Unknown.new(
-                   :type => 256, :value => '01', :length => 10).to_shex)
+                   :type => 255, :value => '01', :length => 10).to_shex)
     # The same type twice in a row.
-    a = BGP::Link_state::Tlv::Unknown.new(256, ['01'].pack('H*'))
+    a = BGP::Link_state::Tlv::Unknown.new(254, ['01'].pack('H*'))
     assert_equal(a.to_shex * 2, [a, a].collect { |t| t.to_shex }.join)
     # Descending order, which section 5.1 makes malformed in an NLRI.
-    b = BGP::Link_state::Tlv::Unknown.new(1024, ['01'].pack('H*'))
+    b = BGP::Link_state::Tlv::Unknown.new(255, ['01'].pack('H*'))
     assert_equal(false, BGP::Link_state::Tlv.ordered?([b, a]))
-    assert_equal('04000001' + '01' + '01000001' + '01',
+    assert_equal('00ff0001' + '01' + '00fe0001' + '01',
                  [b, a].collect { |t| t.to_shex }.join)
     # A private-use type with no Enterprise Code in it at all.
     assert_equal('fde80000', BGP::Link_state::Tlv::Unknown.new(65000, '').to_shex)

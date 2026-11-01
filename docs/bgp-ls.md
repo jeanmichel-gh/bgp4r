@@ -211,7 +211,7 @@ no both fail the suite:
 
 | Type | NLRI Type | Body, after Protocol-ID and Identifier | In bgp4r |
 |---|---|---|---|
-| 1 | Node NLRI | Local Node Descriptors | no |
+| 1 | Node NLRI | Local Node Descriptors | yes |
 | 2 | Link NLRI | Local and Remote Node Descriptors, Link Descriptors | no |
 | 3 | IPv4 Topology Prefix NLRI | Local Node Descriptors, Prefix Descriptors | no |
 | 4 | IPv6 Topology Prefix NLRI | the same, IPv6 | no |
@@ -220,6 +220,123 @@ Each body begins with a **Protocol-ID**, one octet, and an
 **Identifier**, 8 octets, which is the BGP-LS Instance-ID. Figures 7 to
 9. Types 3 and 4 "use the same format", so they differ by type number
 and by the address family of what their descriptors carry.
+
+**So the three layouts share a head and differ only in what follows
+it**, which is figures 7, 8 and 9 read together rather than one at a
+time. `Link_state::Headed` carries the head, and each NLRI type is a
+type number, a hash key and whatever it says about the TLVs it expects.
+Table 2's Protocol-IDs are 1 IS-IS Level 1, 2 IS-IS Level 2, 3 OSPFv2,
+4 Direct, 5 Static configuration and 6 OSPFv3, with 0 Reserved and 200
+to 255 Private Use.
+
+**The body after the head is a TLV list and not a set of named
+fields**, which is section 5.1 rather than a shortcut: an unknown TLV
+"MUST be preserved and propagated" and must not make the NLRI
+malformed, and a layout of named fields would have nowhere to put one.
+It also means a Node NLRI carrying no Local Node Descriptors builds and
+parses, which is right twice over, since section 8.2.2 names "presence
+of a mandatory TLV" among the semantic validations a BGP-LS Propagator
+should **not** perform and building never validates in any case.
+
+## 3b. The node descriptors, section 5.2.1
+
+TLV 256 and TLV 257 are **one layout and two type numbers**. Section
+5.2.1.2: the Local Node Descriptors TLV "contains Node Descriptors for
+the node anchoring the local end of the link. This is a mandatory TLV
+in all three types of NLRIs (node, link, and prefix). The Type is 256.
+The length of this TLV is variable. The value contains one or more Node
+Descriptor sub-TLVs defined in Section 5.2.1.4." Section 5.2.1.3 is the
+same sentence with "remote end" and "mandatory TLV for Link NLRIs", and
+figures 10 and 11 are identical. `Mcast_vpn::Shared_tree_join` and
+`Source_tree_join` are the same shape for the same reason.
+
+The four sub-TLVs, Table 3 of section 5.2.1.4. The "In bgp4r" column is
+**discovered** from `Link_state::Tlv::REGISTRY`, so a row saying yes
+with no class behind it and a class with a row saying no both fail the
+suite:
+
+| Code Point | Description | Length | In bgp4r |
+|---|---|---|---|
+| 256 | Local Node Descriptors | Variable | yes |
+| 257 | Remote Node Descriptors | Variable | yes |
+| 512 | Autonomous System | 4 | yes |
+| 513 | BGP-LS Identifier (deprecated) | 4 | yes |
+| 514 | OSPF Area-ID | 4 | yes |
+| 515 | IGP Router-ID | Variable | yes |
+
+**One flat registry covers TLVs and sub-TLVs alike, and that is IANA's
+doing rather than a simplification.** The registry is "BGP-LS NLRI and
+Attribute TLVs", one space for both, and Table 18 lists 256 and 257
+beside 512 to 515 with no column saying which is which. So a sub-TLV
+number means the same thing under every parent, which is the opposite
+of the EVPN extended community sub-types and of the IS-IS sub-TLVs,
+where the parent decides. That is why part 1's single
+`Tlv::REGISTRY` needed nothing in part 2.
+
+**513 is deprecated and implemented anyway.** Table 18 carries the row
+and marks it deprecated, and section 5.2.1.4 says implementations
+"SHOULD support the advertisement of this sub-TLV for backward
+compatibility in deployments where there are BGP-LS Producer
+implementations that conform to [RFC7752]", with "The default value of 0
+is RECOMMENDED". A deprecated code point a peer still sends is exactly
+what a protocol testing tool has to read.
+
+### The IGP Router-ID has four widths and the width alone does not say which
+
+Section 5.2.1.4 describes four, and the table is held against
+`Igp_router_id::SHAPES` by the doc test so the two cannot drift:
+
+| Width | Protocol-IDs | Node kind | What the octets are |
+|---|---|---|---|
+| 4 | 3, 6 | non_pseudonode | OSPFv2 or OSPFv3 Router-ID |
+| 6 | 1, 2 | non_pseudonode | IS-IS ISO System-ID |
+| 7 | 1, 2 | pseudonode | IS-IS DIS System-ID and PSN identifier |
+| 8 | 3, 6 | pseudonode | OSPF DR Router-ID and interface |
+
+In the section's own words: 7 octets is "the 6-octet ISO Node-ID of the
+Designated Intermediate System (DIS) followed by a 1-octet, nonzero PSN
+identifier", and 8 is "the 4-octet Router-ID of the DR followed by" an
+IPv4 address for OSPFv2 or an interface identifier for OSPFv3.
+
+Then the sentence that is the rule: "The TLV size in combination with
+the protocol identifier enables the decoder to determine the type of
+the node."
+
+**Both halves, and they live one level apart.**
+`Igp_router_id::SHAPES` is keyed by width and names which Protocol-IDs
+each width belongs to; `Link_state::Node#node_type` does the combining,
+because that is the one place that has the Protocol-ID as well.
+Threading the Protocol-ID down into the sub-TLV would buy nothing,
+since the octets replay without it, and a class that accepted it would
+eventually use it.
+
+`node_type` answers `:non_pseudonode` or `:pseudonode` only where the
+two halves agree, and nil otherwise. **nil is an answer and not a
+failure**: a 6-octet Router-ID under Protocol-ID 4, 'Direct', is
+perfectly legal, because the section says that for 'Direct' or 'Static
+configuration' the value "SHOULD be taken from an IPv4 or IPv6
+address", so it describes no node kind there at all. Reporting one
+would be inventing it.
+
+Any other width parses and replays and answers no shape. Opaque is the
+RFC's word for the field, and a width it does not describe is not an
+error it names.
+
+### The two rules of section 5.2.1.4, and why there are only two levels
+
+"At most, there MUST be one instance of each sub-TLV type present in
+any Node Descriptor. The sub-TLVs within a Node Descriptor MUST be
+arranged in ascending order by sub-TLV type."
+
+**That ordering rule is section 5.1's with its tiebreakers made
+unnecessary**, and noticing why is worth more than the two sentences:
+5.1 orders by type, then by Length, then by Value, because several TLVs
+of one type can share an NLRI. Here the once-only rule means two
+sub-TLVs never share a type, so there is nothing left to break a tie.
+So `Node_descriptors#ordered?` asks `Tlv.ordered?` rather than keeping
+a second comparison, and `#duplicate_types` reports the other rule.
+Both report; neither refuses, because building never validates and part
+6 is where a receive side check reads them.
 
 ## 4. The code point registries
 
@@ -332,24 +449,48 @@ arriving from the lexical-scope side rather than the ancestor side.
 
 ## 7. What is in bgp4r today
 
-Seven parts, and part 1 is in. The plan is in CLAUDE.md under "Breadth,
-the one SAFI lever".
+Seven parts, and parts 1 and 2 are in. The plan is in CLAUDE.md under
+"Breadth, the one SAFI lever".
 
 | Part | What | Status |
 |---|---|---|
 | 1 | the TLV primitive and the NLRI framing, pure | **done** |
-| 2 | the Node NLRI and the node descriptor sub-TLVs | to do |
+| 2 | the Node NLRI and the node descriptor sub-TLVs | **done** |
 | 3 | the Link NLRI and the two Prefix NLRIs | to do |
 | 4 | wiring the NLRI to the dispatch sites | to do |
 | 5 | the BGP-LS Attribute, code 29, and RFC 9552's attribute TLVs | to do |
 | 6 | validation, from section 8.2.2 | to do |
 | 7 | the lab, in both directions for SAFI 71 | to do |
 
-**No TLV type and no NLRI type is implemented yet**, so every TLV reads
-back as `Link_state::Tlv::Unknown` and every NLRI as
-`Link_state::Unknown`, and both replay byte for byte. That is the state
-`Evpn::ROUTES` and `Mcast_vpn::ROUTES` were each in when their own
-first part landed.
+**Six TLV types and one NLRI type are in**, which is all of section
+5.2.1 and NLRI type 1. Everything else reads back as its level's
+`Unknown` and replays byte for byte: a TLV type with no class as
+`Link_state::Tlv::Unknown` and an NLRI type with no class as
+`Link_state::Unknown`.
+
+**Part 1 chose test examples from the ranges parts 2 to 5 fill, and
+part 2 paid for it.** Its TLV cases used types 256, 513 and 1024, which
+are a node descriptor, a node descriptor sub-TLV and a node attribute,
+so four of them broke the day the first descriptor landed and a fifth
+would have broken in part 5; its NLRI cases used types 1, 2 and 5. Both
+files now use a type that **cannot** acquire a class: Table 17 reserves
+TLV code points 0 to 255 and says they are "not to be allocated", and
+Table 12 reserves NLRI type 0. Each file names the choice in a constant
+and asserts the range, so the examples cannot expire again. That is the
+fifth expiring example in this plan after the four `docs/mcast-vpn.md`
+records, and the lesson there was already written down.
+
+**And a third shape of the load order trap, which cost the two guards
+above their first firing.** `bgp_ls_doc_test.rb` discovers from
+`Tlv::REGISTRY` and `Link_state::TYPES`, which are mutable and filled
+by `register` calls spread across files. It required only part 1's two
+files, so when part 2 landed its forward-looking guards **passed
+standalone and failed in the suite**, where the registering file had
+been loaded. The two traps Conventions records fail in opposite
+directions and are about constants; this one is about global mutable
+state, so the answer is not "run it both ways" but "require everything
+that writes to what you read". The sibling doc tests do not have it,
+because each discovers from a frozen hash literal in one file.
 
 **Nothing dispatches to either file.** `Nlri.factory` and
 `MpReachCommon#set` know nothing of SAFI 71 or 72, so a BGP-LS UPDATE

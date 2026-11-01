@@ -56,9 +56,29 @@
 # BGP:: names are written out in full, see Conventions in CLAUDE.md.
 
 require 'test/unit'
+require 'bgp/iana'
+# **Every file that registers into the two registries, and that is a
+# requirement rather than tidiness.** The tables here are discovered
+# from `Link_state::Tlv::REGISTRY` and `Link_state::TYPES`, which are
+# mutable and filled by `register` calls spread across files, so a
+# discovery that loaded only some of them measures a subset and says
+# so with confidence. Part 1 required `link_state` and
+# `link_state_tlv` alone, and when part 2 landed its two
+# forward-looking guards **passed standalone and failed in the suite**,
+# because the suite had loaded the registering file and this run had
+# not.
+#
+# That is the load order trap in Conventions in a third shape. The two
+# it records fail in opposite directions and are about constants; this
+# one is about global mutable state, so the answer is not "run it both
+# ways" but "require everything that writes to what you read".
+# `evpn_doc_test.rb` and `mcast_vpn_doc_test.rb` do not have it,
+# because each of those discovers from a frozen hash literal that one
+# file defines.
 require 'bgp/nlris/link_state'
 require 'bgp/nlris/link_state_tlv'
-require 'bgp/iana'
+require 'bgp/nlris/link_state_descriptor'
+require 'bgp/nlris/link_state_nlri'
 # The forward-looking guards read the dispatch gates and validation.rb
 # as text, so they need no requires of their own. These two are reached
 # as code. Required explicitly, per Conventions: run_unit.rb requires
@@ -78,6 +98,15 @@ class BgpLsDocTest < Test::Unit::TestCase
   # is Private Use.
   DEFINED = [1, 2, 3, 4].freeze
 
+  # Every TLV code point RFC 9552's own Table 18 defines, read in the
+  # document on 2026-10-31: 14 on the NLRI side and 25 attribute TLVs,
+  # 39 in all. Listed here because it is the **document's** table and
+  # not the library's, so there is nothing to discover it from; what is
+  # discovered is which of them bgp4r implements.
+  TABLE_18 = ([256, 257, 258, 259, 260, 261, 262, 263, 264, 265] +
+              (512..515).to_a + (1024..1031).to_a + (1088..1098).to_a +
+              (1152..1157).to_a).freeze
+
   def doc
     @doc ||= File.read(DOC_PATH, :encoding => 'UTF-8')
   end
@@ -88,12 +117,35 @@ class BgpLsDocTest < Test::Unit::TestCase
     File.read(File.expand_path("../../#{path}", __dir__))
   end
 
-  # The section 3 table, as {type number => the "In bgp4r" cell}.
-  def table
-    doc.lines.each_with_object({}) do |l, h|
+  # One section of the document, from its heading to the next one.
+  #
+  # **Scoped rather than global, and part 2 is why.** The section 3
+  # table and the section 3b table are both four columns beginning with
+  # a number, so one regexp over the whole document reads the rows of
+  # each into the other's answer. Part 1's helper was global and would
+  # have done exactly that, silently.
+  def section(heading)
+    body = doc[/^## #{Regexp.escape(heading)}.*?(?=^## |\z)/m]
+    assert_not_nil(body, "#{DOC} must have a section #{heading}")
+    body
+  end
+
+  # The four-column rows of one section, as {number => the last cell}.
+  def rows(heading)
+    section(heading).lines.each_with_object({}) do |l, h|
       m = l.match(/^\|\s*(\d+)\s*\|([^|]*)\|([^|]*)\|\s*(\w+)\s*\|\s*$/)
       h[m[1].to_i] = m[4].downcase if m
     end
+  end
+
+  # The section 3 NLRI type table, as {type number => "In bgp4r"}.
+  def table
+    rows('3. The NLRI')
+  end
+
+  # The section 3b TLV code point table, same shape.
+  def tlv_table
+    rows('3b. The node descriptors')
   end
 
   def test_the_document_exists
@@ -286,15 +338,45 @@ class BgpLsDocTest < Test::Unit::TestCase
   # **Forward-looking.** True only while part 1 is the only part in, and
   # the document says so in section 7. When a TLV class or an NLRI type
   # class lands, this fails and names the sentence to rewrite.
-  def test_no_tlv_type_and_no_nlri_type_is_implemented_yet
-    assert_equal({}, BGP::Link_state::Tlv::REGISTRY,
-                 'a TLV type landed: rewrite the section 7 sentence and ' \
-                 'this guard, and give the TLV table a row')
-    assert_equal({}, BGP::Link_state::TYPES,
-                 'an NLRI type landed: rewrite the section 7 sentence and ' \
-                 'set its row in the section 3 table to yes')
-    assert_match(/\*\*No TLV type and no NLRI type is implemented yet\*\*/,
-                 doc)
+  # **Part 1's version of this guard said both registries were empty,
+  # and part 2 is where it fired**, which is what it was for. It is a
+  # discovery in both directions now rather than an emptiness claim, so
+  # it keeps saying something for parts 3 and 5.
+  #
+  # The section 3b table is read the same way section 3's is: a row
+  # saying yes with no class behind it, and a class with a row saying
+  # no, both fail.
+  def test_the_tlv_table_says_yes_for_exactly_what_the_library_implements
+    built = BGP::Link_state::Tlv::REGISTRY.keys.sort
+    said = tlv_table.select { |_, v| v == 'yes' }.keys.sort
+    assert_equal(built, said,
+                 "#{DOC} section 3b and Tlv::REGISTRY disagree about " \
+                 "which TLV types are implemented: library " \
+                 "#{built.inspect}, document #{said.inspect}")
+  end
+
+  # And every row of it is a code point RFC 9552's own Table 18 defines,
+  # so a class registered at a number this document has no row for
+  # fails above rather than being written in quietly.
+  def test_every_row_of_the_tlv_table_is_an_rfc_9552_code_point
+    assert_equal([], tlv_table.keys - TABLE_18,
+                 "#{DOC} section 3b has a row for a code point RFC 9552 " \
+                 'Table 18 does not define')
+  end
+
+  # Both registries are reachable by hash key as well as by number, so
+  # a class cannot be half wired: `register` writes both and refuses a
+  # key already taken, and this is what says it was called rather than
+  # one hash edited by hand.
+  def test_every_registered_class_is_in_both_lookups
+    BGP::Link_state::Tlv::REGISTRY.each do |t, k|
+      assert_equal(k, BGP::Link_state::Tlv::BY_KEY[k.hash_key],
+                   "TLV type #{t} is in REGISTRY and not in BY_KEY")
+    end
+    BGP::Link_state::TYPES.each do |t, k|
+      assert_equal(k, BGP::Link_state::BY_KEY[k.hash_key],
+                   "NLRI type #{t} is in TYPES and not in BY_KEY")
+    end
   end
 
   def test_both_registries_refuse_a_type_already_taken
@@ -319,6 +401,104 @@ class BgpLsDocTest < Test::Unit::TestCase
       end
     end
     assert_match(/Both refuse a type or a hash key already taken/, doc)
+  end
+
+  # --- section 5.2.1, what part 2 claims -------------------------------
+
+  # Table 18 is 39 code points, which section 4 of the document states
+  # as the half of "39 against 139" a reader can check against the RFC.
+  def test_table_18_is_thirty_nine_code_points
+    assert_equal(39, TABLE_18.size)
+    assert_equal(TABLE_18.sort, TABLE_18, 'keep the list in order')
+  end
+
+  # **The rule that needs two levels**, section 5.2.1.4: "The TLV size
+  # in combination with the protocol identifier enables the decoder to
+  # determine the type of the node." The width half is the sub-TLV's
+  # and the Protocol-ID half is the NLRI's, so the combining is on the
+  # NLRI and the document says where.
+  def test_the_node_type_rule_needs_both_halves
+    assert_equal(false,
+                 BGP::Link_state::Tlv::Igp_router_id.method_defined?(
+                   :node_type),
+                 'the width alone cannot name a node, so the sub-TLV must ' \
+                 'not answer this')
+    assert(BGP::Link_state::Headed.method_defined?(:node_type))
+    iso = BGP::Link_state::Tlv::Igp_router_id.new('1921.6800.1001')
+    d = BGP::Link_state::Tlv::Local_node_descriptors.new(iso)
+    # IS-IS Level 1 with a 6-octet ISO System-ID is a non-pseudonode.
+    assert_equal(:non_pseudonode,
+                 BGP::Link_state::Node.new(1, 0, d).node_type)
+    # The same octets under 'Direct', where the section describes no
+    # node kind at all.
+    assert_nil(BGP::Link_state::Node.new(4, 0, d).node_type)
+    assert_match(/\*\*nil is an answer and not a\s+failure\*\*/, doc)
+  end
+
+  # **The four widths, discovered from `SHAPES` and read out of the
+  # document**, both directions, so neither can move without the other.
+  # Each row is width, the Protocol-IDs, the node kind and the octets.
+  def test_the_four_igp_router_id_widths
+    shapes = BGP::Link_state::Tlv::Igp_router_id::SHAPES
+    said = {}
+    section('3b. The node descriptors').lines.each do |l|
+      m = l.match(/^\|\s*(\d)\s*\|\s*([\d, ]+?)\s*\|\s*(\w+)\s*\|/)
+      next if m.nil?
+      said[m[1].to_i] = [m[2].split(/,\s*/).collect(&:to_i), m[3].to_sym]
+    end
+    assert_equal(shapes.keys.sort, said.keys.sort,
+                 "#{DOC} section 3b and Igp_router_id::SHAPES disagree " \
+                 'about which widths section 5.2.1.4 describes')
+    shapes.each do |w, row|
+      assert_equal([row[0], row[1]], said[w],
+                   "#{DOC} section 3b and SHAPES disagree about width #{w}")
+    end
+  end
+
+  # Section 5.2.1.4's two rules, and the document's claim about why the
+  # ordering one has no tiebreakers: the once-only rule means two
+  # sub-TLVs never share a type, so `Tlv.ordered?` is enough.
+  def test_the_two_rules_of_section_5_2_1_4_are_reported_not_refused
+    a = BGP::Link_state::Tlv::Autonomous_system.new(1)
+    b = BGP::Link_state::Tlv::Autonomous_system.new(2)
+    c = BGP::Link_state::Tlv::Igp_router_id.new('0a000001')
+    d = BGP::Link_state::Tlv::Local_node_descriptors.new(a, b)
+    assert_equal([512], d.duplicate_types)
+    assert_equal(16 + 4, d.size, 'and it still encodes')
+    assert_equal(false,
+                 BGP::Link_state::Tlv::Local_node_descriptors.new(
+                   c, a).ordered?)
+    assert_match(/with its tiebreakers made\s+unnecessary/, doc)
+  end
+
+  # One flat registry for TLVs and sub-TLVs, which is IANA's doing: a
+  # node descriptor and a node descriptor sub-TLV are both in
+  # `Tlv::REGISTRY` and there is no second lookup anywhere.
+  def test_one_registry_covers_tlvs_and_sub_tlvs
+    assert_equal(BGP::Link_state::Tlv::Local_node_descriptors,
+                 BGP::Link_state::Tlv::REGISTRY[256])
+    assert_equal(BGP::Link_state::Tlv::Autonomous_system,
+                 BGP::Link_state::Tlv::REGISTRY[512])
+    assert_match(/One flat registry covers TLVs and sub-TLVs alike/, doc)
+  end
+
+  # The expiring-example lesson, which part 2 paid for: both part 1 test
+  # files now use a type that cannot acquire a class, and each names the
+  # choice in a constant.
+  def test_the_part_1_examples_cannot_expire
+    tlv = source('test/unit/nlris/link_state_tlv_test.rb')
+    nlri = source('test/unit/nlris/link_state_test.rb')
+    assert_not_equal(nil, tlv[/^  UNREGISTERED = (\d+)$/],
+                     'link_state_tlv_test.rb must name its unregistered ' \
+                     'type in a constant')
+    assert(BGP::Link_state::Tlv::Unknown::RESERVED.include?($1.to_i),
+           'that type must be in the range Table 17 reserves')
+    assert_not_equal(nil, nlri[/^  NO_CLASS = (\d+)$/],
+                     'link_state_test.rb must name its unregistered NLRI ' \
+                     'type in a constant')
+    assert_nil(BGP::Link_state::TYPES[$1.to_i],
+               'that NLRI type must have no registered class')
+    assert_match(/cannot expire/, doc)
   end
 
   # --- forward-looking: nothing dispatches to this family yet ----------
