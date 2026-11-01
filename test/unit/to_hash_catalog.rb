@@ -1449,10 +1449,81 @@ module ToHashCatalog
                         :tlvs => [{ :ip_reachability => '2001:db8::/32' }] })
   end
 
+  # --- the node attribute TLVs of section 5.3.1, Table 6 ---------------
+  #
+  # Six classes, and all six round trip, which is not luck: the hash
+  # shape was written with these classes, so no field here entered the
+  # object after the hash was settled. That one sentence is behind every
+  # lossy row in this file.
+
+  # **The recipe sets an undefined bit on purpose**, because that is the
+  # field a names-only hash would drop and a names-only recipe would
+  # therefore pass without measuring. Three thin recipes passed for the
+  # wrong reason while this file was written and that is the rule they
+  # earned: exercise every field the class carries. The names path is
+  # measured in the class's own test file, which has both forms.
+  #
+  # One entry per class and no more: the guard resolves an entry's key
+  # with `Object.const_get`, so a second recipe for a class cannot be
+  # named here.
+  ENTRIES['BGP::Link_state::Tlv::Node_flag_bits'] = entry(:ok, nil, nil) do
+    BGP::Link_state::Tlv::Node_flag_bits.new(
+      :node_flag_bits => [:overload, { :bits => 0x83 }])
+  end
+
+  ENTRIES['BGP::Link_state::Tlv::Opaque_node_attribute'] =
+    entry(:ok, nil, nil) do
+      BGP::Link_state::Tlv::Opaque_node_attribute
+        .new(:opaque_node_attribute => 'deadbeef')
+    end
+
+  ENTRIES['BGP::Link_state::Tlv::Node_name'] = entry(:ok, nil, nil) do
+    BGP::Link_state::Tlv::Node_name.new(:node_name => 'router1')
+  end
+
+  ENTRIES['BGP::Link_state::Tlv::Isis_area_id'] = entry(:ok, nil, nil) do
+    BGP::Link_state::Tlv::Isis_area_id.new(:isis_area_id => '490001')
+  end
+
+  ENTRIES['BGP::Link_state::Tlv::Ipv4_local_router_id'] =
+    entry(:ok, nil, nil) do
+      BGP::Link_state::Tlv::Ipv4_local_router_id
+        .new(:ipv4_local_router_id => '10.0.0.1')
+    end
+
+  ENTRIES['BGP::Link_state::Tlv::Ipv6_local_router_id'] =
+    entry(:ok, nil, nil) do
+      BGP::Link_state::Tlv::Ipv6_local_router_id
+        .new(:ipv6_local_router_id => '2001:db8::1')
+    end
+
+  # --- the attribute itself, code 29 -----------------------------------
+  #
+  # It reads its own wrapped hash, where 38 of these read theirs only
+  # through their attribute, and the reason is the same history: the hash
+  # build test came first here, so `new` was written to the shape
+  # `to_hash` answers.
+  ENTRIES['BGP::Link_state_attribute'] = entry(:ok, nil, nil) do
+    BGP::Link_state_attribute.new(
+      :link_state => [{ :node_flag_bits => [:overload] },
+                      { :node_name => 'router1' },
+                      { :isis_area_id => '490001' },
+                      { :isis_area_id => '490002' },
+                      { :ipv4_local_router_id => '10.0.0.1' },
+                      { :unknown => { :type => 9999, :value => 'abcd' } },
+                      { :tail => 'ffff' }])
+  end
+
   # Classes with no entry, each with the reason. An abstract base with no
   # sensible instance belongs here; a class merely awkward to build does
   # not.
   NO_RECIPE = {
+    'BGP::Link_state::Tlv::Opaque_tlv' =>
+      'an abstract base, as Opaque32 and Addr_tlv are: it holds the ' \
+      'variable-width opaque value that Table 6 rows 1025 and 1027 ' \
+      'share and defines neither TYPE nor HASH_KEY nor LABEL, so ' \
+      'every encode raises NameError. Opaque_node_attribute and ' \
+      'Isis_area_id are measured instead.',
     'BGP::Link_state::Tlv::Addr_tlv' =>
       'an abstract base, as Opaque32 is: it supplies WIDTH and the ' \
       'address coercion and neither TYPE nor HASH_KEY, so every encode ' \

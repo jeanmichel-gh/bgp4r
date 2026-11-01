@@ -22,6 +22,7 @@
   tunnel_encap
   as4
   attr_set
+  link_state_attribute
 }.each do |attr|
   require "bgp/path_attributes/#{attr}"
 end

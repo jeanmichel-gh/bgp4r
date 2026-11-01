@@ -138,8 +138,20 @@ bgp/nlris/               prefix encodings (inet, labeled, VPN, RD, mapped IPv4)
                          which only flow spec also needs: figures 5
                          and 6 differ by the Route Distinguisher and
                          by nothing in the octets, so the same capture
-                         is valid read either way. The attribute, code
-                         29, is still part 5. A TLV or NLRI
+                         is valid read either way.
+                         link_state_node_attribute.rb the six node
+                         attribute TLVs of section 5.3.1 that are new,
+                         1024 to 1029, with the Opaque_tlv base the two
+                         variable ones share; the attribute that
+                         carries them is code 29 and is a path
+                         attribute, so it lives in
+                         bgp/path_attributes/link_state_attribute.rb
+                         and goes through Attr.register rather than
+                         either NLRI gate. TLV 263 is in Table 4 and
+                         Table 6 and is one class, which is the flat
+                         registry paying for itself. Table 8's and
+                         Table 10's attribute TLVs are parts 5b and 5c.
+                         A TLV or NLRI
                          type with no class reads back as its level's
                          Unknown and replays byte for byte. **One flat
                          registry covers TLVs and sub-TLVs alike**,
@@ -384,7 +396,10 @@ test that proves its four wiring sites agree. It carries the only cases
 in this family that send a two-address next hop, a VPN NLRI and an
 unknown NLRI type beside a known one over a socket, and the one that
 reads the same octets under both SAFIs to show the SAFI is a parse time
-input. About a second:
+input. Its last two cases are not about a wiring site at all, since the
+BGP-LS Attribute goes through `Attr.register`: they are here because
+this is the only place the NLRI and the attribute that describes it
+travel together over a socket. About a second:
 ```
 ruby -I. test/functional/link_state_test.rb
 ```
@@ -516,7 +531,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. The `lab` job is a matrix, one job per group in `test/lab_groups.rb`, so its cost is the slowest group and not the total: it was 12m42s as one serial suite. Each job installs only what its group needs, which is why the matrix entry carries a `gobgp`, `frr`, `docker` or `netns` flag. The `gobgp` groups pin 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-11-01: 2226 tests, 27312 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.4%.
+Baseline on 2026-11-01: 2288 tests, 27645 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.4%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -1520,12 +1535,14 @@ true here is the shape of the gap:
   :safi=>70, :nexthop=>["10.0.0.1"], :nlris=>[{:inclusive_multicast=>{:rd=>
   [100,200], :tag=>0, :originator=>"10.0.0.1"}}]).to_shex'` prints the
   attribute. A stale entry sends the next reader after work that is done.
-* **BGP-LS's NLRI is in, and attribute 29 is what is left.** AFI 16388
+* **BGP-LS's NLRI is in and so is attribute 29; what is left is two of
+  its three TLV tables.** AFI 16388
   SAFI 71 and 72 read and write since part 4 of phase 4 below, so the
   "one limit" this section named is lifted for the last family too. The
-  BGP-LS **Attribute**, code 29, is part 5 and is a path attribute
-  rather than an NLRI, so it goes through `Attr.register` and not
-  through either dispatch gate.
+  BGP-LS **Attribute**, code 29, is a path attribute rather than an
+  NLRI, so it goes through `Attr.register` and not through either
+  dispatch gate; it landed with Table 6's node attribute TLVs in part
+  5a, and Table 8's and Table 10's are parts 5b and 5c.
   Flowspec, EVPN, RT-constrain, ATTR_SET and MCAST-VPN were all on this list
   and all five are off it, because the
   rule and the route can be sent now: flowspec had every traffic filtering
@@ -1534,16 +1551,19 @@ true here is the shape of the gap:
   extended communities. Phase 3 below measured that community registry rather
   than recalling it, 18 assigned entries with 14 carrying an RFC, and all 14
   are in.
-* Coverage as measured: 23 of 34 live path attribute code points, and 8 of 22
+* Coverage as measured: 24 of 34 live path attribute code points, and 8 of 22
   live capability code points. The attribute figure reads worse than it is:
   FRR's `bgpd.h` defines exactly bgp4r's 22 plus two, where the 23rd is
-  ATTR_SET, which FRR does not define at all. **The extended community
+  ATTR_SET, which FRR does not define at all, and the 24th is the BGP-LS
+  Attribute, which FRR does not define either.
+  `ruby -I. -e 'require "bgp4r"; p BGP::Attr.registrations.size'` prints
+  the first figure rather than leaving it to be counted. **The extended community
   figure is not written down here**, because it moved three times in a week
   and `ruby -I. -e 'require "bgp4r"; p BGP::Extended_community::FACTORY.size'`
   prints the registered code points, against the 115 the IANA registries
   listed when this was last counted by hand.
 
-### Breadth, the one SAFI lever. Phases 2 and 3 done, phase 4 parts 1, 2 and 3 done, part 4 under way: BGP-LS parts 1 to 4 and 7 of seven
+### Breadth, the one SAFI lever. Phases 2 and 3 done, phase 4 parts 1, 2 and 3 done, part 4 under way: BGP-LS parts 1 to 4, 5a and 7 of seven
 
 The section above deferred breadth and named the single limit. This is the
 plan for lifting it, recorded before the work starts.
@@ -2877,8 +2897,8 @@ Two consequences, both of which change the plan rather than decorate it:
    RT-constrain (SAFI 132, RFC 4684), ATTR_SET (attribute 128, RFC
    6368) and MCAST-VPN (SAFI 5, RFC 6514) **are in**; BGP-LS
    (attribute 29, AFI
-   16388, SAFI 71 and 72, RFC 9552) is **under way**, parts 1 to 4 and
-   7 of seven done, as the plan under part 4 below: part 7 was taken
+   16388, SAFI 71 and 72, RFC 9552) is **under way**, parts 1 to 4, 5a
+   and 7 of seven done, as the plan under part 4 below: part 7 was taken
    out of order on purpose, because what a router does decides which
    checks part 6 is worth writing, and it did. This entry used to
    say "each of
@@ -4734,6 +4754,176 @@ Two consequences, both of which change the plan rather than decorate it:
          either NLRI gate. The node, link and prefix attribute TLVs of
          section 5.3 and no others: the rest of the 139 are other
          RFCs' and are the backlog the measure below excludes.
+         **Three parts, one per table**, planned on 2026-11-01 from
+         section 5.3 read first hand, since 25 TLV classes in one pull
+         request is not a small diff.
+         * **5a, the attribute and Table 6. Done**, in #221.
+           `ATTR::BGP_LS = 29`, `Link_state_attribute`, and the
+           **six** node attribute TLVs that are new: 1024 Node Flag
+           Bits, 1025 Opaque Node Attribute, 1026 Node Name, 1027
+           IS-IS Area Identifier, 1028 IPv4 Router-ID of Local Node,
+           1029 IPv6 Router-ID of Local Node. A BGP-LS Attribute
+           reads back out of an attribute set now with no protocol
+           error and no coverage gap, where before it was an
+           `Attr::Unknown` with an `Attr::Gap`.
+           * **The hash is a list and not a map keyed by type**, which
+             is the one thing this attribute does differently from
+             `Path_attribute`'s own hash, and the RFC gives the reason
+             twice: section 5.3.1.2 says the IS-IS Area Identifier
+             repeats and section 5.3.1.4 says each auxiliary Router-ID
+             is "a separate TLV". `Path_attribute` had to bolt a
+             `:duplicates` key onto a hash keyed by type for exactly
+             this; a list carries it for free. That is isis4r's
+             CLAUDE.md lesson arriving in bgp4r, where repetition is
+             the design rather than the exception.
+           * **Erratum 7789 applied.** `Node_flag_bits` names bit 1
+             Attached, as Table 7 does, and has no T bit, which is
+             what Figure 15 prints. `DEFINED_BITS` is 0xfc and the low
+             two bits are kept and echoed, which section 5.3.1.1 asks
+             for outright: "The bits that are not defined MUST be set
+             to 0 by the originator and MUST be ignored by the
+             receiver." The mask table is in `docs/bgp-ls.md` section
+             10a and the doc test reads it out of the document against
+             `BITS`, both ways, so a bit renamed or moved in either
+             place fails.
+           * **Section 5.3.1.3's 255 does not say whether the framing
+             octets are in it.** "The maximum length of the Node Name
+             TLV is 255 octets", where every other width in the family
+             is a value width. 255 of value and 251 of value are both
+             readings and the section settles neither, so nothing
+             enforces either and a longer name builds, which the
+             2-octet Length field can carry. Recorded rather than
+             resolved.
+           * **Three more hand written expectations wrong, the
+             fourteenth to sixteenth in these families, and the
+             library right every time.** Two attribute Length octets
+             computed by hand, and one hex string split in the wrong
+             place. RFC 9552 carries no worked example and no hex
+             anywhere, measured in part 1, so there is nothing here to
+             check a reading against: compute the vectors with the
+             library and paste the result.
+           * **`Attr.by_key` answers a `Registration` and not the
+             class**, which cost one assertion. Every other caller
+             reads `.klass`.
+           * **The `to_hash` catalog allows one entry per class**,
+             because the guard resolves an entry's key with
+             `Object.const_get`. A second recipe named
+             `'...Node_flag_bits (undefined bits)'` failed two guards
+             at once. So the one recipe has to reach the field a
+             names-only hash would drop, which is the
+             exercise-every-field rule this file already records three
+             instances of, with the names path left to the class's own
+             test file.
+           * **The lab example expired and is re-pointed rather than
+             weakened**, the fifth in this family.
+             `link_state_gobgp_test.rb` asserted the attribute came
+             back as an `Attr::Unknown`; it parses now. Re-measured on
+             2026-11-01 against gobgpd 3.23.0: what GoBGP puts in it
+             is one TLV of type **1101**, the Adjacency SID of RFC
+             9085, which is in **no table of RFC 9552**, so it stays a
+             `Tlv::Unknown` through 5b and 5c as well and the example
+             cannot expire again. That is the keep-and-echo MUST of
+             section 5.1 met inside the attribute, where the NLRI case
+             beside it meets the same MUST in the descriptors with
+             sub-TLV 516.
+           * **Two things #220 left stale, and they agreed with each
+             other so nothing caught them.** The parts table in
+             `docs/bgp-ls.md` section 7 still said part 7 was to do,
+             and `test_the_document_names_the_seven_parts` still
+             asserted that word. A guard that compares a document
+             against a hard coded word is not a guard, which is that
+             method's own opening paragraph: part 7's status is tied
+             to the lab files existing now, and part 5's to Table 6
+             being registered while Tables 8 and 10 are not.
+           * **The doc test's row parser was tightened from `\w+` to
+             exactly yes or no**, because section 10a's mask table has
+             a digit in its first cell and a word in its last and was
+             kept out of the code point answer only by the space in
+             "ISO 10589". Part 2 and part 4 each paid for that shape
+             once already. Saying what the cell has to be is cheaper
+             than scoping around every table somebody adds later.
+           * **The load order trap, fourth shape in that one file.**
+             The new guards need `Link_state_attribute` as code and the
+             registries are filled by a fifth file, so both requires
+             are named at the top with the reason. And a guard's phrase
+             wrapped in the document again, so a literal space missed
+             it: `\s+`, which #218 recorded and #219 met one pull
+             request later.
+         * **5b, Table 8.** The **thirteen** link attribute TLVs that
+           are new: 1030 and 1031, the remote Router-IDs, then 1088 to
+           1098.
+         * **5c, Table 10.** The **six** prefix attribute TLVs, 1152
+           to 1157.
+         * **The three tables hold 28 rows and 25 distinct new code
+           points**, counted from the document rather than added up.
+           Table 6 lists 7 and one of them, 263, is already in from
+           part 3. Table 8 lists 15 and two of them, 1028 and 1029,
+           are Table 6's rows again, because a local Router-ID is a
+           node attribute and a link attribute both. Table 10 lists 6
+           and all are its own. **`docs/bgp-ls.md` said "1024 to 1031
+           node, 1088 to 1098 link, 1152 to 1157 prefix", which is
+           wrong about the first range**: 1030 and 1031 are link only.
+           The total was right.
+         * **This is where the flat registry pays for itself**, which
+           part 2 recorded as IANA's doing rather than a
+           simplification. TLV 263 is in Table 4 and Table 6 both, and
+           it is registered once and already works in both places. So
+           the attribute reuses `Tlv.parse_list`, `Tlv.from_hash`,
+           `Tlv.ordered?`, `Opaque32` and `Addr_tlv` whole, and 5a is
+           an attribute class plus six values rather than a second TLV
+           layer.
+         * **Table 8 has no Length column at all**, which is part 3's
+           Table 4 situation exactly and is worse than this entry first
+           said. It was written as "five of Table 8's widths are not in
+           RFC 9552", corrected on reading the table: where Table 6 and
+           Table 10 each give a Length, Table 8 gives an "IS-IS
+           TLV/Sub-TLV" column instead, so **not one of its fifteen
+           rows carries a width**. Five of them have no width anywhere
+           in RFC 9552: 1088 Administrative group cites RFC 5305
+           section 3.1, 1089 Maximum link bandwidth section 3.4, 1090
+           Max. reservable link bandwidth section 3.5, 1091 Unreserved
+           bandwidth section 3.6, and 1093 Link Protection Type RFC
+           5307 section 1.2. The other ten are in RFC 9552's own
+           subsections or in Table 6. Read each in the document that
+           gives it and put the citation beside the class, because a
+           wrong width among the five cannot be caught by reading RFC
+           9552 at all.
+         * **Table 10 disagrees with its own section about TLV 1156,
+           and no erratum covers it.** The table's Length column says 4
+           for the OSPF Forwarding Address; section 5.3.3.5 says "The
+           length is 4 for an IPv4 forwarding address and 16 for an
+           IPv6 forwarding address" and its figure says "Forwarding
+           Address (variable)". So the prose and the figure agree with
+           each other against the table, which is the reading 5c
+           follows. Checked against the errata on 2026-11-01: the two
+           verified ones are 7789 and 8766 and neither is this. **Third
+           self contradiction in this document**, after the Node Flag
+           Bits figure and Table 8's missing widths, which is worth
+           knowing before trusting any single table of it.
+         * **Erratum EID 7789 is this family's second self
+           contradiction and it lands in 5a.** Figure 15 prints the
+           Node Flag Bits as `|O|T|E|B|R|V|` where Table 7 of the same
+           section defines O Overload, **A Attached**, E External, B
+           ABR, R Router and V V6. Confirmed in the text on
+           2026-11-01. So bit 1 is A and the figure's T is the error,
+           which the erratum settles. Same shape as RFC 8956's wrong
+           flow spec vector: read the errata before explaining a
+           document disagreeing with itself some other way.
+         * **The attribute's TLV ordering rule is a SHOULD and its
+           breach is explicitly not malformed**, where the NLRI's is a
+           MUST. Section 5.1 says both. So the attribute reports
+           through `Tlv.ordered?` and refuses nothing, which is what
+           that method was written for. Part 7 measured GoBGP breaking
+           the NLRI's MUST on traffic it originates itself, so do not
+           read either rule off a router.
+         * **The attribute class goes in `bgp/path_attributes/` and
+           its TLV classes stay in `bgp/nlris/` with the family.**
+           One flat registry means one class family, and a family
+           lives in one place: a node attribute TLV file reopens
+           `BGP::Link_state::Tlv` beside the descriptor files. The
+           alternative, a second TLV namespace under the attribute,
+           would need a second registry and would make TLV 263 two
+           classes.
       6. **Validation. No longer gated**, since section 8.2.2 is read.
          `docs/bgp-ls.md` section 8 has its substance; the shape of the
          work, so it is not rediscovered:
@@ -5052,4 +5242,10 @@ request that added the attribute:
 * Prefix-SID (40): the SRv6 TLVs of RFC 9252, and the RFC 8669 section 4.1 rule for labeled unicast.
 * No check for a missing well known mandatory attribute. That needs `Update`, not `Path_attribute`, because it depends on whether the message carries NLRI.
 * The external peer rules for LOCAL_PREF, ORIGINATOR_ID and CLUSTER_LIST, and the RFC 7311 section 3.2 AIGP checks. bgp4r does not know whether a peer is external where the checks run.
-* Not started: BGP-LS, BGPsec_Path.
+* BGP-LS (29): the link attribute TLVs of RFC 9552 Table 8 and the prefix
+  attribute TLVs of Table 10, which are parts 5b and 5c of the plan above,
+  and every attribute TLV the other RFCs define, which that plan's measure
+  deliberately excludes. The attribute and Table 6's node attribute TLVs are
+  in, and a TLV with no class is kept and echoed, which section 5.1 requires
+  rather than permits.
+* Not started: BGPsec_Path.

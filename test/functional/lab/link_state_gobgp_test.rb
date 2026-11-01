@@ -498,14 +498,25 @@ class LinkStateGobgpTest < Test::Unit::TestCase
                  'and it replays byte for byte')
   end
 
-  # The BGP-LS Attribute, code 29, arrives with the route and bgp4r has
-  # no class for it, so it comes back as a `Path_attribute::Unknown`
-  # with **no error and no gap**. That is #116 working one level up, and
-  # it is what part 5 will give meaning to: the octets already survive.
+  # The BGP-LS Attribute, code 29, arrives with the route.
   #
-  # Worth asserting now rather than after part 5, because what it pins
-  # is that an attribute bgp4r cannot read is not a protocol error, and
-  # that is the claim part 5 has to keep rather than discover.
+  # **This case has fired once and is re-pointed rather than
+  # weakened.** Until part 5a the attribute came back as an
+  # `Attr::Unknown` with no error and no gap, which was #116 working one
+  # level up, and the comment here said part 5 would give it meaning.
+  # It has: the attribute parses now, and what it carries is one TLV of
+  # type **1101**, the Adjacency SID of RFC 9085. Measured on
+  # 2026-11-01 against gobgpd 3.23.0.
+  #
+  # **So this is the keep-and-echo MUST of section 5.1 met inside the
+  # attribute**, where the NLRI case above meets it in the descriptors:
+  # 1101 is not in RFC 9552's Table 18 at all, so no part of this plan
+  # will implement it and the example cannot expire. Parts 5b and 5c
+  # add Table 8's and Table 10's TLVs, and 1101 is in neither.
+  #
+  # What the case pins either way is that an attribute carrying a TLV
+  # bgp4r has no class for is not a protocol error, which is the claim
+  # part 6 has to keep rather than rediscover.
   def test_the_attribute_arrives_and_is_kept_without_being_an_error
     _n, router, updates, _drops, _notes = session
     router.client_run(*%w[global rib add -a ls link], *LINK_ARGS)
@@ -516,13 +527,24 @@ class LinkStateGobgpTest < Test::Unit::TestCase
     assert_equal([1, 2, 14, 29], pa.attributes.collect(&:type),
                  'ORIGIN, AS_PATH, MP_REACH_NLRI and the BGP-LS Attribute')
     attr29 = pa.attributes.find { |x| x.type == 29 }
-    assert_instance_of(BGP::Attr::Unknown, attr29,
-                       'which part 5 replaces with a class of its own')
+    assert_instance_of(BGP::Link_state_attribute, attr29,
+                       'part 5a gave code 29 a class of its own')
+    assert_equal([1101], attr29.tlvs.collect { |t| t.type },
+                 "the Adjacency SID of RFC 9085, which is what GoBGP " \
+                 "sends for `sid 1000 sid-type node weight 1`\n#{router.log}")
+    assert_equal([BGP::Link_state::Tlv::Unknown],
+                 attr29.tlvs.collect { |t| t.class },
+                 'kept and echoed, since 1101 is in no table of RFC 9552')
     assert_equal(0, pa.errors.size,
-                 'an attribute bgp4r cannot read is not the peer\'s fault')
+                 'a TLV bgp4r cannot read is not the peer\'s fault, which ' \
+                 'section 5.1 requires in so many words')
     assert_equal(0, pa.undecoded.size,
-                 'and an unimplemented attribute type is not an Attr::Gap ' \
-                 'either, since nothing tried to decode it')
+                 'and is not an Attr::Gap either, since the attribute ' \
+                 'decoded and the TLV inside it is a first-class object')
+    assert_equal(attr29.to_shex,
+                 BGP::Link_state_attribute.new(attr29.encode.is_packed).to_shex,
+                 'and the attribute replays on its own as well as in the ' \
+                 'UPDATE below')
     assert_equal(got.to_shex,
                  BGP::Update.new([got.to_shex].pack('H*').is_packed).to_shex,
                  'so the whole UPDATE replays, attribute 29 included')
