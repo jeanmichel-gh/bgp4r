@@ -415,6 +415,373 @@ module BGP
 
       BY_KEY[Unknown::HASH_KEY] = Unknown
 
+      # --- the shared bases ------------------------------------------
+      #
+      # **Four shapes that more than one of the RFC's tables uses, so
+      # they live with the framing rather than with whichever table
+      # reached for one first.** Each was written where its first user
+      # was: `Opaque32` in `link_state_descriptor.rb` for Table 3,
+      # `Addr_tlv` in `link_state_link_descriptor.rb` for Table 4, and
+      # `Opaque_tlv` and `Text_tlv` in `link_state_node_attribute.rb`
+      # for Table 6. Table 8 wants all four, so leaving them there
+      # would mean three sideways requires and file names that stop
+      # describing what they hold.
+      #
+      # **The move changed no constant path**, because every file in
+      # this family reopens `BGP::Link_state::Tlv`, which is also why
+      # it was cheap to defer until a second table needed one. Phase 1
+      # of the breadth plan is the same argument one level up: build
+      # the shared thing when a second caller arrives, not before.
+
+      # A TLV whose whole value is one 32-bit unsigned integer, in a
+      # 4 + 4 octet TLV. Its subclasses differ only in the type number,
+      # the hash key and how each prints.
+      #
+      # Table 3's three node descriptor sub-TLVs are the shape's
+      # origin, 512, 513 and 514, each "Opaque value (32-bit ...)" in
+      # section 5.2.1.4. **Opaque is the RFC's word for those three**,
+      # so none of them refuses a value or reads structure out of it,
+      # and a subclass that does carry structure says so itself.
+      #
+      # A width other than 4 cannot be one of these: `Tlv.factory` then
+      # finds the value does not reproduce itself and keeps the octets
+      # as a `Tlv::Unknown`, which is the rule part 1 records.
+      class Opaque32 < Tlv
+
+        WIDTH = 4
+
+        attr_reader :value
+
+        # new(65000), the wire value octets, this class's own hash, or
+        # another instance.
+        def initialize(*args)
+          @value = 0
+          if args.size == 1 and args[0].is_a?(String) and args[0].is_packed?
+            parse(args[0])
+          elsif args.size == 1 and args[0].is_a?(self.class)
+            self.declared_len = args[0].declared_len
+            @value = args[0].value
+          elsif args.size == 1 and args[0].is_a?(Hash)
+            from_hash(args[0])
+          elsif args.size == 1
+            @value = coerce(args[0])
+          elsif args.empty?
+            # Zero, which is what section 5.2.1.4 recommends a BGP-LS
+            # Producer send for 513 and which no RFC blesses for the
+            # other two. It builds, per Conventions.
+          else
+            raise ArgumentError, "invalid argument: #{args.inspect}"
+          end
+          self
+        end
+
+        def parse(s)
+          @value = s.slice!(0, WIDTH).unpack1('N').to_i
+          self
+        end
+
+        def encode_value
+          [@value].pack('N')
+        end
+
+        def value_hash
+          @value
+        end
+
+        def to_s
+          "#{self.class.label} #{@value}"
+        end
+
+        # How this sub-TLV names itself in a dump. The registry's own
+        # Description column, so a reader can find the row.
+        def self.label
+          self::LABEL
+        end
+
+        private
+
+        # An Integer as it stands. A subclass that takes another form
+        # overrides this.
+        def coerce(v)
+          v.to_i
+        end
+
+        def from_hash(h)
+          read_declared_len(h)
+          h = self.class.unwrap(h)
+          # The hash value is the bare number, so a Hash here is the
+          # field hash of a class that has none: nothing to read.
+          @value = h.is_a?(Hash) ? 0 : coerce(h)
+        end
+
+      end
+
+      # A TLV whose whole value is one IP address of a fixed width, in
+      # a 4 + WIDTH octet TLV. Its subclasses differ only in the type
+      # number, the width, the family and how each prints. Four of
+      # Table 4's six link descriptors are the shape's origin.
+      #
+      # A width other than WIDTH cannot be one of these: `Tlv.factory`
+      # then finds the value does not reproduce itself and keeps the
+      # octets as a `Tlv::Unknown`, which is part 1's rule.
+      class Addr_tlv < Tlv
+
+        attr_reader :address
+
+        # new('10.0.0.1'), new(an_IPAddr), the wire value octets, this
+        # class's own hash, or another instance.
+        def initialize(*args)
+          @address = nil
+          if args.size == 1 and args[0].is_a?(String) and args[0].is_packed?
+            parse(args[0])
+          elsif args.size == 1 and args[0].is_a?(self.class)
+            self.declared_len = args[0].declared_len
+            @address = args[0].address
+          elsif args.size == 1 and args[0].is_a?(Hash)
+            from_hash(args[0])
+          elsif args.size == 1
+            @address = coerce(args[0])
+          elsif args.empty?
+            # The all zeroes address, which no RFC describes as a link
+            # descriptor and which builds, per Conventions.
+            @address = coerce(self.class.width == 4 ? '0.0.0.0' : '::')
+          else
+            raise ArgumentError, "invalid argument: #{args.inspect}"
+          end
+          self
+        end
+
+        def self.width
+          self::WIDTH
+        end
+
+        def self.label
+          self::LABEL
+        end
+
+        # **Exactly WIDTH octets, and refusing anything else is what
+        # keeps the family honest.** `IPAddr.new_ntoh` reads 4 octets
+        # as an IPv4 address and 16 as an IPv6 one, and `hton` gives
+        # back whatever it was handed, so without this check a 4-octet
+        # value in TLV 261 parsed into an `Ipv6_interface_address`
+        # holding an IPv4 address and reproduced its own octets, which
+        # is how it passed part 3's first run. Raising sends it to
+        # `Tlv::Unknown` through `read_tlv`'s rescue, which keeps the
+        # octets whole and claims nothing about them.
+        def parse(s)
+          w = self.class.width
+          unless s.size == w
+            raise ArgumentError,
+              "#{self.class} is #{w} octets and this value is #{s.size}"
+          end
+          @address = IPAddr.new_ntoh(s.slice!(0, w))
+          self
+        end
+
+        def encode_value
+          @address.hton
+        end
+
+        def value_hash
+          @address.to_s
+        end
+
+        def to_s
+          "#{self.class.label} #{@address}"
+        end
+
+        private
+
+        # **An address of the other family is refused, and that is the
+        # one kind of refusal Conventions allows rather than a
+        # judgement about validity**: a 4-octet field cannot represent
+        # a 16-octet address, so the alternative is writing a 16-octet
+        # value in a TLV whose class says 4 and calling it an IPv4
+        # interface address.
+        #
+        # The octet level route stays open and is the one to use for a
+        # value no RFC allows: `Tlv::Unknown.new(259, sixteen_octets)`
+        # builds it, encodes it and replays it. The message says so.
+        def coerce(v)
+          a = v.is_a?(IPAddr) ? v : IPAddr.new(v.to_s)
+          w = self.class.width
+          unless a.hton.size == w
+            raise ArgumentError,
+              "#{self.class} is #{w} octets and #{a} is #{a.hton.size}; " \
+              "for a value no RFC allows use " \
+              "Link_state::Tlv::Unknown.new(#{self.class.type}, octets)"
+          end
+          a
+        end
+
+        def from_hash(h)
+          read_declared_len(h)
+          h = self.class.unwrap(h)
+          @address = coerce(h)
+        end
+
+      end
+
+      # A TLV whose whole value is a symbolic name in text. Section
+      # 5.3.1.3's Node Name and section 5.3.2.7's Link Name are one
+      # shape and two type numbers: the two sections are the same three
+      # paragraphs with "router node" and "router link" swapped, down
+      # to the 7-bit ASCII rule and the 255.
+      #
+      # **The one class shape in this family whose field form and hash
+      # form are the same String**, because the value is text where
+      # `Opaque_tlv`'s is not. No `is_packed?` branch and no `parse`,
+      # for the reason `Opaque_tlv`'s comment gives.
+      #
+      # Both sections' rules are deviated from on purpose, per
+      # Conventions. "The Value field is encoded in 7-bit ASCII", so
+      # `ascii?` reports a name that is not and nothing refuses it. And
+      # "The maximum length of the ... TLV is 255 octets", which **does
+      # not say whether the four framing octets are in that count**:
+      # 255 of value and 251 of value are both readings of that
+      # sentence and neither section settles it, so nothing enforces
+      # either and a longer name builds.
+      class Text_tlv < Tlv
+
+        # Each section's own number, kept as the figure it gives rather
+        # than as a check. Which of the two readings it means is open.
+        MAX_LEN = 255
+
+        attr_reader :name
+
+        # new('router1'), this class's own hash, or another instance.
+        def initialize(*args)
+          @name = String.new
+          if args.size == 1 and args[0].is_a?(self.class)
+            self.declared_len = args[0].declared_len
+            @name = args[0].name.dup
+          elsif args.size == 1 and args[0].is_a?(Hash)
+            from_hash(args[0])
+          elsif args.size == 1 and args[0].is_a?(String)
+            @name = args[0].dup.b
+          elsif args.empty?
+            # The empty name, which section 5.1's zero-length value
+            # permits and which both sections call optional.
+          else
+            raise ArgumentError, "invalid argument: #{args.inspect}"
+          end
+          self
+        end
+
+        def self.label
+          self::LABEL
+        end
+
+        def encode_value
+          @name.dup
+        end
+
+        # True when every octet is in the 7-bit ASCII the sections ask
+        # for. A reader only: nothing refuses a name that is not.
+        def ascii?
+          @name.each_byte.all? { |b| b < 0x80 }
+        end
+
+        # The name as text, for a reader. Binary on the wire, so the
+        # encoding is forced rather than guessed, and a name that is not
+        # ASCII still comes back whole.
+        def value_hash
+          @name.dup.force_encoding(Encoding::UTF_8)
+        end
+
+        def to_s
+          "#{self.class.label} '#{@name}'"
+        end
+
+        private
+
+        def from_hash(h)
+          read_declared_len(h)
+          h = self.class.unwrap(h)
+          @name = h.to_s.dup.b
+        end
+
+      end
+
+      # A TLV whose whole value is opaque octets of no fixed width.
+      # Its subclasses differ only in the type number, the hash key and
+      # how each prints. Table 6's 1025 and 1027 are the shape's
+      # origin.
+      #
+      # **The field form takes raw octets and the hash form takes hex**,
+      # which is `Tlv::Unknown`'s split and is kept here so the family
+      # reads one way. Each path round trips through itself, and a
+      # caller holding hex writes `['0102'].pack('H*')`, which is the
+      # library's own idiom.
+      #
+      # **There is no `is_packed?` branch and no `parse` here, which is
+      # the one place this family's constructor shape does not apply.**
+      # For a fixed-width class that test tells a wire value from a
+      # field value, because the wire branch slices its own octets and
+      # leaves the rest. A variable-width value **is** the octets: both
+      # branches would take everything and reach the same value, and
+      # the only thing left for the test to decide is whether the
+      # caller's String is consumed. Two branches differing in that and
+      # in nothing else is a trap rather than a feature, especially
+      # since `Array#pack` marks its result packed, so almost every
+      # octet string a caller holds would take the consuming one
+      # without the caller choosing it. So one branch, and it copies,
+      # which is what `Tlv::Unknown` does with the same kind of
+      # argument. Do not add a `parse` here without a caller for it.
+      class Opaque_tlv < Tlv
+
+        attr_reader :value
+
+        # new, new(octets), this class's own hash, or another instance.
+        # Wire octets are the `new(octets)` form, marked or not.
+        def initialize(*args)
+          @value = String.new
+          if args.size == 1 and args[0].is_a?(self.class)
+            self.declared_len = args[0].declared_len
+            @value = args[0].value.dup
+          elsif args.size == 1 and args[0].is_a?(Hash)
+            from_hash(args[0])
+          elsif args.size == 1 and args[0].is_a?(String)
+            @value = args[0].dup.b
+          elsif args.empty?
+            # The empty value, which section 5.1 permits outright: "a
+            # TLV with no value portion would have a length of zero".
+          else
+            raise ArgumentError, "invalid argument: #{args.inspect}"
+          end
+          self
+        end
+
+        # A copy, so building from an instance cannot empty the instance
+        # it is copying: the list reader reads with `slice!`.
+        def encode_value
+          @value.dup
+        end
+
+        def value_hash
+          @value.unpack1('H*')
+        end
+
+        def self.label
+          self::LABEL
+        end
+
+        def to_s
+          s = "#{self.class.label} #{@value.size} octets"
+          s += " [#{@value.unpack1('H*')}]" unless @value.empty?
+          s
+        end
+
+        private
+
+        def from_hash(h)
+          read_declared_len(h)
+          h = self.class.unwrap(h)
+          @value = [h.to_s].pack('H*')
+        end
+
+      end
+
       private
 
       # The one refusal this class makes, and it is the kind
