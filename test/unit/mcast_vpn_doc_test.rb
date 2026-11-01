@@ -49,6 +49,11 @@ require 'test/unit'
 require 'bgp/nlris/mcast_vpn'
 require 'bgp/nlris/nlri'
 require 'bgp/iana'
+# The wiring part's guards reach the build gate and the next hop, which
+# live here. Required explicitly, per Conventions: run_unit.rb requires
+# every file before any test runs, so a file that leans on another's
+# requires passes in the suite and fails on its own.
+require 'bgp/path_attributes/mp_reach'
 
 class McastVpnDocTest < Test::Unit::TestCase
 
@@ -206,13 +211,23 @@ class McastVpnDocTest < Test::Unit::TestCase
     assert_nil(a.address)
   end
 
-  # The field neither document gives a width for. The claim is a
-  # negative, so what is asserted is that the library takes the
-  # what-is-left reading and that the document records the check.
-  def test_the_originating_router_has_no_stated_width
-    assert_match(/\*\*The Originating Router's IP Address has no width\s+anywhere\.\*\*/,
+  # **This guard asserted that no document gives this field a width, and
+  # RFC 6515 does.** Re-pointed at the new truth rather than weakened:
+  # what is asserted now is the derivation RFC 6515 section 2 items 2 to
+  # 4 give, and that bgp4r's what-is-left rule computes the same thing.
+  # The 12-or-24 is the only octet count any document in this family
+  # states, so it is worth holding against the classes.
+  def test_the_originating_router_width_comes_from_the_nlri_length
+    assert_match(/RFC 6515, which settles two things this document called unknown/,
                  doc)
+    assert_match(/4 octets for IPv4 or\s+16 octets for IPv6/, doc)
+    assert_match(/which will be either 12 or 24, respectively/, doc)
     assert_match(/MUST be of the same address family as/, doc)
+    # And the counts RFC 6515 states are what the class encodes.
+    v4 = BGP::Mcast_vpn::Intra_as_i_pmsi.new([100, 200], '10.0.0.1')
+    v6 = BGP::Mcast_vpn::Intra_as_i_pmsi.new([100, 200], '2001:db8::1')
+    assert_equal(12, v4.encode.size, "RFC 6515 section 2 item 2's 12")
+    assert_equal(24, v6.encode.size, 'and its 24')
     o = BGP::Mcast_vpn::Originating_router.new(
       ['0a0000010a000002'].pack('H*').is_packed)
     assert_equal(8, o.size, 'it takes every octet it is handed')
@@ -278,7 +293,8 @@ class McastVpnDocTest < Test::Unit::TestCase
   # while that is true**: the day an MCAST-VPN check lands, it fails and
   # says to rewrite section 8.
   def test_there_is_no_receive_side_check_yet_and_the_document_says_why
-    assert_match(/Error handling: there is none to implement/, doc)
+    assert_match(/Error handling: almost none, and the one rule is RFC 6515's/,
+                 doc)
     assert_match(/neither document references RFC 7606 for an NLRI at all/, doc)
     body = File.read(File.expand_path('../../bgp/path_attributes/validation.rb',
                                       __dir__))
@@ -287,17 +303,65 @@ class McastVpnDocTest < Test::Unit::TestCase
            "#{DOC}, which says there is nothing to check")
   end
 
-  # Nothing dispatches to this family yet, which is what makes the whole
-  # of this part pure. **True only today**: the wiring part makes this
-  # fail, and the message says what to update.
-  def test_nothing_dispatches_to_safi_5_yet
-    assert_match(/Nothing dispatches to any of it yet/, doc)
+  # RFC 6515 is the document the plan missed, so the guide has to name
+  # it, carry its two load bearing sentences, and say how it was found.
+  # The last of those is the part worth keeping: the rule that would
+  # have caught it is one this repository already had.
+  def test_the_document_records_rfc_6515_and_how_it_was_missed
+    assert_match(/\*\*RFC 6515\*\*, "IPv4 and IPv6\s+Infrastructure Addresses in BGP Updates for Multicast VPN"/,
+                 doc)
+    assert_match(/MUST\s+NOT be inferred from the AFI field/, doc)
+    assert_match(/read every RFC that\s+lists itself as updating the one you are implementing/, doc)
+    assert_match(/So the rule\s+is not satisfied by applying it once/, doc)
+  end
+
+  # The next hop, which is the wiring site RFC 6515 decides. Both halves
+  # are asserted from the library: an IPv6 next hop writes 16 octets
+  # under either AFI, and an IPv4 one writes 4 under AFI 2 rather than
+  # the mapped address RFC 4659 and RFC 4798 would have wanted.
+  def test_the_next_hop_is_read_by_its_length_and_never_mapped
+    assert_match(/it is always clear whether the address is an\s+IPv4 address \(length is 4\) or an IPv6 address \(length is 16\)/,
+                 doc)
+    assert_match(/This document does not use that approach/, doc)
+    nlri = { :inter_as_i_pmsi => { :rd => [100, 200], :source_as => 65000 } }
+    [[1, '10.0.0.1', 4], [2, '10.0.0.1', 4],
+     [1, '2001:db8::1', 16], [2, '2001:db8::1', 16]].each do |afi, nh, len|
+      a = BGP::Mp_reach.new(:afi => afi, :safi => 5, :nexthop => [nh],
+                            :nlris => [nlri])
+      assert_equal(len, a.to_shex[12, 2].to_i(16),
+                   "AFI #{afi} with #{nh} writes a #{len}-octet next hop")
+      back = BGP::Mp_reach.new(a.encode.is_packed)
+      assert_equal(nh, back.nexthops, 'and it reads back as the same address')
+    end
+  end
+
+  # Route type 4's split, which section 7 recorded as not being in the
+  # band and RFC 6515 section 2 item 4 settles. The document has to say
+  # both that it was a reading and that it is one no longer.
+  def test_the_leaf_a_d_split_is_settled_by_rfc_6515
+    assert_match(/A later document answered it, and the answer is the reading/,
+                 doc)
+    assert_match(/\*\*RFC 6515 section 2 item 4: "The Route Key has its own length field\."\*\*/,
+                 doc)
+    assert_match(/The code did not change/, doc)
+  end
+
+  # **This guard used to assert that nothing dispatched to SAFI 5**, and
+  # the wiring part made it fail, which is the guard working as part 1
+  # designed it. Re-pointed at the new truth rather than weakened, the
+  # way #185, #191, #209 and #210 each re-pointed an expired example.
+  #
+  # Both AFIs now parse, which is the claim worth holding: RFC 6514
+  # section 4 allows 1 and 2, nothing in the NLRI reads differently per
+  # family, so the same octets must come back the same way under either.
+  def test_both_afis_dispatch_to_safi_5
+    assert_match(/Both dispatch gates know SAFI 5/, doc)
+    hex = '010c00000064000000c80a000001'
     [1, 2].each do |afi|
-      assert_raise(RuntimeError,
-                   "AFI #{afi} SAFI 5 now parses; update section 9 and " \
-                   "section 11 of #{DOC}") do
-        BGP::Nlri.factory(['010c00000064000000c80a000001'].pack('H*'), afi, 5)
-      end
+      n = BGP::Nlri.factory([hex].pack('H*'), afi, 5)
+      assert_instance_of(BGP::Mcast_vpn, n, "AFI #{afi} reads back")
+      assert_instance_of(BGP::Mcast_vpn::Intra_as_i_pmsi, n.route)
+      assert_equal(hex, n.to_shex, 'and replays byte for byte')
     end
   end
 

@@ -45,10 +45,18 @@ module BGP
       # section 4 fixes its family at AFI 1. All three arms below answer
       # for themselves, so afi_from_nlris is not asked a question it
       # would answer by handing nil to IPAddr.
+      # An MCAST-VPN NLRI carries a route type too, and its family is a
+      # question with two answers rather than none: RFC 6514 section 4
+      # takes "an Address Family Identifier (AFI) of 1 or 2". Nothing in
+      # the NLRI is an address afi_from_nlris could read, since the
+      # Multicast Source and Group are length prefixed and everything
+      # else is an RD, an AS or a trailing address, so this arm defaults
+      # rather than infers and an explicit :afi still wins.
       @afi ||= self.class.afi_from_nlris(h[:nlris]) unless
         [IANA::SAFI::FLOW_SPEC_RULES_1, IANA::SAFI::FLOW_SPEC_RULES_2,
          IANA::SAFI::EVPN,
-         IANA::SAFI::ROUTE_TARGET_CONSTRAINTS].include?(safi)
+         IANA::SAFI::ROUTE_TARGET_CONSTRAINTS,
+         IANA::SAFI::MCAST_VPN].include?(safi)
       case safi
       when 1,2
         pfx_klass = prefix_klass(afi, safi)
@@ -152,6 +160,37 @@ module BGP
           rtc
         end
         @afi ||= IANA::AFI::IPv4
+      when IANA::SAFI::MCAST_VPN
+        # RFC 6514 section 4. A route is given either as an Mcast_vpn,
+        # used as it stands, or as the hash Mcast_vpn reads, one key for
+        # the route type.
+        #
+        # **The AFI is defaulted and not inferred, which is this
+        # family's own case.** Section 4 allows 1 or 2, and what the
+        # choice decides is the family of the **customer** addresses the
+        # Multicast Source and Group fields carry: RFC 6515 section 1.1
+        # says AFI 1 means those are IPv4 and AFI 2 means IPv6. Those
+        # fields are length prefixed and say their own width, so the
+        # parse never needs the AFI, but a **sender** still has to pick
+        # one, and bgp4r cannot read it off an NLRI the way
+        # afi_from_nlris reads a prefix. So AFI 1 is the default and a
+        # caller sending IPv6 customer addresses passes :afi => 2. That
+        # is a default rather than a derivation, said plainly, because a
+        # guess dressed as an inference is the worse of the two.
+        #
+        # **A next hop is written here, as for EVPN and RT-constrain**,
+        # and RFC 6515 is why: see parse_next_hops and nexthop_klass.
+        @nlris = [h[:nlris]].flatten.compact.collect do |n|
+          next n if n.is_a?(Mcast_vpn)
+          # Mcast_vpn.new takes a Route, a hash or wire bytes, so one
+          # call covers every form a caller can pass. An Array of field
+          # values cannot travel inside :nlris, for the reason the
+          # RT-constrain arm above records: the flatten is deep.
+          m = Mcast_vpn.new(n)
+          m.path_id ||= @path_id
+          m
+        end
+        @afi ||= IANA::AFI::IPv4
       else
         raise "SAFI #{safi} not implemented!"
       end
@@ -224,6 +263,13 @@ module BGP
           # NLRI is 2 + Length octets, and the family owns that
           # arithmetic the way Flow_spec owns section 4.1's.
           Evpn.nlri_size(s)
+        when IANA::SAFI::MCAST_VPN
+          # RFC 6514 section 4 is the EVPN shape exactly: "The Length
+          # field indicates the length in octets of the Route Type
+          # specific field of the MCAST-VPN NLRI", behind a Route Type
+          # octet. So Mcast_vpn.nlri_size is Evpn.nlri_size again, and
+          # it lives with the family for the same reason.
+          Mcast_vpn.nlri_size(s)
         else
           (s.getbyte(0) + 7) / 8 + 1
         end
@@ -453,10 +499,12 @@ module BGP
           else
             @nexthops << Vpn.new([64+32,s.slice!(0,12)].pack('Ca*'))
           end
-        when IANA::SAFI::EVPN, IANA::SAFI::ROUTE_TARGET_CONSTRAINTS
-          # Two families whose next hop is read by its length alone, and
-          # they arrive at that from opposite directions, so both
-          # sentences are here rather than one standing in for the other.
+        when IANA::SAFI::EVPN, IANA::SAFI::ROUTE_TARGET_CONSTRAINTS,
+             IANA::SAFI::MCAST_VPN
+          # Three families whose next hop is read by its length alone,
+          # and they arrive at that from three different directions, so
+          # all three sentences are here rather than one standing in for
+          # the others.
           #
           # RFC 7432 section 14: "The Next Hop field of the MP_REACH_NLRI
           # attribute of the route MUST be set to the IPv4 or IPv6
@@ -477,7 +525,27 @@ module BGP
           # ipv6_nexthop_length? answers false for SAFI 132, nothing
           # claims RFC 8950 applies here, and section 4 is first hand.
           #
-          # So ipv6_nexthop_length? is left alone for both. A field too
+          # **For MCAST-VPN an RFC says in so many words not to use the
+          # AFI**, which is the strongest of the three and comes from a
+          # document the plan for this family had missed. RFC 6515,
+          # "IPv4 and IPv6 Infrastructure Addresses in BGP Updates for
+          # Multicast VPN", February 2012, whose header says
+          # `Updates: 6514`. Section 1.1: the PE address family "MUST
+          # NOT be inferred from the AFI field", because AFI 1 or 2 says
+          # what the **customer** multicast addresses are and nothing
+          # about the provider's own. Section 2 item 1, on the next hop:
+          # "it is always clear whether the address is an IPv4 address
+          # (length is 4) or an IPv6 address (length is 16)." So where
+          # RT-constrain's AFI could have answered and the RFC prefers
+          # the length, here using the AFI is forbidden outright.
+          #
+          # Section 2 item 1 also gives this family the one receive side
+          # rule either document has: a length that is neither 4 nor 16
+          # makes the MP_REACH_NLRI "incorrect", handled per section 7
+          # of RFC 4760. That is validation.rb's business and not this
+          # method's, which keeps what it is given either way.
+          #
+          # So ipv6_nexthop_length? is left alone for all three. A field too
           # short for either reads as IPv4 and Prefix pads it out, which
           # is exactly what SAFI 1 already does with a short next hop.
           # Consistent with the library rather than a new rule, and it
@@ -535,16 +603,26 @@ module BGP
           end
         when 128,129
           ::BGP::const_get('Vpn')
-        when IANA::SAFI::EVPN, IANA::SAFI::ROUTE_TARGET_CONSTRAINTS
+        when IANA::SAFI::EVPN, IANA::SAFI::ROUTE_TARGET_CONSTRAINTS,
+             IANA::SAFI::MCAST_VPN
           # RFC 7432 section 14 wants the advertising PE's own IPv4 or
-          # IPv6 address and RFC 4684 section 4 takes either too, so
-          # this is an ordinary Prefix and the address the caller gave
+          # IPv6 address, RFC 4684 section 4 takes either too, and RFC
+          # 6515 section 2 item 1 says the same for MCAST-VPN, so this
+          # is an ordinary Prefix and the address the caller gave
           # decides the family. No Ipv4_mapped branch as SAFI 1 and 2
           # have: that one exists because an IPv4 next hop under AFI 2
-          # is written as an IPv4-mapped IPv6 address, and neither of
+          # is written as an IPv4-mapped IPv6 address, and none of
           # these families writes one. EVPN's AFI is 25 either way, and
           # RT-constrain's is 1 while still taking an IPv6 next hop,
           # which is section 4's own sentence and not AFI 2.
+          #
+          # **For MCAST-VPN that is not an analogy but a citation.** RFC
+          # 6515 section 1.1 names RFC 4659 and RFC 4798, which did
+          # require an IPv4 PE address to be written as a mapped address
+          # in a route carrying IPv6 customer addresses, and says of
+          # that: "This document does not use that approach." So an
+          # MCAST-VPN next hop under AFI 2 is still a plain 4-octet IPv4
+          # address when that is what the PE has.
           ::BGP::const_get('Prefix')
         when 133,134
           # RFC 8955 section 4 wants the length set to 0, so a flowspec
