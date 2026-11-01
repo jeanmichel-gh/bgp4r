@@ -131,10 +131,24 @@ class BgpLsDocTest < Test::Unit::TestCase
   end
 
   # The four-column rows of one section, as {number => the last cell}.
+  # A code point table's rows, read as the first cell and the last,
+  # whatever is between them. **Column count on purpose**: section 3's
+  # table has four columns and 3c's have five, because Table 4 of the
+  # RFC has no Length column and each width needs its own citation, so
+  # a regexp with a fixed number of groups would have read one table
+  # and silently skipped the other. First cell is the code point, last
+  # is the yes or no.
   def rows(heading)
     section(heading).lines.each_with_object({}) do |l, h|
-      m = l.match(/^\|\s*(\d+)\s*\|([^|]*)\|([^|]*)\|\s*(\w+)\s*\|\s*$/)
-      h[m[1].to_i] = m[4].downcase if m
+      next unless l.start_with?('|')
+      # `strip` the line before splitting: the newline after the last
+      # `|` is a field of its own, so without it the last cell is
+      # always empty and every row is skipped in silence.
+      cells = l.strip.split('|').collect { |c| c.strip }
+      cells.shift
+      next unless cells.size >= 2 and cells.first =~ /\A\d+\z/
+      next unless cells.last =~ /\A\w+\z/
+      h[cells.first.to_i] = cells.last.downcase
     end
   end
 
@@ -144,8 +158,14 @@ class BgpLsDocTest < Test::Unit::TestCase
   end
 
   # The section 3b TLV code point table, same shape.
+  # Every TLV the document claims, across the two sections that carry a
+  # table of them: 3b for section 5.2.1's node descriptors and 3c for
+  # sections 5.2.2 and 5.2.3. Merged rather than one table, so each
+  # section's table is about its own part of the RFC, and a code point
+  # in neither fails the guard below just the same.
   def tlv_table
-    rows('3b. The node descriptors')
+    rows('3b. The node descriptors').merge(
+      rows('3c. The link and prefix descriptors'))
   end
 
   def test_the_document_exists
@@ -501,6 +521,130 @@ class BgpLsDocTest < Test::Unit::TestCase
     assert_match(/cannot expire/, doc)
   end
 
+  # --- part 3, sections 5.2.2 and 5.2.3 --------------------------------
+
+  # The six widths of section 3c's first table, discovered from the
+  # classes. **Table 4 of the RFC has no Length column**, which is the
+  # fact this guard protects: each width came from a different document,
+  # so a wrong one here cannot be caught by reading RFC 9552 and the
+  # citation beside it is the only thing a later reader can check.
+  def test_the_link_descriptor_widths
+    said = {}
+    section('3c. The link and prefix descriptors').lines.each do |l|
+      m = l.match(/^\|\s*(25[89]|26[0-3])\s*\|[^|]*\|\s*(\d+|2\*n)\s*\|/)
+      said[m[1].to_i] = m[2] if m
+    end
+    built = {}
+    BGP::Link_state::Tlv::REGISTRY.each do |t, k|
+      next unless (258..262).include?(t)
+      built[t] = k::WIDTH.to_s
+    end
+    built[263] = '2*n'
+    assert_equal(built.keys.sort, said.keys.sort,
+                 "#{DOC} section 3c and the library disagree about which " \
+                 'link descriptor types exist')
+    built.each do |t, w|
+      assert_equal(w, said[t],
+                   "#{DOC} section 3c and TLV #{t} disagree about its width")
+    end
+  end
+
+  # TLV 263 is in both of the RFC's tables and is **one class**, so it
+  # has a row in each of section 3c's tables and one entry in the
+  # registry. A second class would be two entries, which `register`
+  # refuses, so this is really a guard on the document saying so.
+  def test_the_mt_id_tlv_is_one_class_in_two_tables
+    assert_equal(BGP::Link_state::Tlv::Multi_topology_id,
+                 BGP::Link_state::Tlv::REGISTRY[263])
+    assert_match(/TLV 263 appears in both tables and is one class/, doc)
+  end
+
+  # **One layout and two type numbers**, which the document claims and
+  # which is checked by encoding the same content under both: the value
+  # octets are identical and only the framing's NLRI Type differs.
+  def test_the_two_prefix_nlris_are_one_layout
+    r = BGP::Link_state::Tlv::Ip_reachability.new(24, ['c00002'].pack('H*'))
+    a = BGP::Link_state::Ipv4_prefix.new(2, 0, r)
+    b = BGP::Link_state::Ipv6_prefix.new(2, 0, r)
+    assert_equal(a.to_shex, b.to_shex,
+                 'figure 9 says types 3 and 4 use the same format')
+    assert_not_equal(BGP::Link_state.new(a).to_shex,
+                     BGP::Link_state.new(b).to_shex,
+                     'and the framing is where they differ')
+    assert_match(/NLRI types 3 and 4 are one layout and two type numbers/,
+                 doc)
+  end
+
+  # The shared base is **registered nowhere**, so it cannot read as a
+  # fifth NLRI type. MCAST-VPN part 3 chose modules over base classes
+  # because its doc test discovers from subclasses; here discovery is
+  # from the registry, and this is what says a base class is therefore
+  # free.
+  def test_the_shared_prefix_base_is_not_a_type
+    assert_equal(false, BGP::Link_state::TYPES.values.include?(
+      BGP::Link_state::Prefix_nlri))
+    assert_equal(false,
+                 BGP::Link_state::Prefix_nlri.const_defined?(:TYPE, false))
+    assert_match(/shared base is \*\*registered nowhere\*\*/, doc)
+  end
+
+  # **The second cross-level read**: the family is the NLRI type's and
+  # the TLV has none, so the same octets are two prefixes. Both halves
+  # asserted, since a class that quietly acquired a family would pass
+  # the first half alone.
+  def test_the_prefix_family_comes_from_the_nlri_type_and_not_the_tlv
+    r = BGP::Link_state::Tlv::Ip_reachability.new(24, ['c00002'].pack('H*'))
+    assert_equal('192.0.2.0/24', r.prefix(IANA::AFI::IPv4))
+    assert_equal('c000:200::/24', r.prefix(IANA::AFI::IPv6))
+    assert_equal(false, r.respond_to?(:afi),
+                 'the TLV must not carry a family of its own')
+    assert_equal('192.0.2.0/24',
+                 BGP::Link_state::Ipv4_prefix.new(2, 0, r).prefix)
+    assert_equal('c000:200::/24',
+                 BGP::Link_state::Ipv6_prefix.new(2, 0, r).prefix)
+    assert_match(/cross-level read/, doc)
+  end
+
+  # Section 5.2.3.2's own four cases, which it states rather than
+  # leaving to be derived, read out of the document's quotation of them.
+  # **The count is asserted first**, because the first draft of this
+  # guard used a literal space in `prefix length (\d+)` and the wrapped
+  # document put a newline there, so it measured three of the four cases
+  # and passed. A guard that reads a document has to say how many rows
+  # it expected to find, or it goes quiet the next time the prose
+  # rewraps. Every `\s+` below is for the same reason.
+  def test_the_octet_counts_section_5_2_3_2_states
+    said = doc[/1 octet for prefix length 1 up\s+to 8.*?etc\./m]
+    assert_not_nil(said, "#{DOC} must quote section 5.2.3.2's own list")
+    found = said.scan(
+      /(\d+)\s+octets?\s+for\s+prefix\s+length\s+(\d+)\s+up\s+to\s+(\d+)/)
+    assert_equal(4, found.size,
+                 'section 5.2.3.2 states four cases and the document must ' \
+                 "quote all four; found #{found.inspect}")
+    found.each do |octets, from, to|
+      [from.to_i, to.to_i].each do |bits|
+        assert_equal(octets.to_i,
+                     BGP::Link_state::Tlv::Ip_reachability.octets_for(bits),
+                     "section 5.2.3.2 says #{bits} bits is #{octets} octets")
+      end
+    end
+  end
+
+  # Section 5.2.2 says four of the link descriptors "can occur multiple
+  # times", which is what section 5.1's Length and Value tiebreakers are
+  # for. So two of a type is ordinary here, where the once-only rule of
+  # section 5.2.1.4 makes those tiebreakers unreachable one section
+  # earlier. Both halves, because the document claims the contrast.
+  def test_a_repeated_link_descriptor_is_ordinary
+    two = [BGP::Link_state::Tlv::Ipv4_interface_address.new('10.0.0.1'),
+           BGP::Link_state::Tlv::Ipv4_interface_address.new('10.0.0.3')]
+    assert(BGP::Link_state::Tlv.ordered?(two),
+           'two of a type in ascending Value order is ordered')
+    assert_equal(false, BGP::Link_state::Tlv.ordered?(two.reverse))
+    assert_match(/This sub-TLV can occur multiple\s+times/, doc)
+    assert_match(/tiebreakers.*unreachable/m, doc)
+  end
+
   # --- forward-looking: nothing dispatches to this family yet ----------
 
   # **Forward-looking.** Part 4 wires the two gates, and then these fail
@@ -607,13 +751,33 @@ class BgpLsDocTest < Test::Unit::TestCase
     assert_match(/Table 18 defines 39 TLV code points/, doc)
   end
 
+  # **The status of the three parts that can be observed is tied to the
+  # observation and not to a word in the table.** Part 3 is done when
+  # every NLRI type is registered, part 4 when the gates dispatch, and
+  # parts 6 and 7 are the subject of the forward-looking guards above.
+  # So a part marked done with nothing behind it fails here, which is
+  # the same discipline as the two "In bgp4r" columns.
   def test_the_document_names_the_seven_parts
     (1..7).each do |n|
       assert_match(/^\| #{n} \| /, doc,
                    "#{DOC} section 7 must have a row for part #{n}")
     end
-    assert_match(/^\| 1 \| the TLV primitive and the NLRI framing, pure \| \*\*done\*\* \|/,
-                 doc)
+    status = {}
+    doc.scan(/^\| ([1-7]) \|[^|]*\|\s*(.+?)\s*\|\s*$/) do
+      status[$1.to_i] = $2.delete('*')
+    end
+    assert_equal(7, status.size)
+    assert_equal('done', status[1])
+    assert_equal('done', status[2])
+    # Part 3: all four of Table 1.
+    assert_equal([1, 2, 3, 4], BGP::Link_state::TYPES.keys.sort)
+    assert_equal('done', status[3],
+                 'every NLRI type is registered, so part 3 is done')
+    # Parts 4, 6 and 7 are what the forward-looking guards watch, so
+    # their status here must agree with those still passing.
+    assert_equal('to do', status[4])
+    assert_equal('to do', status[6])
+    assert_equal('to do', status[7])
   end
 
 end

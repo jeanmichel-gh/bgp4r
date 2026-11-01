@@ -1362,10 +1362,108 @@ module ToHashCatalog
                  :tail => 'ffffff' })
   end
 
+  # The six link descriptors of section 5.2.2. Each recipe sets every
+  # field the class carries: the five fixed-width ones have one value
+  # each, and the MT-ID carries several words with a reserved nibble set
+  # in one of them, which is the only thing that reaches its `:words`
+  # hash shape.
+  ENTRIES['BGP::Link_state::Tlv::Link_local_remote_identifiers'] =
+    entry(:ok, nil, nil) do
+      BGP::Link_state::Tlv::Link_local_remote_identifiers.new(
+        0x01020304, 0x05060708)
+    end
+
+  ENTRIES['BGP::Link_state::Tlv::Ipv4_interface_address'] =
+    entry(:ok, nil, nil) do
+      BGP::Link_state::Tlv::Ipv4_interface_address.new('10.0.0.1')
+    end
+
+  ENTRIES['BGP::Link_state::Tlv::Ipv4_neighbor_address'] =
+    entry(:ok, nil, nil) do
+      BGP::Link_state::Tlv::Ipv4_neighbor_address.new('10.0.0.2')
+    end
+
+  ENTRIES['BGP::Link_state::Tlv::Ipv6_interface_address'] =
+    entry(:ok, nil, nil) do
+      BGP::Link_state::Tlv::Ipv6_interface_address.new('2001:db8::1')
+    end
+
+  ENTRIES['BGP::Link_state::Tlv::Ipv6_neighbor_address'] =
+    entry(:ok, nil, nil) do
+      BGP::Link_state::Tlv::Ipv6_neighbor_address.new('2001:db8::2')
+    end
+
+  # The reserved nibble is the field that only arrives by parsing in
+  # every other class of this shape, so the recipe sets it: without it
+  # the hash is the plain ID list and the `:words` branch is untested.
+  ENTRIES['BGP::Link_state::Tlv::Multi_topology_id'] =
+    entry(:ok, nil, nil) do
+      BGP::Link_state::Tlv::Multi_topology_id.new(
+        :multi_topology_id => { :words => [0x0002, 0xf003, 0x0fff] })
+    end
+
+  # The two prefix descriptors of section 5.2.3. The OSPF Route Type
+  # recipe uses a value section 5.2.3.1 does not name, since a named one
+  # would pass against a class that only read the table.
+  ENTRIES['BGP::Link_state::Tlv::Ospf_route_type'] = entry(:ok, nil, nil) do
+    BGP::Link_state::Tlv::Ospf_route_type.new(15)
+  end
+
+  # Both fields, with trailing bits set and more octets than the Prefix
+  # Length asks for, so neither the bit count nor the octets can be
+  # derived from the other.
+  ENTRIES['BGP::Link_state::Tlv::Ip_reachability'] = entry(:ok, nil, nil) do
+    BGP::Link_state::Tlv::Ip_reachability.new(
+      :ip_reachability => { :bitlen => 20, :octets => 'c00003ff' })
+  end
+
+  # NLRI type 2 of section 5.2, with both descriptor sets, a link
+  # descriptor and the tail.
+  ENTRIES['BGP::Link_state::Link'] = entry(:ok, nil, nil) do
+    BGP::Link_state::Link.new(
+      :link => { :protocol_id => 2, :identifier => 0x0102030405060708,
+                 :tlvs => [{ :local_node_descriptors =>
+                             [{ :igp_router_id => '1921.6800.1001' }] },
+                           { :remote_node_descriptors =>
+                             [{ :igp_router_id => '1921.6800.1002' }] },
+                           { :ipv4_interface_address => '10.0.0.1' }],
+                 :tail => 'ffffff' })
+  end
+
+  # NLRI types 3 and 4, which are one layout and two type numbers, so
+  # both are measured: a recipe for one would pass while the other's
+  # registration was wrong.
+  ENTRIES['BGP::Link_state::Ipv4_prefix'] = entry(:ok, nil, nil) do
+    BGP::Link_state::Ipv4_prefix.new(
+      :ipv4_prefix => { :protocol_id => 3, :identifier => 1,
+                        :tlvs => [{ :local_node_descriptors =>
+                                    [{ :igp_router_id => '0a000001' }] },
+                                  { :ospf_route_type => 1 },
+                                  { :ip_reachability => '192.0.2.0/24' }],
+                        :tail => 'ff' })
+  end
+
+  ENTRIES['BGP::Link_state::Ipv6_prefix'] = entry(:ok, nil, nil) do
+    BGP::Link_state::Ipv6_prefix.new(
+      :ipv6_prefix => { :protocol_id => 6, :identifier => 1,
+                        :tlvs => [{ :ip_reachability => '2001:db8::/32' }] })
+  end
+
   # Classes with no entry, each with the reason. An abstract base with no
   # sensible instance belongs here; a class merely awkward to build does
   # not.
   NO_RECIPE = {
+    'BGP::Link_state::Tlv::Addr_tlv' =>
+      'an abstract base, as Opaque32 is: it supplies WIDTH and the ' \
+      'address coercion and neither TYPE nor HASH_KEY, so every encode ' \
+      'raises NameError. The four address TLVs of section 5.2.2 are ' \
+      'measured instead.',
+    'BGP::Link_state::Prefix_nlri' =>
+      'an abstract base: section 5.2 figure 9 says NLRI types 3 and 4 ' \
+      '"use the same format", so this is the format and the two ' \
+      'subclasses are the type numbers. It defines no TYPE or AFI, so ' \
+      'type and afi both raise NameError. Ipv4_prefix and Ipv6_prefix ' \
+      'are measured.',
     'BGP::Link_state::Tlv::Opaque32' =>
       'an abstract base with no sensible instance. It supplies WIDTH ' \
       'and nothing else, so type and hash_key read a TYPE and a ' \
@@ -1380,8 +1478,8 @@ module ToHashCatalog
     'BGP::Link_state::Headed' =>
       'an abstract base: it carries the Protocol-ID, Identifier and ' \
       'TLV list that figures 7 to 9 share and defines no TYPE, ' \
-      'HASH_KEY or LABEL. Node is measured, and the Link and Prefix ' \
-      'NLRI types fill this in part 3.',
+      'HASH_KEY or LABEL. Node, Link, Ipv4_prefix and Ipv6_prefix are ' \
+      'measured.',
     'BGP::Link_state::Tlv' =>
       'an abstract base with no sensible instance. type and hash_key ' \
       'read self.class::TYPE and HASH_KEY and it defines neither, and ' \

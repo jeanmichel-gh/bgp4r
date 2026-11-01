@@ -24,6 +24,8 @@ require 'bgp/common'
 require 'bgp/iana'
 require 'bgp/nlris/link_state'
 require 'bgp/nlris/link_state_descriptor'
+require 'bgp/nlris/link_state_link_descriptor'
+require 'bgp/nlris/link_state_prefix_descriptor'
 
 module BGP
 
@@ -41,8 +43,9 @@ module BGP
   # octet, an 8-octet Identifier, and then a set of descriptor TLVs. So
   # `Headed` carries the head and the TLV list, and each NLRI type is a
   # type number, a hash key and whatever it says about the TLVs it
-  # expects. Part 2 implements the Node NLRI; parts 3 adds the Link NLRI
-  # and the two Prefix NLRIs on the same base.
+  # expects. All four of Table 1 are here: the Node NLRI came with part
+  # 2 and part 3 put the Link NLRI and the two Prefix NLRIs on the same
+  # base, which is what that base was for.
   class Link_state
 
     # What every Link-State NLRI type of section 5.2 begins with.
@@ -254,6 +257,102 @@ module BGP
       LABEL = 'Node'
     end
     register Node
+
+    # NLRI Type 2, section 5.2 figure 8, the Link NLRI: the head, the
+    # Local and Remote Node Descriptors TLVs, and the Link Descriptor
+    # TLVs of section 5.2.2.
+    #
+    # **What a Link NLRI describes is half a link**, which section
+    # 5.2.2 says outright and which a reader will otherwise assume
+    # wrong: "A link described by the Link Descriptor TLVs actually is
+    # a 'half-link', a unidirectional representation of a logical
+    # link. To fully describe a single logical link, two anchor routers
+    # advertise a half-link each, i.e., two Link NLRIs are advertised
+    # for a given point-to-point link." So nothing here pairs two of
+    # them, and a single Link NLRI is not a link.
+    #
+    # Nothing in the layout differs from the base, so the only thing
+    # this class adds beyond identity is the `remote_node_descriptors`
+    # reader.
+    class Link < Headed
+
+      TYPE = 2
+      HASH_KEY = :link
+      LABEL = 'Link'
+
+      def remote_node_descriptors
+        tlv(Tlv::Remote_node_descriptors.type)
+      end
+
+    end
+    register Link
+
+    # NLRI Types 3 and 4, section 5.2 figure 9: "The IPv4 and IPv6
+    # Prefix NLRIs (NLRI Type = 3 and Type = 4) use the same format".
+    #
+    # So one base and two names, which is the honest statement of what
+    # the figure says, and the two subclasses carry the one thing that
+    # differs: which family their descriptors are in.
+    #
+    # **That family is not in any octet below this class**, which is
+    # the second cross-level read in the family after the node type
+    # rule. `Tlv::Ip_reachability` holds a Prefix Length in bits and
+    # the octets and cannot say whether 24 bits are IPv4 or IPv6; the
+    # NLRI type is what says it, so `#prefix` here combines them. Same
+    # shape as `Headed#node_type`, same reason.
+    class Prefix_nlri < Headed
+
+      def self.afi
+        self::AFI
+      end
+
+      def afi
+        self.class.afi
+      end
+
+      # The section 5.2.3.2 TLV, which that section calls "a mandatory
+      # TLV for IPv4 & IPv6 Prefix NLRI types" and which an NLRI may
+      # still arrive without.
+      def ip_reachability
+        tlv(Tlv::Ip_reachability.type)
+      end
+
+      # The prefix as a person writes it, read with this NLRI type's
+      # own family. nil when there is no IP Reachability Information
+      # TLV, and nil when its fields cannot make an address of this
+      # family, which `Ip_reachability#prefix` decides.
+      def prefix
+        r = ip_reachability
+        r && r.prefix(afi)
+      end
+
+      # The TLV prints its own octets and a bit count, because it has
+      # no family to read them with; this adds the prefix those octets
+      # make under this NLRI type's family, which is the only place
+      # the two can be put together.
+      def to_s
+        p = prefix
+        s = super
+        p ? s + " as #{p}" : s
+      end
+
+    end
+
+    class Ipv4_prefix < Prefix_nlri
+      TYPE = 3
+      HASH_KEY = :ipv4_prefix
+      LABEL = 'IPv4 prefix'
+      AFI = IANA::AFI::IPv4
+    end
+    register Ipv4_prefix
+
+    class Ipv6_prefix < Prefix_nlri
+      TYPE = 4
+      HASH_KEY = :ipv6_prefix
+      LABEL = 'IPv6 prefix'
+      AFI = IANA::AFI::IPv6
+    end
+    register Ipv6_prefix
 
   end
 

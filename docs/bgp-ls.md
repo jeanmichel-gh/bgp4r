@@ -203,7 +203,7 @@ family before this one.
 
 ### The four NLRI types
 
-Table 1, and the bodies are parts 2 and 3. The "In bgp4r" column is
+Table 1, and all four are in. The "In bgp4r" column is
 **discovered** by `test/unit/bgp_ls_doc_test.rb` from
 `Link_state::TYPES` rather than compared against a list in the test, so
 a row saying yes with no class behind it and a class with a row saying
@@ -212,14 +212,32 @@ no both fail the suite:
 | Type | NLRI Type | Body, after Protocol-ID and Identifier | In bgp4r |
 |---|---|---|---|
 | 1 | Node NLRI | Local Node Descriptors | yes |
-| 2 | Link NLRI | Local and Remote Node Descriptors, Link Descriptors | no |
-| 3 | IPv4 Topology Prefix NLRI | Local Node Descriptors, Prefix Descriptors | no |
-| 4 | IPv6 Topology Prefix NLRI | the same, IPv6 | no |
+| 2 | Link NLRI | Local and Remote Node Descriptors, Link Descriptors | yes |
+| 3 | IPv4 Topology Prefix NLRI | Local Node Descriptors, Prefix Descriptors | yes |
+| 4 | IPv6 Topology Prefix NLRI | the same, IPv6 | yes |
 
 Each body begins with a **Protocol-ID**, one octet, and an
 **Identifier**, 8 octets, which is the BGP-LS Instance-ID. Figures 7 to
 9. Types 3 and 4 "use the same format", so they differ by type number
 and by the address family of what their descriptors carry.
+
+**So NLRI types 3 and 4 are one layout and two type numbers**, the
+third instance of that shape in this family after TLV 256 and 257 and
+`Mcast_vpn`'s two section 4.6 types. `Link_state::Prefix_nlri` is the
+layout and the two subclasses carry the one thing that differs, which
+is the family. The shared base is **registered nowhere**, so it cannot
+read as a fifth NLRI type; MCAST-VPN part 3 chose modules over base
+classes for exactly that reason, and here the registry already settles
+it, because discovery is from `Link_state::TYPES` and not from
+subclasses.
+
+**A Link NLRI is half a link**, which section 5.2.2 says outright and
+which a reader will otherwise assume wrong: "A link described by the
+Link Descriptor TLVs actually is a 'half-link', a unidirectional
+representation of a logical link. To fully describe a single logical
+link, two anchor routers advertise a half-link each, i.e., two Link
+NLRIs are advertised for a given point-to-point link." So nothing in
+bgp4r pairs two of them, and a single Link NLRI is not a link.
 
 **So the three layouts share a head and differ only in what follows
 it**, which is figures 7, 8 and 9 read together rather than one at a
@@ -338,6 +356,117 @@ a second comparison, and `#duplicate_types` reports the other rule.
 Both report; neither refuses, because building never validates and part
 6 is where a receive side check reads them.
 
+## 3c. The link and prefix descriptors, sections 5.2.2 and 5.2.3
+
+### Table 4 has no Length column and Table 5 has one
+
+That is the first thing to know before writing either set, because it
+decides where the widths come from. **Table 5 gives a Length for each
+of its three rows**, so the OSPF Route Type being 1 octet and the IP
+Reachability Information being variable are RFC 9552's own statements.
+**Table 4 gives none**, so every link descriptor width here was read in
+the document that defines the TLV, which is a different RFC per row:
+
+The "In bgp4r" column here and in the next table is **discovered** from
+`Link_state::Tlv::REGISTRY` by `test/unit/bgp_ls_doc_test.rb`, the same
+way section 3b's is, so a row saying yes with no class behind it and a
+class with a row saying no both fail the suite.
+
+| Type | Link Descriptor | Width | Where the width is stated | In bgp4r |
+|---|---|---|---|---|
+| 258 | Link Local/Remote Identifiers | 8 | RFC 5307 section 1.1 | yes |
+| 259 | IPv4 interface address | 4 | RFC 5305 section 3.2 | yes |
+| 260 | IPv4 neighbor address | 4 | RFC 5305 section 3.3 | yes |
+| 261 | IPv6 interface address | 16 | RFC 6119 section 4.2 | yes |
+| 262 | IPv6 neighbor address | 16 | RFC 6119 section 4.3 | yes |
+| 263 | Multi-Topology Identifier | 2*n | RFC 9552 section 5.2.2.1 | yes |
+
+And Table 5's own three rows, whose Lengths are the RFC's:
+
+| Type | Prefix Descriptor | Length | Where it is defined | In bgp4r |
+|---|---|---|---|---|
+| 263 | Multi-Topology Identifier | variable | section 5.2.2.1 | yes |
+| 264 | OSPF Route Type | 1 | section 5.2.3.1 | yes |
+| 265 | IP Reachability Information | variable | section 5.2.3.2 | yes |
+
+TLV 258 is "4 octets of Link Local Identifier" then "4 octets of Link
+Remote Identifier", local first, and RFC 5307 says the remote one is
+"set to 0 if it is unknown". The four address TLVs are a single address
+each, and section 5.2.2 adds a rule of its own about them: "IPv4/IPv6
+link-local addresses MUST NOT be carried in the ... TLVs
+(259/260/261/262) as descriptors of a link since they are not
+considered unique." RFC 6119 says the same thing for its two.
+
+**TLV 263 appears in both tables and is one class**, not two. Section
+5.2.2.1 defines it and Table 5's third row is the same TLV used as a
+prefix descriptor, so `Multi_topology_id` is registered once and the
+two tables in this guide share it.
+
+### Four of the link descriptors can repeat, which confirms section 5.1
+
+Section 5.2.2 says of TLVs 259 to 262 "This sub-TLV can occur multiple
+times". So two TLVs of one type in one NLRI is ordinary traffic here,
+not a negative test, and **that is what section 5.1's Length and Value
+tiebreakers are for**, read from the other end. The node descriptor
+sub-TLVs are the opposite case, where the once-only rule of section
+5.2.1.4 makes those same tiebreakers unreachable.
+
+### The MT-ID is the family's first reserved field
+
+Section 5.2.2.1: the value is 2*n octets, each word four R bits then a
+12-bit Multi-Topology ID, and "the length of the TLV is 2*n, where n is
+the number of MT-IDs carried in the TLV".
+
+**The R bits mean two different things depending on where the TLV
+sits**, in one sentence of the section: "In the case of the MT-ID TLV
+being used as a descriptor of an IGP link or prefix, the Bits R are
+reserved and MUST be set to 0 when originated and ignored on receipt",
+where in a Node attribute they are "set as per Section 7.1 of
+[RFC5120]". So this is the ordinary keep-and-echo rule rather than a
+new one: `Multi_topology_id#reserved_set?` reports a nibble that
+arrived set, the octets are echoed as they came, and the hash carries
+the words rather than the bare IDs only when one is set. Part 5 is
+where the attribute's reading of the same field lands.
+
+### The IP Reachability TLV holds no family, the second cross-level read
+
+Section 5.2.3.2 gives a Prefix Length in bits and then "the most
+significant octets of the prefix, i.e., 1 octet for prefix length 1 up
+to 8, 2 octets for prefix length 9 up to 16, 3 octets for prefix length
+17 up to 24, 4 octets for prefix length 25 up to 32, etc." So the width
+is `(bits + 7) / 8`, which is the arithmetic every prefix family in
+this library already does, and the section spells the first four cases
+out rather than leaving them to be derived. "Any trailing bits MUST be
+set to 0."
+
+**Nothing in the TLV says whether those octets are IPv4 or IPv6**: the
+NLRI type does, 3 or 4. So `Tlv::Ip_reachability` holds the bit count
+and the octets and `Prefix_nlri#prefix` combines them, which is the
+same split as `Igp_router_id` and `Headed#node_type` one section
+earlier, for the same reason: the octets replay without the family, and
+a class that accepted one would eventually use it.
+
+**A mis-typed Prefix NLRI is wrong without being malformed**, and that
+is the sharpest way to put the split. 2001:db8::/32 packs down to the
+same four octets as 32.1.13.184/32, so an IPv6 prefix in an NLRI of
+type 3 reads back as a **different valid prefix** rather than as
+nothing. Nothing in the octets can catch it, nothing here refuses it,
+and section 8.2.2 names that shape of check among the semantic
+validations a BGP-LS Propagator should not make anyway.
+
+Trailing bits are **echoed rather than re-masked**, since the MUST
+binds a sender and a peer that broke it sent something this library has
+to be able to send back. `trailing_bits_set?` reports it.
+
+### The OSPF Route Type names six values and no range
+
+Section 5.2.3.1: "Intra-Area (0x1), Inter-Area (0x2), External 1
+(0x3), External 2 (0x4), NSSA 1 (0x5), NSSA 2 (0x6)". So 0 and 7 to 255
+are values it does not describe, and they build, parse and print as the
+number. Route type 0 in particular is one a peer really sends: the
+section says "the route type value 0" may be carried in the OSPFv2
+Extended Prefix TLV and tells a producer to look at another LSA for it.
+
 ## 4. The code point registries
 
 Read on 2026-10-31. **The registry is the index, not section 9**, which
@@ -449,24 +578,32 @@ arriving from the lexical-scope side rather than the ancestor side.
 
 ## 7. What is in bgp4r today
 
-Seven parts, and parts 1 and 2 are in. The plan is in CLAUDE.md under
-"Breadth, the one SAFI lever".
+Seven parts, and parts 1, 2 and 3 are in. The plan is in CLAUDE.md
+under "Breadth, the one SAFI lever".
 
 | Part | What | Status |
 |---|---|---|
 | 1 | the TLV primitive and the NLRI framing, pure | **done** |
 | 2 | the Node NLRI and the node descriptor sub-TLVs | **done** |
-| 3 | the Link NLRI and the two Prefix NLRIs | to do |
+| 3 | the Link NLRI and the two Prefix NLRIs | **done** |
 | 4 | wiring the NLRI to the dispatch sites | to do |
 | 5 | the BGP-LS Attribute, code 29, and RFC 9552's attribute TLVs | to do |
 | 6 | validation, from section 8.2.2 | to do |
 | 7 | the lab, in both directions for SAFI 71 | to do |
 
-**Six TLV types and one NLRI type are in**, which is all of section
-5.2.1 and NLRI type 1. Everything else reads back as its level's
-`Unknown` and replays byte for byte: a TLV type with no class as
+**Every NLRI type and every descriptor TLV RFC 9552 defines is in**,
+which is the whole of sections 5.2.1, 5.2.2 and 5.2.3. What is left is
+the attribute, part 5.
+Everything unimplemented reads back as its level's `Unknown` and
+replays byte for byte: a TLV type with no class as
 `Link_state::Tlv::Unknown` and an NLRI type with no class as
 `Link_state::Unknown`.
+
+**The counts are discovered and not written here**, which is why the
+two tables above carry the "In bgp4r" column rather than a sentence:
+`ruby -I. -e 'require "bgp4r"; p BGP::Link_state::Tlv::REGISTRY.keys.sort'`
+prints the TLV types and `BGP::Link_state::TYPES.keys.sort` the NLRI
+types. A number in prose is a number that goes wrong.
 
 **Part 1 chose test examples from the ranges parts 2 to 5 fill, and
 part 2 paid for it.** Its TLV cases used types 256, 513 and 1024, which

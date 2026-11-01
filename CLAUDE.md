@@ -109,10 +109,22 @@ bgp/nlris/               prefix encodings (inet, labeled, VPN, RD, mapped IPv4)
                          link_state_descriptor.rb the whole of section
                          5.2.1, TLV 256 and 257 and the four sub-TLVs
                          of 5.2.1.4, where 256 and 257 are one layout
-                         and two type numbers; link_state_nlri.rb the
-                         NLRI types, with Headed carrying the
+                         and two type numbers;
+                         link_state_link_descriptor.rb the six of
+                         section 5.2.2, where **Table 4 has no Length
+                         column** so every width is a citation to
+                         another RFC, and the MT-ID of 5.2.2.1 is this
+                         family's first reserved field;
+                         link_state_prefix_descriptor.rb the two of
+                         section 5.2.3, whose widths Table 5 does
+                         give; link_state_nlri.rb **all four NLRI
+                         types**, with Headed carrying the
                          Protocol-ID, Identifier and TLV list that
-                         figures 7 to 9 share and Node on top of it.
+                         figures 7 to 9 share, Node, Link and the
+                         Prefix_nlri base under Ipv4_prefix and
+                         Ipv6_prefix, which are one layout and two
+                         type numbers. TLV 263 is registered once and
+                         is in both of the RFC's tables.
                          **Pure: nothing dispatches to any of them
                          yet**, so a BGP-LS UPDATE still comes back as
                          an Attr::Raw with an Attr::Gap. A TLV or NLRI
@@ -193,7 +205,11 @@ docs/                    protocol-testing.md: using bgp4r to test a router
                          changing how mp_reach.rb and mp_unreach.rb frame
                          an NLRI or read a next hop, and before putting a
                          BGP-LS check in validation.rb, whose scope
-                         section 8.2.2 **narrows** rather than widens:
+                         section 8.2.2 **narrows** rather than widens;
+                         section 3c is the link and prefix descriptors,
+                         and its width table is the only place each
+                         citation lives, since Table 4 of the RFC
+                         gives no widths at all. Section 8.2.2:
                          it lists four kinds of semantic check bgp4r
                          makes for other families and says not to make
                          them here. Its load bearing claims are asserted
@@ -447,7 +463,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. The `lab` job is a matrix, one job per group in `test/lab_groups.rb`, so its cost is the slowest group and not the total: it was 12m42s as one serial suite. Each job installs only what its group needs, which is why the matrix entry carries a `gobgp`, `frr`, `docker` or `netns` flag. The `gobgp` groups pin 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-11-01: 2145 tests, 26852 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.4%.
+Baseline on 2026-11-01: 2217 tests, 27230 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.4%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -518,6 +534,7 @@ There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Cove
 * Run the full unit suite before opening a PR. All tests must pass.
 * New behavior needs a test. Bug fixes need a test that failed before the fix.
   * **Check that the proof proved something.** Two "this test catches the regression" runs in one session proved nothing: the first patched a marker string that did not match, so the library was unchanged and the test passed for the obvious reason, and the second made a change the constructor was lenient enough to absorb, so the round trip still worked and the test was right to pass. A sabotage run that passes means the sabotage missed, not that the test is weak. Assert on the thing you changed before you believe the result, and prefer breaking the code the way it would really break, which is usually deleting a line rather than mutating a value.
+  * **Commit before you sabotage, or revert from a copy rather than from git.** A sabotage pass that reverts with `git checkout -- <files>` reverts **nothing** when any of those files is untracked, because git aborts the whole command on an unknown pathspec. So a pull request adding new files is exactly where this bites: eleven sabotages in #218 accumulated into one broken tree, two of them reporting failures that were really earlier sabotages still in place, and unpicking it by hand took four repairs. Check the revert worked before trusting the next run, which is this rule applied to the harness instead of the test.
 * **A claim nothing checks reads as verified, in a document as much as in a comment.** The lesson came twice. Once from the conformance table, measured by hand and never re-run. Once from `docs/to-hash-round-trips.md`, since **retired**, where the tables stayed true across four pull requests because `to_hash_round_trip_test.rb` compares them against the catalog row by row, while the prose beside them drifted into ranking work that two of those pull requests had already finished. The enforced half held and the unenforced half did not, in one file, with nobody noticing. That is what retiring it was for: what a person reads is printed from the catalog now, by `rake to_hash:status`, so there is no unenforced half left to drift. So when a document makes claims a test could make, assert the load-bearing ones: `test/unit/building_objects_test.rb` is what that looks like, and writing it corrected two claims in the document it guards within the hour.
 * **Work out what the code and the tests were built to do before concluding that any of it is wrong.** bgp4r is behind on BGP features and it is not behind on robustness: encoding and decoding have held up for years because the test coverage around them is extensive and deliberate. So a shape that looks odd is far more likely to be a decision whose reason is not written down than a defect, and the burden is on the reader to find the reason first. This was said on 2026-10-29 after two claims in one afternoon that failed the same way.
   * **The two NLRI dispatch points.** Recorded as drifted apart, because parse groups SAFI 4 with 128 and 129 and build does not. `Labeled#parse` branches on the SAFI itself: parse is one entry point dispatching internally, build dispatches externally because the caller must supply an RD for the VPN families and not for SAFI 4. A difference in the work, read as a defect in the code. It cost a closed pull request, #173.
@@ -2798,8 +2815,8 @@ Two consequences, both of which change the plan rather than decorate it:
    RT-constrain (SAFI 132, RFC 4684), ATTR_SET (attribute 128, RFC
    6368) and MCAST-VPN (SAFI 5, RFC 6514) **are in**; BGP-LS
    (attribute 29, AFI
-   16388, SAFI 71 and 72, RFC 9552) is **under way**, parts 1 and 2 of
-   seven done, as the plan under part 4 below. This entry used to
+   16388, SAFI 71 and 72, RFC 9552) is **under way**, parts 1, 2 and 3
+   of seven done, as the plan under part 4 below. This entry used to
    say "each of
    these is a class and a registration", which held for the first and
    understates the last considerably: BGP-LS is a whole TLV language of
@@ -4335,9 +4352,134 @@ Two consequences, both of which change the plan rather than decorate it:
              changed at once: 10 failures in one file and 7 in the
              other.
       3. **The Link NLRI, type 2, and the two Prefix NLRIs, types 3
-         and 4**, with their descriptor TLVs. Taken together because
-         both are the Node NLRI plus a descriptor set, and the two
-         Prefix types differ only in address family.
+         and 4, with their descriptor TLVs. Done**, in #218, so **all
+         four NLRI types of Table 1 and every descriptor TLV RFC 9552
+         defines are in**, which is the whole of sections 5.2.1, 5.2.2
+         and 5.2.3. `bgp/nlris/link_state_link_descriptor.rb` holds
+         the six of section 5.2.2 and
+         `link_state_prefix_descriptor.rb` the two of 5.2.3; the three
+         NLRI types go on part 2's `Headed`, which is what that base
+         was for. Still pure: the gates are part 4. All six BGP-LS
+         files at 100% line coverage.
+         * **Table 4 has no Length column and Table 5 has one**, which
+           is the first thing to know before writing either set,
+           because it decides where the widths come from. So the two
+           prefix descriptor widths are RFC 9552's own, 1 for the OSPF
+           Route Type and variable for the IP Reachability
+           Information, and **every link descriptor width is a
+           citation to a different RFC**: TLV 258 is 8 octets from RFC
+           5307 section 1.1, 259 and 260 are 4 from RFC 5305 sections
+           3.2 and 3.3, 261 and 262 are 16 from RFC 6119 sections 4.2
+           and 4.3. A wrong width among those cannot be caught by
+           reading RFC 9552, which is why `docs/bgp-ls.md` section 3c
+           puts the citation beside each one and the doc test holds
+           the table against the classes.
+         * **Four of the link descriptors can repeat, and that
+           confirms part 1's reading of section 5.1 from the other
+           end.** Section 5.2.2 says of TLVs 259 to 262 "This sub-TLV
+           can occur multiple times", so two of a type in one NLRI is
+           ordinary traffic here and **that is what section 5.1's
+           Length and Value tiebreakers are for**. One section earlier
+           the once-only rule of 5.2.1.4 makes those same tiebreakers
+           unreachable, which part 2 recorded. Same rule, two
+           opposite consequences, and the doc test asserts the
+           contrast rather than the half.
+         * **The MT-ID is the family's first reserved field**, and its
+           R bits mean two different things in one sentence of section
+           5.2.2.1: "In the case of the MT-ID TLV being used as a
+           descriptor of an IGP link or prefix, the Bits R are
+           reserved and MUST be set to 0 when originated and ignored
+           on receipt", where in a Node attribute they are "set as per
+           Section 7.1 of [RFC5120]". So it is the ordinary
+           keep-and-echo rule rather than a new one: the nibble is
+           echoed, `reserved_set?` reports it, and the hash carries
+           the words rather than the bare IDs only when one is set.
+           Part 5 is where the attribute's reading of the same field
+           lands.
+         * **The IP Reachability TLV holds no family, which is the
+           second cross-level read after part 2's node type rule.**
+           Section 5.2.3.2 gives a Prefix Length in bits and
+           `(bits + 7) / 8` octets of prefix and nothing that says
+           whether they are IPv4 or IPv6; the NLRI type does, 3 or 4.
+           So `Tlv::Ip_reachability` holds the halves and
+           `Prefix_nlri#prefix` combines them, the same split as
+           `Igp_router_id` and `Headed#node_type` for the same reason.
+           The section states its first four octet counts rather than
+           leaving them to be derived, and the doc test reads them out
+           of the document's quotation of them.
+         * **A mis-typed Prefix NLRI is wrong without being malformed,
+           and a hand written expectation had it backwards.** The test
+           asserted that an IPv6 prefix in an NLRI of type 3 reads
+           back as nothing. It reads back as a **different valid
+           prefix**: 2001:db8::/32 packs down to the same four octets
+           as 32.1.13.184/32, so nothing in the octets can tell them
+           apart. That is the split put as sharply as it goes, and it
+           is the thirteenth hand written expectation wrong across
+           these families with the library right every time. RFC 9552
+           carries no hex anywhere, which is the RFC 4684, RFC 6368
+           and RFC 6514 situation.
+         * **NLRI types 3 and 4 are one layout and two type numbers**,
+           the third instance of that shape after TLV 256 and 257 and
+           `Mcast_vpn`'s two section 4.6 types: figure 9 says they
+           "use the same format". `Prefix_nlri` is the layout and the
+           two subclasses are the type numbers and the family.
+           **A base class costs nothing here where MCAST-VPN part 3
+           needed a module**, and the difference is discovery: that
+           family's doc test discovers route types from `Route`
+           subclasses, where this one discovers from
+           `Link_state::TYPES`, so an unregistered base cannot read as
+           a fifth NLRI type. A guard asserts it is registered
+           nowhere.
+         * **Two bugs the tests found in `Addr_tlv`, both by probing a
+           value no RFC allows.** A 4-octet value parsed as an
+           `Ipv6_interface_address`, because `IPAddr.new_ntoh` reads 4
+           octets as IPv4 and `hton` gives them straight back, so the
+           encode-matches rule was satisfied by a class of the wrong
+           width; `parse` now requires exactly WIDTH octets. And
+           `Ipv4_interface_address.new('2001:db8::1')` built a
+           16-octet value into a 4-octet TLV; `coerce` refuses it now
+           and names `Tlv::Unknown.new(259, octets)` as the open
+           octet-level route, which Conventions requires and which the
+           test exercises.
+         * **Eleven sabotages, and the pass itself went wrong in a way
+           worth recording.** The script reverted with `git checkout`
+           after each one, and the two new library files were
+           **untracked**, so that command aborted on an unknown
+           pathspec and reverted **nothing at all**, including the
+           tracked files. Eleven sabotages accumulated into one broken
+           tree that took four repairs to unpick, and two of them
+           reported failures that were really earlier sabotages still
+           in place. **Commit before sabotaging**, or revert from a
+           copy rather than from git. Same family as the scripted
+           CLAUDE.md edit in #188: a script that asserts on its match
+           and not on its result.
+           * Once that was fixed each one landed on what it was aimed
+             at: a width swapped fails 4 and errors 7 in the link
+             descriptor file; TLV 258's local and remote written the
+             other way round fails 6; the MT-ID mask one nibble wider
+             fails 9; `octets_for` flooring fails the prefix
+             descriptor file and the document's own quoted list;
+             `prefix` reading the other family fails 5 in the NLRI
+             file; the two prefix type numbers swapped **both at
+             once** fails 7, where changing one would have been
+             #205's miss, since `register` refuses a duplicate and
+             the file would die at load; and a document row or the
+             status table made wrong fails the matching discovery
+             guard.
+         * **A doc guard that reads a document has to say how many
+           rows it expected**, which cost one of these its first
+           firing. The octet count guard used a literal space in
+           `prefix length (\d+)` and the wrapped document had a
+           newline there, so it measured three of section 5.2.3.2's
+           four cases and passed. It asserts the count first now, and
+           every pattern in it uses `\s+`. Found by being suspicious
+           of an assertion that could pass by luck, which is the one
+           rule in Rules for agents that keeps paying.
+         * The table parser in `bgp_ls_doc_test.rb` reads the first
+           cell and the last and ignores the column count, because
+           section 3's table has four columns and 3c's have five. A
+           fixed-group regexp read one and skipped the other in
+           silence, which is the same failure one level up.
       4. **Wiring the NLRI to the dispatch sites, plus a loopback
          functional test.** The two gates and `nlri_size`, as every
          family since flow spec. Expect the signature those four

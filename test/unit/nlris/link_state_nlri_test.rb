@@ -357,9 +357,282 @@ class TestLinkStateNlri < Test::Unit::TestCase
     assert_equal(HEAD, BGP::Link_state::Node.new(2, 0).to_shex)
   end
 
-  # Not a test method: a helper, kept below every test and with no
-  # `private` above it, because a test method after `private` never
+  # --- section 5.2, figure 8, the Link NLRI ---------------------------
+
+  # A Remote Node Descriptors TLV holding one AS sub-TLV, and the three
+  # link descriptors the cases below use. Type 257 is 0x0101, 258 is
+  # 0x0102, 259 is 0x0103 and 260 is 0x0104.
+  REMOTE = '01010008' + '020000040000fde9'
+  IDS    = '01020008' + '0000000100000002'
+  V4     = '01030004' + '0a000001'
+  N4     = '01040004' + '0a000002'
+
+  def test_the_link_nlri_is_the_head_two_descriptor_sets_and_the_link
+    l = link
+    assert_equal(2, l.type)
+    assert_equal(HEAD + LOCAL + REMOTE + IDS + V4 + N4, l.to_shex)
+    # 1 + 8 + 12 + 12 + 12 + 8 + 8 octets of value.
+    assert_equal(61, l.encode.size)
+  end
+
+  def test_the_whole_link_nlri_through_the_framing
+    ls = BGP::Link_state.new(link)
+    # NLRI type 2, Total NLRI Length 61 (0x3d), then the value.
+    assert_equal('0002' + '003d' + HEAD + LOCAL + REMOTE + IDS + V4 + N4,
+                 ls.to_shex)
+    assert_equal(61, ls.length)
+  end
+
+  def test_a_link_nlri_parses_back_through_the_framing
+    hex = '0002' + '003d' + HEAD + LOCAL + REMOTE + IDS + V4 + N4
+    ls = BGP::Link_state.new_ntop([hex].pack('H*'))
+    assert_equal(BGP::Link_state::Link, ls.nlri.class)
+    assert_equal(5, ls.nlri.tlvs.size)
+    assert_equal(65001, ls.nlri.remote_node_descriptors.sub_tlvs.first.value)
+    assert_equal(hex, ls.to_shex)
+  end
+
+  # The one reader this class adds over the base, and nil is an answer:
+  # section 5.2.1.3 calls the Remote Node Descriptors TLV a Link NLRI's
+  # field, and an NLRI can still arrive without one.
+  def test_the_remote_node_descriptors_reader
+    assert_equal(65001, link.remote_node_descriptors.sub_tlvs.first.value)
+    assert_nil(BGP::Link_state::Link.new(2, 0).remote_node_descriptors)
+  end
+
+  # **A Link NLRI is half a link**, which section 5.2.2 says outright:
+  # "To fully describe a single logical link, two anchor routers
+  # advertise a half-link each, i.e., two Link NLRIs are advertised for
+  # a given point-to-point link." So nothing here pairs two of them, and
+  # the two halves of one link are two independent NLRIs that differ in
+  # which end is local.
+  def test_the_two_halves_of_one_link_are_two_independent_nlris
+    a = BGP::Link_state::Link.new(
+      2, 0, BGP::Link_state::Tlv::Local_node_descriptors.new(
+        BGP::Link_state::Tlv::Autonomous_system.new(65000)),
+      BGP::Link_state::Tlv::Remote_node_descriptors.new(
+        BGP::Link_state::Tlv::Autonomous_system.new(65001)))
+    b = BGP::Link_state::Link.new(
+      2, 0, BGP::Link_state::Tlv::Local_node_descriptors.new(
+        BGP::Link_state::Tlv::Autonomous_system.new(65001)),
+      BGP::Link_state::Tlv::Remote_node_descriptors.new(
+        BGP::Link_state::Tlv::Autonomous_system.new(65000)))
+    assert_not_equal(a.to_shex, b.to_shex)
+    assert_equal(HEAD + LOCAL + REMOTE, a.to_shex)
+    assert_equal(HEAD + '01000008' + '020000040000fde9' +
+                 '01010008' + '020000040000fde8', b.to_shex)
+  end
+
+  # Section 5.2.2 says of four of the link descriptors "This sub-TLV can
+  # occur multiple times", so a Link NLRI holding two of a type is
+  # ordinary traffic and not a negative test. That is also what section
+  # 5.1's Length and Value tiebreakers are for, read from the other end.
+  def test_a_repeated_link_descriptor_is_ordinary
+    l = BGP::Link_state::Link.new(
+      2, 0,
+      BGP::Link_state::Tlv::Ipv4_interface_address.new('10.0.0.1'),
+      BGP::Link_state::Tlv::Ipv4_interface_address.new('10.0.0.3'))
+    assert_equal(HEAD + V4 + '010300040a000003', l.to_shex)
+    assert(BGP::Link_state::Tlv.ordered?(l.tlvs),
+           'two of a type in ascending Value order is still ordered')
+  end
+
+  def test_the_link_nlri_is_registered_both_ways
+    assert_equal(BGP::Link_state::Link, BGP::Link_state::TYPES[2])
+    assert_equal(BGP::Link_state::Link, BGP::Link_state::BY_KEY[:link])
+  end
+
+  def test_the_link_nlri_rebuilds_from_its_own_hash
+    l = BGP::Link_state::Link.new(
+      [(HEAD + LOCAL + REMOTE + IDS + V4 + N4 +
+        'ffffff')].pack('H*').is_packed)
+    h = l.to_hash
+    assert_equal('ffffff', h[:link][:tail])
+    assert_equal(l.to_shex, BGP::Link_state::Link.new(h).to_shex)
+    ls = BGP::Link_state.new(l)
+    assert_equal(ls.to_shex, BGP::Link_state.new(ls.to_hash).to_shex)
+  end
+
+  # --- section 5.2, figure 9, the two Prefix NLRIs --------------------
+
+  # An IP Reachability Information TLV for 24 bits over 3 octets: type
+  # 265 is 0x0109, length 4, then the Prefix Length and the octets.
+  REACH = '01090004' + '18' + 'c00002'
+
+  # **One layout and two type numbers**, which is what the figure says:
+  # "The IPv4 and IPv6 Prefix NLRIs (NLRI Type = 3 and Type = 4) use the
+  # same format". So the same content encodes to the same octets under
+  # both, and only the framing's NLRI Type field differs.
+  def test_the_two_prefix_nlris_are_one_layout
+    a = prefix_nlri(BGP::Link_state::Ipv4_prefix)
+    b = prefix_nlri(BGP::Link_state::Ipv6_prefix)
+    assert_equal(a.to_shex, b.to_shex)
+    assert_equal(HEAD + LOCAL + REACH, a.to_shex)
+    assert_equal(3, a.type)
+    assert_equal(4, b.type)
+    assert_equal('0003' + '001d' + HEAD + LOCAL + REACH,
+                 BGP::Link_state.new(a).to_shex)
+    assert_equal('0004' + '001d' + HEAD + LOCAL + REACH,
+                 BGP::Link_state.new(b).to_shex)
+  end
+
+  # **The family is the NLRI type's and nothing below this class has
+  # it**, so the same octets are two prefixes. That is the second
+  # cross-level read in this family, after section 5.2.1.4's node type
+  # rule, and it is why `Ip_reachability#prefix` takes an AFI.
+  def test_the_same_octets_are_two_prefixes_under_the_two_types
+    assert_equal('192.0.2.0/24',
+                 prefix_nlri(BGP::Link_state::Ipv4_prefix).prefix)
+    assert_equal('c000:200::/24',
+                 prefix_nlri(BGP::Link_state::Ipv6_prefix).prefix)
+    assert_equal(IANA::AFI::IPv4, BGP::Link_state::Ipv4_prefix.afi)
+    assert_equal(IANA::AFI::IPv6, BGP::Link_state::Ipv6_prefix.afi)
+  end
+
+  # The TLV prints octets and a bit count because it has no family;
+  # this is the only level that can print the prefix those octets make.
+  def test_the_prefix_appears_in_to_s_only_at_this_level
+    a = prefix_nlri(BGP::Link_state::Ipv4_prefix)
+    assert_match(/prefix c00002\/24 as 192\.0\.2\.0\/24/, a.to_s)
+    assert_equal('prefix c00002/24', a.ip_reachability.to_s)
+  end
+
+  def test_the_prefix_is_nil_where_the_octets_cannot_make_one
+    # No IP Reachability Information TLV at all, which section 5.2.3.2
+    # calls mandatory and which builds anyway.
+    bare = BGP::Link_state::Ipv4_prefix.new(2, 0)
+    assert_nil(bare.ip_reachability)
+    assert_nil(bare.prefix)
+    assert_equal(HEAD, bare.to_shex)
+    # 64 bits, which is not an IPv4 prefix and is an IPv6 one.
+    r = BGP::Link_state::Tlv::Ip_reachability.new(64, ['00' * 8].pack('H*'))
+    assert_nil(BGP::Link_state::Ipv4_prefix.new(2, 0, r).prefix)
+    assert_equal('::/64', BGP::Link_state::Ipv6_prefix.new(2, 0, r).prefix)
+  end
+
+  def test_a_prefix_nlri_parses_back_through_the_framing
+    [[3, BGP::Link_state::Ipv4_prefix, '192.0.2.0/24'],
+     [4, BGP::Link_state::Ipv6_prefix, 'c000:200::/24']].each do |t, k, p|
+      hex = format('%04x', t) + '001d' + HEAD + LOCAL + REACH
+      ls = BGP::Link_state.new_ntop([hex].pack('H*'))
+      assert_equal(k, ls.nlri.class)
+      assert_equal(p, ls.nlri.prefix)
+      assert_equal(hex, ls.to_shex)
+    end
+  end
+
+  # The descriptor set is a TLV list like any other, so the OSPF Route
+  # Type of section 5.2.3.1 rides in it beside the reachability TLV.
+  def test_a_prefix_nlri_carries_the_other_descriptor_too
+    p = BGP::Link_state::Ipv4_prefix.new(
+      2, 0, BGP::Link_state::Tlv::Local_node_descriptors.new(
+        BGP::Link_state::Tlv::Autonomous_system.new(65000)),
+      BGP::Link_state::Tlv::Ospf_route_type.new('Intra-Area'),
+      BGP::Link_state::Tlv::Ip_reachability.new(24, ['c00002'].pack('H*')))
+    assert_equal(HEAD + LOCAL + '01080001' + '01' + REACH, p.to_shex)
+    assert_equal('Intra-Area',
+                 p.tlv(BGP::Link_state::Tlv::Ospf_route_type.type).name)
+  end
+
+  def test_both_prefix_nlris_are_registered_both_ways
+    assert_equal(BGP::Link_state::Ipv4_prefix, BGP::Link_state::TYPES[3])
+    assert_equal(BGP::Link_state::Ipv6_prefix, BGP::Link_state::TYPES[4])
+    assert_equal(BGP::Link_state::Ipv4_prefix,
+                 BGP::Link_state::BY_KEY[:ipv4_prefix])
+    assert_equal(BGP::Link_state::Ipv6_prefix,
+                 BGP::Link_state::BY_KEY[:ipv6_prefix])
+  end
+
+  # **The base the two share is not itself an NLRI type**, and the
+  # registry is what keeps it from reading as one: it has no TYPE, it is
+  # registered nowhere, and no type number answers it. MCAST-VPN part 3
+  # chose modules over base classes because its doc test discovers from
+  # subclasses; here discovery is from the registry, so a base class
+  # costs nothing and this is what says so.
+  def test_the_shared_base_is_not_a_type
+    assert_equal(false,
+                 BGP::Link_state::TYPES.values.include?(
+                   BGP::Link_state::Prefix_nlri))
+    assert_equal(false,
+                 BGP::Link_state::BY_KEY.values.include?(
+                   BGP::Link_state::Prefix_nlri))
+    assert_equal(false,
+                 BGP::Link_state::Prefix_nlri.const_defined?(:TYPE, false))
+  end
+
+  def test_both_prefix_nlris_rebuild_from_their_own_hash
+    [[BGP::Link_state::Ipv4_prefix, :ipv4_prefix],
+     [BGP::Link_state::Ipv6_prefix, :ipv6_prefix]].each do |k, key|
+      p = k.new([(HEAD + LOCAL + REACH + 'ffffff')].pack('H*').is_packed)
+      h = p.to_hash
+      assert_equal('ffffff', h[key][:tail])
+      assert_equal(p.to_shex, k.new(h).to_shex)
+      ls = BGP::Link_state.new(p)
+      assert_equal(ls.to_shex, BGP::Link_state.new(ls.to_hash).to_shex)
+    end
+  end
+
+  # --- nothing validates, at these two types --------------------------
+
+  # Four more things no RFC allows, each building and encoding.
+  def test_nothing_validates_about_the_link_and_prefix_types
+    # A Link NLRI with no Remote Node Descriptors TLV, which figure 8
+    # shows and section 5.2.1.3 describes.
+    assert_equal(HEAD + LOCAL,
+                 BGP::Link_state::Link.new(
+                   2, 0, BGP::Link_state::Tlv::Local_node_descriptors.new(
+                     BGP::Link_state::Tlv::Autonomous_system.new(
+                       65000))).to_shex)
+    # An IPv6 prefix in an IPv4 Prefix NLRI. **It does not read back as
+    # nothing, it reads back as a different prefix**, and that is the
+    # cross-level point put as sharply as it goes: 2001:db8::/32 packs
+    # down to the same four octets as 32.1.13.184/32, so the TLV cannot
+    # tell them apart and the NLRI type is the only thing that decides.
+    # A mis-typed NLRI is therefore wrong without being malformed, which
+    # is why nothing here refuses it and why `prefix` is at this level.
+    # The hand written expectation here was the other way round first,
+    # and the library was right.
+    r6 = BGP::Link_state::Tlv::Ip_reachability.new('2001:db8::/32')
+    p = BGP::Link_state::Ipv4_prefix.new(2, 0, r6)
+    assert_equal(HEAD + '01090005' + '20' + '20010db8', p.to_shex)
+    assert_equal('32.1.13.184/32', p.prefix)
+    assert_equal('2001:db8::/32',
+                 BGP::Link_state::Ipv6_prefix.new(2, 0, r6).prefix)
+    # A Link NLRI carrying a prefix descriptor and a Prefix NLRI
+    # carrying a link descriptor, which section 8.2.2 names as a
+    # semantic check a BGP-LS Propagator should not make.
+    assert_equal(HEAD + REACH,
+                 BGP::Link_state::Link.new(
+                   2, 0, BGP::Link_state::Tlv::Ip_reachability.new(
+                     24, ['c00002'].pack('H*'))).to_shex)
+    assert_equal(HEAD + V4,
+                 BGP::Link_state::Ipv4_prefix.new(
+                   2, 0, BGP::Link_state::Tlv::Ipv4_interface_address.new(
+                     '10.0.0.1')).to_shex)
+  end
+
+  # Not a test method: helpers, kept below every test and with no
+  # `private` above them, because a test method after `private` never
   # runs and nothing says so.
+  def link
+    BGP::Link_state::Link.new(
+      2, 0,
+      BGP::Link_state::Tlv::Local_node_descriptors.new(
+        BGP::Link_state::Tlv::Autonomous_system.new(65000)),
+      BGP::Link_state::Tlv::Remote_node_descriptors.new(
+        BGP::Link_state::Tlv::Autonomous_system.new(65001)),
+      BGP::Link_state::Tlv::Link_local_remote_identifiers.new(1, 2),
+      BGP::Link_state::Tlv::Ipv4_interface_address.new('10.0.0.1'),
+      BGP::Link_state::Tlv::Ipv4_neighbor_address.new('10.0.0.2'))
+  end
+
+  def prefix_nlri(klass)
+    klass.new(
+      2, 0, BGP::Link_state::Tlv::Local_node_descriptors.new(
+        BGP::Link_state::Tlv::Autonomous_system.new(65000)),
+      BGP::Link_state::Tlv::Ip_reachability.new(24, ['c00002'].pack('H*')))
+  end
+
   def node_with(protocol_id, router_id)
     BGP::Link_state::Node.new(
       protocol_id, 0,
