@@ -215,7 +215,8 @@ module BGP
     # Everything the Total NLRI Length counts: the RD when there is one,
     # then the type-specific body.
     def value
-      (@rd ? @rd.encode : +'') + (@nlri ? @nlri.encode : +'')
+      String.new << (@rd ? @rd.encode : '') <<
+        (@nlri ? @nlri.encode : '')
     end
 
     # The Length octets this NLRI writes: what arrived when that
@@ -346,7 +347,7 @@ module BGP
       attr_reader :value
 
       def initialize(*args)
-        @type, @value = 0, +''
+        @type, @value = 0, String.new
         if args.size == 1 and args[0].is_a?(self.class)
           @type = args[0].type
           @value = args[0].value.dup
