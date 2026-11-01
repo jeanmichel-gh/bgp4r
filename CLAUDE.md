@@ -4911,6 +4911,15 @@ Two consequences, both of which change the plan rather than decorate it:
                held by a text guard and nothing else can hold it.
                That is the same fact that made the move free,
                arriving as a limit on checking it.
+             * **Seven sabotages, all landing**: `Text_tlv` moved
+               back out of the framing file, `Opaque32` given a TYPE
+               so it stops being abstract, a fifth base added with no
+               document row, a base row cut from the document,
+               `Node_descriptors` registered at a third type so
+               "shared means two tables" stops holding, `Text_tlv`
+               hashing as hex rather than text, and `Addr_tlv`'s
+               width check dropped, which is part 3's rule now one
+               file over.
              * **Removing a sideways require is where the load order
                trap bites**, and it bit twice in one change: the node
                attribute test file and the attribute test file each
