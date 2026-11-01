@@ -69,16 +69,22 @@ bgp/nlris/               prefix encodings (inet, labeled, VPN, RD, mapped IPv4)
                          and Group, the 4-octet Source_as, and the
                          Originating_router that has no length field in any
                          document, with the Route base and
-                         Mcast_vpn::Unknown under them, and three of the
-                         seven route types: Intra_as_i_pmsi (section 4.1),
-                         Inter_as_i_pmsi (4.2) and Source_active (4.5),
-                         which are the layouts whose bodies split with no
-                         guess;
+                         Mcast_vpn::Unknown under them, the
+                         Source_and_group module that carries the Multicast
+                         Source and Group pair for the four layouts that
+                         have it, the C_multicast module that is the whole
+                         of section 4.6, and six of the seven route types:
+                         Intra_as_i_pmsi (4.1), Inter_as_i_pmsi (4.2),
+                         S_pmsi (4.3), Source_active (4.5) and
+                         Shared_tree_join with Source_tree_join (4.6, one
+                         layout and two type numbers). Only route type 4 is
+                         left, and it is the one the documents do not
+                         settle;
                          mcast_vpn.rb the NLRI with the section 4 Route Type
                          and Length framing and Mcast_vpn.nlri_size, which
                          is Evpn.nlri_size again because the framing is the
                          same shape. **Nothing dispatches to either yet**:
-                         Mcast_vpn::ROUTES holds route types 1, 2 and 5, a
+                         Mcast_vpn::ROUTES holds every route type but 4, a
                          type outside those reads back as an Unknown that
                          replays byte for byte, and an MCAST-VPN UPDATE is
                          still an Attr::Raw with an Attr::Gap because the
@@ -346,7 +352,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. The `lab` job is a matrix, one job per group in `test/lab_groups.rb`, so its cost is the slowest group and not the total: it was 12m42s as one serial suite. Each job installs only what its group needs, which is why the matrix entry carries a `gobgp`, `frr`, `docker` or `netns` flag. The `gobgp` groups pin 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-11-01: 1912 tests, 25907 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.2%.
+Baseline on 2026-11-01: 1930 tests, 26017 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.2%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -3024,9 +3030,12 @@ Two consequences, both of which change the plan rather than decorate it:
             `wait_for`, which overran the foreground limit twice and
             left a patched working tree behind both times. One method
             is about 45s.
-   3. **MCAST-VPN, SAFI 5, RFC 6514. Two of seven parts done**, in
-      #208 and #209: the framing and the primitives, then route types
-      1, 2 and 5. Still pure, with nothing dispatching to any of it.
+   3. **MCAST-VPN, SAFI 5, RFC 6514. Three of seven parts done**, in
+      #208, #209 and #210: the framing and the primitives, then route
+      types 1, 2 and 5, then 3, 6 and 7. **Every layout but route type
+      4 is in**, and that one is last because it is the one the
+      documents do not settle. Still pure, with nothing dispatching to
+      any of it.
       **The RFC is readable now**, which corrects the note
       this entry used to carry: it was fetched in full on 2026-10-31,
       along with draft-ietf-bess-rfc6514bis-00, which obsoletes it, and
@@ -3284,11 +3293,73 @@ Two consequences, both of which change the plan rather than decorate it:
          * Both files are at 100% line coverage. The one gap part 1
            recorded, `read_route`'s body, is closed: it runs for the
            first time here.
-      3. **Route types 3, 6 and 7.** Type 3 is type 5 with the trailing
-         address behind it. Types 6 and 7 share one layout, RD, Source
-         AS, source and group, the way RFC 6514 section 4.6 covers both
-         in one subsection, so they are one class apart from the type
-         number.
+      3. **Route types 3, 6 and 7. Done**, in #210, which leaves route
+         type 4 the only layout outstanding. Type 3 is type 5 with the
+         trailing address behind it, 22 octets all IPv4 and 58 all
+         IPv6. Types 6 and 7 share one layout, RD, Source AS, source
+         and group, 22 or 46.
+         * **Two modules came out of it, and both are modules rather
+           than base classes for the doc test's sake**, which is EVPN
+           part 6's lesson taken up front: `evpn_doc_test.rb` and its
+           twin here discover the route type table from the `Route`
+           subclasses the library defines, so an abstract
+           `Multicast < Route` would read as a route type with no row.
+           `Source_and_group` is the Multicast Source and Multicast
+           Group pair, which **four of the seven layouts carry**, types
+           3, 5, 6 and 7, so route type 5 was refactored onto it in the
+           same change. `C_multicast` is the whole of section 4.6.
+         * **Section 4.6 defines two route types with one layout, so
+           `Shared_tree_join` and `Source_tree_join` are identity and
+           nothing else**: a `TYPE`, a `HASH_KEY` and a `NAME` the
+           shared `to_s` reads off the class. That is the honest
+           statement of what the section says, in one sentence: "A
+           Shared Tree Join route and a Source Tree Join Route Type
+           specific MCAST-VPN NLRI consists of the following". A test
+           asserts the two encode identically.
+         * **The second length collision in this family**: route type 3
+           with IPv4 addresses and the section 4.6 layout with IPv4
+           addresses are both 22 octets, after route type 1 against
+           route type 2 at 12. Harmless for the same reason, since the
+           Route Type octet is read before the body, and asserted so a
+           reader comparing lengths does not meet it by surprise.
+         * **Route type 3 is the first layout with a variable field
+           after a variable field.** The two lengths are read first and
+           each takes what it claims, so the trailing address gets what
+           is left and needs no arithmetic. The cost is that a length
+           claiming more than the body holds eats the fields behind it
+           and leaves the address empty, which is ordinary negative
+           testing: the route then cannot reproduce its own body and
+           `read_route` keeps the octets as an `Unknown`.
+         * **The expiring-example count is now three in one family**, so
+           the fix went further than re-pointing. `mcast_vpn_test.rb`'s
+           three Unknown cases used route type 3, which part 2 chose and
+           this part made wrong, and route type 4 would have been the
+           obvious replacement and expires in part 4. They use `0x43`
+           now, through a named `NO_CLASS` constant: it is **assigned**,
+           as the mLDP form of route type 3, and out of scope by
+           decision rather than by backlog, so it cannot expire again.
+           Pick an example that cannot expire rather than re-pointing a
+           third time.
+         * **Seven sabotages, six landing and one missing for a reason
+           worth recording.** The six: route type 3's address written
+           before the pair fails 4, 1 and 1 across the three files; the
+           Source AS written after the pair in 6 and 7 fails 3 and 1;
+           the source and group swapped inside the shared module fails
+           5; route type 7 given route type 6's `TYPE` fails 3 and 3;
+           a type dropped from `ROUTES` fails the half-wiring guard and
+           two NLRI cases; and one octet count in the document made
+           wrong fails the table guard.
+           * **The miss: making `Source_and_group` a Class instead of a
+             module died at load with `wrong argument type Class
+             (expected Module)`**, so it tested nothing about the
+             discovery guard it was aimed at. That is #205's `if false`
+             failure again: a sabotage that breaks something unrelated
+             to the claim is the same miss as one that passes. The
+             claim is that an abstract base class would read as a route
+             type, so the sabotage that tests it is **adding** one:
+             `class Multicast < Route` with no `TYPE` errors both
+             discovery guards with `NameError: uninitialized constant
+             BGP::Mcast_vpn::Multicast::TYPE`, naming the constant.
       4. **Route type 4, the Leaf A-D route**, last of the layouts
          because it is the one the documents do not settle. The nested
          read, the replay check that stops it being an assertion, and

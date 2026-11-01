@@ -75,15 +75,25 @@ class Mcast_vpn_test < Test::Unit::TestCase
     assert_nil(M.nlri_size(['01'].pack('H*')))
   end
 
-  # **This test's example expired when route types 1, 2 and 5 landed**,
-  # and it was re-pointed rather than weakened, the way #185 re-pointed
-  # #116's undecodable family. It used to assert that every type reads
-  # as Unknown, which was true while ROUTES was empty. What it asserts
-  # now is the same thing about the types that still have no class, and
-  # the three that do are covered below.
+  # **This test's example has expired twice**, once when route types 1,
+  # 2 and 5 landed and once when 3, 6 and 7 did, and both times it was
+  # re-pointed rather than weakened, the way #185 re-pointed #116's
+  # undecodable family. It originally asserted that every type reads as
+  # Unknown, which was true only while ROUTES was empty.
+  #
+  # **NO_CLASS is picked so it cannot expire a third time.** 0x43 is
+  # assigned, as the mLDP form of route type 3, and it is out of scope
+  # by decision rather than by backlog: RFC 7441 defers its mLDP FEC
+  # Element to RFC 6388 section 2.2, so the field belongs to LDP and
+  # bgp4r has nothing of LDP. Route type 4 would have been the obvious
+  # choice and lands in the next part, which is exactly the mistake
+  # this constant avoids.
+  NO_CLASS = 0x43
+
   def test_a_route_type_with_no_class_reads_back_as_unknown
-    assert_equal([1, 2, 5], M::ROUTES.keys.sort)
-    [3, 4, 6, 7].each do |t|
+    assert_equal([1, 2, 3, 5, 6, 7], M::ROUTES.keys.sort)
+    assert(!M::ROUTES.has_key?(NO_CLASS), 'the mLDP types stay out of scope')
+    [4, NO_CLASS].each do |t|
       n = M.new([format('%02x0c', t) + BODY].pack('H*').is_packed)
       assert_equal(M::Unknown, n.route.class, "route type #{t}")
       assert_equal(t, n.type)
@@ -102,6 +112,20 @@ class Mcast_vpn_test < Test::Unit::TestCase
       '20c0000201' + '20e8010101'            => M::Source_active,
     '050e' + '00000064000000c8' +
       '00' + '20e8010101'                    => M::Source_active,
+    '0316' + '00000064000000c8' +
+      '20c0000201' + '20e8010101' +
+      '0a000001'                             => M::S_pmsi,
+    '033a' + '00000064000000c8' +
+      '8020010db8000000000000000000000001' +
+      '80ff3e0000000000000000000000000001' +
+      '20010db8000000000000000000000002'     => M::S_pmsi,
+    '0616' + '00000064000000c8' + '0000fde8' +
+      '20c0000201' + '20e8010101'            => M::Shared_tree_join,
+    '0716' + '00000064000000c8' + '0000fde8' +
+      '20c0000201' + '20e8010101'            => M::Source_tree_join,
+    '072e' + '00000064000000c8' + '0000fde8' +
+      '8020010db8000000000000000000000001' +
+      '80ff3e0000000000000000000000000001'   => M::Source_tree_join,
   }.freeze
 
   def test_the_three_registered_route_types_read_back_as_themselves
@@ -202,9 +226,10 @@ class Mcast_vpn_test < Test::Unit::TestCase
 
   # And the :unknown shape, on a type that has no class.
   def test_an_unregistered_type_hashes_under_the_unknown_key
-    hex = '030c' + BODY
+    hex = format('%02x0c', NO_CLASS) + BODY
     n = M.new([hex].pack('H*').is_packed)
-    assert_equal({ :unknown => { :type => 3, :value => BODY } }, n.to_hash)
+    assert_equal({ :unknown => { :type => NO_CLASS, :value => BODY } },
+                 n.to_hash)
     assert_equal(hex, M.new(n.to_hash).to_shex)
   end
 
@@ -256,8 +281,9 @@ class Mcast_vpn_test < Test::Unit::TestCase
   def test_to_s_names_the_route_it_holds
     n = M.new([NLRI1].pack('H*').is_packed)
     assert_match(/\[1\] Intra-AS I-PMSI A-D/, n.to_s)
-    assert_match(/Unknown route type 3/,
-                 M.new(['030c' + BODY].pack('H*').is_packed).to_s)
+    assert_match(/Unknown route type #{NO_CLASS}/,
+                 M.new([format('%02x0c', NO_CLASS) + BODY]
+                         .pack('H*').is_packed).to_s)
     assert_match(/\[7\]/, M.new_ntop([NLRI1].pack('H*'), 7).to_s,
                  'the path identifier is printed in front')
   end

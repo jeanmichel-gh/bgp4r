@@ -87,9 +87,8 @@ module BGP
     # 0x47 from RFC 7441, whose header says `Updates: 6514`. 0x00 and
     # 0x80 to 0xff are Reserved.
     #
-    # **Three of the seven rows so far**, 1, 2 and 5: the layouts whose
-    # bodies split with no guess. Route types 3, 6 and 7 come next and
-    # route type 4 last, because it is the one the documents do not
+    # **Six of the seven rows so far**, every one but route type 4,
+    # which comes last because it is the one the documents do not
     # settle. A type with no row reads back as an `Unknown` that
     # replays byte for byte.
     #
@@ -104,9 +103,12 @@ module BGP
     # without `docs/mcast-vpn.md` being told, and a class registered
     # here with no row, or a row with no class, fails either way.
     ROUTES = {
-      Intra_as_i_pmsi.type => Intra_as_i_pmsi,
-      Inter_as_i_pmsi.type => Inter_as_i_pmsi,
-      Source_active.type   => Source_active,
+      Intra_as_i_pmsi.type  => Intra_as_i_pmsi,
+      Inter_as_i_pmsi.type  => Inter_as_i_pmsi,
+      S_pmsi.type           => S_pmsi,
+      Source_active.type    => Source_active,
+      Shared_tree_join.type => Shared_tree_join,
+      Source_tree_join.type => Source_tree_join,
     }.freeze
 
     # Hash key back to class, for the hash build path. `Unknown` is in

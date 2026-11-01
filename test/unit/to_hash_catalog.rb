@@ -1242,6 +1242,28 @@ module ToHashCatalog
     BGP::Mcast_vpn::Source_active.new([100, 200], nil, '232.1.1.1')
   end
 
+  # Route type 3, section 4.3: route type 5 with the trailing address
+  # behind it. Four fields and the recipe sets all four, with the
+  # addresses IPv6 so the widths are the longer pair.
+  ENTRIES['BGP::Mcast_vpn::S_pmsi'] = entry(:ok, nil, nil) do
+    BGP::Mcast_vpn::S_pmsi.new([100, 200], '2001:db8::1', 'ff3e::1',
+                               '2001:db8::2')
+  end
+
+  # Route types 6 and 7, section 4.6, which share one layout and differ
+  # only in identity. Both are measured rather than one standing in for
+  # the other, because each has its own hash key and a hash that read
+  # back under the wrong one would still encode the same octets.
+  ENTRIES['BGP::Mcast_vpn::Shared_tree_join'] = entry(:ok, nil, nil) do
+    BGP::Mcast_vpn::Shared_tree_join.new([100, 200], 70013, '192.0.2.1',
+                                         '232.1.1.1')
+  end
+
+  ENTRIES['BGP::Mcast_vpn::Source_tree_join'] = entry(:ok, nil, nil) do
+    BGP::Mcast_vpn::Source_tree_join.new([100, 200], 70013, '2001:db8::1',
+                                         'ff3e::1')
+  end
+
   # RFC 4684 section 4. The whole prefix, which is the branch where the
   # two fields of the section's figure reproduce the octets, with a path
   # identifier on top. The other branch, where they cannot and the hash
