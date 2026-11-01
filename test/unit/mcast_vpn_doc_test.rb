@@ -79,6 +79,12 @@ class McastVpnDocTest < Test::Unit::TestCase
     @doc ||= File.read(DOC_PATH, :encoding => 'UTF-8')
   end
 
+  # One lab test's body, by basename. A lab test is not loaded here, so
+  # this reads it as text, the way the validation.rb guards do.
+  def lab_test(name)
+    File.read(File.expand_path("../functional/lab/#{name}", __dir__))
+  end
+
   # Every Route subclass the library defines, Unknown excluded: it is in
   # no row and in no ROUTES entry on purpose, since no type number
   # reaches it.
@@ -519,6 +525,54 @@ class McastVpnDocTest < Test::Unit::TestCase
     assert_match(/\*\*The ATTR_SET trick does not transfer\*\*/, doc)
     assert_match(/Do not read the loopback functional test as interoperability/,
                  doc)
+  end
+
+  # The absence in section 9 is asserted by two lab tests now, and this
+  # holds the document and those two files together. **Discovered rather
+  # than listed**: the version each test was measured against is read
+  # out of its own constant and out of the document's table, so a pin
+  # moved in one place and not the other fails here. That is how the
+  # EVPN interoperability table would have gone quietly wrong, since a
+  # lab test omits itself on an unmeasured version and a reader would
+  # see the table and no failure.
+  def test_the_absence_is_asserted_by_the_two_lab_tests
+    gobgp = lab_test('mcast_vpn_gobgp_test.rb')
+    frr = lab_test('mcast_vpn_frr_test.rb')
+
+    # Each must put the question to the router rather than reading our
+    # own side: the capability is offered and the family is not in the
+    # router's config.
+    #
+    # **Every pattern here is anchored at the start of a line of code**,
+    # because the first draft matched a bare /on_state_change/ and
+    # deleting the listener from the test left it passing: both files
+    # name the method in prose. A comment cannot match `^\s+n\.`, so
+    # these are about the code. Measured by sabotage, which is the only
+    # way that would have shown.
+    [['gobgp', gobgp], ['frr', frr]].each do |name, body|
+      assert_match(/^\s+GUESSES = /, body,
+                   "#{name} must list the names a reader would reach for")
+      assert_match(/^\s+GUESSES\.each/, body, "#{name} must try them")
+      assert_match(/^\s+n\.on_state_change\b/, body,
+                   "#{name} must watch for a reset rather than is_established?")
+      assert_match(/^\s+SAFI = 5$/, body, "#{name} must be about SAFI 5")
+      assert_match(/^\s+n\.add_cap BGP::OPT_PARM::CAP::Mbgp\.new\(AFI, SAFI\)$/,
+                   body, "#{name} must offer the capability for it")
+    end
+
+    # The document says what each does with an UPDATE sent anyway, and
+    # the two differ. Both halves, so neither verdict can be dropped.
+    assert_match(/discards the message, keeps the session/, doc)
+    assert_match(/tears the session down, with no NOTIFICATION/, doc)
+    assert_match(/\*\*The last row is the finding\.\*\*/, doc)
+    assert_match(/is_established\?` cannot see FRR's reset/, doc)
+    assert_match(/The two lab tests do not change\n?that/, doc)
+
+    # The versions, out of the tests' own constants and the document.
+    assert_match(/MEASURED_MAJOR = 3/, gobgp)
+    assert_match(/MEASURED = \(8\.\.8\)/, frr)
+    assert_match(/GoBGP 3\.23\.0/, doc)
+    assert_match(/FRR 8\.4\.4/, doc)
   end
 
   # No hex in either document, so the vectors are arithmetic and the

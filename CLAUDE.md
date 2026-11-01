@@ -205,7 +205,15 @@ test/functional/lab/     lab tests: loopback speaker test and one Compose test p
                          with a gobgpd between them, because RFC 6368's
                          ATTR_SET exists to survive transit and neither
                          router implements it. LabHelper::Gobgpd's peer2
-                         is what makes that possible
+                         is what makes that possible;
+                         mcast_vpn_gobgp_test.rb and
+                         mcast_vpn_frr_test.rb are the only two that
+                         measure an **absence**: neither router has
+                         SAFI 5, so they assert how each says so and
+                         what it does with an MCAST-VPN UPDATE sent
+                         anyway, where GoBGP discards it and FRR resets
+                         the session. They vouch for nothing about our
+                         octets
 ```
 
 ## Running tests
@@ -357,6 +365,14 @@ that way. 50 seconds, measured on 2026-10-31 against gobgpd 3.23.0:
 ruby -I. test/functional/lab/attr_set_gobgp_test.rb
 ```
 
+The only two that measure an **absence**: neither router has SAFI 5, so
+these assert how each says so and what it does with an MCAST-VPN UPDATE
+sent anyway, where the two disagree. 30 and 7 seconds:
+```
+ruby -I. test/functional/lab/mcast_vpn_gobgp_test.rb
+ruby -I. test/functional/lab/mcast_vpn_frr_test.rb
+```
+
 Which `#to_hash` read back and which do not, printed from
 `test/unit/to_hash_catalog.rb` rather than written down anywhere:
 ```
@@ -381,7 +397,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. The `lab` job is a matrix, one job per group in `test/lab_groups.rb`, so its cost is the slowest group and not the total: it was 12m42s as one serial suite. Each job installs only what its group needs, which is why the matrix entry carries a `gobgp`, `frr`, `docker` or `netns` flag. The `gobgp` groups pin 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-11-01: 1957 tests, 26182 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.3%.
+Baseline on 2026-11-01: 1958 tests, 26203 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.3%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -1398,7 +1414,7 @@ true here is the shape of the gap:
   prints the registered code points, against the 115 the IANA registries
   listed when this was last counted by hand.
 
-### Breadth, the one SAFI lever. Phases 2 and 3 done, phase 4 parts 1 and 2 done, part 3 all but the lab
+### Breadth, the one SAFI lever. Phases 2 and 3 done, phase 4 parts 1, 2 and 3 done, part 4 not started
 
 The section above deferred breadth and named the single limit. This is the
 plan for lifting it, recorded before the work starts.
@@ -2728,11 +2744,10 @@ Two consequences, both of which change the plan rather than decorate it:
      processing, which matters to a RIB and not to an encoder, and no
      EVPN route goes in a RIB by the decision below. Recorded so nobody
      implements a route key here looking for it.
-4. **The rest, as appetite allows. Two and a half of four done.**
-   RT-constrain (SAFI 132, RFC 4684) and ATTR_SET (attribute 128, RFC
-   6368) **are in**; MCAST-VPN (SAFI 5, RFC 6514) reads and writes on
-   the wire and reports a malformed route, with only the lab left;
-   BGP-LS (attribute 29, AFI
+4. **The rest, as appetite allows. Three of four done.**
+   RT-constrain (SAFI 132, RFC 4684), ATTR_SET (attribute 128, RFC
+   6368) and MCAST-VPN (SAFI 5, RFC 6514) **are in**; BGP-LS
+   (attribute 29, AFI
    16388, SAFI 71 and 72, RFC 9552) is not started. This entry used to
    say "each of
    these is a class and a registration", which held for the first and
@@ -3068,12 +3083,16 @@ Two consequences, both of which change the plan rather than decorate it:
             `wait_for`, which overran the foreground limit twice and
             left a patched working tree behind both times. One method
             is about 45s.
-   3. **MCAST-VPN, SAFI 5, RFC 6514. Six of seven parts done**, in
-      #208, #209, #210, #211, #212 and #213: the framing and the
+   3. **MCAST-VPN, SAFI 5, RFC 6514. Done**, all seven parts, in #208,
+      #209, #210, #211, #212, #213 and #214: the framing and the
       primitives, then route types 1, 2 and 5, then 3, 6 and 7, then 4,
-      then the wiring, then validation. **Every layout of section 4 is
-      in, an MCAST-VPN UPDATE crosses a session, and a malformed one is
-      reported on receive.** Only the lab is left.
+      then the wiring, then validation, then the lab. **Every layout of
+      section 4 is in, an MCAST-VPN UPDATE crosses a session, a
+      malformed one is reported on receive, and the absence this
+      family's whole scope rests on is asserted rather than written
+      down.** What the lab does not give is agreement about our octets,
+      because neither router has the family; part 7 says so in as many
+      words.
       **The RFC is readable now**, which corrects the note
       this entry used to carry: it was fetched in full on 2026-10-31,
       along with draft-ietf-bess-rfc6514bis-00, which obsoletes it, and
@@ -3776,12 +3795,94 @@ Two consequences, both of which change the plan rather than decorate it:
            one an "outside the scope" sentence and the other needing a
            multicast range RFC 6514 does not number; and extending the
            next hop length check to EVPN and RT-constrain, above.
-      7. **The lab**, which for this family is a measurement rather than
-         a test, for the reason above. Assert that neither router
-         negotiates SAFI 5, since that is the fact the whole scope of
-         part 6 and the weakness of part 5 rest on, and a fact nothing
-         checks reads as verified. If a later GoBGP or FRR grows the
-         family, that assertion fails and says to come back.
+      7. **The lab. Done**, in #214, which finishes the MCAST-VPN plan.
+         `test/functional/lab/mcast_vpn_gobgp_test.rb`, 4 cases and 26
+         assertions in about 30 seconds, and `mcast_vpn_frr_test.rb`, 4
+         cases and 23 assertions in 7. No Docker. **These two are the
+         only lab tests here that measure an absence**, which is why
+         the plan called this a measurement rather than a test: neither
+         router has SAFI 5, so there is nothing to ask it about our
+         octets, and what they assert is how each router says it does
+         not have the family. `docs/mcast-vpn.md` section 9 has the
+         measurements and the whole table.
+         * **Probing paid for the fourth family running, and this time
+           it overturned a verdict rather than adding to one.** The
+           plan expected to assert one fact. What the routers gave is
+           three readings each and a **disagreement in the last one**:
+           GoBGP discards the MCAST-VPN UPDATE and keeps the session,
+           where FRR calls it `Attribute MP_REACH_NLRI, parse error`,
+           fails the whole UPDATE and **tears the session down with no
+           NOTIFICATION**. So two routers with the same gap answer
+           differently, which is the flow spec section 4.2 situation
+           again and means neither behaviour is bgp4r's to copy.
+         * **The first reading of FRR was wrong, and the mechanism is
+           the part to keep: `is_established?` cannot see a reset.**
+           FRR dials back in within a second or two, so a read a few
+           seconds after the send finds a session established and
+           concludes nothing happened. That is what the first
+           measurement here recorded, and it was wrong about the
+           verdict and not merely the detail. Both tests watch
+           `Neighbor#on_state_change` instead, which is what phase 2 of
+           the RIB work added it for, and here there is not even a
+           NOTIFICATION to observe. **A router that resets and
+           reconnects is indistinguishable from one that never
+           objected, to any reading of session state taken afterwards.**
+         * **Read GoBGP's capability before sending anything in the
+           family.** It records the pair as `UnknownFamily(65541)`,
+           which is afi << 16 | safi, and stops printing it once an
+           MCAST-VPN UPDATE arrives, logging `Capability was disabled`.
+           A test reading it afterwards would find nothing and could
+           conclude the capability was never received. Measured both
+           ways, since the line persists with no UPDATE. Be exact about
+           that log line: EVPN part 10 records it overstating what GoBGP
+           did, where a route type 3 still installed afterwards. Here
+           the family really is dropped from the neighbor output, and
+           what the line never means either way is that the session is
+           over.
+         * **The control route is an MP_REACH_NLRI for SAFI 1 and not
+           an RFC 4271 section 4.3 UPDATE**, which is what makes it
+           worth having: it holds the attribute, the next hop and the
+           AS_PATH constant and varies only the SAFI, so a discard or a
+           reset cannot be the router objecting to MP_REACH or to our
+           encoding of it. Both routers install it. That is
+           `fault_matrix_scenario.rb`'s `test_the_rib_answer_was_usable`
+           discipline with the one input the claim rests on isolated,
+           which is #205's lesson about a sabotage that misses.
+         * **Neither test makes this family interoperability checked**,
+           and that has to be said because a lab test for a family
+           usually means the opposite. A router with no parser for SAFI
+           5 never reads our octets. The wire format is still bgp4r's
+           own opinion against the field widths RFC 6514 and RFC 6515
+           state, and `test/functional/mcast_vpn_test.rb` still proves
+           only that the wiring sites agree with each other.
+         * Four sabotages, all landing, and none of them is on a router
+           since neither is ours to break: the SAFI pointed at 2, which
+           both routers have, fails 3 of 4 cases in each file and
+           spares the config one; the capability left out of the OPEN
+           fails 2 and 1; the MCAST-VPN UPDATE not sent fails 2 and 2;
+           and a family name each router really has, `ipv4-multicast`
+           and `ipv4 multicast`, fails the config case in each.
+         * The doc test gained a guard that reads the measured version
+           out of each test's own constant **and** out of the
+           document's table and requires them to agree, which is
+           `evpn_doc_test.rb`'s shape: a pin moved in one place and not
+           the other is how this table would go quietly wrong, since
+           both tests omit themselves on an unmeasured version and a
+           reader would see the table and no failure.
+           * **Its first draft passed a sabotage, and why is worth
+             keeping: a guard that reads a test file as text matches
+             the file's prose as readily as its code.** It asserted a
+             bare `/on_state_change/`, and deleting the listener from
+             the test left it passing, because both files name the
+             method in a comment. Every pattern is anchored at the
+             start of a line of code now, `^\s+n\.on_state_change`,
+             which a comment cannot match. The same applies to the
+             `validation.rb` text guards and to
+             `to_hash_round_trip_test.rb`: when the subject is whether
+             a file **does** something, match the call and not the
+             word. Found only by sabotage, which is the
+             check-the-proof rule in Rules for agents paying for
+             itself again.
    4. **BGP-LS, attribute 29 and AFI 16388 SAFI 71 and 72, RFC 9552.
       Not started**, largest of the four, and last for the reason above.
 
@@ -3890,6 +3991,7 @@ Lab and conformance:
 * **EVPN interop lives in `docs/evpn.md` section 9**, measured and asserted rather than written down here. The short version: **both routers implement route types 1 to 5 and neither knows 6 to 11**, GoBGP logging `Unknown EVPN Route type: N` and FRR saying nothing at all; FRR answers a malformed NLRI with **3/9 and a reset**, which is what `validation.rb` reports for the same octets, where GoBGP keeps the session up. Three harness facts worth knowing before writing another EVPN lab test: GoBGP's config file and its client disagree about the family name again, `l2vpn-evpn` against `evpn`; FRR's EVPN JSON has **no `routes` key** and is keyed by Route Distinguisher, so `Frr#rib` answers `{}` for it however many routes are in it and `Frr#evpn_rib` exists for that; and FRR prints `gateway IP 2.0.0.0` for every non-zero route type 5 gateway, so GoBGP is the only check on those octets.
 * **RT-constrain interop found two GoBGP 3.23.0 crashes**, asserted in `test/functional/lab/rt_constrain_gobgp_test.rb` and detailed in phase 4 part 1 above. The short version, because one of them matters more than any other divergence in this file: **the zero-length default route target followed by any second membership route GoBGP accepts panics the daemon**, a nil pointer dereference in `propagateUpdate`, and **both routes are entirely conformant** — RFC 4684 section 4 blesses the zero-length default and says it is what a route reflector's PE client sends. The second crash needs a malformed NLRI: a prefix length demanding more octets than the NLRI holds, 104 bits over 12 octets. Also measured: GoBGP drops a 32-bit or 64-bit partial prefix in silence, so the family's headline use does not work there; it reads the prefix as `mlen / 8` octets where the RFC rounds up, which is why that test cannot vouch for our length octet; and **the config and the client agree on `rtc`**, unlike VPN flow spec and EVPN. FRR 8.4.4 has no RT-constrain family at all, so this is the second family with one reference rather than two.
 * **ATTR_SET interop is the one that runs a router in the middle.** Neither GoBGP 3.23.0 nor FRR 8.4.4 implements attribute 128, measured with `strings` before the test was written, so there is no FRR twin and the question became what a router that has never heard of it can still vouch for. The answer is the property the attribute exists for: RFC 6368 section 5 makes it optional transitive so a customer's attributes cross the provider network. `attr_set_gobgp_test.rb` puts a gobgpd between two bgp4r speakers through `LabHelper::Gobgpd`'s `peer2`, and GoBGP carries the attribute to the far side **byte for byte** with the nested 4-octet AGGREGATOR intact, storing the value base64 encoded meanwhile. **What it does not vouch for**: GoBGP never parses the attributes inside, so the meaning of the 4-octet AS rule is still bgp4r's own opinion and only another ATTR_SET implementation could change that. What it does vouch for is the framing, since a wrong length or wrong flags would send the UPDATE to RFC 7606 rather than the RIB. One measurement recorded and not filed: **GoBGP propagates it with the Partial bit clear**, flags 0xc0 rather than 0xe0, on an attribute it does not recognize; RFC 4271 section 9 would settle whether that is a divergence and this file records that both fetchable sources truncate before it, so nothing is claimed.
+* **MCAST-VPN is the one family with no outside reference, and that absence is asserted rather than written down.** `mcast_vpn_gobgp_test.rb` and `mcast_vpn_frr_test.rb` are the only two lab tests here that measure an absence; `docs/mcast-vpn.md` section 9 has the table. Neither GoBGP 3.23.0 nor FRR 8.4.4 has SAFI 5: GoBGP's config parser refuses every plausible name (`mcast-vpn isn't a valid route family name`) and FRR's grammar has no such `address-family` command. **The two disagree about what to do with an MCAST-VPN UPDATE sent anyway**, which is the finding: GoBGP counts it under `Discarded`, logs `unknown route family. AFI: 1, SAFI: 5`, and keeps the session and an installed route; FRR calls it `Attribute MP_REACH_NLRI, parse error`, fails the whole UPDATE and **resets the session with no NOTIFICATION**, where RFC 4271 section 6 wants one. **Neither test vouches for anything about our octets**, because a router with no parser for the family never reads them, so this family's wire format is still bgp4r's own opinion against the field widths RFC 6514 and RFC 6515 state. Two harness facts: **`is_established?` cannot see FRR's reset**, since it reconnects within a second or two and the first measurement here read the new session and concluded nothing happened, so both tests watch `on_state_change`; and **GoBGP stops printing `UnknownFamily(65541)` once an UPDATE in the family arrives**, so the capability has to be read before sending.
 * **Flow spec interop lives in `docs/flow-spec.md` section 12**, measured and asserted rather than written down here, the same way the fault matrix columns are. The short version: both routers accept a rule from bgp4r and read it back, and they disagree on every part of RFC 8955 section 4.2. Two harness facts worth knowing before writing another flow spec lab test: GoBGP's **config file and its client use different names for the VPN family**, `l3vpn-ipv4-flowspec` and `ipv4-l3vpn-flowspec`, each rejecting the other; and **FRR 8.4.4 has no VPN flow spec family**, refusing a session that offers SAFI 134 alone with 2/7 and silently discarding the rule when SAFI 133 is there too.
 * **`to_hash_round_trip_test.rb` cannot read a test file that is not pure ASCII.** `test_every_working_round_trip_is_asserted_in_a_class_test_file` reads every test file body and matches regexps against it, and a single non-ASCII character in any of them makes it error with `ArgumentError: invalid byte sequence in US-ASCII`, pointing at its own line 190 and naming neither the file nor the character. Found on 2026-10-31 by putting one arrow in a comment in a new test file: that file passed on its own and the suite errored in a test it has nothing to do with. Every test file is ASCII today, so nothing is wrong now; what is wrong is the diagnosis the next person gets. The fix is an encoding on the read or a `scrub`, and it is one line in a file this change does not otherwise touch.
 * Lowest coverage (unit suite): `neighbor/neighbor.rb` 91%, `messages/update.rb` 92%, `neighbor/add_path_cap.rb` 93%, `path_attributes/mp_unreach.rb` 93%, `path_attributes/ipv6_extended_communities.rb` 93%, `optional_parameters/graceful_restart.rb` 93%.

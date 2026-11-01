@@ -62,10 +62,10 @@ module LabGroups
     # What GoBGP makes of something bgp4r learned to speak. A new EVPN,
     # flow spec or RT-constrain test goes here, and so does an
     # attribute's, which `attr_set_gobgp_test` is: the group is about
-    # where the outside opinion comes from, not about the NLRI. ~273s as
-    # a group, measured on 2026-10-31, where it was 139s with two files
-    # and 223s with three. Each entry costs 50 to 90s, because every
-    # case wants a session of its own.
+    # where the outside opinion comes from, not about the NLRI. 291s as
+    # a group, measured on 2026-10-31, where it was 139s with two files,
+    # 223s with three and 273s with four. Each entry costs 30 to 90s,
+    # because every case wants a session of its own.
     #
     # The rule stays the rule, so a new one goes here even though that
     # makes this group the lab job's clock. **Splitting it is now the
@@ -74,10 +74,17 @@ module LabGroups
     # entry. Rebalancing instead by moving a file into a group whose
     # name does not describe it is not, because the names are what tell
     # the next person where to put things.
+    #
+    # `mcast_vpn_gobgp_test` is the odd one and belongs here all the
+    # same: it measures an **absence**, since GoBGP has no SAFI 5, so
+    # what it asserts is how the router says it does not have the
+    # family. The group is about where the outside opinion comes from,
+    # and that is still GoBGP.
     'gobgp-families' => %w[
       attr_set_gobgp_test
       evpn_gobgp_test
       flow_spec_gobgp_test
+      mcast_vpn_gobgp_test
       rt_constrain_gobgp_test
     ],
 
@@ -89,11 +96,15 @@ module LabGroups
     ],
 
     # Everything needing FRR's bgpd. Small enough to stay one group:
-    # 87s all together, under every group above.
+    # 93s all together, under every group above, where
+    # `mcast_vpn_frr_test` is 7s of it. The same absence its GoBGP twin
+    # measures, and FRR answers differently: see docs/mcast-vpn.md
+    # section 9.
     'frr' => %w[
       evpn_frr_test
       fault_matrix_frr_test
       flow_spec_frr_test
+      mcast_vpn_frr_test
       rib_router_frr_test
     ],
 
