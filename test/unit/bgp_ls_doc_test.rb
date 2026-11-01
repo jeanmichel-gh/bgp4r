@@ -80,6 +80,13 @@ require 'bgp/nlris/link_state'
 require 'bgp/nlris/link_state_tlv'
 require 'bgp/nlris/link_state_descriptor'
 require 'bgp/nlris/link_state_nlri'
+# Part 5a's node attribute TLVs register into the same two hashes, so
+# this is the fourth file the paragraph above is about. The attribute
+# itself comes with it, since `link_state_attribute.rb` requires the
+# TLVs, but it is named anyway: the guards below use it as code and a
+# require that arrives by accident is one a later edit can remove.
+require 'bgp/nlris/link_state_node_attribute'
+require 'bgp/path_attributes/link_state_attribute'
 # Required explicitly, per Conventions: run_unit.rb requires every file
 # before any test runs, so a file that leans on another's requires
 # passes in the suite and fails on its own. This family's siblings fell
@@ -157,7 +164,19 @@ class BgpLsDocTest < Test::Unit::TestCase
       cells = l.strip.split('|').collect { |c| c.strip }
       cells.shift
       next unless cells.size >= 2 and cells.first =~ /\A\d+\z/
-      next unless cells.last =~ /\A\w+\z/
+      # **Exactly yes or no, where this was `\A\w+\z`, and this is
+      # defensive rather than load bearing.** Part 5 put a bit-mask
+      # table in section 10 whose rows are `| 0 | Overload | 0x80 | ISO
+      # 10589 |`: a digit in the first cell and a word in the last, so
+      # the looser form came within one character of reading bit
+      # numbers as code points and was saved by the space in "ISO
+      # 10589". Measured: loosening this back passes the whole suite
+      # today, because every Reference cell in that table has a space
+      # in it. It is kept because the next table somebody adds may not,
+      # and that is the fragility part 2 and part 4 each paid for once
+      # already. Saying what the cell has to be is cheaper than scoping
+      # around every table.
+      next unless cells.last =~ /\A(?:yes|no)\z/i
       h[cells.first.to_i] = cells.last.downcase
     end
   end
@@ -168,14 +187,49 @@ class BgpLsDocTest < Test::Unit::TestCase
   end
 
   # The section 3b TLV code point table, same shape.
-  # Every TLV the document claims, across the two sections that carry a
-  # table of them: 3b for section 5.2.1's node descriptors and 3c for
-  # sections 5.2.2 and 5.2.3. Merged rather than one table, so each
-  # section's table is about its own part of the RFC, and a code point
-  # in neither fails the guard below just the same.
+  # Every TLV the document claims, across the three sections that carry
+  # a table of them: 3b for section 5.2.1's node descriptors, 3c for
+  # sections 5.2.2 and 5.2.3, and 10 for the three attribute tables of
+  # section 5.3. Merged rather than one table, so each section's table
+  # is about its own part of the RFC, and a code point in none of them
+  # fails the guard below just the same.
+  #
+  # **Section 10 carries three tables and `section` slices to the next
+  # `## `, so one call reads all three**, since 10a, 10b and 10c are
+  # `###` subheadings. TLV 263 and 1028 and 1029 each have a row in two
+  # of them, which `merge` collapses to one answer; the guard below
+  # asserts the rows agree so a yes in one table and a no in another
+  # cannot pass.
   def tlv_table
     rows('3b. The node descriptors').merge(
-      rows('3c. The link and prefix descriptors'))
+      rows('3c. The link and prefix descriptors')).merge(
+        rows('10. The attribute'))
+  end
+
+  # Every "In bgp4r" row the document has, as a list of [code point,
+  # answer] pairs rather than a Hash, so a code point with a row in more
+  # than one table appears more than once and a disagreement between
+  # them is visible. **A Hash cannot do this**, and that is the point:
+  # `rows` collapses section 3c's two tables to 8 keys where they have 9
+  # rows, because 263 is in both.
+  def tlv_row_pairs(heading)
+    section(heading).lines.each_with_object([]) do |l, a|
+      next unless l.start_with?('|')
+      cells = l.strip.split('|').collect { |c| c.strip }
+      cells.shift
+      next unless cells.size >= 2 and cells.first =~ /\A\d+\z/
+      # Same test as `rows`, and the comment there says why.
+      next unless cells.last =~ /\A(?:yes|no)\z/i
+      a << [cells.first.to_i, cells.last.downcase]
+    end
+  end
+
+  TABLE_SECTIONS = ['3b. The node descriptors',
+                    '3c. The link and prefix descriptors',
+                    '10. The attribute'].freeze
+
+  def tlv_rows_with_duplicates
+    TABLE_SECTIONS.flat_map { |h| tlv_row_pairs(h) }
   end
 
   def test_the_document_exists
@@ -380,9 +434,51 @@ class BgpLsDocTest < Test::Unit::TestCase
     built = BGP::Link_state::Tlv::REGISTRY.keys.sort
     said = tlv_table.select { |_, v| v == 'yes' }.keys.sort
     assert_equal(built, said,
-                 "#{DOC} section 3b and Tlv::REGISTRY disagree about " \
-                 "which TLV types are implemented: library " \
-                 "#{built.inspect}, document #{said.inspect}")
+                 "#{DOC} sections 3b, 3c and 10 and Tlv::REGISTRY " \
+                 "disagree about which TLV types are implemented: " \
+                 "library #{built.inspect}, document #{said.inspect}")
+  end
+
+  # **The row count, asserted before anything is read out of it.** A
+  # guard that reads a document has to say how many rows it expected, or
+  # a pattern that stops matching measures a subset and passes: part 3's
+  # octet count guard did exactly that and survived four sabotages.
+  # Section 3b is Table 3's six; section 3c is Table 4's six and Table
+  # 5's three; section 10 is Table 6's seven, Table 8's fifteen and
+  # Table 10's six.
+  def test_each_code_point_table_has_the_rows_it_should
+    assert_equal(6, tlv_row_pairs('3b. The node descriptors').size)
+    assert_equal(9, tlv_row_pairs('3c. The link and prefix descriptors').size)
+    assert_equal(28, tlv_row_pairs('10. The attribute').size)
+    assert_equal(43, tlv_rows_with_duplicates.size)
+  end
+
+  # **The document's 43 rows cover Table 18's 39 code points exactly**,
+  # which says the three sections together are the whole of RFC 9552's
+  # own TLV space with nothing missing and nothing invented.
+  def test_the_three_tables_cover_table_18_once_over
+    assert_equal(TABLE_18.sort, tlv_table.keys.sort)
+  end
+
+  # Three code points have a row in more than one table, which the
+  # RFC's own tables do too: 263 is a link descriptor, a prefix
+  # descriptor and a node attribute, so three rows, and 1028 and 1029
+  # are node attributes and link attributes, so two each. A yes in one
+  # and a no in another would read as either and `merge` would hide it,
+  # so the rows have to agree.
+  def test_a_code_point_in_two_tables_answers_the_same_in_both
+    seen = {}
+    repeats = []
+    tlv_rows_with_duplicates.each do |type, answer|
+      if seen.key?(type)
+        repeats << type
+        assert_equal(seen[type], answer,
+                     "#{DOC} answers both ways for TLV #{type}")
+      end
+      seen[type] = answer
+    end
+    assert_equal([263, 263, 1028, 1029], repeats.sort,
+                 "#{DOC} should repeat 263 twice and 1028 and 1029 once")
   end
 
   # And every row of it is a code point RFC 9552's own Table 18 defines,
@@ -760,6 +856,110 @@ class BgpLsDocTest < Test::Unit::TestCase
     end
   end
 
+  # --- section 5.3, what part 5 claims ---------------------------------
+
+  # The attribute is a path attribute, so what says it works is that it
+  # reads back out of an attribute set with no protocol error and no
+  # coverage gap. Before part 5a it came back as an `Attr::Unknown` with
+  # an `Attr::Gap`, which part 7 measured against a real router.
+  def test_the_attribute_is_registered_and_reads_back_out_of_a_set
+    assert_equal(29, BGP::ATTR::BGP_LS)
+    assert_equal(BGP::Link_state_attribute, BGP::Attr.by_type(29).klass)
+    assert_equal(BGP::Link_state_attribute, BGP::Attr.by_key(:link_state).klass)
+    a = BGP::Link_state_attribute.new(
+      BGP::Link_state::Tlv::Node_flag_bits.new(:overload),
+      BGP::Link_state::Tlv::Node_name.new('r1'))
+    pa = BGP::Path_attribute.new(a)
+    back = BGP::Path_attribute.new(pa.encode.is_packed)
+    assert_equal(pa.to_shex, back.to_shex)
+    assert_equal([BGP::Link_state_attribute],
+                 back.attributes.collect { |x| x.class })
+    assert_equal(0, back.errors.size)
+    assert_equal(0, back.undecoded.size)
+  end
+
+  # Section 5.3: "an optional, non-transitive BGP Attribute". The flags
+  # octet is the only place that can be checked, and the document says
+  # it in prose.
+  def test_the_attribute_is_optional_and_non_transitive
+    assert_equal(0x80, BGP::Link_state_attribute.new.encode.unpack1('C'))
+    assert_match(/optional, non-transitive BGP Attribute/, doc)
+  end
+
+  # **The hash is a list and not a map keyed by type**, which is the one
+  # thing this attribute does differently from `Path_attribute`'s own
+  # hash. The RFC gives the reason twice, and the test is that two TLVs
+  # of one type survive the round trip, which a map could not carry.
+  def test_the_attribute_hash_is_a_list
+    a = BGP::Link_state_attribute.new(
+      BGP::Link_state::Tlv::Isis_area_id.new(['490001'].pack('H*')),
+      BGP::Link_state::Tlv::Isis_area_id.new(['490002'].pack('H*')))
+    assert_equal(2, a.to_hash[:link_state].size)
+    assert_equal(a.to_shex, BGP::Link_state_attribute.new(a.to_hash).to_shex)
+    assert_match(/multiple TLVs are used to encode them/, doc)
+  end
+
+  # **Erratum 7789, which the document records and the library
+  # follows.** The mask table in section 10a is held against the class,
+  # both ways, so a bit renamed or moved in either place fails. The
+  # names come out of the document and the masks out of `BITS`, which is
+  # what makes this a check and not a restatement.
+  def test_the_node_flag_bits_follow_the_erratum_and_not_the_figure
+    assert_match(/Erratum ID 7789/, doc)
+    assert_match(/the figure's T should read A/, doc)
+    said = {}
+    section('10. The attribute').scan(
+      /^\| [0-5] \| (\w+) \| (0x[0-9a-f]{2}) \|/) { said[$1.downcase.to_sym] =
+                                                      Integer($2, 16) }
+    assert_equal(6, said.size, "#{DOC} section 10a must give six masks")
+    assert_equal(BGP::Link_state::Tlv::Node_flag_bits::BITS, said)
+    assert_equal(:attached, said.keys[1],
+                 'the second bit is Attached, not the figure\'s T')
+    assert_equal(0xfc, BGP::Link_state::Tlv::Node_flag_bits::DEFINED_BITS)
+  end
+
+  # Table 8 has no Length column, which is Table 4's situation again, so
+  # five of its rows cite another RFC for a width that is nowhere in RFC
+  # 9552. Those five citations are the only place each width lives, so
+  # the document has to carry them and a reader has to be told which
+  # five.
+  def test_the_five_link_attribute_widths_that_are_elsewhere
+    { 1088 => 'RFC 5305 section 3.1', 1089 => 'RFC 5305 section 3.4',
+      1090 => 'RFC 5305 section 3.5', 1091 => 'RFC 5305 section 3.6',
+      1093 => 'RFC 5307 section 1.2' }.each do |type, where|
+      assert_match(/^\| #{type} \|[^|]*\| #{Regexp.escape(where)} \|/,
+                   section('10. The attribute'),
+                   "#{DOC} section 10b must cite #{where} for TLV #{type}")
+    end
+    assert_match(/\*\*Table 8 has no Length column\*\*/, doc)
+  end
+
+  # The third self contradiction in RFC 9552, recorded with the erratum
+  # check that rules out an erratum covering it.
+  def test_the_1156_disagreement_is_recorded
+    assert_match(/Table 10 disagrees with its own section about 1156/, doc)
+    # `\s+` and not a literal space: the phrase wraps in the document
+    # and a literal space misses it, which #218 recorded and #219 met
+    # again one pull request later.
+    assert_match(/the two verified ones\s+are 7789 and 8766/, doc)
+  end
+
+  # **Forward-looking.** Parts 5b and 5c are the other two tables, so
+  # the document's own "no" rows are what says they are outstanding, and
+  # the table guard above is what fires when one lands. This one holds
+  # the count, so part 5b landing one class quietly is not possible.
+  def test_table_6_is_in_and_tables_8_and_10_are_not
+    built = BGP::Link_state::Tlv::REGISTRY.keys
+    (1024..1029).each do |t|
+      assert(built.include?(t), "TLV #{t} is Table 6's and part 5a's")
+    end
+    ((1030..1031).to_a + (1088..1098).to_a + (1152..1157).to_a).each do |t|
+      assert(!built.include?(t),
+             "TLV #{t} is registered: that is part 5b or 5c, so rewrite " \
+             "#{DOC} sections 10b and 10c and move part 5 on in section 7")
+    end
+  end
+
   # **Forward-looking.** Part 6 puts the first check in validation.rb,
   # and section 8 of the document says there is none yet.
   def test_validation_knows_nothing_of_the_family_yet
@@ -976,10 +1176,26 @@ class BgpLsDocTest < Test::Unit::TestCase
       ['0001000902000000000000000000'].pack('H*')))
     assert_equal('done', status[4],
                  'the dispatch gates are wired, so part 4 is done')
-    # Parts 6 and 7 are what the forward-looking guards still watch, so
-    # their status here must agree with those still passing.
+    # Part 5: tied to Table 6 being registered and Tables 8 and 10 not,
+    # which `test_table_6_is_in_and_tables_8_and_10_are_not` holds. The
+    # status is a phrase and not a word, so this matches rather than
+    # compares.
+    assert_match(/5a done.*5b and 5c to do/, status[5],
+                 'Table 6 is registered and Tables 8 and 10 are not, so ' \
+                 'part 5 is 5a done')
+    # Part 6 is what the forward-looking validation guard still watches,
+    # so its status here must agree with that one still passing.
     assert_equal('to do', status[6])
-    assert_equal('to do', status[7])
+    # **Part 7's row was stale and so was this line.** #220 landed the
+    # lab, rewrote section 11 and left both the table row and this
+    # assertion saying "to do", and nothing caught it because the two
+    # agreed with each other. Tied to the observation now, which is
+    # what the paragraph above this method asks for: the lab files
+    # exist and are in a CI group.
+    assert_equal(2, LabGroups.present.count { |f| f =~ /\Alink_state_\w+_test\z/ },
+                 'the two BGP-LS lab files are on disk')
+    assert_equal('done', status[7],
+                 'the lab is measured, so part 7 is done')
   end
 
 end

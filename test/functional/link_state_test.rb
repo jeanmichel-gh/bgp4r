@@ -38,6 +38,12 @@ require 'test/helpers/server'
 # Four sites, the EVPN and MCAST-VPN count: the framing in `nlri_size`,
 # the two dispatch gates, and the next hop.
 #
+# **Two cases at the end are not about a wiring site**, since the BGP-LS
+# Attribute of section 5.3 goes through `Attr.register` rather than
+# either gate. They are here because this is the only place the two
+# halves of the family travel together over a socket: the NLRI and the
+# attribute that describes it, in one UPDATE, read off the far side.
+#
 # **Two of them are this family's own and no earlier family has either.**
 #
 # The SAFI is a parse-time input. Figures 5 and 6 of section 5.2 differ
@@ -544,6 +550,74 @@ class LinkStateSessionTest < Test::Unit::TestCase
     assert_equal(BGP::Link_state::Tlv::Ip_reachability,
                  a.nlris.last.nlri.tlvs.first.class,
                  'a prefix descriptor inside a Link NLRI')
+  end
+
+  # --- the BGP-LS Attribute, section 5.3 -------------------------------
+
+  # **The only place the two halves of this family travel together.**
+  # The attribute is not one of the four wiring sites, since it goes
+  # through `Attr.register` rather than either gate, so what this adds
+  # over the unit tests is narrow and worth stating: an UPDATE carrying
+  # the NLRI and the attribute that describes it, read off a socket,
+  # with the attribute set holding both and claiming neither a protocol
+  # error nor a coverage gap.
+  def test_the_attribute_crosses_a_session_beside_its_nlri
+    session
+    attr29 = BGP::Link_state_attribute.new(
+      BGP::Link_state::Tlv::Node_flag_bits.new(:overload, :attached),
+      BGP::Link_state::Tlv::Node_name.new('router1'),
+      BGP::Link_state::Tlv::Isis_area_id.new(['490001'].pack('H*')),
+      BGP::Link_state::Tlv::Ipv4_local_router_id.new('10.0.0.1'))
+    sent = BGP::Update.new(
+      BGP::Path_attribute.new(
+        BGP::Origin.new(0),
+        BGP::As_path.new(CLIENT_AS),
+        BGP::Mp_reach.new(:safi => SAFI,
+                          :nexthop => ['10.0.0.1'],
+                          :nlris => [{ :node => { :protocol_id => 2,
+                                                  :identifier => 7,
+                                                  :tlvs => [local] } }]),
+        attr29))
+    got = crosses(sent)
+    a = got.path_attribute.find(BGP::Link_state_attribute)
+    assert_not_nil(a, 'a Link_state_attribute, not an Attr::Unknown')
+    assert_equal([1024, 1026, 1027, 1028], a.tlvs.collect { |t| t.type })
+    assert_equal('router1', a.tlv(1026).name)
+    assert_equal('10.0.0.1', a.tlv(1028).address.to_s)
+    assert(a.tlv(1024).overload?)
+    assert(a.ordered?, 'section 5.1 asks a sender for ascending type order')
+    assert_equal(BGP::Link_state, mpr(got).nlris.first.class,
+                 'and the NLRI beside it still parses')
+  end
+
+  # Section 5.1's keep-and-echo MUST, inside the attribute and over a
+  # socket: "Unknown and unsupported types MUST be preserved and
+  # propagated within both the NLRI and the BGP-LS Attribute", and their
+  # presence "MUST NOT result in the NLRI or the BGP-LS Attribute being
+  # considered malformed". 1101 is the Adjacency SID of RFC 9085, which
+  # is what GoBGP really sends in this attribute and which no part of
+  # this plan implements, so the example cannot expire.
+  def test_an_unknown_tlv_inside_the_attribute_crosses_a_session
+    session
+    sent = BGP::Update.new(
+      BGP::Path_attribute.new(
+        BGP::Origin.new(0),
+        BGP::As_path.new(CLIENT_AS),
+        BGP::Mp_reach.new(:safi => SAFI,
+                          :nexthop => ['10.0.0.1'],
+                          :nlris => [{ :node => { :protocol_id => 2,
+                                                  :identifier => 7,
+                                                  :tlvs => [local] } }]),
+        BGP::Link_state_attribute.new(
+          BGP::Link_state::Tlv::Node_flag_bits.new(:overload),
+          BGP::Link_state::Tlv::Unknown.new(1101,
+                                            ['0100000003e8'].pack('H*')))))
+    got = crosses(sent)
+    a = got.path_attribute.find(BGP::Link_state_attribute)
+    assert_equal([BGP::Link_state::Tlv::Node_flag_bits,
+                  BGP::Link_state::Tlv::Unknown],
+                 a.tlvs.collect { |t| t.class })
+    assert_equal('0100000003e8', a.tlvs.last.value.unpack1('H*'))
   end
 
   # Not a test method: a helper, kept below every test and with no

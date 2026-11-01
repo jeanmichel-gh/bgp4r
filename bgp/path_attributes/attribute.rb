@@ -49,6 +49,7 @@ module BGP
     TUNNEL_ENCAP = 23              # RFC 9012 section 2
     IPV6_EXTENDED_COMMUNITY = 25   # RFC 5701 section 3
     ACCUMULATED_IGP_METRIC = 26
+    BGP_LS = 29                    # RFC 9552 section 5.3
     LARGE_COMMUNITY = 32           # RFC 8092 section 3
     ONLY_TO_CUSTOMER = 35          # RFC 9234 section 5
     PREFIX_SID = 40                # RFC 8669 section 3
