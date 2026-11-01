@@ -270,8 +270,13 @@ module BGP
         HASH_KEY = :unreserved_bandwidth
         LABEL = 'Unreserved bandwidth'
 
+        # Section 3.6's eight, read by `full?` so the number is not a
+        # constant nothing checks. **There is no WIDTH beside it**: the
+        # 4 octets of an element are what `pack('g*')` is, and a
+        # constant repeating that is a second statement of one fact.
+        # Sabotage found both: changing a `WIDTH = 4` here to 2 passed
+        # the whole suite, because nothing read it.
         PRIORITIES = 8
-        WIDTH = 4
 
         attr_reader :values
 
@@ -298,12 +303,12 @@ module BGP
           self
         end
 
-        # Each whole 4-octet group, so a value that is not a multiple of
-        # 4 keeps what it can and loses the remainder, which then fails
-        # the encode-matches rule and is kept as a `Tlv::Unknown`.
+        # Each whole group, which `unpack('g*')` takes and which leaves
+        # a trailing partial one behind. So a value that is not a
+        # multiple of 4 loses the remainder, which then fails the
+        # encode-matches rule and is kept as a `Tlv::Unknown`.
         def parse(s)
-          n = s.size / WIDTH
-          @values = s.slice!(0, n * WIDTH).unpack('g*')
+          @values = s.slice!(0, s.size).unpack('g*')
           self
         end
 
@@ -315,6 +320,13 @@ module BGP
         # where the value is too short to carry it.
         def at(priority)
           @values[priority]
+        end
+
+        # True for the eight RFC 5305 section 3.6 describes. False is
+        # not an error: section 8.2.2 says not to check whether a
+        # fixed-length TLV's length is correct.
+        def full?
+          @values.size == PRIORITIES
         end
 
         def value_hash
@@ -823,8 +835,11 @@ module BGP
         HASH_KEY = :srlg
         LABEL = 'SRLG'
 
-        WIDTH = 4
-
+        # **No WIDTH constant**, for the reason `Unreserved_bandwidth`
+        # records: section 5.3.2.5's "each element in the list has 4
+        # octets" is what `pack('N*')` is, and a constant beside it is
+        # a second statement of one fact that a sabotage proved nothing
+        # read.
         attr_reader :values
 
         # new(100, 200) or new([100, 200]), the wire value octets, this
@@ -850,9 +865,11 @@ module BGP
           self
         end
 
+        # `unpack('N*')` takes each whole 4-octet group and leaves a
+        # trailing partial one, so a value that is not a multiple of 4
+        # cannot reproduce itself and is kept as a `Tlv::Unknown`.
         def parse(s)
-          n = s.size / WIDTH
-          @values = s.slice!(0, n * WIDTH).unpack('N*')
+          @values = s.slice!(0, s.size).unpack('N*')
           self
         end
 

@@ -164,13 +164,18 @@ class TestLinkStateLinkAttribute < Test::Unit::TestCase
   # floating point numbers", and the order is the section's too,
   # "priority 0 occurring at the start of the sub-TLV, and priority 7 at
   # the end".
+  # The value is built from `PRIORITIES` rather than from a literal 8, so
+  # the constant is read by something: an earlier draft had it read by
+  # nothing at all and a sabotage setting it to 1 passed the whole suite.
   def test_the_unreserved_bandwidth_tlv_is_eight_floats
-    v = (0..7).collect { |i| (i + 1) * 1000.0 }
+    n = BGP::Link_state::Tlv::Unreserved_bandwidth::PRIORITIES
+    v = (0...n).collect { |i| (i + 1) * 1000.0 }
     t = BGP::Link_state::Tlv::Unreserved_bandwidth.new(*v)
     assert_equal(1091, t.type)
     assert_equal(32, t.encode_value.size)
     assert_equal(36, t.size)
     assert_equal(v, t.values)
+    assert(t.full?, 'eight priorities is a full value')
     assert_equal(1000.0, t.at(0), 'priority 0 is first')
     assert_equal(8000.0, t.at(7), 'and priority 7 is last')
     assert_equal({ :unreserved_bandwidth => v }, t.to_hash)
@@ -193,6 +198,7 @@ class TestLinkStateLinkAttribute < Test::Unit::TestCase
     t = BGP::Link_state::Tlv.factory([hex].pack('H*'))
     assert_instance_of(BGP::Link_state::Tlv::Unreserved_bandwidth, t)
     assert_equal(7, t.values.size)
+    assert(!t.full?, 'seven is not full, and that is not an error')
     assert_nil(t.at(7))
     assert_equal(hex, t.to_shex)
   end
