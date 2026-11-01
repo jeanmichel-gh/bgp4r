@@ -141,6 +141,28 @@ class TestLinkStatePrefixDescriptor < Test::Unit::TestCase
     assert_equal('::/0', t.prefix(2))
   end
 
+  # **The octets are BINARY whatever built them, and the empty default is
+  # the case that caught this.** `(+'')` is US-ASCII, so the default
+  # route handed `IPAddr.new_ntoh` a US-ASCII string: Ruby 3.3 accepted
+  # it and 3.4, 4.0 and head all raise `IPAddr::InvalidAddressError:
+  # invalid encoding (given UTF-8, expected BINARY)`. So the encoding is
+  # asserted here rather than left to whichever Ruby happens to run,
+  # which is the only form of this test that fails on 3.3 as well.
+  def test_the_octets_are_binary_on_every_build_path
+    [BGP::Link_state::Tlv::Ip_reachability.new,
+     BGP::Link_state::Tlv::Ip_reachability.new('10.0.0.0/8'),
+     BGP::Link_state::Tlv::Ip_reachability.new('2001:db8::/32'),
+     BGP::Link_state::Tlv::Ip_reachability.new(8, ['0a'].pack('H*')),
+     BGP::Link_state::Tlv::Ip_reachability.new(
+       :ip_reachability => { :bitlen => 8, :octets => '0a' }),
+     BGP::Link_state::Tlv.factory(
+       ['0109000108'].pack('H*').is_packed)].each do |t|
+      assert_equal(Encoding::BINARY, t.octets.encoding,
+                   "octets of #{t.to_shex}")
+      assert_equal(Encoding::BINARY, t.encode.encoding)
+    end
+  end
+
   def test_it_parses_back
     t = BGP::Link_state::Tlv.factory(
       ['01090004' + '18' + 'c00002'].pack('H*').is_packed)

@@ -337,7 +337,7 @@ module BGP
         attr_reader :value
 
         def initialize(*args)
-          @type, @value = 0, +''
+          @type, @value = 0, String.new
           if args.size == 1 and args[0].is_a?(self.class)
             @type = args[0].type
             @value = args[0].value.dup

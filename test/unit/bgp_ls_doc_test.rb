@@ -645,6 +645,61 @@ class BgpLsDocTest < Test::Unit::TestCase
     assert_match(/tiebreakers.*unreachable/m, doc)
   end
 
+  # --- every octet buffer in the family is BINARY -----------------------
+
+  # **The buffers and not `encode`, and the difference is what makes
+  # this guard worth anything.** Every empty buffer in this family was
+  # `(+'')`, which is US-ASCII, and only one of the eight sites showed
+  # it: `Ip_reachability#prefix` handed the default route's empty octets
+  # to `IPAddr.new_ntoh`, which Ruby 3.3 accepts and 3.4, 4.0 and head
+  # refuse with "invalid encoding (given UTF-8, expected BINARY)". CI
+  # failed on three Rubies and passed on the one this was written
+  # against.
+  #
+  # **The first draft of this guard asserted `encode.encoding` and
+  # caught none of the other seven**, because `encode` goes through
+  # `pack`, which forces BINARY on its result whatever went in. It
+  # passed against four sabotages. So it reads the buffers through their
+  # own accessors instead, which is where a US-ASCII string can sit
+  # unnoticed: `String#<<` with an Integer appends a **codepoint** on a
+  # non-BINARY buffer, so a value above 0x7f becomes two octets and
+  # `bytesize` stops agreeing with `size`.
+  def test_every_octet_buffer_is_binary
+    # The two Unknowns are built with no value, since passing one
+    # overwrites the buffer this is about, and they are not in
+    # `REGISTRY` so the loops below do not reach them. **Their own
+    # `String.new` defaults are unreachable either way**, which
+    # sabotage showed: every branch of each constructor assigns
+    # `@value`, and the one-argument form goes through `nil.to_s.b`,
+    # so putting `(+'')` back there changes nothing. Kept and recorded
+    # as unreachable, the way `Fib`'s `:no_next_hop` branch and
+    # `Rt_constrain#origin_as`'s length guard are.
+    objects = [BGP::Link_state::Tlv::Unknown.new(999),
+               BGP::Link_state::Unknown.new(999),
+               BGP::Link_state::Tlv::Ip_reachability.new]
+    BGP::Link_state::Tlv::REGISTRY.each_value do |k|
+      objects << (k.new rescue next)
+    end
+    BGP::Link_state::TYPES.each_value { |k| objects << k.new(1, 0) }
+    checked = 0
+    objects.each do |o|
+      [:value, :tail, :octets].each do |m|
+        next unless o.respond_to?(m)
+        s = o.send(m)
+        next unless s.is_a?(String)
+        checked += 1
+        assert_equal(Encoding::BINARY, s.encoding,
+                     "#{o.class}##{m} must be a BINARY buffer")
+      end
+    end
+    # The count, so a renamed accessor cannot make this guard vacuous
+    # the way its first draft was. 11 today, and the floor is the
+    # number of reachable buffers rather than a round figure.
+    assert_operator(checked, :>=, 11,
+                    'this guard must reach every octet buffer in the ' \
+                    "family; it found #{checked}")
+  end
+
   # --- forward-looking: nothing dispatches to this family yet ----------
 
   # **Forward-looking.** Part 4 wires the two gates, and then these fail

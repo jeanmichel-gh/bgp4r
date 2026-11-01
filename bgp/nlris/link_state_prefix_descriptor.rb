@@ -192,8 +192,17 @@ module BGP
 
         # new('10.0.0.0/8'), new(8, octets), the wire value octets,
         # this class's own hash, or another instance.
+        # **`String.new` and not `+''`, because the empty default has to
+        # be BINARY.** `(+'')` is US-ASCII, and the default route leaves
+        # `@octets` empty, so `prefix` handed `IPAddr.new_ntoh` a
+        # US-ASCII string: Ruby 3.3 accepted it and **3.4 raises
+        # `IPAddr::InvalidAddressError: invalid encoding (given UTF-8,
+        # expected BINARY)`**. Found in CI, where 3.3 passed and 3.4,
+        # 4.0 and head all failed on one test. Every buffer in this
+        # family is `String.new` now, which Conventions names first for
+        # exactly this reason.
         def initialize(*args)
-          @bitlen, @octets = 0, +''
+          @bitlen, @octets = 0, String.new
           if args.size == 1 and args[0].is_a?(String) and args[0].is_packed?
             parse(args[0])
           elsif args.size == 1 and args[0].is_a?(self.class)
@@ -245,7 +254,11 @@ module BGP
           width = afi == IANA::AFI::IPv6 ? 16 : 4
           return nil if @bitlen > width * 8
           return nil if @octets.size != self.class.octets_for(@bitlen)
-          padded = @octets + ([0].pack('C') * (width - @octets.size))
+          # Built on a BINARY buffer rather than by concatenating onto
+          # @octets, so the result's encoding cannot depend on whether
+          # either side happened to be empty.
+          padded = String.new << @octets <<
+            ([0].pack('C') * (width - @octets.size))
           "#{IPAddr.new_ntoh(padded)}/#{@bitlen}"
         end
 

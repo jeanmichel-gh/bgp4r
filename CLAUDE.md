@@ -463,7 +463,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. The `lab` job is a matrix, one job per group in `test/lab_groups.rb`, so its cost is the slowest group and not the total: it was 12m42s as one serial suite. Each job installs only what its group needs, which is why the matrix entry carries a `gobgp`, `frr`, `docker` or `netns` flag. The `gobgp` groups pin 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-11-01: 2217 tests, 27230 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.4%.
+Baseline on 2026-11-01: 2219 tests, 27254 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.4%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -524,6 +524,9 @@ There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Cove
     ```
     So anything defining `BGP::Nlri` before that line runs skips the **whole block**, and `Withdrawn` is never defined either. Found in #173, which opened `class Nlri` in a file `nlri.rb` requires: a dozen failures naming `new_ntop`, `empty?`, `<<` and `BGP::Update::Withdrawn`, and not one of them naming the guard or the constant that tripped it. That pull request is closed, so this is the only thing kept from it. **Do not reopen `class Nlri` outside that file.**
 * Do not mutate string literals. CI runs the suite with `--enable-frozen-string-literal`. Use `String.new` or `+''` for a buffer.
+  * **`String.new` and `+''` are not interchangeable: an octet buffer must be `String.new`.** With no argument `String.new` is `ASCII-8BIT`, where `+''` is `US-ASCII` and `String.new('abc')` is too. That only shows when the buffer stays empty, because concatenating any packed octets onto it makes the result binary, so the bug hides until an object's value happens to be empty. It bit in #218: `Link_state::Tlv::Ip_reachability` defaulted its octets to `+''`, and the default route handed that empty US-ASCII string to `IPAddr.new_ntoh`. **Ruby 3.3 accepted it and 3.4 raises** `IPAddr::InvalidAddressError: invalid encoding (given UTF-8, expected BINARY)`, because 3.3's `IPAddr.ntop` only switched on `addr.size` and 3.4 checks the encoding. CI went green on 3.3 and red on 3.4, 4.0 and head, on one test out of 2217, and no local run could reproduce it. Same family as the `base64` entry above: the local Ruby is not the CI Ruby.
+  * **Assert the encoding rather than trusting it**, because that is the only form of the test that fails on the Ruby you are running. `assert_equal(Encoding::BINARY, obj.octets.encoding)` fails on 3.3 against the unfixed code, where every assertion about the value passes. And assert the **buffer**, not `encode`: `encode` goes through `pack`, which forces binary on its result whatever went in, so a guard on `encode.encoding` passes against every one of these and is worth nothing. The first draft of #218's guard did exactly that and survived four sabotages.
+  * The related trap, from the isis4r notes and true here: **`String#<<` with an Integer appends a codepoint**, so on a non-binary buffer any value above 0x7f becomes two octets, and calling `.b` afterwards relabels the string without undoing the expansion. One more reason the buffer's encoding is set where it is created and not later.
 
 ## Rules for agents
 
@@ -4480,6 +4483,29 @@ Two consequences, both of which change the plan rather than decorate it:
              the file would die at load; and a document width row,
              the status table or a cut table row each fails the
              matching discovery guard.
+         * **A Ruby version bug the suite could not see, found by
+           CI.** `Ip_reachability` defaulted its octets to `+''`,
+           which is US-ASCII, so the default route handed an empty
+           US-ASCII string to `IPAddr.new_ntoh`: Ruby 3.3 accepts it
+           and 3.4, 4.0 and head raise. One test of 2217, green here
+           and red on three of four Rubies. All eight buffers in the
+           family are `String.new` now, which is BINARY with no
+           argument, and the mechanism is in Conventions beside the
+           frozen-literal rule.
+           * **The encoding is asserted rather than trusted**, since
+             that is the only form of the test that fails on 3.3
+             against the unfixed code. The general guard reads every
+             octet buffer through its own accessor, 11 of them, with
+             the count pinned: **its first draft asserted
+             `encode.encoding` and survived four sabotages**, because
+             `encode` goes through `pack` and that forces binary on
+             the result whatever went in.
+           * `Tlv::Unknown` and `Link_state::Unknown` keep a
+             `String.new` default that **cannot be reached**: every
+             branch of each constructor assigns `@value`, and the
+             one-argument form goes through `nil.to_s.b`. Sabotage
+             showed it, and they are kept and recorded as unreachable
+             the way `Fib`'s `:no_next_hop` branch is.
          * **A doc guard that reads a document has to say how many
            rows it expected**, which cost one of these its first
            firing. The octet count guard used a literal space in

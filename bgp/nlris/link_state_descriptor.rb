@@ -251,7 +251,7 @@ module BGP
         # hash, the wire value octets, this class's own hash, or another
         # instance.
         def initialize(*args)
-          @value = +''
+          @value = String.new
           if args.size == 1 and args[0].is_a?(String) and args[0].is_packed?
             @value = args[0].slice!(0, args[0].size)
           elsif args.size == 1 and args[0].is_a?(self.class)
@@ -374,7 +374,7 @@ module BGP
         # new(a_sub_tlv, another), the wire value octets, this class's
         # own hash, or another instance.
         def initialize(*args)
-          @sub_tlvs, @tail = [], +''
+          @sub_tlvs, @tail = [], String.new
           if args.size == 1 and args[0].is_a?(String) and args[0].is_packed?
             parse(args[0])
           elsif args.size == 1 and args[0].is_a?(self.class)

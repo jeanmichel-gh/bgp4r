@@ -104,7 +104,7 @@ module BGP
       # new(protocol_id, identifier, a_tlv, another), the wire value
       # octets, this class's own hash, or another instance.
       def initialize(*args)
-        @protocol_id, @identifier, @tlvs, @tail = 0, 0, [], +''
+        @protocol_id, @identifier, @tlvs, @tail = 0, 0, [], String.new
         if args.size == 1 and args[0].is_a?(String) and args[0].is_packed?
           parse(args[0])
         elsif args.size == 1 and args[0].is_a?(self.class)
