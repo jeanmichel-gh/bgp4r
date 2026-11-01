@@ -806,7 +806,15 @@ class BgpLsDocTest < Test::Unit::TestCase
     assert_nil(IANA.safi?(safi),
                "SAFI #{safi} has a name in iana.rb, so it is a family " \
                'bgp4r is behind on rather than one it can never read')
-    assert_raise(RuntimeError) { BGP::Nlri.factory('x'.is_packed, 1, safi) }
+    # **`['01'].pack('H*')` and not `'x'.is_packed`.** `is_packed` sets
+    # an instance variable, so it is a mutation, and CI runs the suite
+    # with `--enable-frozen-string-literal`, where a literal cannot
+    # take one: the call raised FrozenError before reaching the gate,
+    # so under that flag this asserted nothing about the claim. It
+    # passed locally and for the right reason, which is why only CI
+    # caught it. `Array#pack` marks its result packed already, so the
+    # library's own route needs no mutation.
+    assert_raise(RuntimeError) { BGP::Nlri.factory(['01'].pack('H*'), 1, safi) }
     # `\s+` and not a literal space, because the document wraps and the
     # phrase straddles a line break. #218 recorded that rule for a guard
     # that had silently measured three of four rows; this one failed

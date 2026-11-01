@@ -859,7 +859,15 @@ class Mp_reach_Test < Test::Unit::TestCase
     # Neither gate knows it, which is what makes the attribute above an
     # Attr::Raw with a Gap. The parse gate is the load bearing half: its
     # raise is the mechanism Path_attribute#decode_attribute rescues.
-    assert_raise(RuntimeError) { BGP::Nlri.factory('x'.is_packed, 1, 255) }
+    # **`['01'].pack('H*')` and not `'x'.is_packed`.** `is_packed` sets
+    # an instance variable, so it is a mutation, and CI runs the suite
+    # with `--enable-frozen-string-literal`, where a literal cannot
+    # take one: the call raised FrozenError before reaching the gate,
+    # so under that flag this asserted nothing about the claim. It
+    # passed locally and for the right reason, which is why only CI
+    # caught it. `Array#pack` marks its result packed already, so the
+    # library's own route needs no mutation.
+    assert_raise(RuntimeError) { BGP::Nlri.factory(['01'].pack('H*'), 1, 255) }
     assert_raise(RuntimeError) do
       BGP::Mp_reach.new(:safi => 255, :afi => 1, :nlris => ['10.0.0.0/24'])
     end

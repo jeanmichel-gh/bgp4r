@@ -727,8 +727,16 @@ class Path_attribute_Test < Test::Unit::TestCase # :nodoc:
   def test_the_undecodable_safi_cannot_be_assigned
     assert_nil(IANA.safi?(UNDECODABLE_SAFI))
     assert_not_nil(IANA.safi?(IANA::SAFI::BGP_LS))
+    # **`['01'].pack('H*')` and not `'x'.is_packed`.** `is_packed` sets
+    # an instance variable, so it is a mutation, and CI runs the suite
+    # with `--enable-frozen-string-literal`, where a literal cannot
+    # take one: the call raised FrozenError before reaching the gate,
+    # so under that flag this asserted nothing about the claim. It
+    # passed locally and for the right reason, which is why only CI
+    # caught it. `Array#pack` marks its result packed already, so the
+    # library's own route needs no mutation.
     assert_raise(RuntimeError) do
-      BGP::Nlri.factory('x'.is_packed, 1, UNDECODABLE_SAFI)
+      BGP::Nlri.factory(['01'].pack('H*'), 1, UNDECODABLE_SAFI)
     end
     assert_raise(RuntimeError) do
       BGP::Mp_reach.new(:safi => UNDECODABLE_SAFI, :afi => 1,
