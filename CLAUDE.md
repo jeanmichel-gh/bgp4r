@@ -428,7 +428,9 @@ BGP-LS Attribute goes through `Attr.register`: they are here because
 this is the only place the NLRI and the attribute that describes it
 travel together over a socket: part 5b-ii added the link attribute TLVs
 beside a Link NLRI and part 5c the prefix attribute TLVs beside a Prefix
-NLRI, which is the pairing section 5.3.3 names. About a second:
+NLRI, which is the pairing section 5.3.3 names. Part 6b added the one
+case where a BGP-LS check runs on octets that crossed a socket, as
+`evpn_test.rb` and `mcast_vpn_test.rb` each carry one. About a second:
 ```
 ruby -I. test/functional/link_state_test.rb
 ```
@@ -560,7 +562,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. The `lab` job is a matrix, one job per group in `test/lab_groups.rb`, so its cost is the slowest group and not the total: it was 12m42s as one serial suite. Each job installs only what its group needs, which is why the matrix entry carries a `gobgp`, `frr`, `docker` or `netns` flag. The `gobgp` groups pin 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-11-01: 2393 tests, 28318 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.5%.
+Baseline on 2026-11-01: 2412 tests, 28774 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.5%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -602,6 +604,8 @@ There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Cove
   * A nested class does **not** see the `include` in the class around it, because constant lookup goes up the lexical scope and then the ancestors of the innermost class, not the ancestors of the enclosing one. `TestBgpNeighbor::UpdateCatcher` resolved `Update` only through that top level leak. Write the full name in a nested class.
   * **The mirror image of that leak: a test file that does not require what it names passes in the suite and fails on its own.** `run_unit.rb` requires every file before any test runs, so one file's requires cover every file after it. `as_path_test.rb` asserted on `Path_attribute` without requiring it and `extended_community_test.rb` built an `Extended_communities` without requiring it, both found in one afternoon, and both pass `ruby test/run_unit.rb` and fail `ruby -I. <that file>`. So the two load order traps fail in opposite directions, and **one run cannot catch both**: run a file you changed on its own as well as in the suite.
   * A `NameError` in an observer is invisible: `Neighbor` logs an exception from an observer rather than raising it, deliberately, so nothing outside can kill the FSM. A test observer with a wrong constant therefore fails as "nothing was received" and says nothing about the name. That is how the leak stayed load bearing.
+* **A test method defined twice in one class never runs either, and that is the second shape of the same silent skip.** The second definition replaces the first and Ruby says nothing, so the tell is the same as the `private` one below: a test count lower than `grep -c 'def test_'`. It cost a cycle in #226, where a new case in `test/functional/link_state_test.rb` took the name of one already there: 20 tests reported with 21 defined, and the case that vanished was the one being asserted against. `test_no_test_file_defines_a_test_method_twice` in `test/unit/neighbor/neighbor_test.rb` guards the whole suite now, beside the include-leak guard, which is already this repo's home for a guard over every test file.
+  * **Its first two drafts were wrong and each failure named the tree while the fault was the guard**, which is worth knowing before writing another textual guard over source. It has to be scoped **per class**, because ten files here hold more than one test case and `test_1` in each of `Label_Test` and `Label_stack_Test` is two methods. And the name pattern has to take a trailing `!` or `?`, because `\w+` stops before it and `test_sort!` then collides with the `test_sort` beside it in `extended_communities_test.rb`. Sabotage a guard like this, and also read what it reports on a clean tree.
 * **A test method after `private` in a test file never runs, and nothing says so.** `test/unit/path_attributes/mp_unreach_test.rb` keeps an `attr_len` helper under a `private`, and two tests appended after it in #161 left the file reporting 7 tests where 9 were defined: test-unit collects public methods only, so both were skipped in silence and the file passed. It was the regression check that caught it, not the run, because proving a new test fails against the unfixed code is the one thing a skipped test cannot do. Add tests above any `private`, and if a count looks low, compare it against `grep -c 'def test_'`.
 * Two space indent. Match the style of the file you edit.
 * Copyright headers. A new Ruby file or Dockerfile starts with the standard GPL header from `bgp/observable.rb`, with `Copyright <current year> Jean-Michel Esnault.` (a Dockerfile drops the `#--` and `#++` lines). When you change a file that has a header, add the current year to its years if it is missing: `2008, 2009` becomes `2008, 2009, 2026`. Do not add headers to files that never had one. YAML, Markdown and other config files get no header.
@@ -1564,16 +1568,18 @@ true here is the shape of the gap:
   :safi=>70, :nexthop=>["10.0.0.1"], :nlris=>[{:inclusive_multicast=>{:rd=>
   [100,200], :tag=>0, :originator=>"10.0.0.1"}}]).to_shex'` prints the
   attribute. A stale entry sends the next reader after work that is done.
-* **BGP-LS's NLRI is in and so is attribute 29; what is left is two of
-  its three TLV tables.** AFI 16388
+* **BGP-LS is in whole: the NLRI, attribute 29, every attribute TLV RFC
+  9552 defines, and the receive side checks.** AFI 16388
   SAFI 71 and 72 read and write since part 4 of phase 4 below, so the
   "one limit" this section named is lifted for the last family too. The
   BGP-LS **Attribute**, code 29, is a path attribute rather than an
   NLRI, so it goes through `Attr.register` and not through either
   dispatch gate; it landed with Table 6's node attribute TLVs in part
   5a, Table 8's in part 5b and Table 10's in part 5c, so **every
-  attribute TLV RFC 9552 defines is in** and what is left of the family
-  is validation.
+  attribute TLV RFC 9552 defines is in**, and part 6 added the ten
+  syntactic checks of section 8.2.2. What is left for this family is
+  the attribute TLVs the **other** RFCs define, which the plan's own
+  measure deliberately excludes.
   Flowspec, EVPN, RT-constrain, ATTR_SET and MCAST-VPN were all on this list
   and all five are off it, because the
   rule and the route can be sent now: flowspec had every traffic filtering
@@ -1594,7 +1600,7 @@ true here is the shape of the gap:
   prints the registered code points, against the 115 the IANA registries
   listed when this was last counted by hand.
 
-### Breadth, the one SAFI lever. Phases 2 and 3 done, phase 4 parts 1, 2 and 3 done, part 4 under way: BGP-LS parts 1 to 5, 6a and 7 of seven, the validation checks left
+### Breadth, the one SAFI lever. Done. Phases 2, 3 and 4 complete, all seven BGP-LS parts included; phase 1 deferred by decision
 
 The section above deferred breadth and named the single limit. This is the
 plan for lifting it, recorded before the work starts.
@@ -2924,15 +2930,15 @@ Two consequences, both of which change the plan rather than decorate it:
      processing, which matters to a RIB and not to an encoder, and no
      EVPN route goes in a RIB by the decision below. Recorded so nobody
      implements a route key here looking for it.
-4. **The rest, as appetite allows. Three of four done.**
+4. **The rest, as appetite allows. Done, all four.**
    RT-constrain (SAFI 132, RFC 4684), ATTR_SET (attribute 128, RFC
-   6368) and MCAST-VPN (SAFI 5, RFC 6514) **are in**; BGP-LS
-   (attribute 29, AFI
-   16388, SAFI 71 and 72, RFC 9552) is **under way**, parts 1 to 5, 6a
-   and 7 of seven done with only the validation checks left, as the
-   plan under part 4 below: part 7 was taken
+   6368), MCAST-VPN (SAFI 5, RFC 6514) and BGP-LS (attribute 29, AFI
+   16388, SAFI 71 and 72, RFC 9552) are all in, BGP-LS in **all seven
+   parts** of the plan below. Part 7 was taken
    out of order on purpose, because what a router does decides which
-   checks part 6 is worth writing, and it did. This entry used to
+   checks part 6 is worth writing, and it did: 8.2.2's list turned out
+   not to cover the one rule GoBGP breaks, so the document and the
+   measurement agree with neither moving. This entry used to
    say "each of
    these is a class and a registration", which held for the first and
    understates the last considerably: BGP-LS is a whole TLV language of
@@ -4072,8 +4078,7 @@ Two consequences, both of which change the plan rather than decorate it:
              check-the-proof rule in Rules for agents paying for
              itself again.
    4. **BGP-LS, attribute 29 and AFI 16388 SAFI 71 and 72, RFC 9552.
-      Six of seven parts done and 6a of the seventh, so the validation
-      checks are what is left**, largest of the four by a long way, and
+      Done, all seven parts**, largest of the four by a long way, and
       last for the reason above. Planned on 2026-10-31 before any code,
       from RFC 9552 read as far as it was then fetchable, its two
       errata, and the IANA registries. Seven parts, the MCAST-VPN
@@ -5301,9 +5306,10 @@ Two consequences, both of which change the plan rather than decorate it:
            alternative, a second TLV namespace under the attribute,
            would need a second registry and would make TLV 263 two
            classes.
-      6. **Validation. 6a done, 6b to do**, and no longer gated since
-         section 8.2.2 is read. `docs/bgp-ls.md` section 8 has its
-         substance; the shape of the work, so it is not rediscovered:
+      6. **Validation. Done**, in two pull requests, 6a the action
+         vocabulary and 6b the ten checks. `docs/bgp-ls.md` section 8
+         is the guide and has a table of the checks the doc test
+         discovers from `validation.rb`. What the section says:
          * **Every check is syntactic.** Two MUST NOTs open the
            section: neither the NLRI nor the attribute may "be
            considered malformed or invalid based on the
@@ -5408,6 +5414,127 @@ Two consequences, both of which change the plan rather than decorate it:
            matching a class's expected width. **Those two sound alike
            and are opposite**, and getting them the wrong way round
            would make bgp4r report what the section forbids.
+           * **A functional case written four parts earlier turned out
+             to be the guard for three of the four forbidden shapes.**
+             `test_an_nlri_no_rfc_allows_crosses_a_session` sends a
+             Node NLRI with no Local Node Descriptors, a Protocol-ID of
+             0 and a prefix descriptor inside a Link NLRI, and asserts
+             zero findings. That zero is the instruction and not an
+             absence of coverage, which the case now says.
+         * **6b, the ten checks. Done.** Eight `Finding` sites answer
+           the ten bullets, because several of them describe one walk
+           from a different angle: a Length that overruns its container
+           breaks the sum of the lengths **and** is an invalid length,
+           so NLRI bullets 3 and 4 are one loop and the attribute's 1
+           and 3 are that same loop reached from the attribute, with
+           the action the only difference. The guide's table is one row
+           per site and `bgp_ls_doc_test.rb` counts `Finding.new` in
+           the BGP-LS block against it.
+           * **The block sits at the end of `Check` and not beside the
+             families it resembles.** Two sibling doc tests slice
+             `validation.rb` by method name and count `Finding.new`
+             between the markers: EVPN from `def evpn_finding` to `def
+             nonzero?`, MCAST-VPN from `def
+             mcast_vpn_next_hop_finding` to `def
+             flow_spec_component_size`. A BGP-LS check in either window
+             is counted as that family's and fails its guard. MCAST-VPN
+             part 6 recorded the same thing about the EVPN window one
+             family earlier, so this is the second time and it is now
+             written where the block starts.
+           * **`BGP_LS` is three numbers and this module sees the wrong
+             one.** `ATTR::BGP_LS` is 29 and `include ATTR` is in
+             effect in `Check`, so a bare `BGP_LS` is the attribute
+             code; `IANA::AFI::BGP_LS` is 16388 and
+             `IANA::SAFI::BGP_LS` is 71. `iana.rb` warns about the
+             first two sharing a bare name and there is a third here.
+           * **The whole NLRI set runs on MP_UNREACH too**, which no
+             earlier family does: EVPN's and MCAST-VPN's route checks
+             are MP_REACH only. Bullets 1 and 2 name MP_REACH_NLRI and
+             MP_UNREACH_NLRI in two sentences of one shape and the rest
+             are about the NLRI, which is the same object in either, so
+             `link_state_finding` takes no `reach` argument at all.
+             Only the next hop is MP_REACH's alone.
+           * **The actions come from 8.2.2's criterion and not from its
+             parenthetical, and the two disagree.** The criterion is
+             whether the error "allows for the router to skip the
+             malformed NLRI(s) and continue the processing of the rest
+             of the BGP UPDATE message"; the example of the other case
+             is "length-related encoding errors". While each NLRI's
+             Total NLRI Length lands inside the attribute every other
+             NLRI is locatable, so the error is skippable, and a TLV
+             Length overrunning one body is length-related and still
+             skippable. Both of the section's own examples fall out of
+             the criterion, so read the sentence rather than the
+             brackets.
+           * **Every attribute finding is attribute discard**, because
+             the non-skippable attribute case is its own length against
+             the Path Attribute Length and `next_attribute` and
+             `attribute` answer that for every attribute already.
+           * **The next hop check is in scope here and the citation is
+             a chain of three**, which puts BGP-LS between MCAST-VPN,
+             where RFC 6515 states the error itself, and EVPN and
+             RT-constrain, where nothing points at RFC 7606 for it.
+             Bullet 5 asks that "the syntactic correctness of the NLRI
+             fields has been verified as per [RFC7606]", RFC 7606
+             section 7.11 carries the rule and leaves the expectation
+             to the family, and section 5.5 states it. The one reading
+             it rests on is that "the NLRI fields" means the
+             MP_REACH_NLRI attribute's fields and not only the
+             Link-State NLRI's own: bullets 1 and 2 name the attribute
+             and its length, and under the narrow reading bullet 5
+             would say nothing bullets 3 and 4 do not.
+           * **Section 5.2.1.4's sub-TLV ordering MUST is not in
+             8.2.2's list, and that is what keeps the only router that
+             can originate BGP-LS conformant.** Bullet 6 cites section
+             5.1, whose rule is "all TLVs within the NLRI"; 5.2.1.4
+             states a separate ascending-order MUST for a Node
+             Descriptor's sub-TLVs, and 8.2.2 takes only the other half
+             of that section, bullet 7's once-only rule. That it picked
+             one of the two is what says its authors had the section
+             open and chose. So part 7's measurement, that GoBGP 3.23.0
+             sends 512, 516, 513 on every route it originates, and part
+             6b's checks agree with **neither moving**, which is the
+             outcome taking part 7 early was for. Its two lab
+             assertions are unchanged.
+           * **Section 5.1's own ordering rule has a scope qualifier
+             and 8.2.2 settles it.** 5.1 says unordered NLRI TLVs "MUST
+             be considered as malformed by a BGP-LS Propagator", and
+             bgp4r propagates no BGP-LS so it would not be one. 8.2.2
+             introduces its list with "A BGP-LS Speaker MUST perform
+             the following syntactic validation" and puts the ordering
+             rule in it. Speaker, not Propagator, in the fault
+             management section, so the check is in by the document's
+             word rather than by a reading. This file recorded the
+             qualifier as wanting a decision; it wanted a second
+             sentence of the same document.
+           * **The sub-TLV half of the attribute's bullet 3 has no
+             reachable case.** The Node Descriptors, 256 and 257, are
+             the only recognized TLVs in this family that carry
+             sub-TLVs, and no attribute TLV of RFC 9552's three tables
+             carries any. So "when the TLV is recognized" descends only
+             inside an NLRI.
+           * **A functional case was sending an NLRI no RFC allows and
+             the ordering check found it.**
+             `test_an_unknown_tlv_inside_an_nlri_crosses_a_session` put
+             TLV 255 after TLV 256, breaking section 5.1's MUST while
+             asserting no protocol error. The octets move, every
+             assertion stays, and the unordered case gets a test of its
+             own. Third time this has happened: EVPN part 9 found the
+             same thing with RFC 9136 section 3.2, and it is the
+             argument for writing a check at all, since a suite that
+             only sends what it means to send cannot tell you whether
+             it did.
+           * **Eighteen sabotages, all landing**, five on the wiring,
+             seven on the checks and six on the document. Three of the
+             four new doc guards were wrong before they were right and
+             each failure named the tree while the fault was the guard:
+             `/x` free-spacing **ate the literal spaces inside `nlri
+             discard`** so the table parsed as empty, a first cell
+             starting with a capital letter missed the `[a-z]` anchor,
+             and a phrase straddling a line break needed `\s+`. The
+             floor assertions are what turned the first into a loud
+             failure rather than a vacuous pass, which is why they are
+             asserted before the count.
       7. **The lab. Done**, in #220, and taken **before** part 6
          because what GoBGP does decides which checks are worth
          having, which is what flow spec part 5 and EVPN part 10 both
@@ -5700,4 +5827,10 @@ request that added the attribute:
   so all 25 of its attribute TLVs, and a TLV with no class is kept and
   echoed, which section 5.1 requires rather than permits: the lab meets one
   on real traffic, TLV 1101 from RFC 9085, which GoBGP originates.
+  * The receive side is **not** on this list: the ten syntactic checks of
+    RFC 9552 section 8.2.2 are in `validation.rb`. What is deliberately
+    out is the four shapes of semantic check that section says not to
+    make, which bgp4r does make for EVPN and MCAST-VPN;
+    `docs/bgp-ls.md` section 8 names all four and
+    `bgp_ls_doc_test.rb` asserts that none is reported.
 * Not started: BGPsec_Path.
