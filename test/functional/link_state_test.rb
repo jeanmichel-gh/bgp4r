@@ -620,6 +620,49 @@ class LinkStateSessionTest < Test::Unit::TestCase
     assert_equal('0100000003e8', a.tlvs.last.value.unpack1('H*'))
   end
 
+  # Table 8's link attribute TLVs beside the Link NLRI they describe,
+  # which is the pairing section 5.3.2 is about: "Link Attribute TLVs
+  # are TLVs that may be encoded in the BGP-LS Attribute with a Link
+  # NLRI." Four of the thirteen, picked for the four shapes that are
+  # this table's own rather than shared: a float, eight floats, a
+  # two-octet bitfield and the variable-width metric.
+  def test_the_link_attribute_tlvs_cross_a_session
+    session
+    attr29 = BGP::Link_state_attribute.new(
+      BGP::Link_state::Tlv::Ipv4_remote_router_id.new('10.0.0.2'),
+      BGP::Link_state::Tlv::Administrative_group.new(0x80000001),
+      BGP::Link_state::Tlv::Maximum_link_bandwidth.new(1_250_000.0),
+      BGP::Link_state::Tlv::Unreserved_bandwidth.new(
+        *(1..8).collect { |i| i * 1000.0 }),
+      BGP::Link_state::Tlv::Link_protection_type.new(:shared, :enhanced),
+      BGP::Link_state::Tlv::Igp_metric.new(10, 1),
+      BGP::Link_state::Tlv::Link_name.new('to-core-1'))
+    sent = BGP::Update.new(
+      BGP::Path_attribute.new(
+        BGP::Origin.new(0),
+        BGP::As_path.new(CLIENT_AS),
+        BGP::Mp_reach.new(:safi => SAFI,
+                          :nexthop => ['10.0.0.1'],
+                          :nlris => [{ :link =>
+                                       { :protocol_id => 2, :identifier => 7,
+                                         :tlvs => [local] } }]),
+        attr29))
+    got = crosses(sent)
+    a = got.path_attribute.find(BGP::Link_state_attribute)
+    assert_not_nil(a, 'a Link_state_attribute, not an Attr::Unknown')
+    assert_equal([1030, 1088, 1089, 1091, 1093, 1095, 1098],
+                 a.tlvs.collect { |t| t.type })
+    assert(a.ordered?, 'section 5.1 asks a sender for ascending type order')
+    # The four shapes, each read back off the socket by its own reader.
+    assert_equal([0, 31], a.tlv(1088).groups)
+    assert_equal(1_250_000.0, a.tlv(1089).value)
+    assert_equal(8000.0, a.tlv(1091).at(7), 'priority 7 is last')
+    assert_equal([:shared, :enhanced], a.tlv(1093).names)
+    assert_equal([10, 1], [a.tlv(1095).metric, a.tlv(1095).width],
+                 'and the width survives, which only this family carries')
+    assert_equal('to-core-1', a.tlv(1098).name)
+  end
+
   # Not a test method: a helper, kept below every test and with no
   # `private` above it, because a test method after `private` never runs
   # and nothing says so.

@@ -882,17 +882,28 @@ class BgpLsDocTest < Test::Unit::TestCase
       next false if k == BGP::Link_state::Tlv::Unknown
       !k.const_defined?(:TYPE)
     end.collect(&:to_s).sort
-    assert_equal(%w[Addr_tlv Node_descriptors Opaque32 Opaque_tlv Text_tlv],
+    assert_equal(%w[Addr_tlv Float32_tlv Node_descriptors Opaque32
+                    Opaque_tlv Text_tlv],
                  bases,
                  'the abstract TLV bases in the library')
-    assert_equal(said.sort, (bases - %w[Node_descriptors]).sort,
-                 "#{DOC} section 2 names every shared base")
-    # `Node_descriptors` is the one that is **not** shared: only Table
-    # 3 uses it, so it stays with its table, which is the line this
-    # whole move draws.
+    # **Two of the six are not shared, and that is the line part 5b-i
+    # drew**: shared means more than one of the RFC's tables, not merely
+    # abstract. `Node_descriptors` serves Table 3's 256 and 257 and
+    # `Float32_tlv` serves Table 8's 1089 and 1090, so each stays with
+    # its own table and section 2 names neither. Each one's registered
+    # subclasses are asserted below, so a third table reaching for one
+    # fails here and says to move it.
+    single_table = %w[Float32_tlv Node_descriptors]
+    assert_equal(said.sort, (bases - single_table).sort,
+                 "#{DOC} section 2 names every shared base and nothing else")
     assert_equal([256, 257],
                  BGP::Link_state::Tlv::REGISTRY.select { |_, k|
-                   k < BGP::Link_state::Tlv::Node_descriptors }.keys.sort)
+                   k < BGP::Link_state::Tlv::Node_descriptors }.keys.sort,
+                 'Node_descriptors serves Table 3 and nothing else')
+    assert_equal([1089, 1090],
+                 BGP::Link_state::Tlv::REGISTRY.select { |_, k|
+                   k < BGP::Link_state::Tlv::Float32_tlv }.keys.sort,
+                 'Float32_tlv serves Table 8 and nothing else')
   end
 
   # **And each really is in `link_state_tlv.rb` and not in one of the
@@ -907,7 +918,8 @@ class BgpLsDocTest < Test::Unit::TestCase
     end
     ['bgp/nlris/link_state_descriptor.rb',
      'bgp/nlris/link_state_link_descriptor.rb',
-     'bgp/nlris/link_state_node_attribute.rb'].each do |path|
+     'bgp/nlris/link_state_node_attribute.rb',
+     'bgp/nlris/link_state_link_attribute.rb'].each do |path|
       %w[Opaque32 Addr_tlv Opaque_tlv Text_tlv].each do |name|
         assert_equal(nil, source(path)[/^\s+class #{name} < Tlv$/],
                      "#{path} must not define #{name} any more")
@@ -984,13 +996,26 @@ class BgpLsDocTest < Test::Unit::TestCase
   # the document has to carry them and a reader has to be told which
   # five.
   def test_the_five_link_attribute_widths_that_are_elsewhere
-    { 1088 => 'RFC 5305 section 3.1', 1089 => 'RFC 5305 section 3.4',
-      1090 => 'RFC 5305 section 3.5', 1091 => 'RFC 5305 section 3.6',
-      1093 => 'RFC 5307 section 1.2' }.each do |type, where|
-      assert_match(/^\| #{type} \|[^|]*\| #{Regexp.escape(where)} \|/,
+    # **The width is asserted beside the citation**, and that half is
+    # the one that matters: these five are the rows with no width
+    # anywhere in RFC 9552, so the citation is where each lives and a
+    # reader checking it needs the number it is meant to support. 1091
+    # at 32 and 1093 at 2 are the two that memory gives as 4.
+    { 1088 => [4, 'RFC 5305 section 3.1'],
+      1089 => [4, 'RFC 5305 section 3.4'],
+      1090 => [4, 'RFC 5305 section 3.5'],
+      1091 => [32, 'RFC 5305 section 3.6'],
+      1093 => [2, 'RFC 5307 section 1.2'] }.each do |type, (width, where)|
+      assert_match(/^\| #{type} \|[^|]*\| #{width}, #{Regexp.escape(where)} \|/,
                    section('10. The attribute'),
-                   "#{DOC} section 10b must cite #{where} for TLV #{type}")
+                   "#{DOC} section 10b must give TLV #{type} as #{width} " \
+                   "octets citing #{where}")
     end
+    # And the library agrees about the two that surprise.
+    assert_equal(32, BGP::Link_state::Tlv::Unreserved_bandwidth
+                       .new(*([0.0] * 8)).encode_value.size)
+    assert_equal(2, BGP::Link_state::Tlv::Link_protection_type
+                      .new.encode_value.size)
     assert_match(/\*\*Table 8 has no Length column\*\*/, doc)
   end
 
@@ -1004,19 +1029,23 @@ class BgpLsDocTest < Test::Unit::TestCase
     assert_match(/the two verified ones\s+are 7789 and 8766/, doc)
   end
 
-  # **Forward-looking.** Parts 5b and 5c are the other two tables, so
-  # the document's own "no" rows are what says they are outstanding, and
-  # the table guard above is what fires when one lands. This one holds
-  # the count, so part 5b landing one class quietly is not possible.
-  def test_table_6_is_in_and_tables_8_and_10_are_not
+  # **This guard has fired once and is re-pointed rather than
+  # weakened.** Until part 5b-ii it said Table 6 was in and Tables 8 and
+  # 10 were not. Table 8 is in now, so it asserts the new split: Table 6
+  # and Table 8 complete, Table 10 outstanding. It holds the count, so
+  # part 5c landing one class quietly is not possible either, and the
+  # document's own "no" rows in section 10c are what the table guard
+  # above checks against.
+  def test_tables_6_and_8_are_in_and_table_10_is_not
     built = BGP::Link_state::Tlv::REGISTRY.keys
-    (1024..1029).each do |t|
-      assert(built.include?(t), "TLV #{t} is Table 6's and part 5a's")
+    ((1024..1031).to_a + (1088..1098).to_a).each do |t|
+      assert(built.include?(t),
+             "TLV #{t} is Table 6's or Table 8's, so part 5a or 5b-ii")
     end
-    ((1030..1031).to_a + (1088..1098).to_a + (1152..1157).to_a).each do |t|
+    (1152..1157).each do |t|
       assert(!built.include?(t),
-             "TLV #{t} is registered: that is part 5b or 5c, so rewrite " \
-             "#{DOC} sections 10b and 10c and move part 5 on in section 7")
+             "TLV #{t} is registered: that is part 5c, so rewrite " \
+             "#{DOC} section 10c and move part 5 on in section 7")
     end
   end
 
@@ -1240,9 +1269,9 @@ class BgpLsDocTest < Test::Unit::TestCase
     # which `test_table_6_is_in_and_tables_8_and_10_are_not` holds. The
     # status is a phrase and not a word, so this matches rather than
     # compares.
-    assert_match(/5a done.*5b and 5c to do/, status[5],
-                 'Table 6 is registered and Tables 8 and 10 are not, so ' \
-                 'part 5 is 5a done')
+    assert_match(/5a and 5b done.*5c to do/, status[5],
+                 'Tables 6 and 8 are registered and Table 10 is not, so ' \
+                 'part 5 is 5a and 5b done')
     # Part 6 is what the forward-looking validation guard still watches,
     # so its status here must agree with that one still passing.
     assert_equal('to do', status[6])
