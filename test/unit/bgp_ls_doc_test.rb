@@ -36,16 +36,17 @@
 # either direction, and the TLV registry against what the document says
 # is in it.
 #
-# **Six guards here are aimed at claims that are true only today.** A
-# document written while a family is half built goes stale the moment
-# the next part lands, so each of those is asserted as true only today
-# and names what to update when it fails: when a TLV type or an NLRI
-# type arrives, when the dispatch gates learn SAFI 71, when a receive
-# side check appears, when a lab test lands, when the undecodable
-# examples have to move, and when the copy constructor bug in the four
-# other families is fixed. All four of docs/mcast-vpn.md's
-# forward-looking guards fired on time, which is the argument for
-# writing them.
+# **Six guards here were aimed at claims that were true only today, and
+# four have now fired.** A document written while a family is half built
+# goes stale the moment the next part lands, so each was asserted as
+# true only today and named what to update when it failed: when a TLV
+# type or an NLRI type arrives, when the dispatch gates learn SAFI 71,
+# when a lab test lands, and when the undecodable examples have to move.
+# All four fired on time and were re-pointed rather than weakened, which
+# is what all four of docs/mcast-vpn.md's did too and is the argument
+# for writing them. **Two are still waiting**: when a receive side check
+# appears, which is part 6, and when the copy constructor bug in the
+# four other families is fixed.
 #
 # **Patterns that read a source file as text are anchored at the start
 # of a line of code**, never bare, because a guard that matches prose
@@ -91,6 +92,11 @@ require 'bgp/nlris/mcast_vpn'
 require 'bgp/nlris/nlri'
 require 'bgp/path_attributes/mp_reach'
 require 'bgp/path_attributes/path_attribute'
+# Part 7's guard reads which CI group the two lab files are in. Required
+# here and not inside the test, since `require './test/lab_groups'`
+# works only from the repo root and this file has to pass standalone
+# from anywhere, which is the load order trap one more time.
+require 'test/lab_groups'
 
 class BgpLsDocTest < Test::Unit::TestCase
 
@@ -767,17 +773,87 @@ class BgpLsDocTest < Test::Unit::TestCase
     assert_match(/^\*\*Not implemented\.\*\* Part 6/, doc)
   end
 
-  # **Forward-looking.** Part 7 adds the lab test, and section 11 says
-  # the family is not measured against a router yet.
-  def test_no_lab_test_measures_the_family_yet
-    found = Dir[File.expand_path('../functional/lab/*link_state*',
-                                 __dir__)] +
-            Dir[File.expand_path('../functional/lab/*bgp_ls*', __dir__)]
-    assert_equal([], found,
-                 'a BGP-LS lab test landed: that is part 7, so rewrite ' \
-                 'docs/bgp-ls.md section 11 with what it measured, and ' \
-                 'add the file to test/lab_groups.rb')
-    assert_match(/^\*\*Not measured yet\.\*\* Part 7/, doc)
+  # **This guard has fired and is re-pointed rather than weakened**, the
+  # fourth in this file to do so. It used to assert that no BGP-LS lab
+  # test existed and that section 11 said the family was unmeasured.
+  # Part 7 landed both, so now it asserts the measurement is there and
+  # holds the two routers' versions against the tests' own constants.
+  #
+  # **Why the versions matter more than they look.** Both lab files omit
+  # themselves on a version they were not measured against, so a reader
+  # bumping a pin in one place would see this table and no failure. That
+  # is the shape `mcast_vpn_doc_test.rb` settled on for the same reason.
+  def test_the_lab_measures_the_family_in_both_directions
+    gobgp = source('test/functional/lab/link_state_gobgp_test.rb')
+    frr = source('test/functional/lab/link_state_frr_test.rb')
+
+    assert_match(/Measured on 2026-11-01 against GoBGP 3\.23\.0 and FRR 8\.4\.4/,
+                 doc, 'section 11 says when and against what')
+    assert_equal(nil, doc[/^\*\*Not measured yet\.\*\*/],
+                 'and no longer says it is pending')
+
+    # The versions, out of the tests' own constants and the document.
+    assert_match(/^\s+MEASURED_MAJOR = 3$/, gobgp)
+    assert_match(/^\s+MEASURED = \(8\.\.8\)/, frr)
+    assert_match(/GoBGP 3\.23\.0/, doc)
+    assert_match(/FRR 8\.4\.4/, doc)
+
+    # Both files are assigned to a CI group, which is what
+    # lab_groups_test.rb enforces in general and what this one names, so
+    # the message points at the right file if it ever drifts.
+    assigned = LabGroups::GROUPS.values.flatten
+    %w[link_state_gobgp_test link_state_frr_test].each do |f|
+      assert(assigned.include?(f), "#{f} must be in a group in test/lab_groups.rb")
+    end
+  end
+
+  # **The receive direction is the claim this family's lab makes that no
+  # other family's does**, so it is asserted on the code and not only on
+  # the prose: the one case that gets GoBGP to originate, and the replay
+  # that is the only assertion in it that cannot pass for the wrong
+  # reason.
+  #
+  # Every pattern is anchored at the start of a line of code, because a
+  # guard that reads a test file as text matches its prose as readily as
+  # its calls, which is how the first draft of the MCAST-VPN one passed
+  # a sabotage.
+  def test_the_gobgp_test_measures_both_directions
+    body = source('test/functional/lab/link_state_gobgp_test.rb')
+
+    assert_match(/^\s+LINK_ARGS = %w\[/, body,
+                 'the client grammar the receive direction needs')
+    assert_match(/^\s+out, status = router\.client_run\(\*%w\[global rib add -a ls link\]/,
+                 body, 'and the call that makes GoBGP originate')
+    assert_match(/^[^#]*\brouter\.client_run\(\*%w\[global rib del -a ls link\]/,
+                 body, 'with the withdrawal, which is the other half')
+    assert_match(/^\s+BGP::Link_state\.new_ntop\(\[ls\.to_shex\]/, body,
+                 'the NLRI replay')
+    assert_match(/^\s+BGP::Mp_reach\.new\(\[a\.to_shex\]/, body,
+                 'and the attribute replay')
+    assert_match(/^\s+n\.on_state_change\b/, body,
+                 'a reset is watched for rather than read off session state')
+
+    # And the two faults, each named in the document and asserted in the
+    # test, so neither can be dropped from one without the other.
+    assert_match(/It requires a sub-TLV RFC 9552 does not/, doc)
+    assert_match(/^\s+assert_match\(\/"Error":"Required TLV missing"\//, body)
+    assert_match(/Its client panics rendering an IP Reachability TLV/, doc)
+    assert_match(/^\s+assert_match\(\/index out of range/, body)
+  end
+
+  # Section 11's finding about part 6, held in both places: the document
+  # has to state it and the test has to measure it. This is the one
+  # thing part 7 was taken early for, so it is the one most worth not
+  # losing when part 6 rewrites section 8.
+  def test_the_ordering_finding_is_recorded_and_measured
+    body = source('test/functional/lab/link_state_gobgp_test.rb')
+
+    assert_match(/GoBGP's own node descriptors are not in ascending sub-TLV\s+order/,
+                 doc, 'section 11 states it')
+    assert_match(/\*\*part 6 follows the\s+RFC and not the router\*\*/, doc,
+                 'and says what it decides')
+    assert_match(/^\s+assert_equal\(false, local\.ordered\?,/, body,
+                 'and the lab test measures it')
   end
 
   # **Forward-looking, and the one with nowhere left to go.** Three

@@ -99,11 +99,27 @@ class TestLinkStateNlri < Test::Unit::TestCase
     end
   end
 
-  # The ranges around Table 2, from the IANA registry: 0 Reserved, 200
-  # to 255 Private Use, and everything else unassigned.
-  def test_the_ranges_around_table_2
+  # The three the registry assigns that Table 2 does not, each named by
+  # the document that assigned it. **This is what the lab found**: GoBGP
+  # 3.23.0 originates with Protocol-ID 7, and bgp4r printed Unassigned
+  # for it until the registry was read rather than Table 2.
+  def test_the_three_protocol_ids_outside_table_2
+    { 7 => 'BGP', 8 => 'RSVP-TE', 9 => 'Segment Routing' }.each do |id, name|
+      assert_equal(name, BGP::Link_state::Node.new(id, 0).protocol,
+                   "Protocol-ID #{id}, which Table 2 does not list")
+    end
+  end
+
+  # The ranges around them, from the IANA registry: 0 Reserved, 10 to
+  # 199 Unassigned, 200 to 255 Private Use.
+  #
+  # Unassigned is the one verdict here that can expire, since IANA
+  # assigns from the bottom of that range, so this asserts both ends of
+  # it rather than one value in the middle: 10 is what the next
+  # assignment takes and 199 is what it takes last.
+  def test_the_ranges_around_the_protocol_ids
     assert_equal('Reserved', BGP::Link_state::Node.new(0, 0).protocol)
-    assert_equal('Unassigned', BGP::Link_state::Node.new(7, 0).protocol)
+    assert_equal('Unassigned', BGP::Link_state::Node.new(10, 0).protocol)
     assert_equal('Unassigned', BGP::Link_state::Node.new(199, 0).protocol)
     assert_equal('Private use', BGP::Link_state::Node.new(200, 0).protocol)
     assert_equal('Private use', BGP::Link_state::Node.new(255, 0).protocol)
