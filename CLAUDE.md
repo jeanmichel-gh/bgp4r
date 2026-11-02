@@ -10,6 +10,9 @@ bgp4r is a pure Ruby library to build, parse and speak BGP-4 (RFC 4271 and many 
 
 ```
 bgp4r.rb                 entry point, requires everything
+bgp/version.rb           BGP::VERSION, read by bgp4r.gemspec and printed by
+                         `bgp4r version`; one place for the version, since a
+                         command cannot print what the library does not answer
 bgp/common.rb            shared helpers (IPAddr extensions, hex dumps)
 bgp/iana.rb              IANA constants (AFI, SAFI, attribute codes)
 bgp/messages/            OPEN, UPDATE, KEEPALIVE, NOTIFICATION, ROUTE-REFRESH, CAPABILITY
@@ -209,7 +212,42 @@ bgp/rib/                 routes and the decision process (RFC 4271 section 9); r
                          builds and runs the iproute2 command and fib_installer.rb
                          joins them on the worker thread; rib.install;
                          see "Where the work is going"
+bgp/capture/             reading BGP off a wire; require 'bgp/capture', which
+                         bgp4r.rb does not, the same arrangement bgp/rib.rb has
+                         pcap.rb reads the classic pcap format off an IO a
+                         record at a time, so it works on a live pipe, and no
+                         gem: the library has one runtime dependency and keeps
+                         it; dissect.rb reads a frame down to its TCP payload
+                         (ethernet, VLAN, Linux cooked, IPv4 with options,
+                         IPv6, TCP with options) and a BGP message down to its
+                         fields, every octet belonging to a field, reserved
+                         bits included. **The unit is a message and not a
+                         frame**, which is the one way this differs from
+                         ospfv2's dissector and the reason the two entry
+                         points are separate: a message may arrive in two
+                         frames and two may share one, so no frame's octets
+                         are a message's and every offset is from the
+                         message's first octet;
+                         stream.rb frames messages out of the byte stream,
+                         one buffer per direction, on the RFC 4271 section
+                         4.1 Marker and Length. **That is the work**, and
+                         it is not a TCP stack: arrival order, a
+                         retransmission trimmed by sequence number, and no
+                         reordering, said in the file rather than left to be
+                         found out. A Length below 19 is the one case framing
+                         cannot continue from, so it resynchronises to the
+                         next Marker and hands over the octets it skipped;
+                         cli.rb is the `bgp4r` umbrella, `capture` and
+                         `version`, over exe/bgp4r. Nothing verifies a
+                         checksum and the file says why. docs/daemon.md's
+                         Capture section is the guide
 bgp/misc/                extras: route_generator.rb (many prefixes packed in UPDATEs), live_feed.rb (a client for an old public BGP feed)
+exe/bgp4r                the umbrella command, declared in the gemspec.
+                         docs/daemon.md names four and this is the one that
+                         exists: bgp4rd, bgp4r-cli and bgp4r-sim are
+                         **deliberately not stubbed**, because an executable
+                         in a released gem that answers nothing is worse than
+                         one that is not there
 docs/                    protocol-testing.md: using bgp4r to test a router
                          flow-spec.md: RFC 8955 and RFC 8956 on the wire, as much
                          as is needed to write the encoding and decoding. Read it
@@ -309,7 +347,11 @@ docs/                    protocol-testing.md: using bgp4r to test a router
                          is reachable with one terminal command. Read it
                          before adding an executable, a socket or HTTP
                          method, a config key or a state dump. Mostly a
-                         **design**: none of it exists yet
+                         **design** still, with one command built: its
+                         **Capture section is no longer a design**, and
+                         `bgp4r capture` and `bgp4r version` exist in
+                         exe/bgp4r over bgp/capture/. `bgp4rd`,
+                         `bgp4r-cli` and `bgp4r-sim` do not
                          routescope-labs.md: how those two programs
                          become nodes the routescope console can drive,
                          and the eight labs worth building once they are.
@@ -333,6 +375,12 @@ docs/                    protocol-testing.md: using bgp4r to test a router
                          assertable here and when
 examples/                runnable scripts
 test/unit/               unit tests, mirroring bgp/
+                         test/unit/capture/capture_fixtures.rb builds the BGP
+                         messages, frames and pcap streams the four capture
+                         test files share, with Array#pack rather than a
+                         binary fixture nobody can read in a review; it is
+                         not named *_test.rb, so run_unit.rb does not load it
+                         as a test, the way to_hash_catalog.rb is not
 test/functional/         tests that open real TCP sessions
 test/helpers/            a small test BGP server
 lab/                     speakers in containers: lab/speaker.rb and lab/topologies/ (see lab/README.md)
@@ -641,6 +689,18 @@ ruby -I. test/functional/lab/link_state_gobgp_test.rb
 ruby -I. test/functional/lab/link_state_frr_test.rb
 ```
 
+The capture command, over a pcap file, which needs no interface and no
+root. `-r -` reads standard input, so a capture can be piped in:
+```
+ruby -I. exe/bgp4r capture -r a.pcap
+ruby -I. exe/bgp4r version
+tcpdump -U -n -s 0 -w - -i eth1 tcp port 179 | ruby -I. exe/bgp4r capture -r -
+```
+Live, which needs `tcpdump` on PATH and an interface it may read:
+```
+sudo ruby -I. exe/bgp4r capture -i eth1
+```
+
 Which `#to_hash` read back and which do not, printed from
 `test/unit/to_hash_catalog.rb` rather than written down anywhere:
 ```
@@ -665,7 +725,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. The `lab` job is a matrix, one job per group in `test/lab_groups.rb`, so its cost is the slowest group and not the total: it was 12m42s as one serial suite. Each job installs only what its group needs, which is why the matrix entry carries a `gobgp`, `frr`, `docker` or `netns` flag. The `gobgp` groups pin 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-11-02: 2456 tests, 29052 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.5%.
+Baseline on 2026-11-02: 2602 tests, 29894 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.5%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -718,6 +778,8 @@ There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Cove
   * **The replacement is core and needs no require**: `String#unpack1('m0')` is strict base64 decoding, which is what `Base64.strict_decode64` meant, and `'m'` is the lenient form. Reach for `pack`/`unpack` before a Gemfile entry; adding a gem for one decode in one test is the wrong trade when the library's whole point is having one runtime dependency.
   * The failure mode is worth knowing because it is not a test failure. A bundled gem missing under Bundler kills the **require**, so the job dies before any test runs and the annotation names the requiring file rather than anything about the feature. A 10 second red job is almost always this shape.
 * Do not redefine methods of standard library classes. Newer versions may add the same method with different behavior (`IPAddr#+` in Ruby 4.0). Guard additions with `unless method_defined?`.
+* **`and` binds looser than `? :`, so `a and b ? c : d` is `a and (b ? c : d)`.** With `&&` it is `(a && b) ? c : d`, which is almost always what was meant. `bgp/capture/dissect.rb` shipped a one line method written with `and` that answered **nil** for every object with no children rather than the object itself, and nothing about the failure named a precedence: it showed as a tree of nils three calls away. The house style is `and` for control flow at the end of a statement and `&&` inside an expression, which is the usual Ruby advice and here has a scar behind it. When a condition feeds a ternary, parenthesise it and do not rely on either.
+  * The same family as the `const_defined?` and `BGP::IO` entries below: a Ruby rule that is easy to state and silent when broken. Worth knowing that **copying a working line from another project does not protect you**, since the line was copied from ospfv2, correctly written with `&&`, and retyped with `and` on the way in.
 * **`const_defined?` searches the ancestors unless you pass `false`.** Several files guard a generated class with `unless const_defined? :Unknown` so the file is safe to require twice. That guard asks the wrong question: adding `Optional_parameter::Unknown` in #154 made `Capability.const_defined?(:Unknown)` true by inheritance, so `Capability::Unknown` was never defined and every reference to it resolved up the chain to the parameter level class, which has a different hash and a different constructor. Three tests in two other files failed and not one of them named a constant. Write `const_defined?(:Unknown, false)`, which asks whether this class defines it. `test_the_three_unknown_classes_are_distinct` in `test/unit/optional_parameters/optional_parameter_test.rb` guards the three that now exist. The same guard in `bgp/path_attributes/path_attribute.rb` is still the ancestor searching form; it is correct only because nothing above `Path_attribute` defines an `Unknown`, which is luck.
   * **The same guard has a second failure mode, which is a file loading earlier defining the constant.** `bgp/nlris/nlri.rb` creates both its classes inside `unless const_defined?(:Nlri)`:
     ```ruby
@@ -727,6 +789,8 @@ There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Cove
     end
     ```
     So anything defining `BGP::Nlri` before that line runs skips the **whole block**, and `Withdrawn` is never defined either. Found in #173, which opened `class Nlri` in a file `nlri.rb` requires: a dozen failures naming `new_ntop`, `empty?`, `<<` and `BGP::Update::Withdrawn`, and not one of them naming the guard or the constant that tripped it. That pull request is closed, so this is the only thing kept from it. **Do not reopen `class Nlri` outside that file.**
+* **A test must not load `bgp4r.gemspec`, and that fails only in Docker.** The gemspec shells out to `git ls-files` for `s.files`, and the image has neither `git` nor a `.git`: `Gem::Specification.load` prints `Invalid gemspec in [/app/bgp4r.gemspec]: No such file or directory - git` and answers **nil**, so the next line raises `NoMethodError`. Found on the first CI run of #232, where the three `docker ruby` jobs failed on one test and all four runner jobs and every local run passed. Same family as the `base64` entry below, one step over: there the local Ruby is not the CI Ruby, here the local **tree** is not the image.
+  * The replacement is to read the gemspec as **text**, which works everywhere and is the right shape anyway: a claim about what a file does is matched as code, as the text guards over `validation.rb` are. `ruby -e 'p Gem::Specification.load("bgp4r.gemspec")'` with `git` off PATH is the one line that reproduces it, and a copy of the tree with `.git` removed and a stub PATH is how the whole suite was checked against the image without a Docker daemon.
 * Do not mutate string literals. CI runs the suite with `--enable-frozen-string-literal`. Use `String.new` or `+''` for a buffer.
   * **`String.new` and `+''` are not interchangeable: an octet buffer must be `String.new`.** With no argument `String.new` is `ASCII-8BIT`, where `+''` is `US-ASCII` and `String.new('abc')` is too. That only shows when the buffer stays empty, because concatenating any packed octets onto it makes the result binary, so the bug hides until an object's value happens to be empty. It bit in #218: `Link_state::Tlv::Ip_reachability` defaulted its octets to `+''`, and the default route handed that empty US-ASCII string to `IPAddr.new_ntoh`. **Ruby 3.3 accepted it and 3.4 raises** `IPAddr::InvalidAddressError: invalid encoding (given UTF-8, expected BINARY)`, because 3.3's `IPAddr.ntop` only switched on `addr.size` and 3.4 checks the encoding. CI went green on 3.3 and red on 3.4, 4.0 and head, on one test out of 2217, and no local run could reproduce it. Same family as the `base64` entry above: the local Ruby is not the CI Ruby.
   * **Assert the encoding rather than trusting it**, because that is the only form of the test that fails on the Ruby you are running. `assert_equal(Encoding::BINARY, obj.octets.encoding)` fails on 3.3 against the unfixed code, where every assertion about the value passes. And assert the **buffer**, not `encode`: `encode` goes through `pack`, which forces binary on its result whatever went in, so a guard on `encode.encoding` passes against every one of these and is worth nothing. The first draft of #218's guard did exactly that and survived four sabotages.
@@ -5817,7 +5881,57 @@ Decisions taken before this starts, so they are not re-litigated:
   in a convenience form for test code, each with a reason recorded, and
   clearing the list to empty it is not worth a phase.
 
-### routescope labs, items 3 and 4 done, the rest with no pull request yet
+### routescope labs. Items 1 to 5 of section 6 are Done; the rest is a plan
+
+**Done so far**: items 1 and 5, the `bgp4r` umbrella executable and
+`bgp4r capture`, which landed together because the capture contract
+decides the executable shape; item 2, the lab speaker as a router; and
+items 3 and 4, the view layer and the RIB JSON on top of it. See
+`bgp/capture/`, `bgp/rib/view.rb` and `lab/speaker.rb` in the layout
+above, and the Capture section of `docs/daemon.md`. **Items 1 and 5 were
+taken out of phase order on purpose**, since the phasing table puts item
+5 in phase 3, and why is in that document's section 10: item 5 sits
+there only because routescope's own capture path needs a modification
+before it can point at a bgp4r image, and that modification is
+routescope's and is not blocked by this.
+
+**Four things that work differs from in the design, and they are
+corrections to `docs/routescope-labs.md` section 6 item 5 rather than
+footnotes.** That entry said the dissector "differs from OSPF's in three
+ways and no more" and that "the work is offsets and masks, not decoding".
+* **The reassembly is not one of three ways, it is the whole of the
+  work.** A `packet` line is one **message** and not one frame, so the
+  envelope gains two keys over ospfv2's: `unit`, which is `message`, and
+  `flow`. Both are additive, so a generic decoder pane ignores them.
+* **"The checksum to verify is TCP's" does not survive that**, and
+  nothing verifies one. A message is reassembled from segments so no
+  single checksum covers its octets, and checksum offload makes a lab
+  capture's TCP checksums wrong on every frame the host sent, so
+  verifying would be a false-error generator. RFC 4271 gives a message no
+  checksum of its own.
+* **The offsets were the larger half and not the smaller.** What bgp4r
+  already had saves the **meaning**: `BGP::Message.factory` says whether
+  bgp4r can read a message, and a received UPDATE's
+  `path_attribute.errors` brings `validation.rb` into the capture, which
+  is the thing bgp4r can say about a captured UPDATE that nothing else
+  can.
+* **The filter was right** and is now part of the contract rather than a
+  convenience, because routescope passes none: `DEFAULT_FILTER` is a
+  named constant and a test asserts it.
+
+**Three bugs this work found, each with a test, and two of the three
+were in an error path nobody had one for.** A `Field#leaves` copied from
+ospfv2 read `children and ... ? ... : [self]`, where `and` binds looser
+than `? :`, so a childless field answered nil and every leaf of every
+message was nil; it was **removed** rather than fixed, since nothing
+called it and the test that had used it was replaced by a stronger one.
+`source`'s method level `rescue Errno::ENOENT` reported a pcap file that
+is not there as tcpdump being missing, which is a confident wrong answer
+about the one thing the caller got wrong; ospfv2's `capture_source` has
+the same shape and the same fault. And a test that **loaded**
+`bgp4r.gemspec` failed only in the Docker image, where there is no
+`git`; that one is in Conventions above with the line that reproduces it,
+because the lesson generalises past this work.
 
 **Two documents, and the split matters.** `docs/daemon.md` designs the
 two programs, `bgp4rd` and `bgp4r sim`, and says nothing about
@@ -5851,7 +5965,11 @@ The short version, so the direction is visible here:
   the conformance image already carries GoBGP's client, so a lab with
   both on PATH would be ambiguous. Four commands: `bgp4rd`,
   `bgp4r-cli`, `bgp4r` as the umbrella (`sim`, `routegen`, `capture`,
-  `lab new`, `version`) and `bgp4r-sim` as an alias.
+  `lab new`, `version`) and `bgp4r-sim` as an alias. **The umbrella
+  exists; the other three do not and are not stubbed**, because an
+  executable in a released gem that answers nothing is worse than one
+  that is not there. The gemspec declares `bgp4r` alone and the usage
+  names the rest as not yet implemented.
 * **The largest item was that the lab speaker becomes a router. Done**,
   which is item 2 of the document's section 6. `bgp/rib/` was finished,
   tested and unwired because the speaker predates it; it is wired in now
@@ -5947,11 +6065,15 @@ The short version, so the direction is visible here:
     spot from the same line. Closing it means a second decision over
     `Table#candidates`, which is the one thing this layer is not, so it
     wants a decision rather than a patch.
-* **Match ospfv2's capture contract rather than inventing one.**
+* **Match ospfv2's capture contract rather than inventing one. Done.**
   routescope runs `IMAGE capture -i IFACE` with the subcommand and the
   flag hard-coded and no filter passed, so a bgp4r image taking the
   same argv and writing the same newline-delimited JSON costs one
-  environment variable instead of a change to shared code.
+  environment variable instead of a change to shared code. The
+  Dockerfile's `capture` stage is that image, and its entrypoint is the
+  `bgp4r` command for exactly that reason. **It has not been built**: no
+  Docker daemon was reachable where it was written, and it is the only
+  part of the capture work nothing has run.
 * Eight labs, phased, with phase 0 costing nothing: an unknown `kind`
   renders as `linux` in routescope, so a bgp4r container is useful
   there before either repository changes.
@@ -6230,7 +6352,8 @@ Lab and conformance:
 * **BGP-LS is the only family measured in both directions, and `docs/bgp-ls.md` section 11 has it.** GoBGP 3.23.0 can originate a BGP-LS route, so its encoder feeds our decoder: `gobgp global rib add -a ls link` wants sixteen keyword and value pairs (`LINK_ARGS` in the test has them) and refuses `node` and `prefix`, so NLRI type 2 is the only one. What that bought: sub-TLV 516 kept and echoed on real traffic, the Protocol-ID table corrected because GoBGP originates with 7 and bgp4r said Unassigned, and the finding that decided part 6's scope, which is that **GoBGP's own node descriptors break section 5.2.1.4's ascending-order MUST** while GoBGP also enforces a mandatory-TLV check section 8.2.2 forbids. So part 6 follows the RFC and not the router. **Two GoBGP faults, recorded and not filed**: a node descriptor carrying only an Autonomous System is refused with "Required TLV missing" and costs the whole capability, and the client panics rendering an IP Reachability TLV whose prefix is more than one octet, which is why the send-side prefix case uses a /8. **What the receive direction cannot check**: GoBGP sends one NLRI per UPDATE, so `Link_state.nlri_size` wrong by a constant leaves every receive case passing; the multi-NLRI cases in `test/functional/link_state_test.rb` are the only cover the parse-side framing has. FRR 8.4.4 has neither SAFI and logs `afi/safi: bad-value/unknown`, naming neither half where for MCAST-VPN it named the AFI, then resets on a BGP-LS UPDATE as it does for SAFI 5. SAFI 72 has no reference at all.
 * **Flow spec interop lives in `docs/flow-spec.md` section 12**, measured and asserted rather than written down here, the same way the fault matrix columns are. The short version: both routers accept a rule from bgp4r and read it back, and they disagree on every part of RFC 8955 section 4.2. Two harness facts worth knowing before writing another flow spec lab test: GoBGP's **config file and its client use different names for the VPN family**, `l3vpn-ipv4-flowspec` and `ipv4-l3vpn-flowspec`, each rejecting the other; and **FRR 8.4.4 has no VPN flow spec family**, refusing a session that offers SAFI 134 alone with 2/7 and silently discarding the rule when SAFI 133 is there too.
 * **`to_hash_round_trip_test.rb` cannot read a test file that is not pure ASCII.** `test_every_working_round_trip_is_asserted_in_a_class_test_file` reads every test file body and matches regexps against it, and a single non-ASCII character in any of them makes it error with `ArgumentError: invalid byte sequence in US-ASCII`, pointing at its own line 190 and naming neither the file nor the character. Found on 2026-10-31 by putting one arrow in a comment in a new test file: that file passed on its own and the suite errored in a test it has nothing to do with. Every test file is ASCII today, so nothing is wrong now; what is wrong is the diagnosis the next person gets. The fix is an encoding on the read or a `scrub`, and it is one line in a file this change does not otherwise touch.
-* Lowest coverage (unit suite): `neighbor/neighbor.rb` 91%, `messages/update.rb` 92%, `neighbor/add_path_cap.rb` 93%, `path_attributes/mp_unreach.rb` 93%, `path_attributes/ipv6_extended_communities.rb` 93%, `optional_parameters/graceful_restart.rb` 93%.
+* **`bgp4r capture` has three gaps, each a decision rather than a patch, and each said in the file it is in.** The live path, `tcpdump` into a pipe, is the only code in `bgp/capture/` no test runs: tcpdump is not installed in this sandbox and spawning it in a unit test wants a privileged interface, so the file path is exercised in full and the nine lines of the spawn and the two that kill the child are not. The Dockerfile's **`capture` stage has not been built**, for want of a Docker daemon, and it is what makes routescope's hard coded `IMAGE capture -i IFACE` reach anything, so build it before trusting it. And **reordered segments are not handled**: `bgp/capture/stream.rb` reads each direction in arrival order, trims a retransmission by sequence number and does nothing about a capture whose segments crossed, which would frame garbage from that point with nothing saying so. Reordering means held segments, timers and a reassembly queue, which is a TCP implementation and not a dissector; the file says so rather than leaving it to be found out.
+* Lowest coverage (unit suite): `bgp/capture/cli.rb` 87% (the live tcpdump path, above), `neighbor/neighbor.rb` 91%, `messages/update.rb` 92%, `neighbor/add_path_cap.rb` 93%, `path_attributes/mp_unreach.rb` 93%, `path_attributes/ipv6_extended_communities.rb` 93%, `optional_parameters/graceful_restart.rb` 93%, `path_attributes/mp_reach.rb` 93%.
 
 ## Attribute work left
 

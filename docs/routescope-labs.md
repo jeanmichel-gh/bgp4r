@@ -280,13 +280,19 @@ styles print cannot disagree. Section 6 items 3 and 4 have the detail.
 Measured against ospfv2, which ships all of it. Each item says what it
 unblocks, so the order is not arbitrary.
 
-1. **Executables, which bgp4r has none of.** No `bin/`, no `exe/`, and
-   the gemspec declares none; `lab/speaker.rb` is run as `ruby -I.
-   lab/speaker.rb FILE`. `docs/daemon.md` names the four: `bgp4rd`,
-   `bgp4r-cli`, `bgp4r` with `sim`, `routegen`, `capture` and `lab new`,
-   and `bgp4r-sim` as an alias so a container command reads plainly.
-   Unblocks everything, and the capture contract in section 4 forces the
-   shape of one of them.
+1. **Executables. The umbrella is done**, in `exe/bgp4r`, declared in
+   the gemspec, with `capture` and `version` and a usage line naming the
+   rest. `bgp4rd`, `bgp4r-cli` and `bgp4r-sim` are **not** stubbed and
+   are not declared: an executable in a released gem that answers
+   nothing is worse than one that is not there, so each arrives with the
+   program behind it. `lab/speaker.rb` is still run as `ruby -I.
+   lab/speaker.rb FILE`.
+   * The dispatch is a `case` in `BGP::Capture::CLI#start`, not a
+     framework, and the class takes its output IO so a test reads a
+     String rather than capturing a process. `BGP::VERSION` is new, in
+     `bgp/version.rb`, and the gemspec reads it: a command cannot print a
+     version the library does not answer, and two places for it is one
+     too many.
 2. **The speaker becomes a router. Done**, on 2026-11-02. This was the
    largest item and the most valuable. `lab/README.md` stated the limit
    outright: "A speaker originates routes and records what it receives.
@@ -361,13 +367,60 @@ unblocks, so the order is not arbitrary.
      and `show.fib` shapes are not here either: each is another
      object's state, an Adj-RIB-In, a Router's Adj-RIB-Outs or a Fib,
      and each is its own small piece of work against the same rule.
-5. **`bgp4r capture -i IFACE`.** Section 4 gives the exact contract. A
-   BGP dissector differs from OSPF's in three ways and no more: the
-   filter is `tcp port 179`, messages are a stream rather than one per
-   frame so a reader must reassemble across segments, and the checksum
-   to verify is TCP's rather than the protocol's. bgp4r already parses
-   every message from octets and already answers `to_shex`, so the work
-   is offsets and masks, not decoding.
+5. **`bgp4r capture -i IFACE`. Done.** `bgp/capture/pcap.rb` reads the
+   classic pcap format off an IO a record at a time, so it works on a
+   live pipe; `bgp/capture/dissect.rb` reads a frame down to its TCP
+   payload and a BGP message down to its fields;
+   `bgp/capture/stream.rb` frames messages out of the byte stream; and
+   `bgp/capture/cli.rb` prints the envelope section 4 gives. `tcpdump
+   -U` into a pipe, as ospfv2 does, because a packet socket in pure Ruby
+   would be a native dependency. `-r FILE` reads a pcap file and `-` is
+   standard input.
+   * **Three claims this entry made were wrong and one was the
+     estimate.** It said the dissector "differs from OSPF's in three
+     ways and no more", and the three were not quite the three.
+     * **The filter is right**, `tcp port 179`, and section 4's rule
+       that routescope passes none makes it part of the contract rather
+       than a convenience, so it is a named constant and asserted.
+     * **The reassembly is right and it is not one of three ways, it is
+       the whole of the work.** A message may arrive in two frames and
+       two may share one, so a `packet` line is one **message** and not
+       one frame: `hex` is the message's octets, `length` is their count
+       and every field offset is from the message's first octet. The
+       transport is reported as `flow`, a direction as `src:port >
+       dst:port`, and the header carries `unit: message` so a consumer
+       cannot read ospfv2's frame shape into it by accident. That is one
+       more key than ospfv2's envelope and it is additive, so a generic
+       decoder pane ignores it.
+     * **"The checksum to verify is TCP's" does not survive the
+       envelope, and nothing verifies one.** A message is reassembled
+       from segments, so there is no single checksum over its octets to
+       report, and a capture taken on a host with checksum offload
+       carries a wrong or zero TCP checksum on every frame it sent, so
+       verifying it would fill an ordinary lab capture with false
+       errors. The `check` key of ospfv2's field shape is therefore
+       carried and never used. RFC 4271 gives a message no checksum of
+       its own.
+     * **"The work is offsets and masks, not decoding" understated it.**
+       The offsets are a real dissector: the header, then per message
+       type down to each optional parameter, each capability, each path
+       attribute with its flag bits and each prefix. What bgp4r already
+       had saves the **meaning**, not the offsets:
+       `BGP::Message.factory` says whether bgp4r can read a message at
+       all, and a received UPDATE's `path_attribute.errors` brings
+       `validation.rb` into the capture, which is the thing bgp4r can
+       say about a captured UPDATE that no other dissector can.
+   * **Three kinds of entry land in the one `errors` list and the
+     wording is what tells them apart**, since ospfv2's envelope has one
+     channel: a finding from `validation.rb` is prefixed as the
+     sender's fault, and an `Attr::Gap` or a decoder that raises is
+     prefixed as bgp4r's own gap. Conventions keep those apart inside
+     the library and a capture that called bgp4r's coverage a protocol
+     error would give a confident wrong verdict about a correct router.
+   * A message bgp4r cannot decode still appears, with its hex and every
+     field the framing gives, and so do octets that cannot be framed
+     into a message at all. That is the keep-what-you-cannot-read rule
+     at the one place in this work where octets could be lost.
 6. **A structured event stream.** bgp4r has `Neighbor#on_state_change`
    and `Table#on_change`, which are the hooks; it has no sequence
    numbers, no kinds, no backlog and no `since:` replay. ospfv2's shape
@@ -1059,9 +1112,9 @@ asking for.
 | Phase | bgp4r | routescope | Lab |
 |---|---|---|---|
 | 0 | nothing | nothing | a bgp4r container as `kind: linux`: shell, log, capture |
-| 1 | 1, 3, 5(A) | kinds, router driver | A |
+| 1 | **1 done**, 3 | kinds, router driver | A |
 | 2 | 2, 4 | BGP panes | C, D |
-| 3 | 5 | capture modification | B, and a decoder pane for BGP |
+| 3 | **5 done** | capture modification | B, and a decoder pane for BGP |
 | 4 | 6, 9 | scenario conditions, `do_bgp` | F, H, and section 9.4's scenario A |
 | 5 | 8 | injector driver and its kind | section 9.4's B and C, and E scripted |
 
@@ -1077,6 +1130,16 @@ say what the action did.
 Phase 0 is not a joke. It costs nothing, it proves the container runs
 under routescope's transport, and it is where every assumption in this
 document gets its first test.
+
+**Two items are out of phase order and that is deliberate.** Item 1, the
+umbrella executable, and item 5, `bgp4r capture`, landed together,
+because the capture contract in section 4 is what forces the executable's
+shape: the argv routescope runs is `IMAGE capture -i IFACE`, so the
+command and the dissector are one piece of work and splitting them would
+have shipped an executable with nothing behind it. Item 5 sits in phase 3
+above only because routescope's capture path needs a modification before
+it can point at a bgp4r image, and that modification is routescope's and
+not blocked by this.
 
 **Part of phase 0 is done.** `lab/topologies/add-path` is a topology
 with a `scenarios/` folder, and the two changes to

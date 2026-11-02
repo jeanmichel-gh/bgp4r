@@ -27,6 +27,7 @@
 #   base         Ruby, the dev and test gems, the bgp4r source, a non-root user
 #   test         runs the unit suite (the default command)
 #   speaker      runs a bgp4r script, for labs: docker run bgp4r-speaker my_peer.rb
+#   capture      the bgp4r command with tcpdump, for `bgp4r capture -i IFACE`
 #   gobgp-cli    the router image, only as a source for the gobgp binary
 #   conformance  speaker plus the gobgp client, for the fault matrix topology
 
@@ -60,6 +61,31 @@ CMD ["ruby", "test/run_unit.rb"]
 FROM base AS speaker
 EXPOSE 179
 ENTRYPOINT ["ruby", "-I/app"]
+
+# The capture image. Its entrypoint is the bgp4r command, so the argv
+# routescope hard-codes works unchanged:
+#
+#   docker run --rm --network container:NAME --cap-add NET_RAW \
+#     --cap-add NET_ADMIN bgp4r-capture capture -i eth1
+#
+# That argv is Transport::Docker#capture_command in routescope, where the
+# subcommand `capture` and the flag `-i` are not configurable, so the
+# entrypoint has to take them. docs/routescope-labs.md section 4 has it.
+#
+# tcpdump is the one thing added. The library has no runtime gem but a
+# packet socket in pure Ruby would be a native dependency, so the capture
+# spawns tcpdump into a pipe, as ospfv2's does.
+#
+# **Not built here.** No Docker daemon was reachable in the sandbox this
+# was written in, so this stage is the only part of the capture work that
+# nothing has run. Build it before trusting it.
+FROM base AS capture
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends tcpdump \
+    && rm -rf /var/lib/apt/lists/*
+USER bgp
+ENTRYPOINT ["ruby", "-I/app", "exe/bgp4r"]
+CMD ["capture", "-i", "eth0"]
 
 # The speaker plus the gobgp client, so a script can read GoBGP's RIB:
 #
