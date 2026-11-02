@@ -973,7 +973,19 @@ class TestBgpRibRouter < Test::Unit::TestCase
     sleep(0.02) while r.waiting.any? &&
                       Process.clock_gettime(Process::CLOCK_MONOTONIC) < deadline
     assert_equal([], r.waiting, 'the pacer flushed them on its own')
-    assert(r.flush_requests <= 20,
+    # **One per destination is the invariant, and 20 was a guess.** Each
+    # destination's window ends once, so a flush per group of deadlines
+    # cannot exceed the number of destinations however the groups fall;
+    # the defect this guards is a flush per turn of the pacer's loop,
+    # which is unbounded. Four numbers, so the margin is visible: 2 here,
+    # **29 on a loaded CI runner**, which is what took `docker ruby 3.3`
+    # down on a branch that had not touched the pacer, 100 as the
+    # invariant, and **604,100** with the one-flush-in-flight guard taken
+    # out of `Router#pace`, measured on 2026-11-02 rather than carried
+    # forward from the 99,255 recorded when that guard was written. A
+    # threshold sitting between the legitimate range and nothing is a
+    # test that reports a busy machine as a defect.
+    assert(r.flush_requests <= 100,
            "a flush per group of deadlines, not per loop: #{r.flush_requests} asked for")
     assert(@rib.drain, 'and the worker is not buried under queued flushes')
   end
