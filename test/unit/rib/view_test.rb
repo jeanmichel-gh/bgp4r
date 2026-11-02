@@ -680,4 +680,145 @@ class TestBgpRibView < Test::Unit::TestCase
     assert_equal([], @rib.view.paths('172.16.0.0/12'))
   end
 
+  # ====================================================================
+  # The three views of another object's state: an Adj-RIB-In, a Router's
+  # Adj-RIB-Outs and a Fib.
+
+  # **The Adj-RIB-In is as received, which is what makes it worth a view
+  # of its own.** RFC 4271 section 5.1.5 says a LOCAL_PREF from an
+  # external peer must be ignored, and Table#import drops it, so the
+  # value is in this row and nowhere else: a route the decision process
+  # never saw as sent is otherwise invisible.
+  def test_adj_in_answers_the_route_as_received_before_import
+    @rib.announce(route(E1, P, :local_pref => 250))
+    row = @rib.view.adj_in(E1.address).first
+    assert_equal(P, row[:prefix])
+    assert_equal(250, row[:local_pref], 'as the peer sent it')
+    assert_nil(@rib.view.routes(P).first[:local_pref],
+               'and import dropped it from everything downstream')
+  end
+
+  def test_adj_in_says_which_of_a_peers_paths_won
+    @rib.announce(route(E1, P, :as_path => [65002]))
+    @rib.announce(route(E2, P, :as_path => [65003, 65004]))
+    assert_equal([true], @rib.view.adj_in(E1.address).collect { |r| r[:best] })
+    assert_equal([false], @rib.view.adj_in(E2.address).collect { |r| r[:best] })
+  end
+
+  def test_adj_in_narrows_to_one_prefix_and_lists_its_prefixes_sorted
+    %w[10.2.0.0/16 10.1.0.0/16].each { |pfx| @rib.announce(route(E1, pfx)) }
+    assert_equal(%w[10.1.0.0/16 10.2.0.0/16], @rib.view.adj_in_prefixes(E1.address))
+    assert_equal(['10.2.0.0/16'], @rib.view.adj_in('10.0.0.2', '10.2.0.0/16').collect { |r| r[:prefix] })
+  end
+
+  # **A read must not change what it reads**, and Table#adj_rib_in makes
+  # an Adj-RIB-In on first use, so an address nobody ever peered with
+  # would otherwise leave an empty RIB behind in the table and make that
+  # peer appear in Table#peers.
+  def test_asking_about_a_peer_the_table_never_saw_creates_nothing
+    @rib.announce(route(E1, P))
+    before = @rib.peers.size
+    assert_equal([], @rib.view.adj_in('192.0.2.77'))
+    assert_equal([], @rib.view.adj_in_prefixes('192.0.2.77'))
+    assert_equal(before, @rib.peers.size, 'no Adj-RIB-In was created by reading one')
+  end
+
+  # **The Adj-RIB-Out carries what went out and not what the Loc-RIB
+  # holds**, which is the point: the export rules rewrite AS_PATH and
+  # NEXT_HOP per peer (RFC 4271 section 5.1.2 and 5.1.3), so this is the
+  # only place to see what the peer was really told.
+  def test_adj_out_answers_the_attributes_that_went_out
+    @rib.announce(route(E2, P, :as_path => [65003]))
+    advertise_to_a_peer
+    row = @rib.view.adj_out('10.0.0.2').first
+    assert_equal(P, row[:prefix])
+    assert_equal("#{LOCAL_AS} 65003", row[:as_path], 'our AS prepended toward an external peer')
+    assert_equal('10.0.0.1', row[:next_hop], 'ours, and not the one it arrived with')
+    assert_equal(:igp, row[:origin])
+    assert_equal([P], @rib.view.adj_out_prefixes('10.0.0.2'))
+  end
+
+  def test_adj_out_has_no_from_and_no_local_because_it_holds_no_route
+    @rib.announce(route(E2, P, :as_path => [65003]))
+    advertise_to_a_peer
+    row = @rib.view.adj_out('10.0.0.2').first
+    assert_equal(false, row.has_key?(:from))
+    assert_equal(false, row.has_key?(:local))
+  end
+
+  def test_adj_out_is_empty_with_no_router_and_for_an_unknown_peer
+    @rib.announce(route(E1, P))
+    assert_nil(@rib.router, 'router mode is off until asked for')
+    assert_equal([], @rib.view.adj_out(E1.address))
+    assert_equal([], @rib.view.adj_out_prefixes(E1.address))
+    advertise_to_a_peer
+    assert_equal([], @rib.view.adj_out('192.0.2.77'))
+  end
+
+  # Why a prefix was not advertised, which is the answer Router#skipped
+  # exists for: a route silently not advertised is the hardest kind of
+  # bug to see from outside. Here the route came from the peer it would
+  # go back to, which Export refuses.
+  def test_skipped_says_why_a_prefix_did_not_go_to_a_peer
+    @rib.announce(route(E1, P))
+    advertise_to_a_peer
+    rows = @rib.view.skipped('10.0.0.2')
+    assert_equal([P], rows.collect { |r| r[:prefix] })
+    assert_equal('back_to_sender', rows.first[:reason])
+    assert_equal([], @rib.view.skipped('192.0.2.77'))
+  end
+
+  # :configured is what tells a table that installs nothing from one
+  # whose forwarding table happens to be empty. Both answer no rows.
+  def test_fib_says_whether_anything_is_installing_at_all
+    f = @rib.view.fib
+    assert_equal(false, f[:configured])
+    assert_nil(f[:backend])
+    assert_equal(0, f[:total])
+    assert_equal([], f[:failed])
+    assert_equal([], @rib.view.fib_prefixes)
+    assert_equal([], @rib.view.fib_routes)
+  end
+
+  # With a backend that records instead of running a command, so no
+  # kernel and no privilege is involved: the real one is
+  # test/functional/lab/fib_test.rb.
+  def test_fib_answers_what_it_believes_is_installed
+    @rib.announce(route(E1, '10.2.0.0/16'))
+    @rib.announce(route(E1, '10.1.0.0/16'))
+    @rib.install(:backend => Backend.new)
+    @rib.drain
+    f = @rib.view.fib
+    assert_equal(true, f[:configured])
+    assert_equal('a recording backend', f[:backend])
+    assert_equal(2, f[:total])
+    assert_equal(%w[10.1.0.0/16 10.2.0.0/16], @rib.view.fib_prefixes)
+    assert_equal([{ :prefix => '10.1.0.0/16', :next_hop => '10.0.0.2' }],
+                 @rib.view.fib_routes('10.1.0.0/16'))
+  end
+
+  def test_fib_names_what_the_kernel_refused
+    @rib.announce(route(E1, P))
+    @rib.install(:backend => Backend.new(:fail => true))
+    @rib.drain
+    f = @rib.view.fib
+    assert_equal(0, f[:total], 'an install that failed is not believed')
+    assert_equal([P], f[:failed].collect { |r| r[:prefix] })
+    assert_match(/refused/, f[:failed].first[:error])
+  end
+
+  # A backend that records an operation rather than running it. Its own
+  # Result shape is what FibInstaller#apply reads: ok? and to_s.
+  class Backend
+    Result = Struct.new(:ok, :text) do
+      def ok? ; ok ; end
+      def to_s ; text ; end
+    end
+
+    def initialize(arg = {}) ; @fail = arg[:fail] ; end
+    def run(_op) ; Result.new(!@fail, @fail ? 'the kernel refused it' : 'ok') ; end
+    def flush(_arg = {}) ; Result.new(true, 'ok') ; end
+    def to_s ; 'a recording backend' ; end
+  end
+
 end

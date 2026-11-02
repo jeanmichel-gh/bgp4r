@@ -63,9 +63,29 @@ module BGP
 
       # The operator commands `-c` takes. Anything else is refused with
       # this list, rather than guessed at.
-      COMMANDS = ['show bgp summary', 'show bgp', 'show bgp PREFIX'].freeze
+      #
+      # `clear bgp PEER` is the one that changes something, and it is
+      # here because docs/daemon.md gives it as an example a person
+      # types. The rest of the write side is the method form: `peer.stop`
+      # and `route.originate` take parameters a one line command grammar
+      # would have to invent a syntax for, and this file is a string
+      # match against a short list and not a parser.
+      COMMANDS = ['show bgp summary', 'show bgp', 'show bgp PREFIX',
+                  'clear bgp PEER'].freeze
 
       STYLES = %w[ios junos iosxr].freeze
+
+      # The methods that answer many lines rather than one, so the method
+      # form reads until it is stopped instead of printing one line and
+      # leaving.
+      #
+      # **The client's own list and not `Api::STREAM_METHODS`.** This file
+      # requires `bgp/daemon/client` and nothing else, so `bgp4r-cli`
+      # loads a socket and a JSON parser rather than the whole library and
+      # a Speaker, and `events.unsubscribe` is in the server's list and
+      # is not something a caller starts. cli_test.rb holds this list
+      # inside the server's so the two cannot disagree about a name.
+      STREAMS = %w[events.subscribe].freeze
 
       USAGE = <<-TEXT
 Usage: bgp4r-cli [options] [METHOD [JSON]]
@@ -73,8 +93,11 @@ Usage: bgp4r-cli [options] [METHOD [JSON]]
   bgp4r-cli -c 'show bgp summary'      an operator command, as text
   bgp4r-cli -c 'show bgp'              the Loc-RIB, as a router prints it
   bgp4r-cli -c 'show bgp 10.0.0.0/8'   one prefix, in detail
+  bgp4r-cli -c 'clear bgp 10.0.10.1'   reset one session
   bgp4r-cli show.peers                 an API method, as JSON
   bgp4r-cli show.rib '{"prefix":"10.0.0.0/8"}'
+  bgp4r-cli peer.stop '{"peer":"10.0.10.1"}'
+  bgp4r-cli events.subscribe           a stream, one event per line
 
 Options:
   -s, --socket PATH   bgp4rd's socket (default: $BGP4R_SOCKET, else
@@ -158,12 +181,30 @@ TEXT
           @err.puts 'bgp4r-cli: the second argument is a JSON object of parameters'
           return 1
         end
+        return subscribe(client, opts[:method], params) if STREAMS.include?(opts[:method])
         result = client.call(opts[:method], params)
         @out.puts(opts[:pretty] ? JSON.pretty_generate(result) : JSON.generate(result))
         0
       rescue JSON::ParserError => e
         @err.puts "bgp4r-cli: the second argument is not JSON: #{e.message[0, 120]}"
         1
+      end
+
+      # A stream, one JSON object per line, until the daemon closes it or
+      # the person interrupts. Each line is printed as it arrives rather
+      # than collected, which is the whole point of a stream, so there is
+      # no --pretty here: a line a reader pipes into `jq` has to be one
+      # line.
+      #
+      # INT is caught so the connection is ended with
+      # `events.unsubscribe` rather than dropped, which is what leaves
+      # the daemon with no subscriber behind.
+      def subscribe(client, method, params)
+        client.stream(method, params) { |line| @out.puts(JSON.generate(line)) }
+        0
+      rescue Interrupt
+        client.unsubscribe
+        0
       end
 
       # The text form.
@@ -173,6 +214,7 @@ TEXT
         when 'show bgp summary' then @out.print summary(client)
         when 'show bgp' then @out.print routes(client, opts[:style], nil)
         when /\Ashow bgp (\S+)\z/ then @out.print routes(client, opts[:style], $1)
+        when /\Aclear bgp (\S+)\z/ then @out.print cleared(client, $1)
         else
           @err.puts "bgp4r-cli: #{opts[:command].inspect} is not one of: #{COMMANDS.join(', ')}"
           return 1
@@ -199,6 +241,13 @@ TEXT
                         p['received'] || 0, p['sent'] || 0, p['description'])
         end
         out
+      end
+
+      # `clear bgp PEER`, which resets one session. The line it prints is
+      # this file's own, as the summary's columns are.
+      def cleared(client, peer)
+        r = client.call('peer.clear', 'peer' => peer)
+        format("Cleared %s: was %s, now %s\n", r['peer'], r['was'], r['state'])
       end
 
       # `show bgp` and `show bgp PREFIX`, rendered by the daemon through

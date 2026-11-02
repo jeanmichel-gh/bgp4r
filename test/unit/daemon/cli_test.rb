@@ -53,6 +53,24 @@ class BGP_Daemon_CLI_Test < Test::Unit::TestCase
     def closed? ; @closed ; end
   end
 
+  # A Client that answers a stream: the result line, one event, and a
+  # keepalive.
+  class StreamingClient < FakeClient
+    attr_reader :streams
+
+    def initialize ; super ; @streams = [] ; end
+
+    def stream(method, params = {})
+      @streams << [method, params]
+      [{ 'id' => 1, 'result' => { 'seq' => 0, 'replayed' => 0, 'kinds' => nil } },
+       { 'event' => { 'seq' => 1, 'kind' => 'session', 'peer' => '10.0.0.2' } },
+       { 'keepalive' => 1, 'seq' => 1 }].each { |line| yield line }
+      nil
+    end
+
+    def unsubscribe ; nil ; end
+  end
+
   STATUS = { 'router_id' => '10.0.0.1', 'as' => 65_000,
              'summary' => { 'peers' => 2, 'established' => 1, 'rib' => 7 },
              'peers' => [{ 'address' => '10.0.0.2', 'remote_as' => 65_001, 'state' => 'established',
@@ -195,6 +213,59 @@ class BGP_Daemon_CLI_Test < Test::Unit::TestCase
     assert_equal(0, status)
     assert_equal('', err)
     assert_equal("#{BGP::VERSION}\n", out)
+  end
+
+  # ====================================================================
+  # The write side
+
+  # docs/daemon.md gives `clear bgp 10.0.10.1` as an example a person
+  # types, so the command exists; the rest of the write side is the
+  # method form, because `peer.stop` and `route.originate` take
+  # parameters a one line grammar would have to invent a syntax for.
+  def test_clear_bgp_resets_one_session
+    answers = ANSWERS.merge('peer.clear' => { 'peer' => '10.0.10.1', 'was' => 'established',
+                                              'state' => 'idle', 'cleared' => true })
+    status, out, err, client = run_cli(['-c', 'clear bgp 10.0.10.1'], answers)
+    assert_equal(0, status, err)
+    assert_equal([['peer.clear', { 'peer' => '10.0.10.1' }]], client.calls)
+    assert_match(/Cleared 10\.0\.10\.1: was established, now idle/, out)
+  end
+
+  def test_clear_bgp_with_no_peer_is_not_one_of_the_commands
+    status, _out, err = run_cli(['-c', 'clear bgp'])
+    assert_equal(1, status)
+    assert_match(/clear bgp PEER/, err)
+  end
+
+  def test_the_commands_list_names_clear
+    assert_include(BGP::Daemon::CLI::COMMANDS, 'clear bgp PEER')
+  end
+
+  # **The client's stream list is inside the server's**, so the two
+  # cannot disagree about a name. It is a list of its own because this
+  # file requires only the client, so `bgp4r-cli` loads a socket and a
+  # JSON parser rather than the whole library.
+  def test_the_stream_list_is_inside_the_servers
+    require 'bgp/daemon/api'
+    BGP::Daemon::CLI::STREAMS.each do |m|
+      assert_include(BGP::Daemon::Api::STREAM_METHODS, m)
+    end
+  end
+
+  # A stream method prints every line as it arrives rather than one
+  # result and nothing, which is what a person watching a lab wants.
+  def test_a_stream_method_prints_every_line
+    out, err = StringIO.new, StringIO.new
+    client = StreamingClient.new
+    status = BGP::Daemon::CLI.new(out, err, client).start(['events.subscribe'], {})
+    assert_equal(0, status, err.string)
+    assert_equal([['events.subscribe', {}]], client.streams)
+    lines = out.string.lines
+    assert_equal(3, lines.size)
+    assert_equal(0, JSON.parse(lines[0])['result']['replayed'],
+                 'the result line is printed too, so a reader sees where the stream starts')
+    assert_equal('session', JSON.parse(lines[1])['event']['kind'])
+    assert_equal(1, JSON.parse(lines[2])['keepalive'])
   end
 
   # Every connection is closed, however the command ended, so a client

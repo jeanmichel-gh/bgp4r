@@ -337,8 +337,15 @@ module BGP
         # no :since from the caller it is the current sequence, so there
         # is nothing to replay and the stream starts here.
         sub = events.subscribe(:kinds => kinds, :since => since)
+        # **`seq` is where the stream has got to and not the `since` it
+        # was asked with**, which is the number a reader resumes from: it
+        # already has everything up to it, through the replay or through
+        # the event lines that follow. An event published between the
+        # subscribe above and this read is on the stream as well, so a
+        # reader loses nothing by it and may at worst see one line twice
+        # across a reconnect.
         write(sock, :id => req['id'],
-                    :result => { :seq => since, :replayed => sub.replayed,
+                    :result => { :seq => events.seq, :replayed => sub.replayed,
                                  :kinds => kinds && kinds.collect { |k| k.to_s } })
         pump(sock, sub)
       rescue ArgumentError, TypeError => e

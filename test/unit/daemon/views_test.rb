@@ -276,6 +276,94 @@ class BGP_Daemon_Views_Test < Test::Unit::TestCase
     assert_equal(2, v.peers.size)
   end
 
+  # ====================================================================
+  # show.adj_in, show.adj_out, show.fib, show.log
+
+  # **A per peer view with no peer has no sensible default**: the first
+  # configured neighbor would be an answer about a peer nobody asked
+  # about, and every peer at once is what the page envelope exists to
+  # prevent.
+  def test_a_per_peer_view_requires_a_peer_and_names_the_ones_there_are
+    v = views(loaded)
+    %i[adj_in adj_out].each do |m|
+      e = assert_raise(ArgumentError) { v.send(m) }
+      assert_match(/peer is required/, e.message, m.to_s)
+      e = assert_raise(ArgumentError) { v.send(m, 'peer' => '192.0.2.1') }
+      assert_match(/10\.0\.0\.2, 10\.0\.0\.3/, e.message, m.to_s)
+    end
+  end
+
+  # A configured peer that has never come up holds nothing, which is an
+  # answer and not a failure.
+  def test_a_peer_with_no_session_answers_an_empty_page
+    v = views(loaded)
+    page = v.adj_in('peer' => '10.0.0.2')
+    assert_equal([], page[:rows])
+    assert_equal(0, page[:total])
+    assert_nil(page[:next_offset])
+  end
+
+  # Both carry the page envelope, which is what a caller walks a million
+  # prefixes with, and adj_out carries skipped beside it because a
+  # skipped prefix is by definition not among the ones the page walks.
+  def test_the_two_per_peer_views_are_paged_and_adj_out_carries_skipped
+    v = views(loaded)
+    assert_equal(%i[limit next_offset offset rows total], v.adj_in('peer' => '10.0.0.2').keys.sort)
+    out = v.adj_out('peer' => '10.0.0.2')
+    assert_equal(%i[limit next_offset offset rows skipped total], out.keys.sort)
+    assert_equal({ :total => 0, :rows => [] }, out[:skipped])
+  end
+
+  # **fib.configured is what tells a daemon with no fib: in its
+  # configuration from one whose table happens to be empty.** Both
+  # answer no rows, so without that key the two are the same answer.
+  def test_fib_says_whether_anything_is_installing_at_all
+    page = views(loaded).fib
+    assert_equal([], page[:rows])
+    assert_equal(0, page[:total])
+    assert_equal(false, page[:fib][:configured])
+    assert_equal([], page[:fib][:failed])
+  end
+
+  def test_fib_is_paged_with_its_own_facts_beside_the_page
+    assert_equal(%i[fib limit next_offset offset rows total],
+                 views(loaded).fib.keys.sort)
+  end
+
+  # A Views with no table answers the same keys, so a reader does not
+  # have to branch on rib: false.
+  def test_a_speaker_with_no_table_answers_the_same_fib_keys
+    v = views(BGP::Daemon::Speaker.new('as' => 65_000, 'router_id' => '10.0.0.1',
+                                       'neighbors' => NEIGHBORS))
+    assert_equal(%i[fib limit next_offset offset rows total], v.fib.keys.sort)
+    assert_equal(false, v.fib[:fib][:configured])
+    assert_equal([], v.adj_in('peer' => '10.0.0.2')[:rows])
+  end
+
+  # **Text and not structure**, which is where show.log parts company
+  # with ospfv2's: bgp/daemon/log_ring.rb has the decision and what it
+  # rejected. keeps says whether anything is kept at all.
+  def test_log_answers_the_last_lines_as_text
+    ring = BGP::Daemon::LogRing.new
+    3.times { |i| ring.write("line #{i}\n") }
+    v = BGP::Daemon::Views.new(loaded, :log => ring)
+    assert_equal(['line 0', 'line 1', 'line 2'], v.log[:lines])
+    assert_equal(3, v.log[:kept])
+    assert_equal(BGP::Daemon::LogRing::KEEP, v.log[:keeps])
+    assert_equal(['line 2'], v.log('count' => 1)[:lines])
+  end
+
+  def test_a_views_with_no_ring_keeps_nothing_and_says_so
+    v = views(loaded)
+    assert_equal([], v.log[:lines])
+    assert_equal(0, v.log[:keeps], 'keeps 0 says nothing is kept at all')
+  end
+
+  def test_a_log_count_that_is_not_a_number_is_refused_by_name
+    e = assert_raise(ArgumentError) { views(loaded).log('count' => 'lots') }
+    assert_match(/count/, e.message)
+  end
+
   private
 
   def pa

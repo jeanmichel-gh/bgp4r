@@ -150,6 +150,73 @@ class BGP_Daemon_Api_Test < Test::Unit::TestCase
     end
   end
 
+  # ====================================================================
+  # The write side, and the streams
+
+  # **A mutating method is a name of its own and never a flag on a
+  # read**, which is docs/daemon.md's decision: a read-only client is
+  # then a list of methods and not a trust decision. So no read method
+  # takes a parameter that changes anything, and the test for it is that
+  # the write methods are all named `peer.` or `route.`.
+  def test_the_write_side_is_separate_names_and_not_a_flag
+    writes = BGP::Daemon::Api::METHODS.keys.select { |m| m.start_with?('peer.', 'route.') }
+    assert_equal(%w[peer.clear peer.refresh peer.start peer.stop
+                    route.originate route.withdraw].sort, writes.sort)
+    reads = BGP::Daemon::Api::METHODS.keys - writes
+    reads.each do |m|
+      assert_equal(true, m.start_with?('show.', 'api.'), m)
+    end
+  end
+
+  def test_the_write_methods_answer_over_handle
+    assert_equal(['10.255.1.0/24'],
+                 req('route.originate', 'prefix' => '10.255.1.0/24')[:result][:originated])
+    assert_equal(2, req('show.routes')[:result][:total])
+    assert_equal(['10.255.1.0/24'],
+                 req('route.withdraw', 'prefix' => '10.255.1.0/24')[:result][:withdrawn])
+    assert_equal(true, req('peer.stop', 'peer' => '10.0.0.2')[:result][:shutdown])
+    assert_equal(false, req('peer.start', 'peer' => '10.0.0.2')[:result][:shutdown])
+    assert_equal(true, req('peer.clear', 'peer' => '10.0.0.2')[:result][:cleared])
+  end
+
+  # A refusal a caller can fix comes back as its own message, as a view's
+  # does, and the daemon goes on answering.
+  def test_a_write_method_refuses_by_name
+    assert_match(/peer is required/, req('peer.clear')[:error])
+    assert_match(/no neighbor "9\.9\.9\.9"/, req('peer.stop', 'peer' => '9.9.9.9')[:error])
+    assert_match(/prefix or prefixes is required/, req('route.originate')[:error])
+    assert_match(/not established/, req('peer.refresh', 'peer' => '10.0.0.2')[:error])
+  end
+
+  def test_the_new_read_methods_answer_pages_and_lines
+    assert_match(/peer is required/, req('show.adj_in')[:error])
+    assert_kind_of(Hash, req('show.adj_in', 'peer' => '10.0.0.2')[:result])
+    assert_equal(0, req('show.adj_out', 'peer' => '10.0.0.2')[:result][:total])
+    assert_equal(false, req('show.fib')[:result][:fib][:configured])
+    assert_equal([], req('show.log')[:result][:lines])
+  end
+
+  # **`handle` cannot answer a stream**, since a stream is many lines, so
+  # the two event methods are registered apart and the socket loop
+  # dispatches them. They are still in the one name list, because a
+  # reader guessing a method name wants every name.
+  def test_the_streams_are_registered_apart_and_listed_together
+    BGP::Daemon::Api::STREAM_METHODS.each do |m|
+      assert_equal(false, BGP::Daemon::Api::METHODS.key?(m),
+                   "#{m} is a stream and handle cannot answer it")
+      assert_include(BGP::Daemon::Api.names, m)
+    end
+    assert_equal(%w[events.subscribe events.unsubscribe], BGP::Daemon::Api::STREAM_METHODS)
+  end
+
+  # Asked through handle rather than over a socket, a stream method is
+  # an unknown method: the only thing that can answer one is the loop
+  # that owns the connection. Over the socket it works, which is
+  # test/functional/daemon_test.rb.
+  def test_a_stream_method_through_handle_is_not_answered
+    assert_match(/unknown method "events\.subscribe"/, req('events.subscribe')[:error])
+  end
+
   private
 
   # A Views that raises, for the internal error path.
