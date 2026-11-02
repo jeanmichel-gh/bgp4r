@@ -1,0 +1,31 @@
+# Read by the gobgp container as /config/gobgp.toml.
+#
+# Verified against GoBGP 3.23.0 natively on 2026-11-01. GoBGP 4 reads
+# this schema unchanged, as the fault-matrix topology records.
+#
+# receive lets the router take several paths for one prefix from us.
+# send-max above 0 lets it send us several; it is set here so the
+# capability is symmetric and the session's own half of RFC 7911 section
+# 5 is the interesting case rather than a refusal.
+
+[global.config]
+  as = 65002
+  router-id = "10.40.0.2"
+  local-address-list = ["10.40.0.2"]
+
+[[neighbors]]
+  [neighbors.config]
+    neighbor-address = "10.40.0.1"
+    peer-as = 65001
+  [neighbors.transport.config]
+    local-address = "10.40.0.2"
+    # sim dials, so the router only has to answer.
+    passive-mode = true
+  [[neighbors.afi-safis]]
+    [neighbors.afi-safis.config]
+      afi-safi-name = "ipv4-unicast"
+  # A sub-table after the afi-safis array attaches to this [[neighbors]]
+  # element, which is what TOML says and what GoBGP reads.
+  [neighbors.add-paths.config]
+    receive = true
+    send-max = 8

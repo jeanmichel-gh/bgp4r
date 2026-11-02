@@ -135,7 +135,12 @@ module LabGroups
     # No router binary and no Docker. fib_test is here and needs
     # CAP_NET_ADMIN, which is why this group's job runs it a second time
     # under sudo; see the workflow. 10s.
+    #
+    # add_path_topology_test reads lab/topologies/add-path's own files and
+    # never starts anything, so it belongs here rather than in `compose`
+    # beside the Compose test of the topology it describes.
     'local' => %w[
+      add_path_topology_test
       fib_test
       generate_test
       log_level_test

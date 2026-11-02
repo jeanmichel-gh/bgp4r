@@ -1,0 +1,44 @@
+# sim: the sender. Two paths to one prefix, told apart by their Path
+# Identifier (RFC 7911 section 3) and by their attributes.
+#
+# It dials both receivers, so neither has to win a connection race, and
+# every announce block goes to every neighbor, so both receivers are
+# handed the same octets. A divergence between the two readings is then
+# the router's and not the topology's.
+#
+# add_path's arguments are CAP::Add_path#add's: (send_recv, afi, safi).
+# So [3, 1, 1] is IPv4 unicast both ways. [1, 1, 3] would be SAFI 3,
+# NSAP, receive only, and is the spelling every comment on this in the
+# repository used to give while meaning the first.
+router_id: 10.40.0.1
+as: 65001
+local_address: 10.40.0.1
+
+neighbors:
+  - address: 10.40.0.2
+    as: 65002
+    connect: true
+    hold_time: 30
+    capabilities: [as4_byte, {add_path: [3, 1, 1]}]
+  - address: 10.40.0.3
+    as: 65003
+    connect: true
+    hold_time: 30
+    capabilities: [as4_byte, {add_path: [3, 1, 1]}]
+
+# Two blocks, one prefix, two identifiers. The attributes differ as well,
+# because that is the only thing GoBGP reports: it does not echo the
+# identifier in its RIB, so without different next hops a reader of the
+# router cannot tell the two paths apart at all.
+#
+# RFC 4271 section 9.1.2.2 a) decides which is best, and it is the one
+# behind 10.40.0.7: a shorter AS_PATH. Both receivers must agree on that.
+announce:
+  - prefixes: [198.51.100.0/24]
+    path_id: 7
+    next_hop: 10.40.0.7
+    as_path: [65010]
+  - prefixes: [198.51.100.0/24]
+    path_id: 9
+    next_hop: 10.40.0.9
+    as_path: [65011, 65012]

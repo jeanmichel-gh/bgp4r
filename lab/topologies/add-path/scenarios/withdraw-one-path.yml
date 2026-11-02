@@ -1,0 +1,66 @@
+# Ported from test_withdrawing_one_path_by_its_identifier_leaves_the_other
+# in test/functional/lab/add_path_gobgp_test.rb.
+#
+# THIS ONE NEEDS THE INJECTOR, and that is the finding worth keeping from
+# porting this test. A withdrawal is an action taken after the session is
+# up, and lab/speaker.rb has no way to take one: its announce blocks are
+# sent once at Established and there is nothing afterwards. So the third
+# of the three cases in that test file does not port to a scenario today
+# at any level of effort, and it is the one that matters most, because a
+# withdrawal keyed on the prefix alone takes every path to it.
+#
+# It needs the `bgp4r-sim` kind, its action API and the `bgp:` step key:
+# sections 9.1 to 9.5 of docs/routescope-labs.md. Then sim.yml becomes an
+# injector that starts silent, and the two announcements below are the
+# scenario's first two steps rather than the config's.
+
+name: Withdrawing one path by its identifier leaves the other
+description: >-
+  sim announces two paths, then withdraws Path Identifier 7 only. Both
+  receivers must keep the other path. A withdrawal that named the prefix
+  alone would take both, which is the mistake this scenario exists to
+  catch.
+capture: [sim]
+timeout: 120
+
+steps:
+  - expect: { bgp_session: { node: sim, peer: 10.40.0.2, state: established } }
+    within: 60
+  - expect: { bgp_session: { node: sim, peer: 10.40.0.3, state: established } }
+    within: 60
+
+  # An injector starts silent, so nothing is announced yet. Asserting the
+  # empty baseline first is what stops a later step passing on a route the
+  # config created.
+  - expect: { bgp_prefix: { node: gobgp, prefix: 198.51.100.0/24,
+                            present: false } }
+    name: nothing yet, because an injector announces nothing on its own
+
+  - bgp: announce
+    prefixes: [198.51.100.0/24]
+    path_id: 7
+    next_hop: 10.40.0.7
+    as_path: [65010]
+  - bgp: announce
+    prefixes: [198.51.100.0/24]
+    path_id: 9
+    next_hop: 10.40.0.9
+    as_path: [65011, 65012]
+  - expect: { bgp_prefix: { node: gobgp, prefix: 198.51.100.0/24, paths: 2 } }
+    within: 15
+
+  - mark: withdrawing Path Identifier 7 only
+  - bgp: withdraw
+    prefixes: [198.51.100.0/24]
+    path_id: 7
+  - expect: { bgp_prefix: { node: gobgp, prefix: 198.51.100.0/24, paths: 1 } }
+    within: 15
+    measure: withdraw_to_rib
+  - expect: { bgp_best: { node: gobgp, prefix: 198.51.100.0/24,
+                          next_hop: 10.40.0.9 } }
+    name: the other path survived and is best now
+  - expect: { bgp_prefix: { node: peer, prefix: 198.51.100.0/24,
+                            path_id: 9, next_hop: 10.40.0.9 } }
+  - expect: { bgp_prefix: { node: peer, prefix: 198.51.100.0/24,
+                            path_id: 7, present: false } }
+    name: and only the one we named went away
