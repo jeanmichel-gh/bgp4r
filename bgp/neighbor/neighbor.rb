@@ -23,6 +23,7 @@
 require 'socket'
 require 'thread'
 require 'bgp/observable'
+require 'bgp/events'
 require 'bgp/io'
 require 'bgp/neighbor/add_path_cap'
 # CAPABILITIES below names every capability class, so they have to be
@@ -49,6 +50,7 @@ module BGP
 
     def initialize(*args)
       @opt_parms = []
+      @events = BGP::Events.new
       if args.size==1 and args[0].is_a?(Hash)
         set args[0]
       else
@@ -71,6 +73,33 @@ module BGP
       self.send_queue_limit = h[:send_queue_limit] if h.has_key?(:send_queue_limit)
       self.auto_as4 = h[:auto_as4] if h.has_key?(:auto_as4)
       self.policy = h[:policy] if h.has_key?(:policy)
+      self.events = h[:events] if h.has_key?(:events)
+    end
+
+    # The event stream this session publishes to: a BGP::Events, its own by
+    # default so a Neighbor on its own is useful.
+    #
+    # **A program with several sessions sets one shared Events on every
+    # Neighbor.** That is what makes the sequence numbers one ordered
+    # stream across peers rather than N streams each numbering from 1, and
+    # Event#peer is what tells them apart. Nothing in the library reads
+    # these events; they are for whatever is watching.
+    attr_accessor :events
+
+    # Publishes one event about this session.
+    #
+    # **It cannot raise into its caller**, for the reason on_state_change
+    # already gives: the caller is the finite state machine or the event
+    # dispatch thread, and nothing outside may be able to kill either. So a
+    # stream that refuses a kind, or a listener on it that raises, costs a
+    # log line and nothing else.
+    def publish_event(kind, message, data={}, level=:info)
+      return nil unless @events
+      @events.publish(:kind => kind, :level => level, :peer => @remote_addr,
+                      :message => message, :data => data)
+    rescue => e
+      log_warn "event publish raised #{e.class}: #{e.message}"
+      nil
     end
 
     # The receive policy for path attributes: :lenient (the default),
@@ -480,6 +509,10 @@ module BGP
       else
         @out.enq m
       end
+      # After the enq, so a message the output queue refused is not
+      # reported as sent. Sent here means queued for the session's writer,
+      # which is what every Send line in this file means.
+      publish_notification(m, :send) if m.is_a?(Notification)
     rescue ClosedQueueError
       txt = "Could not Send#{m.class.to_s.split('::')[-1]}: session closed"
       log_warn txt
@@ -548,7 +581,16 @@ module BGP
       end
       # Outside the mutex: a listener that reads the state, or waits on it,
       # would deadlock on a Mutex that is not reentrant.
-      notify_state_change(state, was) unless was == state
+      unless was == state
+        # Published before the listeners run, so a listener that reads the
+        # stream sees the change it was called about.
+        # Braces, not a bare hash: a trailing hash reaching a positional
+        # default is a rule that has changed between Ruby versions before,
+        # and Conventions records that the local Ruby is not the CI Ruby.
+        publish_event(:session, "#{was} -> #{state}",
+                      { :state => state, :was => was, :reason => txt.to_s })
+        notify_state_change(state, was)
+      end
     end
 
     def notify_state_change(now, was)
@@ -628,8 +670,35 @@ module BGP
     
     def rcv_notification(m)
       log_info "#{m}"
+      publish_notification(m, :receive)
       changed and notify_observers(m)
       stop
+    end
+
+    # Publishes one NOTIFICATION, sent or received, as an event.
+    #
+    # Notification has no readers for its three fields, so the code and
+    # subcode come out of to_hash, and the data octets go in as hex rather
+    # than as the binary String they are, since what reads an event is a
+    # console and not a parser.
+    #
+    # **This sees a Notification object and not every notification sent.**
+    # A caller that hands send_message a pre-encoded String, which it
+    # accepts and queues unchanged, and the BGP::Fault helpers that write
+    # octets on purpose, both go past here. That is the right trade for a
+    # tool whose whole point is sending octets no RFC allows: hooking the
+    # octet level would mean parsing what a test deliberately made
+    # unparseable. A program that wants those sees them in a capture.
+    def publish_notification(m, direction)
+      h = m.to_hash
+      data = { :direction => direction.to_s,
+               :code      => h[:code],
+               :subcode   => h[:subcode],
+               :name      => m.to_string }
+      octets = h[:data]
+      data[:octets] = octets.unpack1('H*') if octets and octets.size > 0
+      verb = direction == :send ? 'Send' : 'Recv'
+      publish_event(:notification, "#{verb}Notification #{m.to_string}", data, :warn)
     end
     
     def rcv_route_refresh(m)
@@ -645,6 +714,10 @@ module BGP
         begin
           log_info "SendNotification #{e.finding.notification}"
           @socket.write e.finding.notification.encode
+          # This path writes to the socket rather than going through
+          # send_message, so it needs its own publish. After the write, for
+          # the same reason.
+          publish_notification(e.finding.notification, :send)
         rescue IOError, SystemCallError
         end
         stop

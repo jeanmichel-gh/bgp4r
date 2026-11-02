@@ -421,13 +421,59 @@ unblocks, so the order is not arbitrary.
      field the framing gives, and so do octets that cannot be framed
      into a message at all. That is the keep-what-you-cannot-read rule
      at the one place in this work where octets could be lost.
-6. **A structured event stream.** bgp4r has `Neighbor#on_state_change`
-   and `Table#on_change`, which are the hooks; it has no sequence
-   numbers, no kinds, no backlog and no `since:` replay. ospfv2's shape
-   is worth copying whole: an `Event` struct carrying `kind` and `data`
-   "so a program need not parse `message`", a bounded list, a sequenced
-   publish side, and a synthetic `overflow` event so a console can tell
-   a gap from quiet. Unblocks the timeline pane and scenario `measure:`.
+6. **A structured event stream. Done**, in `bgp/events.rb`. bgp4r had
+   `Neighbor#on_state_change` and `Table#on_change`, which are the
+   hooks, and no sequence numbers, no kinds, no backlog and no `since:`
+   replay. ospfv2's shape was copied whole: an `Event` carrying `kind`
+   and `data` "so a program need not parse `message`", a bounded list, a
+   sequenced publish side, and a synthetic `overflow` event so a console
+   can tell a gap from quiet. Unblocks the timeline pane and scenario
+   `measure:`.
+   * **The consumer's shape, read in routescope at `7eabde1`.** Its
+     `lib/routescope/drivers.rb` streams events by running a command in
+     the container that prints one `{"result":{"seq":N}}` line and then
+     one line per event, each `{"event":{...}}` wrapping these keys.
+     `Event#to_h` answers them, with **one renamed**: `interface` is
+     OSPF's word for a circuit, so bgp4r's field is `peer` and a console
+     maps it onto its own column. Naming it `interface` here would be
+     borrowing another protocol's vocabulary for a thing BGP does not
+     have.
+
+     | Key | routescope's name | What it carries |
+     |---|---|---|
+     | `seq` | `seq` | the number, or null on a synthetic event |
+     | `time` | `time` | ISO 8601 with milliseconds, UTC |
+     | `level` | `level` | debug, info, warn or error |
+     | `kind` | `kind` | what a program switches on |
+     | `peer` | `interface` | **renamed**: where it happened |
+     | `message` | `message` | for a person; nothing parses it |
+     | `data` | `data` | the fields behind the kind, as an object |
+
+     This is a read of another repository at a commit, so section 12
+     applies to it like every other such claim. What a test here **can**
+     hold is that `Event#to_h` answers exactly this key set, and
+     `test/unit/events_test.rb` reads the first column of that table out
+     of this file and does so.
+   * **Two overflow reasons, not one.** `backlog` means the reader
+     resumed from a number that had already rolled off the kept list,
+     which is the case this document named; `queue` means a subscriber
+     is not keeping up with the stream, which is ospfv2's. A reader
+     wants to know which, so `data[:reason]` says. Both carry no
+     sequence number of their own, which is how they say they are
+     synthetic.
+   * **Serving it is not part of this**, so `events.subscribe` in
+     `docs/daemon.md` and `GET /api/events?since=N` are still designs.
+     There is no JSON in `bgp/events.rb` either, deliberately: whether
+     `json` is a default gem is a per Ruby version question that bgp4r's
+     own Conventions records breaking CI twice, and `JSON.generate(ev
+     .to_h)` is one line in the program that serves the socket.
+   * **`Table#on_change` is deliberately still unwired.** The RIB side
+     of the stream belongs with the daemon, and item 2 above is what has
+     to land first for its events to mean anything.
+   * What publishes today: a session's state changes, and a NOTIFICATION
+     sent or received. A `Neighbor` has its own stream and a program
+     with several sessions sets one shared `Events` on each, which is
+     what makes them one ordered timeline rather than N numbering from 1.
 7. **An injected logger.** bgp4r's `Log` in `bgp/common.rb` is a
    **global class-variable singleton** with `private_class_method :new`.
    One process per container makes that survivable, but it means no
@@ -1215,11 +1261,16 @@ The port also corrected a claim in CLAUDE.md, which is the second
 instance of this document's own lesson: the note about the code was
 wrong and one measurement settled it.
 
-**Most of sections 6 to 10 describe work that does not exist**, so
-there is little else to assert yet. Items 3 and 4 of section 6 are the
-exception as of #230, and what they are held to is the bullet below
-rather than anything about routescope. What becomes assertable, and
-when:
+**Sections 7 to 10 describe work that mostly does not exist**, so there
+is little else to assert yet. Items 1 to 6 of section 6 are the
+exception, and two of them carry a guard rather than prose. Items 3 and
+4 are held to the bullet below as of #230. **Item 6's event stream** is
+held to this document directly: `test/unit/events_test.rb` reads the key
+table in that item out of this file and holds `BGP::Event#to_h` to it,
+both ways, so a key renamed in either place fails the unit suite. That
+guard covers the shape and **not** the claim behind it, which is a read
+of routescope at `7eabde1` and cannot be asserted here any more than the
+rest of section 4 can. What becomes assertable, and when:
 
 * The moment item 1 lands, `exe/bgp4r capture -i IFACE` can be tested
   against the format in section 4 by a test in this repository, since
