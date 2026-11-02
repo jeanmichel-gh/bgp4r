@@ -332,10 +332,11 @@ module BGP
         params = req['params'].is_a?(Hash) ? req['params'] : {}
         kinds  = params['kinds'] && Array(params['kinds']).collect { |k| k.to_sym }
         since  = params.has_key?('since') ? Integer(params['since']) : events.seq
-        # :since is always given, so the subscription replays whatever is
-        # kept above it and Subscription#replayed can say how many. With
-        # no :since from the caller it is the current sequence, so there
-        # is nothing to replay and the stream starts here.
+        # A caller that named no :since gets the current sequence, so the
+        # replay is empty and the stream starts here. Either way
+        # Events#subscribe is given one, which is what makes
+        # Subscription#replayed an answer rather than a guess: it is the
+        # number of kept events that came back.
         sub = events.subscribe(:kinds => kinds, :since => since)
         # **`seq` is where the stream has got to and not the `since` it
         # was asked with**, which is the number a reader resumes from: it
@@ -361,7 +362,11 @@ module BGP
       # The stream's loop. True when the client unsubscribed, false when
       # it went away.
       def pump(sock, sub)
-        buffer = +''
+        # String.new and not +'', because this holds what came off a
+        # socket: Conventions says an octet buffer is ASCII-8BIT, which
+        # String.new with no argument gives and +'' does not. ospfv2's
+        # equivalent uses +'' and bgp4r's own rule is the other one.
+        buffer = String.new
         last = monotonic
         loop do
           if sock.wait_readable(0)
@@ -381,9 +386,11 @@ module BGP
             last = now
           elsif now - last >= @keepalive
             # ISO 8601 with milliseconds in UTC, which is the shape
-            # Event#iso_time answers and which strftime gives with no
-            # require: Conventions records `time` becoming a bundled gem
-            # being the kind of thing that kills a require.
+            # Event#iso_time answers. strftime and not Time#iso8601,
+            # which would need `require 'time'`: Conventions records a
+            # standard library becoming a bundled gem twice, once
+            # killing a CI job before a test ran, and a format string
+            # needs nothing at all.
             write(sock, :keepalive => Time.now.utc.strftime('%Y-%m-%dT%H:%M:%S.%LZ'),
                         :seq => events.seq)
             last = now
