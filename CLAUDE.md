@@ -336,6 +336,16 @@ test/unit/               unit tests, mirroring bgp/
 test/functional/         tests that open real TCP sessions
 test/helpers/            a small test BGP server
 lab/                     speakers in containers: lab/speaker.rb and lab/topologies/ (see lab/README.md)
+                         lab/speaker.rb is a **router** when its node file says so: the
+                         tables of bgp/rib/ are wired in behind four keys, `rib`,
+                         `originate`, `export` and `fib`, which are docs/daemon.md's
+                         names because that daemon's configuration is this node file
+                         with more in it. With none of them nothing builds a table and
+                         a node file written before this sends the octets it sent
+                         before. The state file then also carries the Loc-RIB, what
+                         went to each peer and what did not, as **data** and never as
+                         rib.show text; see lab/README.md "Router mode" and
+                         docs/routescope-labs.md section 5
                          lab/fault_matrix.rb sends BGP::Fault::CATALOG to a router; lab/conformance/ has a config per router
                          lab/topologies/fault-matrix runs that matrix against GoBGP in one command, and in CI
                          lab/topologies/add-path is the port of
@@ -357,7 +367,19 @@ test/functional/lab/     lab tests: loopback speaker test and one Compose test p
                          speaker_test.rb also checks the capability names a topology can ask for,
                          and what a topology can say about ADD-PATH: a path_id on an
                          announce block, and the peer's own capability as data in the
-                         state file. add_path_topology_test.rb holds
+                         state file. speaker_router_test.rb is the same shape for
+                         router mode, in three halves: three speakers on loopback as
+                         processes, so a route crosses the middle one with the export
+                         rules applied and the state file is read for the Loc-RIB and
+                         for what was skipped; one session flapped in process over a
+                         real socket, which is the only thing that can see the
+                         adapter the detach is for; and the node file keys with no
+                         socket at all, which is the only half that can say a node
+                         file with none of them builds no table. 2 seconds, no Docker.
+                         Keep it in step with test/functional/rib_router_test.rb,
+                         which proves the protocol half by reading the UPDATE off the
+                         wire; what this one adds is that a node file reaches it.
+                         add_path_topology_test.rb holds
                          lab/topologies/add-path to its own README with no Docker,
                          no router and no socket, which is all the cover those files
                          have until the Compose form can be run;
@@ -542,6 +564,15 @@ second:
 ruby -I. test/functional/lab/add_path_topology_test.rb
 ```
 
+`lab/speaker.rb` as a router, from node files. Three speakers on
+loopback as processes, so a route crosses the middle one and comes out
+with the export rules applied, plus the node file keys read in process
+with no socket. No Docker, no router binary, no privilege, so it runs
+anywhere and in the `local` group. 2 seconds:
+```
+ruby -I. test/functional/lab/speaker_router_test.rb
+```
+
 The same matrix against a second implementation, FRR's `bgpd`, also with
 no Docker and no zebra. It needs the FRR package, whose `bgpd` is not on
 `PATH`: `/usr/lib/frr/bgpd` is looked for, and `FRR_BGPD` and `VTYSH`
@@ -634,7 +665,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. The `lab` job is a matrix, one job per group in `test/lab_groups.rb`, so its cost is the slowest group and not the total: it was 12m42s as one serial suite. Each job installs only what its group needs, which is why the matrix entry carries a `gobgp`, `frr`, `docker` or `netns` flag. The `gobgp` groups pin 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-11-01: 2456 tests, 29047 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.5%.
+Baseline on 2026-11-02: 2456 tests, 29052 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.5%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -5821,11 +5852,68 @@ The short version, so the direction is visible here:
   both on PATH would be ambiguous. Four commands: `bgp4rd`,
   `bgp4r-cli`, `bgp4r` as the umbrella (`sim`, `routegen`, `capture`,
   `lab new`, `version`) and `bgp4r-sim` as an alias.
-* **The largest item is that the lab speaker becomes a router.**
-  `lab/README.md` states the limit and `bgp/rib/` has the answer
-  finished, tested and unwired: the speaker predates it. That one piece
-  unblocks the best path, transit, route reflection, convergence and
-  forwarding labs at once.
+* **The largest item was that the lab speaker becomes a router. Done**,
+  which is item 2 of the document's section 6. `bgp/rib/` was finished,
+  tested and unwired because the speaker predates it; it is wired in now
+  behind four node file keys, `rib`, `originate`, `export` and `fib`,
+  with `docs/daemon.md`'s names, since that daemon's configuration is
+  the node file with more in it and the two must not drift. So the best
+  path, transit, route reflection, convergence and forwarding labs are
+  unblocked, and `bgp_routes_table` has a best path, a `paths` count and
+  a `best` flag to read.
+  * **The one thing the design did not say, and the speaker needed one
+    more key than `docs/daemon.md` lists.** In the daemon a RIB is
+    always on, because a daemon is a router by definition; in the
+    speaker it has to be asked for, or every topology written before
+    this would start deciding routes. So `export` presence is what turns
+    advertising on, each of `originate` and `fib` implies a table, and
+    `rib: true` is the explicit form for a table that advertises
+    nothing, which is what lab C in section 8 wants and which none of
+    the other three can express.
+  * **Measured and worth knowing before writing a lab: the `med` of an
+    `originate` block does not reach an external peer.** `Export`
+    deletes MULTI_EXIT_DISC for every external peer alike, reading RFC
+    4271 section 5.1.4 strictly, where that section is about a MED
+    received from a neighboring AS and an originating speaker may set
+    one of its own. The line's own comment says so: it is "the policy
+    block's business, not a rule". `docs/daemon.md`'s `originate`
+    example carries a `med` with nothing about where it stops, so the
+    key is honest only once that is written down, which
+    `lab/README.md` now does. The first version of the lab test
+    asserted the opposite and the library was right, which is the
+    check-the-proof rule in Rules for agents arriving from the usual
+    direction.
+  * **The state file's Loc-RIB is serialised in `lab/speaker.rb` and
+    belongs in a view layer**, item 3 of that section, which was being
+    built in parallel. Move it there when that lands. What must not
+    move is the shape: plain data, `docs/daemon.md`'s `show.routes`
+    row, and never `rib.show` text, because those three styles have
+    never been diffed against a real device and a state file a driver
+    parses would be exactly the test this file says nobody should
+    write.
+  * One thing the wiring needed that is not configuration:
+    `Peer#new_neighbor` fills `local_addr` from the session's own
+    socket when no `local_address` key is given. `Rib::Router` reads it
+    for the NEXT_HOP of RFC 4271 section 5.1.3, and the speaker always
+    hands `Neighbor#start` a socket so it is never used to dial, so a
+    container with one address is a transit router with `export: {}`
+    and nothing else. **The loopback lab's router node therefore sets
+    no `local_address`**, because with the key set, reverting the
+    fallback failed nothing: the node file that covers a fallback is
+    the one that does not give it anything to fall back from.
+  * **`Table#detach` on a session ending is hygiene and not what
+    removes the peer's routes**, which two sabotages were needed to
+    find out. `PeerAdapter#state_change` queues `:peer_down` the
+    moment a session leaves Established, so RFC 4271 section 6 is
+    answered either way and deleting the detach failed nothing in the
+    loopback lab. What it is for is the adapter: a Neighbor per
+    session is an adapter per session, and `PeerFeed#adapters` is what
+    `Router#run_changes` walks, so a speaker reconnecting every
+    `retry` seconds to a peer that is down would accumulate one per
+    attempt. Same shape as `FibInstaller#start`'s double-listener
+    guard, and handled the same way: the claim got a test that can
+    see it, `LabSpeakerRouterFlapTest`, rather than a comment nobody
+    checks.
 * **The highest-value item for a console is a JSON dump of the RIB**,
   which was a decision recorded in this file and never implemented.
   **Done**, in #230, with the view layer of item 3 under it:
@@ -6039,6 +6127,32 @@ Smaller things:
   four other families and its own topic. `bgp_ls_doc_test.rb` asserts
   the four still have it, so a fix fails that guard and says to strike
   the paragraph in `docs/bgp-ls.md` section 7.
+* **A prefix we originate gets our router ID as its FIB gateway.**
+  `Table#originate` writes the router ID into NEXT_HOP as a
+  placeholder, deliberately, because the export step replaces it with
+  our address on each session (RFC 4271 section 5.1.3). `Fib#plan`
+  reads `route.next_hop` off the Loc-RIB route, where nothing has
+  replaced anything, so the command is `via` our own router ID. A
+  locally originated prefix wants a device route and not a `via` at
+  all.
+  `ruby -I. -e 'require "bgp/rib"; r = BGP::Rib::Table.new(:local_as => 65001, :router_id => "10.0.0.1"); c = r.originate("10.1.0.0/16").first; op = BGP::Rib::Fib.new.plan(c); p [c.new.local?, op.next_hop, BGP::Rib::Fib::IpRoute.new(:table => 100).argv(op).join(" ")]'`
+  prints `[true, "10.0.0.1", "ip route replace 10.1.0.0/16 via 10.0.0.1 table 100 proto bgp"]`.
+  **It is a wrong answer somebody will meet and not only a hazard**,
+  because `lab/speaker.rb`'s `originate:` and `fib:` keys reach it from
+  a node file today: that pair is what
+  `test_a_fib_command_that_fails_is_a_row_in_the_state_file` builds. The
+  outcome depends on the machine and neither is right. Measured here on
+  2026-11-02, where the router ID is on no interface, iproute2 refuses
+  it and the installer records `Error: Nexthop has invalid gateway.`;
+  where the router ID happens to be a reachable address the route
+  installs with a gateway that is not where that prefix lives, which is
+  the worse of the two because nothing says so. It is
+  `bgp/rib/fib.rb` and `bgp/rib/table.rb`, and the FIB's business rather
+  than the speaker's, which is why the pull request that found it left
+  it alone: the fix is a device route for a `route.local?` route, so
+  `Fib::Op` and `IpRoute#install_argv` both grow a case, and `ip route
+  replace P dev D table T proto bgp` wants a `dev` that nothing in a
+  Loc-RIB carries.
 * `Nsap.new` and `Nsap.new_nsap` disagree on the default prefix length, so the same address string gives two different prefixes depending on which constructor built it: `ruby -I. -e 'require "bgp/nlris/nsap"; p [BGP::Nsap.new("49.0102.0304.0506.0608.0910.1112.1314.1516.1718.ff").mlen, BGP::Nsap.new_nsap("49.0102.0304.0506.0608.0910.1112.1314.1516.1718.ff").mlen]'` prints `[160, 152]`. `Nsap#mlen` falls back to 160, the whole twenty octet address, where `new_nsap` writes `len ||= 152` and so masks the twentieth octet away and encodes nineteen. 160 is the one that matches the rest of the class, including `MAX_MLEN` and `prefix_mask_bits`. It was left alone when the clamp above it was fixed, because `test_new_nsap` and `test_nsap` both pin the 152 default and the fix moves them, which makes it a behaviour change of its own rather than part of that one. Found while raising the clamp from 152 to 160.
 
 * **The `to_hash` round trips are not listed here, and their counts are not written down anywhere.** `test/unit/to_hash_catalog.rb` holds one entry per class and `rake to_hash:pending` prints the ones still to fix, each with what it loses and a reproduction; `rake to_hash:status` prints the lot. `test/unit/to_hash_round_trip_test.rb` measures every declared verdict against the library, so that list shortens only when a fix lands and its entry is struck, and it cannot go stale the way a written list does. **The root cause behind every entry on it is one sentence**: a hash is an argument to `initialize`, so what has to come back is the instance state, and a field that lives in an instance variable no key sets cannot survive a hash build however reasonable the hash looks. **No entry is wrong wholesale any more**: `Path_attribute` was the last, with three losses, and all three are closed. ATOMIC_AGGREGATE disappearing, the tail `parse_wire` keeps, and two attributes of one type collapsing into the last, which was recorded here as a shape decision and a won't fix and should not have been. **The reasoning that reached won't fix is worth keeping, because it was wrong in an ordinary way**: a Hash keyed by attribute type genuinely cannot hold two of a type, and the conclusion that nothing readable could be done did not follow from it. A hash is an argument to `initialize`, so what has to come back is the instance state, and `@attributes` holds a repeat perfectly well once the hash has somewhere to put it: `:duplicates`, a list of the occurrences after the first, which is what `:unknown` had always done for attributes with no key of their own, in the same constructor. What made a readable fix look impossible was taking byte-exact octets as the bar, where the order of two of a type is incidental and `Path_attribute#<=>` already says so by sorting each side before comparing. Two more things it corrected that had been recorded here as fact:

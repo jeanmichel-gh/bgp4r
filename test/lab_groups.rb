@@ -145,6 +145,7 @@ module LabGroups
       generate_test
       log_level_test
       routegen_loopback_test
+      speaker_router_test
       speaker_test
     ],
   }.freeze
