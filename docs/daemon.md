@@ -9,20 +9,30 @@ configuration, their command lines and the JSON they answer with.
 `docs/routescope-labs.md` owns the integration: the drivers, the
 inspector tables, the map and the labs. Neither repeats the other.
 
-**Status: a design, with one command built.** Neither `bgp4rd` nor
-`bgp4r-sim` exists. `bgp4r`, the umbrella, does: `bgp4r capture` and
-`bgp4r version`, in `exe/bgp4r` over `bgp/capture/`, and the Capture
-section at the end of this document is no longer a design. The other
-three commands are not stubbed, deliberately, because an executable in a
-released gem that answers nothing is worse than one that is not there.
+**Status: three commands of four built, and `bgp4rd` answers its reads.**
+`bgp4r`, the umbrella, has `capture` and `version`, in `exe/bgp4r` over
+`bgp/capture/`, so the Capture section at the end of this document is no
+longer a design. **`bgp4rd` and `bgp4r-cli` exist**, in `exe/` over
+`bgp/daemon/`: the process, the configuration file, the control socket,
+the request envelope, and the **read** methods `api.info`, `show.status`,
+`show.peers`, `show.routes`, `show.rib` and `show.text`. Everything that
+changes something is still a design: `show.adj_in`, `show.adj_out`,
+`show.fib`, `show.log`, `events.subscribe`, `peer.*`, `route.*` and all
+of `config.*`, each its own piece of work, and **none of them is
+stubbed**, because an unknown method naming the ones that exist reads
+better than a method that answers nothing. `bgp4r-sim` does not exist and
+is not declared in the gemspec, for the same reason.
+
 What exists under all of it is the
 library under them, which is most of the work: `bgp/neighbor/` for the
 FSM and the session, `bgp/rib/` for the Adj-RIB-In, the decision process,
 the Loc-RIB, the export rules, the UPDATE builder, MRAI pacing and the
-FIB adapter, `bgp/misc/route_generator.rb` for the generator, and
-`BGP::Fault::CATALOG` for the faults. `lab/speaker.rb` is a third of
-`bgp4rd` already: it holds sessions, originates and records, and it does
-not route.
+FIB adapter, `bgp/rib/view.rb` for that state as plain data,
+`bgp/events.rb` for the event stream, `bgp/misc/route_generator.rb` for
+the generator, and `BGP::Fault::CATALOG` for the faults. **The session
+and configuration machinery `lab/speaker.rb` held is in the library
+now**, as `bgp/daemon/speaker.rb`, and both programs use it: that file's
+header has the decision and the two options it rejected.
 
 ## The one principle
 
@@ -62,14 +72,15 @@ Four commands, matching ospfv2's `ospfv2`, `ospfd` and `ospf-cli`.
 
 | Command | What it is | Status |
 |---|---|---|
-| `bgp4rd` | the daemon | a design |
-| `bgp4r-cli` | its client, over the socket | a design |
+| `bgp4rd` | the daemon | built, with the read side of its API |
+| `bgp4r-cli` | its client, over the socket | built |
 | `bgp4r` | the umbrella: `sim`, `routegen`, `capture`, `lab new`, `version` | built, with `capture` and `version` |
 | `bgp4r-sim` | an alias for `bgp4r sim`, so a container command reads plainly | a design |
 
-The gemspec declares `bgp4r` and nothing else. A subcommand that does not
-exist is named in the usage as not yet implemented, so a person asking
-for one gets the list rather than a backtrace.
+The gemspec declares `bgp4r`, `bgp4rd` and `bgp4r-cli`. A subcommand or a
+method that does not exist is named in the usage, or in the refusal, as
+not yet implemented, so a person asking for one gets the list rather
+than a backtrace.
 
 ```sh
 # in the VM
@@ -151,8 +162,33 @@ route silently not advertised is the hardest thing to see from outside.
 recorded decision is to share identical attribute sets by their encoded
 bytes rather than hold one object per route, and to measure with
 `routegen` rather than guess. The daemon inherits that and the API must
-not defeat it: `show.rib` is paged, and no endpoint builds a
-million-element array in memory.
+not defeat it: `show.routes` and `show.rib` are paged, and no endpoint
+builds a million-element array in memory. The page envelope is below.
+
+## Where it is
+
+```
+bgp/daemon.rb            requires the rest; not loaded by bgp4r.rb
+bgp/daemon/speaker.rb    the sessions, the configuration, the recording,
+                         shared with lab/speaker.rb; its header has the
+                         decision and the two options it rejected
+bgp/daemon/views.rb      what the API answers, as plain data: it merges
+                         bgp/rib/view.rb with the session facts a Table
+                         has none of
+bgp/daemon/api.rb        the socket server and the method registry
+bgp/daemon/client.rb     the other half of the socket
+bgp/daemon/cli.rb        bgp4r-cli, the two forms
+bgp/daemon/server.rb     bgp4rd itself
+exe/bgp4rd exe/bgp4r-cli
+```
+
+One test file each under `test/unit/daemon/`, and
+`test/functional/daemon_test.rb` over the real socket, which is the only
+test that can say the two halves of a line agree: every unit test on the
+server side reads a request a test wrote and every one on the client
+side reads an answer a fake wrote. That is the argument
+`test/functional/flow_spec_test.rb` makes for the four NLRI wiring
+sites, one layer up.
 
 ## Configuration
 
@@ -207,20 +243,51 @@ advertises to an external peer. `Export` will not invent our address, and
 the alternative to refusing is sending a next hop that is not ours, which
 is how a route becomes a black hole.
 
+**`originate`'s `med: 10` above does not reach an external peer**, and
+the example is kept with the caveat rather than changed, because the key
+is right about where it does reach. `Export` deletes MULTI_EXIT_DISC
+toward every external peer alike (RFC 4271 section 5.1.4), so a MED set
+here reaches the Loc-RIB, the decision process, `show.routes`,
+`show.rib` and every internal peer, and is dropped on the way out to an
+external one. Setting one toward an external peer is the export policy
+block's business and `Export`'s own comment says so. Measured in #231,
+where the first lab test asserted the opposite before the library
+corrected it, and `lab/README.md` carries the same caveat.
+
+**A table is always on, which `lab/speaker.rb` differs from.** `rib`
+defaults to true here, because a daemon is a router by definition and
+`show.routes` has to answer; in the lab speaker a table has to be asked
+for, or every topology written before #231 would start deciding routes.
+A file saying `rib: false` turns it off deliberately, and then the two
+RIB views answer an empty page rather than failing.
+
 ## The command line
 
 ```
-bgp4rd -f FILE [--socket PATH] [--state FILE] [--log FILE] [-d]
+bgp4rd -f FILE [--socket PATH] [--state FILE] [--log FILE] [-d] [-v] [-h]
 ```
 
-`-d` adds the per-message trace. `--log -` is standard output, which is
-what a container wants. With no `--socket` it uses
-`/run/bgp4r/bgp4rd.sock`, or `$XDG_RUNTIME_DIR` when that is not
-writable, so an unprivileged standalone run works with no arguments
-beyond the file.
+`-d` logs at debug. `--log -` is standard output, which is what a
+container wants, and is the default. `--state FILE` wins over
+`state_file` in the configuration.
+
+**The socket path, which both programs work out the same way** so that
+neither has to be told, in `BGP::Daemon::Client.default_socket`:
+`$BGP4R_SOCKET` if it is set, else the first of `/run/bgp4r`,
+`$XDG_RUNTIME_DIR/bgp4r` and `$TMPDIR/bgp4r` whose parent this process
+can write, with `/run/bgp4r/bgp4rd.sock` when none of them is, since a
+path that cannot be created still names the place to look. The
+fallbacks are the recorded requirement that there is no root in the
+ordinary case: `/run` needs root, so an unprivileged standalone run
+works with no arguments beyond the file.
+
+**`SIGHUP` is not a reload.** It logs that reloading is not implemented
+yet and changes nothing, because `config.*` is a later piece of work and
+a signal that silently did nothing would read as a reload that worked.
+`INT` and `TERM` stop.
 
 ```
-bgp4r-cli [--socket PATH] -c 'COMMAND' | METHOD [JSON]
+bgp4r-cli [--socket PATH] [--style NAME] [--pretty] -c 'COMMAND' | METHOD [JSON]
 ```
 
 Two forms on purpose. `-c` takes an operator command and prints text, so
@@ -248,30 +315,126 @@ Loc-RIB in three styles: `rib.show`, `rib.show(:junos)` and
 switches it. Those are **in the style of** those commands and not copies,
 and no test may depend on the text byte for byte.
 
+**The daemon renders it and the client asks for the text, which is one
+method beyond the read list and is a departure from ospfv2.**
+`ospf-cli` renders every view client side from the data, and copying
+that here would mean a second IOS, Junos and IOS-XR renderer in
+`bgp/daemon/cli.rb` beside `bgp/rib/show.rb`, which has samples behind
+its three styles and a column test per style. Two renderers of one
+format is the shape CLAUDE.md records drifting three times, and `Show`
+takes a `Rib::Table` which lives in the daemon. So `show.text` exists
+and is `rib.show(style, prefix)` and nothing else. A driver still reads
+`show.routes` and `show.rib`, which is what `bgp/rib/view.rb` is for; a
+console must not parse this text.
+
+**`show bgp summary` is the exception and the client renders it**,
+because `Show` has **no** summary form: no vendor sample was found
+behind one, so adding a fourth thing to those three styles would be
+inventing a format inside the file that says it never does. Its columns
+are `bgp/daemon/cli.rb`'s own and no test depends on them.
+
+**`show.text` is not paged**, which is honest rather than tidy: a
+vendor's `show bgp` prints the table and this prints the table. A
+million prefixes of it is a million prefixes of it, which is what
+`| head` is for, and a paged vendor style would be a format no router
+has. `show.routes` and `show.rib` are the paged pair.
+
 ## The control API
 
 A Unix socket, one JSON object per line, request and reply, as ospfd's
 is. Dotted method names so a reader can guess them.
 
-| Method | Answers |
-|---|---|
-| `show.status` | router id, AS, uptime, the peers, a summary |
-| `show.peers` | one row per session |
-| `show.routes` | the Loc-RIB, one row per prefix, its best path |
-| `show.rib` | every candidate path per prefix, with the decision |
-| `show.adj_in` | one peer's Adj-RIB-In |
-| `show.adj_out` | what was sent to one peer, and what was skipped |
-| `show.fib` | what the daemon believes is in the kernel table, and what failed |
-| `show.log` | the last N lines |
-| `api.info` | version, the method list, the event sequence |
-| `events.subscribe` | a stream, one event per line |
-| `config.load`, `config.commit`, `config.compare` | a candidate configuration |
-| `peer.clear`, `peer.stop`, `peer.start` | one session |
-| `peer.refresh` | a ROUTE-REFRESH, RFC 2918 and the RFC 7313 subtypes |
-| `route.originate`, `route.withdraw` | our own prefixes |
+### The envelope
+
+**Exact, because routescope's client is one line and a mismatch is a
+wrong answer rather than a missing one.** `Drivers::Ospfd::CLIENT`, read
+in routescope at commit **`7eabde1`**, opens the socket, writes one line
+and reads one line:
+
+```ruby
+s.write(JSON.generate(id: 1, method: ARGV[0], params: JSON.parse(ARGV[1])) + "\n")
+r = JSON.parse(s.gets || abort("ospfd closed the connection"))
+r["error"] ? abort(r["error"]) : puts(JSON.generate(r["result"]))
+```
+
+The bgp4r driver will be that line with the paths changed. So:
+
+```
+-> {"id":1,"method":"show.status","params":{}}
+<- {"id":1,"result":{...}}
+<- {"id":1,"error":"unknown method \"show.foo\"; this bgp4rd answers ..."}
+```
+
+One JSON object per line in each direction, the reply carrying the id it
+was asked with. `params` is optional and anything that is not an object
+is read as none, since every read method answers something with none. A
+line that is not JSON, a line that is JSON but not an object, and a line
+longer than 1 MiB each get an error line of their own with no `id`, and
+the daemon goes on answering: **a daemon a console can kill by accident
+is worse than one with no API.** The socket is born mode 0660, so access
+is by file permission.
+
+### The page envelope
+
+**`show.routes` and `show.rib` are paged and nothing else is.** A full
+table is about a million prefixes and the recorded requirement is that no
+endpoint builds a million element array; a peer list is bounded by the
+configuration file. So both answer one shape:
+
+```json
+{ "rows": [ ... ], "total": 7, "offset": 0, "limit": 500, "next_offset": null }
+```
+
+`offset` and `limit` are params, `limit` defaults to 500 and is clamped
+to 1 to 10000, and the answer carries the limit it used so a caller can
+see what it got. **`next_offset` is the cursor and nil is what says the
+walk is over**, which is why the envelope exists at all: a caller handed
+a short list cannot tell the end of the table from a truncated answer,
+and `total` beside it says which. A `prefix` param answers that one
+prefix and ignores `offset`, since a caller naming a prefix is asking a
+question with one answer.
+
+The whole page is built inside one `Table#synchronize`, so it is a
+coherent snapshot rather than N reads of a RIB that is deciding in
+between; the lock is reentrant and public for exactly that. What is
+still materialised is the sorted prefix list, because that is where
+`View#prefixes` sorts. The rows, which are the expensive part, are built
+for one page only.
+
+### The methods
+
+| Method | Answers | Status |
+|---|---|---|
+| `api.info` | version, the method list, the event sequence | built |
+| `show.status` | router id, AS, uptime, the peers, a summary | built |
+| `show.peers` | one row per configured neighbor | built |
+| `show.routes` | the Loc-RIB, one row per prefix, its best path | built |
+| `show.rib` | every candidate path per prefix, with the decision | built |
+| `show.text` | the Loc-RIB as a router prints it, for `bgp4r-cli -c` | built |
+| `show.adj_in` | one peer's Adj-RIB-In | a design |
+| `show.adj_out` | what was sent to one peer, and what was skipped | a design |
+| `show.fib` | what the daemon believes is in the kernel table, and what failed | a design |
+| `show.log` | the last N lines | a design |
+| `events.subscribe` | a stream, one event per line | a design |
+| `config.load`, `config.commit`, `config.compare` | a candidate configuration | a design |
+| `peer.clear`, `peer.stop`, `peer.start` | one session | a design |
+| `peer.refresh` | a ROUTE-REFRESH, RFC 2918 and the RFC 7313 subtypes | a design |
+| `route.originate`, `route.withdraw` | our own prefixes | a design |
 
 Mutating methods are separate names rather than a flag, so a read-only
 client is a list of methods and not a trust decision.
+
+**Nothing in the second half of that table is stubbed.** An unknown
+method answers an error naming the methods that exist, which is the
+shape `Events#publish` already answers an unknown kind with, and is what
+makes a typo self correcting. A method answering nothing reads as a
+feature that is broken.
+
+`api.info` carries `event_seq` with no `events.subscribe` beside it on
+purpose: it is the number a reader resumes from, `bgp/events.rb` already
+numbers every session's events into one shared stream, and a console can
+watch the stream advance and know how far behind it is before the
+subscription method exists.
 
 ## The JSON
 
@@ -282,9 +445,10 @@ client is a list of methods and not a trust decision.
   "peers": [
     { "address": "10.0.10.1", "router_id": "10.255.10.1", "remote_as": 65010,
       "state": "established", "description": "inj1", "uptime": 380,
-      "received": 4, "sent": 2, "flaps": 0, "last_error": null,
-      "capabilities": ["as4_byte", "route_refresh", "mbgp_ipv4_unicast"] } ],
-  "summary": { "established": 1, "peers": 2, "rib": 7 } }
+      "received": 4, "sent": 2, "best": 2, "type": "ebgp",
+      "flaps": 0, "last_error": null, "updates": 6,
+      "capabilities": [ { "name": "As4", "code": 65, "capability": { "as": 65010 } } ] } ],
+  "summary": { "established": 1, "peers": 2, "rib": 7, "paths": 9, "originated": 1 } }
 ```
 
 States are lowercase and are RFC 4271 section 8's: `idle`, `connect`,
@@ -292,50 +456,87 @@ States are lowercase and are RFC 4271 section 8's: `idle`, `connect`,
 is nil until the OPEN arrives, which is what lets a map draw a session
 that has not come up.
 
-`show.routes`, one row per prefix:
+**Measured on 2026-11-02 rather than assumed: every state bgp4r's FSM
+reaches is in that list once downcased.** The ones it sets are `:Idle`,
+`:Active`, `:OpenSent`, `:OpenConfirm` and `:Established`. It never
+enters `:Connect`, going straight to `:Active` when it opens the socket,
+and `:OpenRecv` is in `Neighbor`'s `is_*?` helpers and is never set.
+That matters because routescope validates against the closed list and
+**drops** a value outside it, so a wrong case or a stray name shows as
+an empty peer list rather than an error.
+
+**`capabilities` is the structured form and not a list of names**, which
+is a correction to the example this document carried. A name like
+`as4_byte` is what a script *asks* for, and `Neighbor::CAPABILITIES` maps
+six such spellings onto `CAP::As4` alone, so there is no reverse mapping
+to answer with. What is here is each capability's class name and its own
+`to_hash`, which is what the lab state file already carries and is
+strictly more information than a name. #228's entry in `lab/README.md`
+has the shape.
+
+**Which keys are whose, because a Table has no session state.** The view
+in `bgp/rib/view.rb` answers `address`, `remote_as`, `router_id`,
+`type`, `received`, `best` and, in router mode, `sent`. The daemon adds
+`state`, `description`, `uptime`, `flaps`, `last_error`, `updates` and
+`capabilities`, which come from the sessions, and `uptime` and
+`summary.established` of its own.
+
+Two more things the daemon does rather than the view, each because the
+view answers a different question:
+
+* **The peer list is every configured neighbor**, where the view lists
+  the peers the table has seen. A neighbor that has never come up has no
+  Adj-RIB-In and no Adj-RIB-Out, so the view does not list it at all,
+  and a peer table that hides the peers that are down hides the
+  interesting ones. Such a peer still answers `received`, `sent` and
+  `best` as 0, which is the view's own rule that a key with a value is
+  an answer: a peer with no session holds no routes.
+* **`summary.peers` is the configured count**, for the same reason.
+
+`show.routes`, one row per prefix, inside the page envelope above:
 
 ```json
-[ { "prefix": "10.255.10.0/24", "next_hop": "10.0.10.1", "as_path": "65010",
-    "origin": "igp", "med": 100, "local_pref": 100, "from": "10.0.10.1",
-    "paths": 2, "best": true } ]
+{ "rows": [
+    { "prefix": "10.255.10.0/24", "next_hop": "10.0.10.1", "as_path": "65010",
+      "origin": "igp", "med": 100, "local_pref": 100, "from": "10.0.10.1",
+      "path_id": null, "local": false, "paths": 2, "best": true,
+      "decided_by": "med" } ],
+  "total": 7, "offset": 0, "limit": 500, "next_offset": null }
 ```
 
 `show.rib`, which is the daemon's own answer and has no counterpart in
 any router's output:
 
 ```json
-[ { "prefix": "10.255.10.0/24",
-    "paths": [
-      { "from": "10.0.10.1", "next_hop": "10.0.10.1", "as_path": "65010",
-        "local_pref": 100, "med": 100, "best": true, "lost_at": null, "reason": "med" },
-      { "from": "10.0.11.1", "next_hop": "10.0.11.1", "as_path": "65010",
-        "local_pref": 100, "med": 200, "best": false, "lost_at": "med",
-        "reason": "higher MED from the same neighbouring AS" } ] } ]
+{ "rows": [
+    { "prefix": "10.255.10.0/24", "decided_by": "med",
+      "paths": [
+        { "from": "10.0.10.1", "next_hop": "10.0.10.1", "as_path": "65010",
+          "local_pref": 100, "med": 100, "best": true, "usable": true,
+          "lost_at": null, "reason": "best path, decided at the med step" },
+        { "from": "10.0.11.1", "next_hop": "10.0.11.1", "as_path": "65010",
+          "local_pref": 100, "med": 200, "best": false, "usable": true,
+          "lost_at": "med",
+          "reason": "higher MED from the same neighbouring AS" } ] } ],
+  "total": 7, "offset": 0, "limit": 500, "next_offset": null }
 ```
 
 `Decision::Result` is `Struct.new(:best, :reason, :eliminated)` with
 `eliminated` a path to step map, so this is a serialisation and not a new
 computation. `reason` is words for a person.
 
-**The two paragraphs above are what `bgp/rib/view.rb` is built to, and
-it departs from them in two places**, both measured against the library
-in #230 and both corrected here rather than worked around.
+**Both examples above are what the library answers**, measured against
+it rather than written from the design. Two things in the shapes this
+document first gave were wrong and are corrected in them, both found in
+#230:
 
-The example gives the **best** path `"reason": "med"`, the step symbol,
-where the prose says `reason` is words for a person. The view makes every
-`reason` words and puts the step in `decided_by` on the prefix row, which
-is where `Decision::Result` keeps it: one step per prefix rather than one
-hidden in whichever path won. So a daemon answering `show.rib` from the
-view answers `decided_by` beside `paths`, and the keys inside a path are
-these.
-
-And `show.status`'s peer row is mostly a **session** fact. A Table knows
-a peer's address, remote AS, router ID and Adj-RIB-In size and nothing of
-its state, uptime, flap count, last error or negotiated capabilities, so
-the view answers the four it has, under these key names, and adds `type`,
-`best` and, in router mode, `sent`. The daemon merges the session half
-onto that. Same for `uptime` and `summary.established`, which are the
-daemon's own.
+* The `show.rib` example gave the **best** path `"reason": "med"`, the
+  step symbol, where the prose says `reason` is words for a person. The
+  view makes every `reason` words and puts the step in `decided_by` on
+  the prefix row, which is where `Decision::Result` keeps it: one step
+  per prefix rather than one hidden in whichever path won.
+* `show.status`'s peer row is mostly a **session** fact, and the split is
+  written out above the `show.routes` example.
 
 `lost_at` is one of **fifteen** values the decision process already uses,
 measured on 2026-11-01 rather than written from memory, and this said
