@@ -71,9 +71,30 @@ class TestBgpRibFibInstaller < Test::Unit::TestCase
     end
   end
 
+  # Holds the feed's worker thread where a test can see it. PeerFeed#apply
+  # answers a :sync work item with `work[1] << true`, so this gets handed
+  # the worker: it says so on #reached and then blocks until #release. The
+  # same class is in router_test.rb, which exercises the same question
+  # about the other listener.
+  class Gate
+    def initialize ; @reached = Queue.new ; @release = Queue.new ; end
+    def <<(_value) ; @reached << true ; @release.pop ; self ; end
+    def reached ; @reached.pop ; end
+    def release ; @release << true ; end
+  end
+
   def setup
     @rib = BGP::Rib.new(:local_as => LOCAL_AS, :router_id => '1.1.1.1')
     @backend = Backend.new
+  end
+
+  # True once block answers true, false after seconds. A deadline rather
+  # than a sleep, so a sabotage that stops the condition ever holding
+  # fails the assertion instead of hanging the file.
+  def wait_until(seconds = 5)
+    deadline = Time.now + seconds
+    sleep 0.005 until yield || Time.now > deadline
+    yield
   end
 
   def route(prefix = '192.0.2.0/24', next_hop = '10.0.0.2')
@@ -231,16 +252,36 @@ class TestBgpRibFibInstaller < Test::Unit::TestCase
     assert_nil(@rib.uninstall)
   end
 
+  # **The bug Table#off_change fixed, which was a wrong answer and not a
+  # hazard.** Before it, uninstall cleared a flag run_changes never read
+  # and left its on_change listener on the table, so the next Loc-RIB
+  # change reached an empty Fib and put the route back into the forwarding
+  # table the uninstall had just flushed. Measured on ebba544: one `ip
+  # route replace` ran after the flush and rib.fib held one route.
+  def test_a_change_after_an_uninstall_does_not_put_the_route_back
+    @rib.install(:backend => @backend)
+    @rib.uninstall
+    assert_equal([false, true], @backend.flushes)
+    assert_equal(0, @rib.listener_count, 'the listener came off the table')
+    @rib.announce(route)
+    @rib.drain
+    assert_equal([], @backend.ran, 'nothing was installed after the flush')
+    assert(@rib.fib.empty?)
+  end
+
   # Installing again after an uninstall runs each command once and records
   # no failure.
   #
-  # Be precise about what holds this up. FibInstaller#start guards against
-  # registering a second on_change listener, but removing that guard moves
-  # no test, because the duplicate comes to nothing anyway: Fib#plan
-  # answers nil for an install the FIB already agrees with and nil for a
-  # removal of a prefix it no longer holds. So what this really pins is
+  # Be precise about what holds this up, since the comment here used to say
+  # the opposite. FibInstaller#start kept a second flag so it could not
+  # register a listener twice, and removing that flag moved no test,
+  # because the duplicate came to nothing: Fib#plan answers nil for an
+  # install the FIB already agrees with and nil for a removal of a prefix
+  # it no longer holds. There is no second flag now, because stop takes
+  # the listener off and start registering one is the whole record that it
+  # is registered, which test_one_listener_per_install pins. So this pins
   # that re-installing is idempotent, which is the plan-then-commit design
-  # doing its job, and not the guard.
+  # doing its job.
   def test_installing_again_after_uninstall_does_not_double_up
     @rib.install(:backend => @backend)
     @rib.uninstall
@@ -252,6 +293,70 @@ class TestBgpRibFibInstaller < Test::Unit::TestCase
     @rib.drain
     assert_equal(2, @backend.ran.size)
     assert_equal({}, @rib.fib_installer.failed, 'and no spurious failure')
+  end
+
+  # One listener however many times install and uninstall are called, which
+  # is what replaced the second flag start used to keep.
+  def test_one_listener_per_install
+    @rib.install(:backend => @backend)
+    assert_equal(1, @rib.listener_count)
+    @rib.install(:backend => @backend)
+    assert_equal(1, @rib.listener_count, 'asking twice is the same installer')
+    @rib.uninstall
+    assert_equal(0, @rib.listener_count)
+    @rib.install(:backend => @backend)
+    assert_equal(1, @rib.listener_count, 'and not two after a round trip')
+  end
+
+  # The in-flight queued :fib, which stop answers the same way Router#stop
+  # does and for the reason that method's comment argues: the listener
+  # comes off first, so nothing more can be queued, then the queue drains
+  # through the installer that filled it, and only then does the flush run.
+  # So a change already queued is installed and then flushed, rather than
+  # dropped or run after the stop.
+  # Both waits are load bearing, for the reason the twin of this test in
+  # router_test.rb records: without waiting for stop to reach its drain, a
+  # stop with no drain in it passes, because the worker can get to the
+  # change before the stopping thread has run at all.
+  def test_a_change_queued_when_the_installer_stops_is_flushed_not_left
+    @rib.install(:backend => @backend)
+    gate = Gate.new
+    @rib.feed << [:sync, gate]
+    gate.reached                   # the worker is inside the gate
+    @rib.announce(route)           # so this is queued behind it
+    assert_equal(1, @rib.feed.pending, 'the change is waiting, not applied')
+    stopping = Thread.new { @rib.uninstall(5) }
+    assert(wait_until { @rib.feed.pending == 2 },
+           'stop queued its own drain behind the change')
+    gate.release
+    stopping.join
+    assert_equal(['192.0.2.0/24'], @backend.ran.map { |op| op.prefix.to_s },
+                 'the queued change ran through the installer that queued it')
+    assert_equal([false, true], @backend.flushes, 'and the flush came after it')
+    assert(@rib.fib.empty?)
+  end
+
+  # **What the started? guard in run_changes is for, and the only thing
+  # that reaches it.** The listener comes off before the drain, so nothing
+  # new is queued, and the drain is what runs what was. But the drain is
+  # bounded, so a worker that cannot be reached in time leaves work queued
+  # with the flush already run, and without the guard that work puts the
+  # route back exactly as it did before this listener could be taken off
+  # at all. The gate is released after uninstall has returned, which is
+  # that worker.
+  def test_a_change_the_drain_could_not_reach_is_not_installed_after_the_flush
+    @rib.install(:backend => @backend)
+    gate = Gate.new
+    @rib.feed << [:sync, gate]
+    gate.reached
+    @rib.announce(route)
+    @rib.uninstall(0.1)            # the drain times out behind the gate
+    assert_equal([false, true], @backend.flushes, 'the flush ran anyway')
+    assert_equal([], @backend.ran)
+    gate.release                   # now the worker reaches the change
+    assert(@rib.drain)
+    assert_equal([], @backend.ran, 'and nothing went back in after the flush')
+    assert(@rib.fib.empty?)
   end
 
   def test_apply_of_nothing_is_nothing

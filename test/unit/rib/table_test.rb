@@ -208,6 +208,65 @@ class TestBgpRibTable < Test::Unit::TestCase
     assert_equal(%w[10.1.0.0/16 10.2.0.0/16], @changes.map(&:prefix).sort)
   end
 
+  # ---- off_change ----
+
+  # The counterpart on_change went without for as long as it existed. The
+  # Proc is the handle, so a caller keeps the one it registered.
+  def test_off_change_stops_a_listener_being_called
+    seen = []
+    listener = proc { |c| seen << c.prefix }
+    @rib.on_change(&listener)
+    assert_equal(2, @rib.listener_count, 'setup registered one and this is the second')
+    @rib.announce(route(E1, '10.1.0.0/16'))
+    assert_equal(['10.1.0.0/16'], seen)
+    @rib.off_change(listener)
+    assert_equal(1, @rib.listener_count)
+    @rib.announce(route(E1, '10.2.0.0/16'))
+    assert_equal(['10.1.0.0/16'], seen, 'nothing more reached it')
+    assert_equal(%w[10.1.0.0/16 10.2.0.0/16], @changes.map(&:prefix).sort,
+                 'and the other listener is untouched')
+  end
+
+  # True when it took one off and false when there was nothing to take, so
+  # a caller removing one twice can tell which call did it.
+  def test_off_change_says_whether_it_removed_one
+    listener = proc { |_c| }
+    assert_equal(false, @rib.off_change(listener), 'it was never registered')
+    @rib.on_change(&listener)
+    assert_equal(true, @rib.off_change(listener))
+    assert_equal(false, @rib.off_change(listener), 'and not twice')
+  end
+
+  # **The one that pins the copy-on-write.** decide reads @listeners once
+  # and walks that Array, so deleting from it in place while it is being
+  # walked makes Array#each skip the element after the one removed: the
+  # listener that removed itself sat at index 0, the next moved down into
+  # it, and the walk went on at index 1. So the listener beside it would
+  # miss the very change it was called about, silently. on_change and
+  # off_change replace the Array instead, and freeze it.
+  def test_a_listener_that_removes_itself_does_not_hide_the_change_from_the_next
+    seen = []
+    first = nil
+    first = proc { |c| seen << [:first, c.prefix] ; @rib.off_change(first) }
+    second = proc { |c| seen << [:second, c.prefix] }
+    @rib.on_change(&first)
+    @rib.on_change(&second)
+    @rib.announce(route(E1, '10.1.0.0/16'))
+    assert_equal([[:first, '10.1.0.0/16'], [:second, '10.1.0.0/16']], seen,
+                 'both ran, in order, on the change the first one removed itself during')
+    @rib.announce(route(E1, '10.2.0.0/16'))
+    assert_equal([:second, '10.2.0.0/16'], seen.last)
+    assert_equal(1, seen.count { |(who, _)| who == :first }, 'the first ran once')
+  end
+
+  # Frozen, so a later `<<` raises here rather than quietly costing the
+  # guarantee above.
+  def test_the_listener_list_is_frozen
+    assert(@rib.instance_variable_get(:@listeners).frozen?)
+    @rib.on_change { |_c| }
+    assert(@rib.instance_variable_get(:@listeners).frozen?, 'and after a second one')
+  end
+
   # Several threads feeding one table must lose nothing. Each thread owns its
   # own prefixes and peer, so the expected end state is exact.
   def test_many_threads_feeding_one_table

@@ -52,7 +52,7 @@ module BGP
     # happened. A listener may call back into the table, because the lock is
     # reentrant for the thread that holds it. A listener that blocks holds
     # every other thread up, so do the work elsewhere: put the change on a
-    # Queue and let another thread have it.
+    # Queue and let another thread have it. off_change takes one off again.
     #
     # The decision and loc_rib readers, and the AdjRibIn that adj_rib_in
     # returns, are the objects themselves and have no lock of their own.
@@ -77,7 +77,9 @@ module BGP
         @import = import
         @adj_in = {}     # peer => AdjRibIn
         @imported = {}   # prefix => { [peer, path_id] => imported route }
-        @listeners = []
+        # Replaced rather than appended to, and frozen so it cannot be
+        # anything else. See on_change.
+        @listeners = [].freeze
         @lock = Mutex.new
       end
 
@@ -92,10 +94,53 @@ module BGP
         sync(&block)
       end
 
+      # Runs block on every Loc-RIB change. Returns self, so **the block
+      # itself is the handle**: keep a reference to it and off_change takes
+      # it off again.
+      #
+      #   listener = proc { |change| puts change.prefix }
+      #   rib.on_change(&listener)
+      #   rib.off_change(listener)
+      #
+      # A separate handle object was the other shape and buys nothing here:
+      # every caller in the library already has to keep the Proc alive to
+      # close over its own state, and a handle would be one more object to
+      # keep beside it.
+      #
+      # **The list is replaced and never mutated in place**, and that is
+      # what makes off_change safe to call from inside a listener. decide
+      # reads @listeners once and walks that Array; deleting from an Array
+      # that is being walked makes Enumerable skip the element after the
+      # one removed, silently, so a listener that removed itself would stop
+      # the next listener seeing that change. The new Array is frozen so a
+      # later `<<` raises here rather than failing there.
       def on_change(&block)
-        sync { @listeners << block }
+        sync { @listeners = (@listeners + [block]).freeze }
         self
       end
+
+      # Stops calling listener, the Proc on_change was given. True when it
+      # was registered and false when it was not, so a caller that removes
+      # one twice can tell which call did it.
+      #
+      # It takes the table's lock, and decide runs the listeners holding
+      # that same lock, so this cannot interleave with a change: once it
+      # has returned, no further change reaches that listener. What was
+      # already queued by it is still queued, which is why Router#stop and
+      # FibInstaller#stop drain between taking their listener off and
+      # standing down.
+      def off_change(listener)
+        sync do
+          next false unless @listeners.include?(listener)
+          @listeners = (@listeners - [listener]).freeze
+          true
+        end
+      end
+
+      # How many blocks are listening. For a caller diagnosing a table
+      # that is advertising or installing twice, which is what off_change
+      # exists to make impossible.
+      def listener_count ; sync { @listeners.size } ; end
 
       # The Adj-RIB-In of peer, created on first use.
       def adj_rib_in(peer)
