@@ -498,6 +498,12 @@ class BGP_Sim_Injector_Test < Test::Unit::TestCase
                  peer.updates.first.withdrawn.to_ary)
     assert_nil(peer.updates.first.nlri)
     assert_equal(10, inj.sent.summary[:prefixes_withdrawn])
+    # **And the withdrawal path lists nothing either**, which is the
+    # same rule as the announce path above. Sabotage caught this
+    # missing: recording every generated prefix in `stream_withdraw`
+    # passed the whole file, because the only assertion about rows was
+    # on the other path.
+    assert_equal([], inj.announced)
   end
 
   def test_a_generated_range_that_the_generator_refuses_is_a_refusal
