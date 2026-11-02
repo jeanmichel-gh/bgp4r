@@ -66,6 +66,7 @@ module BGP
       @threads=ThreadGroup.new
       @mutex = Mutex.new
       @state_cv = ConditionVariable.new
+      @lifecycle = Mutex.new
       @eventQ = Queue.new
       @event_thread = event_dispatch
     end
@@ -401,11 +402,73 @@ module BGP
       @holdtime ||= 180
     end
     
+    # The passive side: a listener accepted a connection for this peer and
+    # hands us the socket.
+    #
+    # **Building a session has to exclude tearing one down.** Without the
+    # lock the sequence below interleaves with `stop` on another thread,
+    # and what the two do is not independent: `stop` closes the output
+    # queue and `clean` kills both `BGP::IO` threads, so a `stop` that
+    # begins after `init_io` destroys the session this method is halfway
+    # through building, and `new_state :Idle` at the end of it overwrites
+    # the state this one just set. The window is the three lines between
+    # `init_io` and `send_open`.
+    #
+    # What that looks like from outside is a listener's log reading
+    # `Open Socket old state Idle new state Active`, then `SendOpen`, then
+    # `Could not SendOpen: session closed`, and a peer that waits out
+    # `start`'s whole 60 second timeout for a session that was never going
+    # to come up. Worse in a test server, where `start_session` runs on the
+    # accept loop's own thread: the `SessionClosed` it raises takes that
+    # thread with it, so nothing is accepted afterwards either.
+    #
+    # Three threads reach `stop` and that is why one of them is not
+    # enough to serialise: a caller's own thread, the event dispatch
+    # thread on `:ev_conn_reset` and `:ev_holdtime_expire`, and `start`'s
+    # rescue. `sync_lifecycle` is reentrant for the third.
     def start_session(session)
-      @socket=session
-      return unless  @state == :Idle
-      init_io
-      send_open :ev_send_open
+      sync_lifecycle do
+        @socket=session
+        return unless  @state == :Idle
+        init_io
+        send_open :ev_send_open
+      end
+    end
+
+    # Serialises building a session against tearing one down.
+    #
+    # **Reentrant, and what needs that is a listener.** `new_state` runs
+    # the `on_state_change` blocks on whichever thread changed the state,
+    # which inside here is the thread holding this lock, and a listener may
+    # call `stop` or `start`: `lab/speaker.rb` and `bgp4rd` both register
+    # one. A plain `Mutex#synchronize` deadlocks on itself there.
+    # `start`'s own rescue does not need it, since the exception leaves the
+    # block before the rescue runs.
+    #
+    # **The cost of that reentrancy, said plainly: a listener that calls
+    # the blocking `start` holds this lock for its whole `:timeout`.** It
+    # runs on the thread already inside `stop`, so the lock is held, and
+    # `start`'s wait is outside its own `sync_lifecycle` but still inside
+    # that outer one. Every other thread's `start` and `stop` waits on it.
+    # Nothing in the tree does this: both listeners in `bgp/rib/` only put
+    # a work item on a queue, which is the shape to copy, and
+    # `:no_blocking => true` is the way to start a session from a
+    # listener. Checked by reading both of them rather than assumed.
+    #
+    # `Mutex#owned?` is core Ruby, so this needs no require, and it is the
+    # same trade `BGP::Rib::Table#sync` makes for the same reason: the
+    # `monitor` library would do it and is one more standard library that
+    # could become a bundled gem.
+    #
+    # **It is not `@mutex`.** That one guards `@state` and is held while
+    # `wait_for_state` blocks on `@state_cv`, for up to `start`'s timeout,
+    # so a `stop` taking it would wait out the session it is trying to
+    # end. Two locks, one for state and one for lifecycle, and nothing
+    # takes them in both orders: `new_state` takes `@mutex` while this one
+    # is held and never the reverse.
+    def sync_lifecycle
+      return yield if @lifecycle.owned?
+      @lifecycle.synchronize { yield }
     end
     
     # The error that made the last start fail, or nil.
@@ -421,13 +484,24 @@ module BGP
       raise IOError, "#{self.class} is closed" if closed?
       return true if @state == :Established
       stop unless @state == :Idle
-      if options[:session]
-        @socket = options[:session]
-      else
-        @socket = TCPSocket.new(@remote_addr, options[:port], local_host=@local_addr)
+      # **Two things are deliberately outside the lock, and each would
+      # otherwise hold it across an unbounded wait.** The dial, because
+      # `TCPSocket.new` has no timeout of its own, so a peer that never
+      # answers would block a `stop` for as long as the connect takes. And
+      # the wait at the end, because it blocks for up to `:timeout`
+      # seconds and a `stop` from the event thread has to be able to get
+      # in and end the session rather than queue behind it.
+      #
+      # What is inside is what `start_session` holds, and for the same
+      # reason its comment gives: a half-built session is what a
+      # concurrent `stop` destroys.
+      socket = options[:session] ||
+               TCPSocket.new(@remote_addr, options[:port], local_host=@local_addr)
+      sync_lifecycle do
+        @socket = socket
+        init_io
+        send_open :ev_send_open
       end
-      init_io
-      send_open :ev_send_open
       retry_thread if options[:auto_retry] == true
       unless options[:no_blocking] == true
         unless wait_for_state(options[:waitfor], options[:timeout])
@@ -462,15 +536,21 @@ module BGP
       end
     end
 
+    # Ends the session. Safe to call twice, and safe to call while another
+    # thread is building one: `sync_lifecycle` makes the two exclusive, for
+    # the reason `start_session`'s comment gives.
     def stop
-      # Closing the output queue wakes any caller waiting in send_message on
-      # a full one, and drain_output then lets the writer get what is already
-      # queued onto the socket before the next line takes the socket away.
-      drain_output
-      @socket.close  if defined?(@socket) and not @socket.closed?
-      clean
-      @open=nil
-      new_state :Idle, "Disable"
+      sync_lifecycle do
+        # Closing the output queue wakes any caller waiting in send_message
+        # on a full one, and drain_output then lets the writer get what is
+        # already queued onto the socket before the next line takes the
+        # socket away.
+        drain_output
+        @socket.close  if defined?(@socket) and not @socket.closed?
+        clean
+        @open=nil
+        new_state :Idle, "Disable"
+      end
     end
 
     # How long stop waits for the writer thread to empty the output queue.

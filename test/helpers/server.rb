@@ -35,7 +35,20 @@ module BGP
       @thread = Thread.new(@s, @server) do |peer, sock|
         begin
           while (session = sock.accept())
-            @s.start_session(session)
+            begin
+              @s.start_session(session)
+            rescue StandardError => e
+              # **One connection must not take the listener with it.**
+              # `start_session` runs on this thread, so anything it raises
+              # ends the accept loop, and every test afterwards that
+              # expects this server to answer hangs until its own timeout
+              # with nothing saying why. That is how the Neighbor
+              # lifecycle race read in CI: one
+              # `Could not SendOpen: session closed` and then a 60 second
+              # wait for a session nobody was listening for.
+              Log.warn "start_server: #{e.class}: #{e.message}"
+              session.close rescue nil
+            end
           end
         rescue IOError
         end

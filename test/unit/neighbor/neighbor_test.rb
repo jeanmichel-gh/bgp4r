@@ -377,6 +377,77 @@ class TestBgpNeighbor < Test::Unit::TestCase
     n.close if n
   end
 
+  # A session being built and a session being torn down are the same
+  # object's state, so they have to exclude each other. `stop` ends with
+  # `clean`, which kills both IO threads, and then `new_state :Idle`; a
+  # `start_session` landing between the two built a session whose threads
+  # that older `stop` killed and whose state it overwrote.
+  #
+  # **Forced rather than raced**, because the window is small: one `stop`
+  # is held inside `clean` while the new session arrives. Against the
+  # unlocked version the second start fails and both ends read Idle, which
+  # is what `test_start_stop_start_again` met about once in sixty runs,
+  # as a flat 60 second wait for a session that was never coming up.
+  def test_a_stop_in_flight_does_not_destroy_the_session_being_built
+    Timeout::timeout(20) {
+      port = start_free_server
+      @c = Neighbor.new(4, 100, 180, '0.0.0.2', '127.0.0.1', '127.0.0.1')
+      @c.start :port=> port
+      @c.stop
+      gate = Queue.new
+      @s.define_singleton_method(:clean) do
+        gate.push(:in_clean)
+        sleep 0.25
+        super()
+      end
+      stopper = Thread.new { @s.stop }
+      gate.pop
+      # The listener accepts and calls start_session while that stop is
+      # still unfinished.
+      assert @c.start(:port=> port, :timeout=> 10), @c.last_error.to_s
+      stopper.join
+      assert @c.is_established?, 'the new session was torn down by a stop that began before it'
+      assert ! @s.is_idle?, "the listener's side was left Idle"
+      @c.close
+    }
+  end
+
+  # The lock has to be reentrant, and a listener is what needs it:
+  # new_state runs the on_state_change blocks on the thread that changed
+  # the state, which inside stop is the thread holding the lock, so a
+  # listener calling stop meets a Mutex its own thread already holds. Both
+  # programs that use this library register such a block.
+  #
+  # **The assertion has to be inside the listener**, which is the trap
+  # Conventions records for an observer: notify_state_change logs an
+  # exception from a block and never raises it, deliberately, so nothing
+  # outside can kill the FSM. So a non-reentrant lock is invisible from
+  # out here, and asserting on the Neighbor afterwards passes against it.
+  # Catching it where it lands is the only form of this test that fails.
+  def test_a_state_listener_may_call_stop_without_deadlocking
+    Timeout::timeout(10) {
+      ours, theirs = UNIXSocket.pair
+      n = Neighbor.new(:my_as=> 100, :id=> '1.1.1.1')
+      raised, ran = [], []
+      n.on_state_change do |_o, _new, _r|
+        begin
+          n.stop
+          ran << true
+        rescue Exception => e
+          raised << e
+        end
+      end
+      n.start(:session=> ours, :no_blocking=> true)
+      n.stop
+      assert_equal [], raised.collect { |e| "#{e.class}: #{e.message}" },
+                   'a listener calling stop from inside stop must not raise'
+      assert ! ran.empty?, 'the listener never ran, so this asserted nothing'
+      assert n.is_idle?
+      [ours, theirs].each { |s| s.close unless s.closed? }
+      n.close
+    }
+  end
+
   def test_start_stop_start_again
     Timeout::timeout(6) {
       port = start_free_server
