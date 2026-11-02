@@ -547,8 +547,39 @@ module BGP
           return tree
         end
         holder = locate(tree, path[0..-2])
-        holder.delete(path.last) if holder.is_a?(Hash)
+        case holder
+        when Hash  then delete_key(holder, path.last)
+        when Array then delete_element(holder, path.last)
+        end
         tree
+      end
+
+      # A key of a mapping, by its token. **Both the token and the value
+      # it stands for**, because a YAML key need not be a String: the
+      # `next_hops` mapping is keyed by the AFI, so `export: {next_hops:
+      # {1 => ...}}` holds the Integer 1 where `delete export next_hops
+      # 1` arrives with the String. Deleting only the String missed it,
+      # and `compare` emits exactly that line, so a compare loaded back
+      # left the next hop behind.
+      def self.delete_key(holder, token)
+        holder.delete(token)
+        holder.delete(scalar(token))
+      end
+
+      # One element of an argument list, by its name: `delete neighbors
+      # 10.0.10.1 capabilities add_path` takes that capability away and
+      # leaves the others.
+      #
+      # **A bare name and a name with arguments are both matched**, which
+      # is the half that was missing. `Array#delete` finds `'as4_byte'`
+      # and does not find `{'add_path' => [3, 1, 1]}`, so a capability
+      # with arguments could not be deleted at all; `compare` emits that
+      # line, and the test meant to catch it passed **vacuously**, since
+      # an edit that did nothing left nothing to compare.
+      def self.delete_element(list, token)
+        list.reject! do |e|
+          e.is_a?(Hash) ? e.size == 1 && e.keys.first.to_s == token : e.to_s == token
+        end
       end
 
       # The mapping a path names, or nil. Used by `delete` only: a `set`
@@ -556,7 +587,7 @@ module BGP
       def self.locate(tree, path)
         path.inject(tree) do |node, name|
           case node
-          when Hash  then node[name]
+          when Hash  then node.key?(name) ? node[name] : node[scalar(name)]
           when Array then element_of(node, name)
           else nil
           end

@@ -203,10 +203,42 @@ class BGP_Daemon_Config_Test < Test::Unit::TestCase
                               'set originate 0 prefixes 10.255.2.0/24']],
      ['a capability gone',   ['delete neighbors 10.0.10.1 capabilities role']],
      ['an empty list filled', ['set export clients 1.1.1.1']],
-     ['a neighbor added',    ['set neighbors 10.0.12.1 as 65012']]].each do |name, edit|
+     ['a neighbor added',    ['set neighbors 10.0.12.1 as 65012']],
+     ['a next hop gone',     ['delete export next_hops 1']]].each do |name, edit|
       candidate = C.apply(config, edit)
-      replayed  = C.apply(config, C.compare(config, candidate))
+      diff = C.compare(config, candidate)
+      # **The edit has to have done something, or the case proves
+      # nothing.** Two of these passed vacuously while they were
+      # written: `delete neighbors ... capabilities add_path` and
+      # `delete export next_hops 1` were both silently no-ops, so the
+      # candidate equalled the configuration, `compare` answered an empty
+      # list, and replaying an empty list of course reproduced it. The
+      # bugs were real and are fixed in `unset`; this assertion is what
+      # makes the case able to see them.
+      assert_not_equal([], diff, "#{name}: the edit changed nothing, so the case proves nothing")
+      replayed = C.apply(config, diff)
       assert_equal(C.to_set(candidate).sort, C.to_set(replayed).sort, name)
+    end
+  end
+
+  # The two shapes `unset` was wrong about, asserted on the value rather
+  # than through a round trip, since a round trip is what hid them.
+  def test_a_delete_takes_away_what_it_names
+    gone = C.apply(config, ['delete neighbors 10.0.10.1 capabilities add_path'])
+    assert_equal(['as4_byte', { 'role' => 'customer' }],
+                 gone['neighbors'].first['capabilities'])
+    # A YAML key need not be a String: next_hops is keyed by the AFI.
+    assert_equal({}, C.apply(config, ['delete export next_hops 1'])['export']['next_hops'])
+    # A bare capability too, which was the half that did work.
+    assert_equal([{ 'role' => 'customer' }, { 'add_path' => [3, 1, 1] }],
+                 C.apply(config, ['delete neighbors 10.0.10.1 capabilities as4_byte'])['neighbors']
+                   .first['capabilities'])
+  end
+
+  def test_a_delete_of_something_absent_changes_nothing
+    ['delete export nonsense', 'delete nope deep key', 'delete neighbors 9.9.9.9',
+     'delete originate 7', 'delete neighbors 10.0.10.1 capabilities nonsense'].each do |line|
+      assert_equal(C.to_set(config), C.to_set(C.apply(config, [line])), line)
     end
   end
 
