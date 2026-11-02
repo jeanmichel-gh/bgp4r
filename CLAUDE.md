@@ -725,7 +725,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. The `lab` job is a matrix, one job per group in `test/lab_groups.rb`, so its cost is the slowest group and not the total: it was 12m42s as one serial suite. Each job installs only what its group needs, which is why the matrix entry carries a `gobgp`, `frr`, `docker` or `netns` flag. The `gobgp` groups pin 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-11-02: PENDING_MEASUREMENT, all passing. Line coverage of `bgp/` from the unit suite: 98.5%.
+Baseline on 2026-11-02: 2602 tests, 29894 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.5%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -5919,15 +5919,19 @@ ways and no more" and that "the work is offsets and masks, not decoding".
   convenience, because routescope passes none: `DEFAULT_FILTER` is a
   named constant and a test asserts it.
 
-**Two bugs this work found, both in error paths, both with a test.** A
-`Field#leaves` copied from ospfv2 read `children and ... ? ... : [self]`,
-where `and` binds looser than `? :`, so a childless field answered nil
-and every leaf of every message was nil; it was **removed** rather than
-fixed, since nothing called it and the test that had used it was replaced
-by a stronger one. And `source`'s method level `rescue Errno::ENOENT`
-reported a pcap file that is not there as tcpdump being missing, which is
-a confident wrong answer about the one thing the caller got wrong;
-ospfv2's `capture_source` has the same shape and the same fault.
+**Three bugs this work found, each with a test, and two of the three
+were in an error path nobody had one for.** A `Field#leaves` copied from
+ospfv2 read `children and ... ? ... : [self]`, where `and` binds looser
+than `? :`, so a childless field answered nil and every leaf of every
+message was nil; it was **removed** rather than fixed, since nothing
+called it and the test that had used it was replaced by a stronger one.
+`source`'s method level `rescue Errno::ENOENT` reported a pcap file that
+is not there as tcpdump being missing, which is a confident wrong answer
+about the one thing the caller got wrong; ospfv2's `capture_source` has
+the same shape and the same fault. And a test that **loaded**
+`bgp4r.gemspec` failed only in the Docker image, where there is no
+`git`; that one is in Conventions above with the line that reproduces it,
+because the lesson generalises past this work.
 
 **Two documents, and the split matters.** `docs/daemon.md` designs the
 two programs, `bgp4rd` and `bgp4r sim`, and says nothing about
