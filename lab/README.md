@@ -78,7 +78,12 @@ neighbors:
                             # extended_nexthop, add_path, role, orf, dynamic,
                             # mbgp, and mbgp_<afi>_<safi> such as mbgp_ipv6_unicast.
                             # One key per capability that needs arguments:
-                            #   capabilities: [{role: customer}, {add_path: [1, 1, 3]}]
+                            #   capabilities: [{role: customer}, {add_path: [3, 1, 1]}]
+                            # add_path takes (send_recv, afi, safi), which is
+                            # what CAP::Add_path#add takes, so [3, 1, 1] is
+                            # IPv4 unicast both ways. [1, 1, 3] is SAFI 3,
+                            # NSAP, receive only: this line said that until
+                            # it was measured.
     record: routes          # optional. routes keeps every route received.
                             # count keeps counters and times only.
 

@@ -291,15 +291,18 @@ docs/                    protocol-testing.md: using bgp4r to test a router
                          test/unit/building_objects_test.rb
                          routescope-labs.md: how bgp4r becomes a node the
                          routescope console can drive, and the eight labs
-                         worth building once it is. A **design**: nothing in
-                         its sections 6 to 9 exists yet, and every fact in
+                         worth building once it is, with **section 9** the
+                         `bgp4r-sim` injector in detail: the config that
+                         brings a session up, its actions, and the
+                         scenarios that drive it. A **design**: nothing in
+                         its sections 6 to 10 exists yet, and every fact in
                          it about routescope or ospfv2 is a read of another
                          repository at a named commit, which this suite
-                         cannot assert. Its section 11 says which claims
+                         cannot assert. Its section 12 says which claims
                          become assertable here and when. Read it before
                          adding an executable, a state dump, a capture
-                         command or a lab topology, because each of those
-                         has a contract in it
+                         command, an action API or a lab topology, because
+                         each of those has a contract in it
 examples/                runnable scripts
 test/unit/               unit tests, mirroring bgp/
 test/functional/         tests that open real TCP sessions
@@ -5755,10 +5758,31 @@ visible here:
 * Eight labs, phased, with phase 0 costing nothing: an unknown `kind`
   renders as `linux` in routescope, so a bgp4r container is useful
   there before either repository changes.
+* **Section 9 is `bgp4r-sim` in detail**, which is the part to read
+  before building anything: the three config files that bring a session
+  up, the twelve actions, the four scenario conditions and three worked
+  scenarios. Its shape is `Drivers::Sim`'s, an HTTP API on the
+  container's loopback reached by `docker exec`, and **its action body
+  keys are the node file's own keys**, so the injector's vocabulary is
+  bgp4r's configuration vocabulary at runtime rather than a second
+  language. Two decisions there carry the most weight: an injector
+  **starts silent**, with no `announce:` block, because a baseline the
+  config created is one no assertion can rest on; and if it ships
+  without `fault` and `replay` it is a worse FRR, since those are the
+  two things no real router can be told to do.
+* **The injector is phase 5 and not phase 1**, which section 10 says
+  plainly because section 2 calls it the thing that justifies the work.
+  It needs the structured event stream or its pane shows nothing, the
+  action API, which is the largest piece of new bgp4r surface in the
+  document, and the router kind, because every scenario asserts against
+  something that holds a RIB.
 
-The document's section 11 says what it does not assert and when each
+The document's section 12 says what it does not assert and when each
 claim becomes assertable, because every fact in it about those two
-repositories is a read at a commit and this suite cannot check one.
+repositories is a read at a commit and this suite cannot check one. It
+also records one claim that was wrong in its first draft and corrected
+in place, `partial_lsdb?`'s consumer, with the lesson: when reading
+another repository, read the consumer and not the definition.
 
 ### Vendor style `to_s`, a phase with no pull request yet
 
