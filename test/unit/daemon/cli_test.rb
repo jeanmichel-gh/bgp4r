@@ -241,6 +241,30 @@ class BGP_Daemon_CLI_Test < Test::Unit::TestCase
     assert_include(BGP::Daemon::CLI::COMMANDS, 'clear bgp PEER')
   end
 
+  # `show configuration` asks for **set lines**, where the method form
+  # with no `format` answers YAML: a person typing an operator command
+  # wants the form a driver diffs, one leaf per line, and the file is
+  # what `bgp4r-cli show.configuration` gives them.
+  def test_show_configuration_asks_for_the_set_lines
+    answers = { 'show.configuration' => "set as 65000\n" }
+    status, out, _e, client = run_cli(['-c', 'show configuration'], answers)
+    assert_equal(0, status)
+    assert_equal("set as 65000\n", out)
+    assert_equal([['show.configuration', { 'format' => 'set' }]], client.calls)
+  end
+
+  def test_show_configuration_candidate_asks_for_the_candidate
+    answers = { 'show.configuration' => "set as 65001\n" }
+    _s, _o, _e, client = run_cli(['-c', 'show configuration candidate'], answers)
+    assert_equal([['show.configuration', { 'format' => 'set', 'candidate' => true }]],
+                 client.calls)
+  end
+
+  def test_the_commands_list_names_both_configuration_forms
+    assert_include(BGP::Daemon::CLI::COMMANDS, 'show configuration')
+    assert_include(BGP::Daemon::CLI::COMMANDS, 'show configuration candidate')
+  end
+
   # **The client's stream list is inside the server's**, so the two
   # cannot disagree about a name. It is a list of its own because this
   # file requires only the client, so `bgp4r-cli` loads a socket and a

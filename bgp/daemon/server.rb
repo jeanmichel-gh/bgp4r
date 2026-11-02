@@ -176,7 +176,15 @@ TEXT
         return log(:warn, 'SIGHUP: there is no configuration file to reload') unless @config_path
         config = load_config(:config => @config_path) or
           return log(:warn, 'SIGHUP: the configuration file could not be read; nothing changed')
-        errors = @candidate.replace(:lines => Config.to_set(config))[:errors]
+        # **`with_defaults` and not the file as it stands**, which is the
+        # one thing this method got wrong first. The running
+        # configuration went through it at start-up, so it carries `rib:
+        # true`; a file that does not say `rib` reads back without it, so
+        # the reload compared as `delete rib`, which is a restart-class
+        # change, and every reload of an ordinary file was refused. A
+        # reload has to build the configuration the same way `start`
+        # does or it is comparing against something that was never read.
+        errors = @candidate.replace(:lines => Config.to_set(Server.with_defaults(config)))[:errors]
         unless errors.empty?
           @candidate.discard
           return log(:warn, "SIGHUP: #{errors.join('; ')}; nothing changed")

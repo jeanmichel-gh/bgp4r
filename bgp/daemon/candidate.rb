@@ -139,9 +139,6 @@ module BGP
         'fib' => 'Table#on_change cannot take a listener off again, so the FibInstaller this ' \
                  'would replace would go on installing beside the new one',
         'rib' => 'the table is built in Speaker#initialize and every session is attached to it',
-        'neighbors' => '@peers is built in Speaker#initialize and read from every session ' \
-                       'thread without a lock, and whether anything listens for a passive ' \
-                       'peer is decided once in Speaker#start',
         'router_id' => 'every session carries it in its OPEN and the Loc-RIB is keyed by it',
         'as' => 'every session carries it in its OPEN and the export rules compare against it',
         'socket' => 'the control socket is bound once, and this request arrived on it'
@@ -151,6 +148,26 @@ module BGP
       # `listen_address`, `port`, `local_address` and `state_file` are all
       # read once by `Speaker#start`.
       RESTART_DEFAULT = 'it is read once, when bgp4rd starts'
+
+      # Why one of a neighbor's own keys cannot change. **Looked up
+      # before the table above and not through it**, because that one is
+      # keyed by the first token and a neighbor's key is the third: a
+      # `neighbors` row there would give every unclassified neighbor key
+      # the same reason, and a test caught it doing exactly that, telling
+      # a person that `record` could not change because `@peers` has no
+      # lock.
+      NEIGHBOR_RESTART_REASONS = {
+        'record' => 'the Recorder is built once, in Peer#initialize, and counts ' \
+                    'established_count and flaps across sessions, so a bounce deliberately ' \
+                    'leaves those alone and replacing it would reset them'
+      }.freeze
+
+      # Adding a neighbor or taking one away, which is refused before the
+      # per key pass because its keys read as ordinary bounce-class
+      # changes and are not.
+      NEIGHBOR_SET_REASON = '@peers is built in Speaker#initialize and read from every ' \
+                            'session thread without a lock, and whether anything listens ' \
+                            'for a passive peer is decided once in Speaker#start'
 
       attr_reader :speaker
 
@@ -423,10 +440,20 @@ module BGP
         end
 
         def refuse(path)
-          key = path.first
           @errors << "#{path.join(' ')} cannot change while bgp4rd runs: " \
-                     "#{RESTART_REASONS.fetch(key, RESTART_DEFAULT)}. " \
-                     'Edit the file and restart bgp4rd.'
+                     "#{reason(path)}. Edit the file and restart bgp4rd."
+        end
+
+        # A neighbor's own key is looked up first and by its **third**
+        # token, since `RESTART_REASONS` is keyed by the first: a
+        # `neighbors` row there would hand every unclassified neighbor key
+        # the same reason, and a test caught it telling a person that
+        # `record` could not change because `@peers` has no lock.
+        def reason(path)
+          if path.first == 'neighbors' && path.size >= 3
+            return NEIGHBOR_RESTART_REASONS.fetch(path[2], RESTART_DEFAULT)
+          end
+          RESTART_REASONS.fetch(path.first, RESTART_DEFAULT)
         end
 
         # A neighbor added or taken away is refused before the per key
@@ -437,11 +464,11 @@ module BGP
           was, now = addresses(@running), addresses(@candidate)
           (now - was).each do |a|
             @errors << "a neighbor cannot be added while bgp4rd runs (#{a}): " \
-                       "#{RESTART_REASONS['neighbors']}. Edit the file and restart bgp4rd."
+                       "#{NEIGHBOR_SET_REASON}. Edit the file and restart bgp4rd."
           end
           (was - now).each do |a|
             @errors << "a neighbor cannot be taken away while bgp4rd runs (#{a}): " \
-                       "#{RESTART_REASONS['neighbors']}. Edit the file and restart bgp4rd."
+                       "#{NEIGHBOR_SET_REASON}. Edit the file and restart bgp4rd."
           end
         end
 

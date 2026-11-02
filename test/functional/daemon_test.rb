@@ -606,6 +606,113 @@ class BGP_Daemon_Functional_Test < Test::Unit::TestCase
     end
   end
 
+  # ---- the candidate configuration ----
+  #
+  # **Written as routescope's Config pane calls them**, in the order it
+  # calls them, read in `Drivers::Ospfd` at `7eabde1`: that is the whole
+  # point of putting them here rather than only in
+  # test/unit/daemon/candidate_test.rb. A unit test reads a Hash a test
+  # wrote; this reads what crossed a socket, and the shapes a driver
+  # depends on are the ones a JSON round trip can quietly change. A bare
+  # boolean is the one to watch: `true` survives, where a Symbol or a
+  # Hash would arrive as something the driver cannot use.
+
+  def test_the_config_methods_answer_over_the_socket
+    assert_equal(false, routescope_client('config.changed')['result'])
+    assert_equal([], routescope_client('config.compare')['result'])
+    assert_equal([], routescope_client('config.history')['result'])
+    text = routescope_client('show.configuration', 'format' => 'set')['result']
+    assert_match(/^set as 65000$/, text)
+    assert_match(/^set neighbors 127\.0\.0\.9 description inj1$/, text)
+  end
+
+  # `Drivers::Ospfd#running_config` uses the answer as a boolean
+  # directly, so it has to arrive as one and not as a String or a Hash.
+  def test_config_changed_crosses_the_socket_as_a_boolean
+    assert_equal(FalseClass, routescope_client('config.changed')['result'].class)
+    routescope_client('config.load', 'lines' => ['set log_level warn'])
+    assert_equal(TrueClass, routescope_client('config.changed')['result'].class)
+  ensure
+    routescope_client('config.discard')
+  end
+
+  # `load_candidate` sends the startup file as `lines:` and reads
+  # `['errors']`, treating an empty Array as success. Then `candidate`
+  # asks `config.compare` and `config.commit` with `check: true`, and
+  # `commit_candidate` commits with a comment and raises unless `['ok']`.
+  # That is one pass of the pane, over the socket.
+  def test_a_whole_pass_of_the_config_pane_crosses_the_socket
+    lines = BGP::Daemon::Config.to_set(@server.candidate.running)
+    edited = lines.map { |l| l.sub('description inj1', 'description inj2') }
+    assert_equal([], routescope_client('config.replace', 'lines' => edited)['result']['errors'])
+    assert_equal(true, routescope_client('config.changed')['result'])
+    assert_equal(['set neighbors 127.0.0.9 description inj2'],
+                 routescope_client('config.compare')['result'])
+    check = routescope_client('config.commit', 'check' => true)['result']
+    assert_equal(true, check['ok'])
+    assert_equal([], check['errors'])
+    done = routescope_client('config.commit', 'comment' => 'from the pane')['result']
+    assert_equal(true, done['ok'])
+    assert_equal('inj2', @server.speaker.peer('127.0.0.9').description)
+    assert_equal('from the pane', routescope_client('config.history')['result'].first['comment'])
+    assert_equal(false, routescope_client('config.changed')['result'])
+  end
+
+  # The one that matters most, because it is the answer this repository
+  # least wants to give wrongly: a key that cannot change refuses the
+  # commit, and the running configuration goes on being true.
+  def test_a_commit_that_cannot_be_done_is_refused_over_the_socket
+    routescope_client('config.load', 'lines' => ['set router_id 9.9.9.9'])
+    r = routescope_client('config.commit', 'check' => true)['result']
+    assert_equal(false, r['ok'])
+    assert_match(/router_id cannot change while bgp4rd runs/, r['errors'].first)
+    assert_equal(false, routescope_client('config.commit')['result']['ok'])
+    assert_equal('10.0.0.1', @server.speaker.router_id)
+    assert_match(/^set router_id 10\.0\.0\.1$/,
+                 routescope_client('show.configuration', 'format' => 'set')['result'])
+    assert_still_alive
+  ensure
+    routescope_client('config.discard')
+  end
+
+  # A bounce is reported in `warnings`, which is the channel
+  # docs/daemon.md names for it, and it crosses as an Array of Strings.
+  def test_a_bounce_crosses_the_socket_as_a_warning
+    routescope_client('config.load', 'lines' => ['set neighbors 127.0.0.9 hold_time 90'])
+    r = routescope_client('config.commit')['result']
+    assert_equal(true, r['ok'])
+    assert_match(/was bounced/, r['warnings'].first)
+    assert_equal(90, @server.speaker.peer('127.0.0.9').config['hold_time'])
+  end
+
+  def test_the_rollback_pane_crosses_the_socket
+    routescope_client('config.load', 'lines' => ['set neighbors 127.0.0.9 description two'])
+    routescope_client('config.commit', 'comment' => 'one')
+    # What the pane lists: a row per commit, newest first, which it
+    # labels with its own index as the rollback number.
+    rows = routescope_client('config.history')['result']
+    assert_equal(1, rows.size)
+    assert_equal(%w[time comment changes].sort, rows.first.keys.sort)
+    assert_equal(1, routescope_client('config.rollback', 'number' => 1)['result']['rollback'])
+    assert_equal(['set neighbors 127.0.0.9 description inj1'],
+                 routescope_client('config.compare')['result'])
+    assert_equal(true, routescope_client('config.discard')['result']['discarded'])
+  end
+
+  def test_a_config_refusal_crosses_the_socket_as_an_error_line
+    r = routescope_client('config.rollback', 'number' => 9)
+    assert_nil(r['result'])
+    assert_match(/rollback 9 does not exist/, r['error'])
+    assert_still_alive
+  end
+
+  def test_the_cli_prints_the_configuration_as_set_lines
+    status, out, err = cli(['-s', @socket, '-c', 'show configuration'])
+    assert_equal(0, status, err)
+    assert_match(/^set as 65000$/, out)
+  end
+
+
   private
 
   # A Neighbor that keeps the ROUTE-REFRESH messages it is sent.
