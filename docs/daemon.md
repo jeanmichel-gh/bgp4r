@@ -9,9 +9,10 @@ configuration, their command lines and the JSON they answer with.
 `docs/routescope-labs.md` owns the integration: the drivers, the
 inspector tables, the map and the labs. Neither repeats the other.
 
-**Status: all four commands built, and nothing in the method table is a
-design any more.** `bgp4r`, the umbrella, has `capture`, `sim`,
-`routegen` and `version`, in `exe/bgp4r` over `bgp/capture/` and
+**Status: all four commands built, every subcommand with them, and
+nothing in the method table is a design any more.** `bgp4r`, the
+umbrella, has `capture`, `sim`, `routegen`, `lab new` and `version`, in
+`exe/bgp4r` over `bgp/capture/` and
 `bgp/sim/`, so the Capture section at the end of this document is no
 longer a design. **`bgp4rd` and `bgp4r-cli` exist**, in `exe/` over
 `bgp/daemon/`: the process, the configuration file, the control socket,
@@ -31,8 +32,9 @@ corrected in the method table and written out under "The candidate
 configuration". `config.load` is a tenth that no driver calls and a
 person does.
 
-What is left of `lab new` is the umbrella's one unimplemented
-subcommand.
+**`lab new` was the umbrella's one unimplemented subcommand and it is
+built**, in `BGP::Capture::CLI#lab`, with its own section below. So
+nothing in this document describes something that does not run.
 
 What exists under all of it is the
 library under them, which is most of the work: `bgp/neighbor/` for the
@@ -85,13 +87,14 @@ Four commands, matching ospfv2's `ospfv2`, `ospfd` and `ospf-cli`.
 |---|---|---|
 | `bgp4rd` | the daemon | built, with every API method |
 | `bgp4r-cli` | its client, over the socket | built |
-| `bgp4r` | the umbrella: `sim`, `routegen`, `capture`, `lab new`, `version` | built, with all but `lab new` |
+| `bgp4r` | the umbrella: `sim`, `routegen`, `capture`, `lab new`, `version` | built, all five |
 | `bgp4r-sim` | an alias for `bgp4r sim`, so a container command reads plainly | built |
 
 The gemspec declares all four. A subcommand or a method that does not
 exist is named in the usage, or in the refusal, as not yet implemented,
-so a person asking for one gets the list rather than a backtrace; `lab
-new` is the only one left.
+so a person asking for one gets the list rather than a backtrace.
+**Nothing is left**, so the umbrella's usage names no missing
+subcommand; the rule stands for whatever is added next.
 
 ```sh
 # in the VM
@@ -1499,6 +1502,78 @@ is the `bgp4r` command, so `IMAGE capture -i IFACE` works as routescope
 writes it, and it adds `tcpdump`. **That stage has not been built**, since
 no Docker daemon was reachable where it was written, and it is the only
 part of this work nothing has run.
+
+# bgp4r lab new
+
+**Built.** `BGP::Capture::CLI#lab` is it, and
+`docs/routescope-labs.md` section 6 is the design: it copies a topology
+folder and git-inits it, because a lab somebody edits in place is a lab
+whose history is the repository's, and the git init is what makes a
+saved configuration diffable.
+
+```
+bgp4r lab new DIR [NAME] [--no-git]
+```
+
+`DIR` must not exist, or must be empty. `NAME` is a folder under
+`lab/topologies/`, defaulting to `two-speakers`, which is the only one
+that needs nothing but bgp4r. `--no-git` copies and stops there.
+
+**The topologies are discovered and not listed, and that is the one
+deliberate difference from `ospfv2 lab new`.** That command keeps a
+`CLAB_LABS` table beside its templates, so a template added to the
+repository is invisible until somebody edits the table too. Here a
+folder under `lab/topologies/` is offered the day it lands, and the
+usage and the refusal for an unknown name both print what was found
+rather than a list written down anywhere. That is also why the design's
+`--routescope` flag is not here: a flag per topology is one more flag,
+one more arm of a `fetch` and one more table row each time, where a
+positional name against the discovered folders is none of them.
+
+**How to start it comes from the folder's own files too.** A
+`*.clab.yml` makes it a containerlab topology, which is containerlab's
+own convention and what every routescope lab is; a `compose.yml` makes
+it a Compose one. So a topology added later says which it is by what is
+in it rather than by a second table, and that was not a hypothetical
+for long: `bgp4r-lab` landed the same day and took the containerlab arm
+with no change to `cli.rb`. A `README.md` in the folder is named when
+there is one, which `add-path` and `bgp4r-lab` have and the other three
+do not.
+
+**What a `.gitignore` in the folder leaves out is read in three shapes**:
+a trailing slash is a directory and takes everything under it, a
+pattern holding a slash is matched against the relative path, and
+anything else matches a basename at any depth. `bgp4r-lab`'s own file
+is why: it carries `recordings/` and `clab-*/`, so a basename-only
+match, which is what ospfv2's `copy_lab` does, would have copied
+containerlab's working directory into every lab made from a template
+somebody had deployed in place. `!` negation is not read; that one is
+in CLAUDE.md under "Known issues to work on".
+
+**A copied Compose topology cannot be built where it landed, and that is
+a real limit rather than a caveat.** Every Compose topology here has
+`build.context: ../../..`, the repository root, so the copy resolves
+that context three directories above wherever it went. The image is
+named, though, and `docker compose up` builds only when the named image
+is missing, so the message says to build it once in a checkout and then
+run the copy without `--build`. The image to name is read out of the
+compose file, because `fault-matrix` builds `bgp4r-conformance` where
+the other Compose topologies build `bgp4r-speaker`. `bgp4r-lab` is
+containerlab and has none of this.
+
+**Everything that can go wrong is a message, and only two of them are a
+non-zero status.** A destination that is not empty, an unknown name, a
+missing `lab/topologies/`, a folder that cannot be made and an unknown
+flag each print why and exit 1. A git that is not installed, or a commit
+that fails, prints a line and exits **0**: the copy is what was asked
+for and it happened, and a lab with no history is still a lab.
+
+**The topologies ship.** The gemspec's `s.files` is `git ls-files` and
+its `require_paths` is `["."]`, so `lab/topologies/` sits beside `bgp/`
+in an installed gem. Measured on 2026-11-02 by building the gem,
+installing it into a throwaway `GEM_HOME` and running `bgp4r lab new`
+from it. No packaging change was needed. Where the folder is absent
+anyway, the command names the path it looked in.
 
 # What is not here
 

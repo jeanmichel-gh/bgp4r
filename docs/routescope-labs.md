@@ -280,9 +280,10 @@ styles print cannot disagree. Section 6 items 3 and 4 have the detail.
 Measured against ospfv2, which ships all of it. Each item says what it
 unblocks, so the order is not arbitrary.
 
-1. **Executables. Done**, all four of them. `exe/bgp4r` is the
-   umbrella, with `capture`, `sim`, `routegen` and `version` and a usage
-   line naming `lab new`, which is what is left; `exe/bgp4rd` and
+1. **Executables. Done**, all four of them, **and every subcommand with
+   them**. `exe/bgp4r` is the
+   umbrella, with `capture`, `sim`, `routegen`, `lab new` and `version`,
+   so its usage names nothing as missing any more; `exe/bgp4rd` and
    `exe/bgp4r-cli` arrived with the daemon's read side and
    `exe/bgp4r-sim` with the injector. The gemspec declares all four, and
    the rule that got them there one at a time stands: an executable in a
@@ -586,10 +587,28 @@ unblocks, so the order is not arbitrary.
 **Two things this list used to call unnecessary and no longer does**,
 because the design asked for them by name:
 
-* **`bgp4r lab new DIR`**, which copies a topology folder and git-inits
-  it, as `ospfv2 lab new` does from `CLAB_LABS` (`cli.rb:187`). A lab
+* **`bgp4r lab new DIR [NAME]`. Done**, in `BGP::Capture::CLI#lab`,
+  and `docs/daemon.md` has the section. It copies a topology folder and
+  git-inits it, as `ospfv2 lab new` does from `CLAB_LABS`
+  (`cli.rb:187`). A lab
   somebody edits in place is a lab whose history is the repository's,
   and the git init is what makes a saved configuration diffable.
+  * **The one thing it does not copy from ospfv2 is the `CLAB_LABS`
+    table**, and that changes the command line. The folders under
+    `lab/topologies/` are discovered at runtime, so a topology added
+    later is offered with no edit to `cli.rb`, and the usage and the
+    refusal for an unknown name print what was found rather than a list.
+    So the kind is a positional `NAME`, not a flag per template, and
+    `--routescope` below is corrected to that. Which kind a topology is
+    comes from its own files too, a `*.clab.yml` against a
+    `compose.yml`, rather than from a second table.
+  * **And one thing measured while building it belongs here**, because
+    it bears on every lab in section 8: bgp4r's Compose topologies
+    all build with `context: ../../..`, so a copy of one cannot build
+    its own image where it landed. The command says so and names the
+    image to build in a checkout first. A containerlab topology has no
+    such problem, which is one more reason section 8 is right that the
+    routescope labs are containerlab.
 * **A candidate configuration with `load`, `compare` and `commit`**,
   which is in `docs/daemon.md`'s method list. routescope's Config pane
   reads `running_config`, `candidate?` and `save_running`
@@ -695,8 +714,15 @@ What it exercises that no existing lab does, in order of what it proves:
    screenshot.
 5. A withdraw removing it from BIRD, which is the far end of the chain.
 
-`bgp4r lab new ~/labs/bgp4r-lab --routescope` copies it and git-inits
-it, as `ospfv2 lab new` does.
+`bgp4r lab new ~/labs/bgp4r-lab bgp4r-lab` copies it and git-inits it,
+as `ospfv2 lab new` does, and **that works today**. The line read
+`--routescope` until the command was built: the topologies are
+discovered rather than listed, so the kind is the positional name of
+the folder and there is no flag for it, which is what let this topology
+arrive without touching `cli.rb`. Its `bgp4r-lab.clab.yml` is what
+tells the command to print `containerlab deploy` rather than `docker
+compose up`, and its `.gitignore` is what made the copier read a
+directory pattern rather than a basename.
 
 **The folder exists now**, as `lab/topologies/bgp4r-lab`: the
 `*.clab.yml` with those six nodes and both labels on each, node files for

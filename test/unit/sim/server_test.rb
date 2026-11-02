@@ -267,11 +267,15 @@ class BGP_Sim_Server_Test < Test::Unit::TestCase
     assert_equal('', err.string)
   end
 
-  def test_the_umbrella_names_its_four_subcommands
+  # `lab` joined the list when `bgp4r lab new` landed, so this is five
+  # now. Re-pointed and not weakened: the whole list is still asserted,
+  # and what this file cares about is still the second half, that `sim`
+  # is not listed as missing.
+  def test_the_umbrella_names_its_five_subcommands
     out = StringIO.new
     BGP::Capture::CLI.new(out, StringIO.new).start([])
-    %w[capture sim routegen version].each { |s| assert_match(/^  #{s}/, out.string) }
-    assert_equal(%w[capture sim routegen version], BGP::Capture::CLI::SUBCOMMANDS)
+    %w[capture sim routegen lab version].each { |s| assert_match(/^  #{s}/, out.string) }
+    assert_equal(%w[capture sim routegen lab version], BGP::Capture::CLI::SUBCOMMANDS)
     assert_not_match(/Not yet implemented:.*\bsim\b/, out.string,
                      'sim is built, so the usage must not still list it as missing')
   end

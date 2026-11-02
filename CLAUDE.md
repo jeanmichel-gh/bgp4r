@@ -479,26 +479,64 @@ bgp/capture/             reading BGP off a wire; require 'bgp/capture', which
                          found out. A Length below 19 is the one case framing
                          cannot continue from, so it resynchronises to the
                          next Marker and hands over the octets it skipped;
-                         cli.rb is the `bgp4r` umbrella, `capture` and
-                         `version`, over exe/bgp4r. Nothing verifies a
+                         cli.rb is the `bgp4r` umbrella, `capture`,
+                         `version` and `lab new`, over exe/bgp4r.
+                         Nothing verifies a
                          checksum and the file says why. docs/daemon.md's
-                         Capture section is the guide
+                         Capture section is the guide.
+                         **`lab new` is the last subcommand and it is in
+                         here**, which is where the dispatch is:
+                         `CLI.topologies` **discovers** the folders under
+                         lab/topologies/ rather than keeping ospfv2's
+                         `CLAB_LABS` table, so a topology added later is
+                         offered with no edit to this file, and the usage
+                         and the refusal for an unknown name print what
+                         was found. Which kind a topology is comes from
+                         its own files too, a `*.clab.yml` against a
+                         `compose.yml`, which is what let `bgp4r-lab`
+                         take the containerlab arm the day it merged
+                         with no edit here. A
+                         copied Compose topology cannot build its own
+                         image where it landed, since every one of them
+                         has `context: ../../..`, and the message says
+                         so
+                         and names the image to build in a checkout
+                         first. `copy_lab` reads a `.gitignore`'s
+                         directory, slash and basename patterns, which
+                         is **not** ospfv2's basename-only `fnmatch`:
+                         `bgp4r-lab`'s own file carries `recordings/`
+                         and `clab-*/`, and a basename match fires on
+                         neither. `fileutils` is required in that branch
+                         and not at the top, as `bgp/sim` is for `sim`.
+                         docs/daemon.md's `bgp4r lab new` section is the
+                         guide
 bgp/misc/                extras: route_generator.rb (many prefixes packed in UPDATEs), live_feed.rb (a client for an old public BGP feed)
 exe/bgp4r                the umbrella command, with `capture`, `sim`,
-                         `routegen` and `version`. `sim` and `routegen`
-                         require bgp/sim in their own branch, so a
-                         capture container loads no injector
+                         `routegen`, `lab new` and `version`. `sim` and
+                         `routegen`
+                         require bgp/sim in their own branch, and `lab`
+                         requires fileutils in its own, so a
+                         capture container loads neither injector nor
+                         file copier
 exe/bgp4rd exe/bgp4r-cli the daemon and its client, over bgp/daemon/
 exe/bgp4r-sim            the injector, over bgp/sim/, an alias for
                          `bgp4r sim` so a container command reads
                          plainly. **All four of docs/daemon.md's
-                         commands exist now and all four are declared in
-                         the gemspec**; `lab new` is the only
-                         subcommand still named in the usage as not
-                         implemented. The rule that got them there one
-                         at a time stands: an executable in a released
+                         commands exist now, all four are declared in
+                         the gemspec, and every subcommand that document
+                         names is built**, so the umbrella's usage lists
+                         nothing as not yet implemented. The rule that
+                         got them there one
+                         at a time stands for whatever is added next: an
+                         executable in a released
                          gem that answers nothing is worse than one that
-                         is not there, so each arrived with its program
+                         is not there, so each arrived with its program.
+                         **The gem was measured and not reasoned about**:
+                         built, installed into a throwaway GEM_HOME, and
+                         `bgp4r lab new DIR` run from it on 2026-11-02,
+                         which copied a topology and committed it. So
+                         lab/topologies/ ships, through `s.files` being
+                         `git ls-files`, and the gemspec needed no change
 docs/                    protocol-testing.md: using bgp4r to test a router
                          flow-spec.md: RFC 8955 and RFC 8956 on the wire, as much
                          as is needed to write the encoding and decoding. Read it
@@ -1128,6 +1166,22 @@ Live, which needs `tcpdump` on PATH and an interface it may read:
 sudo ruby -I. exe/bgp4r capture -i eth1
 ```
 
+A lab of your own, copied out of `lab/topologies/` and git-inited, which
+needs no Docker to make and no Docker to inspect. With no NAME it is
+`two-speakers`, and `bgp4r lab new` with no folder prints the
+topologies it **found** rather than a list anybody wrote down:
+```
+ruby -I. exe/bgp4r lab new
+ruby -I. exe/bgp4r lab new /tmp/my-lab
+ruby -I. exe/bgp4r lab new /tmp/my-add-path add-path
+ruby -I. exe/bgp4r lab new /tmp/no-history two-speakers --no-git
+```
+What it prints after the copy says how to start that topology, worked
+out from the folder's own files. **Mind the one limit it names**: every
+Compose topology here builds with `context: ../../..`, so a copy
+cannot build its own image where it landed; build it once in a checkout
+and run the copy without `--build`.
+
 Which `#to_hash` read back and which do not, printed from
 `test/unit/to_hash_catalog.rb` rather than written down anywhere:
 ```
@@ -1152,11 +1206,11 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. The `lab` job is a matrix, one job per group in `test/lab_groups.rb`, so its cost is the slowest group and not the total: it was 12m42s as one serial suite. Each job installs only what its group needs, which is why the matrix entry carries a `gobgp`, `frr`, `docker` or `netns` flag. The `gobgp` groups pin 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-11-02: 3074 tests, 31592 assertions, all passing. Line coverage of `bgp/` from the unit suite: 96.2%.
+Baseline on 2026-11-02: 3098 tests, 31697 assertions, all passing. Line coverage of `bgp/` from the unit suite: 96.2%.
 
 **That coverage figure is 98.5% for the library and the rest is the two
 programs, not a gap anywhere else.** Measured the same run: with
-`bgp/sim/` and `bgp/daemon/` excluded it is **98.5%** over 12483 lines,
+`bgp/sim/` and `bgp/daemon/` excluded it is **98.5%** over 12588 lines,
 which is the same figure the daemon's arrival was measured against, so
 the core has not moved. From the unit suite alone `bgp/sim/` is **85.9%**
 and `bgp/daemon/` is **82.5%**, because most of what both do needs a
@@ -6370,7 +6424,9 @@ Decisions taken before this starts, so they are not re-litigated:
 
 **Done so far**: items 1 and 5, the `bgp4r` umbrella executable and
 `bgp4r capture`, which landed together because the capture contract
-decides the executable shape; item 2, the lab speaker as a router;
+decides the executable shape, **with `bgp4r lab new` finishing item 1**,
+since that document's section 6 asks for it by name and it was the
+umbrella's last subcommand; item 2, the lab speaker as a router;
 items 3 and 4, the view layer and the RIB JSON on top of it; and item
 6, the structured event stream. See `bgp/capture/`, `bgp/rib/view.rb`,
 `bgp/events.rb` and `lab/speaker.rb` in the layout above, and the
@@ -6380,6 +6436,42 @@ phase order on purpose**, since the phasing table puts item 5 in phase
 because routescope's own capture path needs a modification before it
 can point at a bgp4r image, and that modification is routescope's and
 is not blocked by this.
+
+**`bgp4r lab new DIR [NAME]` corrected the design it came from, in two
+places.** It copies a topology folder out of `lab/topologies/` and
+git-inits it, which is what `docs/routescope-labs.md` section 6 asks
+for, and `docs/daemon.md`'s `bgp4r lab new` section is the guide.
+* **The design wrote it as `--routescope`, a flag per template, and it
+  is a positional NAME instead.** That is `ospfv2 lab new`'s shape and
+  it carries ospfv2's `CLAB_LABS` table with it: one more topology is
+  one more flag, one more arm of a `fetch` and one more table row. The
+  folders are **discovered** at runtime instead, so the containerlab
+  topology that document designs arrives with no edit to `cli.rb`, and
+  the usage and the refusal for an unknown name print what was found.
+  Which kind a topology is comes from its own files too, a `*.clab.yml`
+  against a `compose.yml`, which is the same choice one level down.
+* **And a measurement that bears on every lab in that document's
+  section 8**: every one of bgp4r's Compose topologies builds with
+  `context: ../../..`, the repository root, so **a copy of one cannot
+  build its own image where it landed**. The named image saves it, since
+  `docker compose up` builds only when the image is missing, so the
+  message says to build it once in a checkout and run the copy without
+  `--build`. A containerlab topology has no such problem, which is one
+  more reason that section is right that the routescope labs are
+  containerlab rather than Compose.
+* **And one defect it found, filed as latent, and then had to fix
+  hours later, which is a lesson about filing.** `copy_lab` started as
+  ospfv2's basename-only `fnmatch` over a `.gitignore`, so a directory
+  pattern and a pattern with a slash both fired on nothing. It was
+  filed rather than fixed because no topology had a `.gitignore` to
+  expose it. `bgp4r-lab` merged the same day carrying one with
+  `recordings/` and `clab-*/` in it, which is exactly the shape that
+  did not work, so a lab deployed in the template folder would have had
+  containerlab's own working directory copied into every lab made from
+  it. Three shapes are matched now and `!` negation is what is left,
+  under "Known issues to work on". **The rule: a latent defect in code
+  you are writing is cheaper to fix than to file**, because the thing
+  that makes it live may already be in flight.
 
 **And `bgp4rd` with `bgp4r-cli` exist now, answering every control API
 method**, in `bgp/daemon/` over `exe/bgp4rd` and
@@ -6624,11 +6716,14 @@ The short version, so the direction is visible here:
   both on PATH would be ambiguous. Four commands: `bgp4rd`,
   `bgp4r-cli`, `bgp4r` as the umbrella (`sim`, `routegen`, `capture`,
   `lab new`, `version`) and `bgp4r-sim` as an alias. **All four exist
-  now and all four are declared**; `lab new` is the one subcommand
-  still named in the usage as not implemented, because an executable in
-  a released gem that answers nothing is worse than one that is not
-  there. The gemspec declares `bgp4r`, `bgp4rd` and `bgp4r-cli`, and
-  the usage names what is left as not yet implemented.
+  now, all four are declared, and `lab new` is built too**, so the
+  usage names nothing as not implemented. The rule that got them there
+  stands for whatever is added next, because an executable in a
+  released gem that answers nothing is worse than one that is not
+  there. The gemspec declares `bgp4r`, `bgp4rd`, `bgp4r-cli` and
+  `bgp4r-sim`, and it needed no change for `lab new`: `s.files` is `git
+  ls-files`, so `lab/topologies/` ships, which was measured by
+  installing the built gem rather than reasoned about.
 * **The largest item was that the lab speaker becomes a router. Done**,
   which is item 2 of the document's section 6. `bgp/rib/` was finished,
   tested and unwired because the speaker predates it; it is wired in now
@@ -6992,6 +7087,10 @@ Smaller things:
 * **`peer.clear` and `peer.stop` still send no NOTIFICATION, and now nothing is in the way of one.** A router answers `clear bgp NEIGHBOR` with Cease and RFC 4486 section 4's Administrative Reset, subcode 4, or Administrative Shutdown, subcode 2. The prerequisite is done: `Neighbor#stop` drains the output queue before closing the socket, so a message queued just before it reaches the wire. What is left is choosing the subcode per method and sending it, which is `bgp/daemon/control.rb` and a line in `Peer#stop`, plus a lab measurement of what each router logs on receipt. Until then the two methods close the connection and **report no NOTIFICATION at all** rather than claiming one they cannot verify, which is honest and is not what a router does.
   * **The mechanism this entry used to give was half right and the half it got wrong is the interesting one.** It said `stop` was `@out.close` then `@socket.close`, so a queued message "may never" be written, and that the fix was for `stop` to drain the queue. `SizedQueue#close` already drains: `deq` keeps handing out what is queued and only then answers nil, so the writer loop in `BGP::IO::Output` empties the queue of its own accord. What was missing was **waiting for it**, and the entry had the right shape for the wrong reason, which is why it read as a bigger change than it was. Measured on 2026-11-02 rather than read this time: a NOTIFICATION sent and then followed by `stop` reached the peer in **0 of 20** loopback runs and 20 of 20 with a bounded join. Not "may never": never.
   * **`BGP::IO::Output#exit` is the form that really does drop, and nothing in the library calls it.** It sets `@continue` false before closing, so the loop stops after one more `deq`. Only `test/unit/io_test.rb` reaches it. The comment on `Neighbor#pending` cited it as the reason `stop` dropped, which was a citation to a method that path does not touch; both comments say so now. Whether a public method with no caller should stay is its own decision and nothing here needs it either way.
+* **`CLI.copy_lab` reads three of a `.gitignore`'s shapes and not `!` negation**, so a pattern that re-includes something an earlier pattern excluded is ignored and the file is left out. A directory pattern, a pattern holding a slash and a bare basename all work, which is what `copy_lab`'s header lays out and what `bgp4r-lab`'s own `.gitignore` needs; what is missing is ordering, `**` and anchoring, so this is not gitignore and does not claim to be. Measured on 2026-11-02:
+  `ruby -I. -e 'require "bgp/capture/cli"; require "tmpdir"; Dir.mktmpdir { |t| s = File.join(t, "s"); Dir.mkdir(s); File.write(File.join(s, ".gitignore"), "*.log\n!keep.log\n"); File.write(File.join(s, "a.log"), "x\n"); File.write(File.join(s, "keep.log"), "x\n"); d = File.join(t, "d"); BGP::Capture::CLI.copy_lab(s, d); p Dir.children(d).sort }'`
+  prints `[".gitignore"]` where git would have kept `keep.log`. (`Dir.children` and not `Dir.glob`, which hides a dotfile without `FNM_DOTMATCH` and so prints `[]` for both the broken and the fixed case: measured, after the first draft of this line said `Dir.glob`.) **Nothing is wrong today**: no `.gitignore` in the tree uses `!`, and the one that exists, `bgp4r-lab`'s, is read correctly, which `test_the_real_gitignore_of_bgp4r_lab_keeps_its_directories_out` asserts against the real file. The fix is a decision rather than a patch, because doing negation properly means doing ordering with it: either shell out to `git check-ignore`, which makes the copier need git where today it does not, or walk the patterns in order with a last-match-wins rule and accept that the rest of gitignore is still missing.
+  * **The basename-only version of this was the bug and it is fixed.** It was ospfv2's `copy_lab` inherited whole, filed here as latent because no topology had a `.gitignore` to expose it, and `bgp4r-lab` arrived with one carrying `recordings/` and `clab-*/` the same day. So the window between filing it and it mattering was hours, which is the argument for fixing a latent defect in the code you are already writing rather than filing it.
 * **A received UPDATE carrying a zero-length ORIGIN kills a bgp4r receiver's event dispatch thread**, and the trigger is a log line that is built whatever the log level is. `Neighbor#dispatch_event` does `log_debug "Recv #{msg}\n"`, so `Update#to_s` runs before the level is looked at; `Origin.new` accepts a zero-length value and `Origin#encode` then raises `TypeError: no implicit conversion of nil into Integer` on `pack`. `dispatch_event` rescues only `SessionClosed`, so the thread dies and the session stops handling events, silently. Measured on 2026-11-02:
   `ruby -I. -e 'require "bgp4r"; u = BGP::Fault.update(:origin_length, :my_as => 1, :next_hop => "10.0.0.1", :prefixes => ["10.0.0.0/8"]); o = u.encode(BGP::Update::Info.new(true, :lenient)); p BGP::Update.new(o.is_packed, BGP::Update::Info.new(true, :lenient)).to_s' `
   **1 of the 18 catalog cases does it**, measured case by case: the other 17 render and each reports exactly one finding, which is why `test/functional/sim_test.rb` injects `origin_value` and says so. No existing test met it, because the matrix sends the catalog to GoBGP and FRR and never to a bgp4r receiver. Two faults in one and the fix is a decision rather than a patch: the interpolation should be behind the level check, which is `Log`'s business and every `log_debug` in the file; and `Origin#to_s` should not raise on a value its own constructor took, which is the keep-what-you-cannot-read rule one layer further in than `Attr::Gap` reaches.
@@ -7135,7 +7234,7 @@ Lab and conformance:
 * **`to_hash_round_trip_test.rb` cannot read a test file that is not pure ASCII.** `test_every_working_round_trip_is_asserted_in_a_class_test_file` reads every test file body and matches regexps against it, and a single non-ASCII character in any of them makes it error with `ArgumentError: invalid byte sequence in US-ASCII`, pointing at its own line 190 and naming neither the file nor the character. Found on 2026-10-31 by putting one arrow in a comment in a new test file: that file passed on its own and the suite errored in a test it has nothing to do with. Every test file is ASCII today, so nothing is wrong now; what is wrong is the diagnosis the next person gets. The fix is an encoding on the read or a `scrub`, and it is one line in a file this change does not otherwise touch.
   * **The same trap has a second home and that one bit**, which is the reason to believe it will bite a third time. `test/unit/rib/view_test.rb` reads `docs/daemon.md` and `docs/routescope-labs.md` the same way, and one em dash written into `docs/daemon.md` made three `assert_match` calls raise the same `invalid byte sequence in US-ASCII`, from a test with nothing to do with the character and naming neither the file nor the byte. Fixed there, in `read_doc`, which passes `:encoding => 'UTF-8'`. So the rule is wider than "a test file is ASCII": **any test that reads a file as text and matches a regexp against it has to name the encoding**, because the default external one is the environment's and the file is somebody's prose. `to_hash_round_trip_test.rb` is still the unfixed one.
 * **`bgp4r capture` has three gaps, each a decision rather than a patch, and each said in the file it is in.** The live path, `tcpdump` into a pipe, is the only code in `bgp/capture/` no test runs: tcpdump is not installed in this sandbox and spawning it in a unit test wants a privileged interface, so the file path is exercised in full and the nine lines of the spawn and the two that kill the child are not. The Dockerfile's **`capture` stage has not been built**, for want of a Docker daemon, and it is what makes routescope's hard coded `IMAGE capture -i IFACE` reach anything, so build it before trusting it. And **reordered segments are not handled**: `bgp/capture/stream.rb` reads each direction in arrival order, trims a retransmission by sequence number and does nothing about a capture whose segments crossed, which would frame garbage from that point with nothing saying so. Reordering means held segments, timers and a reassembly queue, which is a TCP implementation and not a dissector; the file says so rather than leaving it to be found out.
-* Lowest coverage (unit suite), re-measured 2026-11-02 after `config.rb` and `candidate.rb` arrived: `daemon/api.rb` 57.5%, `daemon/client.rb` 64.1%, `sim/http.rb` 66.0%, `sim/routegen.rb` 66.9%, `daemon/server.rb` 70.4%, `daemon/speaker.rb` 70.7%, `sim/server.rb` 87.9%, `bgp/capture/cli.rb` 88.5% (the live tcpdump path, above), `neighbor/neighbor.rb` 91.8%, `messages/update.rb` 92.2%, `neighbor/add_path_cap.rb` 92.9%, `path_attributes/mp_unreach.rb` 93.0%, `path_attributes/ipv6_extended_communities.rb` 93.1%, `optional_parameters/graceful_restart.rb` 93.3%, `path_attributes/mp_reach.rb` 93.5%. **The `daemon/` and `sim/` rows are not a gap and must not be chased by unit testing a socket**: the note under the baseline has `bgp/daemon/` at 88.1% and `bgp/sim/` at 95.6% once each one's functional test is counted, and `api.rb` is the lowest of them in the unit suite precisely because the event stream and the accept loop are the two things a unit test cannot reach.
+* Lowest coverage (unit suite), re-measured 2026-11-02 after `config.rb`, `candidate.rb` and `lab new` arrived: `daemon/api.rb` 57.5%, `daemon/client.rb` 64.1%, `sim/http.rb` 66.0%, `sim/routegen.rb` 66.9%, `daemon/server.rb` 70.4%, `daemon/speaker.rb` 70.7%, `sim/server.rb` 87.9%, `bgp/capture/cli.rb` 94.8% (the live tcpdump path, above, and nothing else: `lab new` took that file to 174 measured lines and the nine spawn lines plus the two that kill the child are the whole of what is left), `neighbor/neighbor.rb` 91.8%, `messages/update.rb` 92.2%, `neighbor/add_path_cap.rb` 92.9%, `path_attributes/mp_unreach.rb` 93.0%, `path_attributes/ipv6_extended_communities.rb` 93.1%, `optional_parameters/graceful_restart.rb` 93.3%, `path_attributes/mp_reach.rb` 93.5%. **The `daemon/` and `sim/` rows are not a gap and must not be chased by unit testing a socket**: the note under the baseline has `bgp/daemon/` at 88.1% and `bgp/sim/` at 95.6% once each one's functional test is counted, and `api.rb` is the lowest of them in the unit suite precisely because the event stream and the accept loop are the two things a unit test cannot reach.
 
 ## Attribute work left
 
