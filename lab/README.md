@@ -6,6 +6,8 @@ Each node runs the same program, `lab/speaker.rb`, driven by its own YAML file. 
 
 The machinery behind that program is in the library, as `BGP::Daemon::Speaker` in `bgp/daemon/speaker.rb`, because `bgp4rd` needs the same sessions, the same configuration and the same recording and `lab/` is not on an installed gem's load path. `lab/speaker.rb` is its command line, its state file writer and three constants pointing at it, so `Lab::Speaker`, `Lab::Peer` and `Lab::Recorder` mean what they always did. That file's header has the decision and the two options it rejected, and `docs/daemon.md` is the daemon.
 
+**Three programs read this node file now**, which is why its keys are worth knowing: `lab/speaker.rb`, `bgp4rd` with `rib` on by default and a `socket` key, and `bgp4r-sim`, which adds `api` and refuses the four router keys because an injector holds no Loc-RIB. The announce block below is the injector's runtime vocabulary as well: `prefixes`, `generate`, `med`, `as_path`, `communities`, `next_hop`, `local_pref`, `path_id` and `origin` are what `POST /api/announce` takes, so there is one thing to learn. `docs/daemon.md` has both programs and `examples/sim.yml` is a node file for the injector.
+
 ## Run a topology
 
 From the repo root:

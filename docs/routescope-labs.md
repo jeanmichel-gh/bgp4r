@@ -280,13 +280,16 @@ styles print cannot disagree. Section 6 items 3 and 4 have the detail.
 Measured against ospfv2, which ships all of it. Each item says what it
 unblocks, so the order is not arbitrary.
 
-1. **Executables. The umbrella is done**, in `exe/bgp4r`, declared in
-   the gemspec, with `capture` and `version` and a usage line naming the
-   rest. `bgp4rd`, `bgp4r-cli` and `bgp4r-sim` are **not** stubbed and
-   are not declared: an executable in a released gem that answers
-   nothing is worse than one that is not there, so each arrives with the
-   program behind it. `lab/speaker.rb` is still run as `ruby -I.
-   lab/speaker.rb FILE`.
+1. **Executables. Done**, all four of them. `exe/bgp4r` is the
+   umbrella, with `capture`, `sim`, `routegen` and `version` and a usage
+   line naming `lab new`, which is what is left; `exe/bgp4rd` and
+   `exe/bgp4r-cli` arrived with the daemon's read side and
+   `exe/bgp4r-sim` with the injector. The gemspec declares all four, and
+   the rule that got them there one at a time stands: an executable in a
+   released gem that answers nothing is worse than one that is not
+   there, so each arrived with the program behind it rather than as a
+   stub. `lab/speaker.rb` is still run as `ruby -I. lab/speaker.rb
+   FILE`.
    * The dispatch is a `case` in `BGP::Capture::CLI#start`, not a
      framework, and the class takes its output IO so a test reads a
      String rather than capturing a process. `BGP::VERSION` is new, in
@@ -502,14 +505,28 @@ unblocks, so the order is not arbitrary.
    per-node logger, and `Log.level` and `Log.filename` are process-wide.
    ospfv2 injects a plain callable `->(level, message)` like its clock.
    Lower priority than 6, since a console reads events and not log text.
-8. **Actions, for `bgp4r-sim` only.** A way for routescope to tell a
-   node to do something. The table is in `docs/daemon.md`: announce,
+8. **Actions, for `bgp4r-sim` only. Done**, in `bgp/sim/` over
+   `exe/bgp4r-sim`. The table is in `docs/daemon.md`: announce,
    withdraw, attribute, fault, replay, notification, the three session
    actions and refresh, on an HTTP API on `127.0.0.1:8080` with a header
    requirement so a cross-site form cannot flap a lab. Two of them are
    why the node kind exists at all: `fault`, which drives the eighteen
    cases of `BGP::Fault::CATALOG`, and `replay`, which sends a capture
    byte for byte. An injector without those two is a worse FRR.
+   * **One thing measured here changes what a driver must do**, and it
+     is in `docs/daemon.md` with the measurement: `Net::HTTP`
+     capitalises a header name per word, so the `X-BGP4R` of
+     `Drivers::Sim`'s POST arrives as `X-Bgp4r`. The injector matches
+     the name case insensitively; a driver needs no change, but anyone
+     writing a second client should know the header it sends is not the
+     header it wrote.
+   * **And one corrects this document's sibling.** `/api/events`
+     answers `bgp/events.rb`'s own seven-field shape with a full ISO
+     8601 time, not ospfv2's `{seq, time, kind, text}`, so the
+     `Drivers::Sim` event script's invented level, invented interface,
+     empty data hash and date-rebuilding lambda are all unnecessary
+     here. Section 9.2's "events are the one dependency it cannot be
+     built without" is answered.
 9. **Containerlab topologies and a privilege story.** bgp4r's Dockerfile
    runs as the non-root user `bgp` and relies on a container's own
    `net.ipv4.ip_unprivileged_port_start=0` to bind 179. That is fine for
@@ -1183,8 +1200,8 @@ asking for.
 | 1 | **1 done**, 3 | kinds, router driver | A |
 | 2 | 2, 4 | BGP panes | C, D |
 | 3 | **5 done** | capture modification | B, and a decoder pane for BGP |
-| 4 | 6, 9 | scenario conditions, `do_bgp` | F, H, and section 9.4's scenario A |
-| 5 | 8 | injector driver and its kind | section 9.4's B and C, and E scripted |
+| 4 | **6 done**, 9 | scenario conditions, `do_bgp` | F, H, and section 9.4's scenario A |
+| 5 | **8 done** | injector driver and its kind | section 9.4's B and C, and E scripted |
 
 **The injector is phase 5 and not phase 1, which is worth saying since
 section 2 calls it the thing that justifies the work.** It needs item 6
@@ -1194,6 +1211,13 @@ surface in this document; and item 2, the router kind, because every
 scenario in section 9.4 asserts against something that holds a RIB.
 Ordering it first would mean a node that can act and a lab that cannot
 say what the action did.
+
+**All three of those are in now, so every bgp4r item of phases 1 to 5 is
+done but item 9**, the containerlab topologies and the privilege story,
+which needs a Docker daemon. What is left for a lab a person can drive
+is routescope's own column: the two kinds, the two drivers, the `bgp:`
+step and the four conditions, which section 9.5 costs out and none of
+which is bgp4r's to write.
 
 Phase 0 is not a joke. It costs nothing, it proves the container runs
 under routescope's transport, and it is where every assumption in this

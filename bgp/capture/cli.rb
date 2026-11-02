@@ -30,7 +30,7 @@ module BGP
 
     # The `bgp4r` umbrella command. `docs/daemon.md` names four commands,
     # `bgp4rd`, `bgp4r-cli`, `bgp4r` and `bgp4r-sim`; this is the third,
-    # with the two subcommands that exist. The rest are listed in the usage
+    # with the subcommands that exist. The rest are listed in the usage
     # as not yet implemented rather than stubbed, because an executable
     # that answers nothing is worse in a released gem than one that is not
     # there.
@@ -39,9 +39,18 @@ module BGP
     #
     # Output goes to an injected IO so a test reads it as a String rather
     # than capturing a process's stdout.
+    #
+    # **`sim` and `routegen` require `bgp/sim` in the branch that needs
+    # it and not at the top of this file.** `bgp4r capture` is what
+    # routescope runs in its own container, once per lab, and loading an
+    # injector, a Speaker and the route generator to dissect a pcap would
+    # be work nothing asked for. It is also why this class still lives in
+    # `bgp/capture/` while dispatching to two other programs: the file is
+    # named after what it is mostly for, and moving it is a rename
+    # nothing needs.
     class CLI
 
-      SUBCOMMANDS = %w{capture version}
+      SUBCOMMANDS = %w{capture sim routegen version}
 
       # `docs/routescope-labs.md` section 4: routescope's capture argv is
       # hard coded to `IMAGE capture -i IFACE`, so it passes **no
@@ -55,9 +64,11 @@ module BGP
 Usage: bgp4r SUBCOMMAND [options]
 
   capture   dissect BGP messages off an interface or a pcap file
+  sim       run the route injector, with its HTTP API (also: bgp4r-sim)
+  routegen  send one generated range to a peer and exit
   version   print the bgp4r version
 
-Not yet implemented: sim, routegen, lab new. See docs/daemon.md.
+Not yet implemented: lab new. See docs/daemon.md.
       TEXT
 
       def initialize(out = $stdout, err = $stderr)
@@ -67,8 +78,10 @@ Not yet implemented: sim, routegen, lab new. See docs/daemon.md.
 
       def start(argv)
         case argv.first
-        when 'capture' then capture(argv[1..-1])
-        when 'version' then version
+        when 'capture'  then capture(argv[1..-1])
+        when 'sim'      then sim(argv[1..-1])
+        when 'routegen' then routegen(argv[1..-1])
+        when 'version'  then version
         when nil, '-h', '--help'
           @out.print USAGE
           0
@@ -76,6 +89,20 @@ Not yet implemented: sim, routegen, lab new. See docs/daemon.md.
           @err.print USAGE
           1
         end
+      end
+
+      # `bgp4r sim`, which `bgp4r-sim` is an alias for, and `bgp4r
+      # routegen`. Both are the same objects the executables run, so
+      # there is one implementation of each and the alias cannot drift
+      # from the subcommand.
+      def sim(argv)
+        require 'bgp/sim/server'
+        BGP::Sim::Server.new(@out, @err).start(argv)
+      end
+
+      def routegen(argv)
+        require 'bgp/sim/routegen'
+        BGP::Sim::Routegen.new(@out, @err).start(argv)
       end
 
       def version

@@ -141,6 +141,84 @@ class TestFault < Test::Unit::TestCase
     end
   end
 
+  # ---- Fault.update, the whole UPDATE --------------------------------
+
+  # **Two programs build this and that is why it is here.**
+  # lab/fault_matrix.rb sends every case to a router on a session of its
+  # own and `bgp4r-sim` injects one case on a session that is already
+  # up; two copies of "which attributes does a plain UPDATE need" is how
+  # two programs come to put different octets on the wire for one
+  # catalog name. The matrix had the only copy until #235 and now calls
+  # this. **The move was checked rather than assumed**: all 18 cases
+  # built byte for byte what the matrix's own method built, measured
+  # before the swap.
+  def test_names_are_the_catalogs_own
+    assert_equal Fault::CATALOG.collect(&:first), Fault.names
+  end
+
+  OPTS = { :my_as => 65_001, :next_hop => '10.0.0.1',
+           :prefixes => ['203.0.113.0/24'] }.freeze
+
+  # The two octet strings below are the library's own, computed and
+  # pasted: RFC 7606 carries no worked example of a whole UPDATE and
+  # CLAUDE.md records seventeen hand written expectations in these
+  # families that were wrong with the library right.
+  def test_one_case_is_the_attribute_plus_what_a_plain_update_needs
+    u = Fault.update(:med_length, OPTS)
+    # Everything after the 19 octet header's Length field, so the
+    # message length is not restated here: the Type, the two list
+    # lengths, the four attributes and the prefix.
+    assert_equal '020000001a8004050000000a004001010040' \
+                 '02040201fde94003040a00000118cb0071', u.to_shex[36..-1]
+    # The fault, then ORIGIN, AS_PATH and NEXT_HOP after it.
+    assert_equal [ATTR::MULTI_EXIT_DISC, ATTR::ORIGIN, ATTR::AS_PATH, ATTR::NEXT_HOP],
+                 u.path_attribute.attributes.collect(&:type)
+    assert_equal ['203.0.113.0/24'], u.nlri.to_ary
+  end
+
+  # Not added when the fault is that attribute, or the UPDATE would
+  # carry a good one beside the faulty one and the router would be
+  # answering a duplicate rather than the case.
+  def test_an_attribute_the_fault_is_about_is_not_added_beside_it
+    %i[origin_length origin_value origin_flags].each do |name|
+      types = Fault.update(name, OPTS).path_attribute.attributes.collect(&:type)
+      assert_equal 1, types.count(ATTR::ORIGIN), name.to_s
+    end
+    assert_equal 1, Fault.update(:next_hop_length, OPTS)
+                        .path_attribute.attributes.count { |a| a.type == ATTR::NEXT_HOP }
+    assert_equal 1, Fault.update(:as_path_segment, OPTS)
+                        .path_attribute.attributes.count { |a| a.type == ATTR::AS_PATH }
+  end
+
+  def test_every_catalog_case_builds_an_update_that_encodes
+    Fault.names.each do |name|
+      u = Fault.update(name, OPTS)
+      assert_instance_of Update, u, name.to_s
+      assert_operator u.to_shex.size, :>, 38, name.to_s
+    end
+  end
+
+  # Nothing validates, per Conventions: each of these is a shape
+  # somebody will want and none of them is refused.
+  def test_what_is_left_out_is_left_out
+    # No AS_PATH value, which is an empty AS_PATH and what an internal
+    # peer gets.
+    assert_equal 'empty', Fault.update(:med_length, :prefixes => ['10.0.0.0/8'])
+                               .path_attribute[:as_path].as_path
+    # No next hop at all, which is an UPDATE RFC 4271 section 4.3 does
+    # not allow.
+    assert_equal false, Fault.update(:med_length, :my_as => 1)
+                             .path_attribute.has?(Next_hop)
+    # No NLRI, which is how a case carrying its own inside MP_REACH_NLRI
+    # is sent on its own.
+    assert_nil Fault.update(:duplicate_mp_reach, :my_as => 1).nlri
+  end
+
+  def test_an_unknown_name_is_refused_and_names_the_catalog
+    e = assert_raise(ArgumentError) { Fault.update(:no_such_case) }
+    assert_match(/CATALOG/, e.message)
+  end
+
   # A fault put in an UPDATE with good attributes still parses in lenient
   # mode, with the fault in errors.
   def test_fault_inside_an_update

@@ -221,8 +221,14 @@ bgp/events.rb            the structured event stream: an Event carrying a kind a
                          documented and tested as answering a
                          Subscription, and an Array answers
                          `pop(:timeout => 5)` with a TypeError rather
-                         than an event. `Table#on_change` is still
-                         deliberately unwired. See "routescope labs"
+                         than an event. `bgp4r-sim` serves `GET
+                         /api/events?since=N` from the same stream, in
+                         `Event#to_h`'s shape, and registers two kinds of
+                         its own, `:route` and `:fault`, through
+                         `register_kind` rather than by editing KINDS,
+                         which is what that method is for.
+                         `Table#on_change` is still deliberately unwired.
+                         See "routescope labs"
 bgp/rib/                 routes and the decision process (RFC 4271 section 9); require 'bgp/rib'
                          peer_adapter.rb turns a Neighbor's UPDATEs into table operations,
                          peer_feed.rb applies them on one worker thread; rib.attach(neighbor)
@@ -327,6 +333,57 @@ bgp/daemon/              `bgp4rd` the daemon and `bgp4r-cli` its client;
                          and the wait. **Every method but `config.*`
                          answers now**: the candidate configuration is its
                          own piece of work and is not stubbed
+bgp/sim/                 `bgp4r-sim` the route injector, and `bgp4r
+                         routegen`; require 'bgp/sim', which bgp4r.rb
+                         does not, the same arrangement bgp/daemon.rb and
+                         bgp/rib.rb have. docs/daemon.md is the design
+                         and the guide, from its `bgp4r-sim, the
+                         injector` heading on
+                         injector.rb the ten actions of that document's
+                         action table, over a BGP::Daemon::Speaker's
+                         sessions. **Two rules are the product**: it
+                         starts silent, which falls out of a node file
+                         with no `announce` block, and it validates
+                         nothing, which is Conventions' first rule and
+                         is pinned by `test_nothing_validates`. What it
+                         refuses is a request it cannot carry out: an
+                         unknown body key, a fault name the catalog
+                         lacks, a prefix never announced, hex that is
+                         not octets, no session. It holds **no Loc-RIB**
+                         and refuses the four node file keys that would
+                         build one, naming `bgp4rd`
+                         sent.rb the send side of
+                         `BGP::Daemon::Recorder`, answering the same
+                         five keys for what left as that answers for
+                         what arrived. `finished_at` is nil while a feed
+                         runs, which is what lets a console show a feed
+                         rather than a spinner. A feed is **counted and
+                         not listed**: there is no Adj-RIB-Out here, so
+                         a withdrawal of a generated range regenerates
+                         the prefixes rather than reading a list back
+                         views.rb the five reads, as a **subclass** of
+                         bgp/daemon/views.rb, so `status` and `peers`
+                         are the daemon's own shape and one driver reads
+                         both programs. `summary.rib` is 0, which is
+                         what an injector honestly has
+                         http.rb HTTP/1.1 over TCPServer, because
+                         `webrick` is not available and the library
+                         keeps its one runtime gem. **The POST header
+                         name is matched case insensitively**: measured
+                         on 2026-11-02, `Net::HTTP` capitalises per
+                         word, so the `X-BGP4R` routescope's driver
+                         writes arrives as `X-Bgp4r`. A refusal is 400
+                         and no session is 409
+                         server.rb `bgp4r-sim` itself, which is
+                         bgp/daemon/server.rb's shape with HTTP in place
+                         of a socket and a positional file
+                         routegen.rb `bgp4r routegen`: one session, a
+                         generated range, a report, exit. It goes
+                         through `Injector#act`, so it is the third way
+                         into one implementation rather than a second
+                         one, and it reads a **node file**;
+                         `examples/routegen` keeps its own format and
+                         its own script
 bgp/capture/             reading BGP off a wire; require 'bgp/capture', which
                          bgp4r.rb does not, the same arrangement bgp/rib.rb has
                          pcap.rb reads the classic pcap format off an IO a
@@ -357,13 +414,21 @@ bgp/capture/             reading BGP off a wire; require 'bgp/capture', which
                          checksum and the file says why. docs/daemon.md's
                          Capture section is the guide
 bgp/misc/                extras: route_generator.rb (many prefixes packed in UPDATEs), live_feed.rb (a client for an old public BGP feed)
-exe/bgp4r                the umbrella command, with `capture` and `version`
+exe/bgp4r                the umbrella command, with `capture`, `sim`,
+                         `routegen` and `version`. `sim` and `routegen`
+                         require bgp/sim in their own branch, so a
+                         capture container loads no injector
 exe/bgp4rd exe/bgp4r-cli the daemon and its client, over bgp/daemon/
-                         Three of docs/daemon.md's four commands, all three
-                         declared in the gemspec. `bgp4r-sim` is
-                         **deliberately not stubbed** and not declared,
-                         because an executable in a released gem that
-                         answers nothing is worse than one that is not there
+exe/bgp4r-sim            the injector, over bgp/sim/, an alias for
+                         `bgp4r sim` so a container command reads
+                         plainly. **All four of docs/daemon.md's
+                         commands exist now and all four are declared in
+                         the gemspec**; `lab new` is the only
+                         subcommand still named in the usage as not
+                         implemented. The rule that got them there one
+                         at a time stands: an executable in a released
+                         gem that answers nothing is worse than one that
+                         is not there, so each arrived with its program
 docs/                    protocol-testing.md: using bgp4r to test a router
                          flow-spec.md: RFC 8955 and RFC 8956 on the wire, as much
                          as is needed to write the encoding and decoding. Read it
@@ -462,20 +527,27 @@ docs/                    protocol-testing.md: using bgp4r to test a router
                          opens with, so every number a console would show
                          is reachable with one terminal command. Read it
                          before adding an executable, a socket or HTTP
-                         method, a config key or a state dump. **Three of
-                         its four commands are built now** and its
-                         Capture section and its `bgp4rd` sections are no
-                         longer designs: `bgp4r capture` and `bgp4r
-                         version` in exe/bgp4r over bgp/capture/, and
+                         method, a config key or a state dump. **All four
+                         of its commands are built now** and the only
+                         part of it still a design is the candidate
+                         configuration. Its Capture section, its `bgp4rd`
+                         sections and the whole of its `bgp4r-sim` half
+                         describe what runs: `bgp4r capture` and `bgp4r
+                         version` in exe/bgp4r over bgp/capture/,
                          `bgp4rd` and `bgp4r-cli` in exe/ over
-                         bgp/daemon/, with **every control API method but
-                         `config.*`**. What is still a design is the
-                         candidate configuration and the whole of
-                         `bgp4r-sim`. It carries the request envelope
-                         with the routescope commit it was read at, the
-                         page envelope and the event stream's line
-                         shapes, none of which it had, and a section per
-                         new method saying what it answers and why
+                         bgp/daemon/ with **every control API method but
+                         `config.*`**, and `bgp4r-sim` in exe/ over
+                         bgp/sim/. It carries the request envelope with
+                         the routescope commit it was read at, the page
+                         envelope and the event stream's line shapes,
+                         none of which it had, a section per control
+                         method saying what it answers and why, and two
+                         corrections the injector's own building made:
+                         `/api/events` answers `bgp/events.rb`'s seven
+                         field shape rather than ospfv2's thin one, and
+                         `bgp4r routegen` reads a node file rather than
+                         `examples/routegen.yml`, which is the old
+                         script's own format
                          routescope-labs.md: how those two programs
                          become nodes the routescope console can drive,
                          and the eight labs worth building once they are.
@@ -506,6 +578,12 @@ test/unit/               unit tests, mirroring bgp/
                          not named *_test.rb, so run_unit.rb does not load it
                          as a test, the way to_hash_catalog.rb is not
 test/functional/         tests that open real TCP sessions
+                         sim_test.rb drives `bgp4r-sim` over its real
+                         HTTP API with `Net::HTTP`, which is the client
+                         routescope's driver inlines, against a bgp4r
+                         peer on loopback. It is the only test that can
+                         say an HTTP request reaching the process puts
+                         the octets another speaker reads
 test/helpers/            a small test BGP server
 lab/                     speakers in containers: lab/speaker.rb and lab/topologies/ (see lab/README.md)
                          lab/speaker.rb is the **command line** now and nothing
@@ -840,6 +918,36 @@ removed the keepalive line **hung** the file rather than failing it.
 Measured. A hang names nothing, which is the opposite of what the
 check-the-proof rule in Rules for agents wants.
 
+`bgp4r-sim` over its real HTTP API and a real session, and the only test
+that can say an HTTP request reaching the process puts the octets
+another speaker reads. It carries the fault case that crosses a socket
+and is reported by `validation.rb` on the other side, the replayed
+capture that arrives octet for octet, the session that stops and stays
+stopped, and the measurement the whole POST path rests on, which is that
+`Net::HTTP` sends `X-Bgp4r` for the `X-BGP4R` a driver writes. No
+privilege, no router, no Docker. 5 seconds:
+```
+ruby -I. test/functional/sim_test.rb
+```
+
+The injector and routegen by hand. It starts silent, so the first
+command answers an empty table and the second is what puts something on
+the wire:
+```
+ruby -I. exe/bgp4r-sim examples/sim.yml --api 127.0.0.1:8080 -l - &
+curl 127.0.0.1:8080/api/status
+curl 127.0.0.1:8080/api/sent
+curl -X POST -H 'X-BGP4R: routescope' \
+     -d '{"prefixes":["10.1.0.0/24"],"med":100}' \
+     127.0.0.1:8080/api/announce
+curl -X POST -H 'X-BGP4R: routescope' \
+     -d '{"case":"origin_value","prefixes":["10.3.1.0/24"]}' \
+     127.0.0.1:8080/api/fault
+ruby -I. exe/bgp4r routegen --peer 10.0.0.2 --peer-as 65002 --count 200000 --per-update 127
+```
+`examples/sim.yml` carries an `announce` block, which is the one waiver
+of the start-silent rule: take it out for a node a scenario drives.
+
 The daemon and its client by hand, which is how the shapes in
 `docs/daemon.md` were measured. `--socket` and `$BGP4R_SOCKET` both work,
 and with neither it is `/run/bgp4r/bgp4rd.sock` or a path under
@@ -892,23 +1000,38 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. The `lab` job is a matrix, one job per group in `test/lab_groups.rb`, so its cost is the slowest group and not the total: it was 12m42s as one serial suite. Each job installs only what its group needs, which is why the matrix entry carries a `gobgp`, `frr`, `docker` or `netns` flag. The `gobgp` groups pin 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-11-02: 2826 tests, 30657 assertions, all passing. Line coverage of `bgp/` from the unit suite: 96.1%.
+Baseline on 2026-11-02: 2974 tests, 31164 assertions, all passing. Line coverage of `bgp/` from the unit suite: 95.8%.
 
-**That coverage figure fell from 98.5% and the reason is `bgp/daemon/`,
-not a gap anywhere else.** Measured the same run: with `bgp/daemon/`
-excluded it is still **98.5%** over 12388 lines, and `bgp/daemon/` is at
-**66.1%** from the unit suite alone, because most of what it does needs
-a socket or a session: `api.rb` is 44% there, and the stream, the accept
-loop and the signal wait are the bulk of what is missing. Measured over
-the eight unit files plus `test/functional/daemon_test.rb`,
-`speaker_test.rb` and `speaker_router_test.rb`, `bgp/daemon/` is
-**89.6%**, with `log_ring.rb` at 100%, `control.rb` at 99%, `views.rb`
-at 98%, `cli.rb` at 98%, `api.rb` at 94%, `client.rb` at 89%,
-`server.rb` at 83% and `speaker.rb` at 82%. What is left uncovered is
-the session loop that only a Compose topology reaches, the accept loop's
-out-of-descriptors branch, and the signal wait. So read the one-line
-figure as what it says, which is the unit suite, and do not chase it by
-unit testing a socket.
+**That coverage figure is 98.5% for the library and the rest is the two
+programs, not a gap anywhere else.** Measured the same run: with
+`bgp/sim/` and `bgp/daemon/` excluded it is **98.5%** over 12418 lines,
+which is the same figure the daemon's arrival was measured against, so
+the core has not moved. From the unit suite alone `bgp/sim/` is **85.9%**
+and `bgp/daemon/` is **71.2%**, because most of what both do needs a
+socket or a session: `api.rb` is 44% there, and the event stream, the
+accept loop and the signal wait are the bulk of what is missing.
+
+Measured over the six `test/unit/sim/` files plus
+`test/functional/sim_test.rb`, `bgp/sim/` is **95.6%**, with `sent.rb`
+and `views.rb` at 100%, `injector.rb` at 99%, `routegen.rb` and
+`http.rb` at 92% and `server.rb` at 88%. `bgp/daemon/` is **88.1%**
+measured the same way, over its eight unit files plus
+`test/functional/daemon_test.rb`, `speaker_test.rb` and
+`speaker_router_test.rb`, with `log_ring.rb` at 100%, `control.rb` at
+99%, `views.rb` at 98%, `cli.rb` at 98%, `api.rb` at 94%, `client.rb` at
+89%, `server.rb` at 83% and `speaker.rb` at 78%. What is left uncovered
+in both is the session loop that only a Compose topology reaches, the
+accept loop's out-of-descriptors branch, the signal wait, and the
+handful of error paths a client has to misbehave to reach.
+
+**`speaker.rb` fell from 82% to 78% and the reason is that it is shared.**
+`bgp4r-sim` added `each_update`, `on_established` and `session_established`
+to it, which only the injector's tests reach, so the daemon's own file
+set now covers a smaller fraction of a larger file. Measured over both
+programs' tests together it is 88%.
+
+So read the one-line figure as what it says, which is the unit suite,
+and do not chase it by unit testing a socket.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -6064,7 +6187,7 @@ Decisions taken before this starts, so they are not re-litigated:
   in a convenience form for test code, each with a reason recorded, and
   clearing the list to empty it is not worth a phase.
 
-### routescope labs. Items 1 to 6 of section 6 are Done, and so is every control API method but `config.*`; the rest is a plan
+### routescope labs. Items 1 to 6 and 8 of section 6 are Done, and so is every control API method but `config.*`; items 7 and 9 and the candidate configuration are left, then routescope's own column
 
 **Done so far**: items 1 and 5, the `bgp4r` umbrella executable and
 `bgp4r capture`, which landed together because the capture contract
@@ -6086,9 +6209,46 @@ request envelope, nine `show.` methods, the event stream, and the four
 `peer.` and two `route.` methods that change something. So the first
 thing a routescope driver needs is there: it can ask a question rather
 than read a snapshot bgp4r chose to write, which is what section 5 says
-a driver should do and what `Frr` and `Bird` both do, and item 8's
-actions have a precedent to copy on the injector side. Five things the
-read side settled, each in `docs/daemon.md` now:
+a driver should do and what `Frr` and `Bird` both do.
+
+**And item 8 is Done, which is `bgp4r-sim`**, in `bgp/sim/` over
+`exe/bgp4r-sim`: the ten actions, the five reads, the HTTP API on the
+loopback and routegen folded in three ways. Section 2 of
+`docs/routescope-labs.md` calls the injector the thing that justifies
+the whole integration, and its own section 9.6 says why: `fault` and
+`replay` are the point, and without them it is a worse FRR. So the two
+node kinds both have their programs now and **what is left of that
+document's own items is 7 and 9**: the injected logger, and the
+containerlab topologies with the privilege story, which needs a Docker
+daemon. The candidate configuration is left too, and it is not one of
+the nine. Everything else in its phases 1 to 5 is routescope's own
+column: the kinds, the two drivers, the `bgp:` step and the four
+conditions, which its section 9.5 costs out.
+
+Nine things the building of the two settled, each in `docs/daemon.md`
+now:
+
+* **The POST header name is matched case insensitively**, because
+  `Net::HTTP` capitalises a header name per word: the `X-BGP4R`
+  `Drivers::Sim` writes arrives as `X-Bgp4r`. Measured on 2026-11-02 by
+  reading what it put on a socket. A case sensitive match refuses every
+  POST routescope makes, with a 403 and nothing anywhere saying why.
+* **`/api/events` answers `bgp/events.rb`'s own seven field shape**,
+  with a full ISO 8601 time, and the design said "Sim's own shape".
+  ospfv2's simulator answers `{seq, time, kind, text}` with a clock
+  time, so `Drivers::Sim`'s event script invents a level, an interface
+  and an empty data hash and rebuilds a date from a time of day. There
+  is nothing to invent here, and a driver's mapping is one rename.
+* **`summary.rib` is 0 for an injector** and `announced` is beside it.
+  routescope's state contract has a `rib` key and an injector holds no
+  Loc-RIB: zero routes in a table it does not have is the honest
+  number, where the announced count would call a list of what it sent a
+  RIB.
+* **A refusal is a 4xx and a session that is not there is a 409.** The
+  driver's whole reading of an action is `exit(code < 300 ? 0 : 1)`, so
+  the status code is the entire channel; both are 4xx, so a scenario
+  fails either way, and a person reading the body can tell the two
+  apart.
 
 * **The request envelope is routescope's own client line**, read at
   `7eabde1`, and the document did not carry it. `{"id":1,"method":...,
@@ -6240,9 +6400,10 @@ The short version, so the direction is visible here:
   the conformance image already carries GoBGP's client, so a lab with
   both on PATH would be ambiguous. Four commands: `bgp4rd`,
   `bgp4r-cli`, `bgp4r` as the umbrella (`sim`, `routegen`, `capture`,
-  `lab new`, `version`) and `bgp4r-sim` as an alias. **Three exist and
-  `bgp4r-sim` does not and is not stubbed**, because an executable in a
-  released gem that answers nothing is worse than one that is not
+  `lab new`, `version`) and `bgp4r-sim` as an alias. **All four exist
+  now and all four are declared**; `lab new` is the one subcommand
+  still named in the usage as not implemented, because an executable in
+  a released gem that answers nothing is worse than one that is not
   there. The gemspec declares `bgp4r`, `bgp4rd` and `bgp4r-cli`, and
   the usage names what is left as not yet implemented.
 * **The largest item was that the lab speaker becomes a router. Done**,
@@ -6431,22 +6592,44 @@ The short version, so the direction is visible here:
   one receiver reading the same octets, an action after the session is
   up, or a degraded link while traffic flows. The worked example is
   `lab/topologies/add-path`, and what it cost is recorded there.
-* **The injector's action body keys are the node file's own keys**, so
-  its vocabulary is bgp4r's configuration vocabulary at runtime rather
+* **The injector's action body keys are the node file's own keys. Done**,
+  so its vocabulary is bgp4r's configuration vocabulary at runtime rather
   than a second language, and its shape is `Drivers::Sim`'s, an HTTP
-  API reached by `docker exec`. Two decisions carry the most weight: an
-  injector **starts silent**, with no `announce:` block, because a
-  baseline the config created is one no assertion can rest on; and if
-  it ships without `fault` and `replay` it is a worse FRR, since those
-  are the two things no real router can be told to do.
+  API reached by `docker exec`. Two decisions carry the most weight and
+  both are built and tested: an injector **starts silent**, with no
+  `announce:` block, because a baseline the config created is one no
+  assertion can rest on; and `fault` and `replay` are there, since
+  without them it is a worse FRR and those two are what no real router
+  can be told to do.
+  * **Three things that keeping those two rules cost, each a wrong
+    answer rather than a missing one.** `session.stop` needs an
+    administrative flag, since `Neighbor#stop` alone lets the active
+    side dial again two seconds later. What an action announced has to
+    go again when a session comes back, which a config block gets for
+    free from `Peer#announce`, or a `session.flap` loses it for good.
+    And a program that sends and then stops has to drain first, because
+    `send_message` queues and `BGP::IO::Output#exit` closes the queue:
+    `bgp4r routegen` lost the last UPDATE of every range until
+    `Injector#drain` was there, and said it had sent them.
 * **routegen is folded into the injector three ways and is not a
-  program of its own**: an action with a `generate:` block, a `bgp4r
-  routegen` subcommand for a standalone run, and a config block for a
-  node that starts loaded. Two requirements come with it, both already
-  true of `bgp/misc/route_generator.rb`: generated routes get **no
+  program of its own. Done**: an action with a `generate:` block, a
+  `bgp4r routegen` subcommand for a standalone run, and a config block
+  for a node that starts loaded, with `Injector#act` under all three.
+  Two requirements come with it, both already true of
+  `bgp/misc/route_generator.rb`: generated routes get **no
   Adj-RIB-Out**, because recording a million prefixes per peer is the
   memory the generator exists to avoid, and the packing stays
   arithmetic rather than measurement.
+  * **The measurement that is left is ours and not the caller's**, which
+    is the distinction to keep: `RouteGenerator#check_size` measures the
+    first batch of a feed so a slip in our arithmetic raises rather than
+    reaching the wire, and an explicit `prefixes` list is sent whatever
+    size it comes to, because refusing an oversized UPDATE a caller
+    asked for would be validating on send.
+  * `bgp4r routegen` reads a **node file** and `docs/daemon.md` named
+    `examples/routegen.yml`, which is the old script's own format with
+    its own loader. `examples/sim.yml` is the node file version;
+    `examples/routegen` and its YAML keep working.
 * **A capture is harder here than in ospfv2 and the reason is TCP.**
   OSPF is one packet per datagram, so its reader dissects a frame and
   is done. BGP is a byte stream, so the dissector has to reassemble it
@@ -6454,12 +6637,13 @@ The short version, so the direction is visible here:
   spanning two segments and two messages sharing one.
   `BGP::Message.factory` decodes once the framing is right, so the
   framing is the work.
-* **The injector is phase 5 and not phase 1**, which section 10 says
+* **The injector was phase 5 and not phase 1**, which section 10 says
   plainly because section 2 calls it the thing that justifies the work.
-  It needs the structured event stream or its pane shows nothing, the
+  It needed the structured event stream or its pane shows nothing, the
   action API, which is the largest piece of new bgp4r surface in the
   document, and the router kind, because every scenario asserts against
-  something that holds a RIB.
+  something that holds a RIB. All three landed first, in that order, and
+  the injector last.
 
 The document's section 12 says what it does not assert and when each
 claim becomes assertable, because every fact in it about those two
@@ -6571,6 +6755,15 @@ Found while fixing other bugs, not fixed yet. Verified against master on
 Smaller things:
 
 * **A session this library closes sends no NOTIFICATION, so `peer.clear` and `peer.stop` cannot either.** A router answers `clear bgp NEIGHBOR` with Cease and RFC 4486 section 4's Administrative Reset, subcode 4, or Administrative Shutdown, subcode 2. `Neighbor#stop` is `@out.close` and then `@socket.close` on the next line, so a NOTIFICATION queued just before it is one the writer thread may never get on the wire: `BGP::IO::Output`'s thread has to be scheduled, take it off the queue and write it before the socket goes, and nothing waits for that. Measured by reading `bgp/io.rb` rather than by trying it, which is why the two control methods close the connection and **report no NOTIFICATION at all** rather than claiming one they cannot verify. The honest fix is for `stop` to drain the output queue before closing the socket, which is a change to `bgp/io.rb` and to every caller's timing, so it is its own piece of work. There is no bug today: `bgp/daemon/speaker.rb` says in `Peer#stop` what is missing and why, and nothing in the tree claims a Cease was sent.
+* **A received UPDATE carrying a zero-length ORIGIN kills a bgp4r receiver's event dispatch thread**, and the trigger is a log line that is built whatever the log level is. `Neighbor#dispatch_event` does `log_debug "Recv #{msg}\n"`, so `Update#to_s` runs before the level is looked at; `Origin.new` accepts a zero-length value and `Origin#encode` then raises `TypeError: no implicit conversion of nil into Integer` on `pack`. `dispatch_event` rescues only `SessionClosed`, so the thread dies and the session stops handling events, silently. Measured on 2026-11-02:
+  `ruby -I. -e 'require "bgp4r"; u = BGP::Fault.update(:origin_length, :my_as => 1, :next_hop => "10.0.0.1", :prefixes => ["10.0.0.0/8"]); o = u.encode(BGP::Update::Info.new(true, :lenient)); p BGP::Update.new(o.is_packed, BGP::Update::Info.new(true, :lenient)).to_s' `
+  **1 of the 18 catalog cases does it**, measured case by case: the other 17 render and each reports exactly one finding, which is why `test/functional/sim_test.rb` injects `origin_value` and says so. No existing test met it, because the matrix sends the catalog to GoBGP and FRR and never to a bgp4r receiver. Two faults in one and the fix is a decision rather than a patch: the interpolation should be behind the level check, which is `Log`'s business and every `log_debug` in the file; and `Origin#to_s` should not raise on a value its own constructor took, which is the keep-what-you-cannot-read rule one layer further in than `Attr::Gap` reaches.
+* **`BGP::IO::Output` transcodes a String message when `Encoding.default_internal` is set**, so `send_message` with octets is not the pass-through Conventions says it is. The writer does `obj.respond_to?(:encode) ? obj.encode : obj`, and a String answers `encode`: with no `default_internal`, which is the default, `String#encode` returns the same bytes and everything is fine, and under `ruby -E UTF-8:UTF-8` it transcodes. Measured on 2026-11-02:
+  `ruby -E UTF-8:UTF-8 -e 'p [255,0,1].pack("C*").encode.unpack1("H*")'` prints `efbfbd0001`, so `ff` became the three octets of the replacement character. **It is every send, not only a replayed capture**: `send_update` enqueues `u.encode(@session_info)`, which is a String too. Nothing is wrong today and nothing in CI sets the flag; the fix is `obj.is_a?(String) ? obj : obj.encode` in `bgp/io.rb`, which is one line and its own topic, since it is on every session's write path.
+* **`Speaker#each_update` drops a `path_id` on a `generate` block in silence.** An announce block documents both keys and `each_update` hands `BGP::RouteGenerator` only `start`, `count`, `per_update` and the path attributes, where the generator does take a `path_id:`. So a lab topology writing `announce: [{generate: {...}, path_id: 7}]` sends a range with no Path Identifier and nothing says so. `bgp4r-sim` meets it from the API side and **refuses the combination rather than passing it on**, naming the gap, which is honest but is not the fix: the fix is to thread the key through, which changes what an existing node file sends and so wants its own pull request and a look at every topology that has one.
+* **An explicit `as_path` on an announce gets our own AS prepended on an external session, so the injector cannot send an AS_PATH that does not begin with our AS.** `Speaker#path_attribute` is `path = [@my_as] + path if ebgp`, which is right for a node file saying "this route reached us from 65020" and is the wrong default for a program whose whole job is sending what it was asked for. Measured on 2026-11-02 between a `bgp4r-sim` in AS 65010 and a `bgp4rd` in AS 65000: `POST /api/announce` with `"as_path":[65010,65020]` arrives at the router as `65010 65010 65020`. An AS_PATH whose leftmost AS is not the sender's is a classic eBGP receive check and there is no way to ask for one through `announce`. **`replay` is the escape hatch** and is the honest one, since hex goes out untouched. Not fixed because changing the prepend changes what every existing node file sends, which is the `path_id` entry above exactly; the other shape, a key that means "take my as_path literally", is a new option on a block two programs share. **`GET /api/sent` reports the requested path and not the sent one** for the same reason, `65010 65020` where the wire carries the prepend, so a scenario asserting against the injector and one asserting against the router disagree by one AS.
+* **`test/unit/neighbor/neighbor_test.rb`'s `test_start_stop_start_again` times out in the Docker 3.3 job and nothing here explains why.** The 6 second `Timeout::timeout` around it is the tightest in the suite and it covers two whole loopback sessions, so a slow runner is the obvious reading. What is measured: it failed twice on `docker ruby 3.3` while `docker ruby 3.4` and `docker ruby 4.0` passed the same commit both times, and 8 runs of the single test locally passed. **Do not write down a mechanism for it without one**, which is the trap `docs/flow-spec.md` records as a right answer with an invented reason: the first guess here was that a test file leaving threads behind was stealing time, and that does not hold up, because the threads in question were blocked in `connect` and a blocked connect costs no CPU. The threads were a real defect and are fixed; this is still open.
+* **A test must stop what it starts, and the way to tell is to count `Thread.list` at exit.** `test/unit/sim/server_test.rb` started Servers through a helper that dropped them on the floor, so the unit suite ran to the end with 4 of its threads still dialling: measured on 2026-11-02 by registering an `at_exit` that prints `Thread.list` grouped by `Thread.current['name']`, with and without `test/unit/sim/` in the tree, which gave 5 unnamed threads against 1. It is 1 again now. The library's own threads are named, which is what makes the count readable, so an unnamed one in that list is a test's.
 * **`Log.create` reads as "use this logger" and silently keeps the one that is already there**, which is a trap rather than a wrong answer today. It is `@@logger ||= new(s)` in `bgp/common.rb`, so a second caller's IO is dropped and every line keeps going where the first caller sent it. `Log.set_filename` is the forcing form. Measured on 2026-11-02:
   `ruby -I. -e 'require "bgp4r"; f = File.open("/tmp/l1.log", "w"); Log.create(STDERR); Log.create(f); Log.info("to the file?"); f.flush; p File.size("/tmp/l1.log")'`
   prints `0`. Nothing is wrong now, because the two callers in the tree are `Speaker#setup_log`, which runs once in a fresh lab process, and `Server#setup_log`, which uses `set_filename` for exactly this reason and has a test that `--log FILE` really wrote there. Not fixed because renaming or changing `create` touches every caller of a decade-old class and is its own decision: the smallest honest fix is a comment on `create` saying it does not replace, which is a one line change nobody has made.
@@ -6702,7 +6895,7 @@ Lab and conformance:
 * **`to_hash_round_trip_test.rb` cannot read a test file that is not pure ASCII.** `test_every_working_round_trip_is_asserted_in_a_class_test_file` reads every test file body and matches regexps against it, and a single non-ASCII character in any of them makes it error with `ArgumentError: invalid byte sequence in US-ASCII`, pointing at its own line 190 and naming neither the file nor the character. Found on 2026-10-31 by putting one arrow in a comment in a new test file: that file passed on its own and the suite errored in a test it has nothing to do with. Every test file is ASCII today, so nothing is wrong now; what is wrong is the diagnosis the next person gets. The fix is an encoding on the read or a `scrub`, and it is one line in a file this change does not otherwise touch.
   * **The same trap has a second home and that one bit**, which is the reason to believe it will bite a third time. `test/unit/rib/view_test.rb` reads `docs/daemon.md` and `docs/routescope-labs.md` the same way, and one em dash written into `docs/daemon.md` made three `assert_match` calls raise the same `invalid byte sequence in US-ASCII`, from a test with nothing to do with the character and naming neither the file nor the byte. Fixed there, in `read_doc`, which passes `:encoding => 'UTF-8'`. So the rule is wider than "a test file is ASCII": **any test that reads a file as text and matches a regexp against it has to name the encoding**, because the default external one is the environment's and the file is somebody's prose. `to_hash_round_trip_test.rb` is still the unfixed one.
 * **`bgp4r capture` has three gaps, each a decision rather than a patch, and each said in the file it is in.** The live path, `tcpdump` into a pipe, is the only code in `bgp/capture/` no test runs: tcpdump is not installed in this sandbox and spawning it in a unit test wants a privileged interface, so the file path is exercised in full and the nine lines of the spawn and the two that kill the child are not. The Dockerfile's **`capture` stage has not been built**, for want of a Docker daemon, and it is what makes routescope's hard coded `IMAGE capture -i IFACE` reach anything, so build it before trusting it. And **reordered segments are not handled**: `bgp/capture/stream.rb` reads each direction in arrival order, trims a retransmission by sequence number and does nothing about a capture whose segments crossed, which would frame garbage from that point with nothing saying so. Reordering means held segments, timers and a reassembly queue, which is a TCP implementation and not a dissector; the file says so rather than leaving it to be found out.
-* Lowest coverage (unit suite), measured on 2026-11-02: `daemon/api.rb` 44%, `daemon/speaker.rb` 52%, `daemon/server.rb` 57%, `daemon/client.rb` 64%, `bgp/capture/cli.rb` 87% (the live tcpdump path, above), `messages/update.rb` 92%, `neighbor/neighbor.rb` 92%, `neighbor/add_path_cap.rb` 93%, `path_attributes/mp_unreach.rb` 93%, `path_attributes/ipv6_extended_communities.rb` 93%, `optional_parameters/graceful_restart.rb` 93%, `path_attributes/mp_reach.rb` 94%. **The four `daemon/` rows are not a gap and must not be chased by unit testing a socket**: the note under the baseline has the same files at 89.6% once `test/functional/daemon_test.rb` and the two speaker lab tests are counted, and `api.rb` is the lowest of them in the unit suite precisely because the event stream and the accept loop are the two things a unit test cannot reach.
+* Lowest coverage (unit suite), measured 2026-11-02: `daemon/api.rb` 44%, `daemon/server.rb` 57%, `daemon/client.rb` 64%, `sim/http.rb` 66%, `daemon/speaker.rb` 66%, `sim/routegen.rb` 67%, `sim/server.rb` 88%, `bgp/capture/cli.rb` 88% (the live tcpdump path, above), `neighbor/neighbor.rb` 92%, `messages/update.rb` 92%, `neighbor/add_path_cap.rb` 93%, `path_attributes/mp_unreach.rb` 93%, `path_attributes/ipv6_extended_communities.rb` 93%, `optional_parameters/graceful_restart.rb` 93%, `path_attributes/mp_reach.rb` 93%. **The `daemon/` and `sim/` rows are not a gap and must not be chased by unit testing a socket**: the note under the baseline has `bgp/daemon/` at 88.1% and `bgp/sim/` at 95.6% once each one's functional test is counted, and `api.rb` is the lowest of them in the unit suite precisely because the event stream and the accept loop are the two things a unit test cannot reach.
 
 ## Attribute work left
 

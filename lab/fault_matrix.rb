@@ -156,15 +156,18 @@ module BGP
       installed == wanted ? :agrees : :differs
     end
 
+    # The faulty UPDATE for one case: the catalog's attribute plus the
+    # attributes a plain UPDATE needs, unless the fault is one of them.
+    #
+    # **That arithmetic lives in `Fault.update` now and not here**,
+    # because `bgp4r-sim` injects the same cases on a long-lived session
+    # and two copies of it is how two programs come to put different
+    # octets on the wire for one catalog name. The move was checked
+    # rather than assumed: all 18 cases build byte for byte what this
+    # method built before it.
     def update_for(name)
-      built = Fault.build(name)
-      pa = built.is_a?(Path_attribute) ? built : Path_attribute.new(built)
-      # The attributes a plain UPDATE needs, unless the fault is that one.
-      have = pa.attributes.collect { |a| a.type }
-      pa.append Origin.new(0)                    unless have.include?(ATTR::ORIGIN)
-      pa.append As_path.new(@opts[:my_as])       unless have.include?(ATTR::AS_PATH)
-      pa.append Next_hop.new(@opts[:next_hop])   unless have.include?(ATTR::NEXT_HOP)
-      Update.new(pa, Nlri.new(PREFIX))
+      Fault.update(name, :my_as => @opts[:my_as], :next_hop => @opts[:next_hop],
+                         :prefixes => [PREFIX])
     end
 
     # A session of its own for each fault, because a reset leaves

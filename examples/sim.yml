@@ -1,0 +1,44 @@
+# A node file for bgp4r-sim, the route injector, and for
+# `bgp4r routegen`. docs/daemon.md is the design and lab/README.md
+# documents the keys it shares with a lab speaker's node file.
+#
+#   ruby -I. exe/bgp4r-sim examples/sim.yml
+#   ruby -I. exe/bgp4r sim examples/sim.yml --api 127.0.0.1:8080
+#   ruby -I. exe/bgp4r routegen examples/sim.yml
+#
+# **Two programs read this one file and they treat the announce block
+# below differently.** `bgp4r-sim` sends it when a session comes up,
+# which is the one waiver of the start-silent rule and is what a lab
+# that wants a feed at start-up asks for; `bgp4r routegen` sends it once
+# and exits. Take the block out and bgp4r-sim is silent until the HTTP
+# API asks, which is what a scenario wants:
+#
+#   curl 127.0.0.1:8080/api/status
+#   curl -X POST -H 'X-BGP4R: routescope' \
+#        -d '{"prefixes":["10.1.0.0/24"],"med":100}' \
+#        127.0.0.1:8080/api/announce
+#
+# This file is **not** examples/routegen.yml, which is the old
+# standalone script's own format and keeps working with it.
+
+router_id: 10.255.10.1
+as: 65010
+api: 127.0.0.1:8080        # where the HTTP API listens; the loopback is the default
+log_level: info
+
+neighbors:
+  - address: 10.0.10.2
+    as: 65000
+    connect: true          # the sim dials, so the lab comes up either way
+    hold_time: 30
+    capabilities: [as4_byte]
+
+# An injector starts silent, on purpose: a baseline the configuration
+# created is a baseline no assertion can rest on. This block is here
+# because `bgp4r routegen` needs something to send; delete it for a
+# scenario that announces on command.
+announce:
+  - generate: { start: 11.0.0.0/28, count: 10000, per_update: 127 }
+    med: 100
+    communities: ['65010:1']
+    as_path: [90, 80]
