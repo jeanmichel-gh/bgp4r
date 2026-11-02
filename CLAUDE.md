@@ -193,6 +193,20 @@ bgp/nlris/               prefix encodings (inet, labeled, VPN, RD, mapped IPv4)
 bgp/optional_parameters/ OPEN capabilities (4-byte AS, add-path, graceful restart...)
 bgp/orfs/                outbound route filtering
 bgp/neighbor/            the BGP finite state machine and TCP session (neighbor.rb)
+bgp/events.rb            the structured event stream: an Event carrying a kind a
+                         program switches on, a data Hash behind it and a message
+                         for a person only, and an Events that numbers them, keeps
+                         a bounded backlog, replays from a number with a synthetic
+                         overflow when that number has rolled off, and serves
+                         subscribers and listeners. Neighbor publishes its state
+                         changes and its NOTIFICATIONs to one, its own by default
+                         and a shared one when a program sets it, which is what
+                         makes several sessions one ordered timeline. Nothing in
+                         the library reads these events; they are the layer under
+                         `events.subscribe` in docs/daemon.md and
+                         `GET /api/events?since=N` in the injector's API, and
+                         neither of those programs exists yet. See
+                         "routescope labs"
 bgp/rib/                 routes and the decision process (RFC 4271 section 9); require 'bgp/rib'
                          peer_adapter.rb turns a Neighbor's UPDATEs into table operations,
                          peer_feed.rb applies them on one worker thread; rib.attach(neighbor)
@@ -725,7 +739,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. The `lab` job is a matrix, one job per group in `test/lab_groups.rb`, so its cost is the slowest group and not the total: it was 12m42s as one serial suite. Each job installs only what its group needs, which is why the matrix entry carries a `gobgp`, `frr`, `docker` or `netns` flag. The `gobgp` groups pin 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-11-02: 2602 tests, 29894 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.5%.
+Baseline on 2026-11-02: 2665 tests, 30099 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.5%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -5881,19 +5895,20 @@ Decisions taken before this starts, so they are not re-litigated:
   in a convenience form for test code, each with a reason recorded, and
   clearing the list to empty it is not worth a phase.
 
-### routescope labs. Items 1 to 5 of section 6 are Done; the rest is a plan
+### routescope labs. Items 1 to 6 of section 6 are Done; the rest is a plan
 
 **Done so far**: items 1 and 5, the `bgp4r` umbrella executable and
 `bgp4r capture`, which landed together because the capture contract
-decides the executable shape; item 2, the lab speaker as a router; and
-items 3 and 4, the view layer and the RIB JSON on top of it. See
-`bgp/capture/`, `bgp/rib/view.rb` and `lab/speaker.rb` in the layout
-above, and the Capture section of `docs/daemon.md`. **Items 1 and 5 were
-taken out of phase order on purpose**, since the phasing table puts item
-5 in phase 3, and why is in that document's section 10: item 5 sits
-there only because routescope's own capture path needs a modification
-before it can point at a bgp4r image, and that modification is
-routescope's and is not blocked by this.
+decides the executable shape; item 2, the lab speaker as a router;
+items 3 and 4, the view layer and the RIB JSON on top of it; and item
+6, the structured event stream. See `bgp/capture/`, `bgp/rib/view.rb`,
+`bgp/events.rb` and `lab/speaker.rb` in the layout above, and the
+Capture section of `docs/daemon.md`. **Items 1 and 5 were taken out of
+phase order on purpose**, since the phasing table puts item 5 in phase
+3, and why is in that document's section 10: item 5 sits there only
+because routescope's own capture path needs a modification before it
+can point at a bgp4r image, and that modification is routescope's and
+is not blocked by this.
 
 **Four things that work differs from in the design, and they are
 corrections to `docs/routescope-labs.md` section 6 item 5 rather than
@@ -6065,6 +6080,70 @@ The short version, so the direction is visible here:
     spot from the same line. Closing it means a second decision over
     `Table#candidates`, which is the one thing this layer is not, so it
     wants a decision rather than a patch.
+* **Item 6, the structured event stream, is Done**, in `bgp/events.rb`,
+  which is the layer under both programs' event APIs and under scenario
+  `measure:`. The document said bgp4r had the hooks and "no sequence
+  numbers, no kinds, no backlog and no `since:` replay"; all four are
+  there now, with ospfv2's shape copied as the document asked. What is
+  **not** here is serving it: no socket, no HTTP, no JSON, because
+  neither program exists and `json`'s default gem status is a per Ruby
+  version question that Conventions records biting twice. `Event#to_h`
+  is the contract and `JSON.generate` is one line in whatever serves it.
+  * **`Table#on_change` is deliberately not wired to it.** It is the
+    other obvious hook and the RIB side of the stream belongs with the
+    daemon, after #230, #231 and #232; wiring it here would have put
+    this pull request inside three open ones.
+  * **An event is published and not logged, and the mechanism matters
+    more than the verdict.** Three reasons, in order. `Log` is a
+    process-wide singleton with `private_class_method :new` and
+    process-wide `Log.level` and `Log.filename`, so an `Events` that
+    logged through it would make every event a process-wide side effect
+    and two streams in one process, which is what a multi-node harness
+    is, could not have separate logs. The call sites already log:
+    `new_state` writes a line for every transition and `rcv_notification`
+    for every NOTIFICATION, so publishing from `Events` as well would
+    double each one. And item 7, the injected logger, is where ospfv2's
+    `log(level, message, kind:, **data)` belongs; writing that method
+    now would mean writing it against the singleton and rewriting it
+    there. What **is** kept from ospfv2 is its rule that a debug line
+    never becomes an event, with its reason: kept in a bounded list it
+    would push out the events people look for. The level is accepted so
+    a caller can choose; nothing here publishes at `:debug`.
+  * **Every option Hash in that file refuses an option name it does not
+    read, and the rejected argument is worth as much as the choice.**
+    Found by the owner exercising it: `Events.new(:limit => 3)` took the
+    default backlog of 2000 and said nothing, so `since` answered short
+    with no overflow and nothing looked wrong. Three more had the same
+    hole and all were measured doing the wrong thing quietly;
+    `subscribe(:kind => [...])`, singular, was the worst, since it built
+    a subscription with **no filter** and a reader asking for one kind
+    got every kind. An ignored option name is a wrong answer and not a
+    missing one, which is the case Conventions lets a constructor refuse,
+    "because the alternative is silently sending a different value".
+    * **Rejected: keyword arguments**, which would have raised `unknown
+      keyword: :limit` for free with no line to maintain. That is a real
+      argument and it lost on three counts. Every constructor in bgp4r
+      takes `arg={}`, so it would be the first that does not, and
+      `Subscription#new` twenty lines away is positional, so the file
+      would carry two conventions. The refusal names **what the method
+      does take**, which `unknown keyword` does not, and that is the
+      shape `publish` already answers an unknown kind with. And `publish`
+      and `pop` are called with a Hash a program built at runtime, the
+      way `Neighbor#set` is written, which keywords would make every such
+      caller splat. The cost is one line per method, edited when an
+      option is added. `Events.check_options` is where it lives.
+  * **Measured, and it contradicts nothing in the design but is worth
+    knowing before writing another concurrency test here.** Racing
+    threads cannot hold a lock placement in this file. Moving the
+    subscriber push or the sequence increment out of the lock and then
+    racing 32 threads through 16000 publishes produced a duplicate
+    sequence number in 0 of 40 runs and an out of order list in 0 of 40:
+    MRI does not preempt between those bytecodes and its Mutex hands the
+    lock to waiters in arrival order. Two cases in
+    `test/unit/events_test.rb` force the interleaving instead, with a
+    subscriber whose `push` blocks, and both catch their sabotage. One
+    claim has no test at all and says so there: that `@seq += 1` is
+    inside the lock is not observable from outside MRI.
 * **Match ospfv2's capture contract rather than inventing one. Done.**
   routescope runs `IMAGE capture -i IFACE` with the subcommand and the
   flag hard-coded and no filter passed, so a bgp4r image taking the
@@ -6353,7 +6432,7 @@ Lab and conformance:
 * **Flow spec interop lives in `docs/flow-spec.md` section 12**, measured and asserted rather than written down here, the same way the fault matrix columns are. The short version: both routers accept a rule from bgp4r and read it back, and they disagree on every part of RFC 8955 section 4.2. Two harness facts worth knowing before writing another flow spec lab test: GoBGP's **config file and its client use different names for the VPN family**, `l3vpn-ipv4-flowspec` and `ipv4-l3vpn-flowspec`, each rejecting the other; and **FRR 8.4.4 has no VPN flow spec family**, refusing a session that offers SAFI 134 alone with 2/7 and silently discarding the rule when SAFI 133 is there too.
 * **`to_hash_round_trip_test.rb` cannot read a test file that is not pure ASCII.** `test_every_working_round_trip_is_asserted_in_a_class_test_file` reads every test file body and matches regexps against it, and a single non-ASCII character in any of them makes it error with `ArgumentError: invalid byte sequence in US-ASCII`, pointing at its own line 190 and naming neither the file nor the character. Found on 2026-10-31 by putting one arrow in a comment in a new test file: that file passed on its own and the suite errored in a test it has nothing to do with. Every test file is ASCII today, so nothing is wrong now; what is wrong is the diagnosis the next person gets. The fix is an encoding on the read or a `scrub`, and it is one line in a file this change does not otherwise touch.
 * **`bgp4r capture` has three gaps, each a decision rather than a patch, and each said in the file it is in.** The live path, `tcpdump` into a pipe, is the only code in `bgp/capture/` no test runs: tcpdump is not installed in this sandbox and spawning it in a unit test wants a privileged interface, so the file path is exercised in full and the nine lines of the spawn and the two that kill the child are not. The Dockerfile's **`capture` stage has not been built**, for want of a Docker daemon, and it is what makes routescope's hard coded `IMAGE capture -i IFACE` reach anything, so build it before trusting it. And **reordered segments are not handled**: `bgp/capture/stream.rb` reads each direction in arrival order, trims a retransmission by sequence number and does nothing about a capture whose segments crossed, which would frame garbage from that point with nothing saying so. Reordering means held segments, timers and a reassembly queue, which is a TCP implementation and not a dissector; the file says so rather than leaving it to be found out.
-* Lowest coverage (unit suite): `bgp/capture/cli.rb` 87% (the live tcpdump path, above), `neighbor/neighbor.rb` 91%, `messages/update.rb` 92%, `neighbor/add_path_cap.rb` 93%, `path_attributes/mp_unreach.rb` 93%, `path_attributes/ipv6_extended_communities.rb` 93%, `optional_parameters/graceful_restart.rb` 93%, `path_attributes/mp_reach.rb` 93%.
+* Lowest coverage (unit suite): `bgp/capture/cli.rb` 87% (the live tcpdump path, above), `neighbor/neighbor.rb` 92%, `messages/update.rb` 92%, `neighbor/add_path_cap.rb` 93%, `path_attributes/mp_unreach.rb` 93%, `path_attributes/ipv6_extended_communities.rb` 93%, `optional_parameters/graceful_restart.rb` 93%, `path_attributes/mp_reach.rb` 93%.
 
 ## Attribute work left
 

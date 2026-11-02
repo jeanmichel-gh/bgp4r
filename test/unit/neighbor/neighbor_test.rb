@@ -785,4 +785,208 @@ class TestBgpNeighbor < Test::Unit::TestCase
       assert @c.wait_for_state(:Idle, 2)
     }
   end
+
+  # ---- the event stream, bgp/events.rb ------------------------------
+  #
+  # What these assert is the wiring. The stream itself is
+  # test/unit/events_test.rb; here the questions are which session facts
+  # become events, what the data carries, and that nothing the stream does
+  # can reach the finite state machine.
+
+  def a_neighbor(h={})
+    BGP::Neighbor.new({ :version=> 4, :my_as=> 100, :id=> '0.0.0.2',
+                        :remote_addr=> '192.0.2.1', :local_addr=> '192.0.2.2',
+                        :holdtime=> 30 }.merge(h))
+  end
+
+  def test_a_neighbor_has_an_event_stream_of_its_own
+    a, b = a_neighbor, a_neighbor(:remote_addr=> '192.0.2.5')
+    assert_instance_of BGP::Events, a.events
+    assert_equal 0, a.events.seq
+    assert_not_same a.events, b.events, 'two neighbors share one stream by default'
+  ensure
+    a.close ; b.close
+  end
+
+  # A program with several sessions sets one shared stream on each, so the
+  # sequence numbers are one ordered timeline and Event#peer is what tells
+  # the sessions apart. Without that each session numbers from 1 and a
+  # console cannot merge them.
+  def test_one_shared_stream_numbers_two_sessions_in_one_sequence
+    shared = BGP::Events.new
+    a = a_neighbor(:events=> shared, :remote_addr=> '192.0.2.1')
+    b = a_neighbor(:remote_addr=> '192.0.2.5')
+    b.events = shared
+    a.send(:new_state, :Active, 'a')
+    b.send(:new_state, :Active, 'b')
+    a.send(:new_state, :Established, 'a')
+    assert_equal [1, 2, 3], shared.since(0).collect { |e| e.seq }
+    assert_equal ['192.0.2.1', '192.0.2.5', '192.0.2.1'],
+                 shared.since(0).collect { |e| e.peer }
+  ensure
+    a.close ; b.close
+  end
+
+  def test_a_state_change_is_an_event
+    n = a_neighbor
+    n.send(:new_state, :Active, 'Open Socket')
+    ev = n.events.since(0).last
+    assert_equal :session, ev.kind
+    assert_equal :info, ev.level
+    assert_equal '192.0.2.1', ev.peer
+    assert_equal 'Idle -> Active', ev.message
+    assert_equal({ :state=> :Active, :was=> :Idle, :reason=> 'Open Socket' }, ev.data)
+  ensure
+    n.close
+  end
+
+  # new_state is called with the state it is already in on several paths,
+  # and notify_state_change already skips those. The event follows it, or
+  # a console timeline fills with transitions that did not happen.
+  def test_a_state_change_to_the_same_state_is_not_an_event
+    n = a_neighbor
+    n.send(:new_state, :Active, 'first')
+    n.send(:new_state, :Active, 'again')
+    assert_equal 1, n.events.seq
+  ensure
+    n.close
+  end
+
+  # The event is published before the on_state_change listeners run, so a
+  # listener that reads the stream sees the change it was called about.
+  def test_the_event_is_published_before_the_state_listeners_run
+    n = a_neighbor
+    seen = []
+    n.on_state_change { |now, _was| seen << [now, n.events.since(0).last.data[:state]] }
+    n.send(:new_state, :Active, 'x')
+    assert_equal [[:Active, :Active]], seen
+  ensure
+    n.close
+  end
+
+  def test_a_received_notification_is_an_event
+    n = a_neighbor
+    n.send(:rcv_notification, BGP::Notification.new(6, 2, 'bye'))
+    ev = n.events.since(0).find { |e| e.kind == :notification }
+    assert ev, 'no notification event'
+    assert_equal :warn, ev.level
+    assert_equal 'RecvNotification Administrative Shutdown', ev.message
+    assert_equal 'receive', ev.data[:direction]
+    assert_equal [6, 2], ev.data.values_at(:code, :subcode)
+    assert_equal 'Administrative Shutdown', ev.data[:name]
+    assert_equal '627965', ev.data[:octets]
+  ensure
+    n.close
+  end
+
+  def test_a_notification_with_no_data_carries_no_octets
+    n = a_neighbor
+    n.send(:publish_notification, BGP::Notification.new(4, 0), :send)
+    ev = n.events.since(0).last
+    assert_equal 'SendNotification Undefined', ev.message
+    assert_equal [4, 0], ev.data.values_at(:code, :subcode)
+    assert !ev.data.has_key?(:octets), 'an empty data field is not reported as octets'
+  ensure
+    n.close
+  end
+
+  # Over a real session, through send_message, which is the path a script
+  # sends one by.
+  def test_a_notification_sent_through_send_message_is_an_event
+    Timeout::timeout(8) {
+      port = start_server(0)
+      c = Neighbor.new(:version=> 4, :my_as=> 100, :id=> '0.0.0.2',
+                       :remote_addr=> '127.0.0.1', :local_addr=> '127.0.0.1')
+      begin
+        assert c.start(:port=> port), "no session: #{c.last_error}"
+        c.send_message BGP::Notification.new(6, 4)
+        ev = c.events.since(0).find { |e| e.kind == :notification }
+        assert ev, 'no notification event'
+        assert_equal 'send', ev.data[:direction]
+        assert_equal [6, 4], ev.data.values_at(:code, :subcode)
+        assert_equal '127.0.0.1', ev.peer
+        # The session transitions are in the same stream.
+        #
+        # Their *order against this notification* is deliberately not
+        # asserted, because nothing guarantees it. new_state broadcasts its
+        # condition variable inside the mutex and publishes outside it, so
+        # a thread resumed by wait_for_state is in principle running
+        # before the event for the change it woke on has been published.
+        #
+        # **Not filed as a bug, because it could not be produced.** Every
+        # read of the stream takes the Events lock, which an in flight
+        # publish is holding, so a reader that asks serialises behind it;
+        # forcing the window with a subscriber whose push blocks did not
+        # produce an observation of it on 2026-11-01. It costs a console
+        # nothing either way, since every event carries its sequence
+        # number. What it would cost is a test that asserted this order,
+        # so this one does not.
+        assert_equal [:session],
+                     c.events.since(0).reject { |e| e.kind == :notification }
+                      .collect { |e| e.kind }.uniq
+        assert c.events.since(0).any? { |e| e.data[:state] == :Established },
+               'the stream has no Established transition'
+      ensure
+        c.close
+      end
+    }
+  end
+
+  # The one notification bgp4r sends by itself: rcv_malformed writes it
+  # straight to the socket rather than through send_message, so it needs
+  # its own publish and this is what says it has one.
+  def test_the_notification_a_session_reset_sends_is_an_event
+    Timeout::timeout(8) {
+      strict_client_with_server
+      mp = Mp_reach.new(:afi=>2, :safi=>1, :nexthop=>'2001:db8::1', :nlris=>['2001:db8:1::/48'])
+      @s.send_message Update.new(Path_attribute.new(Origin.new(0), As_path.new(100), mp, Mp_reach.new(mp.encode))).encode
+      assert @server_notifications.pop, "server got no NOTIFICATION"
+      assert @c.wait_for_state(:Idle, 2)
+      ev = @c.events.since(0).find { |e| e.kind == :notification }
+      assert ev, 'the NOTIFICATION bgp4r sent is not in its own event stream'
+      assert_equal 'send', ev.data[:direction]
+      assert_equal [3, 1], ev.data.values_at(:code, :subcode)
+    }
+  end
+
+  # The property on_state_change already has: nothing outside may kill the
+  # finite state machine. A stream that refuses what it is handed costs a
+  # log line and the state change still happens.
+  def test_an_event_stream_that_raises_cannot_reach_the_state_machine
+    n = a_neighbor
+    # A stream whose publish always raises, which is what a broken
+    # subscriber or a bad kind amounts to.
+    broken = Object.new
+    def broken.publish(*) ; raise 'the stream is broken' ; end
+    n.events = broken
+    seen = []
+    n.on_state_change { |now, _was| seen << now }
+    assert_nothing_raised { n.send(:new_state, :Active, 'x') }
+    assert_equal [:Active], seen, 'the state listeners still ran'
+    # Neighbor#state answers a String, not the Symbol new_state took.
+    assert_equal 'Active', n.state
+  ensure
+    n.close
+  end
+
+  def test_a_listener_on_the_stream_cannot_reach_the_state_machine
+    n = a_neighbor
+    n.events.on_event { |_ev| raise 'listener' }
+    assert_nothing_raised { n.send(:new_state, :Active, 'x') }
+    assert_equal 1, n.events.listener_errors
+    # Neighbor#state answers a String, not the Symbol new_state took.
+    assert_equal 'Active', n.state
+  ensure
+    n.close
+  end
+
+  def test_a_neighbor_with_no_stream_still_changes_state
+    n = a_neighbor
+    n.events = nil
+    assert_nothing_raised { n.send(:new_state, :Active, 'x') }
+    # Neighbor#state answers a String, not the Symbol new_state took.
+    assert_equal 'Active', n.state
+  ensure
+    n.close
+  end
 end
