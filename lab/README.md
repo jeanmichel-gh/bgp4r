@@ -30,7 +30,16 @@ docker compose -f lab/topologies/two-speakers/compose.yml logs -f
 
 ### State
 
-Each speaker keeps its state in `/tmp/bgp4r-state.json`: each session's state, the peer's AS and router ID, and every route received with its attributes. It rewrites the file twice a second. Tests read it, and so can you.
+Each speaker keeps its state in `/tmp/bgp4r-state.json`: each session's state, the peer's AS and router ID, what the peer's OPEN advertised, and every route received with its attributes. It rewrites the file twice a second. Tests read it, and so can you.
+
+`peer_capabilities` is each capability of the peer's OPEN as data, from the capability's own `to_hash`, with its class name added. So an ADD-PATH capability reads:
+
+```json
+{ "name": "Add_path", "code": 69,
+  "capability": { "families": [ { "afi": 1, "safi": 1, "send_recv": 2 } ] } }
+```
+
+`send_recv` is RFC 7911 section 4's field value, 1 able to receive, 2 able to send, 3 both, and the values say what the **sender** of the capability can do. So reading the peer's 2 is how a test checks the peer means to send us several paths, which is the half bgp4r cannot tell itself: against another bgp4r both ends invert the field together and the error cancels, which is how an inverted `_send_recv` lived here for years.
 
 Each neighbor entry also has counters and times for the current session:
 
@@ -53,6 +62,7 @@ The speakers run as the non-root user `bgp` and still listen on TCP 179. Docker 
 |---|---|
 | `two-speakers` | eBGP between AS 65001 and AS 65002 on one link. r2 connects, r1 waits. Routes cross both ways with AS_PATH, NEXT_HOP, MED and communities. |
 | `routegen` | A dockerized routegen. gen (AS 65001, 10.20.0.1) connects and sends 10000 generated prefixes. sink (AS 65002, 10.20.0.2) waits, counts them and times them. |
+| `add-path` | ADD-PATH, RFC 7911: one prefix, two paths, three nodes. sim (AS 65001, 10.40.0.1) sends identifiers 7 and 9 and dials both receivers. gobgp (AS 65002, 10.40.0.2) reports how many paths it holds; peer (AS 65003, 10.40.0.3) reports which identifiers arrived. Two receivers because neither answers both questions: GoBGP's `global rib -j` has no identifier key for a received path. It is the port of `test/functional/lab/add_path_gobgp_test.rb` and the first topology with a `lab.yml` and a `scenarios/` folder, which nothing reads yet. Its own README says what ported and what did not. |
 | `fault-matrix` | Every `BGP::Fault::CATALOG` case sent to GoBGP. matrix (AS 65001, 10.30.0.1) listens, router (AS 65002, 10.30.0.2) connects. It reads the router's RIB with the `gobgp` client, so it scores routes as well as sessions. The matrix runs once and exits, non-zero on any disagreement, which against either GoBGP version measured means 1. `test/functional/lab/fault_matrix_native_test.rb` runs the same matrix against a `gobgpd` on loopback, with no container at all. |
 
 ## Node file
@@ -94,6 +104,13 @@ announce:                   # each block is one UPDATE, sent to every neighbor
     as_path: [64999]        # optional, put after our own AS over eBGP
     local_pref: 200         # optional, iBGP only, default 100
     next_hop: 10.10.0.9     # optional, default our address on that session
+    path_id: 7              # optional, RFC 7911 section 3. Every prefix in
+                            # the block carries it, so two blocks naming one
+                            # prefix with two identifiers are two paths to
+                            # it. Needs add_path with send_recv 2 or 3 on
+                            # that neighbor, and nothing checks that: a Path
+                            # Identifier on a session that did not negotiate
+                            # one is a test worth being able to run.
   - generate: { start: 11.0.0.0/28, count: 10000, per_update: 127 }
     med: 100                # same optional keys as above
     communities: ['100:1', '200:1', '300:1']

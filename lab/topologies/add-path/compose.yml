@@ -1,0 +1,75 @@
+# ADD-PATH, RFC 7911: one prefix, two paths, three nodes.
+#
+#   sim     AS 65001  10.40.0.1  bgp4r, sends two paths for one prefix
+#   gobgp   AS 65002  10.40.0.2  GoBGP, takes them and marks one best
+#   peer    AS 65003  10.40.0.3  bgp4r, takes them and records both identifiers
+#
+# Two receivers, and the reason is measured rather than tidy. GoBGP's
+# `global rib -j` has no identifier key at all for a received path: it
+# keeps the two apart internally and reports only their attributes.
+# Measured against gobgpd 3.23.0 on 2026-11-01. So GoBGP answers "how
+# many paths" and bgp4r answers "which identifiers arrived", and neither
+# answers both. A lab with one receiver can assert only half of RFC 7911.
+#
+# From the repo root:
+#   docker compose -f lab/topologies/add-path/compose.yml up -d --build
+#   docker compose -f lab/topologies/add-path/compose.yml exec peer cat /tmp/bgp4r-state.json
+#   docker compose -f lab/topologies/add-path/compose.yml exec gobgp gobgp global rib -j
+#   docker compose -f lab/topologies/add-path/compose.yml down
+#
+# sim dials both receivers, so neither has to win a connection race, and
+# every announce block goes to every neighbor: one block is one UPDATE
+# sent to both, which is what makes the two readings comparable.
+#
+# GOBGP_IMAGE pins the router, as it does for the fault-matrix topology.
+# The default has a native linux/arm64 build.
+
+name: bgp4r-add-path
+
+x-speaker: &speaker
+  build:
+    context: ../../..
+    target: speaker
+  image: bgp4r-speaker
+  volumes:
+    - ./:/topology:ro
+  environment:
+    # info or debug. Debug also prints every message decoded, which for
+    # this topology is where the Path Identifiers are visible on the wire.
+    LAB_LOG_LEVEL: ${LAB_LOG_LEVEL:-info}
+  stop_grace_period: 5s
+
+services:
+  gobgp:
+    image: ${GOBGP_IMAGE:-jauderho/gobgp:v4.10.0}
+    volumes:
+      - ./:/config:ro
+    networks:
+      link:
+        ipv4_address: 10.40.0.2
+    stop_grace_period: 5s
+
+  peer:
+    <<: *speaker
+    command: ["lab/speaker.rb", "/topology/peer.yml"]
+    networks:
+      link:
+        ipv4_address: 10.40.0.3
+
+  sim:
+    <<: *speaker
+    command: ["lab/speaker.rb", "/topology/sim.yml"]
+    depends_on:
+      - gobgp
+      - peer
+    networks:
+      link:
+        ipv4_address: 10.40.0.1
+
+networks:
+  link:
+    ipam:
+      config:
+        # The gateway is off .1, .2 and .3 so the three nodes can use them.
+        - subnet: 10.40.0.0/24
+          gateway: 10.40.0.254

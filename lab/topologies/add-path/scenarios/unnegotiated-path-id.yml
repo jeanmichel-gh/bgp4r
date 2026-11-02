@@ -1,0 +1,84 @@
+# The case the test file has no equivalent of, and the best argument in
+# this folder for a lab over a test.
+#
+# A Path Identifier on a session that negotiated none is four unexpected
+# octets in front of every prefix, so it is a corrupt UPDATE and not a
+# wrong route. add_path_gobgp_test.rb says that in a comment. Measured on
+# 2026-11-01, the two implementations disagree about the same octets:
+#
+#   gobgpd 3.23.0  logs "network bytes is short", sends NOTIFICATION
+#                  3/1 (UPDATE Message Error / Malformed Attribute List)
+#                  and resets the session.
+#   bgp4r          reports nothing at all and reads one prefix as five,
+#                  "0.0.0.0/0" three times, "24.0.0.0/7" and
+#                  "51.100.0.0/198". It does not replay the octets
+#                  either: encode gives 23 more than arrived.
+#
+# Both bgp4r readings are gaps, and both are recorded under "Known issues
+# to work on" in CLAUDE.md rather than fixed here. A console puts
+# 51.100.0.0/198 in a RIB pane next to a dead session, which is a thing
+# anyone can see; an assertion only counts it.
+#
+# THIS ONE NEEDS THE INJECTOR, and for a reason worth knowing before
+# porting any other test: lab/speaker.rb's announce blocks are
+# per-speaker, not per-neighbor, so every block goes to every neighbor.
+# A config therefore cannot aim a malformed UPDATE at one of two sessions
+# and leave the other alone. Only an action against a named session can.
+
+name: A Path Identifier nobody negotiated
+description: >-
+  sim sends a Path Identifier on the gobgp session, which never
+  negotiated add-path. GoBGP must reset with 3/1. The peer session must
+  be untouched, which is what says the fault was the UPDATE and not the
+  speaker.
+capture: [sim, gobgp]
+timeout: 120
+
+steps:
+  - expect: { bgp_session: { node: sim, peer: 10.40.0.2, state: established } }
+    within: 60
+  - expect: { bgp_session: { node: sim, peer: 10.40.0.3, state: established } }
+    within: 60
+
+  # A clean route first, so a later absence means something. Both
+  # sessions take it, since neither needs add-path for a plain prefix.
+  - bgp: announce
+    prefixes: [203.0.113.0/24]
+    next_hop: 10.40.0.7
+  - expect: { bgp_prefix: { node: gobgp, prefix: 203.0.113.0/24, present: true } }
+    within: 15
+    name: the baseline, and it also proves the session was usable
+
+  # Drop the capability on this session only, then send an identifier on
+  # it. session.capability is section 9.3's action, and the re-negotiation
+  # costs a session bounce, which is why the baseline above is taken
+  # first.
+  - mark: gobgp session without add-path
+  - bgp: session.capability
+    peer: 10.40.0.2
+    capabilities: [as4_byte]
+  - expect: { bgp_session: { node: sim, peer: 10.40.0.2, state: established } }
+    within: 60
+  - expect: { bgp_capability: { node: sim, peer: 10.40.0.2, add_path: null } }
+    name: neither side negotiated it now
+
+  - bgp: announce
+    peer: 10.40.0.2
+    prefixes: [198.51.100.0/24]
+    path_id: 7
+    next_hop: 10.40.0.7
+
+  # The assertion that matters is the reset and its subcode. A scenario
+  # that only read the session state afterwards would find it established
+  # again, because GoBGP dials back in within seconds: the same mistake
+  # the MCAST-VPN lab tests record for FRR.
+  - expect: { bgp_notification: { node: sim, peer: 10.40.0.2,
+                                  code: 3, subcode: 1 } }
+    within: 30
+    measure: time_to_reset
+  - expect: { bgp_prefix: { node: gobgp, prefix: 198.51.100.0/24,
+                            present: false } }
+    name: and the route never arrived, since the message was refused whole
+
+  - expect: { bgp_session: { node: sim, peer: 10.40.0.3, state: established } }
+    name: the other session never flapped, so the fault was the UPDATE

@@ -1,0 +1,45 @@
+# The routescope manifest for this topology.
+#
+# routescope reads this to know what the nodes are and how to talk to
+# each one. The compose file beside it brings them up; routescope reaches
+# them with `docker exec`.
+#
+# NOTHING READS THIS FILE YET. The `bgp4r` kind does not exist in
+# routescope's Lab::KINDS, and until it does an unknown kind renders as
+# `linux`: shell, log and capture, no protocol pane. That is phase 0 of
+# docs/routescope-labs.md and it is useful on its own, which is why this
+# file is here rather than waiting.
+#
+# `service` names the compose service, which is how routescope finds the
+# container. `config` is the node's own file, so a pane can show what a
+# node was told as well as what it did.
+
+name: bgp4r-add-path
+description: >-
+  One prefix, two paths. A bgp4r sender, a GoBGP receiver that reports
+  how many paths it holds, and a bgp4r receiver that reports which Path
+  Identifiers arrived. Neither receiver can answer both questions.
+
+compose: compose.yml
+
+nodes:
+  - name: sim
+    kind: bgp4r
+    service: sim
+    address: 10.40.0.1
+    config: sim.yml
+    protocols: [bgp]
+
+  - name: gobgp
+    kind: gobgp
+    service: gobgp
+    address: 10.40.0.2
+    config: gobgp.toml
+    protocols: [bgp]
+
+  - name: peer
+    kind: bgp4r
+    service: peer
+    address: 10.40.0.3
+    config: peer.yml
+    protocols: [bgp]

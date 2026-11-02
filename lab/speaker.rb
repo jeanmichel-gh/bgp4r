@@ -55,7 +55,8 @@ module Lab
       @mode = mode.to_s
       raise ArgumentError, "record #{mode.inspect}: use one of #{MODES.join(', ')}" unless MODES.include?(@mode)
       @lock = Mutex.new
-      @data = { 'peer_as' => nil, 'peer_router_id' => nil, 'updates_received' => 0,
+      @data = { 'peer_as' => nil, 'peer_router_id' => nil, 'peer_capabilities' => [],
+                'updates_received' => 0,
                 'prefixes_received' => 0, 'established_count' => 0, 'last_error' => nil }
       reset_session
     end
@@ -69,6 +70,7 @@ module Lab
         when BGP::Open
           @data['peer_as'] = msg.local_as
           @data['peer_router_id'] = msg.bgp_id
+          @data['peer_capabilities'] = Recorder.capabilities(msg)
           reset_session
         when BGP::Keepalive
           # RFC 4271 section 8.2.2: the first KEEPALIVE after OPEN takes the
@@ -107,6 +109,40 @@ module Lab
         h.merge!(timing(h['prefixes_received']))
         h.merge!('first_prefix' => @first_prefix, 'last_prefix' => @last_prefix) unless routes?
         h
+      end
+    end
+
+    # What the peer's OPEN advertised, as data rather than as its rendered
+    # form. Each capability's own to_hash is the data, so this adds no
+    # per-capability knowledge and cannot drift from the library: an
+    # ADD-PATH capability comes back as
+    #
+    #   {"code" => 69, "name" => "Add_path",
+    #    "capability" => {"families" => [{"afi" => 1, "safi" => 1, "send_recv" => 2}]}}
+    #
+    # where send_recv is RFC 7911 section 4's field value, so 2 is "able to
+    # send" and is what says the peer read our half the way we meant it.
+    #
+    # Rendered text is deliberately not what goes in the state file: a reader
+    # of this file is another program, and to_s here carries the enclosing
+    # parameter's hex dump as well as the capability.
+    def self.capabilities(open)
+      Array(open.opt_parms).flat_map { |p|
+        p.respond_to?(:capabilities) ? Array(p.capabilities) : [p]
+      }.collect { |c|
+        h = (c.respond_to?(:to_hash) ? c.to_hash : {}) rescue {}
+        { 'name' => c.class.to_s.split('::').last }.merge(stringify(h))
+      }
+    end
+
+    # JSON has no symbols, so a hash from the library is converted once here
+    # rather than leaving a reader to deal with both spellings.
+    def self.stringify(o)
+      case o
+      when Hash  then o.to_h { |k, v| [k.to_s, stringify(v)] }
+      when Array then o.collect { |v| stringify(v) }
+      when Symbol then o.to_s
+      else o
       end
     end
 
@@ -243,7 +279,12 @@ module Lab
     # Hash of a name and the arguments that follow it:
     #
     #   capabilities: [as4_byte, route_refresh, mbgp_ipv6_unicast]
-    #   capabilities: [{role: customer}, {add_path: [1, 1, 3]}]
+    #   capabilities: [{role: customer}, {add_path: [3, 1, 1]}]
+    #
+    # Mind add_path's argument order, which is CAP::Add_path#add's:
+    # (send_recv, afi, safi). So [3, 1, 1] is IPv4 unicast both ways, and
+    # [1, 1, 3] is SAFI 3, NSAP, receive only. Both lines here and in
+    # lab/README.md gave the second while meaning the first.
     #
     # Neighbor#capability knows every name bgp4r implements, so this
     # forwards rather than keeping a list of its own. The list here was four
@@ -306,7 +347,25 @@ module Lab
     # speaker prepends its own AS to AS_PATH and sets NEXT_HOP to itself.
     # Over iBGP the AS_PATH is left as configured and LOCAL_PREF is sent.
     def build_update(a, ebgp, local_ip)
-      BGP::Update.new(path_attribute(a, ebgp, local_ip), BGP::Nlri.new(*Array(a.fetch('prefixes'))))
+      BGP::Update.new(path_attribute(a, ebgp, local_ip), nlri_for(a))
+    end
+
+    # The NLRI of one prefixes block. With path_id every prefix in the block
+    # carries that Path Identifier (RFC 7911 section 3), so two blocks naming
+    # one prefix with two identifiers are two paths to it rather than one
+    # block overwriting the other.
+    #
+    # The identifier is the sender's to allocate, and it may only go on a
+    # session that negotiated add-path in our direction, which is
+    # capabilities: [{add_path: [2, 1, 1]}] or [3, 1, 1]. Nothing here
+    # checks that, deliberately: a Path Identifier on a session that did not
+    # negotiate one is four unexpected octets in front of every prefix, so
+    # sending one is a test a topology should be able to run.
+    def nlri_for(a)
+      prefixes = Array(a.fetch('prefixes'))
+      return BGP::Nlri.new(*prefixes) unless a['path_id']
+      id = Integer(a['path_id'])
+      BGP::Nlri.new(*prefixes.collect { |p| { :path_id => id, :nlri => p } })
     end
 
     # Yields the UPDATEs of one announce block, one at a time. A prefixes

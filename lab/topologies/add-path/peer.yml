@@ -1,0 +1,28 @@
+# peer: the bgp4r receiver, and the only node in this topology that can
+# say which Path Identifiers arrived.
+#
+# It waits for sim to dial, records every route received, and keys each
+# one by identifier and prefix together, so two paths to one prefix are
+# two entries:
+#
+#   "received": { "ID=7, 198.51.100.0/24": { "next_hop": "10.40.0.7", ... },
+#                 "ID=9, 198.51.100.0/24": { "next_hop": "10.40.0.9", ... } }
+#
+# It announces nothing. A receiver that also originated would make the
+# state file say two things at once, and the question here is only what
+# arrived.
+router_id: 10.40.0.3
+as: 65003
+local_address: 10.40.0.3
+
+neighbors:
+  - address: 10.40.0.1
+    as: 65001
+    hold_time: 30
+    # Receive only, which is the whole of what this node does, and it is
+    # also the asymmetric case: sim advertises 3 and this advertises 1,
+    # so RFC 7911 section 5's pair rule has to come out as "sim may send,
+    # peer may not". A console showing both halves is how anyone sees
+    # that the two agree.
+    capabilities: [as4_byte, {add_path: [1, 1, 1]}]
+    record: routes

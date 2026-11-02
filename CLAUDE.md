@@ -317,8 +317,25 @@ test/helpers/            a small test BGP server
 lab/                     speakers in containers: lab/speaker.rb and lab/topologies/ (see lab/README.md)
                          lab/fault_matrix.rb sends BGP::Fault::CATALOG to a router; lab/conformance/ has a config per router
                          lab/topologies/fault-matrix runs that matrix against GoBGP in one command, and in CI
+                         lab/topologies/add-path is the port of
+                         test/functional/lab/add_path_gobgp_test.rb to a lab:
+                         one prefix, two paths, and two receivers, because
+                         GoBGP reports how many paths it holds and bgp4r
+                         reports which Path Identifiers arrived and neither
+                         answers both. It is the first topology with a
+                         lab.yml, routescope's manifest, and a scenarios/
+                         folder; nothing reads either yet, see
+                         docs/routescope-labs.md. Its README says which of
+                         its three scenarios runs on what exists and why
+                         the other two need the injector
 test/functional/lab/     lab tests: loopback speaker test and one Compose test per topology;
-                         speaker_test.rb also checks the capability names a topology can ask for;
+                         speaker_test.rb also checks the capability names a topology can ask for,
+                         and what a topology can say about ADD-PATH: a path_id on an
+                         announce block, and the peer's own capability as data in the
+                         state file. add_path_topology_test.rb holds
+                         lab/topologies/add-path to its own README with no Docker,
+                         no router and no socket, which is all the cover those files
+                         have until the Compose form can be run;
                          fault_matrix_scenario.rb holds the RFC 7606 checks, and both
                          fault_matrix_test.rb (Compose) and fault_matrix_native_test.rb
                          (a gobgpd on loopback, no Docker) assert them;
@@ -491,6 +508,15 @@ ruby -I. test/functional/lab/rib_router_gobgp_test.rb
 ruby -I. test/functional/lab/add_path_gobgp_test.rb
 ```
 
+What `lab/topologies/add-path` says, read out of its own files: no
+Docker, no router, no socket, so it runs anywhere and in the `local`
+group. It is the only cover those files have until the Compose form can
+be run, and it holds them to the folder's own README. Hundredths of a
+second:
+```
+ruby -I. test/functional/lab/add_path_topology_test.rb
+```
+
 The same matrix against a second implementation, FRR's `bgpd`, also with
 no Docker and no zebra. It needs the FRR package, whose `bgpd` is not on
 `PATH`: `/usr/lib/frr/bgpd` is looked for, and `FRR_BGPD` and `VTYSH`
@@ -583,7 +609,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. The `lab` job is a matrix, one job per group in `test/lab_groups.rb`, so its cost is the slowest group and not the total: it was 12m42s as one serial suite. Each job installs only what its group needs, which is why the matrix entry carries a `gobgp`, `frr`, `docker` or `netns` flag. The `gobgp` groups pin 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-11-01: 2412 tests, 28774 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.5%.
+Baseline on 2026-11-01: 2412 tests, 28779 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.5%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -5879,6 +5905,12 @@ Found while fixing other bugs, not fixed yet. Verified against master on
 
 Smaller things:
 
+* **An IPv4 NLRI with a prefix length above 32 is accepted in silence, and `validation.rb` has no NLRI field checks at all.** Every rule there is about a path attribute, so the reachability fields of RFC 4271 section 4.3 are unchecked: a prefix length of 198 produces a `Prefix` and no finding on either channel. Found on 2026-11-01 from the other end, by sending a Path Identifier on a session that negotiated none, which puts four unexpected octets in front of every prefix:
+  `ruby -I. -e 'require "bgp4r"; u = BGP::Update.new(["ffffffffffffffffffffffffffffffff00310200000012400101004003040a0000074002040201fde90000000718c63364"].pack("H*").is_packed, BGP::Update::Info.new(false, :lenient)); p [u.nlri.to_ary, u.path_attribute.errors.size, u.path_attribute.undecoded.size]'`
+  prints `[["0.0.0.0/0", "0.0.0.0/0", "0.0.0.0/0", "24.0.0.0/7", "51.100.0.0/198"], 0, 0]`. **gobgpd 3.23.0 on the same octets logs `network bytes is short`, sends NOTIFICATION 3/1 and resets**, so a second implementation refuses what bgp4r invents five routes out of. Not fixed here for two reasons, both decisions rather than patches: the first NLRI check in the file is a new channel, since `Attr::Check.attribute` is handed one attribute and these octets are not in one; and the subcode is not obvious, because RFC 4271 section 6.3 names 3/10 Invalid Network Field while GoBGP picks 3/1, and inventing one is the trap four families' validation parts each recorded.
+* **The same NLRI does not replay, which is the keep-what-you-cannot-read rule failing one field over from where it holds.** Those octets come back 23 longer than they arrived, `0x31` becoming `0x48`, because each misread prefix re-encodes at its declared width and the /198 pads out:
+  `ruby -I. -e 'require "bgp4r"; h = "ffffffffffffffffffffffffffffffff00310200000012400101004003040a0000074002040201fde90000000718c63364"; u = BGP::Update.new([h].pack("H*").is_packed, BGP::Update::Info.new(false, :lenient)); p [h.size, u.to_shex.size, u.to_shex == h]'`
+  Conventions says a tool that can send a value no RFC describes but cannot replay what it just received is the wrong shape of tool, and that is exactly this case. The path attribute levels all hold; it is the NLRI list that does not, and the fix is the same shape as `Flow_spec`'s, which parses each component on a copy and keeps the octets when `encode` disagrees.
 * **Three families still default an octet buffer to `+''`, latent rather than broken.** `Mcast_vpn::Originating_router`, `Rt_constrain` and `Flow_spec::Component::Unknown` each do `@value = +''`, which is US-ASCII, and that is the shape that broke CI on Ruby 3.4 in #218. **None is reachable today**, measured on 2026-11-01: `Mcast_vpn::Originating_router.new.value.encoding` is UTF-8, and its `to_s` guards `when 4, 16` so an empty buffer never reaches `IPAddr`, nothing `<<` an Integer onto any of the three, and `encode` packs them so the octets are right either way. So this is a hazard and not a wrong answer, and it becomes one the day any of them grows a padding call or an `IPAddr` call. The fix is `String.new`, which Conventions explains; it is listed here rather than done because it is three other families and #218 was BGP-LS part 3.
 * **The copy constructor loses an extended NLRI in four families.**
   `Klass.new(an_instance)` re-parses `an_instance.encode`, and `encode`
@@ -5964,7 +5996,8 @@ Lab and conformance:
   * The guard that was missing is GoBGP's own reading of the RFC 7911 section 4 Send/Receive field: we advertise `:send` and it must read "send", `:recv` and it must read "receive". Invert `_send_recv` and that fails with GoBGP reading our `:send` as "receive".
   * Be precise about what that adds, because #115 already pinned the direction inside bgp4r by writing the field value literally on one side: inverting `_send_recv` today also fails `test/functional/add_path_test.rb` and two unit files. What survived for years was the *behaviour*, where bgp4r against bgp4r cancels the error out. So the new part is a second implementation's reading of the field, plus the data path nothing had checked against anyone else: that GoBGP accepts a Path Identifier from us, holds two paths for one prefix because of it, and understands a withdrawal that names one of them.
   * **`Neighbor#capability :add_path` takes its arguments in the order `(send_recv, afi, safi)`**, which is what `CAP::Add_path#add` takes. This file used to give the example `capabilities: [{add_path: [1, 1, 3]}]`, which is SAFI 3, NSAP, and a Send/Receive of 1. For IPv4 unicast both ways it is `[3, 1, 1]`, or `[:send_and_receive, 1, 1]`, which says it better. The wrong example was never run.
-  * A Compose topology on `lab/speaker.rb` is still possible and is two pieces, neither needed by the native test: an announce block has no way to give a prefix a Path Identifier, since `build_update` calls `Nlri.new` with plain prefix strings; and `Lab::Recorder#record_routes` keys received routes by prefix alone, so two paths for one prefix overwrite each other and the state file cannot show a Path Identifier arrived. Worth doing only if the lab speaker itself needs add-path.
+  * **A Compose topology on `lab/speaker.rb` exists now**, `lab/topologies/add-path`, and it took one of the two pieces this entry named rather than both. **The second claim here was wrong**, measured on 2026-11-01: `Lab::Recorder#record_routes` keys a received route by `Nlri#to_ary`, which is `"ID=7, 198.51.100.0/24"` once add-path is negotiated, so two paths for one prefix get distinct keys and a withdrawal by Path Identifier removes exactly one. The state file always could show a Path Identifier arrived. What was wrong is the **shape**: the identifier rides inside a rendered key, which a driver would have to parse, and that is a schema question rather than a capability one. The first claim held: `build_update` called `Nlri.new` with plain prefix strings, so no topology could send one, and `path_id` on an announce block is the fix. `lab/topologies/add-path/README.md` has the port and what it does not cover.
+    * **Two gaps that topology found, both receive side, both recorded and not fixed.** An IPv4 NLRI whose prefix length is above 32 is accepted in silence: no `errors` entry and no `undecoded` entry, because `validation.rb` has no NLRI field checks at all. And the same NLRI does not replay, which is the keep-what-you-cannot-read rule failing one field over from where it holds. Both are under "Known issues to work on" with the reproduction.
 * **EVPN interop lives in `docs/evpn.md` section 9**, measured and asserted rather than written down here. The short version: **both routers implement route types 1 to 5 and neither knows 6 to 11**, GoBGP logging `Unknown EVPN Route type: N` and FRR saying nothing at all; FRR answers a malformed NLRI with **3/9 and a reset**, which is what `validation.rb` reports for the same octets, where GoBGP keeps the session up. Three harness facts worth knowing before writing another EVPN lab test: GoBGP's config file and its client disagree about the family name again, `l2vpn-evpn` against `evpn`; FRR's EVPN JSON has **no `routes` key** and is keyed by Route Distinguisher, so `Frr#rib` answers `{}` for it however many routes are in it and `Frr#evpn_rib` exists for that; and FRR prints `gateway IP 2.0.0.0` for every non-zero route type 5 gateway, so GoBGP is the only check on those octets.
 * **RT-constrain interop found two GoBGP 3.23.0 crashes**, asserted in `test/functional/lab/rt_constrain_gobgp_test.rb` and detailed in phase 4 part 1 above. The short version, because one of them matters more than any other divergence in this file: **the zero-length default route target followed by any second membership route GoBGP accepts panics the daemon**, a nil pointer dereference in `propagateUpdate`, and **both routes are entirely conformant** — RFC 4684 section 4 blesses the zero-length default and says it is what a route reflector's PE client sends. The second crash needs a malformed NLRI: a prefix length demanding more octets than the NLRI holds, 104 bits over 12 octets. Also measured: GoBGP drops a 32-bit or 64-bit partial prefix in silence, so the family's headline use does not work there; it reads the prefix as `mlen / 8` octets where the RFC rounds up, which is why that test cannot vouch for our length octet; and **the config and the client agree on `rtc`**, unlike VPN flow spec and EVPN. FRR 8.4.4 has no RT-constrain family at all, so this is the second family with one reference rather than two.
 * **ATTR_SET interop is the one that runs a router in the middle.** Neither GoBGP 3.23.0 nor FRR 8.4.4 implements attribute 128, measured with `strings` before the test was written, so there is no FRR twin and the question became what a router that has never heard of it can still vouch for. The answer is the property the attribute exists for: RFC 6368 section 5 makes it optional transitive so a customer's attributes cross the provider network. `attr_set_gobgp_test.rb` puts a gobgpd between two bgp4r speakers through `LabHelper::Gobgpd`'s `peer2`, and GoBGP carries the attribute to the far side **byte for byte** with the nested 4-octet AGGREGATOR intact, storing the value base64 encoded meanwhile. **What it does not vouch for**: GoBGP never parses the attributes inside, so the meaning of the 4-octet AS rule is still bgp4r's own opinion and only another ATTR_SET implementation could change that. What it does vouch for is the framing, since a wrong length or wrong flags would send the UPDATE to RFC 7606 rather than the RIB. One measurement recorded and not filed: **GoBGP propagates it with the Partial bit clear**, flags 0xc0 rather than 0xe0, on an attribute it does not recognize; RFC 4271 section 9 would settle whether that is a divergence and this file records that both fetchable sources truncate before it, so nothing is claimed.

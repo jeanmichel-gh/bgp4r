@@ -1,0 +1,63 @@
+# Ported from test_gobgp_holds_both_paths_we_send_for_one_prefix in
+# test/functional/lab/add_path_gobgp_test.rb.
+#
+# This one ports whole and needs no injector: the two paths come out of
+# sim.yml, so the scenario only has to wait and read. Measured against
+# gobgpd 3.23.0 on 2026-11-01, driven by lab/speaker.rb from a node file:
+# the router holds both, told apart by next hop, with the shorter AS_PATH
+# best.
+#
+# What it needs from routescope that does not exist yet: the `bgp4r`
+# node kind and its driver, and the four bgp_ conditions. See sections 7
+# and 9.5 of docs/routescope-labs.md. Until then this file is a worked
+# example of the language and not a runnable scenario.
+
+name: One prefix, two paths, two readings
+description: >-
+  sim sends two paths for 198.51.100.0/24 with Path Identifiers 7 and 9.
+  GoBGP must hold two paths and mark the shorter AS_PATH best. peer must
+  record both identifiers, which is the half GoBGP cannot report.
+capture: [sim]
+timeout: 120
+
+steps:
+  - expect: { bgp_session: { node: sim, peer: 10.40.0.2, state: established } }
+    within: 60
+    measure: gobgp_session_up
+  - expect: { bgp_session: { node: sim, peer: 10.40.0.3, state: established } }
+    within: 60
+    measure: peer_session_up
+
+  # The capability each side read, which is the guard bgp4r cannot provide
+  # on its own: against another bgp4r both ends invert the Send/Receive
+  # field together and the error cancels, which is how an inverted
+  # _send_recv lived here for years.
+  #
+  # RFC 7911 section 4: the value says what the SENDER of the capability
+  # can do. sim advertises 3, so both receivers must read 3 from it, and
+  # peer advertises 1, so sim must read 1 from peer.
+  - expect: { bgp_capability: { node: gobgp, peer: 10.40.0.1,
+                                add_path: { afi: 1, safi: 1, send_recv: 3 } } }
+    name: GoBGP read our 3 as both directions, not as its mirror
+  - expect: { bgp_capability: { node: sim, peer: 10.40.0.3,
+                                add_path: { afi: 1, safi: 1, send_recv: 1 } } }
+    name: and the asymmetric half, where peer may receive and not send
+
+  # GoBGP's answer: how many paths. It has no identifier key in
+  # `global rib -j` for a received path, so this is all it can say.
+  - expect: { bgp_prefix: { node: gobgp, prefix: 198.51.100.0/24,
+                            paths: 2 } }
+    within: 15
+    measure: both_paths_installed
+  - expect: { bgp_best: { node: gobgp, prefix: 198.51.100.0/24,
+                          next_hop: 10.40.0.7 } }
+    name: RFC 4271 section 9.1.2.2 a), the shorter AS_PATH wins
+
+  # peer's answer: which identifiers. This is the assertion the GoBGP
+  # half cannot make, and it is why the topology has two receivers.
+  - expect: { bgp_prefix: { node: peer, prefix: 198.51.100.0/24,
+                            path_id: 7, next_hop: 10.40.0.7 } }
+    within: 15
+  - expect: { bgp_prefix: { node: peer, prefix: 198.51.100.0/24,
+                            path_id: 9, next_hop: 10.40.0.9 } }
+    name: both identifiers arrived, and on the paths we put them on
