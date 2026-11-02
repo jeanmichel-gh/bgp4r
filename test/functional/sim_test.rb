@@ -364,7 +364,12 @@ class BGP_Sim_Functional_Test < Test::Unit::TestCase
   end
 
   def test_a_refused_action_is_a_4xx_a_driver_can_act_on
-    [['/api/announce', { 'bogus' => 1 }, 400],
+    # The first row carries a prefix as well as the unknown key, so only
+    # the unknown-key rule can refuse it: with `{'bogus' => 1}` alone
+    # the "give exactly one of prefixes, generate" rule answers 400 too,
+    # and the case passed against a library that ignored unknown keys.
+    # Found by sabotage, which is what that pass looked like.
+    [['/api/announce', { 'prefixes' => ['10.1.0.0/24'], 'bogus' => 1 }, 400],
      ['/api/fault', { 'case' => 'no_such_case' }, 400],
      ['/api/replay', { 'hex' => 'odd' }, 400],
      ['/api/announce', { 'prefixes' => ['10.1.0.0/24'], 'peer' => '10.9.9.9' }, 400]].each do |path, body, want|
