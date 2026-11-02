@@ -665,7 +665,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. The `lab` job is a matrix, one job per group in `test/lab_groups.rb`, so its cost is the slowest group and not the total: it was 12m42s as one serial suite. Each job installs only what its group needs, which is why the matrix entry carries a `gobgp`, `frr`, `docker` or `netns` flag. The `gobgp` groups pin 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-11-02: PENDING_MEASUREMENT, all passing. Line coverage of `bgp/` from the unit suite: 98.5%.
+Baseline on 2026-11-02: 2456 tests, 29052 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.5%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -6127,6 +6127,32 @@ Smaller things:
   four other families and its own topic. `bgp_ls_doc_test.rb` asserts
   the four still have it, so a fix fails that guard and says to strike
   the paragraph in `docs/bgp-ls.md` section 7.
+* **A prefix we originate gets our router ID as its FIB gateway.**
+  `Table#originate` writes the router ID into NEXT_HOP as a
+  placeholder, deliberately, because the export step replaces it with
+  our address on each session (RFC 4271 section 5.1.3). `Fib#plan`
+  reads `route.next_hop` off the Loc-RIB route, where nothing has
+  replaced anything, so the command is `via` our own router ID. A
+  locally originated prefix wants a device route and not a `via` at
+  all.
+  `ruby -I. -e 'require "bgp/rib"; r = BGP::Rib::Table.new(:local_as => 65001, :router_id => "10.0.0.1"); c = r.originate("10.1.0.0/16").first; op = BGP::Rib::Fib.new.plan(c); p [c.new.local?, op.next_hop, BGP::Rib::Fib::IpRoute.new(:table => 100).argv(op).join(" ")]'`
+  prints `[true, "10.0.0.1", "ip route replace 10.1.0.0/16 via 10.0.0.1 table 100 proto bgp"]`.
+  **It is a wrong answer somebody will meet and not only a hazard**,
+  because `lab/speaker.rb`'s `originate:` and `fib:` keys reach it from
+  a node file today: that pair is what
+  `test_a_fib_command_that_fails_is_a_row_in_the_state_file` builds. The
+  outcome depends on the machine and neither is right. Measured here on
+  2026-11-02, where the router ID is on no interface, iproute2 refuses
+  it and the installer records `Error: Nexthop has invalid gateway.`;
+  where the router ID happens to be a reachable address the route
+  installs with a gateway that is not where that prefix lives, which is
+  the worse of the two because nothing says so. It is
+  `bgp/rib/fib.rb` and `bgp/rib/table.rb`, and the FIB's business rather
+  than the speaker's, which is why the pull request that found it left
+  it alone: the fix is a device route for a `route.local?` route, so
+  `Fib::Op` and `IpRoute#install_argv` both grow a case, and `ip route
+  replace P dev D table T proto bgp` wants a `dev` that nothing in a
+  Loc-RIB carries.
 * `Nsap.new` and `Nsap.new_nsap` disagree on the default prefix length, so the same address string gives two different prefixes depending on which constructor built it: `ruby -I. -e 'require "bgp/nlris/nsap"; p [BGP::Nsap.new("49.0102.0304.0506.0608.0910.1112.1314.1516.1718.ff").mlen, BGP::Nsap.new_nsap("49.0102.0304.0506.0608.0910.1112.1314.1516.1718.ff").mlen]'` prints `[160, 152]`. `Nsap#mlen` falls back to 160, the whole twenty octet address, where `new_nsap` writes `len ||= 152` and so masks the twentieth octet away and encodes nineteen. 160 is the one that matches the rest of the class, including `MAX_MLEN` and `prefix_mask_bits`. It was left alone when the clamp above it was fixed, because `test_new_nsap` and `test_nsap` both pin the 152 default and the fix moves them, which makes it a behaviour change of its own rather than part of that one. Found while raising the clamp from 152 to 160.
 
 * **The `to_hash` round trips are not listed here, and their counts are not written down anywhere.** `test/unit/to_hash_catalog.rb` holds one entry per class and `rake to_hash:pending` prints the ones still to fix, each with what it loses and a reproduction; `rake to_hash:status` prints the lot. `test/unit/to_hash_round_trip_test.rb` measures every declared verdict against the library, so that list shortens only when a fix lands and its entry is struck, and it cannot go stale the way a written list does. **The root cause behind every entry on it is one sentence**: a hash is an argument to `initialize`, so what has to come back is the instance state, and a field that lives in an instance variable no key sets cannot survive a hash build however reasonable the hash looks. **No entry is wrong wholesale any more**: `Path_attribute` was the last, with three losses, and all three are closed. ATOMIC_AGGREGATE disappearing, the tail `parse_wire` keeps, and two attributes of one type collapsing into the last, which was recorded here as a shape decision and a won't fix and should not have been. **The reasoning that reached won't fix is worth keeping, because it was wrong in an ordinary way**: a Hash keyed by attribute type genuinely cannot hold two of a type, and the conclusion that nothing readable could be done did not follow from it. A hash is an argument to `initialize`, so what has to come back is the instance state, and `@attributes` holds a repeat perfectly well once the hash has somewhere to put it: `:duplicates`, a list of the occurrences after the first, which is what `:unknown` had always done for attributes with no key of their own, in the same constructor. What made a readable fix look impossible was taking byte-exact octets as the bar, where the order of two of a type is incidental and `Path_attribute#<=>` already says so by sorting each side before comparing. Two more things it corrected that had been recorded here as fact:
