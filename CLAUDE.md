@@ -1061,7 +1061,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. The `lab` job is a matrix, one job per group in `test/lab_groups.rb`, so its cost is the slowest group and not the total: it was 12m42s as one serial suite. Each job installs only what its group needs, which is why the matrix entry carries a `gobgp`, `frr`, `docker` or `netns` flag. The `gobgp` groups pin 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-11-02: 3034 tests, 31406 assertions, all passing. Line coverage of `bgp/` from the unit suite: 96.1%.
+Baseline on 2026-11-02: 3036 tests, 31428 assertions, all passing. Line coverage of `bgp/` from the unit suite: 96.1%.
 
 **That coverage figure is 98.5% for the library and the rest is the two
 programs, not a gap anywhere else.** Measured the same run: with
@@ -1174,6 +1174,22 @@ There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Cove
 * Run the full unit suite before opening a PR. All tests must pass.
 * New behavior needs a test. Bug fixes need a test that failed before the fix.
   * **Check that the proof proved something.** Two "this test catches the regression" runs in one session proved nothing: the first patched a marker string that did not match, so the library was unchanged and the test passed for the obvious reason, and the second made a change the constructor was lenient enough to absorb, so the round trip still worked and the test was right to pass. A sabotage run that passes means the sabotage missed, not that the test is weak. Assert on the thing you changed before you believe the result, and prefer breaking the code the way it would really break, which is usually deleting a line rather than mutating a value.
+  * **A test that walks a list of cases has to assert that each case did
+    something.** The shape: build an edited object per case, derive
+    something from it, and assert the derivation round trips. A case
+    whose edit is silently a **no-op** then compares the thing against
+    itself and passes, which is a vacuous pass rather than a weak test,
+    and no sabotage of the code under test can find it because that code
+    never runs. Two of eleven cases in `config_test.rb` were exactly
+    that, and each was hiding a real bug in `Config.unset`: `delete
+    neighbors A capabilities add_path` could not match
+    `{'add_path' => [...]}` through `Array#delete`, and `delete export
+    next_hops 1` could not match a Hash keyed by the **Integer** AFI. The
+    fix is one line per case, `assert_not_equal([], diff, "the edit
+    changed nothing")`, and it is worth writing wherever a case list
+    derives its expectation from its own input. Sabotage the **guard**
+    too, by making one listed edit a no-op, or it is one more claim
+    nothing checks.
   * **Commit before you sabotage, or revert from a copy rather than from git.** A sabotage pass that reverts with `git checkout -- <files>` reverts **nothing** when any of those files is untracked, because git aborts the whole command on an unknown pathspec. So a pull request adding new files is exactly where this bites: eleven sabotages in #218 accumulated into one broken tree, two of them reporting failures that were really earlier sabotages still in place, and unpicking it by hand took four repairs. Check the revert worked before trusting the next run, which is this rule applied to the harness instead of the test.
 * **A claim nothing checks reads as verified, in a document as much as in a comment.** The lesson came twice. Once from the conformance table, measured by hand and never re-run. Once from `docs/to-hash-round-trips.md`, since **retired**, where the tables stayed true across four pull requests because `to_hash_round_trip_test.rb` compares them against the catalog row by row, while the prose beside them drifted into ranking work that two of those pull requests had already finished. The enforced half held and the unenforced half did not, in one file, with nobody noticing. That is what retiring it was for: what a person reads is printed from the catalog now, by `rake to_hash:status`, so there is no unenforced half left to drift. So when a document makes claims a test could make, assert the load-bearing ones: `test/unit/building_objects_test.rb` is what that looks like, and writing it corrected two claims in the document it guards within the hour.
 * **Work out what the code and the tests were built to do before concluding that any of it is wrong.** bgp4r is behind on BGP features and it is not behind on robustness: encoding and decoding have held up for years because the test coverage around them is extensive and deliberate. So a shape that looks odd is far more likely to be a decision whose reason is not written down than a defect, and the burden is on the reader to find the reason first. This was said on 2026-10-29 after two claims in one afternoon that failed the same way.
