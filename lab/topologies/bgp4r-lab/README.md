@@ -152,12 +152,22 @@ Specifically unverified, each worth knowing before a first deploy:
   containerlab runs these through `docker exec` and the image's own user
   is what decides; `lab-node` is root so that it can, but that is a
   reading of the Dockerfile rather than a measurement.
-* **Whether the three FRR and BIRD configs are accepted as written.**
-  Their shapes are ospfv2's `examples/bgp-lab`, read at ospfv2
+* **The three router configs parse, which is less than being accepted
+  by the pinned versions.** Measured on 2026-11-02 with the binaries
+  this sandbox turned out to have: `bird -p -c r3/bird.conf` is clean
+  under BIRD **2.14**, and `bgpd -C -f` accepts every BGP line of both
+  FRR configs under bgpd **8.4.4**. The only lines it rejects are `no
+  ipv6 forwarding` and `service integrated-vtysh-config`, which are
+  zebra and vtysh lines a standalone `bgpd` does not own and which the
+  bound `daemons` file routes to zebra and staticd. **This lab pins FRR
+  10.2.1**, so an older bgpd accepting these commands says they are not
+  10.x-only and says nothing about 10.2.1 itself, and a parse is not a
+  session. Their shapes are ospfv2's `examples/bgp-lab`, read at ospfv2
   `2dfc03a`, and each file says so; what is bgp4r's own in them is the
   eBGP session to `rtr`, the timers matching `hold_time: 30`, the
   deliberate absence of `next-hop-self` on `r1` and the static routes
-  that absence needs on `r2` and `r3`.
+  that absence needs on `r2` and `r3`. None of those four is checked by
+  a parse.
 * **Whether `rtr` can write routing table 100.** `fib:` needs
   CAP_NET_ADMIN as well as `ip`. Where it cannot, bgp4r says so rather
   than dying: the reason lands under `fib` in the state file, with a row
