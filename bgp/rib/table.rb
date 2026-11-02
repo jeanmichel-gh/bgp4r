@@ -20,6 +20,7 @@
 # along with BGP4R.  If not, see <http://www.gnu.org/licenses/>.
 #++
 
+require 'bgp/logging'
 require 'bgp/rib/adj_rib_in'
 require 'bgp/rib/loc_rib'
 require 'bgp/rib/peer_feed'
@@ -65,13 +66,23 @@ module BGP
     # The methods on Table need no such care: best, result, candidates and
     # peers each take the lock themselves and copy what they return.
     class Table
+      # #log and #logger. **This is the one logger of the three objects
+      # below**: Router, PeerFeed and FibInstaller are each handed the
+      # Table and read it from here, so none of their signatures moved
+      # and a program cannot give one of them a different destination
+      # than the other two.
+      include BGP::Logging
+
       attr_reader :decision, :loc_rib
 
       # import: a block that takes a Route and returns the Route to use, a
       #   changed copy, or nil to reject it. It runs after the built in rules.
+      # logger: the ->(level, message) this table and the three objects it
+      #   builds log through; with none it is the process-wide Log.
       # Other options go to Decision.new: resolver, default_local_pref,
       #   always_compare_med, missing_med_worst, cluster_id.
-      def initialize(local_as:, router_id:, import: nil, **decision_options)
+      def initialize(local_as:, router_id:, import: nil, logger: nil, **decision_options)
+        @logger = logger
         @decision = Decision.new(local_as: local_as, router_id: router_id, **decision_options)
         @loc_rib = LocRib.new(@decision)
         @import = import

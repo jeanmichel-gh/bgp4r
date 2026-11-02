@@ -25,6 +25,7 @@ require 'bgp/observable'
 require 'thread'
 require 'timeout'
 require 'bgp/common'
+require 'bgp/logging'
 require 'bgp/messages/message'
 
 
@@ -40,6 +41,12 @@ module BGP
       DEFAULT_MAX = 256
 
       include Observable
+      # #log and #logger, so this thread's lines follow the session's own
+      # logger rather than the process-wide Log. Neighbor#start_session
+      # sets it after building this: the signature takes its observers as
+      # a splat, so an options Hash behind one could not be told from
+      # another observer.
+      include Logging
       def initialize(session, holdtime, *obs)
         @session, @holdtime = session, holdtime
         obs.each { |o| add_observer(o) }
@@ -51,7 +58,7 @@ module BGP
       def start
         @thread = Thread.new(@session, @holdtime) do |s, h|
           Thread.current['name']='BGP IO Ouput'
-          Log.debug "#{self} #{Thread.current} started" 
+          log(:debug, "#{self} #{Thread.current} started")
           begin
             while @continue
               obj = deq
@@ -62,7 +69,7 @@ module BGP
           rescue IOError, Errno::ECONNRESET, Errno::EBADF => e
             changed and notify_observers(:ev_conn_reset, e)
           ensure
-            Log.debug "Exiting #{Thread.current['name']}"
+            log(:debug, "Exiting #{Thread.current['name']}")
           end
         end
       end
@@ -78,6 +85,8 @@ module BGP
 
     class Input
       include Observable
+      # See Output above: same reason, same setter.
+      include Logging
       def initialize(session, holdtime, *obs)
         @session, @holdtime = session, holdtime
         obs.each { |o| add_observer(o) }
@@ -108,7 +117,7 @@ module BGP
       def start
         @thread = Thread.new(@session, @holdtime) do |s, h|
           Thread.current['name']='BGP IO Input'
-          Log.debug "#{self} #{Thread.current} started"
+          log(:debug, "#{self} #{Thread.current} started")
           @buf = ''
           @continue = true
           @len=0
@@ -128,8 +137,8 @@ module BGP
           rescue IOError, Errno::ECONNRESET, Errno::EBADF => e
             changed and notify_observers(:ev_conn_reset, e)
           end
-          Log.debug "Exiting #{Thread.current['name']}"
-        end 
+          log(:debug, "Exiting #{Thread.current['name']}")
+        end
       end
     end
   end

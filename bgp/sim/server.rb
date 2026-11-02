@@ -105,7 +105,9 @@ TEXT
       # all three. Answers nil and prints the reason on anything a person
       # can fix, which for an injector is mostly the node file.
       def build(config, opts = {})
-        @injector = Injector.new(config)
+        # The same logger the Http server gets, so the injector's lines
+        # and its sessions' go out beside this file's.
+        @injector = Injector.new(config, :logger => @logger)
         @views    = Views.new(@injector)
         @http     = Http.new(@views, @injector,
                              Http.address(opts[:api] || config['api'] ||
@@ -183,8 +185,11 @@ TEXT
         opts
       end
 
-      # `Log` is the library's logger and the Speaker's sessions already
-      # write to it, so there is one place for a line to come out.
+      # `Log` is where this process's lines come out, and the Injector is
+      # handed `BGP::Logging.to_log` so its sessions write there too: one
+      # place for a line to come out. One process is one log, which is
+      # what a program wants; `bgp/logging.rb` has what the injected
+      # logger changed, which is that it is now a choice.
       #
       # **`Log.set_filename` and not `Log.create`**, for the reason
       # `bgp/daemon/server.rb` records: `Log.create` is `@@logger ||=
@@ -199,7 +204,7 @@ TEXT
         io.sync = true if io.respond_to?(:sync=)
         Log.set_filename(io)
         Log.level = opts[:debug] ? Logger::DEBUG : Daemon::Speaker.log_level(config)
-        @logger = ->(level, message) { Log.send(level, message) }
+        @logger = BGP::Logging.to_log
       end
 
       def log(level, message)

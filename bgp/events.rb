@@ -20,8 +20,10 @@
 # along with BGP4R.  If not, see <http://www.gnu.org/licenses/>.
 #++
 
-# Log, for a listener that raises. bgp/common.rb defines it.
+# Log, for a listener that raises when nothing set a logger. bgp/common.rb
+# defines it; bgp/logging.rb is #log, which is how that line is written.
 require 'bgp/common'
+require 'bgp/logging'
 
 module BGP
 
@@ -131,6 +133,15 @@ module BGP
   # and it is the kind of thing a later edit does by tidying.
   class Events
 
+    # #log and #logger. The one line this file writes is about a listener
+    # that raised, and a shared stream belongs to one program, so it
+    # follows that program's logger rather than the process-wide Log.
+    #
+    # It is still true that an event is published and not logged, which
+    # the header above records: nothing here turns a published event into
+    # a log line, in either direction.
+    include Logging
+
     # Kept events, and the most a subscriber may fall behind. Both are per
     # instance, so a test uses a small number instead of flooding, and the
     # defaults are ospfv2's, which has run them in a daemon.
@@ -198,12 +209,14 @@ module BGP
 
     attr_reader :backlog_limit, :queue_limit
 
-    # :backlog and :max_queue override BACKLOG and MAX_QUEUE. Any other
+    # :backlog and :max_queue override BACKLOG and MAX_QUEUE, and :logger
+    # is the ->(level, message) the one log line here goes to. Any other
     # option name is refused; see check_options.
     def initialize(arg={})
-      Events.check_options(arg, :backlog, :max_queue)
+      Events.check_options(arg, :backlog, :max_queue, :logger)
       @backlog_limit   = arg[:backlog]   || BACKLOG
       @queue_limit     = arg[:max_queue] || MAX_QUEUE
+      @logger          = arg[:logger]
       @seq             = 0
       @kept            = []
       @subscribers     = []
@@ -482,7 +495,7 @@ module BGP
           # Counted and logged, not published. Publishing an event about it
           # would re-enter publish and the same listener would raise again.
           @lock.synchronize { @listener_errors += 1 }
-          Log.warn "BGP::Events listener raised #{e.class}: #{e.message}"
+          log(:warn, "BGP::Events listener raised #{e.class}: #{e.message}")
         end
       end
     end

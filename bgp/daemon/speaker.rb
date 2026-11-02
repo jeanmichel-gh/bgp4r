@@ -581,7 +581,8 @@ module BGP
         n = BGP::Neighbor.new(:my_as => @speaker.my_as, :id => @speaker.router_id,
                               :holdtime => @config.fetch('hold_time', 90),
                               :remote_addr => @address, :local_addr => local,
-                              :events => @speaker.events)
+                              :events => @speaker.events,
+                              :logger => @speaker.logger)
         Array(@config.fetch('capabilities', ['as4_byte'])).each { |c| add_capability(n, c) }
         n.add_observer @recorder
         n
@@ -627,6 +628,16 @@ module BGP
     end
 
     class Speaker
+      # #log and #logger. **This is what makes two speakers in one
+      # process able to log apart**, which the process-wide Log
+      # could not: every session this speaker runs, every BGP::IO thread
+      # under it, its BGP::Events and its Rib::Table all take this
+      # logger, so a harness hands each speaker its own callable and
+      # neither reaches the other's destination. With none they all fall
+      # back to Log, which is where these lines always went, so
+      # every node file and every topology behaves as it did.
+      include BGP::Logging
+
       attr_reader :my_as, :router_id, :local_address, :announcements, :peers, :rib, :router,
                   :events, :started_at
 
@@ -648,7 +659,13 @@ module BGP
       # reader of this file must not depend on them. See rib_state.
       ORIGINS = { 0 => 'igp', 1 => 'egp', 2 => 'incomplete' }.freeze
 
-      def initialize(config)
+      # arg[:logger] is the ->(level, message) this speaker and everything
+      # under it logs through. A second positional argument rather than a
+      # config key, because it is a Ruby callable and a node file is YAML:
+      # `log_level` and `log` in the file are the file's business and this
+      # is the program's.
+      def initialize(config, arg = {})
+        @logger = arg[:logger]
         @config = config
         @my_as = config.fetch('as')
         @router_id = config.fetch('router_id')
@@ -662,7 +679,7 @@ module BGP
         # sessions one ordered timeline, with Event#peer telling them
         # apart. Nothing in the lab reads them; `api.info` answers its
         # sequence and `events.subscribe` is a later pull request.
-        @events = BGP::Events.new
+        @events = BGP::Events.new(:logger => @logger)
         @started_at = Time.now
         @peers = Array(config.fetch('neighbors')).map { |c| Peer.new(self, c) }
         @on_established = []
@@ -674,7 +691,8 @@ module BGP
         # router: a Rib::Table with two Neighbors attached decides what both
         # sent and advertises the winner to both. Built here rather than in
         # run, because it starts no thread until something attaches to it.
-        @rib = BGP::Rib::Table.new(:local_as => @my_as, :router_id => @router_id) if rib?
+        @rib = BGP::Rib::Table.new(:local_as => @my_as, :router_id => @router_id,
+                                   :logger => @logger) if rib?
       end
 
       def stopping? ; @stopping ; end
@@ -767,7 +785,7 @@ module BGP
           begin
             block.call(peer)
           rescue StandardError => e
-            Log.error "bgp4r: on_established for #{peer.address}: #{e.class}: #{e.message}"
+            log(:error, "bgp4r: on_established for #{peer.address}: #{e.class}: #{e.message}")
           end
         end
       end
@@ -832,7 +850,7 @@ module BGP
         @rib.uninstall if @fib_installer
         @rib.feed.stop
       rescue StandardError => e
-        Log.error "bgp4r: stopping the rib: #{e.class}: #{e.message}"
+        log(:error, "bgp4r: stopping the rib: #{e.class}: #{e.message}")
       end
 
       # Each originate: block, through Table#originate, so our own prefixes
@@ -923,7 +941,7 @@ module BGP
           @fib_installer = @rib.install(**opts)
         rescue StandardError => e
           @fib_error = "#{e.class}: #{e.message}"
-          Log.error "bgp4r: fib: #{@fib_error}"
+          log(:error, "bgp4r: fib: #{@fib_error}")
         end
       end
 
@@ -1088,7 +1106,18 @@ module BGP
         end
       end
 
+      # Points the process-wide Log at standard output, which is what
+      # a container's log is, and sets its level from the node file.
+      #
+      # **A speaker handed a logger does nothing here**, and that is the
+      # point of the guard rather than tidiness: `run` is `lab/speaker.rb`'s
+      # own main loop and one process there is one node, so configuring
+      # the process log is right. A speaker inside a program that gave it
+      # a callable is not using Log at all, so touching `Log.level` would
+      # change a destination it does not write to and that another
+      # speaker in the same process may.
       def setup_log
+        return if @logger
         Log.create(STDOUT)
         Log.level = Speaker.log_level(@config)
       end
@@ -1104,7 +1133,7 @@ module BGP
             if peer
               peer.accept(sock)
             else
-              Log.warn "bgp4r: refused connection from unknown peer #{ip}"
+              log(:warn, "bgp4r: refused connection from unknown peer #{ip}")
               sock.close
             end
           rescue IOError

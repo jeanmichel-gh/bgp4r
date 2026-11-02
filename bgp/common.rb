@@ -207,28 +207,54 @@ class String
 end
 
 class Log  < Logger
-  private_class_method :new 
+  private_class_method :new
   @@logger = nil
+
+  # The timestamp on a line, with the date on it.
+  #
+  # **It was "%M:%S" and that is a bug in anything long lived.** A line
+  # read `I, [54:16 #2408]  INFO -- :`, so two lines a day apart were
+  # indistinguishable in a `bgp4rd` log. In a library used from a script
+  # it was harmless, which is why it survived. The offset is printed
+  # rather than claimed as UTC, because Logger applies this format to a
+  # local Time: an unambiguous line costs the same as a wrong one.
+  # BGP::Event#iso_time is the structured side's answer to the same
+  # question and is UTC, since it formats the Time itself.
+  DATETIME_FORMAT = '%Y-%m-%dT%H:%M:%S.%L%z'
+
   def initialize(s)
     super(s)
     @@time=Time.now
-    self.datetime_format = "%M:%S"
+    self.datetime_format = DATETIME_FORMAT
     self.level = Logger::INFO
-  end 
+  end
   def Log.time_reset
     @@time = Time.now
   end
+  # **Ensures there is a process log; it does not replace one.** It reads
+  # as "use this logger" and is `@@logger ||= new(s)`, so a second
+  # caller's IO is dropped and every line keeps going where the first
+  # caller sent it. `Log.set_filename` is the forcing form and is what
+  # both Server classes call. See "Known issues to work on" in CLAUDE.md.
   def Log.create(s=STDERR)
     @@logger ||= new(s)
   end
   def Log.set_filename(s)
     @@logger = new(s)
-  end 
+  end
+  # **Both of these answer rather than raise when nothing created a
+  # logger**, which is the same guard the range check beside it already
+  # had. Before this they raised `NoMethodError: undefined method
+  # 'level=' for nil`, so one line returned silently for a level out of
+  # range and raised for a state the caller could not see, and
+  # `Candidate::Plan#apply_log_level` carried a rescue for it.
   def Log.level=(level)
     return unless (0..4) === level
+    return if @@logger.nil?
     @@logger.level=(level)
-  end 
+  end
   def Log.level
+    return nil if @@logger.nil?
     case @@logger.level
     when Logger::INFO ;  "(#{Logger::INFO }) 'INFO'"
     when Logger::DEBUG ; "(#{Logger::DEBUG }) 'DEBUG'"
@@ -244,7 +270,11 @@ class Log  < Logger
     File.delete(name) if File.exist?(name)
     Log.set_filename(name)
   end
+  # nil with no logger, which is the same guard as Log.level: it is the
+  # third reader that raised on a state its caller cannot see, and it is
+  # what makes Log.clear safe to call on a fresh process.
   def Log.filename
+    return nil if @@logger.nil?
     @@logger.instance_eval { @logdev.filename }
   end
   def Log.start(*arg)

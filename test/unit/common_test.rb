@@ -453,6 +453,40 @@ class Common_Test < Test::Unit::TestCase
   ensure
     restore_log_state(state)
   end
+  # **Three readers raised on a state their caller cannot see**, where one
+  # line above them Log.level= already returned silently for a level out of
+  # range. Each answers nil now, and Log.clear is safe on a fresh process
+  # because Log.filename is one of the three.
+  def test_the_readers_answer_rather_than_raise_with_no_logger
+    state = save_log_state
+    Log.class_variable_set(:@@logger, nil)
+    assert_nil(Log.level, 'Log.level raised NoMethodError before this')
+    assert_nil(Log.filename)
+    assert_nothing_raised { Log.level = Logger::DEBUG }
+    assert_nothing_raised { Log.clear }
+    assert_nil(Log.level, 'and nothing was created on the way through')
+  ensure
+    restore_log_state(state)
+  end
+
+  # **The timestamp carries the date.** It was "%M:%S", so a line read
+  # `I, [54:16 #2408]  INFO -- :` and two lines a day apart in a bgp4rd log
+  # were indistinguishable. The offset is printed rather than claimed as
+  # UTC, because Logger applies this format to a local Time.
+  def test_a_log_line_says_what_day_it_was
+    state = save_log_state
+    io = StringIO.new
+    Log.class_variable_set(:@@logger, nil)
+    Log.start(io)
+    Log.info 'what day is it'
+    today = Time.now.strftime('%Y-%m-%d')
+    assert_match(/\[#{today}T\d\d:\d\d:\d\d\.\d\d\d[-+]\d{4} #\d+\]/, io.string,
+                 'the date, the time to milliseconds and the offset')
+    assert_equal('%Y-%m-%dT%H:%M:%S.%L%z', Log::DATETIME_FORMAT)
+  ensure
+    restore_log_state(state)
+  end
+
   def test_log_writes_every_severity
     state = save_log_state
     io = StringIO.new

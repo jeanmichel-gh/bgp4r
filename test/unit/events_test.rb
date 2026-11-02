@@ -219,6 +219,7 @@ class EventsTest < Test::Unit::TestCase
     # The message names what the method does take, as publish's does.
     assert_match(/:backlog/, e.message)
     assert_match(/:max_queue/, e.message)
+    assert_match(/:logger/, e.message)
   end
 
   # It took the default backlog of 2000 and said nothing, so since
@@ -525,6 +526,24 @@ class EventsTest < Test::Unit::TestCase
     assert_equal(2, @events.listener_errors)
     # And the event is in the stream, so a failing listener loses nothing.
     assert_equal([1], @events.since(0).collect(&:seq))
+  end
+
+  # The one log line this file writes goes to the stream's own logger, so
+  # a program with two streams keeps them apart. Before the injected
+  # logger it went to the process-wide Log, which two streams in one
+  # process shared.
+  def test_the_line_about_a_raising_listener_goes_to_this_streams_logger
+    lines = []
+    events = BGP::Events.new(:logger => ->(l, m) { lines << [l, m] })
+    events.on_event { |_ev| raise ArgumentError, 'from a listener' }
+    events.publish(:kind => :log, :message => 'x')
+    assert_equal(1, events.listener_errors)
+    assert_equal([:warn], lines.collect(&:first))
+    assert_match(/listener raised ArgumentError: from a listener/, lines.first.last)
+    # And a second stream's lines do not land in the first's.
+    other = BGP::Events.new(:logger => ->(_l, _m) { flunk('the wrong logger') })
+    other.publish(:kind => :log, :message => 'y')
+    assert_equal(1, lines.size)
   end
 
   def test_a_listener_may_publish_without_deadlocking

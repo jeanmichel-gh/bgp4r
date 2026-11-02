@@ -543,21 +543,33 @@ module BGP
 
         # ---- doing it ----
 
-        # **`Log.level=` raises when nothing has created a logger**, which
-        # a `bgp4rd` always has by the time a commit can reach it, since
-        # `Server#setup_log` runs before `build`. A Speaker built
-        # directly, which is what a unit test has, has none: `Log.level=`
-        # is `@@logger.level=` with no guard, where one line above it the
-        # same method returns silently for a level out of range. So the
-        # commit says it could not apply it rather than dying on the way
-        # through. Listed under "Known issues to work on" in CLAUDE.md.
+        # **`Log.level=` does nothing when nothing has created a logger**,
+        # which a `bgp4rd` always has by the time a commit can reach it,
+        # since `Server#setup_log` runs before `build`. A Speaker built
+        # directly, which is what a unit test has, has none. So the
+        # commit says it could not apply it rather than claiming a level
+        # that went nowhere.
+        #
+        # **This used to be a `rescue NoMethodError`** and it was the one
+        # caller the raise had: `Log.level=` was `@@logger.level=` with no
+        # guard, where one line above it the same method returned
+        # silently for a level out of range. Both readers answer nil now
+        # instead of raising, so the condition is read rather than caught
+        # and the two outcomes and their wording are unchanged.
+        #
+        # It is the process-wide level either way, and that is right for
+        # this program: `bgp4rd`'s logger is `BGP::Logging.to_log`, so
+        # `Log` is the destination every one of its lines reaches. A
+        # program that gave its speakers callables of their own would
+        # have no such lever and would not have a `log_level` key.
         def apply_log_level
           return [] unless @live.include?(%w[log_level])
           Log.level = Speaker.log_level(@candidate)
+          if Log.level.nil?
+            return ["log_level is #{@candidate['log_level']} in the configuration, and nothing " \
+                    'created a logger to apply it to']
+          end
           ["log_level is #{@candidate['log_level']} now"]
-        rescue NoMethodError
-          ["log_level is #{@candidate['log_level']} in the configuration, and nothing " \
-           'created a logger to apply it to']
         end
 
         # The prefixes to withdraw and the ones to originate, worked out

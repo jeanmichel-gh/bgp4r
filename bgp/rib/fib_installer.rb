@@ -52,6 +52,9 @@ module BGP
 
       attr_reader :table, :fib, :backend
 
+      # The table's logger; see Rib::Router#log for why it is delegated.
+      def log(level, message) ; @table.log(level, message) ; end
+
       def initialize(table, feed, backend:)
         @table = table
         @feed = feed
@@ -138,7 +141,7 @@ module BGP
         else
           @lock.synchronize { @failed[op.prefix] = result }
           @fib.commit(op) if op.remove?
-          Log.error "#{self.class}: #{result}"
+          log(:error, "#{self.class}: #{result}")
         end
         result
       end
