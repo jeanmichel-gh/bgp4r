@@ -498,11 +498,14 @@ class BGP_Sim_Injector_Test < Test::Unit::TestCase
                  peer.updates.first.withdrawn.to_ary)
     assert_nil(peer.updates.first.nlri)
     assert_equal(10, inj.sent.summary[:prefixes_withdrawn])
-    # **And the withdrawal path lists nothing either**, which is the
-    # same rule as the announce path above. Sabotage caught this
-    # missing: recording every generated prefix in `stream_withdraw`
-    # passed the whole file, because the only assertion about rows was
-    # on the other path.
+    # **And nothing is listed afterwards.** Be exact about what this
+    # proves, because sabotage showed it is less than it looks: making
+    # `stream_withdraw` record every prefix it sends passes this file,
+    # since `withdraw` forgets the whole range immediately afterwards
+    # and the end state is the same. What the no-rows rule protects on
+    # this path is the memory a feed holds **while** it runs, which no
+    # assertion from outside can see. The announce path's version of
+    # this assertion does catch its own sabotage.
     assert_equal([], inj.announced)
   end
 
