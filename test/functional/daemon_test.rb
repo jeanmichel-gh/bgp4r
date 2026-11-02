@@ -120,7 +120,7 @@ class BGP_Daemon_Functional_Test < Test::Unit::TestCase
     s = UNIXSocket.new(@socket)
     %w[api.info show.status show.peers show.routes show.rib].each_with_index do |m, i|
       s.write("#{JSON.generate(:id => i + 1, :method => m, :params => {})}\n")
-      r = JSON.parse(s.gets)
+      r = read_line(s)
       assert_equal(i + 1, r['id'], "#{m} answered the wrong id")
       assert_equal(false, r.key?('error'), "#{m}: #{r['error']}")
     end
@@ -191,9 +191,9 @@ class BGP_Daemon_Functional_Test < Test::Unit::TestCase
   def test_a_method_that_refuses_its_parameters_answers_and_lives
     s = UNIXSocket.new(@socket)
     s.write("#{JSON.generate(:id => 1, :method => 'show.routes', :params => { :limit => 'lots' })}\n")
-    assert_match(/limit must be an integer/, JSON.parse(s.gets)['error'])
+    assert_match(/limit must be an integer/, read_line(s)['error'])
     s.write("#{JSON.generate(:id => 2, :method => 'api.info', :params => {})}\n")
-    assert_equal(2, JSON.parse(s.gets)['id'], 'the connection still takes requests')
+    assert_equal(2, read_line(s)['id'], 'the connection still takes requests')
     s.close
     assert_still_alive
   end
@@ -210,7 +210,7 @@ class BGP_Daemon_Functional_Test < Test::Unit::TestCase
   def test_many_clients_at_once_are_all_answered
     socks = Array.new(8) { UNIXSocket.new(@socket) }
     socks.each_with_index { |s, i| s.write("#{JSON.generate(:id => i, :method => 'api.info')}\n") }
-    socks.each_with_index { |s, i| assert_equal(i, JSON.parse(s.gets)['id']) }
+    socks.each_with_index { |s, i| assert_equal(i, read_line(s)['id']) }
     socks.each(&:close)
     assert_still_alive
   end
@@ -307,7 +307,7 @@ class BGP_Daemon_Functional_Test < Test::Unit::TestCase
       assert_equal(true, File.socket?(sock))
       s = UNIXSocket.new(sock)
       s.write("#{JSON.generate(:id => 1, :method => 'show.status', :params => {})}\n")
-      r = JSON.parse(s.gets)
+      r = read_line(s)
       s.close
       assert_equal('10.0.0.2', r['result']['router_id'])
       assert_equal(65_002, r['result']['as'])
@@ -324,7 +324,7 @@ class BGP_Daemon_Functional_Test < Test::Unit::TestCase
       s = UNIXSocket.new(sock)
       s.write("#{JSON.generate(:id => 2, :method => 'show.log', :params => {})}
 ")
-      lines = JSON.parse(s.gets)['result']
+      lines = read_line(s)['result']
       s.close
       assert_operator(lines['kept'], :>, 0, 'the daemon logged at least its own startup line')
       assert_equal(BGP::Daemon::LogRing::KEEP, lines['keeps'])
@@ -333,7 +333,7 @@ class BGP_Daemon_Functional_Test < Test::Unit::TestCase
       s = UNIXSocket.new(sock)
       s.write("#{JSON.generate(:id => 3, :method => 'show.log', :params => { 'count' => 1 })}
 ")
-      assert_equal(1, JSON.parse(s.gets)['result']['lines'].size)
+      assert_equal(1, read_line(s)['result']['lines'].size)
       s.close
     ensure
       daemon.stop
@@ -407,17 +407,17 @@ class BGP_Daemon_Functional_Test < Test::Unit::TestCase
     @server.speaker.events.publish(:kind => :log, :message => 'before the subscription')
     s = UNIXSocket.new(@socket)
     s.write("#{JSON.generate(:id => 2, :method => 'events.subscribe', :params => { 'since' => 0 })}\n")
-    r = JSON.parse(s.gets)
+    r = read_line(s)
     assert_equal(2, r['id'])
     assert_equal(1, r['result']['replayed'], 'the kept event above since 0')
     assert_equal(1, r['result']['seq'], 'where the stream has got to')
     assert_nil(r['result']['kinds'], 'every kind, since none was named')
-    replay = JSON.parse(s.gets)
+    replay = read_line(s)
     assert_equal('before the subscription', replay['event']['message'])
     @server.speaker.events.publish(:kind => :session, :peer => '127.0.0.9',
                                    :message => 'Active -> Established',
                                    :data => { :state => :Established })
-    ev = JSON.parse(s.gets)['event']
+    ev = read_line(s)['event']
     assert_equal(%w[data kind level message peer seq time], ev.keys.sort)
     assert_equal('session', ev['kind'])
     assert_equal('127.0.0.9', ev['peer'],
@@ -432,11 +432,11 @@ class BGP_Daemon_Functional_Test < Test::Unit::TestCase
     @server.speaker.events.publish(:kind => :log, :message => 'already happened')
     s = UNIXSocket.new(@socket)
     s.write("#{JSON.generate(:id => 1, :method => 'events.subscribe')}\n")
-    r = JSON.parse(s.gets)
+    r = read_line(s)
     assert_equal(0, r['result']['replayed'])
     assert_equal(1, r['result']['seq'])
     @server.speaker.events.publish(:kind => :log, :message => 'and this one is live')
-    assert_equal('and this one is live', JSON.parse(s.gets)['event']['message'])
+    assert_equal('and this one is live', read_line(s)['event']['message'])
     s.close
   end
 
@@ -444,11 +444,11 @@ class BGP_Daemon_Functional_Test < Test::Unit::TestCase
     s = UNIXSocket.new(@socket)
     s.write("#{JSON.generate(:id => 1, :method => 'events.subscribe',
                              :params => { 'kinds' => ['notification'] })}\n")
-    assert_equal(['notification'], JSON.parse(s.gets)['result']['kinds'])
+    assert_equal(['notification'], read_line(s)['result']['kinds'])
     @server.speaker.events.publish(:kind => :log, :message => 'not this one')
     @server.speaker.events.publish(:kind => :notification, :peer => '127.0.0.9',
                                    :message => 'this one')
-    assert_equal('this one', JSON.parse(s.gets)['event']['message'])
+    assert_equal('this one', read_line(s)['event']['message'])
     s.close
   end
 
@@ -461,8 +461,8 @@ class BGP_Daemon_Functional_Test < Test::Unit::TestCase
     begin
       s = UNIXSocket.new(api.path)
       s.write("#{JSON.generate(:id => 1, :method => 'events.subscribe')}\n")
-      JSON.parse(s.gets)
-      line = JSON.parse(s.gets)
+      read_line(s)
+      line = read_line(s)
       assert_match(/\A\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z\z/, line['keepalive'])
       assert_kind_of(Integer, line['seq'])
       s.close
@@ -477,14 +477,14 @@ class BGP_Daemon_Functional_Test < Test::Unit::TestCase
   def test_unsubscribing_ends_the_stream_and_the_connection_takes_requests
     s = UNIXSocket.new(@socket)
     s.write("#{JSON.generate(:id => 1, :method => 'events.subscribe')}\n")
-    JSON.parse(s.gets)
+    read_line(s)
     assert_equal(1, @server.speaker.events.subscribers)
     s.write("#{JSON.generate(:id => 2, :method => 'events.unsubscribe')}\n")
-    r = JSON.parse(s.gets)
+    r = read_line(s)
     assert_equal(2, r['id'])
     assert_equal(true, r['result']['unsubscribed'])
     s.write("#{JSON.generate(:id => 3, :method => 'api.info')}\n")
-    assert_equal(BGP::VERSION, JSON.parse(s.gets)['result']['version'])
+    assert_equal(BGP::VERSION, read_line(s)['result']['version'])
     s.close
     assert_equal(0, @server.speaker.events.subscribers, 'and the subscription is gone')
   end
@@ -495,13 +495,13 @@ class BGP_Daemon_Functional_Test < Test::Unit::TestCase
   def test_another_request_mid_stream_is_refused_and_the_stream_goes_on
     s = UNIXSocket.new(@socket)
     s.write("#{JSON.generate(:id => 1, :method => 'events.subscribe')}\n")
-    JSON.parse(s.gets)
+    read_line(s)
     s.write("#{JSON.generate(:id => 9, :method => 'show.status')}\n")
-    r = JSON.parse(s.gets)
+    r = read_line(s)
     assert_equal(9, r['id'])
     assert_match(/only events\.unsubscribe/, r['error'])
     @server.speaker.events.publish(:kind => :log, :message => 'still streaming')
-    assert_equal('still streaming', JSON.parse(s.gets)['event']['message'])
+    assert_equal('still streaming', read_line(s)['event']['message'])
     s.close
   end
 
@@ -517,9 +517,9 @@ class BGP_Daemon_Functional_Test < Test::Unit::TestCase
     s = UNIXSocket.new(@socket)
     s.write("#{JSON.generate(:id => 1, :method => 'events.subscribe',
                              :params => { 'kinds' => ['nonsense'] })}\n")
-    assert_match(/unknown event kind/, JSON.parse(s.gets)['error'])
+    assert_match(/unknown event kind/, read_line(s)['error'])
     s.write("#{JSON.generate(:id => 2, :method => 'api.info')}\n")
-    assert_equal(2, JSON.parse(s.gets)['id'], 'the connection still takes requests')
+    assert_equal(2, read_line(s)['id'], 'the connection still takes requests')
     s.close
     assert_equal(0, @server.speaker.events.subscribers)
   end
@@ -529,7 +529,7 @@ class BGP_Daemon_Functional_Test < Test::Unit::TestCase
   def test_a_subscriber_that_disappears_leaves_no_subscription
     s = UNIXSocket.new(@socket)
     s.write("#{JSON.generate(:id => 1, :method => 'events.subscribe')}\n")
-    JSON.parse(s.gets)
+    read_line(s)
     assert_equal(1, @server.speaker.events.subscribers)
     s.close
     deadline = Time.now + 5
@@ -626,6 +626,18 @@ class BGP_Daemon_Functional_Test < Test::Unit::TestCase
     n.capability :route_refresh
     Thread.new { n.start(:session => sock, :timeout => 10) }
     n
+  end
+
+  # **One line of a stream, or a failure saying none came.** A bare
+  # `gets` on a stream that went quiet blocks until the connection's
+  # IDLE, which is fifteen minutes, so every sabotage aimed at the
+  # stream would hang the suite rather than fail it, and a hang names
+  # nothing. Measured: with the keepalive line taken out,
+  # test_a_quiet_stream_says_so_rather_than_going_silent hung instead of
+  # failing until this was here.
+  def read_line(sock, timeout = 10)
+    assert_not_nil(sock.wait_readable(timeout), "no line arrived within #{timeout}s")
+    JSON.parse(sock.gets)
   end
 
   def wait_until(timeout = 10)
