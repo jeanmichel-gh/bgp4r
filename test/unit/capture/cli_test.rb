@@ -73,11 +73,26 @@ class Capture_CLI_Test < Test::Unit::TestCase
     assert_equal(BGP::VERSION, @out.string.strip)
   end
 
-  def test_the_version_the_command_prints_is_the_one_the_gem_declares
+  def test_the_gemspec_reads_the_version_rather_than_carrying_its_own
     # One place for the version, which is why bgp/version.rb exists: a
     # command cannot print what the library does not answer.
-    spec = Gem::Specification.load(File.expand_path('../../../bgp4r.gemspec', __dir__))
-    assert_equal(spec.version.to_s, BGP::VERSION)
+    #
+    # **Read as text and not loaded, and the first draft of this test
+    # loaded it.** `Gem::Specification.load` evaluates the gemspec, which
+    # runs `git ls-files`, and the Docker image has neither git nor a
+    # .git: the spec came back nil and the test errored in the three
+    # `docker ruby` CI jobs while passing on every runner job and
+    # locally. Same family as the base64 and frozen-literal entries in
+    # CLAUDE.md, one step over: the local tree is not the image.
+    #
+    # Asserting the two agree would also be vacuous, since the gemspec
+    # reads the constant. What is worth asserting is that it still does
+    # and has grown no literal of its own, which is a claim about what a
+    # file does, so it is matched as code and not as a word.
+    src = File.read(File.expand_path('../../../bgp4r.gemspec', __dir__))
+    assert_match(/^\s*s\.version\s*=\s*BGP::VERSION\s*$/, src)
+    assert_no_match(/^\s*s\.version\s*=\s*["']/, src)
+    assert_match(%r{^require File\.expand_path\('bgp/version', __dir__\)$}, src)
   end
 
   def test_no_subcommand_prints_the_usage_and_succeeds
