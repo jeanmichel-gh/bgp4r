@@ -1,0 +1,27 @@
+# inj2, a bgp4r-sim in AS 65010. inj1's file with its own addresses.
+#
+# **The same AS as inj1, deliberately.** MULTI_EXIT_DISC is only
+# compared between paths from the same neighbouring AS (RFC 4271 section
+# 9.1.2.2 c and section 5.1.4), so one AS for both injectors is what
+# makes rtr's decision reach the MED step at all. In two ASes the two
+# paths would be decided at AS_PATH length and no MED a scenario sets
+# would change anything.
+#
+# A different `router_id`, because two speakers in one AS with one
+# identifier is not a topology, and a different link.
+#
+# No `announce` block here either: it starts silent. See inj1/sim.yml.
+router_id: 10.255.10.2
+as: 65010
+api: 127.0.0.1:8080
+log_level: info
+
+local_address: 10.0.11.1
+
+neighbors:
+  - address: 10.0.11.2
+    as: 65000
+    connect: true
+    hold_time: 30
+    description: rtr
+    capabilities: [as4_byte, route_refresh]

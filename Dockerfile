@@ -27,6 +27,7 @@
 #   base         Ruby, the dev and test gems, the bgp4r source, a non-root user
 #   test         runs the unit suite (the default command)
 #   speaker      runs a bgp4r script, for labs: docker run bgp4r-speaker my_peer.rb
+#   lab-node     speaker plus iproute2, as root, for a containerlab node
 #   capture      the bgp4r command with tcpdump, for `bgp4r capture -i IFACE`
 #   gobgp-cli    the router image, only as a source for the gobgp binary
 #   conformance  speaker plus the gobgp client, for the fault matrix topology
@@ -75,6 +76,36 @@ CMD ["ruby", "test/run_unit.rb"]
 FROM base AS speaker
 EXPOSE 179
 ENTRYPOINT ["ruby", "-I/app"]
+
+# The containerlab node image: the speaker stage plus iproute2, as root.
+#
+#   docker build --target lab-node -t bgp4r-lab:latest .
+#
+# `lab/topologies/bgp4r-lab` is the one topology that needs it, and the
+# two things it adds are both things the `speaker` stage cannot be given
+# from a topology file.
+#
+# * **iproute2**, because a containerlab topology sets a node's addresses
+#   with `exec: ip addr add ...` and there is no `ip` in the speaker
+#   image. `bgp/rib/ip_route.rb` shells out to the same binary, so a
+#   `fib:` key in a node file needs it too.
+# * **root**, because `BGP::Daemon::Api#start` does `mkdir_p` on the
+#   socket's directory and the default is `/run/bgp4r`, which uid 1000
+#   cannot create. routescope's `Drivers::Bgp4rd` hard-codes that path
+#   for a containerlab node, since `Containerlab#node` passes no
+#   `socket:` option through, so the daemon has to be able to bind there.
+#
+# The four Compose topologies stay on `speaker` and are untouched: they
+# set their addresses through Compose rather than with `ip`, and nothing
+# in them opens a control socket.
+#
+# **Not built here**, for the same reason the capture stage below is not:
+# no Docker daemon was reachable where this was written. Build it before
+# trusting it.
+FROM speaker AS lab-node
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends iproute2 \
+    && rm -rf /var/lib/apt/lists/*
 
 # The capture image. Its entrypoint is the bgp4r command, so the argv
 # routescope hard-codes works unchanged:

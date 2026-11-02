@@ -1,0 +1,70 @@
+# Point 5 of this lab's README: a withdraw removes the prefix from BIRD,
+# which is the far end of the chain.
+#
+# Four hops of propagation for one action: inj1 withdraws, rtr's Loc-RIB
+# loses the only path to the prefix, its export side withdraws it from
+# r1, r1 withdraws it from the mesh, and r3 drops it. Nothing in bgp4r's
+# own test suite covers that, because a test asserts against one router
+# and moves on.
+#
+# **r3 advertises nothing**, which is what makes its answer worth
+# reading: everything in its table arrived from somewhere else, so an
+# absence there cannot be satisfied by anything r3 did itself.
+#
+# NOT RUN: this lab has not been deployed, so nothing here is a
+# measurement.
+
+name: A withdraw reaches BIRD
+description: >-
+  inj1 announces 10.3.0.0/24 and it must reach r3 through rtr and r1.
+  Withdrawing it at inj1 must remove it from r3, and must leave the
+  sessions and the other prefixes alone, which is what says a withdrawal
+  and not a reset carried it away.
+capture: [rtr]
+timeout: 240
+
+steps:
+  - expect: { bgp_session: { node: rtr, peer: 10.0.10.1, state: established } }
+    within: 60
+  - expect: { bgp_session: { node: r1, peer: 10.1.23.2, state: established } }
+    within: 60
+    name: and the BIRD session, read from r1
+
+  # A second prefix that stays throughout, so the last steps can tell a
+  # withdrawal from the session going away underneath it.
+  - bgp: announce
+    node: inj1
+    prefixes: [10.3.9.0/24]
+  - bgp: announce
+    node: inj1
+    prefixes: [10.3.0.0/24]
+  - expect: { bgp_prefix: { node: r3, prefix: 10.3.0.0/24,
+                            as_path: '65000 65010' } }
+    within: 25
+    measure: announce_to_bird
+  - expect: { bgp_prefix: { node: r3, prefix: 10.3.9.0/24, present: true } }
+    within: 25
+
+  - mark: withdrawing 10.3.0.0/24 at the injector
+  - bgp: withdraw
+    node: inj1
+    prefixes: [10.3.0.0/24]
+
+  - expect: { bgp_prefix: { node: rtr, prefix: 10.3.0.0/24, present: false } }
+    within: 15
+    measure: withdraw_at_rtr
+  - expect: { bgp_prefix: { node: r1, prefix: 10.3.0.0/24, present: false } }
+    within: 20
+  - expect: { bgp_prefix: { node: r2, prefix: 10.3.0.0/24, present: false } }
+    within: 25
+  - expect: { bgp_prefix: { node: r3, prefix: 10.3.0.0/24, present: false } }
+    within: 25
+    measure: withdraw_to_bird
+
+  # The two that say it was a withdrawal. A reset would have taken the
+  # other prefix with it and would show in the session state, so the
+  # scenario would pass the absence above for the wrong reason.
+  - expect: { bgp_prefix: { node: r3, prefix: 10.3.9.0/24, present: true } }
+    name: the prefix we did not name is still there
+  - expect: { bgp_session: { node: rtr, peer: 10.0.10.1, state: established } }
+    name: and the session never went down

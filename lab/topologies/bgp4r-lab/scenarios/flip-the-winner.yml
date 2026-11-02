@@ -1,0 +1,82 @@
+# Point 4 of this lab's README: one action flips the winner, which is a
+# scenario rather than a screenshot.
+#
+# **The flip is a MED and not a LOCAL_PREF, and that is a correction to
+# docs/routescope-labs.md section 9.4 scenario B rather than a
+# preference.** That sketch sends `local_pref` from an injector and
+# expects `reason: local_pref`. It cannot work over the sessions this lab
+# has: `Table#import` drops LOCAL_PREF from an **external** peer (RFC
+# 4271 section 5.1.5), both injectors are external to rtr, and both paths
+# then carry the same default. A LOCAL_PREF flip needs an iBGP injector,
+# which this topology deliberately does not have, because an iBGP
+# injector could not demonstrate the AS_PATH prepending of point 2.
+#
+# `attribute` is the right action for it. RFC 4271 section 3.1: "Changing
+# the attribute(s) of a route is accomplished by advertising a
+# replacement route", so the injector re-announces with the named keys
+# changed and the rest of the block as it was.
+#
+# NOT RUN: this lab has not been deployed, so nothing here is a
+# measurement.
+
+name: One action flips which path wins
+description: >-
+  inj1 wins 10.2.1.0/24 with MED 100 against inj2's 200. Raising inj1's
+  MED to 300 must move the winner to inj2 and leave the step that decided
+  it the same, which is what says the decision was re-run rather than
+  cached.
+capture: [rtr]
+timeout: 180
+
+steps:
+  - expect: { bgp_session: { node: rtr, peer: 10.0.10.1, state: established } }
+    within: 60
+  - expect: { bgp_session: { node: rtr, peer: 10.0.11.1, state: established } }
+    within: 60
+  - expect: { bgp_prefix: { node: rtr, prefix: 10.2.1.0/24, present: false } }
+    name: the baseline is empty, because an injector starts silent
+
+  - bgp: announce
+    node: inj1
+    prefixes: [10.2.1.0/24]
+    med: 100
+  - bgp: announce
+    node: inj2
+    prefixes: [10.2.1.0/24]
+    med: 200
+  - expect: { bgp_prefix: { node: rtr, prefix: 10.2.1.0/24, next_hop: 10.0.10.1 } }
+    within: 15
+  - expect: { bgp_best: { node: rtr, prefix: 10.2.1.0/24, reason: med } }
+    name: inj1 wins on MED
+
+  # The far end has to be carried along, or the flip is a change rtr
+  # agreed with itself about. r1 is where it becomes visible outside
+  # AS 65000, and its next hop is rtr's either way, so the next hop is
+  # not what moves: the AS_PATH is not either, since both injectors are
+  # in one AS. What moves at r1 is nothing at all, which is itself worth
+  # asserting: see the last step.
+  - expect: { bgp_prefix: { node: r1, prefix: 10.2.1.0/24, next_hop: 10.0.20.1 } }
+    within: 20
+
+  - mark: raising inj1's MED above inj2's
+  - bgp: attribute
+    node: inj1
+    prefixes: [10.2.1.0/24]
+    med: 300
+  - expect: { bgp_prefix: { node: rtr, prefix: 10.2.1.0/24,
+                            next_hop: 10.0.11.1, med: 200 } }
+    within: 15
+    measure: flip
+    name: inj2 wins now, on the same step
+  - expect: { bgp_best: { node: rtr, prefix: 10.2.1.0/24, reason: med } }
+    name: still MED, so the decision was re-run and not re-ordered by chance
+
+  # **The peer cannot see this flip and must not be sent anything.** RFC
+  # 4271 section 5.1.4 keeps MULTI_EXIT_DISC out of another AS and both
+  # injectors are in one AS, so what r1 would receive is identical before
+  # and after and rtr's Adj-RIB-Out says so. The prefix is still there,
+  # on rtr's own next hop, which is the honest assertion: a change the
+  # peer cannot see is not a change the peer hears about.
+  - expect: { bgp_prefix: { node: r1, prefix: 10.2.1.0/24, next_hop: 10.0.20.1 } }
+    within: 20
+    name: r1 is unchanged, which is what section 5.1.4 asks for

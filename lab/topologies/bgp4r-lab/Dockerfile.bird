@@ -1,0 +1,46 @@
+# Copyright 2026 Jean-Michel Esnault.
+# All rights reserved.
+# See LICENSE.txt for permissions.
+#
+#
+# This file is part of BGP4R.
+#
+# BGP4R is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# BGP4R is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with BGP4R.  If not, see <http://www.gnu.org/licenses/>.
+
+# BIRD 2 for the bgp4r-lab topology: the third implementation on it.
+#
+#   docker build -f lab/topologies/bgp4r-lab/Dockerfile.bird \
+#                -t bgp4r-bird:latest lab/topologies/bgp4r-lab
+#
+# **This is ospfv2's docker/bird/Dockerfile**, read at ospfv2 2dfc03a,
+# with the entrypoint's socket path unchanged so `birdc` and routescope's
+# BIRD driver both find it. It is copied rather than referenced because a
+# bgp4r lab that cannot be deployed without an ospfv2 checkout is a lab
+# with a dependency nobody reading this repository would expect. Any
+# image carrying bird2 and iproute2 does instead; ospfv2-bird:latest is
+# the same thing under another name.
+#
+# `iproute2` is what the topology's `exec:` lines need and `procps` is
+# for a person in its shell.
+#
+# **Not built here.** No Docker daemon was reachable where this was
+# written, which the Dockerfile at the repository root records of its own
+# capture stage for the same reason. Build it before trusting it.
+FROM debian:bookworm-slim
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends bird2 iproute2 procps \
+ && rm -rf /var/lib/apt/lists/* \
+ && mkdir -p /run/bird
+# Foreground, logging to stderr (docker logs), control socket where birdc looks.
+ENTRYPOINT ["bird", "-f", "-c", "/etc/bird/bird.conf", "-s", "/run/bird/bird.ctl"]

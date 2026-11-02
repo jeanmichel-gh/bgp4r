@@ -698,6 +698,50 @@ What it exercises that no existing lab does, in order of what it proves:
 `bgp4r lab new ~/labs/bgp4r-lab --routescope` copies it and git-inits
 it, as `ospfv2 lab new` does.
 
+**The folder exists now**, as `lab/topologies/bgp4r-lab`: the
+`*.clab.yml` with those six nodes and both labels on each, node files for
+the two injectors and the daemon, FRR and BIRD configs, and four
+scenarios, one per point 2 to 5 above. Its README says what each node is
+and what it proves, and
+`test/functional/lab/bgp4r_lab_topology_test.rb` holds the files to it
+with no Docker. **It has not been deployed**, so nothing in it is a
+measurement; that is said in its README, in the topology's own header and
+in every scenario.
+
+Four things the building of it settled, each in that README:
+
+* **It needs an image the Compose topologies do not.** The Dockerfile's
+  `speaker` stage runs as the non-root user `bgp` and carries no
+  iproute2, so a containerlab node built from it has no `ip` for its
+  `exec:` address lines and `bgp4rd` cannot create `/run/bgp4r`, which is
+  the one path `Drivers::Bgp4rd` looks in for a containerlab node since
+  `Containerlab#node` passes no `socket:` option through. The
+  `lab-node` stage is `speaker` plus iproute2, as root.
+* **`rtr` names no `local_address`.** It has three addresses and a next
+  hop is per session, so `export:` with no `next_hops` and
+  `Peer#new_neighbor` filling the local address from the socket is the
+  only shape that advertises the right one on each of three links.
+* **Section 9.4's scenario B cannot be written as it stands.** It sends
+  `local_pref` from an injector and expects `reason: local_pref`, and
+  `Table#import` drops LOCAL_PREF from an **external** peer (RFC 4271
+  section 5.1.5). Both injectors are external to `rtr`, so both paths
+  carry the same default and the step is never reached.
+  `scenarios/flip-the-winner.yml` flips on MED instead. A LOCAL_PREF
+  flip wants an iBGP injector, which this topology does not have because
+  one could not demonstrate the AS_PATH prepending of point 2.
+* **A `socket:` key in a `bgp4rd.yml` does nothing today**, so the
+  topology passes `-s` on the command line. `docs/daemon.md` documents
+  the key and `Candidate::RESTART_REASONS` classifies it, and
+  `Server#build` reads `opts[:socket] || Client.default_socket` and never
+  `config['socket']`.
+
+Point 3's name is worth correcting here as well. There is no
+`bgp_decision` table: a scenario asks the `bgp_best` condition, which
+reads the `bgp4r` driver's own `bgp_rib`, which asks the daemon's
+`show.rib`, which answers `bgp/rib/view.rb`'s `decided_by` per prefix and
+`lost_at` per path. `bgp_peers` and `bgp_routes` are the two tables, and
+neither carries a reason.
+
 ### A. Two speakers, one link
 
 bgp4r against bgp4r, eBGP, the `two-speakers` topology that exists.

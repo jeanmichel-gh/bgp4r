@@ -139,8 +139,14 @@ module LabGroups
     # add_path_topology_test reads lab/topologies/add-path's own files and
     # never starts anything, so it belongs here rather than in `compose`
     # beside the Compose test of the topology it describes.
+    # bgp4r_lab_topology_test is the same shape for the containerlab
+    # topology, and is here for the same reason: it parses that folder and
+    # loads each node file through the program that reads it, with no
+    # Docker daemon, no router binary and no socket. Hundredths of a
+    # second.
     'local' => %w[
       add_path_topology_test
+      bgp4r_lab_topology_test
       fib_test
       generate_test
       log_level_test
