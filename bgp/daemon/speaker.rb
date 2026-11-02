@@ -272,19 +272,25 @@ module BGP
 
       attr_reader :address, :recorder, :config
 
-      # **There is deliberately no reader for the session's Neighbor.**
-      # What a caller outside wants of a live session is `send_message`,
-      # `session_info`, `local_ip`, `pending`, `refresh` and
-      # `established?`, and each of those is a method here that says what
-      # it answers when there is no session. A reader was written first
-      # and nothing called it, which is the shape #223 found as a
-      # constant nothing read; handing the Neighbor out would also hand
-      # out `start` and `stop`, where the administrative pair below is
-      # how a session is driven from outside. Measured again when the
-      # control API's write side landed: `refresh` puts a ROUTE-REFRESH
-      # on the session from inside this class, and the `last_error` a
-      # peer row carries comes from the recorder rather than from a
-      # Neighbor, so nothing outside reads one.
+      # The BGP::Neighbor running the current session, or nil before the
+      # first one.
+      #
+      # **Read it for what a live session knows, and drive the session
+      # through the methods below.** What a caller outside wants is
+      # `send_message`, `session_info`, `local_ip`, `pending`, `refresh`
+      # and `established?`, and each of those is a method here that says
+      # what it answers when there is no session. Handing the Neighbor
+      # out hands out `start` and `stop` with it, where the
+      # administrative pair below is how a session is driven from
+      # outside.
+      #
+      # **The reader was taken out once as unread and had to come back**,
+      # which is worth knowing before taking it out again: nothing in
+      # `bgp/` or `bgp/sim/` reads it, so it looks like the dead constant
+      # #223 found, and `test/functional/daemon_test.rb` reads it to
+      # watch a session it set up by hand reach Established. The grep
+      # that said otherwise was cut off by a `head`.
+      attr_reader :neighbor
       def initialize(speaker, config)
         @speaker, @config = speaker, config
         @address = config.fetch('address')

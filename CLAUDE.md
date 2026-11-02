@@ -1000,26 +1000,35 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. The `lab` job is a matrix, one job per group in `test/lab_groups.rb`, so its cost is the slowest group and not the total: it was 12m42s as one serial suite. Each job installs only what its group needs, which is why the matrix entry carries a `gobgp`, `frr`, `docker` or `netns` flag. The `gobgp` groups pin 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-11-02: MEASURE_TESTS tests, MEASURE_ASSERTIONS assertions, all passing. Line coverage of `bgp/` from the unit suite: MEASURE_TOTAL.
+Baseline on 2026-11-02: 2974 tests, 31164 assertions, all passing. Line coverage of `bgp/` from the unit suite: 95.8%.
 
-**That coverage figure is MEASURE_LIB for the library and the rest is the
-two programs, not a gap anywhere else.** Measured the same run: with
-`bgp/sim/` and `bgp/daemon/` excluded it is MEASURE_LIB over
-MEASURE_LINES lines, which is the same figure the daemon's arrival was
-measured against, so the core has not moved. From the unit suite alone
-`bgp/sim/` is MEASURE_SIM and `bgp/daemon/` is MEASURE_DAEMON, because
-most of what both do needs a socket or a session.
+**That coverage figure is 98.5% for the library and the rest is the two
+programs, not a gap anywhere else.** Measured the same run: with
+`bgp/sim/` and `bgp/daemon/` excluded it is **98.5%** over 12418 lines,
+which is the same figure the daemon's arrival was measured against, so
+the core has not moved. From the unit suite alone `bgp/sim/` is **85.9%**
+and `bgp/daemon/` is **71.2%**, because most of what both do needs a
+socket or a session: `api.rb` is 44% there, and the event stream, the
+accept loop and the signal wait are the bulk of what is missing.
 
 Measured over the six `test/unit/sim/` files plus
-`test/functional/sim_test.rb`, `bgp/sim/` is MEASURE_SIM_FULL.
-`bgp/daemon/` is **89.6%** measured the same way, over its eight unit
-files plus `test/functional/daemon_test.rb`, `speaker_test.rb` and
+`test/functional/sim_test.rb`, `bgp/sim/` is **95.6%**, with `sent.rb`
+and `views.rb` at 100%, `injector.rb` at 99%, `routegen.rb` and
+`http.rb` at 92% and `server.rb` at 88%. `bgp/daemon/` is **88.1%**
+measured the same way, over its eight unit files plus
+`test/functional/daemon_test.rb`, `speaker_test.rb` and
 `speaker_router_test.rb`, with `log_ring.rb` at 100%, `control.rb` at
 99%, `views.rb` at 98%, `cli.rb` at 98%, `api.rb` at 94%, `client.rb` at
-89%, `server.rb` at 83% and `speaker.rb` at 82%. What is left uncovered
+89%, `server.rb` at 83% and `speaker.rb` at 78%. What is left uncovered
 in both is the session loop that only a Compose topology reaches, the
 accept loop's out-of-descriptors branch, the signal wait, and the
 handful of error paths a client has to misbehave to reach.
+
+**`speaker.rb` fell from 82% to 78% and the reason is that it is shared.**
+`bgp4r-sim` added `each_update`, `on_established` and `session_established`
+to it, which only the injector's tests reach, so the daemon's own file
+set now covers a smaller fraction of a larger file. Measured over both
+programs' tests together it is 88%.
 
 So read the one-line figure as what it says, which is the unit suite,
 and do not chase it by unit testing a socket.
@@ -6752,6 +6761,7 @@ Smaller things:
 * **`BGP::IO::Output` transcodes a String message when `Encoding.default_internal` is set**, so `send_message` with octets is not the pass-through Conventions says it is. The writer does `obj.respond_to?(:encode) ? obj.encode : obj`, and a String answers `encode`: with no `default_internal`, which is the default, `String#encode` returns the same bytes and everything is fine, and under `ruby -E UTF-8:UTF-8` it transcodes. Measured on 2026-11-02:
   `ruby -E UTF-8:UTF-8 -e 'p [255,0,1].pack("C*").encode.unpack1("H*")'` prints `efbfbd0001`, so `ff` became the three octets of the replacement character. **It is every send, not only a replayed capture**: `send_update` enqueues `u.encode(@session_info)`, which is a String too. Nothing is wrong today and nothing in CI sets the flag; the fix is `obj.is_a?(String) ? obj : obj.encode` in `bgp/io.rb`, which is one line and its own topic, since it is on every session's write path.
 * **`Speaker#each_update` drops a `path_id` on a `generate` block in silence.** An announce block documents both keys and `each_update` hands `BGP::RouteGenerator` only `start`, `count`, `per_update` and the path attributes, where the generator does take a `path_id:`. So a lab topology writing `announce: [{generate: {...}, path_id: 7}]` sends a range with no Path Identifier and nothing says so. `bgp4r-sim` meets it from the API side and **refuses the combination rather than passing it on**, naming the gap, which is honest but is not the fix: the fix is to thread the key through, which changes what an existing node file sends and so wants its own pull request and a look at every topology that has one.
+* **An explicit `as_path` on an announce gets our own AS prepended on an external session, so the injector cannot send an AS_PATH that does not begin with our AS.** `Speaker#path_attribute` is `path = [@my_as] + path if ebgp`, which is right for a node file saying "this route reached us from 65020" and is the wrong default for a program whose whole job is sending what it was asked for. Measured on 2026-11-02 between a `bgp4r-sim` in AS 65010 and a `bgp4rd` in AS 65000: `POST /api/announce` with `"as_path":[65010,65020]` arrives at the router as `65010 65010 65020`. An AS_PATH whose leftmost AS is not the sender's is a classic eBGP receive check and there is no way to ask for one through `announce`. **`replay` is the escape hatch** and is the honest one, since hex goes out untouched. Not fixed because changing the prepend changes what every existing node file sends, which is the `path_id` entry above exactly; the other shape, a key that means "take my as_path literally", is a new option on a block two programs share. **`GET /api/sent` reports the requested path and not the sent one** for the same reason, `65010 65020` where the wire carries the prepend, so a scenario asserting against the injector and one asserting against the router disagree by one AS.
 * **`test/unit/neighbor/neighbor_test.rb`'s `test_start_stop_start_again` times out in the Docker 3.3 job and nothing here explains why.** The 6 second `Timeout::timeout` around it is the tightest in the suite and it covers two whole loopback sessions, so a slow runner is the obvious reading. What is measured: it failed twice on `docker ruby 3.3` while `docker ruby 3.4` and `docker ruby 4.0` passed the same commit both times, and 8 runs of the single test locally passed. **Do not write down a mechanism for it without one**, which is the trap `docs/flow-spec.md` records as a right answer with an invented reason: the first guess here was that a test file leaving threads behind was stealing time, and that does not hold up, because the threads in question were blocked in `connect` and a blocked connect costs no CPU. The threads were a real defect and are fixed; this is still open.
 * **A test must stop what it starts, and the way to tell is to count `Thread.list` at exit.** `test/unit/sim/server_test.rb` started Servers through a helper that dropped them on the floor, so the unit suite ran to the end with 4 of its threads still dialling: measured on 2026-11-02 by registering an `at_exit` that prints `Thread.list` grouped by `Thread.current['name']`, with and without `test/unit/sim/` in the tree, which gave 5 unnamed threads against 1. It is 1 again now. The library's own threads are named, which is what makes the count readable, so an unnamed one in that list is a test's.
 * **`Log.create` reads as "use this logger" and silently keeps the one that is already there**, which is a trap rather than a wrong answer today. It is `@@logger ||= new(s)` in `bgp/common.rb`, so a second caller's IO is dropped and every line keeps going where the first caller sent it. `Log.set_filename` is the forcing form. Measured on 2026-11-02:
@@ -6885,7 +6895,7 @@ Lab and conformance:
 * **`to_hash_round_trip_test.rb` cannot read a test file that is not pure ASCII.** `test_every_working_round_trip_is_asserted_in_a_class_test_file` reads every test file body and matches regexps against it, and a single non-ASCII character in any of them makes it error with `ArgumentError: invalid byte sequence in US-ASCII`, pointing at its own line 190 and naming neither the file nor the character. Found on 2026-10-31 by putting one arrow in a comment in a new test file: that file passed on its own and the suite errored in a test it has nothing to do with. Every test file is ASCII today, so nothing is wrong now; what is wrong is the diagnosis the next person gets. The fix is an encoding on the read or a `scrub`, and it is one line in a file this change does not otherwise touch.
   * **The same trap has a second home and that one bit**, which is the reason to believe it will bite a third time. `test/unit/rib/view_test.rb` reads `docs/daemon.md` and `docs/routescope-labs.md` the same way, and one em dash written into `docs/daemon.md` made three `assert_match` calls raise the same `invalid byte sequence in US-ASCII`, from a test with nothing to do with the character and naming neither the file nor the byte. Fixed there, in `read_doc`, which passes `:encoding => 'UTF-8'`. So the rule is wider than "a test file is ASCII": **any test that reads a file as text and matches a regexp against it has to name the encoding**, because the default external one is the environment's and the file is somebody's prose. `to_hash_round_trip_test.rb` is still the unfixed one.
 * **`bgp4r capture` has three gaps, each a decision rather than a patch, and each said in the file it is in.** The live path, `tcpdump` into a pipe, is the only code in `bgp/capture/` no test runs: tcpdump is not installed in this sandbox and spawning it in a unit test wants a privileged interface, so the file path is exercised in full and the nine lines of the spawn and the two that kill the child are not. The Dockerfile's **`capture` stage has not been built**, for want of a Docker daemon, and it is what makes routescope's hard coded `IMAGE capture -i IFACE` reach anything, so build it before trusting it. And **reordered segments are not handled**: `bgp/capture/stream.rb` reads each direction in arrival order, trims a retransmission by sequence number and does nothing about a capture whose segments crossed, which would frame garbage from that point with nothing saying so. Reordering means held segments, timers and a reassembly queue, which is a TCP implementation and not a dissector; the file says so rather than leaving it to be found out.
-* Lowest coverage (unit suite), measured 2026-11-02: MEASURE_LOWEST. **The `daemon/` and `sim/` rows are not a gap and must not be chased by unit testing a socket**: the note under the baseline has `bgp/daemon/` at 89.6% and `bgp/sim/` at MEASURE_SIM_FULL once each one's functional test is counted, and `api.rb` is the lowest of them in the unit suite precisely because the event stream and the accept loop are the two things a unit test cannot reach.
+* Lowest coverage (unit suite), measured 2026-11-02: `daemon/api.rb` 44%, `daemon/server.rb` 57%, `daemon/client.rb` 64%, `sim/http.rb` 66%, `daemon/speaker.rb` 66%, `sim/routegen.rb` 67%, `sim/server.rb` 88%, `bgp/capture/cli.rb` 88% (the live tcpdump path, above), `neighbor/neighbor.rb` 92%, `messages/update.rb` 92%, `neighbor/add_path_cap.rb` 93%, `path_attributes/mp_unreach.rb` 93%, `path_attributes/ipv6_extended_communities.rb` 93%, `optional_parameters/graceful_restart.rb` 93%, `path_attributes/mp_reach.rb` 93%. **The `daemon/` and `sim/` rows are not a gap and must not be chased by unit testing a socket**: the note under the baseline has `bgp/daemon/` at 88.1% and `bgp/sim/` at 95.6% once each one's functional test is counted, and `api.rb` is the lowest of them in the unit suite precisely because the event stream and the accept loop are the two things a unit test cannot reach.
 
 ## Attribute work left
 
