@@ -371,7 +371,7 @@ module BGP
             return false if buffer.bytesize > MAX_LINE
             while (i = buffer.index("\n"))
               line = buffer.slice!(0..i)
-              return true if unsubscribed?(sock, line)
+              return true if unsubscribed?(sock, line, sub)
             end
           end
           ev = sub.pop(:timeout => 0.2)
@@ -396,13 +396,21 @@ module BGP
       # mid stream would interleave with the event lines, and dropping
       # the stream over a stray line would lose the events the caller
       # asked for.
-      def unsubscribed?(sock, line)
+      def unsubscribed?(sock, line, sub)
         msg = begin
                 JSON.parse(line)
               rescue JSON::ParserError
                 nil
               end
         if msg.is_a?(Hash) && msg['method'] == 'events.unsubscribe'
+          # **Closed before the reply and not after it.** The reply means
+          # the subscription is gone, so a caller that reads it can go on
+          # to assert that it is; closing in the ensure below leaves a
+          # window in which the reply has arrived and the subscriber is
+          # still registered, which is a race a test found. The ensure
+          # stays, for the path where the client simply went away, and a
+          # second close is harmless.
+          sub.close
           write(sock, :id => msg['id'], :result => { :unsubscribed => true })
           return true
         end
