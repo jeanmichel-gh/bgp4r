@@ -4,6 +4,8 @@ Run bgp4r speakers in containers and test what they say to each other.
 
 Each node runs the same program, `lab/speaker.rb`, driven by its own YAML file. A topology is a folder with a `compose.yml` and one YAML per node. To build a new topology, copy a folder and edit the YAML.
 
+The machinery behind that program is in the library, as `BGP::Daemon::Speaker` in `bgp/daemon/speaker.rb`, because `bgp4rd` needs the same sessions, the same configuration and the same recording and `lab/` is not on an installed gem's load path. `lab/speaker.rb` is its command line, its state file writer and three constants pointing at it, so `Lab::Speaker`, `Lab::Peer` and `Lab::Recorder` mean what they always did. That file's header has the decision and the two options it rejected, and `docs/daemon.md` is the daemon.
+
 ## Run a topology
 
 From the repo root:
@@ -51,6 +53,10 @@ Each neighbor entry also has counters and times for the current session:
 | `first_update_at`, `last_update_at` | when the first and the last UPDATE arrived |
 | `seconds_to_last_update` | from Established to the last UPDATE |
 | `prefixes_per_second` | `prefixes_received` divided by `seconds_to_last_update` |
+| `established_count` | sessions that reached Established, over the speaker's life |
+| `flaps` | sessions that reached Established and then went down |
+
+`flaps` is not `established_count` minus one, and the two differ whenever a session is up: three establishments with the third still up is two flaps, and three with the third already gone is three. It is counted rather than derived for that reason.
 
 Times are ISO 8601 in UTC with milliseconds. With `record: count` the entry has no `received` routes, and gets `first_prefix` and `last_prefix` instead.
 

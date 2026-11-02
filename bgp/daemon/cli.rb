@@ -1,0 +1,215 @@
+#--
+# Copyright 2026 Jean-Michel Esnault.
+# All rights reserved.
+# See LICENSE.txt for permissions.
+#
+#
+# This file is part of BGP4R.
+#
+# BGP4R is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# BGP4R is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with BGP4R.  If not, see <http://www.gnu.org/licenses/>.
+#++
+
+require 'bgp/daemon/client'
+require 'bgp/version'
+
+module BGP
+  module Daemon
+
+    # `bgp4r-cli`, the client command for `bgp4rd`.
+    #
+    #   bgp4r-cli -c 'show bgp summary'        text, for a person
+    #   bgp4r-cli show.peers                   JSON, for a script
+    #   bgp4r-cli show.rib '{"prefix":"10.0.0.0/8"}'
+    #
+    # **Two forms on purpose, which is docs/daemon.md's decision.** `-c`
+    # takes an operator command and prints what a person would read at a
+    # router; a bare method name prints the JSON a driver or a script
+    # wants. Neither is a wrapper around the other: the method form is
+    # one line of socket work, and the text form renders through
+    # `bgp/rib/show.rb`.
+    #
+    # **`show bgp` asks the daemon for the text and does not render it
+    # here, and that is a departure from ospfv2 with a reason.**
+    # `ospf-cli` renders every view client side from the data, and
+    # copying that would mean a second IOS, Junos and IOS-XR renderer in
+    # this file beside `bgp/rib/show.rb`, which already has samples
+    # behind its three styles and a column test per style. Two renderers
+    # of one format is the shape CLAUDE.md records drifting three times.
+    # `Show` takes a Rib::Table and the Table is in the daemon, so the
+    # daemon renders: `show.text` is the one API method this adds beyond
+    # the read list, and it is `rib.show(style, prefix)` and nothing
+    # else.
+    #
+    # `show bgp summary` is the exception and is rendered here, because
+    # `Show` has **no** summary form: there is no vendor sample behind
+    # one, so adding a fourth thing to those three styles would be
+    # inventing a format inside the file that says it never does. The
+    # columns below are this file's own and no test depends on them.
+    #
+    # Output goes to injected IOs, as `BGP::Capture::CLI`'s does, so a
+    # test reads a String rather than capturing a process.
+    class CLI
+
+      # The operator commands `-c` takes. Anything else is refused with
+      # this list, rather than guessed at.
+      COMMANDS = ['show bgp summary', 'show bgp', 'show bgp PREFIX'].freeze
+
+      STYLES = %w[ios junos iosxr].freeze
+
+      USAGE = <<-TEXT
+Usage: bgp4r-cli [options] [METHOD [JSON]]
+
+  bgp4r-cli -c 'show bgp summary'      an operator command, as text
+  bgp4r-cli -c 'show bgp'              the Loc-RIB, as a router prints it
+  bgp4r-cli -c 'show bgp 10.0.0.0/8'   one prefix, in detail
+  bgp4r-cli show.peers                 an API method, as JSON
+  bgp4r-cli show.rib '{"prefix":"10.0.0.0/8"}'
+
+Options:
+  -s, --socket PATH   bgp4rd's socket (default: $BGP4R_SOCKET, else
+                      /run/bgp4r/bgp4rd.sock or $XDG_RUNTIME_DIR/bgp4r)
+  -c, --command CMD   run an operator command and print text
+      --style NAME    ios (the default), junos or iosxr
+      --pretty        indent the JSON
+  -h, --help          this help
+TEXT
+
+      # `client` is the seam that keeps the tests free of a daemon: with
+      # none, `start` builds a Client from `--socket` and the
+      # environment.
+      def initialize(out = $stdout, err = $stderr, client = nil)
+        @out = out
+        @err = err
+        @client = client
+      end
+
+      # Returns an exit status.
+      def start(argv, env = ENV)
+        opts = parse(argv, env)
+        return 0 if opts[:version]
+        return help(0) if opts[:help]
+        return help(1) if opts[:error]
+        client = @client || Client.new(opts[:socket], env)
+        begin
+          opts[:command] ? command(client, opts) : method_call(client, opts)
+        rescue Client::Error => e
+          @err.puts "bgp4r-cli: #{e.message}"
+          1
+        ensure
+          client.close
+        end
+      end
+
+      private
+
+      def help(status)
+        (status.zero? ? @out : @err).print USAGE
+        status
+      end
+
+      # The option parsing, by hand rather than through OptionParser,
+      # because the method form takes a bare argument and an argument
+      # that looks like JSON, and OptionParser's `parse!` would try to
+      # read a leading `{` as a flag.
+      def parse(argv, env)
+        opts = { :socket => env['BGP4R_SOCKET'], :style => 'ios', :pretty => false }
+        rest = []
+        i = 0
+        while i < argv.size
+          case argv[i]
+          when '-h', '--help' then opts[:help] = true
+          when '-s', '--socket' then opts[:socket] = argv[i += 1]
+          when '-c', '--command' then opts[:command] = argv[i += 1]
+          when '--style' then opts[:style] = argv[i += 1]
+          when '--pretty' then opts[:pretty] = true
+          when '-v', '--version' then opts[:version] = true
+          else rest << argv[i]
+          end
+          i += 1
+        end
+        opts[:method], opts[:params] = rest[0], rest[1]
+        if opts[:version]
+          @out.puts BGP::VERSION
+          return opts
+        end
+        return opts if opts[:help]
+        opts[:error] = true if opts[:command].nil? && opts[:method].nil?
+        opts[:error] = true if opts[:command] && opts[:method]
+        opts[:error] = true unless STYLES.include?(opts[:style].to_s)
+        opts
+      end
+
+      # The method form: one call, the result as JSON.
+      def method_call(client, opts)
+        require 'json'
+        params = opts[:params] ? JSON.parse(opts[:params]) : {}
+        unless params.is_a?(Hash)
+          @err.puts 'bgp4r-cli: the second argument is a JSON object of parameters'
+          return 1
+        end
+        result = client.call(opts[:method], params)
+        @out.puts(opts[:pretty] ? JSON.pretty_generate(result) : JSON.generate(result))
+        0
+      rescue JSON::ParserError => e
+        @err.puts "bgp4r-cli: the second argument is not JSON: #{e.message[0, 120]}"
+        1
+      end
+
+      # The text form.
+      def command(client, opts)
+        cmd = opts[:command].to_s.strip.squeeze(' ')
+        case cmd
+        when 'show bgp summary' then @out.print summary(client)
+        when 'show bgp' then @out.print routes(client, opts[:style], nil)
+        when /\Ashow bgp (\S+)\z/ then @out.print routes(client, opts[:style], $1)
+        else
+          @err.puts "bgp4r-cli: #{opts[:command].inspect} is not one of: #{COMMANDS.join(', ')}"
+          return 1
+        end
+        0
+      end
+
+      # `show bgp summary`, in the shape of the command every router has.
+      # The column widths are this file's; see the class comment on what
+      # is quoted and what is not.
+      def summary(client)
+        s = client.call('show.status')
+        sum = s['summary'] || {}
+        out = +''
+        out << format("BGP router identifier %s, local AS number %s\n", s['router_id'], s['as'])
+        out << format("%d peer(s), %d established, %d prefix(es) in the Loc-RIB\n\n",
+                      sum['peers'].to_i, sum['established'].to_i, sum['rib'].to_i)
+        out << format("%-20s %-8s %-14s %10s %8s %8s %s\n",
+                      'Neighbor', 'AS', 'State', 'Up/Down', 'PfxRcd', 'PfxSnt', 'Description')
+        Array(s['peers']).each do |p|
+          out << format("%-20s %-8s %-14s %10s %8s %8s %s\n",
+                        p['address'], p['remote_as'], p['state'],
+                        p['uptime'] ? "#{p['uptime']}s" : 'never',
+                        p['received'] || 0, p['sent'] || 0, p['description'])
+        end
+        out
+      end
+
+      # `show bgp` and `show bgp PREFIX`, rendered by the daemon through
+      # bgp/rib/show.rb's three styles.
+      def routes(client, style, prefix)
+        params = { 'style' => style }
+        params['prefix'] = prefix if prefix
+        client.call('show.text', params).to_s
+      end
+
+    end
+
+  end
+end

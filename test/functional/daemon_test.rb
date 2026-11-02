@@ -1,0 +1,345 @@
+#--
+# Copyright 2026 Jean-Michel Esnault.
+# All rights reserved.
+# See LICENSE.txt for permissions.
+#
+#
+# This file is part of BGP4R.
+#
+# BGP4R is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# BGP4R is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with BGP4R.  If not, see <http://www.gnu.org/licenses/>.
+#++
+
+# bgp4rd over its real socket, and the only test that can say the two
+# halves of a line agree.
+#
+#   ruby -I. test/functional/daemon_test.rb
+#
+# **Why it has to be here and not in test/unit/daemon/.** Every unit
+# test on the server side reads a request Hash a test wrote, and every
+# one on the client side reads an answer a fake client wrote, so neither
+# can say what `Api` puts on a socket is what `Client` takes off it.
+# That is the same argument test/functional/flow_spec_test.rb makes for
+# the four NLRI wiring sites.
+#
+# It needs no privilege, no router and no second machine: the control
+# socket is a path in a temporary directory, and the one TCP port is for
+# a session nobody dials.
+
+require 'test/unit'
+require 'json'
+require 'socket'
+require 'stringio'
+require 'tmpdir'
+require 'fileutils'
+require 'bgp/daemon'
+
+class BGP_Daemon_Functional_Test < Test::Unit::TestCase
+
+  # A port nothing else here uses, for the listener the daemon opens.
+  # Nobody dials it: what is under test is the control socket.
+  PORT = 17_903
+
+  def setup
+    @dir = Dir.mktmpdir
+    @socket = File.join(@dir, 'bgp4rd.sock')
+    @out, @err = StringIO.new, StringIO.new
+    @server = BGP::Daemon::Server.new(@out, @err)
+    config = BGP::Daemon::Server.with_defaults(
+      'as' => 65_000, 'router_id' => '10.0.0.1',
+      'listen_address' => '127.0.0.1', 'port' => PORT,
+      'state_file' => File.join(@dir, 'state.json'),
+      'neighbors' => [{ 'address' => '127.0.0.9', 'as' => 65_001, 'description' => 'inj1' }])
+    assert_not_nil(@server.build(config, :socket => @socket),
+                   "the daemon did not start: #{@err.string}")
+    @server.speaker.rib.originate('10.255.0.0/24', :path_attribute => pa)
+    @server.speaker.rib.originate('10.255.1.0/24', :path_attribute => pa)
+    @server.speaker.rib.drain
+  end
+
+  def teardown
+    @server.stop if @server
+    FileUtils.remove_entry(@dir) if @dir
+  end
+
+  # One request line in, one reply line out. **Written exactly as
+  # routescope's own client writes it**, read in routescope at `7eabde1`,
+  # because the bgp4r driver will be that one liner with the paths
+  # changed and a mismatch is a wrong answer rather than a missing one.
+  def raw(line)
+    s = UNIXSocket.new(@socket)
+    s.write(line)
+    reply = s.gets
+    s.close
+    reply
+  end
+
+  def routescope_client(method, params = {})
+    reply = raw("#{JSON.generate(:id => 1, :method => method, :params => params)}\n")
+    JSON.parse(reply || '')
+  end
+
+  def test_the_socket_is_there_and_is_a_socket
+    assert_equal(true, File.socket?(@socket))
+  end
+
+  # The socket is born 0660, so access is by file permission and there
+  # is no window in which umask leaves it open.
+  def test_the_socket_is_not_world_reachable
+    assert_equal(0, File.stat(@socket).mode & 0o007,
+                 'a control socket anybody can write is a daemon anybody can drive')
+  end
+
+  def test_the_envelope_is_an_id_and_a_result
+    r = routescope_client('show.status')
+    assert_equal(1, r['id'])
+    assert_equal(false, r.key?('error'))
+    assert_equal('10.0.0.1', r['result']['router_id'])
+    assert_equal(65_000, r['result']['as'])
+  end
+
+  def test_one_line_per_reply_and_nothing_more
+    reply = raw("#{JSON.generate(:id => 1, :method => 'api.info', :params => {})}\n")
+    assert_equal(1, reply.lines.size)
+    assert_equal("\n", reply[-1])
+  end
+
+  # Several requests on one connection, each answered with its own id,
+  # which is what makes a client able to keep a socket open.
+  def test_a_connection_answers_request_after_request
+    s = UNIXSocket.new(@socket)
+    %w[api.info show.status show.peers show.routes show.rib].each_with_index do |m, i|
+      s.write("#{JSON.generate(:id => i + 1, :method => m, :params => {})}\n")
+      r = JSON.parse(s.gets)
+      assert_equal(i + 1, r['id'], "#{m} answered the wrong id")
+      assert_equal(false, r.key?('error'), "#{m}: #{r['error']}")
+    end
+    s.close
+  end
+
+  def test_the_read_methods_answer_over_the_socket
+    assert_equal(1, routescope_client('show.peers')['result'].size)
+    assert_equal('127.0.0.9', routescope_client('show.peers')['result'].first['address'])
+    assert_equal('inj1', routescope_client('show.peers')['result'].first['description'])
+    assert_equal(2, routescope_client('show.routes')['result']['total'])
+    assert_equal(2, routescope_client('show.rib')['result']['total'])
+    assert_match(/10\.255\.0\.0\/24/, routescope_client('show.text')['result'])
+  end
+
+  # The page envelope crosses the socket with its cursor, which is what
+  # a caller walks a million prefixes with.
+  def test_a_page_crosses_the_socket_with_its_cursor
+    first = routescope_client('show.routes', 'limit' => 1)['result']
+    assert_equal(2, first['total'])
+    assert_equal(1, first['rows'].size)
+    assert_equal(1, first['next_offset'])
+    second = routescope_client('show.routes', 'limit' => 1, 'offset' => 1)['result']
+    assert_equal('10.255.1.0/24', second['rows'].first['prefix'])
+    assert_nil(second['next_offset'])
+  end
+
+  # Symbol keys become Strings, which is the one thing JSON does to the
+  # views on the way out, so a driver reads Strings everywhere.
+  def test_every_key_and_symbol_value_arrives_as_a_string
+    row = routescope_client('show.rib')['result']['rows'].first
+    assert_equal('only_route', row['decided_by'])
+    assert_equal('igp', row['paths'].first['origin'])
+    assert_equal('ebgp', routescope_client('show.peers')['result'].first['type'])
+  end
+
+  # **A daemon a console can kill by accident is worse than one with no
+  # API.** Each of these is something a console or a person really
+  # sends, and after every one the daemon still answers.
+  def test_an_unknown_method_is_an_error_line_and_not_a_crash
+    r = routescope_client('show.nonsense')
+    assert_equal(1, r['id'])
+    assert_match(/unknown method/, r['error'])
+    assert_match(/show\.status/, r['error'], 'the refusal names the methods that exist')
+    assert_still_alive
+  end
+
+  def test_a_line_that_is_not_json_is_answered_and_the_daemon_lives
+    r = JSON.parse(raw("this is not json\n"))
+    assert_match(/bad JSON/, r['error'])
+    assert_still_alive
+  end
+
+  def test_a_line_that_is_json_but_not_an_object_is_answered
+    r = JSON.parse(raw("[1,2,3]\n"))
+    assert_match(/a request is a JSON object/, r['error'])
+    assert_still_alive
+  end
+
+  def test_a_request_too_long_to_read_ends_that_connection_only
+    r = JSON.parse(raw("#{'x' * (BGP::Daemon::Api::MAX_LINE + 10)}\n"))
+    assert_match(/longer than/, r['error'])
+    assert_still_alive
+  end
+
+  # A method that raises comes back as an error on that request and the
+  # connection goes on taking requests.
+  def test_a_method_that_refuses_its_parameters_answers_and_lives
+    s = UNIXSocket.new(@socket)
+    s.write("#{JSON.generate(:id => 1, :method => 'show.routes', :params => { :limit => 'lots' })}\n")
+    assert_match(/limit must be an integer/, JSON.parse(s.gets)['error'])
+    s.write("#{JSON.generate(:id => 2, :method => 'api.info', :params => {})}\n")
+    assert_equal(2, JSON.parse(s.gets)['id'], 'the connection still takes requests')
+    s.close
+    assert_still_alive
+  end
+
+  # Half a request and then gone. The server thread for it ends; nothing
+  # else does.
+  def test_a_client_that_disappears_mid_request_takes_nothing_with_it
+    s = UNIXSocket.new(@socket)
+    s.write('{"id":1,"method":"show.sta')
+    s.close
+    assert_still_alive
+  end
+
+  def test_many_clients_at_once_are_all_answered
+    socks = Array.new(8) { UNIXSocket.new(@socket) }
+    socks.each_with_index { |s, i| s.write("#{JSON.generate(:id => i, :method => 'api.info')}\n") }
+    socks.each_with_index { |s, i| assert_equal(i, JSON.parse(s.gets)['id']) }
+    socks.each(&:close)
+    assert_still_alive
+  end
+
+  # bgp4r-cli against the real daemon, both forms, which is the only
+  # thing that says the client and the server agree about a line.
+  def test_the_cli_reads_the_daemon_in_both_forms
+    status, out, err = cli(['-s', @socket, 'show.peers'])
+    assert_equal(0, status, err)
+    assert_equal('127.0.0.9', JSON.parse(out).first['address'])
+
+    status, out, err = cli(['-s', @socket, '-c', 'show bgp summary'])
+    assert_equal(0, status, err)
+    assert_match(/BGP router identifier 10\.0\.0\.1/, out)
+    assert_match(/^127\.0\.0\.9\s+65001\s+idle/, out)
+
+    status, out, err = cli(['-s', @socket, '-c', 'show bgp'])
+    assert_equal(0, status, err)
+    assert_match(/10\.255\.0\.0\/24/, out)
+  end
+
+  def test_the_cli_carries_a_refusal_out_as_an_exit_status
+    status, out, err = cli(['-s', @socket, 'show.nonsense'])
+    assert_equal(1, status)
+    assert_equal('', out)
+    assert_match(/unknown method/, err)
+  end
+
+  def test_the_socket_environment_variable_reaches_the_cli
+    status, out, _e = cli(['show.peers'], 'BGP4R_SOCKET' => @socket)
+    assert_equal(0, status)
+    assert_equal('127.0.0.9', JSON.parse(out).first['address'])
+  end
+
+  # Stopping takes the socket away, so a second daemon on the same path
+  # is not refused by a file nobody is listening on.
+  def test_stopping_removes_the_socket
+    @server.stop
+    assert_equal(false, File.exist?(@socket))
+    @server = nil
+  end
+
+  # A socket with a daemon behind it is refused; one left by a daemon
+  # that died is taken over.
+  def test_a_second_daemon_on_the_same_path_is_refused
+    other = BGP::Daemon::Api.new(@server.views, :path => @socket)
+    assert_raise(BGP::Daemon::Api::InUse) { other.start }
+  end
+
+  def test_a_socket_left_behind_by_a_dead_daemon_is_taken_over
+    @server.stop
+    @server = nil
+    FileUtils.mkdir_p(File.dirname(@socket))
+    stale = UNIXServer.new(@socket)
+    stale.close # the path stays, with nothing listening
+    assert_equal(true, File.socket?(@socket))
+    api = BGP::Daemon::Api.new(nil, :path => @socket)
+    assert_nothing_raised { api.start }
+    api.stop
+  end
+
+  # `bgp4rd` from its own command line, end to end: the flags, the YAML
+  # file, the log file, the Speaker and the socket. Nothing else runs
+  # `start`, which is what the executable calls.
+  #
+  # It is here and not in a unit test because it opens a log: `Log` is
+  # the library's one logger and `Log.set_filename` replaces it for
+  # every other test in the process, so this file puts it back.
+  def test_the_whole_command_line_starts_a_daemon_that_answers
+    @server.stop
+    @server = nil
+    config = File.join(@dir, 'bgp4rd.yml')
+    log = File.join(@dir, 'bgp4rd.log')
+    sock = File.join(@dir, 'from-the-command-line.sock')
+    File.write(config, <<~YAML)
+      router_id: 10.0.0.2
+      as: 65002
+      listen_address: 127.0.0.1
+      port: #{PORT + 1}
+      neighbors: []
+    YAML
+    out, err = StringIO.new, StringIO.new
+    daemon = BGP::Daemon::Server.new(out, err)
+    # **A logger before the daemon's, which is what makes the --log
+    # assertion below mean something.** `Log.create` is `@@logger ||=
+    # new(s)`, so in a fresh process it and `Log.set_filename` agree and
+    # a test that starts the daemon first passes against either. Here
+    # there is already a logger, as there is in any long-lived process,
+    # so only the forcing form writes to the file.
+    Log.create(StringIO.new)
+    begin
+      assert_equal(0, daemon.start(['-f', config, '-s', sock, '-l', log], {}, :wait => false),
+                   err.string)
+      assert_equal(true, File.socket?(sock))
+      s = UNIXSocket.new(sock)
+      s.write("#{JSON.generate(:id => 1, :method => 'show.status', :params => {})}\n")
+      r = JSON.parse(s.gets)
+      s.close
+      assert_equal('10.0.0.2', r['result']['router_id'])
+      assert_equal(65_002, r['result']['as'])
+      assert_equal([], r['result']['peers'])
+      # A table is on with no rib key, because a daemon is a router.
+      assert_equal(0, r['result']['summary']['rib'])
+      # --log FILE really wrote there, which Log.create would not have.
+      assert_match(/bgp4rd #{Regexp.escape(BGP::VERSION)} up/, File.read(log))
+      assert_match(/socket #{Regexp.escape(sock)}/, File.read(log))
+    ensure
+      daemon.stop
+      Log.set_filename(STDERR)
+    end
+  end
+
+  private
+
+  def cli(argv, env = {})
+    out, err = StringIO.new, StringIO.new
+    status = BGP::Daemon::CLI.new(out, err).start(argv, env)
+    [status, out.string, err.string]
+  end
+
+  # The daemon answers after whatever just happened to it.
+  def assert_still_alive
+    assert_equal(BGP::VERSION, routescope_client('api.info')['result']['version'],
+                 'the daemon stopped answering')
+  end
+
+  def pa
+    BGP::Path_attribute.new(BGP::Origin.new(0), BGP::As_path.new,
+                            BGP::Next_hop.new('10.0.0.1'))
+  end
+
+end

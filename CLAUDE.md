@@ -204,8 +204,13 @@ bgp/events.rb            the structured event stream: an Event carrying a kind a
                          makes several sessions one ordered timeline. Nothing in
                          the library reads these events; they are the layer under
                          `events.subscribe` in docs/daemon.md and
-                         `GET /api/events?since=N` in the injector's API, and
-                         neither of those programs exists yet. See
+                         `GET /api/events?since=N` in the injector's API.
+                         `bgp4rd` exists now and shares **one** Events across
+                         every session, which is what makes the sequence
+                         numbers one ordered timeline rather than N streams
+                         each numbering from 1, and `api.info` answers
+                         `event_seq` so a console can watch it advance.
+                         `events.subscribe` is still a later pull request. See
                          "routescope labs"
 bgp/rib/                 routes and the decision process (RFC 4271 section 9); require 'bgp/rib'
                          peer_adapter.rb turns a Neighbor's UPDATEs into table operations,
@@ -226,6 +231,45 @@ bgp/rib/                 routes and the decision process (RFC 4271 section 9); r
                          builds and runs the iproute2 command and fib_installer.rb
                          joins them on the worker thread; rib.install;
                          see "Where the work is going"
+bgp/daemon/              `bgp4rd` the daemon and `bgp4r-cli` its client;
+                         require 'bgp/daemon', which bgp4r.rb does not, the
+                         same arrangement bgp/rib.rb and bgp/capture.rb have.
+                         docs/daemon.md is the design and the guide
+                         speaker.rb the sessions, the configuration and the
+                         recording, **shared with lab/speaker.rb**, which is
+                         now that file's command line and three constants
+                         pointing here. It is in the library because two
+                         programs use it and `lab/` is not on an installed
+                         gem's load path; its header has the decision and
+                         the two options it rejected. It adds three things
+                         to what the lab had: `start` and `stop` split out
+                         of `run` so a program owns its own main loop, one
+                         shared BGP::Events across every session rather
+                         than one per Neighbor, and a flap count
+                         views.rb what the API answers, as plain data: it
+                         merges bgp/rib/view.rb with the **session** facts a
+                         Table has none of, and its peer list is every
+                         **configured** neighbor where the view's is the
+                         peers the table has seen. The page envelope is here
+                         api.rb the Unix socket, one JSON object per line
+                         each way, and the method registry. The envelope is
+                         routescope's own client line read at 7eabde1 and is
+                         exact; an unknown method answers the list rather
+                         than nothing, and no bad request line takes the
+                         daemon down
+                         client.rb the other half of the socket, and where
+                         both programs work out the socket path
+                         cli.rb `bgp4r-cli`, two forms on purpose: `-c` an
+                         operator command as text, a bare method name as
+                         JSON. `show bgp` asks the daemon for the text
+                         through `show.text`, because bgp/rib/show.rb takes
+                         a Table and a second renderer here would be two
+                         copies of three vendor styles
+                         server.rb `bgp4rd` itself: the command line, the
+                         YAML file, the Speaker, the socket and the wait.
+                         **This is the read side only**: every method that
+                         changes something is a later pull request and none
+                         of them is stubbed
 bgp/capture/             reading BGP off a wire; require 'bgp/capture', which
                          bgp4r.rb does not, the same arrangement bgp/rib.rb has
                          pcap.rb reads the classic pcap format off an IO a
@@ -256,12 +300,13 @@ bgp/capture/             reading BGP off a wire; require 'bgp/capture', which
                          checksum and the file says why. docs/daemon.md's
                          Capture section is the guide
 bgp/misc/                extras: route_generator.rb (many prefixes packed in UPDATEs), live_feed.rb (a client for an old public BGP feed)
-exe/bgp4r                the umbrella command, declared in the gemspec.
-                         docs/daemon.md names four and this is the one that
-                         exists: bgp4rd, bgp4r-cli and bgp4r-sim are
-                         **deliberately not stubbed**, because an executable
-                         in a released gem that answers nothing is worse than
-                         one that is not there
+exe/bgp4r                the umbrella command, with `capture` and `version`
+exe/bgp4rd exe/bgp4r-cli the daemon and its client, over bgp/daemon/
+                         Three of docs/daemon.md's four commands, all three
+                         declared in the gemspec. `bgp4r-sim` is
+                         **deliberately not stubbed** and not declared,
+                         because an executable in a released gem that
+                         answers nothing is worse than one that is not there
 docs/                    protocol-testing.md: using bgp4r to test a router
                          flow-spec.md: RFC 8955 and RFC 8956 on the wire, as much
                          as is needed to write the encoding and decoding. Read it
@@ -360,12 +405,19 @@ docs/                    protocol-testing.md: using bgp4r to test a router
                          opens with, so every number a console would show
                          is reachable with one terminal command. Read it
                          before adding an executable, a socket or HTTP
-                         method, a config key or a state dump. Mostly a
-                         **design** still, with one command built: its
-                         **Capture section is no longer a design**, and
-                         `bgp4r capture` and `bgp4r version` exist in
-                         exe/bgp4r over bgp/capture/. `bgp4rd`,
-                         `bgp4r-cli` and `bgp4r-sim` do not
+                         method, a config key or a state dump. **Three of
+                         its four commands are built now** and its
+                         Capture section and its `bgp4rd` sections are no
+                         longer designs: `bgp4r capture` and `bgp4r
+                         version` in exe/bgp4r over bgp/capture/, and
+                         `bgp4rd` and `bgp4r-cli` in exe/ over
+                         bgp/daemon/, with the **read** side of the
+                         control API. What is still a design is every
+                         method that changes something, `events.subscribe`,
+                         and the whole of `bgp4r-sim`. It carries the
+                         request envelope with the routescope commit it
+                         was read at, and the page envelope, neither of
+                         which it had
                          routescope-labs.md: how those two programs
                          become nodes the routescope console can drive,
                          and the eight labs worth building once they are.
@@ -398,6 +450,16 @@ test/unit/               unit tests, mirroring bgp/
 test/functional/         tests that open real TCP sessions
 test/helpers/            a small test BGP server
 lab/                     speakers in containers: lab/speaker.rb and lab/topologies/ (see lab/README.md)
+                         lab/speaker.rb is the **command line** now and nothing
+                         else: the sessions, the configuration and the recording
+                         moved into bgp/daemon/speaker.rb, because `bgp4rd`
+                         needs the same machinery and `lab/` is not on an
+                         installed gem's load path. `Lab::Speaker`, `Lab::Peer`
+                         and `Lab::Recorder` are constants pointing there, so
+                         every topology and every lab test that names them
+                         keeps working; the test of the move is that
+                         speaker_test.rb, speaker_router_test.rb and
+                         add_path_topology_test.rb all pass unchanged.
                          lab/speaker.rb is a **router** when its node file says so: the
                          tables of bgp/rib/ are wired in behind four keys, `rib`,
                          `originate`, `export` and `fib`, which are docs/daemon.md's
@@ -703,6 +765,26 @@ ruby -I. test/functional/lab/link_state_gobgp_test.rb
 ruby -I. test/functional/lab/link_state_frr_test.rb
 ```
 
+`bgp4rd` over its real control socket, and the only test that can say
+the two halves of a line agree: every unit test on the server side reads
+a request a test wrote and every one on the client side reads an answer a
+fake wrote. No privilege, no router, no Docker. A tenth of a second:
+```
+ruby -I. test/functional/daemon_test.rb
+```
+
+The daemon and its client by hand, which is how the shapes in
+`docs/daemon.md` were measured. `--socket` and `$BGP4R_SOCKET` both work,
+and with neither it is `/run/bgp4r/bgp4rd.sock` or a path under
+`$XDG_RUNTIME_DIR`:
+```
+ruby -I. exe/bgp4rd -f /etc/bgp4r/bgp4rd.yml -s /tmp/d.sock -l - &
+ruby -I. exe/bgp4r-cli -s /tmp/d.sock api.info
+ruby -I. exe/bgp4r-cli -s /tmp/d.sock show.rib --pretty
+ruby -I. exe/bgp4r-cli -s /tmp/d.sock -c 'show bgp summary'
+ruby -I. exe/bgp4r-cli -s /tmp/d.sock -c 'show bgp' --style junos
+```
+
 The capture command, over a pcap file, which needs no interface and no
 root. `-r -` reads standard input, so a capture can be piped in:
 ```
@@ -739,7 +821,21 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. The `lab` job is a matrix, one job per group in `test/lab_groups.rb`, so its cost is the slowest group and not the total: it was 12m42s as one serial suite. Each job installs only what its group needs, which is why the matrix entry carries a `gobgp`, `frr`, `docker` or `netns` flag. The `gobgp` groups pin 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-11-02: 2665 tests, 30099 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.5%.
+Baseline on 2026-11-02: 2749 tests, 30374 assertions, all passing. Line coverage of `bgp/` from the unit suite: 96.5%.
+
+**That coverage figure fell from 98.5% and the reason is `bgp/daemon/`,
+not a gap anywhere else.** Measured the same run: with `bgp/daemon/`
+excluded it is still 98.5% over the same 12311 lines, and the new files
+are at 47% to 85% from the unit suite alone, because most of what they
+do needs a socket or a session. Measured over the six unit files plus
+`test/functional/daemon_test.rb`, `speaker_test.rb` and
+`speaker_router_test.rb`, `bgp/daemon/` is **87.9%**, with `views.rb`
+and `cli.rb` at 100%, `api.rb` at 91%, `client.rb` at 94%, `server.rb`
+at 83% and `speaker.rb` at 82%. What is left uncovered is the session
+loop that only a Compose topology reaches, the accept loop's
+out-of-descriptors branch, and the signal wait. So read the one-line
+figure as what it says, which is the unit suite, and do not chase it by
+unit testing a socket.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -5895,7 +5991,7 @@ Decisions taken before this starts, so they are not re-litigated:
   in a convenience form for test code, each with a reason recorded, and
   clearing the list to empty it is not worth a phase.
 
-### routescope labs. Items 1 to 6 of section 6 are Done; the rest is a plan
+### routescope labs. Items 1 to 6 of section 6 are Done, and so is the daemon's read side; the rest is a plan
 
 **Done so far**: items 1 and 5, the `bgp4r` umbrella executable and
 `bgp4r capture`, which landed together because the capture contract
@@ -5909,6 +6005,64 @@ phase order on purpose**, since the phasing table puts item 5 in phase
 because routescope's own capture path needs a modification before it
 can point at a bgp4r image, and that modification is routescope's and
 is not blocked by this.
+
+**And `bgp4rd` with `bgp4r-cli` exist now, with the read side of the
+control API**, in `bgp/daemon/` over `exe/bgp4rd` and `exe/bgp4r-cli`:
+the process, the YAML file, the Unix socket, the request envelope, and
+`api.info`, `show.status`, `show.peers`, `show.routes`, `show.rib` and
+`show.text`. So the first thing a routescope driver needs is there: it
+can ask a question rather than read a snapshot bgp4r chose to write,
+which is what section 5 says a driver should do and what `Frr` and
+`Bird` both do. Five things that work settled, each in
+`docs/daemon.md` now:
+
+* **The request envelope is routescope's own client line**, read at
+  `7eabde1`, and the document did not carry it. `{"id":1,"method":...,
+  "params":{}}` in, `{"id":1,"result":...}` or `{"id":1,"error":"..."}`
+  out, one JSON object per line each way. The driver will be that line
+  with the paths changed, so a mismatch would be a wrong answer rather
+  than a missing one.
+* **A page envelope for the two unbounded views**, `{"rows":[...],
+  "total":N,"offset":O,"limit":L,"next_offset":O+L or null}`, where the
+  design had a bare Array. A full table is about a million prefixes and
+  the recorded requirement is that no endpoint builds a million element
+  array; a bare Array also cannot tell the end of a table from a
+  truncated answer, which is the gap-against-quiet failure this file
+  keeps meeting. A driver reads `result["rows"]`.
+* **`show.text` is one method beyond the read list**, and it exists
+  because `bgp/rib/show.rb` takes a `Rib::Table`. ospfv2 renders every
+  view client side, and copying that would mean a second IOS, Junos and
+  IOS-XR renderer beside the one with samples behind it. So the daemon
+  renders and the client asks. `show bgp summary` is the exception and
+  is rendered in the client, since `Show` has no summary form at all.
+* **A peer row is mostly session state and the daemon owns that half.**
+  The view answers four keys plus `type`, `best` and `sent`; `state`,
+  `description`, `uptime`, `flaps`, `last_error`, `updates` and
+  `capabilities` come from the sessions. Two more: the daemon's peer
+  list is every **configured** neighbor where the view's is the peers
+  the table has seen, because a peer table that hides the peers that
+  are down hides the interesting ones; and `summary.peers` is the
+  configured count for the same reason.
+* **Every state bgp4r's FSM reaches is in routescope's closed
+  lowercase list**, measured rather than assumed: it sets `:Idle`,
+  `:Active`, `:OpenSent`, `:OpenConfirm` and `:Established`, never
+  `:Connect`, and `:OpenRecv` is in `Neighbor`'s `is_*?` helpers and is
+  never set. That matters because routescope **drops** a value outside
+  the list, so a wrong case shows as an empty peer list and not as an
+  error.
+
+**And a decision with a cost, recorded with the two options it beat.**
+`lab/speaker.rb` was most of a daemon and `lab/` is not on an installed
+gem's load path, so `bgp4rd` could have required it, kept a copy, or
+the shared part could move into the library. The third: `bgp/daemon/
+speaker.rb`, with `lab/speaker.rb` reduced to its command line and
+three constants. Requiring `lab/speaker.rb` gives an executable that
+works from a checkout and fails from `gem install bgp4r`; a copy gives
+two session loops, which is the drift this file records three times,
+most recently the capability name list that lived in two methods and in
+`lab/speaker.rb` and fell behind the library in all three. The test of
+the move is that `speaker_test.rb`, `speaker_router_test.rb` and
+`add_path_topology_test.rb` all pass **unchanged**, which they do.
 
 **Four things that work differs from in the design, and they are
 corrections to `docs/routescope-labs.md` section 6 item 5 rather than
@@ -5980,11 +6134,11 @@ The short version, so the direction is visible here:
   the conformance image already carries GoBGP's client, so a lab with
   both on PATH would be ambiguous. Four commands: `bgp4rd`,
   `bgp4r-cli`, `bgp4r` as the umbrella (`sim`, `routegen`, `capture`,
-  `lab new`, `version`) and `bgp4r-sim` as an alias. **The umbrella
-  exists; the other three do not and are not stubbed**, because an
-  executable in a released gem that answers nothing is worse than one
-  that is not there. The gemspec declares `bgp4r` alone and the usage
-  names the rest as not yet implemented.
+  `lab new`, `version`) and `bgp4r-sim` as an alias. **Three exist and
+  `bgp4r-sim` does not and is not stubbed**, because an executable in a
+  released gem that answers nothing is worse than one that is not
+  there. The gemspec declares `bgp4r`, `bgp4rd` and `bgp4r-cli`, and
+  the usage names what is left as not yet implemented.
 * **The largest item was that the lab speaker becomes a router. Done**,
   which is item 2 of the document's section 6. `bgp/rib/` was finished,
   tested and unwired because the speaker predates it; it is wired in now
@@ -6016,14 +6170,19 @@ The short version, so the direction is visible here:
     asserted the opposite and the library was right, which is the
     check-the-proof rule in Rules for agents arriving from the usual
     direction.
-  * **The state file's Loc-RIB is serialised in `lab/speaker.rb` and
-    belongs in a view layer**, item 3 of that section, which was being
-    built in parallel. Move it there when that lands. What must not
-    move is the shape: plain data, `docs/daemon.md`'s `show.routes`
-    row, and never `rib.show` text, because those three styles have
-    never been diffed against a real device and a state file a driver
-    parses would be exactly the test this file says nobody should
-    write.
+  * **The state file's Loc-RIB is serialised in the speaker and belongs
+    in a view layer**, item 3 of that section, which landed in #230 as
+    `bgp/rib/view.rb`. It is **still not moved onto it**, and the
+    serialising now lives in `bgp/daemon/speaker.rb` rather than in
+    `lab/speaker.rb`, since that is where the state file writer went.
+    Moving it is a change to the state file's own shape, which is what
+    three lab test files read, so it is its own piece of work; the
+    daemon reads the view directly and does not go through it. What
+    must not move either way is the shape: plain data,
+    `docs/daemon.md`'s `show.routes` row, and never `rib.show` text,
+    because those three styles have never been diffed against a real
+    device and a state file a driver parses would be exactly the test
+    this file says nobody should write.
   * One thing the wiring needed that is not configuration:
     `Peer#new_neighbor` fills `local_addr` from the session's own
     socket when no `local_address` key is given. `Rib::Router` reads it
@@ -6305,6 +6464,9 @@ Found while fixing other bugs, not fixed yet. Verified against master on
 
 Smaller things:
 
+* **`Log.create` reads as "use this logger" and silently keeps the one that is already there**, which is a trap rather than a wrong answer today. It is `@@logger ||= new(s)` in `bgp/common.rb`, so a second caller's IO is dropped and every line keeps going where the first caller sent it. `Log.set_filename` is the forcing form. Measured on 2026-11-02:
+  `ruby -I. -e 'require "bgp4r"; f = File.open("/tmp/l1.log", "w"); Log.create(STDERR); Log.create(f); Log.info("to the file?"); f.flush; p File.size("/tmp/l1.log")'`
+  prints `0`. Nothing is wrong now, because the two callers in the tree are `Speaker#setup_log`, which runs once in a fresh lab process, and `Server#setup_log`, which uses `set_filename` for exactly this reason and has a test that `--log FILE` really wrote there. Not fixed because renaming or changing `create` touches every caller of a decade-old class and is its own decision: the smallest honest fix is a comment on `create` saying it does not replace, which is a one line change nobody has made.
 * **An IPv4 NLRI with a prefix length above 32 is accepted in silence, and `validation.rb` has no NLRI field checks at all.** Every rule there is about a path attribute, so the reachability fields of RFC 4271 section 4.3 are unchecked: a prefix length of 198 produces a `Prefix` and no finding on either channel. Found on 2026-11-01 from the other end, by sending a Path Identifier on a session that negotiated none, which puts four unexpected octets in front of every prefix:
   `ruby -I. -e 'require "bgp4r"; u = BGP::Update.new(["ffffffffffffffffffffffffffffffff00310200000012400101004003040a0000074002040201fde90000000718c63364"].pack("H*").is_packed, BGP::Update::Info.new(false, :lenient)); p [u.nlri.to_ary, u.path_attribute.errors.size, u.path_attribute.undecoded.size]'`
   prints `[["0.0.0.0/0", "0.0.0.0/0", "0.0.0.0/0", "24.0.0.0/7", "51.100.0.0/198"], 0, 0]`. **gobgpd 3.23.0 on the same octets logs `network bytes is short`, sends NOTIFICATION 3/1 and resets**, so a second implementation refuses what bgp4r invents five routes out of. Not fixed here for two reasons, both decisions rather than patches: the first NLRI check in the file is a new channel, since `Attr::Check.attribute` is handed one attribute and these octets are not in one; and the subcode is not obvious, because RFC 4271 section 6.3 names 3/10 Invalid Network Field while GoBGP picks 3/1, and inventing one is the trap four families' validation parts each recorded.
@@ -6432,7 +6594,7 @@ Lab and conformance:
 * **Flow spec interop lives in `docs/flow-spec.md` section 12**, measured and asserted rather than written down here, the same way the fault matrix columns are. The short version: both routers accept a rule from bgp4r and read it back, and they disagree on every part of RFC 8955 section 4.2. Two harness facts worth knowing before writing another flow spec lab test: GoBGP's **config file and its client use different names for the VPN family**, `l3vpn-ipv4-flowspec` and `ipv4-l3vpn-flowspec`, each rejecting the other; and **FRR 8.4.4 has no VPN flow spec family**, refusing a session that offers SAFI 134 alone with 2/7 and silently discarding the rule when SAFI 133 is there too.
 * **`to_hash_round_trip_test.rb` cannot read a test file that is not pure ASCII.** `test_every_working_round_trip_is_asserted_in_a_class_test_file` reads every test file body and matches regexps against it, and a single non-ASCII character in any of them makes it error with `ArgumentError: invalid byte sequence in US-ASCII`, pointing at its own line 190 and naming neither the file nor the character. Found on 2026-10-31 by putting one arrow in a comment in a new test file: that file passed on its own and the suite errored in a test it has nothing to do with. Every test file is ASCII today, so nothing is wrong now; what is wrong is the diagnosis the next person gets. The fix is an encoding on the read or a `scrub`, and it is one line in a file this change does not otherwise touch.
 * **`bgp4r capture` has three gaps, each a decision rather than a patch, and each said in the file it is in.** The live path, `tcpdump` into a pipe, is the only code in `bgp/capture/` no test runs: tcpdump is not installed in this sandbox and spawning it in a unit test wants a privileged interface, so the file path is exercised in full and the nine lines of the spawn and the two that kill the child are not. The Dockerfile's **`capture` stage has not been built**, for want of a Docker daemon, and it is what makes routescope's hard coded `IMAGE capture -i IFACE` reach anything, so build it before trusting it. And **reordered segments are not handled**: `bgp/capture/stream.rb` reads each direction in arrival order, trims a retransmission by sequence number and does nothing about a capture whose segments crossed, which would frame garbage from that point with nothing saying so. Reordering means held segments, timers and a reassembly queue, which is a TCP implementation and not a dissector; the file says so rather than leaving it to be found out.
-* Lowest coverage (unit suite): `bgp/capture/cli.rb` 87% (the live tcpdump path, above), `neighbor/neighbor.rb` 92%, `messages/update.rb` 92%, `neighbor/add_path_cap.rb` 93%, `path_attributes/mp_unreach.rb` 93%, `path_attributes/ipv6_extended_communities.rb` 93%, `optional_parameters/graceful_restart.rb` 93%, `path_attributes/mp_reach.rb` 93%.
+* Lowest coverage (unit suite): `daemon/speaker.rb` 47%, `daemon/api.rb` 50%, `daemon/server.rb` 57%, `daemon/client.rb` 85%, `bgp/capture/cli.rb` 87% (the live tcpdump path, above), `neighbor/neighbor.rb` 92%, `messages/update.rb` 92%, `neighbor/add_path_cap.rb` 93%, `path_attributes/mp_unreach.rb` 93%, `path_attributes/ipv6_extended_communities.rb` 93%, `optional_parameters/graceful_restart.rb` 93%, `path_attributes/mp_reach.rb` 93%. **The four `daemon/` rows are not a gap and must not be chased by unit testing a socket**: the note under the baseline has the same files at 87.9% once `test/functional/daemon_test.rb` and the two speaker lab tests are counted.
 
 ## Attribute work left
 
