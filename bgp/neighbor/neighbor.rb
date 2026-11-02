@@ -25,6 +25,7 @@ require 'thread'
 require 'bgp/observable'
 require 'bgp/events'
 require 'bgp/io'
+require 'bgp/logging'
 require 'bgp/neighbor/add_path_cap'
 # CAPABILITIES below names every capability class, so they have to be
 # loaded by the time this file is. The dependency was always here, in the
@@ -35,17 +36,21 @@ require 'bgp/optional_parameters/capabilities'
 module BGP
   class Neighbor
     include Observable
-    
+    # #log and #logger. Every line this session writes goes through them,
+    # so a program with two sessions can keep their logs apart; with no
+    # logger set it is Log, which is where these lines always went.
+    include Logging
+
     def log_info(txt)
-      Log.info "#{self.class} #{txt}"
+      log(:info, "#{self.class} #{txt}")
     end
 
     def log_warn(txt)
-      Log.warn "#{self.class} #{txt}"
+      log(:warn, "#{self.class} #{txt}")
     end
 
     def log_debug(txt)
-      Log.debug "#{self.class} #{txt}"
+      log(:debug, "#{self.class} #{txt}")
     end
 
     def initialize(*args)
@@ -74,6 +79,7 @@ module BGP
       self.auto_as4 = h[:auto_as4] if h.has_key?(:auto_as4)
       self.policy = h[:policy] if h.has_key?(:policy)
       self.events = h[:events] if h.has_key?(:events)
+      self.logger = h[:logger] if h.has_key?(:logger)
     end
 
     # The event stream this session publishes to: a BGP::Events, its own by
@@ -340,7 +346,7 @@ module BGP
         begin
           msg = BGP::Message.factory(m, @session_info)
         rescue UnknownBgpMessage => e
-          Log.error e.message
+          log(:error, e.message)
           return
         rescue Malformed_attribute => e
           rcv_malformed(e)
@@ -361,18 +367,18 @@ module BGP
         elsif msg.is_a?(Keepalive)
           rcv_keepalive
         else
-          Log.error "unexpected message type #{type}"
+          log(:error, "unexpected message type #{type}")
         end
         changed and notify_observers(msg)
       when :ev_conn_reset
-        Log.warn "#{type}"
+        log(:warn, "#{type}")
         stop
       when :ev_holdtime_expire
-        Log.warn "Holdtime expire: #{type}"
+        log(:warn, "Holdtime expire: #{type}")
         stop
         changed and notify_observers(BGP::Notification.code_to_s(4))
       else
-        Log.error "unexpected event #{ev}"
+        log(:error, "unexpected event #{ev}")
       end
     end
 
@@ -432,7 +438,7 @@ module BGP
       true
     rescue => e
       @last_error = e
-      Log.error "#{e}"
+      log(:error, "#{e}")
       stop
       raise if options && options[:raise]
       false
@@ -540,6 +546,10 @@ module BGP
     def init_io
       @in = BGP::IO::Input.new(@socket, holdtime, self)
       @out = BGP::IO::Output.new(@socket, @holdtime, self)
+      # Both threads log, so both follow this session's logger. Set here
+      # rather than passed, for the reason BGP::IO::Output records: the
+      # constructor takes its observers as a splat.
+      @in.logger = @out.logger = @logger
       @out.max = send_queue_limit
       new_state(:Active, "Open Socket")
       [@in, @out].each { |io| 
@@ -639,7 +649,7 @@ module BGP
       when :Active
         send_message open  ; new_state :OpenSent, ev
       else
-        Log.warn "#{self.class}: attempt to send OPEN msg while in #{@state}"
+        log(:warn, "#{self.class}: attempt to send OPEN msg while in #{@state}")
       end
     end
   
@@ -660,7 +670,7 @@ module BGP
         send_open "RecvOpen"
         new_state :OpenConfirm, "RecvOpen"
       else
-        Log.warn "#{self.class}: received open message while in state #{@state}"
+        log(:warn, "#{self.class}: received open message while in state #{@state}")
       end
       
     end

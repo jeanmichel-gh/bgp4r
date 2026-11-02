@@ -21,6 +21,7 @@
 #++
 
 require 'bgp/daemon/speaker'
+require 'bgp/logging'
 require 'bgp/misc/route_generator'
 require 'bgp/events'
 require 'bgp/sim/sent'
@@ -68,6 +69,9 @@ module BGP
     # file keys that would build a table are refused, naming `bgp4rd`.
     # What it knows about what it sent is `bgp/sim/sent.rb`.
     class Injector
+
+      # #log and #logger; see bgp/logging.rb.
+      include BGP::Logging
 
       # Something the caller can fix: a bad body, an unknown name, a
       # prefix with no history. `BGP::Daemon::NoSession` is the other
@@ -137,9 +141,14 @@ module BGP
 
       attr_reader :speaker, :sent
 
-      def initialize(config)
+      # arg[:logger] is the ->(level, message) this injector and the
+      # Speaker it builds log through. Its two lines are about a resend
+      # and about publishing an event, both from a session thread, so
+      # they belong with the speaker's rather than with the process's.
+      def initialize(config, arg = {})
         Injector.check_config(config)
-        @speaker = Daemon::Speaker.new(config)
+        @logger = arg[:logger]
+        @speaker = Daemon::Speaker.new(config, :logger => @logger)
         @sent = Sent.new
         @announced = {}
         @lock = Mutex.new
@@ -733,7 +742,7 @@ module BGP
         publish(ROUTE, "re-announced #{blocks} block(s) to #{peer.address}",
                 :peer => peer.address, :action => 'resend')
       rescue StandardError => e
-        Log.warn "bgp4r-sim: re-announcing to #{peer.address}: #{e.class}: #{e.message}"
+        log(:warn, "bgp4r-sim: re-announcing to #{peer.address}: #{e.class}: #{e.message}")
       end
 
       # ---- the body ----------------------------------------------------
@@ -845,7 +854,7 @@ module BGP
         @speaker.events.publish(:kind => kind, :message => message,
                                 :peer => data[:peer], :data => stringify(data))
       rescue StandardError => e
-        Log.warn "bgp4r-sim: publishing an event: #{e.class}: #{e.message}"
+        log(:warn, "bgp4r-sim: publishing an event: #{e.class}: #{e.message}")
       end
 
       # JSON has no symbols, and an event's data is read by a program.

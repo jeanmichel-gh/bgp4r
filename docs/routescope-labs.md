@@ -499,12 +499,59 @@ unblocks, so the order is not arbitrary.
      sent or received. A `Neighbor` has its own stream and a program
      with several sessions sets one shared `Events` on each, which is
      what makes them one ordered timeline rather than N numbering from 1.
-7. **An injected logger.** bgp4r's `Log` in `bgp/common.rb` is a
-   **global class-variable singleton** with `private_class_method :new`.
-   One process per container makes that survivable, but it means no
-   per-node logger, and `Log.level` and `Log.filename` are process-wide.
-   ospfv2 injects a plain callable `->(level, message)` like its clock.
-   Lower priority than 6, since a console reads events and not log text.
+7. **An injected logger. Done**, in `bgp/logging.rb`. `BGP::Logging` is a
+   `log(level, message)` and a settable `logger`, where a logger is a
+   plain callable `->(level, message)` as ospfv2's is. `Log` in
+   `bgp/common.rb` is still the **global class-variable singleton** with
+   `private_class_method :new` and process-wide `Log.level` and
+   `Log.filename`, and it is now the **destination** an object with no
+   logger falls back to rather than the API the library calls. So no
+   call site outside the library moved: the 50 `Log.` lines in `lab/`,
+   `exe/` and `examples/` are untouched.
+   * **The bar, and it is cleared**: two `Speaker`s in one process can
+     write to two different destinations with no process-wide state
+     between them, and a line says what day it happened on.
+     `test/functional/lab/speaker_test.rb` is two of them over loopback
+     with the singleton emptied, so a line that reached it rather than a
+     callable has nowhere to hide.
+   * **What takes one**, which is every object with a session under it:
+     `Neighbor` and the two `BGP::IO` threads below it, `BGP::Events`,
+     `Daemon::Speaker`, `Rib::Table` with the `Router`, `PeerFeed` and
+     `FibInstaller` it builds, and `Sim::Injector`. A `Speaker` passes
+     its own down to all of them, so one callable per node is the whole
+     configuration.
+   * **One line in `bgp/` is deliberately left on `Log`**:
+     `Path_attribute#to_s`, which has no owner to take a logger from,
+     since it is built by a parse, by a test and by a script with no
+     session near it. `test/unit/logging_test.rb` has an allowed list,
+     so a second one fails the suite rather than reading as an
+     oversight.
+   * **The two designs rejected.** A logger beside `Log`, with the
+     library still calling `Log.warn` from inside a session, was the
+     cheaper diff and clears no bar: a Speaker handed one would still
+     write its sessions' lines to the process-wide destination.
+     Threading one through every constructor was the other half of the
+     choice and turned out not to be needed, because the objects that
+     hold sessions already take an options Hash that reaches them, and
+     the three `Rib` objects are each handed the Table so they read its
+     logger. So the per-object state that fixes the bar cost no
+     constructor change.
+   * **Three `Log` bugs went with it.** `Log.level`, `Log.level=` and
+     `Log.filename` raised `NoMethodError` with no logger created, where
+     one line above them `Log.level=` already returned silently for a
+     level out of range; all three answer now, which also makes
+     `Log.clear` safe on a fresh process. And `datetime_format` was
+     `"%M:%S"`, so a `bgp4rd` line read `I, [54:16 #2408]  INFO -- :`
+     and two lines a day apart were indistinguishable; it is ISO 8601
+     with the offset now, printed rather than claimed as UTC because
+     `Logger` applies the format to a local Time.
+   * **What it does not do**, so nobody reads more into it: nothing
+     publishes a log line as an event, which `bgp/events.rb` records a
+     reason against, and `show.log` is still the text ring rather than
+     the event list. `bgp/daemon/log_ring.rb` named this item as what
+     would make the ospfv2 answer possible; it is possible now and it is
+     a separate decision, because a bounded list of 2000 would lose the
+     events people look for to the lines nobody reads.
 8. **Actions, for `bgp4r-sim` only. Done**, in `bgp/sim/` over
    `exe/bgp4r-sim`. The table is in `docs/daemon.md`: announce,
    withdraw, attribute, fault, replay, notification, the three session

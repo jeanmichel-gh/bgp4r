@@ -238,7 +238,77 @@ class BGP_Daemon_Speaker_Test < Test::Unit::TestCase
     assert_match(/not established/, e.message)
   end
 
+  # ---- the injected logger ----
+
+  # **One logger reaches everything under a speaker**, which is what makes
+  # two of them in one process able to log apart: before this every line
+  # went to the process-wide Log whatever a program configured. Each of
+  # these is a separate wiring site, so a missed one is a line a program
+  # cannot redirect.
+  def test_the_logger_reaches_every_object_under_a_speaker
+    mine = ->(_level, _message) {}
+    s = speaker_with_logger(mine, 'rib' => true)
+    assert_same(mine, s.logger, 'the speaker itself')
+    assert_same(mine, s.events.logger, 'its shared event stream')
+    assert_same(mine, s.rib.logger, 'its table, and so the three objects the table builds')
+    assert_same(mine, s.peers.first.send(:new_neighbor).logger, 'every session')
+  end
+
+  # The two BGP::IO threads log too, and they are set after construction
+  # rather than passed, since their constructor takes observers as a
+  # splat. So the only thing that can say they were wired is reading
+  # init_io, which needs no socket.
+  def test_the_two_io_threads_take_the_sessions_logger
+    mine = ->(_level, _message) {}
+    n = BGP::Neighbor.new(:my_as => 1, :id => '1.1.1.1', :remote_addr => '10.0.0.2',
+                          :logger => mine)
+    n.instance_variable_set(:@socket, nil)
+    n.send(:init_io)
+    assert_same(mine, n.instance_variable_get(:@in).logger)
+    assert_same(mine, n.instance_variable_get(:@out).logger)
+  ensure
+    n.instance_variable_get(:@in)&.thread&.kill
+    n.instance_variable_get(:@out)&.exit
+  end
+
+  # With no logger every one of them answers nil, so each falls back to
+  # the process-wide Log, which is where these lines always went. That is
+  # what makes every node file and every topology behave as it did.
+  def test_a_speaker_with_no_logger_leaves_everything_on_the_process_log
+    s = speaker('rib' => true)
+    assert_nil(s.logger)
+    assert_nil(s.events.logger)
+    assert_nil(s.rib.logger)
+    assert_nil(s.peers.first.send(:new_neighbor).logger)
+  end
+
+  # **A speaker handed a logger does not touch the process log**, and the
+  # guard is the point rather than tidiness: `run` is lab/speaker.rb's own
+  # main loop and one process there is one node, so configuring Log is
+  # right. A speaker inside a program that gave it a callable is not
+  # using Log, so setting Log.level would change a destination it does
+  # not write to and another speaker in the same process may.
+  def test_setup_log_leaves_the_process_log_alone_when_a_logger_was_given
+    state = [Log.class_variable_get(:@@logger)]
+    Log.class_variable_set(:@@logger, nil)
+    speaker_with_logger(->(_l, _m) {}, 'log_level' => 'debug').send(:setup_log)
+    assert_nil(Log.class_variable_get(:@@logger), 'nothing was created')
+    # And with no logger it still does what lab/speaker.rb needs.
+    speaker('log_level' => 'debug').send(:setup_log)
+    assert_not_nil(Log.class_variable_get(:@@logger))
+    assert_match(/DEBUG/, Log.level)
+  ensure
+    Log.class_variable_set(:@@logger, state[0])
+  end
+
   private
+
+  def speaker_with_logger(logger, extra = {})
+    BGP::Daemon::Speaker.new({ 'as' => 65_000, 'router_id' => '10.0.0.1',
+                               'neighbors' => [{ 'address' => '10.0.0.2',
+                                                 'as' => 65_001 }] }.merge(extra),
+                             :logger => logger)
+  end
 
   def keepalive ; BGP::Keepalive.new ; end
 

@@ -113,7 +113,10 @@ TEXT
       # Builds the Speaker, the Views and the Api and starts all three.
       # Answers nil and prints the reason on anything a person can fix.
       def build(config, opts = {})
-        @speaker = Speaker.new(config)
+        # The same logger the Api and the Candidate get, so every line
+        # this process writes goes through one callable: the sessions'
+        # and the table's as much as the daemon's own.
+        @speaker = Speaker.new(config, :logger => @logger)
         @views   = Views.new(@speaker, :log => @log_ring)
         # The candidate is built here rather than left to `Api#candidate`
         # so that it carries the logger and so that `--config`'s path is
@@ -235,10 +238,15 @@ TEXT
         opts
       end
 
-      # `Log` is the library's logger and the Speaker's sessions already
-      # write to it, so there is one place for a line to come out. The
-      # `--log` file is opened unbuffered because a container reads it as
-      # it happens.
+      # `Log` is where this process's lines come out, and the Speaker is
+      # handed `BGP::Logging.to_log` so its sessions and its table write
+      # there too: one place for a line to come out. The `--log` file is
+      # opened unbuffered because a container reads it as it happens.
+      #
+      # One process is one log here, which is what a daemon wants. What
+      # changed with the injected logger is that it is a choice: two
+      # speakers in one process can be given two callables and then
+      # neither touches `Log`. See `bgp/logging.rb`.
       #
       # **`Log.set_filename` and not `Log.create`, which is the one that
       # reads right and does nothing.** `Log.create` is `@@logger ||=
@@ -255,16 +263,17 @@ TEXT
              end
         io.sync = true if io.respond_to?(:sync=)
         # **The ring goes in front of the real destination, which is the
-        # only place it can go.** `show.log` answers the last N lines, and
-        # the lines are written by `Log` from every session thread rather
-        # than through the `@logger` below, which only this file and the
-        # Api use. A ring fed from that lambda would answer the daemon's
-        # own handful of lines and call them the log.
+        # only place it can go.** `show.log` answers the last N lines, so
+        # it has to see every line, whichever thread wrote it. The
+        # `@logger` below is `BGP::Logging.to_log`, so the daemon's own
+        # lines, the sessions', the table's and the Api's all pass
+        # through `Log` and so through the ring, and a line's format is
+        # `Logger`'s rather than this file's.
         # `bgp/daemon/log_ring.rb` has the decision and what it rejected.
         @log_ring = LogRing.new(io)
         Log.set_filename(@log_ring)
         Log.level = opts[:debug] ? Logger::DEBUG : Speaker.log_level(config)
-        @logger = ->(level, message) { Log.send(level, message) }
+        @logger = BGP::Logging.to_log
       end
 
       def log(level, message)

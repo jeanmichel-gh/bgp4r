@@ -309,3 +309,174 @@ class LabSpeakerPeerCapabilitiesTest < Test::Unit::TestCase
                  'the code is what a reader has to go on, so it must be there'
   end
 end
+
+# **Two speakers in one process, each writing to its own logger.** This is
+# the bar the injected logger had to clear and the one thing the
+# process-wide `Log` could not do: `@@logger` sits behind
+# `private_class_method :new`, with process-wide `Log.level` and
+# `Log.filename`, so two speakers could not log apart however a program
+# configured them. A multi-node harness is exactly two speakers in one
+# process, and so are `bgp4rd`, `bgp4r-sim` and `lab/speaker.rb`. See
+# `bgp/logging.rb` and item 7 of docs/routescope-labs.md section 6.
+#
+# Two real sessions over loopback rather than a stub, because the lines
+# that matter come off the session threads and the two BGP::IO threads
+# under them, which is where every one of them used to reach `Log`.
+#
+#   ruby -I. test/functional/lab/speaker_test.rb
+class LabSpeakerTwoLoggersTest < Test::Unit::TestCase
+
+  PORT = LabHelper::Local.free_port
+
+  def setup
+    @lines = { :a => [], :b => [] }
+    # The process log is taken away for the duration, so a line that
+    # reached it rather than a callable has nowhere to hide: with
+    # @@logger nil every Log writer is a no-op, and one of these tests
+    # asserts it was never created.
+    @log_state = Log.class_variable_get(:@@logger)
+    Log.class_variable_set(:@@logger, nil)
+    @a = @b = nil
+  end
+
+  def teardown
+    @a.stop if @a
+    @b.stop if @b
+    Log.class_variable_set(:@@logger, @log_state)
+  end
+
+  def collect_into(which)
+    ->(level, message) { @lines[which] << [level, message] }
+  end
+
+  def wait_for(timeout = 10)
+    deadline = Time.now + timeout
+    loop do
+      return true if yield
+      return false if Time.now > deadline
+      sleep 0.05
+    end
+  end
+
+  # One listener and one dialler, so the two have a session between them
+  # and each one's lines come off its own threads.
+  def start_a_pair
+    @a = Lab::Speaker.new({ 'as' => 65_001, 'router_id' => '10.0.0.1',
+                            'listen_address' => '127.0.0.1', 'port' => PORT,
+                            'neighbors' => [{ 'address' => '127.0.0.1',
+                                              'as' => 65_002 }] },
+                          :logger => collect_into(:a))
+    @b = Lab::Speaker.new({ 'as' => 65_002, 'router_id' => '10.0.0.2',
+                            'local_address' => '127.0.0.1',
+                            'neighbors' => [{ 'address' => '127.0.0.1', 'as' => 65_001,
+                                              'connect' => true, 'port' => PORT,
+                                              'retry' => 0.5 }] },
+                          :logger => collect_into(:b))
+    @a.start
+    @b.start
+    assert(wait_for { @a.peers.first.established? && @b.peers.first.established? },
+           'both sessions came up')
+    assert(wait_for { @lines[:a].any? && @lines[:b].any? }, 'both loggers were written to')
+  end
+
+  def test_two_speakers_in_one_process_write_to_two_loggers
+    start_a_pair
+    # A line written through each speaker's own session, which is the
+    # path every state change and every message takes.
+    @a.peers.first.neighbor.log_info('from speaker a')
+    @b.peers.first.neighbor.log_info('from speaker b')
+    assert(@lines[:a].any? { |_l, m| m == 'BGP::Neighbor from speaker a' })
+    assert(@lines[:b].any? { |_l, m| m == 'BGP::Neighbor from speaker b' })
+    assert_equal([], @lines[:a].select { |_l, m| m =~ /from speaker b/ },
+                 "speaker b's lines must not reach speaker a's logger")
+    assert_equal([], @lines[:b].select { |_l, m| m =~ /from speaker a/ })
+  end
+
+  # **No process-wide state between them**, which is the other half of the
+  # bar: with the singleton emptied in setup, nothing either speaker did
+  # created one, so there is no shared destination and no shared level.
+  def test_neither_speaker_touches_the_process_log
+    start_a_pair
+    assert_nil(Log.class_variable_get(:@@logger),
+               'a speaker handed a logger must not create the process-wide one')
+    assert_nil(Log.level, 'and so there is no shared level between the two')
+  end
+
+  # **Logging is observation, so installing a logger must not change
+  # behaviour.** The same session is run twice, once with a logger taking
+  # every level and once with none at all, and what crossed the wire is
+  # compared: the UPDATE's octets, what the peer's OPEN said and the
+  # sequence of state changes.
+  #
+  # **Be exact about what it can see, because the obvious reading is too
+  # wide.** The argument to `log(...)` is built by the caller and so is
+  # evaluated whether or not a logger is installed: `log_debug "Send
+  # #{m.to_s}"` calls `to_s` either way. So a side effect in the argument
+  # expression changes **both** runs identically and this comparison is
+  # blind to it, which a sabotage proved by passing. What it does catch
+  # is the class the injected logger brings in, which is behaviour that
+  # depends on whether a logger is there: everything in that diff that
+  # branches on `@logger`. The other half of that class, a logger that
+  # writes to the process log as well as to its callable, is caught by
+  # `test_a_logger_replaces_the_process_log_rather_than_writing_beside_it`
+  # in test/unit/logging_test.rb, since this file cannot see where a line
+  # went.
+  def test_a_logger_at_debug_changes_nothing_that_crossed_the_wire
+    with_logger = run_one_session(collect_into(:a))
+    without     = run_one_session(nil)
+    assert(@lines[:a].any? { |l, _m| l == :debug }, 'the logger really saw debug lines')
+    assert_not_equal([], with_logger.first, 'an UPDATE crossed')
+    assert_equal(with_logger, without,
+                 'the same octets, the same OPEN and the same transitions')
+  end
+
+  private
+
+  # One session against a free port, driven to Established and fed the
+  # speaker's announce block, answering what the far side saw. The far
+  # side is a plain Neighbor, so nothing of the speaker's own recording
+  # is in the comparison.
+  def run_one_session(logger)
+    port = LabHelper::Local.free_port
+    states = []
+    seen = []
+    speaker = Lab::Speaker.new({ 'as' => 65_001, 'router_id' => '10.0.0.1',
+                                 'listen_address' => '127.0.0.1', 'port' => port,
+                                 'neighbors' => [{ 'address' => '127.0.0.1',
+                                                   'as' => 65_002 }],
+                                 'announce' => [{ 'prefixes' => ['10.1.0.0/24'],
+                                                  'med' => 7 }] },
+                               :logger => logger)
+    far = BGP::Neighbor.new(4, 65_002, 180, '10.0.0.2', '127.0.0.1', '127.0.0.1')
+    far.on_state_change { |_n, _old, new, _r| states << new }
+    far.add_observer(Catcher.new(seen))
+    speaker.start
+    far.start(:port => port)
+    assert(wait_for { far.is_established? }, 'the far side came up')
+    # The OPEN and then the announce block, so both runs are compared at
+    # the same point of the session rather than wherever each got to.
+    assert(wait_for { seen.size >= 2 }, 'the OPEN and the announce block arrived')
+    [seen.dup, far.rmt_as, far.rmt_bgp_id, states.dup]
+  ensure
+    far.stop if far
+    speaker.stop if speaker
+  end
+
+  # Keeps the hex of every message the far side received, which is what
+  # "crossed the wire" has to mean here: the OPEN's octets carry our hold
+  # time, our AS, our router id and every capability, and a comparison on
+  # the UPDATE alone missed a sabotage that changed the hold time.
+  # KEEPALIVEs are left out because they are periodic, so counting them
+  # would make the comparison depend on how long each run took.
+  #
+  # A Neighbor notifies its observers with the decoded message, one
+  # argument, which is why this takes a message and not the (:ev_msg,
+  # type, octets) triple the BGP::IO threads publish.
+  class Catcher
+    def initialize(sink) ; @sink = sink ; end
+    def update(msg)
+      return if msg.is_a?(BGP::Keepalive) || !msg.respond_to?(:to_shex)
+      @sink << msg.to_shex
+    end
+  end
+end

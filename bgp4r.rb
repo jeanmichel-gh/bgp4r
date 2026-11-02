@@ -5,6 +5,7 @@
 #end
 
 require 'bgp/common'
+require 'bgp/logging'
 require 'bgp/iana'
 require 'bgp/messages/messages'
 require 'bgp/path_attributes/attributes'

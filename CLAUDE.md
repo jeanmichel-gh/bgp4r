@@ -13,7 +13,35 @@ bgp4r.rb                 entry point, requires everything
 bgp/version.rb           BGP::VERSION, read by bgp4r.gemspec and printed by
                          `bgp4r version`; one place for the version, since a
                          command cannot print what the library does not answer
-bgp/common.rb            shared helpers (IPAddr extensions, hex dumps)
+bgp/common.rb            shared helpers (IPAddr extensions, hex dumps), and
+                         Log, the process-wide logger singleton, which is a
+                         **destination** now rather than the API the library
+                         calls: see bgp/logging.rb
+bgp/logging.rb           the injected logger: `log(level, message)` and a
+                         settable `logger`, which is a plain callable
+                         ->(level, message) as ospfv2's is, with Log as the
+                         fallback for an object that has none. **It is what
+                         makes two speakers in one process log apart**, which
+                         Log could not: `@@logger` sits behind
+                         private_class_method :new with process-wide
+                         Log.level and Log.filename. Every object with a
+                         session under it takes one, so one callable per node
+                         is the whole configuration: Neighbor and the two
+                         BGP::IO threads below it, BGP::Events,
+                         Daemon::Speaker, Rib::Table with the Router,
+                         PeerFeed and FibInstaller it builds, and
+                         Sim::Injector. A Speaker passes its own down to all
+                         of them. `Logging.write` and `Logging.to_log` are
+                         the fallback as a method and as a callable, so the
+                         two Server classes hand one down rather than each
+                         building a `Log.send` lambda. Its header has the
+                         decision and the two designs it rejected.
+                         **One line in bgp/ is deliberately left on Log**,
+                         Path_attribute#to_s, which has no owner to take a
+                         logger from; test/unit/logging_test.rb keeps the
+                         allowed list, so a second one fails the suite.
+                         docs/routescope-labs.md section 6 item 7 is the
+                         guide, and see "routescope labs"
 bgp/iana.rb              IANA constants (AFI, SAFI, attribute codes)
 bgp/messages/            OPEN, UPDATE, KEEPALIVE, NOTIFICATION, ROUTE-REFRESH, CAPABILITY
 bgp/path_attributes/     one file per path attribute (origin, as_path, communities, mp_reach...)
@@ -227,6 +255,12 @@ bgp/events.rb            the structured event stream: an Event carrying a kind a
                          its own, `:route` and `:fault`, through
                          `register_kind` rather than by editing KINDS,
                          which is what that method is for.
+                         It takes a `:logger` now, so the one line it
+                         writes, about a listener that raised, goes to
+                         the program's callable rather than to the
+                         process-wide Log; **nothing here publishes a
+                         log line as an event or logs a published one**,
+                         and the header has the reason.
                          `Table#on_change` is still deliberately unwired.
                          See "routescope labs"
 bgp/rib/                 routes and the decision process (RFC 4271 section 9); require 'bgp/rib'
@@ -673,7 +707,19 @@ test/functional/lab/     lab tests: loopback speaker test and one Compose test p
                          speaker_test.rb also checks the capability names a topology can ask for,
                          and what a topology can say about ADD-PATH: a path_id on an
                          announce block, and the peer's own capability as data in the
-                         state file. speaker_router_test.rb is the same shape for
+                         state file. **It is where the injected logger's bar
+                         is**, in LabSpeakerTwoLoggersTest: two speakers in one
+                         process over loopback writing to two callables, with
+                         Log's singleton emptied so a line that reached it
+                         rather than a callable has nowhere to hide, and the
+                         same session run twice, once with a logger at debug
+                         and once with none, with every message the far side
+                         received compared. Read that last one's comment
+                         before trusting it: a side effect in a `log(...)`
+                         **argument** is evaluated either way, so the
+                         comparison is structurally blind to one, which a
+                         sabotage proved by passing.
+                         speaker_router_test.rb is the same shape for
                          router mode, in three halves: three speakers on loopback as
                          processes, so a route crosses the middle one with the export
                          rules applied and the state file is read for the Loc-RIB and
@@ -1064,14 +1110,14 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. The `lab` job is a matrix, one job per group in `test/lab_groups.rb`, so its cost is the slowest group and not the total: it was 12m42s as one serial suite. Each job installs only what its group needs, which is why the matrix entry carries a `gobgp`, `frr`, `docker` or `netns` flag. The `gobgp` groups pin 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-11-02: 3052 tests, 31509 assertions, all passing. Line coverage of `bgp/` from the unit suite: 96.1%.
+Baseline on 2026-11-02: 3072 tests, 31584 assertions, all passing. Line coverage of `bgp/` from the unit suite: 96.2%.
 
 **That coverage figure is 98.5% for the library and the rest is the two
 programs, not a gap anywhere else.** Measured the same run: with
-`bgp/sim/` and `bgp/daemon/` excluded it is **98.5%** over 12439 lines,
+`bgp/sim/` and `bgp/daemon/` excluded it is **98.5%** over 12477 lines,
 which is the same figure the daemon's arrival was measured against, so
 the core has not moved. From the unit suite alone `bgp/sim/` is **85.9%**
-and `bgp/daemon/` is **82.3%**, because most of what both do needs a
+and `bgp/daemon/` is **82.5%**, because most of what both do needs a
 socket or a session: `api.rb` is 57.5% there, and the event stream, the
 accept loop and the signal wait are the bulk of what is missing.
 **That daemon figure read 71.2% and 44% until 2026-11-02**, measured
@@ -1145,6 +1191,9 @@ There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Cove
 * **A test method after `private` in a test file never runs, and nothing says so.** `test/unit/path_attributes/mp_unreach_test.rb` keeps an `attr_len` helper under a `private`, and two tests appended after it in #161 left the file reporting 7 tests where 9 were defined: test-unit collects public methods only, so both were skipped in silence and the file passed. It was the regression check that caught it, not the run, because proving a new test fails against the unfixed code is the one thing a skipped test cannot do. Add tests above any `private`, and if a count looks low, compare it against `grep -c 'def test_'`.
 * Two space indent. Match the style of the file you edit.
 * Copyright headers. A new Ruby file or Dockerfile starts with the standard GPL header from `bgp/observable.rb`, with `Copyright <current year> Jean-Michel Esnault.` (a Dockerfile drops the `#--` and `#++` lines). When you change a file that has a header, add the current year to its years if it is missing: `2008, 2009` becomes `2008, 2009, 2026`. Do not add headers to files that never had one. YAML, Markdown and other config files get no header.
+* **A log line in the library goes through `log(level, message)`, never through `Log`.** `bgp/logging.rb` is the mixin: `include BGP::Logging` and the object gains `log` and a settable `logger`, which is a plain callable `->(level, message)` and falls back to the process-wide `Log` when nothing set one. Writing `Log.warn` instead is a line a program cannot redirect, which is the whole of what that file fixes, and `test_no_other_library_file_logs_through_the_process_log` in `test/unit/logging_test.rb` fails the suite on a new one. An object that logs needs somewhere to take a logger from: a Hash option its constructor already reads, or the object that built it. The one exception in the tree is `Path_attribute#to_s`, which has no owner at all, and it is in that guard's allowed list with the reason beside it.
+  * A **program** still configures `Log` directly, and that is a different thing: `Log.set_filename`, `Log.level` and `Log.create` are a process choosing its destination, and the two `Server` classes and `lab/speaker.rb` do exactly that, then hand `BGP::Logging.to_log` down. Do not reach for `Log.send(level, message)`: `Logging.write` is that dispatch, and a `send` of a Symbol onto `Log` reaches `Log.clear`, which deletes the log file.
+  * **Filtering is the logger's, not `log`'s.** Every level reaches the callable, `:debug` included, as ospfv2's `ospfd` does in the lambda it builds. Dropping a line in both places would let it be dropped twice and enabled once.
 * Keep the library free of runtime gem dependencies. The one exception is `logger`: it ships with Ruby, but Ruby 4.0 made it a bundled gem, so `bgp4r.gemspec` and the `Gemfile` declare it.
 * Before requiring a standard library, check that it is still a default gem. Ruby keeps moving libraries to bundled gems (`observer` in 3.4, `logger` in 4.0, **`base64` in 3.4**), and under Bundler those fail to load unless declared. Prefer a small built-in copy, as with `BGP::Observable`.
   * **This rule applies to test files too, and it was broken the day after it was written down.** `attr_set_gobgp_test.rb` required `base64` for one decode. It passed here on Ruby 3.3, where `base64` is still a default gem, and **failed CI on 3.4 before a single test ran**: `cannot load such file -- base64`, from `run_lab.rb`'s require loop, with the whole `gobgp-families` job red after 10 seconds. `ruby -e 'Gem::Specification.find_by_name("base64").default_gem?'` is the one line that answers the question, and it answers it per Ruby version, so the local answer is not the CI answer.
@@ -6326,9 +6375,9 @@ loopback and routegen folded in three ways. Section 2 of
 `docs/routescope-labs.md` calls the injector the thing that justifies
 the whole integration, and its own section 9.6 says why: `fault` and
 `replay` are the point, and without them it is a worse FRR. So the two
-node kinds both have their programs now and **what is left of that
-document's own items is 7 and 9**: the injected logger, and the
-containerlab topologies with the privilege story, which needs a Docker
+node kinds both have their programs now and **item 7 is Done as well, so
+what is left of that document's own items is 9 alone**: the containerlab
+topologies with the privilege story, which needs a Docker
 daemon. Everything else in its phases 1 to 5 is routescope's own
 column: the kinds, the two drivers, the `bgp:` step and the four
 conditions, which its section 9.5 costs out, and now the Config pane as
@@ -6645,6 +6694,18 @@ The short version, so the direction is visible here:
     never becomes an event, with its reason: kept in a bounded list it
     would push out the events people look for. The level is accepted so
     a caller can choose; nothing here publishes at `:debug`.
+    * **Item 7 is Done now and it did not bring the combined method
+      with it, which is the part to know before reopening this.**
+      `bgp/logging.rb` is `log(level, message)` and nothing else: the
+      first reason above is answered, since an `Events` has its own
+      logger and two streams in one process keep their lines apart, but
+      the second is not. `new_state` and `rcv_notification` still both
+      log and publish, so a `log` that also published would double every
+      line they write, and the bounded list of 2000 would fill with the
+      lines nobody reads at the expense of the events people look for.
+      Making it ospfv2's method is a decision about that list, not a
+      consequence of the logger, and `bgp/daemon/log_ring.rb`'s header is
+      the other half of it.
   * **Every option Hash in that file refuses an option name it does not
     read, and the rejected argument is worth as much as the choice.**
     Found by the owner exercising it: `Events.new(:limit => 3)` took the
@@ -6875,10 +6936,9 @@ Smaller things:
 * **`test/unit/neighbor/neighbor_test.rb`'s `test_start_stop_start_again` times out in the Docker 3.3 job and nothing here explains why.** The 6 second `Timeout::timeout` around it is the tightest in the suite and it covers two whole loopback sessions, so a slow runner is the obvious reading. What is measured: it failed twice on `docker ruby 3.3` while `docker ruby 3.4` and `docker ruby 4.0` passed the same commit both times, and 8 runs of the single test locally passed. **Do not write down a mechanism for it without one**, which is the trap `docs/flow-spec.md` records as a right answer with an invented reason: the first guess here was that a test file leaving threads behind was stealing time, and that does not hold up, because the threads in question were blocked in `connect` and a blocked connect costs no CPU. The threads were a real defect and are fixed; this is still open.
 * **A test must stop what it starts, and the way to tell is to count `Thread.list` at exit.** `test/unit/sim/server_test.rb` started Servers through a helper that dropped them on the floor, so the unit suite ran to the end with 4 of its threads still dialling: measured on 2026-11-02 by registering an `at_exit` that prints `Thread.list` grouped by `Thread.current['name']`, with and without `test/unit/sim/` in the tree, which gave 5 unnamed threads against 1. It is 1 again now. The library's own threads are named, which is what makes the count readable, so an unnamed one in that list is a test's.
 * **A replacement `Router` starts with empty Adj-RIB-Outs, so a route the new export rules refuse is never withdrawn from a peer that holds it, and that is what still makes `export` a restart-class key.** `Router#item_for` answers nil for a refused route unless its own Adj-RIB-Out has the prefix, and a Router built a moment ago has nothing in one. Measured on 2026-11-02 by replacing a reflecting Router with a non-reflecting one over a recording Neighbor: the new Router records `:ibgp_to_ibgp` in `skipped`, sends no withdrawal, and the peer goes on holding `10.1.0.0/16`. This is what is left of the `Table#on_change` entry that used to sit here, which #238 closed: a stopped `Router` or `FibInstaller` does stop being called now, and `Table#off_change` is how. **The reason recorded then was wrong about its mechanism as well as superseded**, and the correction is worth keeping: it said two Routers would advertise side by side, where `PeerFeed#apply` dispatches `:advertise` through `Table#router` rather than through the work item, so both listeners' items reach whichever Router the table names. Measured: with two listeners registered the old Router's `run_changes` was called **0** times and the new one's twice. So the cost of a double listener was duplicated work the Adj-RIB-Out then discarded, and the wrong answers were the three #238 measured and fixed: a change after `Router#stop` still advertised, a session reaching Established after it still got the whole Loc-RIB through the `Neighbor#on_state_change` block `watch` registers, which has no counterpart either, and a change after `rib.uninstall` put the route back into the forwarding table the uninstall had just flushed. The fix for this one is for a new Router to inherit the old one's Adj-RIB-Outs, which is a constructor option plus a decision about what a policy change should re-advertise, and it wants `Speaker#reconfigure` to read the key at all. `BGP::Daemon::Candidate::RESTART_REASONS` states it, with `fib`'s own reason beside it, which is now only that `Speaker#reconfigure` does not read `fib` either.
-* **`Log.level=` and `Log.level` raise when nothing has created a logger**, where one line above them `Log.level=` returns silently for a level out of range. `bgp/common.rb`: `def Log.level=(level) ; return unless (0..4) === level ; @@logger.level=(level) ; end`, with `@@logger` nil until `Log.create` or `Log.set_filename`. Measured on 2026-11-02: `ruby -I. -e 'require "bgp4r"; Log.level = 0'` raises `NoMethodError: undefined method 'level=' for nil`. Nothing is wrong in a `bgp4rd`, which calls `setup_log` before `build`, so only a Speaker built directly meets it, which is what a unit test has: `Candidate::Plan#apply_log_level` rescues it and says it could not apply the level rather than dying halfway through a commit. The honest fix is the same guard the range check already has, which is one line in a decade-old class and so is its own decision.
 * **`Log.create` reads as "use this logger" and silently keeps the one that is already there**, which is a trap rather than a wrong answer today. It is `@@logger ||= new(s)` in `bgp/common.rb`, so a second caller's IO is dropped and every line keeps going where the first caller sent it. `Log.set_filename` is the forcing form. Measured on 2026-11-02:
   `ruby -I. -e 'require "bgp4r"; f = File.open("/tmp/l1.log", "w"); Log.create(STDERR); Log.create(f); Log.info("to the file?"); f.flush; p File.size("/tmp/l1.log")'`
-  prints `0`. Nothing is wrong now, because the two callers in the tree are `Speaker#setup_log`, which runs once in a fresh lab process, and `Server#setup_log`, which uses `set_filename` for exactly this reason and has a test that `--log FILE` really wrote there. Not fixed because renaming or changing `create` touches every caller of a decade-old class and is its own decision: the smallest honest fix is a comment on `create` saying it does not replace, which is a one line change nobody has made.
+  prints `0`. Nothing is wrong now, because the two callers in the tree are `Speaker#setup_log`, which runs once in a fresh lab process and does nothing at all when the Speaker was handed a logger, and `Server#setup_log`, which uses `set_filename` for exactly this reason and has a test that `--log FILE` really wrote there. **It has the comment now**, which that one line of the entry asked for; the behaviour is unchanged and deliberately so, because `create` is the idempotent "ensure a process log exists" call and four of `examples/` plus `lab/fault_matrix.rb` rely on being able to call it without clobbering. Changing it to replace would make the right reading of the name the wrong behaviour for every one of them, so what is left here is the name and not a defect.
 * **An IPv4 NLRI with a prefix length above 32 is accepted in silence, and `validation.rb` has no NLRI field checks at all.** Every rule there is about a path attribute, so the reachability fields of RFC 4271 section 4.3 are unchecked: a prefix length of 198 produces a `Prefix` and no finding on either channel. Found on 2026-11-01 from the other end, by sending a Path Identifier on a session that negotiated none, which puts four unexpected octets in front of every prefix:
   `ruby -I. -e 'require "bgp4r"; u = BGP::Update.new(["ffffffffffffffffffffffffffffffff00310200000012400101004003040a0000074002040201fde90000000718c63364"].pack("H*").is_packed, BGP::Update::Info.new(false, :lenient)); p [u.nlri.to_ary, u.path_attribute.errors.size, u.path_attribute.undecoded.size]'`
   prints `[["0.0.0.0/0", "0.0.0.0/0", "0.0.0.0/0", "24.0.0.0/7", "51.100.0.0/198"], 0, 0]`. **gobgpd 3.23.0 on the same octets logs `network bytes is short`, sends NOTIFICATION 3/1 and resets**, so a second implementation refuses what bgp4r invents five routes out of. Not fixed here for two reasons, both decisions rather than patches: the first NLRI check in the file is a new channel, since `Attr::Check.attribute` is handed one attribute and these octets are not in one; and the subcode is not obvious, because RFC 4271 section 6.3 names 3/10 Invalid Network Field while GoBGP picks 3/1, and inventing one is the trap four families' validation parts each recorded.
@@ -7007,7 +7067,7 @@ Lab and conformance:
 * **`to_hash_round_trip_test.rb` cannot read a test file that is not pure ASCII.** `test_every_working_round_trip_is_asserted_in_a_class_test_file` reads every test file body and matches regexps against it, and a single non-ASCII character in any of them makes it error with `ArgumentError: invalid byte sequence in US-ASCII`, pointing at its own line 190 and naming neither the file nor the character. Found on 2026-10-31 by putting one arrow in a comment in a new test file: that file passed on its own and the suite errored in a test it has nothing to do with. Every test file is ASCII today, so nothing is wrong now; what is wrong is the diagnosis the next person gets. The fix is an encoding on the read or a `scrub`, and it is one line in a file this change does not otherwise touch.
   * **The same trap has a second home and that one bit**, which is the reason to believe it will bite a third time. `test/unit/rib/view_test.rb` reads `docs/daemon.md` and `docs/routescope-labs.md` the same way, and one em dash written into `docs/daemon.md` made three `assert_match` calls raise the same `invalid byte sequence in US-ASCII`, from a test with nothing to do with the character and naming neither the file nor the byte. Fixed there, in `read_doc`, which passes `:encoding => 'UTF-8'`. So the rule is wider than "a test file is ASCII": **any test that reads a file as text and matches a regexp against it has to name the encoding**, because the default external one is the environment's and the file is somebody's prose. `to_hash_round_trip_test.rb` is still the unfixed one.
 * **`bgp4r capture` has three gaps, each a decision rather than a patch, and each said in the file it is in.** The live path, `tcpdump` into a pipe, is the only code in `bgp/capture/` no test runs: tcpdump is not installed in this sandbox and spawning it in a unit test wants a privileged interface, so the file path is exercised in full and the nine lines of the spawn and the two that kill the child are not. The Dockerfile's **`capture` stage has not been built**, for want of a Docker daemon, and it is what makes routescope's hard coded `IMAGE capture -i IFACE` reach anything, so build it before trusting it. And **reordered segments are not handled**: `bgp/capture/stream.rb` reads each direction in arrival order, trims a retransmission by sequence number and does nothing about a capture whose segments crossed, which would frame garbage from that point with nothing saying so. Reordering means held segments, timers and a reassembly queue, which is a TCP implementation and not a dissector; the file says so rather than leaving it to be found out.
-* Lowest coverage (unit suite), re-measured 2026-11-02 after `config.rb` and `candidate.rb` arrived: `daemon/api.rb` 57.5%, `daemon/client.rb` 64.1%, `sim/http.rb` 66.0%, `sim/routegen.rb` 66.9%, `daemon/speaker.rb` 69.9%, `daemon/server.rb` 70.4%, `sim/server.rb` 87.9%, `bgp/capture/cli.rb` 88.5% (the live tcpdump path, above), `neighbor/neighbor.rb` 91.7%, `messages/update.rb` 92.2%, `neighbor/add_path_cap.rb` 92.9%, `path_attributes/mp_unreach.rb` 93.0%, `path_attributes/ipv6_extended_communities.rb` 93.1%, `optional_parameters/graceful_restart.rb` 93.3%, `path_attributes/mp_reach.rb` 93.5%. **The `daemon/` and `sim/` rows are not a gap and must not be chased by unit testing a socket**: the note under the baseline has `bgp/daemon/` at 88.1% and `bgp/sim/` at 95.6% once each one's functional test is counted, and `api.rb` is the lowest of them in the unit suite precisely because the event stream and the accept loop are the two things a unit test cannot reach.
+* Lowest coverage (unit suite), re-measured 2026-11-02 after `config.rb` and `candidate.rb` arrived: `daemon/api.rb` 57.5%, `daemon/client.rb` 64.1%, `sim/http.rb` 66.0%, `sim/routegen.rb` 66.9%, `daemon/server.rb` 70.4%, `daemon/speaker.rb` 70.7%, `sim/server.rb` 87.9%, `bgp/capture/cli.rb` 88.5% (the live tcpdump path, above), `neighbor/neighbor.rb` 91.8%, `messages/update.rb` 92.2%, `neighbor/add_path_cap.rb` 92.9%, `path_attributes/mp_unreach.rb` 93.0%, `path_attributes/ipv6_extended_communities.rb` 93.1%, `optional_parameters/graceful_restart.rb` 93.3%, `path_attributes/mp_reach.rb` 93.5%. **The `daemon/` and `sim/` rows are not a gap and must not be chased by unit testing a socket**: the note under the baseline has `bgp/daemon/` at 88.1% and `bgp/sim/` at 95.6% once each one's functional test is counted, and `api.rb` is the lowest of them in the unit suite precisely because the event stream and the accept loop are the two things a unit test cannot reach.
 
 ## Attribute work left
 

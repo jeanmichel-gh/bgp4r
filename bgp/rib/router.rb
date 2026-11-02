@@ -89,6 +89,13 @@ module BGP
       #   those routes are not advertised and skipped is why.
       # mrai: an Mrai, or a Hash of its options, for the rate limiting of
       #   RFC 4271 section 9.2.1.1. The default holds nothing.
+      # The table's logger and not one of this object's own, so a program
+      # with two tables keeps their lines apart and cannot give the three
+      # objects a Table builds three different destinations. Delegated
+      # rather than copied in initialize, since a Table's logger may be
+      # set after this was built.
+      def log(level, message) ; @table.log(level, message) ; end
+
       def initialize(table, feed, export: nil, next_hops: {}, mrai: nil)
         @table = table
         @feed = feed
@@ -445,7 +452,7 @@ module BGP
         # A session that went away between the check and the send, or a
         # message that cannot be built. Neither is worth losing the worker
         # thread, which serves every other peer.
-        Log.error "#{self.class}: #{e.class}: #{e.message}"
+        log(:error, "#{self.class}: #{e.class}: #{e.message}")
         @lock.synchronize { @skipped[[nil, adapter.peer]] = e.class.name.to_sym }
       end
 

@@ -50,6 +50,9 @@ module BGP
 
       attr_reader :table
 
+      # The table's logger; see Rib::Router#log for why it is delegated.
+      def log(level, message) ; @table.log(level, message) ; end
+
       def initialize(table)
         @table = table
         @adapters = {}        # neighbor => PeerAdapter
@@ -159,7 +162,7 @@ module BGP
           rescue => e
             # One bad UPDATE must not take the table's only worker with it.
             @lock.synchronize { @errors << e }
-            Log.error "#{self.class}: #{e.class}: #{e.message}"
+            log(:error, "#{self.class}: #{e.class}: #{e.message}")
           end
         end
       end

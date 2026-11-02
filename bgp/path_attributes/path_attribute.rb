@@ -96,6 +96,16 @@ module BGP
           begin
             a.to_s(method)
           rescue => e
+            # **The one log line in the library still on the process-wide
+            # Log, and deliberately.** bgp/logging.rb gave the objects
+            # that hold sessions a logger of their own; a Path_attribute
+            # has no owner to take one from. It is built by a parse, by a
+            # test and by a script with no session anywhere near it, so
+            # there is nothing to thread a logger down from and a
+            # constructor argument for one line nobody configures would
+            # be worse than this. A line here says bgp4r cannot print an
+            # attribute it decoded, which is its own gap and not the
+            # peer's fault; see Conventions on #errors.
             Log.error "#{a.class}#to_s: #{e}"
             a.class
           end
