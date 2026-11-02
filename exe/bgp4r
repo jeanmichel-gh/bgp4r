@@ -1,0 +1,36 @@
+#!/usr/bin/env ruby
+#--
+# Copyright 2026 Jean-Michel Esnault.
+# All rights reserved.
+# See LICENSE.txt for permissions.
+#
+#
+# This file is part of BGP4R.
+#
+# BGP4R is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# BGP4R is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with BGP4R.  If not, see <http://www.gnu.org/licenses/>.
+#++
+
+# The bgp4r umbrella command. See docs/daemon.md.
+#
+# The gemspec's require_paths is ["."], the repository root, so the
+# library is required as 'bgp/...' both from a checkout and installed.
+# Installed, exe/ is on PATH and the gem's root is one directory up from
+# this file; from a checkout the same arithmetic reaches the same place,
+# so one line covers both.
+root = File.expand_path('..', __dir__)
+$LOAD_PATH.unshift(root) unless $LOAD_PATH.include?(root)
+
+require 'bgp/capture/cli'
+
+exit BGP::Capture::CLI.new.start(ARGV)

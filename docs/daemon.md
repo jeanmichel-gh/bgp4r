@@ -9,7 +9,13 @@ configuration, their command lines and the JSON they answer with.
 `docs/routescope-labs.md` owns the integration: the drivers, the
 inspector tables, the map and the labs. Neither repeats the other.
 
-**Status: a design. Neither program exists yet.** What exists is the
+**Status: a design, with one command built.** Neither `bgp4rd` nor
+`bgp4r-sim` exists. `bgp4r`, the umbrella, does: `bgp4r capture` and
+`bgp4r version`, in `exe/bgp4r` over `bgp/capture/`, and the Capture
+section at the end of this document is no longer a design. The other
+three commands are not stubbed, deliberately, because an executable in a
+released gem that answers nothing is worse than one that is not there.
+What exists under all of it is the
 library under them, which is most of the work: `bgp/neighbor/` for the
 FSM and the session, `bgp/rib/` for the Adj-RIB-In, the decision process,
 the Loc-RIB, the export rules, the UPDATE builder, MRAI pacing and the
@@ -54,12 +60,16 @@ reaches with one Ruby line and no client installed.
 
 Four commands, matching ospfv2's `ospfv2`, `ospfd` and `ospf-cli`.
 
-| Command | What it is |
-|---|---|
-| `bgp4rd` | the daemon |
-| `bgp4r-cli` | its client, over the socket |
-| `bgp4r` | the umbrella: `sim`, `routegen`, `capture`, `lab new`, `version` |
-| `bgp4r-sim` | an alias for `bgp4r sim`, so a container command reads plainly |
+| Command | What it is | Status |
+|---|---|---|
+| `bgp4rd` | the daemon | a design |
+| `bgp4r-cli` | its client, over the socket | a design |
+| `bgp4r` | the umbrella: `sim`, `routegen`, `capture`, `lab new`, `version` | built, with `capture` and `version` |
+| `bgp4r-sim` | an alias for `bgp4r sim`, so a container command reads plainly | a design |
+
+The gemspec declares `bgp4r` and nothing else. A subcommand that does not
+exist is named in the usage as not yet implemented, so a person asking
+for one gets the list rather than a backtrace.
 
 ```sh
 # in the VM
@@ -516,29 +526,81 @@ status.
 
 # Capture
 
+**Built.** `bgp/capture/` holds it and `bgp4r capture` runs it.
+
 `bgp4r capture -i IFACE` prints newline-delimited JSON, the same envelope
 as ospfv2's so a console's decoder pane needs no second shape:
 
 ```
-{"capture":{"interface":"eth1","link":"ethernet","filter":"tcp port 179"}}
-{"packet":{"seq":1,"time":"...","length":87,"hex":"...","summary":"OPEN","fields":[...]}}
+{"capture":{"interface":"eth1","file":null,"link":"ethernet","filter":"tcp port 179","unit":"message"}}
+{"packet":{"seq":1,"time":"...","flow":"10.0.0.1:179 > 10.0.0.2:51234","length":29,"hex":"...","summary":"OPEN AS 65001 holdtime 30s id 10.0.0.1","fields":[...],"errors":[]}}
+{"error":"..."}
 ```
 
-Two things make this harder than OSPF's and both are worth knowing before
-anyone estimates it.
+An `error` line is the last line and the exit status is 1. Flags:
+`-i IFACE` (default `eth0`), `-r FILE` for a pcap file with `-` for
+standard input, `-f EXPR` for the filter and `-c N` to stop after N
+messages. A file is read with no filter, since the filter is tcpdump's.
 
-**BGP is a byte stream.** OSPF is one packet per datagram, so ospfv2's
-reader dissects a frame and is done. BGP runs over TCP, so the dissector
-has to follow the stream, reassemble it, and frame on the 16-octet marker
-and the length field. A message can span two segments and two messages
-can share one. `BGP::Message.factory` decodes once the framing is right,
-so the framing is the work.
+**Two keys differ from ospfv2's, and both follow from BGP being a byte
+stream.** OSPF is one packet per datagram, so there a frame's octets and
+a packet's octets are the same thing. BGP is not, so:
+
+* **`unit` is `message`.** A `packet` line is one BGP message, `hex` is
+  that message's own octets, `length` is their count, and every offset in
+  `fields` is from the message's first octet. A consumer that read `hex`
+  as a frame would be wrong about every offset, so the header says which
+  it is rather than leaving it to be found out.
+* **`flow` is the direction**, as `src:port > dst:port`. The frame
+  headers are not octets of the message, so they are not byte offset
+  fields; a reader that wants the transport gets it here.
+
+**The framing is the work and `bgp/capture/stream.rb` is where it is.**
+RFC 4271 section 4.1: 16 octets of Marker, a 2 octet Length that is "the
+total length of the message, including the header", and a 1 octet Type. A
+message can arrive in two segments and two can share one, so there is one
+buffer per direction, appended to in arrival order, and messages are cut
+off the front of it. A Length at or above 19 is honoured even when it is
+wrong, because that is what the octets say and a receiving speaker reads
+them the same way; a Length **below** 19 is the one case framing cannot
+continue from, so the stream resynchronises to the next all ones Marker
+and the octets skipped on the way are emitted rather than dropped.
+
+**It is not a TCP stack and must not become one.** Each direction is read
+in arrival order. A retransmission is trimmed by sequence number, because
+that one artifact is common and cheap to spot. Reordered segments are
+not: that needs held segments, timers and a reassembly queue, which is a
+TCP implementation. A forward gap in the sequence number is a capture that
+dropped a frame, and the octets that did arrive are appended rather than
+the rest of the session lost.
+
+**Nothing verifies a checksum, and the reason is worth recording** because
+the obvious thing is to verify TCP's. A message is reassembled from
+segments, so there is no single checksum over its octets; and a capture
+taken on a host with checksum offload carries a wrong or zero TCP
+checksum on every frame it sent, so verifying it would fill an ordinary
+lab capture with false errors. RFC 4271 gives a message no checksum of
+its own. The `check` key of ospfv2's field shape is carried and unused.
+
+**Three kinds of entry land in the one `errors` list**, and the wording is
+what tells them apart, since the envelope has one channel: a finding from
+`validation.rb` says the sender got something wrong, and a decoder that
+raised or an `Attr::Gap` says bgp4r could not read it. Conventions keep
+those apart inside the library and a capture that called bgp4r's own
+coverage a protocol error would give a confident wrong verdict about a
+correct router.
 
 **routescope runs the capture in its own container** with
 `--network container:NAME`, and the image is
 `ROUTESCOPE_CAPTURE_IMAGE`, default `ospfv2:latest`, which dissects IP
 protocol 89 only. A BGP capture has to run the bgp4r image. That is a
 routescope change and it is in `docs/routescope-labs.md`.
+
+The `capture` stage of the Dockerfile is the image for it: its entrypoint
+is the `bgp4r` command, so `IMAGE capture -i IFACE` works as routescope
+writes it, and it adds `tcpdump`. **That stage has not been built**, since
+no Docker daemon was reachable where it was written, and it is the only
+part of this work nothing has run.
 
 # What is not here
 
