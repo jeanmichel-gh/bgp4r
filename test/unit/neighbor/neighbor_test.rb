@@ -330,6 +330,53 @@ class TestBgpNeighbor < Test::Unit::TestCase
     [ours, theirs].each { |s| s.close unless s.closed? }
   end
 
+  # stop closed the output queue and then closed the socket on the next
+  # line, so the writer thread never ran and whatever was queued was never
+  # written. A NOTIFICATION is the case that matters, since that is the one
+  # message a speaker sends because it is about to close: before the fix it
+  # reached the peer in 0 of 20 loopback runs.
+  #
+  # A socket pair rather than a session, so this is ordering and not timing:
+  # the octets are in the pair's buffer whether or not anyone is reading,
+  # and they are readable after our end closes. What they cannot be is
+  # written after it closes.
+  def test_a_message_queued_before_stop_still_reaches_the_socket
+    ours, theirs = UNIXSocket.pair
+    n = Neighbor.new(:my_as=> 100, :id=> '1.1.1.1')
+    n.start(:session=> ours, :no_blocking=> true)
+    cease = Notification.new(6, 4)
+    n.send_message cease
+    n.stop
+    # stop closed our end, so this reads what is buffered and then EOF. It
+    # cannot block, and it needs no io/wait, which is a bundled gem now.
+    wrote = theirs.read.to_s
+    assert_match(/#{cease.to_shex}/, wrote.unpack1('H*').to_s,
+                 'the NOTIFICATION was queued and the socket closed before the writer ran')
+  ensure
+    n.close if n
+    [ours, theirs].each { |s| s.close unless s.closed? }
+  end
+
+  # The wait is bounded, which is the whole difference between a stop that
+  # delivers and a stop a peer can wedge: a writer blocked in IO#write on a
+  # socket nobody is reading never finishes, and a bare join would hold stop
+  # for good. Asserted on the argument, because a test that really stalls a
+  # writer costs DRAIN_TIMEOUT seconds to prove one number.
+  def test_the_drain_waits_for_the_writer_but_not_for_ever
+    spy = JoinSpy.new
+    n = Neighbor.new(:my_as=> 100, :id=> '1.1.1.1')
+    n.instance_variable_set(:@out, StubOutput.new(spy))
+    n.drain_output
+    assert spy.closed, 'the queue has to be closed, or deq never ends'
+    assert_equal Neighbor::DRAIN_TIMEOUT, spy.waited,
+                 'join with no timeout is a stop a peer can wedge for good'
+    assert Neighbor::DRAIN_TIMEOUT > 0, 'a zero bound is no wait at all'
+    # And with no session there is nothing to drain and nothing to raise.
+    assert_nothing_raised { Neighbor.new(:my_as=> 100).drain_output }
+  ensure
+    n.close if n
+  end
+
   def test_start_stop_start_again
     Timeout::timeout(6) {
       port = start_free_server
@@ -722,6 +769,21 @@ class TestBgpNeighbor < Test::Unit::TestCase
       assert pa.has_no?(As4_path)
       assert pa.has_no?(As4_aggregator)
     }
+  end
+
+  # Stands in for the writer thread, so the one thing under test is the
+  # argument drain_output gives join. A real stalled writer would prove the
+  # same number and cost DRAIN_TIMEOUT seconds doing it.
+  class JoinSpy
+    attr_reader :waited
+    attr_accessor :closed
+    def join(secs = nil) ; @waited = secs ; nil ; end
+  end
+
+  class StubOutput
+    def initialize(spy) ; @spy = spy ; end
+    def thread ; @spy ; end
+    def close ; @spy.closed = true ; end
   end
 
   class Catcher

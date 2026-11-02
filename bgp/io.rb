@@ -76,6 +76,14 @@ module BGP
       # Stops the writer thread. It closes the queue instead of enqueuing a
       # sentinel, so it never waits on a full queue and never raises on a
       # closed one. Messages still queued are dropped. Safe to call twice.
+      #
+      # **`close` on its own does not drop them, which is the difference
+      # between these two and is easy to read the wrong way round.** A
+      # closed SizedQueue keeps handing `deq` what is queued and only then
+      # answers nil, so the loop above empties it and exits; `@continue` is
+      # what makes this one stop after one more `deq`. `Neighbor#stop`
+      # therefore closes rather than exiting, and waits for the thread. No
+      # caller in the library reaches this method.
       def exit
         @continue = false
         close
