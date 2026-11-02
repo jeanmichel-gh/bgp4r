@@ -61,30 +61,21 @@ module BGP
         @lock = Mutex.new
       end
 
+      # The Proc it registers is kept, because it is the handle stop hands
+      # back to Table#off_change, and keeping it is also what says this is
+      # registered: there is no second flag for that, as there was before
+      # stop could take a listener off.
       def start
-        listen = false
-        @lock.synchronize do
+        listener = @lock.synchronize do
           return self if @started
           @started = true
-          # Tracked apart from @started, because stop clears that one and
-          # install can then be called again, and Table#on_change appends.
-          #
-          # This is hygiene and not a fix for a wrong result. Registering
-          # twice queues every change twice, and the second copy comes to
-          # nothing: Fib#plan answers nil for an install the FIB already
-          # agrees with and nil for a removal of a prefix it no longer
-          # holds, so no command runs twice. That was checked by removing
-          # this guard, and no test moved. The guard is here to not queue
-          # work that will be thrown away, which is the kind of thing that
-          # matters at a million prefixes.
-          listen = !@listening
-          @listening = true
+          @listener = proc { |change| @feed << [:fib, [change]] }
         end
         # The worker would otherwise start on the first attach, and a FIB
         # fed only by rib.originate never attaches anything. See
         # PeerFeed#start.
         @feed.start
-        @table.on_change { |change| @feed << [:fib, [change]] } if listen
+        @table.on_change(&listener)
         sync_all
         self
       end
@@ -106,7 +97,23 @@ module BGP
       end
 
       # Called on the worker thread, by PeerFeed#apply.
+      #
+      # A stopped installer runs nothing. What stops being called is the
+      # listener, which stop takes off the table; **what this guard is for
+      # is the one case that gets past it, which is stop's drain timing
+      # out.** The drain is bounded, so a worker that cannot be reached in
+      # time leaves work queued with the flush already run, and that work
+      # would arrive here and put the route back into the forwarding table
+      # the uninstall had just flushed. Which is the bug this whole change
+      # is about, since before stop could take a listener off at all,
+      # every Loc-RIB change after an uninstall did exactly that.
+      #
+      # Nothing else reaches it, measured by sabotage: with the listener
+      # off, and with PeerFeed#apply reaching this through
+      # Table#fib_installer, work queued for an installer that has since
+      # been replaced goes to the replacement and not to this.
       def run_changes(changes)
+        return unless started?
         changes.each { |change| apply(@fib.plan(change)) }
       end
 
@@ -150,9 +157,25 @@ module BGP
         results
       end
 
+      # Takes the listener off the table, runs what it had already queued,
+      # and then flushes. **The order is the same as Router#stop's and for
+      # the same reason**, which that method's comment argues: off_change
+      # takes the lock decide runs the listeners under, so once it has
+      # returned nothing more can be queued; what was queued is ahead of
+      # the drain's own work item in one FIFO queue, so it runs through
+      # the installer that queued it; and @started goes false after that,
+      # so nothing reaches the backend once the flush has run.
+      #
+      # The flag was cleared first here before, which read as the same
+      # thing and was not: run_changes did not look at it, so the drained
+      # work installed and only withdraw_all's flush took it out again.
       def stop(timeout = 1)
+        listener = @lock.synchronize { l = @listener ; @listener = nil ; l }
+        if listener
+          @table.off_change(listener)
+          @table.drain(timeout)
+        end
         @lock.synchronize { @started = false }
-        @table.drain(timeout)
         withdraw_all
       end
 

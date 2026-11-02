@@ -686,12 +686,18 @@ module BGP
       # **What it deliberately does not touch is as much of the point as
       # what it does.** `@my_as`, `@router_id`, `@local_address`,
       # `@export`, `@fib`, `@rib` and `@peers` are read once, by
-      # `initialize` and by `start`, and three of them have no way back:
-      # `Table#on_change` cannot take a listener off, so neither the
-      # Router nor the FibInstaller can be replaced, and `@peers` is read
-      # from every session thread with no lock. So a change to any of
-      # them is refused by `Candidate::Plan` before this is called, and
-      # this method cannot quietly apply half of one.
+      # `initialize` and by `start`, and `@peers` is read from every
+      # session thread with no lock besides. So a change to any of them
+      # is refused by `Candidate::Plan` before this is called, and this
+      # method cannot quietly apply half of one.
+      #
+      # **`@fib` is the one whose only remaining obstacle is this
+      # method.** It used to be refused because `Table#on_change` could
+      # not take a listener off, so a replaced FibInstaller went on
+      # installing; `Table#off_change` fixed that, and the library would
+      # now take a flush and a reinstall. `@export` has a library reason
+      # of its own left, which `Candidate::RESTART_REASONS` states: a
+      # replacement Router starts with empty Adj-RIB-Outs.
       #
       # What it does swap is the three a live or bounced session reads
       # again: the `announce` blocks, which go out on the next

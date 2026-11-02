@@ -357,11 +357,14 @@ bgp/daemon/              `bgp4rd` the daemon and `bgp4r-cli` its client;
                          methods over somebody else's, which is why it is
                          not more methods on control.rb. **A changed key
                          is live, a bounce, or refused**, and its header
-                         has the table and the mechanism for each refusal:
-                         the sharpest is that `Table#on_change` cannot
-                         take a listener off, so `export` and `fib` cannot
-                         change without a second Router advertising beside
-                         the first. A restart-class change is **refused**
+                         has the table and the mechanism for each refusal.
+                         Two of them moved in #238, which closed the
+                         `Table#on_change` gap they shared: `export` is
+                         refused now because a replacement Router starts
+                         with empty Adj-RIB-Outs and so withdraws nothing
+                         its new rules refuse, and `fib` only because
+                         `Speaker#reconfigure` does not read it.
+                         A restart-class change is **refused**
                          rather than recorded, because a running
                          configuration that disagrees with the running
                          speaker is the claim docs/daemon.md says a commit
@@ -1061,16 +1064,19 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. The `lab` job is a matrix, one job per group in `test/lab_groups.rb`, so its cost is the slowest group and not the total: it was 12m42s as one serial suite. Each job installs only what its group needs, which is why the matrix entry carries a `gobgp`, `frr`, `docker` or `netns` flag. The `gobgp` groups pin 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-11-02: 3036 tests, 31428 assertions, all passing. Line coverage of `bgp/` from the unit suite: 96.1%.
+Baseline on 2026-11-02: 3052 tests, 31509 assertions, all passing. Line coverage of `bgp/` from the unit suite: 96.1%.
 
 **That coverage figure is 98.5% for the library and the rest is the two
 programs, not a gap anywhere else.** Measured the same run: with
-`bgp/sim/` and `bgp/daemon/` excluded it is **98.5%** over 12418 lines,
+`bgp/sim/` and `bgp/daemon/` excluded it is **98.5%** over 12439 lines,
 which is the same figure the daemon's arrival was measured against, so
 the core has not moved. From the unit suite alone `bgp/sim/` is **85.9%**
-and `bgp/daemon/` is **71.2%**, because most of what both do needs a
-socket or a session: `api.rb` is 44% there, and the event stream, the
+and `bgp/daemon/` is **82.3%**, because most of what both do needs a
+socket or a session: `api.rb` is 57.5% there, and the event stream, the
 accept loop and the signal wait are the bulk of what is missing.
+**That daemon figure read 71.2% and 44% until 2026-11-02**, measured
+before `config.rb` and `candidate.rb` arrived with two unit files of
+their own; re-measured on master the same way.
 
 Measured over the six `test/unit/sim/` files plus
 `test/functional/sim_test.rb`, `bgp/sim/` is **95.6%**, with `sent.rb`
@@ -1942,15 +1948,20 @@ Neighbor ◀──UPDATE── Adj-RIB-Out (per peer) ◀───────�
         * `runner:` on `IpRoute` is the seam that keeps the unit tests
           free of a kernel, root and iproute2. It is useful outside them
           too: `sudo`, a remote shell, or a dry run that only logs.
-        * `start` guards against registering a second `on_change`
-          listener, since `uninstall` then `install` would otherwise add
-          one. **That guard is hygiene, not a fix.** Removing it moves no
-          test: the duplicate change comes to nothing, because `Fib#plan`
-          answers nil for an install the FIB already agrees with and nil
-          for a removal of a prefix it no longer holds. It is kept so the
-          work is not queued and thrown away, which matters at a million
-          prefixes. The comment on it first claimed a double removal and a
-          spurious failure, which trying to break it disproved.
+        * `start` guarded against registering a second `on_change`
+          listener with a flag of its own, since `uninstall` then
+          `install` would otherwise add one, and that guard was recorded
+          here as hygiene rather than a fix: removing it moved no test,
+          because the duplicate came to nothing, `Fib#plan` answering nil
+          for an install the FIB already agrees with and nil for a
+          removal of a prefix it no longer holds. **#238 took the flag
+          away and the guarantee got stronger**, because `stop` takes the
+          listener off now: `start` holding a Proc is the whole record
+          that it is registered, there is exactly one at a time, and
+          `test_one_listener_per_install` says so. What that pull request
+          also found is that `uninstall` left its listener on and so
+          **reinstalled a route after flushing it**, which is the thing
+          the flag was never guarding against.
         * `uninstall` flushes both families, because a flush names one and
           a table can hold both. A flush of a table that does not exist
           yet exits 2, which is not a failure: there is nothing to flush.
@@ -6568,10 +6579,10 @@ The short version, so the direction is visible here:
     session is an adapter per session, and `PeerFeed#adapters` is what
     `Router#run_changes` walks, so a speaker reconnecting every
     `retry` seconds to a peer that is down would accumulate one per
-    attempt. Same shape as `FibInstaller#start`'s double-listener
-    guard, and handled the same way: the claim got a test that can
-    see it, `LabSpeakerRouterFlapTest`, rather than a comment nobody
-    checks.
+    attempt. Same shape as the double-listener guard `FibInstaller#start`
+    carried until #238 replaced it with a listener `stop` can take off,
+    and handled the same way: the claim got a test that can see it,
+    `LabSpeakerRouterFlapTest`, rather than a comment nobody checks.
 * **The highest-value item for a console is a JSON dump of the RIB**,
   which was a decision recorded in this file and never implemented.
   **Done**, in #230, with the view layer of item 3 under it:
@@ -6863,7 +6874,7 @@ Smaller things:
 * **An explicit `as_path` on an announce gets our own AS prepended on an external session, so the injector cannot send an AS_PATH that does not begin with our AS.** `Speaker#path_attribute` is `path = [@my_as] + path if ebgp`, which is right for a node file saying "this route reached us from 65020" and is the wrong default for a program whose whole job is sending what it was asked for. Measured on 2026-11-02 between a `bgp4r-sim` in AS 65010 and a `bgp4rd` in AS 65000: `POST /api/announce` with `"as_path":[65010,65020]` arrives at the router as `65010 65010 65020`. An AS_PATH whose leftmost AS is not the sender's is a classic eBGP receive check and there is no way to ask for one through `announce`. **`replay` is the escape hatch** and is the honest one, since hex goes out untouched. Not fixed because changing the prepend changes what every existing node file sends, which is the `path_id` entry above exactly; the other shape, a key that means "take my as_path literally", is a new option on a block two programs share. **`GET /api/sent` reports the requested path and not the sent one** for the same reason, `65010 65020` where the wire carries the prepend, so a scenario asserting against the injector and one asserting against the router disagree by one AS.
 * **`test/unit/neighbor/neighbor_test.rb`'s `test_start_stop_start_again` times out in the Docker 3.3 job and nothing here explains why.** The 6 second `Timeout::timeout` around it is the tightest in the suite and it covers two whole loopback sessions, so a slow runner is the obvious reading. What is measured: it failed twice on `docker ruby 3.3` while `docker ruby 3.4` and `docker ruby 4.0` passed the same commit both times, and 8 runs of the single test locally passed. **Do not write down a mechanism for it without one**, which is the trap `docs/flow-spec.md` records as a right answer with an invented reason: the first guess here was that a test file leaving threads behind was stealing time, and that does not hold up, because the threads in question were blocked in `connect` and a blocked connect costs no CPU. The threads were a real defect and are fixed; this is still open.
 * **A test must stop what it starts, and the way to tell is to count `Thread.list` at exit.** `test/unit/sim/server_test.rb` started Servers through a helper that dropped them on the floor, so the unit suite ran to the end with 4 of its threads still dialling: measured on 2026-11-02 by registering an `at_exit` that prints `Thread.list` grouped by `Thread.current['name']`, with and without `test/unit/sim/` in the tree, which gave 5 unnamed threads against 1. It is 1 again now. The library's own threads are named, which is what makes the count readable, so an unnamed one in that list is a test's.
-* **`Table#on_change` has no counterpart, so a `Router` or a `FibInstaller` cannot be detached, and that is what makes `export` and `fib` unchangeable while `bgp4rd` runs.** `@listeners` in `bgp/rib/table.rb` is only ever `<<`'d, at line 96, and `Router#stop` stops the pacer thread and leaves its listener registered. So replacing the Router a committed `export` block built would leave the old one advertising beside the new one, with two Adj-RIB-Outs disagreeing about what each peer holds, which is a wrong answer on the wire rather than a missing feature. Measured by reading rather than by trying it, because the trying is the damage. `BGP::Daemon::Candidate` refuses such a commit and its message is this paragraph in one sentence; `docs/daemon.md`'s "What a commit does to a running speaker" has the table. The fix is `Table#off_change`, or a listener handle `on_change` answers, plus a `Router#detach` that uses it, and it wants a decision about what an in-flight queued `:advertise` means for a Router that has gone: `PeerFeed`'s worker may already hold one. Worth doing: it is what would let `export`, `fib` and `rib` become live or bounce-class keys, which is most of what a reload cannot do today.
+* **A replacement `Router` starts with empty Adj-RIB-Outs, so a route the new export rules refuse is never withdrawn from a peer that holds it, and that is what still makes `export` a restart-class key.** `Router#item_for` answers nil for a refused route unless its own Adj-RIB-Out has the prefix, and a Router built a moment ago has nothing in one. Measured on 2026-11-02 by replacing a reflecting Router with a non-reflecting one over a recording Neighbor: the new Router records `:ibgp_to_ibgp` in `skipped`, sends no withdrawal, and the peer goes on holding `10.1.0.0/16`. This is what is left of the `Table#on_change` entry that used to sit here, which #238 closed: a stopped `Router` or `FibInstaller` does stop being called now, and `Table#off_change` is how. **The reason recorded then was wrong about its mechanism as well as superseded**, and the correction is worth keeping: it said two Routers would advertise side by side, where `PeerFeed#apply` dispatches `:advertise` through `Table#router` rather than through the work item, so both listeners' items reach whichever Router the table names. Measured: with two listeners registered the old Router's `run_changes` was called **0** times and the new one's twice. So the cost of a double listener was duplicated work the Adj-RIB-Out then discarded, and the wrong answers were the three #238 measured and fixed: a change after `Router#stop` still advertised, a session reaching Established after it still got the whole Loc-RIB through the `Neighbor#on_state_change` block `watch` registers, which has no counterpart either, and a change after `rib.uninstall` put the route back into the forwarding table the uninstall had just flushed. The fix for this one is for a new Router to inherit the old one's Adj-RIB-Outs, which is a constructor option plus a decision about what a policy change should re-advertise, and it wants `Speaker#reconfigure` to read the key at all. `BGP::Daemon::Candidate::RESTART_REASONS` states it, with `fib`'s own reason beside it, which is now only that `Speaker#reconfigure` does not read `fib` either.
 * **`Log.level=` and `Log.level` raise when nothing has created a logger**, where one line above them `Log.level=` returns silently for a level out of range. `bgp/common.rb`: `def Log.level=(level) ; return unless (0..4) === level ; @@logger.level=(level) ; end`, with `@@logger` nil until `Log.create` or `Log.set_filename`. Measured on 2026-11-02: `ruby -I. -e 'require "bgp4r"; Log.level = 0'` raises `NoMethodError: undefined method 'level=' for nil`. Nothing is wrong in a `bgp4rd`, which calls `setup_log` before `build`, so only a Speaker built directly meets it, which is what a unit test has: `Candidate::Plan#apply_log_level` rescues it and says it could not apply the level rather than dying halfway through a commit. The honest fix is the same guard the range check already has, which is one line in a decade-old class and so is its own decision.
 * **`Log.create` reads as "use this logger" and silently keeps the one that is already there**, which is a trap rather than a wrong answer today. It is `@@logger ||= new(s)` in `bgp/common.rb`, so a second caller's IO is dropped and every line keeps going where the first caller sent it. `Log.set_filename` is the forcing form. Measured on 2026-11-02:
   `ruby -I. -e 'require "bgp4r"; f = File.open("/tmp/l1.log", "w"); Log.create(STDERR); Log.create(f); Log.info("to the file?"); f.flush; p File.size("/tmp/l1.log")'`
@@ -6996,7 +7007,7 @@ Lab and conformance:
 * **`to_hash_round_trip_test.rb` cannot read a test file that is not pure ASCII.** `test_every_working_round_trip_is_asserted_in_a_class_test_file` reads every test file body and matches regexps against it, and a single non-ASCII character in any of them makes it error with `ArgumentError: invalid byte sequence in US-ASCII`, pointing at its own line 190 and naming neither the file nor the character. Found on 2026-10-31 by putting one arrow in a comment in a new test file: that file passed on its own and the suite errored in a test it has nothing to do with. Every test file is ASCII today, so nothing is wrong now; what is wrong is the diagnosis the next person gets. The fix is an encoding on the read or a `scrub`, and it is one line in a file this change does not otherwise touch.
   * **The same trap has a second home and that one bit**, which is the reason to believe it will bite a third time. `test/unit/rib/view_test.rb` reads `docs/daemon.md` and `docs/routescope-labs.md` the same way, and one em dash written into `docs/daemon.md` made three `assert_match` calls raise the same `invalid byte sequence in US-ASCII`, from a test with nothing to do with the character and naming neither the file nor the byte. Fixed there, in `read_doc`, which passes `:encoding => 'UTF-8'`. So the rule is wider than "a test file is ASCII": **any test that reads a file as text and matches a regexp against it has to name the encoding**, because the default external one is the environment's and the file is somebody's prose. `to_hash_round_trip_test.rb` is still the unfixed one.
 * **`bgp4r capture` has three gaps, each a decision rather than a patch, and each said in the file it is in.** The live path, `tcpdump` into a pipe, is the only code in `bgp/capture/` no test runs: tcpdump is not installed in this sandbox and spawning it in a unit test wants a privileged interface, so the file path is exercised in full and the nine lines of the spawn and the two that kill the child are not. The Dockerfile's **`capture` stage has not been built**, for want of a Docker daemon, and it is what makes routescope's hard coded `IMAGE capture -i IFACE` reach anything, so build it before trusting it. And **reordered segments are not handled**: `bgp/capture/stream.rb` reads each direction in arrival order, trims a retransmission by sequence number and does nothing about a capture whose segments crossed, which would frame garbage from that point with nothing saying so. Reordering means held segments, timers and a reassembly queue, which is a TCP implementation and not a dissector; the file says so rather than leaving it to be found out.
-* Lowest coverage (unit suite), measured 2026-11-02: `daemon/api.rb` 44%, `daemon/server.rb` 57%, `daemon/client.rb` 64%, `sim/http.rb` 66%, `daemon/speaker.rb` 66%, `sim/routegen.rb` 67%, `sim/server.rb` 88%, `bgp/capture/cli.rb` 88% (the live tcpdump path, above), `neighbor/neighbor.rb` 92%, `messages/update.rb` 92%, `neighbor/add_path_cap.rb` 93%, `path_attributes/mp_unreach.rb` 93%, `path_attributes/ipv6_extended_communities.rb` 93%, `optional_parameters/graceful_restart.rb` 93%, `path_attributes/mp_reach.rb` 93%. **The `daemon/` and `sim/` rows are not a gap and must not be chased by unit testing a socket**: the note under the baseline has `bgp/daemon/` at 88.1% and `bgp/sim/` at 95.6% once each one's functional test is counted, and `api.rb` is the lowest of them in the unit suite precisely because the event stream and the accept loop are the two things a unit test cannot reach.
+* Lowest coverage (unit suite), re-measured 2026-11-02 after `config.rb` and `candidate.rb` arrived: `daemon/api.rb` 57.5%, `daemon/client.rb` 64.1%, `sim/http.rb` 66.0%, `sim/routegen.rb` 66.9%, `daemon/speaker.rb` 69.9%, `daemon/server.rb` 70.4%, `sim/server.rb` 87.9%, `bgp/capture/cli.rb` 88.5% (the live tcpdump path, above), `neighbor/neighbor.rb` 91.7%, `messages/update.rb` 92.2%, `neighbor/add_path_cap.rb` 92.9%, `path_attributes/mp_unreach.rb` 93.0%, `path_attributes/ipv6_extended_communities.rb` 93.1%, `optional_parameters/graceful_restart.rb` 93.3%, `path_attributes/mp_reach.rb` 93.5%. **The `daemon/` and `sim/` rows are not a gap and must not be chased by unit testing a socket**: the note under the baseline has `bgp/daemon/` at 88.1% and `bgp/sim/` at 95.6% once each one's functional test is counted, and `api.rb` is the lowest of them in the unit suite precisely because the event stream and the accept loop are the two things a unit test cannot reach.
 
 ## Attribute work left
 

@@ -57,6 +57,27 @@ class TestBgpRibRouter < Test::Unit::TestCase
     n
   end
 
+  # Holds the feed's worker thread where a test can see it. PeerFeed#apply
+  # answers a :sync work item with `work[1] << true`, so this gets handed
+  # the worker: it says so on #reached and then blocks until #release.
+  # Full BGP:: names in a nested class, see Conventions in CLAUDE.md;
+  # there are none here.
+  class Gate
+    def initialize ; @reached = Queue.new ; @release = Queue.new ; end
+    def <<(_value) ; @reached << true ; @release.pop ; self ; end
+    def reached ; @reached.pop ; end
+    def release ; @release << true ; end
+  end
+
+  # True once block answers true, false after seconds. A deadline rather
+  # than a sleep, so a sabotage that stops the condition ever holding
+  # fails the assertion instead of hanging the file.
+  def wait_until(seconds = 5)
+    deadline = Time.now + seconds
+    sleep 0.005 until yield || Time.now > deadline
+    yield
+  end
+
   # A peer the routes come from, which is not any of the attached ones.
   def source(as = LOCAL_AS)
     BGP::Rib::Peer.new(:address => '10.9.9.9', :remote_as => as,
@@ -82,6 +103,11 @@ class TestBgpRibRouter < Test::Unit::TestCase
     assert(r.started?)
     assert_same(r, @rib.router)
     assert_same(r, @rib.advertise, 'asking twice is the same router')
+    # And start is idempotent in the one way that matters now that there
+    # is something to take off again: advertise calls it on every call.
+    assert_equal(1, @rib.listener_count, 'one listener, not one per call')
+    r.start
+    assert_equal(1, @rib.listener_count)
   end
 
   def test_a_loc_rib_change_is_advertised
@@ -372,6 +398,148 @@ class TestBgpRibRouter < Test::Unit::TestCase
     assert_equal(1, n.sent.size, 'it got the table on attach')
   end
 
+  # ---- stopping ----
+  #
+  # A stopped Router stops being called, which it did not before
+  # Table#off_change existed: stop stopped the pacer thread and left its
+  # on_change listener registered.
+
+  def test_a_stopped_router_does_not_advertise
+    n = neighbor
+    @rib.attach(n)
+    r = @rib.advertise
+    assert(@rib.drain, 'the initial advertisement is flushed first')
+    assert_equal(1, @rib.listener_count)
+    r.stop
+    assert(!r.started?)
+    assert_equal(0, @rib.listener_count, 'the listener came off the table')
+    @rib.announce(route('10.1.0.0/16'))
+    assert(@rib.drain)
+    assert_equal([], n.sent)
+  end
+
+  # A session coming up after a stop is the one path that reaches a
+  # stopped Router through no queue of this change's making: watch
+  # registers a Neighbor#on_state_change block and **that one has no
+  # counterpart at all**, so it still queues [:session_up, adapter]. This
+  # drives the real path rather than calling session_up by hand.
+  #
+  # What refuses it is run_changes' started? guard, which session_up ends
+  # in. A guard on session_up as well was written and taken out again:
+  # removing it moved no test, because run_changes had already answered,
+  # and a guard nothing can check reads as verified.
+  def test_a_session_coming_up_after_a_stop_gets_nothing
+    n = neighbor(2, 65002, :established => false)
+    @rib.attach(n)
+    r = @rib.advertise
+    @rib.announce(route('10.1.0.0/16'))
+    assert(@rib.drain)
+    r.stop
+    n.send(:new_state, :Established)
+    assert(@rib.drain)
+    assert_equal([], n.sent, 'the Loc-RIB did not go out on a stopped Router')
+  end
+
+  # **The in-flight queued :advertise, which is the question this change
+  # had to answer.** It is neither dropped nor run after the stop: stop
+  # takes the listener off, which cannot interleave with a change because
+  # off_change takes the lock decide runs the listeners under, and then
+  # drains, so what was already queued runs through the Router that queued
+  # it and with the Adj-RIB-Out it owns.
+  #
+  # The worker is held inside a Gate, so the change is provably still on
+  # the queue when stop is called, and stop is on a thread of its own
+  # because its drain waits for that same worker.
+  #
+  # **Both waits are load bearing and the second one was found by
+  # sabotage.** Without waiting for stop to reach its drain, a stop with
+  # no drain in it **passed** this test: the worker got to the change
+  # before the stopping thread had run at all, so @started was still true
+  # and the UPDATE went out for the wrong reason. Measured. The queue
+  # holding two items is what says stop has queued its own drain behind
+  # the change.
+  def test_a_change_queued_when_the_router_stops_still_goes_out
+    n = neighbor
+    @rib.attach(n)
+    r = @rib.advertise
+    assert(@rib.drain, 'the initial advertisement is flushed first')
+    gate = Gate.new
+    @rib.feed << [:sync, gate]
+    gate.reached                          # the worker is inside the gate
+    @rib.announce(route('10.1.0.0/16'))   # so this is queued behind it
+    assert_equal(1, @rib.feed.pending, 'the change is waiting, not applied')
+    stopping = Thread.new { r.stop(5) }
+    assert(wait_until { @rib.feed.pending == 2 },
+           'stop queued its own drain behind the change')
+    gate.release
+    stopping.join
+    assert_equal(1, n.sent.size, 'the change that was in flight was sent')
+    assert_equal(['10.1.0.0/16'], n.sent.first.nlri.to_ary)
+    assert_equal(1, r.adj_rib_out(@rib.feed.adapters.first.peer).size,
+                 'and recorded, so nothing afterwards disagrees about what the peer holds')
+    assert(!r.started?)
+  end
+
+  # **What the started? guard in run_changes is for, and one of the two
+  # things that reach it.** The listener comes off before the drain, so
+  # nothing new is queued, and the drain runs what was. But the drain is
+  # bounded, so a worker that cannot be reached in time leaves work queued
+  # for a Router that has stood down, and without the guard it sends on a
+  # session the caller has stopped advertising to. The gate is released
+  # after stop has returned, which is that worker. The other thing that
+  # reaches it is a Router that has been replaced, since PeerFeed#apply
+  # dispatches through Table#router rather than through the work item.
+  def test_a_change_the_drain_could_not_reach_is_not_sent_after_the_stop
+    n = neighbor
+    @rib.attach(n)
+    r = @rib.advertise
+    assert(@rib.drain, 'the initial advertisement is flushed first')
+    gate = Gate.new
+    @rib.feed << [:sync, gate]
+    gate.reached
+    @rib.announce(route('10.1.0.0/16'))
+    r.stop(0.1)                       # the drain times out behind the gate
+    assert(!r.started?)
+    gate.release                      # now the worker reaches the change
+    assert(@rib.drain)
+    assert_equal([], n.sent, 'nothing was sent after the stop')
+  end
+
+  # **Not guarded on started?, where session_up is**, and the line is what
+  # a method does rather than when it is called: this only forgets, so it
+  # can send nothing. Refusing it would leave a Router that is started
+  # again believing a peer holds what it held before a session it lost in
+  # between, which watch's @watched guard would not correct.
+  def test_a_stopped_router_still_forgets_a_session_that_went_down
+    n = neighbor
+    @rib.attach(n)
+    r = @rib.advertise
+    @rib.announce(route('10.1.0.0/16'))
+    assert(@rib.drain)
+    peer = @rib.feed.adapters.first.peer
+    assert_equal(1, r.adj_rib_out(peer).size)
+    r.stop
+    n.send(:new_state, :Idle)
+    assert(@rib.drain)
+    assert_equal(0, r.adj_rib_out(peer).size, 'the peer keeps nothing across a session')
+  end
+
+  # Stop and start again is a working sequence now, where before stop left
+  # @started set and a second start returned early.
+  def test_a_router_stopped_and_started_again_advertises_again
+    n = neighbor
+    @rib.attach(n)
+    r = @rib.advertise
+    assert(@rib.drain)
+    r.stop
+    assert_same(r, r.start)
+    assert(r.started?)
+    assert_equal(1, @rib.listener_count, 'one listener, not two')
+    @rib.announce(route('10.1.0.0/16'))
+    assert(@rib.drain)
+    assert_equal(['10.1.0.0/16'], n.sent.last.nlri.to_ary)
+  end
+
   # ---- MinRouteAdvertisementIntervalTimer, RFC 4271 section 9.2.1.1 ----
   #
   # The interval itself is tested in mrai_test.rb, with an injected clock
@@ -412,6 +580,63 @@ class TestBgpRibRouter < Test::Unit::TestCase
     assert(r.pacing?)
     r.stop
     assert(!r.pacing?)
+  end
+
+  # **What the started? guard in flush_mrai is for.** The pacer thread is
+  # stopped before anything else, so it asks for no more flushes, but a
+  # [:mrai] it already asked for can still be on the queue and reach a
+  # Router that has stood down. The class comment says what stopping means
+  # for anything the interval was holding, which is that it is dropped
+  # unsent, and this is the half of that nothing else says.
+  def test_what_the_interval_was_holding_is_not_flushed_after_a_stop
+    n = neighbor
+    @rib.attach(n)
+    r = paced(:ebgp => 30)
+    @rib.announce(route('10.1.0.0/16'))
+    assert(@rib.drain)
+    assert_equal(1, n.sent.size)
+    @rib.announce(route('10.1.0.0/16', source, [BGP::Origin.new(1),
+                                                BGP::Next_hop.new('10.9.9.9')]))
+    assert(@rib.drain)
+    assert_equal(1, n.sent.size, 'held inside its window')
+    assert_equal([[r.peers.first, '10.1.0.0/16']], r.waiting)
+    r.stop
+    assert_equal([[r.peers.first, '10.1.0.0/16']], r.waiting,
+                 'stop does not clear what was waiting, so there is something to flush')
+    flush(30)                 # the window has ended and the feed is asked
+    assert_equal(1, n.sent.size, 'and a stopped Router sent none of it')
+  end
+
+  # The pacer comes back and **does its work**, which needed @stopping
+  # cleared: stop sets it under the lock the pacer waits on, and a new
+  # thread would otherwise read it on its first turn and exit at once.
+  #
+  # It has to watch an UPDATE arrive rather than ask pacing?, and that was
+  # found by sabotage: pacing? is `!!@pacer`, which Thread.new sets
+  # whatever the thread then does, so a pacer that exits on its first turn
+  # answers true. So this is the real-time shape of
+  # test_the_pacer_thread_sends_a_held_update_on_its_own, after a stop.
+  def test_the_pacer_comes_back_after_a_stop_and_still_flushes
+    n = neighbor
+    @rib.attach(n)
+    r = @rib.advertise(:mrai => BGP::Rib::Mrai.new(:ebgp => 0.15))
+    assert(r.pacing?)
+    r.stop
+    assert(!r.pacing?)
+    r.start
+    assert(r.pacing?, 'a second pacer thread, not the dead one')
+
+    @rib.announce(route('10.1.0.0/16'))
+    assert(@rib.drain)
+    assert_equal(1, n.sent.size)
+    @rib.announce(route('10.1.0.0/16', source, [BGP::Origin.new(1),
+                                                BGP::Next_hop.new('10.9.9.9')]))
+    assert(@rib.drain)
+    assert_equal(1, n.sent.size, 'held, and nobody has called the flush')
+    assert(wait_until { n.sent.size >= 2 },
+           'the pacer that came back sent it when the window ended')
+    assert_equal(1, n.sent.last.path_attribute[BGP::Origin].to_i)
+    assert_equal([], r.waiting)
   end
 
   # The first UPDATE for a destination is never held: there is no earlier

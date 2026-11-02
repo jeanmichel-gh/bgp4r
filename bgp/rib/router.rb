@@ -115,9 +115,19 @@ module BGP
 
       # Starts advertising to every peer the table is attached to, and to any
       # attached later. Idempotent.
+      #
+      # The Proc it registers is kept, because it is the handle stop hands
+      # back to Table#off_change. Calling this again after a stop registers
+      # a fresh one, so start, stop and start is a working sequence rather
+      # than a half stop.
       def start
-        return self if @lock.synchronize { s = @started ; @started = true ; s }
-        @table.on_change { |change| @feed << [:advertise, [change]] }
+        listener = @lock.synchronize do
+          next nil if @started
+          @started = true
+          @listener = proc { |change| @feed << [:advertise, [change]] }
+        end
+        return self unless listener
+        @table.on_change(&listener)
         @feed.adapters.each { |adapter| watch(adapter) }
         start_pacer unless @mrai.off?
         self
@@ -125,10 +135,48 @@ module BGP
 
       def started? ; @lock.synchronize { !!@started } ; end
 
-      # Stops the pacer thread. Called by PeerFeed#stop, and by a test that
-      # wants no thread left behind. Anything still held is dropped unsent,
-      # which is what stopping means.
+      # Stops advertising: the listener comes off the table, what it had
+      # already queued is run, and then nothing here decides or sends
+      # again. Called by PeerFeed#stop, by a test that wants no thread left
+      # behind, and by anything replacing this Router with another.
+      #
+      # **The order is the whole of it, and the middle step is the answer
+      # to what an in-flight queued :advertise means.** There are three
+      # things to do with a change the worker is already holding for a
+      # Router that is standing down, and the first two are the only ones
+      # that look available:
+      #
+      # * Drop it. The bar is not Mrai#drop's, which is a peer holding a
+      #   route its Adj-RIB-Out says it does not have: nothing is recorded
+      #   until commit runs, so an unprocessed change writes nothing and
+      #   the two cannot disagree. The cost is the other staleness, a peer
+      #   holding a route the Loc-RIB no longer has with the Adj-RIB-Out
+      #   agreeing it is there, and nothing afterwards would correct it.
+      # * Run it after the stop, which is sending on a session the caller
+      #   has just stopped advertising to.
+      #
+      # The third is to take the listener off first and then drain, which
+      # neither drops it nor sends after the stop: Table#off_change takes
+      # the same lock decide runs the listeners under, so once it has
+      # returned nothing more can be queued, and everything that was
+      # queued is ahead of the drain's own work item in one FIFO queue. So
+      # the queue empties through the Router that filled it, with the
+      # Adj-RIB-Outs it owns, and only then does @started go false.
+      #
+      # The drain is bounded by timeout, which matters if this is ever
+      # called from the feed's worker thread: that would be a thread
+      # waiting for itself, and it costs a timeout rather than a hang.
+      # Nothing does it today.
+      #
+      # Anything the interval of section 9.2.1.1 still held is dropped
+      # unsent, which is what stopping means.
       def stop(timeout = 1)
+        listener = @lock.synchronize { l = @listener ; @listener = nil ; l }
+        if listener
+          @table.off_change(listener)
+          @table.drain(timeout)
+        end
+        @lock.synchronize { @started = false }
         thread = @lock.synchronize { t = @pacer ; @pacer = nil ; t }
         return self unless thread
         # The flag is set under the lock the pacer waits on, and in the same
@@ -199,6 +247,16 @@ module BGP
       def clear_skipped ; @lock.synchronize { @skipped.clear } ; self ; end
 
       # The whole Loc-RIB to one peer. Called when a session comes up.
+      #
+      # **This is reachable on a stopped Router and has no guard of its
+      # own, deliberately.** watch registers a Neighbor#on_state_change
+      # block and that one has no counterpart at all, so a session coming
+      # up after this Router stopped still queues [:session_up, adapter].
+      # What refuses it is run_changes, which this ends in, and a second
+      # guard here would be a claim nothing can check: one was written and
+      # removing it moved no test, because run_changes had already
+      # answered. The cost of not having one is the snapshot below, built
+      # and thrown away.
       def session_up(adapter)
         changes = @table.synchronize do
           @table.loc_rib.prefixes.map { |p| LocRib::Change.new(p, nil, @table.best(p), :session_up) }
@@ -210,6 +268,16 @@ module BGP
       # includes its intervals: a window armed by the old session must not
       # delay the first UPDATE of the new one, and an item waiting for one
       # is about a session that is gone.
+      #
+      # **This one is deliberately not guarded on started?, where
+      # run_changes and flush_mrai are.** The line is what a method does
+      # rather than when it is called: those two decide or send, and a
+      # stopped Router must do neither. This only forgets, so it can send
+      # nothing, and refusing it would be a wrong answer:
+      # a Router stopped and started again would still believe a peer
+      # holds what it held before the session it lost in between, and
+      # watch's @watched guard means start does not re-advertise to a
+      # session it is already watching, so nothing would correct it.
       def session_down(adapter)
         peer = adapter.peer
         return unless peer
@@ -221,6 +289,7 @@ module BGP
       # whose window has now ended. Called on the feed's worker thread,
       # which the pacer thread asks to do it.
       def flush_mrai
+        return unless started?
         due = @mrai_lock.synchronize do
           # The flush the pacer asked for is being done now, so it may ask
           # again. Signalling lets it work out its next deadline from what
@@ -245,7 +314,16 @@ module BGP
 
       # Runs the export side for these Loc-RIB changes. only: one adapter,
       # for the initial advertisement; otherwise every attached peer.
+      #
+      # A stopped Router runs nothing. What stops being called is the
+      # listener, which stop takes off the table, and **two things get
+      # past that**: stop's drain is bounded, so a worker that cannot be
+      # reached in time leaves work queued for a Router that has stood
+      # down; and PeerFeed#apply dispatches through Table#router rather
+      # than through the work item, so a change queued by a Router that
+      # has since been replaced arrives at the replacement.
       def run_changes(changes, only: nil)
+        return unless started?
         adapters = only ? [only] : @feed.adapters
         adapters.each do |adapter|
           peer = adapter.peer
@@ -395,9 +473,13 @@ module BGP
 
       def drop(peer, prefix) ; @mrai_lock.synchronize { @mrai.drop(peer, prefix) } ; end
 
-      # Called holding @lock.
+      # Serialised by start's @started flip rather than by @lock, which is
+      # what the one caller does.
       def start_pacer
         return if @pacer
+        # A stop sets this and a start after one has to clear it, or the
+        # new pacer reads it on its first turn and exits at once.
+        @mrai_lock.synchronize { @stopping = false }
         @pacer = Thread.new { pace }
         @pacer['name'] = 'BGP RIB MRAI'
         @pacer

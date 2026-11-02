@@ -72,15 +72,32 @@ module BGP
     # restarts, which is what they would have had to do anyway.
     #
     # **Each restart-class group is refused for a measured reason and not
-    # on principle.** The sharpest is `export` and `fib`:
-    # `Table#on_change` appends to a list of listeners and there is **no
-    # way to take one off**, measured in `bgp/rib/table.rb`, where
-    # `@listeners` is only ever `<<`'d and `Router#stop` stops the pacer
-    # thread and leaves its listener registered. So replacing a `Router`
-    # live would leave the old one advertising beside the new one, with
-    # two Adj-RIB-Outs disagreeing about what each peer holds. That is a
-    # wrong answer on the wire, not a missing feature, and it is listed
-    # under "Known issues to work on" in CLAUDE.md.
+    # on principle**, and the two reasons worth reading are `export`'s
+    # and `fib`'s, because both moved once already.
+    #
+    # They used to be refused because `Table#on_change` could not take a
+    # listener off, so a stopped `Router` went on advertising. That is
+    # fixed: `Table#off_change` exists and `Router#stop` and
+    # `FibInstaller#stop` use it. **The two reasons now differ from each
+    # other**, which they did not before.
+    #
+    # `fib` is held up by this daemon and nothing else: `@fib` is set in
+    # `Speaker#initialize` and `install_fib` runs once in
+    # `Speaker#start_rib`, and `Speaker#reconfigure` reads neither. The
+    # library would take it, because `FibInstaller#stop` flushes and a
+    # new one installs the whole Loc-RIB from `sync_all`, so a flush and
+    # a reinstall is the whole of applying it.
+    #
+    # `export` is held up by the library as well, and by something
+    # sharper than the listener ever was: **a replacement `Router` starts
+    # with empty Adj-RIB-Outs**, so a route the new rules refuse is never
+    # withdrawn from a peer that holds it. `Router#item_for` returns nil
+    # for a refused route unless its own Adj-RIB-Out has the prefix, and
+    # a new Router's has nothing. Measured on 2026-11-02 by replacing a
+    # reflecting Router with a non-reflecting one: the new Router records
+    # `:ibgp_to_ibgp` in `skipped`, sends no withdrawal, and the peer
+    # keeps the route. Both are under "Known issues to work on" in
+    # CLAUDE.md.
     #
     # **`warnings` is where a bounce is reported**, because a bounce is a
     # thing that happened to the session rather than a thing that went
@@ -134,10 +151,12 @@ module BGP
       # token. The mechanism, not the verdict: a later reader has to be
       # able to tell whether the reason still holds.
       RESTART_REASONS = {
-        'export' => 'Table#on_change cannot take a listener off again, so the Router this ' \
-                    'would replace would go on advertising beside the new one',
-        'fib' => 'Table#on_change cannot take a listener off again, so the FibInstaller this ' \
-                 'would replace would go on installing beside the new one',
+        'export' => 'a replacement Router starts with an empty Adj-RIB-Out per peer, so a ' \
+                    'route the new rules refuse is never withdrawn from a peer that holds ' \
+                    'it, and Speaker#reconfigure does not read export either',
+        'fib' => 'Speaker#reconfigure does not read it: @fib is set in Speaker#initialize ' \
+                 'and install_fib runs once in start_rib, so a commit has nothing to apply ' \
+                 'the change to',
         'rib' => 'the table is built in Speaker#initialize and every session is attached to it',
         'router_id' => 'every session carries it in its OPEN and the Loc-RIB is keyed by it',
         'as' => 'every session carries it in its OPEN and the export rules compare against it',
