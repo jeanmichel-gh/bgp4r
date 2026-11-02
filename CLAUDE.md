@@ -703,6 +703,27 @@ lab/                     speakers in containers: lab/speaker.rb and lab/topologi
                          invented, and the routescope lab is containerlab
                          rather than Compose, so a Compose topology for
                          bgp4r's own tests has no reason to carry one
+                         lab/topologies/bgp4r-lab is **the one
+                         containerlab topology** and the only one written
+                         for the routescope console rather than for this
+                         test suite: six nodes and three
+                         implementations, two `bgp4r-sim` injectors in
+                         one AS feeding a `bgp4rd` that feeds an FRR and
+                         BIRD AS, which is docs/routescope-labs.md
+                         section 8's "lab to build first". Both
+                         injectors are in one AS so that MED is
+                         comparable, which is what lets one action flip
+                         which path wins; `rtr` routes rather than
+                         originates what they send. Its four scenarios
+                         are that section's points 2 to 5. **It has
+                         never been deployed**, so nothing in it is a
+                         measurement, and it wants the Dockerfile's
+                         `lab-node` stage rather than `speaker`: a
+                         containerlab node sets its addresses with `ip`
+                         and `bgp4rd` has to be able to create
+                         `/run/bgp4r`, and `speaker` has neither
+                         iproute2 nor root. The four Compose topologies
+                         stay on `speaker` and are untouched
 test/functional/lab/     lab tests: loopback speaker test and one Compose test per topology;
                          speaker_test.rb also checks the capability names a topology can ask for,
                          and what a topology can say about ADD-PATH: a path_id on an
@@ -735,6 +756,18 @@ test/functional/lab/     lab tests: loopback speaker test and one Compose test p
                          lab/topologies/add-path to its own README with no Docker,
                          no router and no socket, which is all the cover those files
                          have until the Compose form can be run;
+                         bgp4r_lab_topology_test.rb is the same shape for
+                         lab/topologies/bgp4r-lab and loads each of its
+                         three node files through the program that reads
+                         it, `Sim::Injector.new` for the two injectors
+                         and `Daemon::Server#load_config` with
+                         `with_defaults` for the daemon, so a key that
+                         program would refuse fails here rather than in
+                         a container log nobody is watching. It also
+                         holds both ends of every link to one prefix and
+                         the four scenarios to routescope's own action,
+                         key and condition lists, copied at a named
+                         commit;
                          fault_matrix_scenario.rb holds the RFC 7606 checks, and both
                          fault_matrix_test.rb (Compose) and fault_matrix_native_test.rb
                          (a gobgpd on loopback, no Docker) assert them;
@@ -914,6 +947,15 @@ be run, and it holds them to the folder's own README. Hundredths of a
 second:
 ```
 ruby -I. test/functional/lab/add_path_topology_test.rb
+```
+
+The same for `lab/topologies/bgp4r-lab`, the containerlab one, which has
+never been deployed, so this is the only cover its files have. It parses
+the `*.clab.yml`, loads each of the three node files through the program
+that reads it, and holds the folder to its own README and the four
+scenarios to routescope's own vocabulary. Hundredths of a second:
+```
+ruby -I. test/functional/lab/bgp4r_lab_topology_test.rb
 ```
 
 `lab/speaker.rb` as a router, from node files. Three speakers on
@@ -1110,7 +1152,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. The `lab` job is a matrix, one job per group in `test/lab_groups.rb`, so its cost is the slowest group and not the total: it was 12m42s as one serial suite. Each job installs only what its group needs, which is why the matrix entry carries a `gobgp`, `frr`, `docker` or `netns` flag. The `gobgp` groups pin 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-11-02: 3072 tests, 31584 assertions, all passing. Line coverage of `bgp/` from the unit suite: 96.2%.
+Baseline on 2026-11-02: 3036 tests, 31431 assertions, all passing. Line coverage of `bgp/` from the unit suite: 96.1%.
 
 **That coverage figure is 98.5% for the library and the rest is the two
 programs, not a gap anywhere else.** Measured the same run: with
@@ -6324,7 +6366,7 @@ Decisions taken before this starts, so they are not re-litigated:
   in a convenience form for test code, each with a reason recorded, and
   clearing the list to empty it is not worth a phase.
 
-### routescope labs. Items 1 to 6 and 8 of section 6 are Done, and so is every control API method; items 7 and 9 are left, then routescope's own column
+### routescope labs. Items 1 to 6 and 8 of section 6 are Done, and so is every control API method and section 8's first lab; item 7 and running that lab are left, then routescope's own column
 
 **Done so far**: items 1 and 5, the `bgp4r` umbrella executable and
 `bgp4r capture`, which landed together because the capture contract
@@ -6376,9 +6418,30 @@ loopback and routegen folded in three ways. Section 2 of
 the whole integration, and its own section 9.6 says why: `fault` and
 `replay` are the point, and without them it is a worse FRR. So the two
 node kinds both have their programs now and **item 7 is Done as well, so
-what is left of that document's own items is 9 alone**: the containerlab
-topologies with the privilege story, which needs a Docker
-daemon. Everything else in its phases 1 to 5 is routescope's own
+what is left of that document's own items is half of 9**: running a
+containerlab topology, which needs a Docker daemon.
+
+**The topology itself is written**, which is the other half of item 9:
+`lab/topologies/bgp4r-lab`, the six node lab of that document's section
+8, with both labels on every node, node files for the two injectors and
+the daemon, FRR and BIRD configs, and four scenarios covering its points
+2 to 5. The privilege story came out of writing it and is a Dockerfile
+stage, `lab-node`: a containerlab node sets its addresses with `ip addr
+add` and `bgp4rd` has to create `/run/bgp4r`, which is the one socket
+path `Drivers::Bgp4rd` looks in for such a node, and the `speaker` stage
+the Compose topologies use has neither iproute2 nor root. **Neither
+image has been built and nothing has been deployed**, so it is a folder
+and not a measurement, and `test/functional/lab/bgp4r_lab_topology_test.rb`
+is most of the cover it has until a Docker daemon is reachable.
+**What could be measured without one was**, and it is the three router
+configs: `bird -p` parses `r3/bird.conf` clean under BIRD 2.14, and
+`bgpd -C` accepts every BGP line of both FRR configs under bgpd 8.4.4,
+rejecting only `no ipv6 forwarding` and `service
+integrated-vtysh-config`, which are zebra and vtysh lines a standalone
+`bgpd` does not own and which the bound `daemons` file routes to zebra
+and staticd. Read that for what it is: the lab pins FRR **10.2.1**, so
+an older bgpd accepting the commands says they are not 10.x-only and
+says nothing about 10.2.1 itself. Everything else in its phases 1 to 5 is routescope's own
 column: the kinds, the two drivers, the `bgp:` step and the four
 conditions, which its section 9.5 costs out, and now the Config pane as
 well, which needs a bgp4r driver answering `candidate?` true and the

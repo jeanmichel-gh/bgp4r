@@ -1,0 +1,75 @@
+# Point 3 of this lab's README: rtr's decision answers **why**, with two
+# paths to one prefix and the losing one naming `med`. That is the one
+# thing no other node in this lab can say about itself: `show bgp` and
+# `birdc show route` give the winner, not the step that decided it.
+#
+# `bgp_best` reads the `decided_by` key of bgp4r's own RIB view
+# (`bgp/rib/view.rb`), which is the RFC 4271 section 9.1.2.2 step
+# `Decision#best` returned. The step names are that file's `STEPS`:
+# local_pref, as_path_length, origin, med, ebgp_over_ibgp, igp_cost,
+# router_id, cluster_list_length, peer_address, path_id.
+#
+# **This is why both injectors are in AS 65010.** MULTI_EXIT_DISC is
+# compared only between paths from the same neighbouring AS (section
+# 9.1.2.2 c), so in two ASes these two paths would be decided at
+# as_path_length and no MED would be reached.
+#
+# NOT RUN: this lab has not been deployed, so nothing here is a
+# measurement.
+
+name: MED decides, and rtr says so
+description: >-
+  Both injectors announce 10.2.0.0/24, inj1 with MED 100 and inj2 with
+  200. Everything earlier in the decision is equal by construction, so
+  rtr must choose inj1's path and must report that it was the MED step
+  that chose it.
+capture: [rtr]
+timeout: 180
+
+steps:
+  - expect: { bgp_session: { node: rtr, peer: 10.0.10.1, state: established } }
+    within: 60
+  - expect: { bgp_session: { node: rtr, peer: 10.0.11.1, state: established } }
+    within: 60
+  - mark: one prefix, two injectors, one AS
+  - expect: { bgp_prefix: { node: rtr, prefix: 10.2.0.0/24, present: false } }
+
+  # Everything before the MED step is equal on purpose. LOCAL_PREF cannot
+  # differ: `Table#import` drops it from an external peer (RFC 4271
+  # section 5.1.5), and both sessions are eBGP. AS_PATH is one AS on each
+  # side, since each injector prepends its own and they share it. ORIGIN
+  # is the default on both. So MED is the first step with anything to
+  # compare.
+  - bgp: announce
+    node: inj1
+    prefixes: [10.2.0.0/24]
+    as_path: [65020]
+    med: 100
+  - bgp: announce
+    node: inj2
+    prefixes: [10.2.0.0/24]
+    as_path: [65020]
+    med: 200
+
+  - expect: { bgp_prefix: { node: rtr, prefix: 10.2.0.0/24,
+                            next_hop: 10.0.10.1, med: 100 } }
+    within: 15
+    measure: two_paths_decided
+    name: the lower MED won
+
+  # The step, and not the outcome. Without this the scenario passes
+  # whenever the right path wins, including when it wins for the wrong
+  # reason, which is the commonest way a decision implementation is
+  # subtly wrong.
+  - expect: { bgp_best: { node: rtr, prefix: 10.2.0.0/24, reason: med } }
+    name: and it was the MED step that decided, not a later tie break
+
+  # What goes on from rtr is the winner alone, and without the MED: RFC
+  # 4271 section 5.1.4 keeps MULTI_EXIT_DISC out of another AS, which
+  # `Export` applies to every external peer. So r1 sees one path and a
+  # table with no MED on it, which is the half the console shows beside
+  # rtr's two candidates.
+  - expect: { bgp_prefix: { node: r1, prefix: 10.2.0.0/24,
+                            as_path: '65000 65010 65020', next_hop: 10.0.20.1 } }
+    within: 20
+    name: one path leaves rtr, with its AS in front of the injector's
