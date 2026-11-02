@@ -289,27 +289,41 @@ docs/                    protocol-testing.md: using bgp4r to test a router
                          constructor or chasing an object that does not come back.
                          Its load-bearing claims are asserted by
                          test/unit/building_objects_test.rb
-                         routescope-labs.md: how bgp4r becomes a node the
-                         routescope console can drive, and the eight labs
-                         worth building once it is, with **section 9** the
-                         `bgp4r-sim` injector in detail: the config that
-                         brings a session up, its actions, and the
-                         scenarios that drive it. Mostly a **design**:
-                         little of its sections 6 to 10 exists yet, and
-                         every fact in it about routescope or ospfv2 is a
-                         read of another repository at a named commit,
-                         which this suite cannot assert. The exception is
-                         **section 8's porting subsection**, which says
-                         which of the 23 files in test/functional/lab/
-                         want to be scenarios and which do not, with
-                         lab/topologies/add-path as a worked example that
-                         exists and has a test. Read that one before
-                         porting any other lab test. Its section 12 says
-                         which claims become assertable here and when.
-                         Read it before adding an executable, a state
-                         dump, a capture command, an action API or a lab
-                         topology, because each of those has a contract
-                         in it
+                         daemon.md: the two programs, `bgp4rd` the daemon
+                         and `bgp4r sim` the injector, with routegen
+                         folded into the second. Functions, requirements,
+                         configuration, the command line, the control
+                         API and the JSON each answers, plus `bgp4r
+                         capture` and a list of what is deliberately not
+                         in either. **It is the design of the programs
+                         and nothing else**: neither program knows
+                         routescope exists, which is the one principle it
+                         opens with, so every number a console would show
+                         is reachable with one terminal command. Read it
+                         before adding an executable, a socket or HTTP
+                         method, a config key or a state dump. Mostly a
+                         **design**: none of it exists yet
+                         routescope-labs.md: how those two programs
+                         become nodes the routescope console can drive,
+                         and the eight labs worth building once they are.
+                         Its **section 4** is the contracts bgp4r has to
+                         meet, read out of routescope at a named commit:
+                         the driver's own method shapes, the table rows,
+                         kind resolution, the protocols label, the config
+                         paths and health. Its **section 8** has the lab
+                         to build first, concretely, and a porting
+                         subsection saying which of the 23 files in
+                         test/functional/lab/ want to be scenarios and
+                         which do not, with lab/topologies/add-path as a
+                         worked example that exists and has a test. Read
+                         that one before porting any other lab test. Its
+                         section 9 is the scenario language and what the
+                         driver answers; the programs themselves are
+                         daemon.md's. Every fact in it about routescope
+                         or ospfv2 is a read of another repository at a
+                         named commit, which this suite cannot assert,
+                         and its section 12 says which claims become
+                         assertable here and when
 examples/                runnable scripts
 test/unit/               unit tests, mirroring bgp/
 test/functional/         tests that open real TCP sessions
@@ -323,11 +337,15 @@ lab/                     speakers in containers: lab/speaker.rb and lab/topologi
                          GoBGP reports how many paths it holds and bgp4r
                          reports which Path Identifiers arrived and neither
                          answers both. It is the first topology with a
-                         lab.yml, routescope's manifest, and a scenarios/
-                         folder; nothing reads either yet, see
+                         scenarios/ folder; nothing reads it yet, see
                          docs/routescope-labs.md. Its README says which of
                          its three scenarios runs on what exists and why
-                         the other two need the injector
+                         the other two need the injector. It carried a
+                         lab.yml too, written as a routescope manifest,
+                         and that file is gone: two of its keys were
+                         invented, and the routescope lab is containerlab
+                         rather than Compose, so a Compose topology for
+                         bgp4r's own tests has no reason to carry one
 test/functional/lab/     lab tests: loopback speaker test and one Compose test per topology;
                          speaker_test.rb also checks the capability names a topology can ask for,
                          and what a topology can say about ADD-PATH: a path_id on an
@@ -5757,21 +5775,39 @@ Decisions taken before this starts, so they are not re-litigated:
 
 ### routescope labs, a phase with no pull request yet
 
-**`docs/routescope-labs.md` is the design**, written on 2026-11-01
-against routescope `7eabde1` and ospfv2 `2dfc03a`, both read first hand.
-Read it before any of this work. The short version, so the direction is
-visible here:
+**Two documents, and the split matters.** `docs/daemon.md` designs the
+two programs, `bgp4rd` and `bgp4r sim`, and says nothing about
+routescope. `docs/routescope-labs.md` designs the integration: the
+contracts, the driver, the labs. Both were written on 2026-11-01 against
+routescope `7eabde1` and ospfv2 `2dfc03a`, read first hand. Read both
+before any of this work, the first one first. **That split is ospfv2's
+own**, which keeps `user-guide.md` for the programs and
+`console-plan.md` for the console, and it exists so a program is not
+designed around one consumer: the one principle `docs/daemon.md` opens
+with is that every number a console would show has to be reachable with
+one terminal command.
+
+The short version, so the direction is visible here:
 
 * **routescope already speaks BGP**, and that is the finding that
   shapes the plan. Its FRR and BIRD drivers read sessions and the BGP
   table, node health counts an established session, and the front end
   has columns for both. So bgp4r is not filling a gap in its BGP
   support, and parity with FRR is not the goal.
-* **bgp4r is two node kinds, not one.** `bgp4r`, a router whose Loc-RIB
-  and decision a console can read, and `bgp4r-sim`, an injector and
-  fault source driven by actions. The second is what no real router can
+* **Two programs, so two node kinds.** `bgp4rd`, a daemon holding a
+  Loc-RIB that a console reads over a Unix socket, and `bgp4r sim`, an
+  injector and fault source driven over an HTTP API on the container's
+  loopback. The kinds are `bgp4r` and `bgp4r-sim`. **Do not merge
+  them**: the daemon's job is to be correct and the injector's is to be
+  wrong on request, so one program with a mode would need a branch on
+  that mode in every path. The second is what no real router can
   substitute for, and routescope's own `docs/protocols.md` names the
   shape: "A BGP route injector would be one more."
+* **Named `bgp4rd` and not `bgpd`**, because FRR's binary is `bgpd` and
+  the conformance image already carries GoBGP's client, so a lab with
+  both on PATH would be ambiguous. Four commands: `bgp4rd`,
+  `bgp4r-cli`, `bgp4r` as the umbrella (`sim`, `routegen`, `capture`,
+  `lab new`, `version`) and `bgp4r-sim` as an alias.
 * **The largest item is that the lab speaker becomes a router.**
   `lab/README.md` states the limit and `bgp/rib/` has the answer
   finished, tested and unwired: the speaker predates it. That one piece
@@ -5801,18 +5837,29 @@ visible here:
   one receiver reading the same octets, an action after the session is
   up, or a degraded link while traffic flows. The worked example is
   `lab/topologies/add-path`, and what it cost is recorded there.
-* **Section 9 is `bgp4r-sim` in detail**, which is the part to read
-  before building anything: the three config files that bring a session
-  up, the twelve actions, the four scenario conditions and three worked
-  scenarios. Its shape is `Drivers::Sim`'s, an HTTP API on the
-  container's loopback reached by `docker exec`, and **its action body
-  keys are the node file's own keys**, so the injector's vocabulary is
-  bgp4r's configuration vocabulary at runtime rather than a second
-  language. Two decisions there carry the most weight: an injector
-  **starts silent**, with no `announce:` block, because a baseline the
-  config created is one no assertion can rest on; and if it ships
-  without `fault` and `replay` it is a worse FRR, since those are the
-  two things no real router can be told to do.
+* **The injector's action body keys are the node file's own keys**, so
+  its vocabulary is bgp4r's configuration vocabulary at runtime rather
+  than a second language, and its shape is `Drivers::Sim`'s, an HTTP
+  API reached by `docker exec`. Two decisions carry the most weight: an
+  injector **starts silent**, with no `announce:` block, because a
+  baseline the config created is one no assertion can rest on; and if
+  it ships without `fault` and `replay` it is a worse FRR, since those
+  are the two things no real router can be told to do.
+* **routegen is folded into the injector three ways and is not a
+  program of its own**: an action with a `generate:` block, a `bgp4r
+  routegen` subcommand for a standalone run, and a config block for a
+  node that starts loaded. Two requirements come with it, both already
+  true of `bgp/misc/route_generator.rb`: generated routes get **no
+  Adj-RIB-Out**, because recording a million prefixes per peer is the
+  memory the generator exists to avoid, and the packing stays
+  arithmetic rather than measurement.
+* **A capture is harder here than in ospfv2 and the reason is TCP.**
+  OSPF is one packet per datagram, so its reader dissects a frame and
+  is done. BGP is a byte stream, so the dissector has to reassemble it
+  and frame on the 16-octet marker and the length field, with a message
+  spanning two segments and two messages sharing one.
+  `BGP::Message.factory` decodes once the framing is right, so the
+  framing is the work.
 * **The injector is phase 5 and not phase 1**, which section 10 says
   plainly because section 2 calls it the thing that justifies the work.
   It needs the structured event stream or its pane shows nothing, the
@@ -5826,6 +5873,30 @@ repositories is a read at a commit and this suite cannot check one. It
 also records one claim that was wrong in its first draft and corrected
 in place, `partial_lsdb?`'s consumer, with the lesson: when reading
 another repository, read the consumer and not the definition.
+
+**Three claims in its first version were wrong about routescope's lab
+model, and the mechanism is worth more than the corrections.** The
+document was written before reading routescope's own
+`docs/protocols.md`, which is the file that says how a protocol is
+added. So it leaned on a `lab.yml` where **containerlab** is the path,
+it never mentioned the `routescope.kind` and `routescope.protocols`
+labels, which is how a node gets a driver and how routescope knows what
+to ask it, and it had the capture image wrong. All three are corrected
+in place, with a dated block in the header naming them.
+
+* **It cost a file, not just prose.** `lab/topologies/add-path/lab.yml`
+  was written as a routescope manifest from that wrong model: two of
+  its keys were invented and the one real schema needs, `segments`, was
+  missing. Worse, the test beside it asserted the file against
+  `compose.yml`, so it was internally consistent and externally wrong,
+  which is the shape no test catches. The file is gone and the test
+  reads the node files against `compose.yml` instead.
+* **The lesson is the same one as `partial_lsdb?` and larger.** Read
+  the consumer, and when the consumer is another repository, read the
+  file that repository keeps for people adding to it **before**
+  designing against it rather than after. An invented schema that your
+  own test confirms is the most expensive kind of wrong, because
+  nothing fails until somebody runs the real thing.
 
 ### Vendor style `to_s`, a phase with no pull request yet
 

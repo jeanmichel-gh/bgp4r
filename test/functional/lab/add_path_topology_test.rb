@@ -169,22 +169,25 @@ class LabAddPathTopologyTest < Test::Unit::TestCase
     end
   end
 
-  # lab.yml is read by nothing today, so a typo in it is invisible. The
-  # node names and addresses have to match the compose file and the node
-  # files, since that is the whole content of a manifest.
-  def test_the_routescope_manifest_matches_the_topology
-    lab = YAML.safe_load(File.read(File.join(DIR, 'lab.yml')))
-    assert_equal %w[sim gobgp peer], lab['nodes'].collect { |n| n['name'] }
-    assert_equal %w[10.40.0.1 10.40.0.2 10.40.0.3],
-                 lab['nodes'].collect { |n| n['address'] }
-
+  # Each node file's own address has to be the one the compose file gives
+  # that service, or the speaker binds one address and the container has
+  # another, which shows up as a session that never comes up.
+  #
+  # This used to read a lab.yml beside these files and compare the two.
+  # That file is gone: it was written as a routescope manifest and two of
+  # its keys were invented, since the real schema is name, segments and
+  # nodes with profiles, config and socket. A Compose topology for
+  # bgp4r's own tests has no reason to carry one, and the routescope lab
+  # is containerlab anyway. See docs/routescope-labs.md section 8.
+  def test_every_node_address_matches_the_compose_file
     compose = File.read(File.join(DIR, 'compose.yml'))
-    lab['nodes'].each do |n|
-      assert_match(/^  #{n['service']}:$/, compose,
-                   "compose.yml has no service #{n['service']}")
-      assert_match(/ipv4_address: #{Regexp.escape(n['address'])}\b/, compose,
-                   "compose.yml does not give #{n['name']} #{n['address']}")
-      assert_path_exist File.join(DIR, n['config'])
+    { 'sim' => 'sim.yml', 'peer' => 'peer.yml' }.each do |service, file|
+      address = node(file)['local_address']
+      assert_match(/^  #{service}:$/, compose, "compose.yml has no service #{service}")
+      assert_match(/ipv4_address: #{Regexp.escape(address)}\b/, compose,
+                   "compose.yml does not give #{service} #{address}")
     end
+    assert_match(/^  gobgp:$/, compose, 'and the router is a service too')
+    assert_path_exist File.join(DIR, 'gobgp.toml')
   end
 end

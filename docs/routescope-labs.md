@@ -9,9 +9,32 @@ both read first hand. Where a claim is about one of those repositories
 it is cited by file and construct, because this document cannot assert
 them: see section 12 for what that costs and what fixes it.
 
-Section 9 is the injector node kind in detail, from the config that
-brings a session up to the scenarios that drive it. Read sections 3 and
-4 first: it meets those contracts and then adds to them.
+**`docs/daemon.md` owns the two programs**: `bgp4rd` the daemon and
+`bgp4r-sim` the injector, their functions, requirements, configuration,
+command lines and the JSON they answer with. This document owns the
+integration: the drivers, the inspector tables, the map, the labs and
+the phasing. Neither repeats the other. Read that one first if the
+question is what the programs do; read this one if the question is how
+routescope sees them.
+
+Section 9 is the injector as routescope drives it, which is the half of
+`docs/daemon.md`'s design that is routescope's business. Read sections 3
+and 4 first: it meets those contracts and then adds to them.
+
+**Corrected 2026-11-01**, after reading `routescope/docs/protocols.md`,
+which is the file that says how a protocol is added and which the first
+draft of this document did not read. Three things it got wrong:
+
+* The lab model. These labs are **containerlab** topologies in
+  `~/labs/<name>`, as all three of ospfv2's BGP labs are. The first
+  draft leaned on `lab.yml`, which routescope does read for a Compose
+  lab, and left out the two labels that matter.
+* How a node gets a driver. It is the **`routescope.kind` label**, else
+  the image, and the protocols a node is asked about are the
+  **`routescope.protocols` label**. Section 4 has both.
+* The capture image. routescope runs captures in a container of its own
+  from `ROUTESCOPE_CAPTURE_IMAGE`, default `ospfv2:latest`, so a BGP
+  capture needs a routescope change. Section 7 has it.
 
 ## 1. What routescope is, in one paragraph
 
@@ -59,10 +82,15 @@ takes. **A BGP route injector would be one more.**"
 
 ## 3. The two roles, and they are two node kinds
 
-| Kind | What it is | What it is for | FRR could do it |
+| Kind | Program | What it is for | FRR could do it |
 |---|---|---|---|
-| `bgp4r` | a BGP router: sessions, a Loc-RIB, best path, optionally a FIB | peering with real routers, showing a decision, transit, route reflection | yes |
-| `bgp4r-sim` | an injector and fault source driven by actions | sending what no RFC allows, replaying a capture, flapping on command, scripting the fault matrix | **no** |
+| `bgp4r` | `bgp4rd` | peering with real routers, showing a decision, transit, route reflection | yes |
+| `bgp4r-sim` | `bgp4r sim` | sending what no RFC allows, replaying a capture, flapping on command, scripting the fault matrix | **no** |
+
+The programs are designed in `docs/daemon.md`. The daemon is named
+`bgp4rd` and not `bgpd` because FRR's binary is `bgpd` and a lab
+container can have both on its `PATH`: bgp4r's own conformance image
+already copies GoBGP's client in beside its own code.
 
 Both are worth having and they are not the same program wearing two
 hats. The first answers questions; the second takes orders. The second
@@ -124,6 +152,41 @@ does not name falls into `options`**. So `socket:`, `state_file:`,
 `capture_interface:` and anything else reach a driver with no change to
 routescope's schema.
 
+**How a node gets its driver, which the first draft of this document
+left out.** `Containerlab#node` (`containerlab.rb:64`) reads
+`labels['routescope.kind']` first and falls back to `kind_of(n)`, which
+matches the image against `IMAGES` (`containerlab.rb:29`):
+
+```ruby
+[%r{frrouting/frr|(\A|/)frr:}, 'frr'], [/bird/, 'bird'], [/ospfv2/, :ospfv2]
+```
+
+and for ospfv2 then splits by command, `ospfd` against the simulator. An
+unknown kind is kept as a plain Linux node with a shell, a log and a
+capture, and routescope says so in `Lab#warnings`. So a bgp4r container
+is useful in a lab **before either repository changes**, and that is
+phase 0.
+
+Two rows for bgp4r, by the same two-step: `[/bgp4r/, :bgp4r]`, then the
+command decides, `sim` for the injector and `bgp4rd` for the daemon. Add
+the labels in the topology anyway, because an explicit label survives an
+image rename.
+
+**Which protocols a node is asked about** is the
+`routescope.protocols` label in a containerlab topology, `protocols:`
+on the node in a `lab.yml`, else the driver's `default_protocols`
+(`drivers.rb:50`). Both bgp4r kinds default to `%w[bgp]`, and a lab that
+says `routescope.protocols: bgp` on every node is saying it explicitly,
+which all three of ospfv2's BGP labs do.
+
+**Where a node's startup file is** comes from `CONFIG_IN`
+(`containerlab.rb:20`), a kind to in-container path map, read against the
+topology's `binds`. Two rows: `/etc/bgp4r/bgp4rd.yml` and `/lab/sim.yml`.
+Without them routescope cannot show or save a node's configuration.
+
+**Health.** `Nodes` (`nodes.rb:88`) counts `established` peers and a node
+is up once one of them is. Nothing else in the BGP path decides health.
+
 **Capture is the one contract bgp4r must match exactly to get for
 free.** `Transport::Docker#capture_command` (`transport.rb:78`)
 hard-codes the argv:
@@ -170,33 +233,33 @@ carries a verified checksum. routescope's decoder pane is generic over
 that shape (`web/src/decoder.ts`); the only OSPF-specific parts are the
 LSA key and "follow an LSA".
 
-## 5. How a driver reads bgp4r, and the choice
+## 5. How a driver reads each program
 
-Three options, in increasing cost and increasing value.
+**Each kind gets the control plane ospfv2 gives the same role**, so each
+driver is a copy of an existing one rather than a new shape.
 
-| Option | Driver does | bgp4r needs | Verdict |
+| Kind | Control plane | Driver copies | ospfv2's precedent |
 |---|---|---|---|
-| **A. Read the state file** | `docker exec cat /tmp/bgp4r-state.json` | a documented, versioned schema | the first step |
-| **B. A CLI that prints JSON** | `docker exec bgp4r show peers --json` | `exe/bgp4r` and a view layer | the end state |
-| **C. A management socket** | connect, send a method, read a line | an `Api` with a method registry | only for actions |
+| `bgp4r` | a Unix socket, JSON lines, dotted methods | `Drivers::Ospfd` | `ospfd` and `ospf-cli` |
+| `bgp4r-sim` | HTTP on the container's loopback | `Drivers::Sim` | `ospfv2 run --web` |
 
-**Take A first, then B, and C only for `bgp4r-sim`.** The reasons:
+`Drivers::Ospfd` already carries the client as a Ruby one-liner
+(`drivers.rb:215`) that opens the socket, writes one request and reads
+one line, with the socket path from `node.options['socket']` and a
+default. Both halves of that are what `docs/daemon.md` designs for
+`bgp4rd`, so the bgp4r driver is that method list with the paths
+changed. `Drivers::Sim` is the same story for the injector, including
+the POST header and `exit(code < 300 ? 0 : 1)` to carry a refusal out
+through an exit status.
 
-* A works against the speaker that exists today and proves the whole
-  path end to end before any bgp4r change. It is also how ospfv2's own
-  offline harness does it: `test/support/core_runner.rb` writes JSON
-  every second with an atomic rename, which is exactly what
-  `lab/speaker.rb` already does at 2 Hz.
-* B is what routescope's other drivers actually look like. `Frr` runs
-  `vtysh -c '... json'` and `Bird` runs `birdc`. A file is a snapshot
-  bgp4r chose to write; a command is a question routescope asked. The
-  difference shows the moment the console wants something the file does
-  not carry.
-* C is how ospfv2 does everything (`lib/ospfv2/daemon/api.rb`, a
-  JSON-lines Unix socket with a 20-entry `METHODS` registry and an
-  `api.info` for version negotiation). It is the right shape for
-  **acting** on a node, which is role 2. It is more than role 1 needs,
-  and building it first would delay every lab.
+**A state file stays, and it is not the driver's road.**
+`lab/speaker.rb` writes `/tmp/bgp4r-state.json` at 2 Hz with an atomic
+rename, and #228 added the peer's negotiated capabilities to it. That is
+worth keeping for a reader with no socket, for the lab test scripts, and
+because routescope's `Lab::Node` carries `state_file` through `options`
+with no schema change. But a driver should ask a question rather than
+read a snapshot bgp4r chose to write, which is what `Frr` and `Bird`
+both do.
 
 **The thing to get right in A, because B and C inherit it.** The state
 has to be the *data* under `rib/show.rb`, not its text. bgp4r's own
@@ -214,11 +277,13 @@ style phase recorded in CLAUDE.md as well.
 Measured against ospfv2, which ships all of it. Each item says what it
 unblocks, so the order is not arbitrary.
 
-1. **`exe/bgp4r`, a real executable.** bgp4r has no `bin/` or `exe/`
-   and its gemspec declares no executables; `lab/speaker.rb` is run as
-   `ruby -I. lab/speaker.rb FILE`. Subcommands `speaker`, `show`,
-   `capture`, `fault-matrix`. Unblocks everything, and the capture
-   contract in section 4 forces its shape.
+1. **Executables, which bgp4r has none of.** No `bin/`, no `exe/`, and
+   the gemspec declares none; `lab/speaker.rb` is run as `ruby -I.
+   lab/speaker.rb FILE`. `docs/daemon.md` names the four: `bgp4rd`,
+   `bgp4r-cli`, `bgp4r` with `sim`, `routegen`, `capture` and `lab new`,
+   and `bgp4r-sim` as an alias so a container command reads plainly.
+   Unblocks everything, and the capture contract in section 4 forces the
+   shape of one of them.
 2. **The speaker becomes a router.** This is the largest item and the
    most valuable. `lab/README.md` states the limit outright: "A speaker
    originates routes and records what it receives. It never passes
@@ -264,11 +329,13 @@ unblocks, so the order is not arbitrary.
    ospfv2 injects a plain callable `->(level, message)` like its clock.
    Lower priority than 6, since a console reads events and not log text.
 8. **Actions, for `bgp4r-sim` only.** A way for routescope to tell a
-   node to do something. ospfv2's injector equivalent is an HTTP API on
-   `127.0.0.1:8080` that its `Sim` driver POSTs to, with a header
-   requirement so a cross-site form cannot flap a link. The bgp4r verbs
-   are different and more interesting: announce, withdraw, shut, raise,
-   send fault case N, replay this capture, set MED, prepend an AS.
+   node to do something. The table is in `docs/daemon.md`: announce,
+   withdraw, attribute, fault, replay, notification, the three session
+   actions and refresh, on an HTTP API on `127.0.0.1:8080` with a header
+   requirement so a cross-site form cannot flap a lab. Two of them are
+   why the node kind exists at all: `fault`, which drives the eighteen
+   cases of `BGP::Fault::CATALOG`, and `replay`, which sends a capture
+   byte for byte. An injector without those two is a worse FRR.
 9. **Containerlab topologies and a privilege story.** bgp4r's Dockerfile
    runs as the non-root user `bgp` and relies on a container's own
    `net.ipv4.ip_unprivileged_port_start=0` to bind 179. That is fine for
@@ -278,11 +345,23 @@ unblocks, so the order is not arbitrary.
    lab does not declare, so on compose only one end is acted on. So
    every lab that injects link faults wants containerlab.
 
-**Deliberately not on this list.** A candidate/commit configuration
-model with compare, rollback and history; a `bgp-cli` with a grammar; an
-HTTP server for browsing state; a `lab new` scaffolder. ospfv2 has all
-four and none is needed for a lab to run. Revisit if a lab turns out to
-need one, not before.
+**Two things this list used to call unnecessary and no longer does**,
+because the design asked for them by name:
+
+* **`bgp4r lab new DIR`**, which copies a topology folder and git-inits
+  it, as `ospfv2 lab new` does from `CLAB_LABS` (`cli.rb:187`). A lab
+  somebody edits in place is a lab whose history is the repository's,
+  and the git init is what makes a saved configuration diffable.
+* **A candidate configuration with `load`, `compare` and `commit`**,
+  which is in `docs/daemon.md`'s method list. routescope's Config pane
+  reads `running_config`, `candidate?` and `save_running`
+  (`drivers.rb:64-78`), so without a candidate model the daemon's node
+  shows a configuration it cannot change.
+
+Still deliberately not on this list: an HTTP server on the daemon for
+browsing its own state, and a command grammar with completion.
+`bgp4r-cli -c 'show bgp summary'` is a string match against a short
+list, not a parser.
 
 ## 7. What routescope must gain
 
@@ -299,8 +378,21 @@ Additive unless marked. Columns are the file and the construct.
 | scenario actions for the injector | `Scenario::ACTIONS` and `SIM_ACTIONS` | additive |
 | BGP panes | `web/src/protocols.ts`, panels in `App.tsx` | additive; `docs/protocols.md` pre-names `bgp-rib` and `bgp-peers` |
 | a RIB compare across nodes | `lib/routescope/compare.rb`, today OSPF only | **modification** |
+| the `bgp_decision` table | `Drivers::Base#tables`, overridden as `super + %w[bgp_decision]`; one entry in `web/src/tables.ts` | additive, and FRR and BIRD are untouched because `BGP_TABLES` does not move |
 | a capture that is not OSPF's | `Transport::Docker#capture_command` (`transport.rb:78`) and `Transport::Local#capture_command` (`:154`) | **modification**: the Docker image is an env var but a global one, the subcommand and the missing filter argument are hard-coded, and the local path names `ospfv2` outright |
 | lab lifecycle not assuming ospfv2 | `lib/routescope/lifecycle.rb`, `ROUTESCOPE_OSPFV2`, `PROJECT = 'ospfv2'` | **modification**, or sidestep it with containerlab |
+
+**The capture image is the one row with a shape to propose rather than
+just a cost.** `ROUTESCOPE_CAPTURE_IMAGE` is one value for a whole lab,
+and a lab with FRR, BIRD and bgp4r in it needs the OSPF dissector next
+to one node and the BGP dissector next to another. One image cannot be
+both: ospfv2's filters `ip proto 89` and bgp4r's would filter `tcp port
+179`.
+
+So the driver should answer its own capture image, defaulting to the
+environment variable, and the bgp4r drivers answer `bgp4r:latest`. One
+method on `Drivers::Base`, read by both transports. That also gives
+`Transport::Local` the seam it has none of today.
 
 **Nothing needs a plugin mechanism, because there is none.** Four of
 the eleven rows are modifications of a `case` or a constant, and those
@@ -316,15 +408,64 @@ useful before either repository changes. That is the zeroth phase.
 
 Eight labs, ordered so each one is runnable when its prerequisites are.
 "Needs" cites section 6 and 7 items. Every lab is a folder under
-`lab/topologies/`, the convention bgp4r already uses, with a
-containerlab topology where link faults matter.
+`lab/topologies/`, the convention bgp4r already uses.
+
+**Containerlab, not Compose, and that is a correction.** All three of
+ospfv2's BGP labs are `*.clab.yml` and routescope's own labs all are. The
+reason that matters beyond consistency: `Links#ends` resolves both ends
+of a link from `lab.links`, which a Compose lab does not declare, so on
+Compose only one end of a link fault is acted on. bgp4r's existing
+`lab/topologies/` are Compose and stay that way, because they drive
+`lab/speaker.rb` for bgp4r's own test suite and routescope never sees
+them.
+
+### The lab to build first, concretely
+
+`bgp4r-lab`, six nodes, three implementations, one containerlab
+topology.
+
+```
+AS 65010                        AS 65000            AS 65001 (iBGP full mesh)
+
+inj1 (bgp4r-sim) --eBGP--\
+                          >-- rtr (bgp4rd) --eBGP-- r1 (FRR) ---- r2 (FRR)
+inj2 (bgp4r-sim) --eBGP--/                               \        /
+                                                          r3 (BIRD)
+```
+
+**Both injectors are in one AS on purpose.** MED only compares paths
+from the same neighbouring AS, so that is what makes `rtr`'s decision
+answer MED rather than skip it, and what lets one action flip which path
+wins. Two injectors in two ASes would compare on AS_PATH length and the
+MED step would never be reached.
+
+Labels: `routescope.kind: bgp4r-sim` on the injectors, `bgp4r` on `rtr`,
+and `routescope.protocols: bgp` on all six, which is what all three of
+ospfv2's BGP labs do rather than leaning on a default.
+
+What it exercises that no existing lab does, in order of what it proves:
+
+1. Six sessions across three implementations, which the node cards and
+   the map show.
+2. A prefix injected on command reaching r2 and r3 with `rtr`'s AS
+   prepended and `rtr` as the next hop, which is `rtr` routing rather
+   than originating and so needs item 2 of section 6.
+3. `rtr`'s decision answering **why**, with two paths to one prefix and
+   the losing one naming `med`. That is the `bgp_decision` table and the
+   one thing no other node in the lab can say about itself.
+4. One action flipping the winner, which is a scenario rather than a
+   screenshot.
+5. A withdraw removing it from BIRD, which is the far end of the chain.
+
+`bgp4r lab new ~/labs/bgp4r-lab --routescope` copies it and git-inits
+it, as `ospfv2 lab new` does.
 
 ### A. Two speakers, one link
 
 bgp4r against bgp4r, eBGP, the `two-speakers` topology that exists.
-**Needs: nothing but a driver (7) and option A (5).** Validates that
-the whole path works: compose up, driver reads state, console shows two
-peers established and routes with their attributes.
+**Needs: a driver (7) and the daemon's `show.status` (6).** Validates
+that the whole path works: the lab comes up, the driver asks, the console
+shows two peers established and routes with their attributes.
 
 Worth doing first precisely because it tests the plumbing and not the
 protocol. If it cannot show two bgp4r speakers it will not show
@@ -553,258 +694,66 @@ comes up, what a scenario can tell it to do, and what routescope has to
 gain for it. Read section 4 first for the contracts, because the
 injector meets all of them and then adds to them.
 
-### 9.1 The shape is `Drivers::Sim`'s, and that is deliberate
+### 9.1 The programs are designed elsewhere
 
-routescope already drives one injector, the `ospfv2-sim` kind, and its
-driver is the template. It does not open a socket to the node: it
-`docker exec`s a one-line Ruby client that talks to the simulator's own
-HTTP API on the container's loopback (`drivers.rb:680-687`):
+The injector's shape, its configuration, its HTTP API, its action table
+and the route generator folded into it are all in **`docs/daemon.md`**.
+They are facts about a program a person runs, not about routescope, so
+they live with the program. What follows is only what routescope has to
+do about them.
 
-```ruby
-def self.get_argv(path) = ['ruby', '-rnet/http', '-e', "print Net::HTTP.get(URI(\"http://127.0.0.1:8080#{path}\"))"].freeze
+Three of those facts bear on everything below, so they are repeated here
+and nowhere else:
 
-def self.post_argv(path, body = {})
-  script = 'r = Net::HTTP.post(URI("http://127.0.0.1:8080#{ARGV[0]}"), ARGV[1], "X-OSPFv2" => "routescope", ' \
-           '"Content-Type" => "application/json"); print r.body; exit(r.code.to_i < 300 ? 0 : 1)'
-  ['ruby', '-rnet/http', '-e', script, path, JSON.generate(body)]
-end
-```
+* It is **HTTP on `127.0.0.1:8080`**, reached by `docker exec` with a
+  Ruby one-liner, which is `Drivers::Sim`'s shape exactly. A POST
+  carries `X-BGP4R: routescope` and answers an exit status, so a driver
+  tells a refusal from a success without reading the body.
+* It **starts silent**. No announcement until asked, because a baseline
+  the configuration created is a baseline no assertion can rest on.
+* Its **action body keys are the node file's own keys**, the ones
+  `lab/README.md` already documents for an announce block. So the
+  scenario vocabulary below is bgp4r's configuration vocabulary and
+  there is one thing to learn.
 
-Four things fall out of copying that, and each is a decision:
-
-* **The API binds the container's loopback only**, and routescope reaches
-  it through `docker exec` rather than over the lab network. So the
-  endpoint is not on the topology, cannot be reached from another node,
-  and needs no address or firewall rule. It also means the injector is
-  driveable with `docker exec` by hand, which is how anyone will debug
-  a scenario that misbehaves.
-* **A mutating request carries a header**, `X-OSPFv2: routescope` there
-  and `X-BGP4R: routescope` here. ospfv2 added it so a cross-site form
-  in a browser cannot flap a lab link, and the same reasoning holds for
-  an action that tears a session down. Copy it; it costs one line.
-* **The client is Ruby from the image's own interpreter**, so the
-  container needs no curl and no extra package. bgp4r's image is
-  already a Ruby image.
-* **`exit(r.code.to_i < 300 ? 0 : 1)`** is what lets `act` tell a
-  refused action from a successful one, since `docker exec` surfaces an
-  exit status and not an HTTP code. So the API answers 4xx for a bad
-  request and the error text goes in a JSON `error` key, which `act`
-  reads (`drivers.rb:794-797`).
-
-### 9.2 The initial config, and how the adjacency comes up
-
-Three files. Nothing in the node file is new: every key below is in
-`lab/README.md`'s node-file schema today, which is the point. The
-injector's action vocabulary is bgp4r's own configuration vocabulary
-applied at runtime rather than a second language.
-
-**`lab.yml`**, which routescope reads:
-
-```yaml
-name: bgp4r-sim-lab
-
-segments:
-  - name: bgplab
-    subnet: 10.99.1.0/24
-
-nodes:
-  - name: sim
-    kind: bgp4r-sim
-    service: sim
-    address: 10.99.1.10
-    config: sim/sim.yml
-    protocols: [bgp]
-    api: 127.0.0.1:8080        # optional; the default
-
-  - name: frr
-    kind: frr
-    service: frr
-    address: 10.99.1.20
-    config: frr/frr.conf
-    protocols: [bgp]
-```
-
-**`protocols: [bgp]` on the FRR node is load bearing and easy to
-miss.** `docs/protocols.md`: a node runs "its driver's default (OSPF
-for ospfd, FRR, BIRD, SR Linux and the simulator), unless the lab says
-otherwise". So without that line routescope asks FRR about OSPF, never
-calls `Frr#bgp`, and the lab shows a node with no neighbours and no
-explanation. The `bgp4r-sim` driver's own `default_protocols` is
-`%w[bgp]`, so its node needs nothing.
-
-**The endpoint is named on both sides and they mean different things**,
-which is worth stating because the two files above both mention it and
-a reader would otherwise have to guess. `api:` in `sim.yml` is where
-bgp4r **binds**, which is bgp4r's business and belongs with the rest of
-its configuration. `api:` in `lab.yml` is where routescope **connects**,
-and it exists only so a lab that moved the port can say so: it is an
-ordinary unknown key, so it lands in `Lab::Node#options` with no change
-to routescope's schema, which is the seam section 4 names. Both default
-to `127.0.0.1:8080`, so an ordinary lab names neither.
-
-Keep the default on the loopback. An API that binds `0.0.0.0` is
-reachable from every other node on the lab segment, which turns an
-injector into something any container can drive and makes a scenario's
-record of what happened incomplete.
-
-**`sim/sim.yml`**, bgp4r's existing node file:
-
-```yaml
-router_id: 10.99.1.10
-as: 65001
-state_file: /tmp/bgp4r-state.json
-
-neighbors:
-  - address: 10.99.1.20
-    as: 65002                  # differs from ours, so eBGP
-    connect: true              # the sim dials, so the lab comes up on its own
-    hold_time: 30
-    capabilities: [as4_byte, route_refresh, {add_path: [3, 1, 1]}]
-    record: routes
-
-# No announce block. An injector starts silent, on purpose: see below.
-```
-
-**The sim dials and does not wait.** `connect: true` is what
-`lab/speaker.rb` reads through `Peer#active?`, and picking it means the
-session comes up without FRR having to find us. Both sides can dial and
-BGP sorts it out, but a lab that depends on which side won is a lab
-whose first step is flaky.
-
-**An injector starts silent, with no `announce:` block, and that is the
-most important line in the file.** Every announcement a scenario asserts
-should be one the scenario caused, so the baseline is a session in
-Established with an empty table. Otherwise the first `expect` passes on
-state the config created and the scenario proves nothing. That is the
-same discipline as `fault_matrix_scenario.rb`'s
-`test_the_rib_answer_was_usable`, which refuses to score verdicts when
-the clean baseline route did not install.
-
-**`frr/frr.conf`**, the independent side:
-
-```
-router bgp 65002
- bgp router-id 10.99.1.20
- neighbor 10.99.1.10 remote-as 65001
- address-family ipv4 unicast
-  neighbor 10.99.1.10 activate
- exit-address-family
-```
-
-So bringing the lab up is: compose or containerlab starts both
-containers, bgp4r dials 10.99.1.20, the session reaches Established,
-routescope's `Nodes#node_status` counts one established session and
-marks both nodes up, and the map draws the adjacency. Nothing has been
-announced yet.
-
-### 9.3 The actions
-
-One frozen table in the driver, the shape `Sim::ACTIONS` already has:
-`action => [path, body keys]`. The body keys are the node file's own,
-which is what keeps this from being a second vocabulary.
-
-| Action | Body | What it does |
-|---|---|---|
-| `announce` | `prefixes`, and any of `med`, `local_pref`, `as_path`, `communities`, `next_hop`, `origin` | one UPDATE, the node file's `announce` block at runtime |
-| `withdraw` | `prefixes` | one UPDATE with those prefixes in Withdrawn Routes |
-| `announce.many` | `start`, `count`, `per_update`, plus the attribute keys | the `generate` block at runtime, through `bgp/misc/route_generator.rb` |
-| `withdraw.many` | `start`, `count`, `per_update` | the same, withdrawn |
-| `attribute` | `prefixes` plus the one key to change | re-announce a prefix with one attribute different |
-| `session.stop` | `peer` | drop the session |
-| `session.start` | `peer`, optional `capabilities` | bring it up, optionally renegotiating |
-| `session.flap` | `peer`, `count`, `interval` | stop and start N times |
-| `refresh` | `peer`, `afi`, `safi`, optional `subtype` | a ROUTE-REFRESH, including RFC 7313's BoRR and EoRR |
-| `notification` | `peer`, `code`, `subcode` | send one and reset |
-| `fault` | `case`, `prefixes` | one `BGP::Fault::CATALOG` case on the wire |
-| `replay` | `hex` | octets verbatim, through `send_message` |
-
-**`attribute` is one action and not six**, because the interesting
-scenario is changing exactly one tie-break input and watching the
-decision move. `attribute` with `med: 50` re-announces at a different
-MED and nothing else differs, which is lab C in section 8 reduced to
-one step.
-
-**`fault` and `replay` are the two that justify the node kind**, and
-they are why the injector is worth building when FRR can already be a
-BGP neighbour. `fault` takes a name from `BGP::Fault::CATALOG`, whose
-entry shape is `[name, description, expected action, subcode, RFC
-section, block]`, so the API can also answer a `GET` listing the 18
-cases with what RFC 7606 says each should cause. No router can be asked
-to send a malformed attribute on command. `replay` takes hex and hands
-it to `send_message`, which takes a String and queues it unchanged, so
-a capture from a real router goes back on the wire byte for byte.
-
-**Nothing in this table validates, per Conventions.** `announce` with
-an out-of-order flow spec rule, a 200-bit RT-constrain prefix or a
-reserved octet set to `0xff` is a request the API fulfils. That is the
-first bullet of bgp4r's Conventions reaching the lab, and an injector
-that refused such a request would be the wrong shape of tool.
-
-**Two actions are deliberately absent.**
-* **Anything about a link.** `link.down` and `netem` belong to
-  routescope's `Links`, which acts on the container's interfaces
-  through a netns sidecar, and a BGP speaker has no business doing it.
-  A scenario mixes `interface:` steps with `bgp:` steps, which is the
-  whole point of having both.
-* **Changing the AS or the router ID.** Both are OPEN fields, so
-  changing one is a different session, which is `session.stop` with a
-  new config. Making it an action would mean an API that rewrites the
-  node file, and a lab whose config no longer describes the node is a
-  lab nobody can read afterwards.
-
-### 9.4 What the driver answers
+### 9.2 What the driver answers
 
 The three contract methods of section 4, plus the injector's own.
 
 ```ruby
 class Bgp4rSim < Drivers::Base
   def default_protocols = %w[bgp]
-  def bgp(c)                       # from GET /api/state
+  def bgp(c)                       # from GET /api/status
   def bgp_peers_table(c)           # its sessions
   def bgp_routes_table(c)          # what it has announced
-  def partial_rib? = true          # see below
-  def act(c, action, params)       # the table above
-  def event_stream(c, since:)      # its events, in ospfd's stream shape
-  def log_command(c, follow:, tail:)
+  def partial_rib? = true          # it holds no Loc-RIB
+  def act(c, action, params)       # docs/daemon.md's action table
 end
 ```
 
-**`bgp_routes_table` answers what the injector has announced, which is
-not what the column header says, and routescope has the shape of an
-answer but not a consumer for it.** `Base#partial_lsdb?`
-(`drivers.rb:68`, true at `:705` for the simulator) says a node holds
-only its own share of a database. So `partial_rib?` is the right
-predicate one protocol over, and it follows a precedent rather than
-inventing a convention.
+**`partial_rib?` is this family's `partial_lsdb?`**, and the precedent is
+narrower than it looks. `Drivers::Base#partial_lsdb?` (`drivers.rb:68`)
+exists so a reader knows the simulator holds only the LSAs it
+originates, and its **only consumer is `Compare`** (`compare.rb:24`),
+which is OSPF only. So adding `partial_rib?` buys nothing until
+something reads it, and the thing that would read it is a BGP compare
+pane, which section 7 marks a modification. Add the method with the
+driver and expect it to be unread for a while.
 
-**Be exact about what reads it, because the first draft of this
-paragraph was wrong.** `partial_lsdb?` is not read by the inspector
-table at all: its only consumer is `Compare`, which uses it to keep a
-partial node out of the set it compares and reports `partial: true` per
-node for `web/src/compare.ts` to label (`compare.rb:24`, `:106`,
-`:109`). And `Compare` is OSPF only, which section 7 lists as a
-modification. So `partial_rib?` arrives with nothing reading it until
-either a BGP compare exists or `tables.ts` grows a label of its own.
-The predicate is still worth adding with the driver, because the
-alternative is a table that silently means something different on one
-node kind; just do not record it as free.
+**What it cannot answer, and the honest shape of saying so.** An
+injector runs no decision process, so it has no best path and no
+`bgp_decision` table. `bgp_routes_table` for it is what it has
+announced, with `best` nil rather than false, because false would claim
+a comparison it never made.
 
-The row shape needs no change: for an originated route `from` is the
-node itself, `paths` is 1 and `best` is true, so every column of
-`bgp_routes` has an honest value.
+**Events are the one dependency it cannot be built without.** A console
+driving an injector with no event stream shows a spinner and a state
+file. The kinds a BGP scenario is about: a session state change, an
+UPDATE sent with its prefix count, a withdrawal, a NOTIFICATION sent or
+received, and a fault case injected with its catalog name. That is item
+6 of section 6.
 
-**Events are where the injector earns its pane.** `Sim#event_stream`
-runs a polling script inside the container that reads
-`/api/events?since=N` and prints each one in ospfd's event-stream
-shape, so routescope's timeline reads one format from every node. A
-bgp4r injector does the same, and the events worth emitting are the
-ones a BGP scenario is about: a session state change, an UPDATE sent
-with its prefix count, a withdrawal, a NOTIFICATION sent or received,
-and a fault case injected with its catalog name. That needs item 6 of
-section 6, the structured event stream, and it is the one item
-`bgp4r-sim` cannot be built without.
-
-### 9.5 The scenario language
+### 9.3 The scenario language
 
 **A `bgp:` step key rather than widening `sim:`**, and that is a
 smaller change rather than a larger one. `ScenarioRunner#do_sim` hard
@@ -862,7 +811,7 @@ No other implementation in a lab can answer that about itself:
 `bgp4r` router kind, not to the injector, which runs no decision
 process.
 
-### 9.6 Three scenarios
+### 9.4 Three scenarios
 
 **Where these files go is routescope's answer, not ours.** A scenario is
 a YAML file under `scenarios/` in the lab folder, kept in the lab's git
@@ -1005,7 +954,7 @@ Note the `netem:` step requires containerlab, for the reason section 6
 item 9 records: `Links#ends` resolves both ends from `lab.links`, which
 a compose lab does not declare.
 
-### 9.7 What this costs routescope
+### 9.5 What this costs routescope
 
 Beyond section 7's table, the injector specifically needs:
 
@@ -1013,7 +962,7 @@ Beyond section 7's table, the injector specifically needs:
 |---|---|---|
 | the `bgp4r-sim` kind | `Lab::KINDS`, `Drivers::BY_KIND` | additive |
 | the driver | `class Bgp4rSim < Base` with `act` | additive |
-| `partial_rib?` | `Drivers::Base` | additive, mirrors `partial_lsdb?`, but see 9.4: nothing reads it yet |
+| `partial_rib?` | `Drivers::Base` | additive, mirrors `partial_lsdb?`, but see 9.2: nothing reads it yet |
 | the `bgp:` step and its actions | `Scenario::ACTIONS`, a new `BGP_ACTIONS` | additive |
 | `do_bgp` | `ScenarioRunner` | additive, a new method |
 | the four conditions | `Scenario::CONDITIONS` | additive |
@@ -1031,23 +980,23 @@ same `driver.act`. Additive if a new route is added; a rename of the
 existing one is a breaking change to a published API and is not worth
 asking for.
 
-### 9.8 Decisions, so they are not re-litigated
+### 9.6 Decisions, so they are not re-litigated
 
 * **One HTTP API on the container's loopback, reached by `docker
   exec`**, not a socket and not a port on the lab network. Section 9.1.
   It is `Drivers::Sim`'s pattern, it needs no addressing, and it stays
   driveable by hand.
-* **The action body keys are the node file's keys.** Section 9.3. The
+* **The action body keys are the node file's keys.** `docs/daemon.md`. The
   injector's vocabulary is bgp4r's own configuration vocabulary at
   runtime, so there is one thing to learn and `lab/README.md` already
   documents it.
-* **An injector starts silent.** Section 9.2. A baseline the config
+* **An injector starts silent.** Section 9.1. A baseline the config
   created is a baseline no assertion can rest on.
 * **The sim dials.** `connect: true`, so the lab comes up without
   depending on which side won the race.
-* **A `bgp:` step key, not a wider `sim:`.** Section 9.5. Two action
+* **A `bgp:` step key, not a wider `sim:`.** Section 9.3. Two action
   vocabularies in one validated list is worse than one more key.
-* **No link actions and no AS or router-ID actions.** Section 9.3.
+* **No link actions and no AS or router-ID actions.** `docs/daemon.md`.
   Links belong to routescope; OPEN fields belong to the config.
 * **`fault` and `replay` are the point.** If the injector ships without
   them it is a worse FRR, and section 2's whole argument is gone.
@@ -1060,15 +1009,15 @@ asking for.
 | 1 | 1, 3, 5(A) | kinds, router driver | A |
 | 2 | 2, 4 | BGP panes | C, D |
 | 3 | 5 | capture modification | B, and a decoder pane for BGP |
-| 4 | 6, 9 | scenario conditions, `do_bgp` | F, H, and section 9.6's scenario A |
-| 5 | 8 | injector driver and its kind | section 9.6's B and C, and E scripted |
+| 4 | 6, 9 | scenario conditions, `do_bgp` | F, H, and section 9.4's scenario A |
+| 5 | 8 | injector driver and its kind | section 9.4's B and C, and E scripted |
 
 **The injector is phase 5 and not phase 1, which is worth saying since
 section 2 calls it the thing that justifies the work.** It needs item 6
 of section 6, the structured event stream, or its pane shows nothing;
 item 8, the action API, which is the largest single piece of new bgp4r
 surface in this document; and item 2, the router kind, because every
-scenario in section 9.6 asserts against something that holds a RIB.
+scenario in section 9.4 asserts against something that holds a RIB.
 Ordering it first would mean a node that can act and a lab that cannot
 say what the action did.
 
@@ -1077,10 +1026,15 @@ under routescope's transport, and it is where every assumption in this
 document gets its first test.
 
 **Part of phase 0 is done.** `lab/topologies/add-path` is a topology
-with a `lab.yml` and a `scenarios/` folder, and the two changes to
+with a `scenarios/` folder, and the two changes to
 `lab/speaker.rb` that the port needed are in: a `path_id` on an announce
-block and the peer's capabilities as data in the state file. Nothing in
-routescope reads either file yet, which is exactly what phase 0 is, and
+block and the peer's capabilities as data in the state file. It carried
+a `lab.yml` too and that file is gone, which is the lab model
+correction in this document's header arriving as a deletion: it was
+written as a routescope manifest from the wrong model, two of its keys
+were invented, and a Compose topology for bgp4r's own tests has no
+reason to carry one when the routescope lab is containerlab. Nothing in
+routescope reads the scenarios yet, which is exactly what phase 0 is, and
 the topology is useful on its own today as three containers with a log
 and a state file. The lesson from doing it is in section 8's porting
 subsection, and the one worth carrying into phase 1 is that what a
@@ -1106,7 +1060,7 @@ while what it wants to **do** is the injector.
   rest. `Links#ends` is the reason and it is measured, not assumed.
 * **No per-family lab.** Section 8. The existing lab tests already
   measure what a console would re-render.
-* **The injector's own seven decisions** are in section 9.8, because
+* **The injector's own decisions** are in section 9.6, because
   they only make sense next to its design. The one that carries the
   most: if it ships without `fault` and `replay` it is a worse FRR.
 
@@ -1164,7 +1118,7 @@ nothing else to assert yet. What becomes assertable, and when:
   fails the unit suite rather than a container log nobody is watching.
   Write that test for every topology this plan adds.
 * **The injector's action table is assertable here the day item 8
-  lands, and it is the best guard in this document.** Section 9.3's
+  lands, and it is the best guard in this document.** `docs/daemon.md`'s
   table is a list of paths and body keys, and the API is bgp4r's own
   code, so a test can read the table out of this document and require
   that every action it names is a route the API serves and every body
@@ -1173,7 +1127,7 @@ nothing else to assert yet. What becomes assertable, and when:
   than listed, and it would catch the thing most likely to go wrong:
   an action added to the API with no row, or a row naming a key
   `lab/README.md` does not document.
-* Section 9.6's scenarios are assertable only once a lab exists to run
+* Section 9.4's scenarios are assertable only once a lab exists to run
   them in, which is phase 5. Until then they are worked examples of the
   language, and a reader should treat the YAML as illustrative: the
   step keys and condition names are proposals to routescope, not an
