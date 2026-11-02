@@ -9,18 +9,22 @@ configuration, their command lines and the JSON they answer with.
 `docs/routescope-labs.md` owns the integration: the drivers, the
 inspector tables, the map and the labs. Neither repeats the other.
 
-**Status: three commands of four built, and `bgp4rd` answers everything
-but `config.*`.** `bgp4r`, the umbrella, has `capture` and `version`, in
-`exe/bgp4r` over `bgp/capture/`, so the Capture section at the end of
-this document is no longer a design. **`bgp4rd` and `bgp4r-cli` exist**,
-in `exe/` over `bgp/daemon/`: the process, the configuration file, the
-control socket, the request envelope, every `show.` method, the event
-stream, and the `peer.` and `route.` methods that change something. The
-only design left in the method table is **`config.*`**, the candidate
-configuration, which is its own piece of work and is **not stubbed**,
-because an unknown method naming the ones that exist reads better than a
-method that answers nothing. `bgp4r-sim` does not exist and is not
-declared in the gemspec, for the same reason.
+**Status: all four commands built, and `config.*` is the only design
+left.** `bgp4r`, the umbrella, has `capture`, `sim`, `routegen` and
+`version`, in `exe/bgp4r` over `bgp/capture/` and `bgp/sim/`, so the
+Capture section at the end of this document is no longer a design.
+**`bgp4rd` and `bgp4r-cli` exist**, in `exe/` over `bgp/daemon/`: the
+process, the configuration file, the control socket, the request
+envelope, every `show.` method, the event stream, and the `peer.` and
+`route.` methods that change something. **`bgp4r-sim` exists too**, in
+`exe/` over `bgp/sim/`, with every read and every action of its HTTP API
+and with routegen folded into it three ways, so everything from the
+`bgp4r-sim, the injector` heading on is built rather than designed.
+
+The only design left in the method table is **`config.*`**, the
+candidate configuration, which is its own piece of work and is **not
+stubbed**, because an unknown method naming the ones that exist reads
+better than a method that answers nothing.
 
 What exists under all of it is the
 library under them, which is most of the work: `bgp/neighbor/` for the
@@ -73,13 +77,13 @@ Four commands, matching ospfv2's `ospfv2`, `ospfd` and `ospf-cli`.
 |---|---|---|
 | `bgp4rd` | the daemon | built, with every API method but `config.*` |
 | `bgp4r-cli` | its client, over the socket | built |
-| `bgp4r` | the umbrella: `sim`, `routegen`, `capture`, `lab new`, `version` | built, with `capture` and `version` |
-| `bgp4r-sim` | an alias for `bgp4r sim`, so a container command reads plainly | a design |
+| `bgp4r` | the umbrella: `sim`, `routegen`, `capture`, `lab new`, `version` | built, with all but `lab new` |
+| `bgp4r-sim` | an alias for `bgp4r sim`, so a container command reads plainly | built |
 
-The gemspec declares `bgp4r`, `bgp4rd` and `bgp4r-cli`. A subcommand or a
-method that does not exist is named in the usage, or in the refusal, as
-not yet implemented, so a person asking for one gets the list rather
-than a backtrace.
+The gemspec declares all four. A subcommand or a method that does not
+exist is named in the usage, or in the refusal, as not yet implemented,
+so a person asking for one gets the list rather than a backtrace; `lab
+new` is the only one left.
 
 ```sh
 # in the VM
@@ -90,9 +94,17 @@ bgp4r-cli -c 'show bgp summary'
 
 ```sh
 # in the VM
-docker build -t bgp4r .
-docker run --rm -v $PWD/sim.yml:/lab/sim.yml bgp4r sim /lab/sim.yml --api 0.0.0.0:8080
+docker build --target speaker -t bgp4r-speaker .
+docker run --rm -v $PWD/sim.yml:/lab/sim.yml bgp4r-speaker \
+  exe/bgp4r-sim /lab/sim.yml --api 0.0.0.0:8080
 ```
+
+The `speaker` stage of the Dockerfile runs any program in the tree, so
+it is the injector and the daemon as well and neither has a stage of its
+own: a stage whose only difference is a default command is a stage that
+can go stale. The Dockerfile says so where that stage is. **No Docker
+daemon was reachable where this was written**, so nothing here has been
+run in a container; the capture stage carries the same caveat.
 
 The gem declares `logger` and nothing else, which is the library's own
 rule. The image adds `tcpdump` and `iproute2`, for `bgp4r capture` and
@@ -838,6 +850,32 @@ same as `total`: see `route.withdraw` above.
 
 # bgp4r-sim, the injector, with routegen
 
+**Built**, in `bgp/sim/` over `exe/bgp4r-sim`, with `bgp4r sim` and
+`bgp4r routegen` on the umbrella. Everything in this part of the
+document describes what runs; where the implementation found this design
+wrong it is corrected in place and says so.
+
+```
+bgp/sim.rb               requires the rest; not loaded by bgp4r.rb
+bgp/sim/sent.rb          what it has sent: the counters and the feeds,
+                         which is BGP::Daemon::Recorder's five keys for
+                         the send side
+bgp/sim/injector.rb      the ten actions, over a BGP::Daemon::Speaker's
+                         sessions
+bgp/sim/views.rb         the five reads; a subclass of
+                         bgp/daemon/views.rb, so `status` and `peers`
+                         are the daemon's own shape and cannot drift
+bgp/sim/http.rb          the HTTP server and the two path tables
+bgp/sim/server.rb        bgp4r-sim itself
+bgp/sim/routegen.rb      bgp4r routegen
+exe/bgp4r-sim
+```
+
+One test file each under `test/unit/sim/`, and
+`test/functional/sim_test.rb` over the real HTTP API and a real session,
+which is the only test that can say an HTTP request reaching the process
+puts the octets another speaker reads.
+
 ## Functions
 
 1. **Bring sessions up**, dialling or waiting, with any capability set,
@@ -856,6 +894,32 @@ same as `total`: see `route.withdraw` above.
    does not define.
 8. **Report** what it has sent, its rate and its sessions.
 
+Three things the building of it added to that list, each because leaving
+it out was a wrong answer rather than a missing one:
+
+* **`session.stop` keeps a session down.** `Neighbor#stop` does not:
+  the active side dials again every `retry` seconds for as long as the
+  speaker runs, so an injector that only stopped would watch the session
+  come back two seconds later having reported that it stopped it. So a
+  Peer has an administrative flag, checked in both directions in, and
+  `session.start` clears it. For a **passive** peer `session.start` is a
+  permission and not a dial, because nothing here can make the other
+  side connect; the answer says which peers that applies to.
+* **What was announced goes again when a session comes back.** A node
+  file's `announce` block gets that for free, since the Speaker replays
+  it on every establishment, and an action did not: without it a
+  `session.flap` loses for good everything a scenario had announced and
+  the scenario reads as a convergence failure. `Speaker#on_established`
+  is the seam. A **generated** feed is not replayed, which is the fire
+  and forget rule: there is no list of its prefixes and rebuilding one
+  would be the Adj-RIB-Out the generator exists to avoid.
+* **A program that sends and then stops has to drain first.**
+  `send_message` queues and `BGP::IO::Output#exit` closes the queue
+  rather than draining it, so `bgp4r routegen` lost the last UPDATE of
+  every range it sent until `Injector#drain` was there: 15 prefixes of
+  20 arrived and the report said 20. `Neighbor#pending` is new and is
+  what a caller waits on.
+
 **It starts silent.** No announcement happens until asked, because a
 baseline the configuration created is a baseline no assertion can rest
 on. A scenario asserts the peer holds nothing, then announces, then
@@ -865,6 +929,24 @@ asserts again.
 any length, any order, any repetition, a Path Identifier on a session
 that negotiated none. The library's first Convention is what makes this
 program possible and the injector must not grow a check.
+`test_nothing_validates` in `test/unit/sim/injector_test.rb` pins five
+specific things no RFC allows, and every one of them goes out.
+
+**What it does refuse is a request it cannot carry out, never one it
+disapproves of.** An unknown body key, a fault name the catalog does not
+have, a prefix that was never announced, an address that is not a
+configured peer, hex that is not an even number of digits, no session to
+send on. Each is a 4xx with a reason, which is the difference between a
+scenario that fails and a scenario that passes having done nothing. An
+unknown key is refused rather than ignored for the reason
+`Speaker#export_options` already refuses one in a node file: a typo that
+silently changes nothing is worse than both an error and a wrong value.
+
+**The one place the injector refuses something it could have done**
+is `path_id` on a `generate` block, and it is a gap and not a rule:
+`Speaker#each_update` hands `RouteGenerator` no Path Identifier, so the
+key would be dropped in silence. Refusing it names the gap. An add-path
+test uses `prefixes`, which does carry one.
 
 ## routegen
 
@@ -888,9 +970,23 @@ POST /api/announce
 
 ```sh
 # in the VM
-bgp4r routegen examples/routegen.yml
+bgp4r routegen examples/sim.yml
 bgp4r routegen --peer 10.0.0.2 --peer-as 65002 --count 200000 --per-update 127
 ```
+
+**The file is a node file and this said `examples/routegen.yml`**, which
+is a different format: that one has `neighbor:` and `routes:` sections
+with loosely matched key names and its own loader in
+`examples/routegen`, which keeps working for whoever has the old file.
+Reading both would mean two loaders for one subcommand, where the whole
+argument for folding routegen in is that there is one vocabulary.
+`examples/sim.yml` is the node file version of it.
+
+**Its `announce` blocks are moved out of the config and sent as
+actions**, which is what makes this the same implementation rather than
+a second one: left in the config the Speaker would send each block by
+itself on establishment, so each would go twice and the report would
+count one of them.
 
 **As a configuration block**, for a lab that wants a feed at start-up,
 which is the one case where the start-silent rule is waived and has to be
@@ -914,8 +1010,19 @@ raises rather than reaching the wire.
 
 What it reports, so a console can show a feed rather than a spinner:
 `prefixes_sent`, `updates_sent`, `started_at`, `finished_at` and
-`prefixes_per_second`. `lab/speaker.rb`'s recorder already computes those
-for the receive side.
+`prefixes_per_second`. `bgp/daemon/speaker.rb`'s Recorder already
+computes those for the receive side, and `bgp/sim/sent.rb` is the send
+side of it: the timestamp format is `Recorder.iso`, which is now a class
+method so there is one of it rather than two copies of a format string.
+
+**`finished_at` is nil while a feed runs and that is what makes a feed a
+feed rather than a spinner**: a reader polling `/api/sent` sees
+`prefixes_sent` climbing with no `finished_at` and no rate, so it cannot
+take a total off something that is still going. A `generate` action
+answers at once with the feed's record and streams on a thread of its
+own, which is also what keeps a 200000 prefix range out of an HTTP
+request; `bgp4r routegen` runs the same action inline, which is the one
+difference between the two.
 
 ## Configuration
 
@@ -936,7 +1043,22 @@ neighbors:
 ```
 
 `api:` is where it binds, and the loopback is the default for the reason
-below.
+below. It is written `HOST:PORT`, or `[IPV6]:PORT`, or a bare `PORT`; an
+IPv6 address needs the brackets because the last colon of `::1:8080` is
+part of the address as readily as it is the separator. `--api` on the
+command line wins over the key.
+
+`examples/sim.yml` is this file with an `announce` block in it, which is
+the waiver above, and the command line is
+`bgp4r-sim FILE [--api HOST:PORT] [--log FILE] [-d] [-v] [-h]`, with
+`-f FILE` accepted too.
+
+**The keys are the Speaker's, which is the node file `lab/README.md`
+documents, plus `api`, and the four that would build a Loc-RIB are
+refused by name.** `rib`, `originate`, `export` and `fib` are
+`bgp4rd`'s: an injector quietly deciding routes would make it a worse
+daemon and void every assertion a scenario makes about what it sent. A
+key no injector reads is refused as well, naming the ones it does.
 
 ## The HTTP API
 
@@ -954,15 +1076,59 @@ address.
 a cross-site form in a browser cannot flap a lab's links, and the same
 reasoning holds for an action that tears a session down.
 
+**The header name is matched case insensitively and that is not
+tidiness.** Measured on 2026-11-02 by reading what `Net::HTTP` puts on a
+socket: it capitalises a header name per word, so the `X-BGP4R` a driver
+writes arrives as **`X-Bgp4r`**. A case sensitive match refuses every
+POST routescope makes, with a 403 and nothing anywhere saying why; 13 of
+the 23 cases in `test/functional/sim_test.rb` fail when the downcasing
+is taken out, which is how that is kept true.
+
+**There is no web framework and no `webrick`.** The library has one
+runtime gem and means to keep it, and `webrick` left the standard
+library: `Gem::Specification.find_by_name('webrick')` raises
+`Gem::MissingSpecError` on the Ruby this was written on, which is the
+check Conventions requires before requiring any standard library. So
+`bgp/sim/http.rb` is HTTP/1.1 over `TCPServer`, which for ten paths on a
+loopback is a few hundred lines. What it does not do is written in that
+file: one connection at a time, no keep-alive, no chunked request body,
+no compression, no TLS, no authentication beyond the header.
+
 Reads:
 
 | Path | Answers |
 |---|---|
 | `GET /api/status` | the same shape `bgp4rd` answers, so one driver reads both |
-| `GET /api/peers` | one row per session |
-| `GET /api/sent` | what it has announced, and the rate |
+| `GET /api/peers` | one row per configured neighbor |
+| `GET /api/sent` | what it has announced, the feeds, and the rate |
 | `GET /api/topology` | what it is configured to be able to send |
-| `GET /api/events?since=N` | its events, Sim's own shape |
+| `GET /api/events?since=N` | its events, in `bgp/events.rb`'s own shape |
+| `GET /` | the paths, so `curl` needs no document |
+
+**`/api/events` answers `Event#to_h` and this document said "Sim's own
+shape"**, which is a correction worth the sentence. ospfv2's simulator
+answers `{seq, time, kind, text}` with a clock time, so `Drivers::Sim`'s
+event script has to invent a level, an interface and an empty data hash,
+and carries a lambda that rebuilds a date from a time of day and
+subtracts a day when the result lands in the future. `bgp/events.rb`
+already carries `seq`, `time`, `level`, `kind`, `peer`, `message` and
+`data` with a full ISO 8601 time, so answering that shape loses nothing,
+invents nothing, and leaves a driver with one rename to do, `peer` to
+its own interface column. Read against routescope at `7eabde1`.
+
+**`summary.rib` is 0 and `announced` is beside it.** routescope's state
+contract is `summary: { established:, peers:, rib: }` and an injector
+holds no Loc-RIB: zero routes in a table it does not have is true, where
+leaving the key out would show a console a blank and putting the
+announced count there would call a list of what it sent a RIB.
+
+**`/api/sent`'s rows are what it announced by name**, in routescope's
+`bgp_routes` shape with `best` nil rather than false, since an injector
+runs no decision process and false would claim a comparison it never
+made. They are paged in the same envelope `show.routes` uses. A
+generated range is **not** rows: it is one `feeds` record with its range
+and its counts, because listing a million prefixes to say what was sent
+is what the streaming generator exists to avoid.
 
 Actions, as `action => [path, body keys]`, which is the table
 `Drivers::Sim::ACTIONS` already is:
@@ -989,10 +1155,42 @@ is one thing to learn, and `lab/README.md` is already its reference.
 **`fault` and `replay` are the point.** An injector that ships without
 them is a worse FRR, and the argument for building any of this is gone.
 
+Three things about those two, found in the building:
+
+* **`fault` injects onto the session it has, where
+  `lab/fault_matrix.rb` gives every case a session of its own**,
+  because for the matrix a case the router answers with a reset leaves
+  nothing to reuse and waiting for the next session is its whole per
+  case cost. An injector is long lived: a case that resets takes that
+  session down, the active side reconnects on its own `retry` timer, and
+  what was announced goes again when it comes back. Nothing waits for
+  any of that, which is why a scenario asserting the session survived
+  reads the session state afterwards, as section 9.4's scenario C does.
+* **One catalog name is one set of octets for both programs.**
+  `BGP::Fault.update` is new in `bgp/fault.rb` and the matrix calls it,
+  so "which attributes does a plain UPDATE need" has one answer; two
+  copies of it is how two programs come to disagree about a case with no
+  way to tell which was right. The move was checked rather than assumed:
+  all 18 cases build byte for byte what the matrix built before it.
+* **`replay` needed no new path.** `Neighbor#send_message` queues a
+  String and `BGP::IO::Output` writes it, measured rather than assumed.
+  The one thing refused is a string that is not an even number of hex
+  digits, because that is not octets at all; the Marker, the Length and
+  the Type are not looked at, which is the point.
+
 A refused action answers 4xx with `{"error": "..."}`, and the exit status
 of the `docker exec` carries it, because `exit(code < 300 ? 0 : 1)` is
 how a driver tells a refusal from a success when all it gets is an exit
-status.
+status. **Two codes, told apart by class and not by wording**: 400 for a
+request the caller can fix and **409 for a session that is not there**,
+which is the commonest thing to meet because the session is still coming
+up. Both are 4xx, so a driver treats them alike, and a person reading the
+body can tell "you asked for something odd" from "it is not up yet".
+
+**`session.flap` answers before it has finished.** Three flaps at five
+seconds is thirty seconds and a POST that blocked for it would sit
+inside a driver's HTTP timeout for no gain, so it runs behind and a
+scenario waits on a condition with `within:`.
 
 # Capture
 

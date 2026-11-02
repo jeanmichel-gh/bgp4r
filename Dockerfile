@@ -58,6 +58,20 @@ USER bgp
 FROM base AS test
 CMD ["ruby", "test/run_unit.rb"]
 
+# The speaker stage runs any program in the tree, so it is also the
+# injector and the daemon: its entrypoint takes a path, which is what a
+# Compose topology passes.
+#
+#   docker run --rm -v $PWD/sim.yml:/lab/sim.yml bgp4r-speaker \
+#     exe/bgp4r-sim /lab/sim.yml --api 0.0.0.0:8080
+#   docker run --rm -v $PWD/bgp4rd.yml:/etc/bgp4r/bgp4rd.yml bgp4r-speaker \
+#     exe/bgp4rd -f /etc/bgp4r/bgp4rd.yml
+#
+# **No stage of its own for either**, deliberately: a stage whose only
+# difference is a default command is a stage that can go stale, and
+# neither program needs a package the base image lacks. The injector's
+# API is reached with `docker exec`, which needs no published port, and
+# that is the recorded reason it binds the loopback.
 FROM base AS speaker
 EXPOSE 179
 ENTRYPOINT ["ruby", "-I/app"]
