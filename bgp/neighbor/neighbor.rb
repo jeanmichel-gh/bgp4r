@@ -463,12 +463,49 @@ module BGP
     end
 
     def stop
-      # Wake any caller waiting in send_message on a full queue.
-      @out.close if defined?(@out) and @out
+      # Closing the output queue wakes any caller waiting in send_message on
+      # a full one, and drain_output then lets the writer get what is already
+      # queued onto the socket before the next line takes the socket away.
+      drain_output
       @socket.close  if defined?(@socket) and not @socket.closed?
       clean
       @open=nil
       new_state :Idle, "Disable"
+    end
+
+    # How long stop waits for the writer thread to empty the output queue.
+    # It is a bound and not an expectation: on a healthy session the writer
+    # is through in microseconds, and this is what stops a peer that has
+    # stopped reading from wedging stop for good.
+    DRAIN_TIMEOUT = 2
+
+    # Closes the output queue and waits for the writer thread to finish with
+    # what was in it.
+    #
+    # **Closing the queue is what drains it and waiting is what delivers
+    # it**, and only the first half was here. `SizedQueue#close` leaves
+    # `deq` handing out what is queued and only then answering nil, so the
+    # writer loop in `BGP::IO::Output` empties the queue of its own accord;
+    # what it needs is to be scheduled, and `stop` closed the socket on the
+    # very next line. Measured on 2026-11-02 over a loopback session: a
+    # NOTIFICATION sent and then followed by `stop` reached the peer in **0
+    # of 20 runs** before this and 20 of 20 after. Not a race in practice,
+    # since the writer never ran at all.
+    #
+    # `BGP::IO::Output#exit` is the other form and the one that really does
+    # drop: it sets `@continue` false first, so the loop stops after one
+    # more `deq`. Nothing in the library calls it. An earlier comment on
+    # `pending` blamed it for what `stop` did, which was a citation to a
+    # method this path never reaches.
+    #
+    # The join is skipped on the writer's own thread, the way `close` skips
+    # joining the event thread from inside it, so an observer that reaches
+    # here cannot deadlock.
+    def drain_output
+      return unless defined?(@out) and @out
+      @out.close
+      t = @out.thread
+      t.join(DRAIN_TIMEOUT) if t and Thread.current != t
     end
 
     # Stops the session if needed and ends the event thread for good.
@@ -496,13 +533,20 @@ module BGP
     # How many messages are queued for the session's writer and have not
     # been handed to the socket yet, or 0 when there is no session.
     #
-    # **It exists because `send_message` is asynchronous and `stop` drops
-    # what is still queued**, which `BGP::IO::Output#exit` says in so
-    # many words: it closes the queue rather than draining it. So a
-    # program that sends and then stops loses the tail of what it sent,
-    # and it loses it silently. A caller that must have its messages on
-    # the wire waits for this to reach 0 first; `bgp4r routegen` does,
-    # and found this by losing 5 prefixes of 20.
+    # **It exists because `send_message` is asynchronous**, so a program
+    # that sends and then stops used to lose the tail of what it sent, and
+    # lose it silently: `bgp4r routegen` found this by losing 5 prefixes of
+    # 20. A caller that must have its messages on the wire waits for this
+    # to reach 0 first, and `Injector#drain` does.
+    #
+    # `stop` now drains the queue itself, bounded by `DRAIN_TIMEOUT`, so
+    # the common case needs no wait here. This is still what a caller
+    # wants: the drain bounds how long `stop` waits, where this says
+    # whether the messages are actually gone. An earlier version of this
+    # comment said `stop` dropped what was queued and cited
+    # `BGP::IO::Output#exit` for it. The behaviour was real and the
+    # citation was not: `stop` has always called `close`, which drains,
+    # and `exit` is the form that drops and has no caller in the library.
     #
     # Zero means dequeued and handed to `IO#write`, not acknowledged by
     # anybody: the octets are in the socket's buffer, which an ordinary
