@@ -305,6 +305,30 @@ module BGP
         @resume = ConditionVariable.new
       end
 
+      # This peer's configuration, swapped for `config`, which is one
+      # neighbor block of a committed candidate. Everything the session
+      # reads comes off `@config`, so this is the whole of what a bounce
+      # has to do before it ends the session: `new_neighbor` then reads
+      # the new `hold_time` and `capabilities`, and `run_active` the new
+      # `connect`, `port` and `retry`.
+      #
+      # **The address cannot change and the Recorder is not rebuilt.** The
+      # address is what names a peer, so a changed one is a neighbor added
+      # and another taken away, which `Candidate::Plan` refuses. The
+      # Recorder is built once here and counts `established_count` and
+      # `flaps` **across** sessions, so those numbers are deliberately
+      # session independent; swapping it on a commit would reset the two
+      # things a bounce is supposed to leave alone, which is why `record`
+      # is a restart-class key rather than a bounce-class one.
+      def reconfigure(config)
+        unless config['address'].to_s == @address
+          raise ArgumentError,
+                "a peer is named by its address: #{@address} cannot become #{config['address']}"
+        end
+        @config = config
+        self
+      end
+
       def remote_as ; @config.fetch('as') ; end
       # What the node file calls this peer, for a console's own column.
       # Nothing in the protocol carries it.
@@ -606,6 +630,11 @@ module BGP
       attr_reader :my_as, :router_id, :local_address, :announcements, :peers, :rib, :router,
                   :events, :started_at
 
+      # The configuration this speaker was built from, which
+      # `BGP::Daemon::Candidate` reads as the running one and `reconfigure`
+      # replaces.
+      attr_reader :config
+
       # The export: keys that go to Rib::Export rather than to Rib::Router.
       EXPORT_POLICY_KEYS = %w[route_reflector clients cluster_id default_local_pref].freeze
       EXPORT_KEYS = (EXPORT_POLICY_KEYS + %w[next_hops mrai]).freeze
@@ -649,6 +678,37 @@ module BGP
       end
 
       def stopping? ; @stopping ; end
+
+      # The configuration this speaker is running, swapped for a
+      # committed candidate. `BGP::Daemon::Candidate` is the only caller
+      # and its own comment has the table of what a commit may change.
+      #
+      # **What it deliberately does not touch is as much of the point as
+      # what it does.** `@my_as`, `@router_id`, `@local_address`,
+      # `@export`, `@fib`, `@rib` and `@peers` are read once, by
+      # `initialize` and by `start`, and three of them have no way back:
+      # `Table#on_change` cannot take a listener off, so neither the
+      # Router nor the FibInstaller can be replaced, and `@peers` is read
+      # from every session thread with no lock. So a change to any of
+      # them is refused by `Candidate::Plan` before this is called, and
+      # this method cannot quietly apply half of one.
+      #
+      # What it does swap is the three a live or bounced session reads
+      # again: the `announce` blocks, which go out on the next
+      # establishment, the `originate` blocks, which the caller has
+      # already turned into table operations, and each neighbor's own
+      # block.
+      def reconfigure(config)
+        @config = config
+        @announcements = Array(config['announce'])
+        @originate = Array(config['originate'])
+        Array(config['neighbors']).each do |c|
+          next unless c.is_a?(Hash)
+          p = peer(c['address'].to_s)
+          p.reconfigure(c) if p
+        end
+        self
+      end
 
       # The configured neighbor with this address, or nil. A peer is
       # named by its address, which is CLAUDE.md's "A peer is identified

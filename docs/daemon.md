@@ -9,22 +9,30 @@ configuration, their command lines and the JSON they answer with.
 `docs/routescope-labs.md` owns the integration: the drivers, the
 inspector tables, the map and the labs. Neither repeats the other.
 
-**Status: all four commands built, and `config.*` is the only design
-left.** `bgp4r`, the umbrella, has `capture`, `sim`, `routegen` and
-`version`, in `exe/bgp4r` over `bgp/capture/` and `bgp/sim/`, so the
-Capture section at the end of this document is no longer a design.
-**`bgp4rd` and `bgp4r-cli` exist**, in `exe/` over `bgp/daemon/`: the
-process, the configuration file, the control socket, the request
-envelope, every `show.` method, the event stream, and the `peer.` and
-`route.` methods that change something. **`bgp4r-sim` exists too**, in
-`exe/` over `bgp/sim/`, with every read and every action of its HTTP API
-and with routegen folded into it three ways, so everything from the
+**Status: all four commands built, and nothing in the method table is a
+design any more.** `bgp4r`, the umbrella, has `capture`, `sim`,
+`routegen` and `version`, in `exe/bgp4r` over `bgp/capture/` and
+`bgp/sim/`, so the Capture section at the end of this document is no
+longer a design. **`bgp4rd` and `bgp4r-cli` exist**, in `exe/` over
+`bgp/daemon/`: the process, the configuration file, the control socket,
+the request envelope, every `show.` method, the event stream, the
+`peer.` and `route.` methods that change something, and **the candidate
+configuration**, in `bgp/daemon/config.rb` and
+`bgp/daemon/candidate.rb`. **`bgp4r-sim` exists too**, in `exe/` over
+`bgp/sim/`, with every read and every action of its HTTP API and with
+routegen folded into it three ways, so everything from the
 `bgp4r-sim, the injector` heading on is built rather than designed.
 
-The only design left in the method table is **`config.*`**, the
-candidate configuration, which is its own piece of work and is **not
-stubbed**, because an unknown method naming the ones that exist reads
-better than a method that answers nothing.
+**`config.*` was the last design and the table named three of its
+methods where a console calls nine.** The nine were read in
+routescope's `Drivers::Ospfd` at commit `7eabde1`, the same commit the
+request envelope and the page envelope below were read at, and they are
+corrected in the method table and written out under "The candidate
+configuration". `config.load` is a tenth that no driver calls and a
+person does.
+
+What is left of `lab new` is the umbrella's one unimplemented
+subcommand.
 
 What exists under all of it is the
 library under them, which is most of the work: `bgp/neighbor/` for the
@@ -75,7 +83,7 @@ Four commands, matching ospfv2's `ospfv2`, `ospfd` and `ospf-cli`.
 
 | Command | What it is | Status |
 |---|---|---|
-| `bgp4rd` | the daemon | built, with every API method but `config.*` |
+| `bgp4rd` | the daemon | built, with every API method |
 | `bgp4r-cli` | its client, over the socket | built |
 | `bgp4r` | the umbrella: `sim`, `routegen`, `capture`, `lab new`, `version` | built, with all but `lab new` |
 | `bgp4r-sim` | an alias for `bgp4r sim`, so a container command reads plainly | built |
@@ -133,7 +141,10 @@ for the FIB, the way ospfv2's does.
 8. **Log and emit events**, so a console has a timeline and a person has
    a reason for every refusal.
 9. **Reload** its configuration without dropping sessions it need not
-   drop.
+   drop. SIGHUP and `config.commit` are the same code path, and the
+   table under "The candidate configuration" says which keys a reload
+   can apply, which it applies by bouncing one session, and which it
+   refuses.
 
 Items 1 to 6 are wiring, not new protocol code. Items 7 to 9 are new.
 
@@ -189,6 +200,15 @@ bgp/daemon/views.rb      what the API answers, as plain data: it merges
 bgp/daemon/control.rb    what it can be told to do: the peer. and route.
                          methods. A file of its own because views.rb says
                          nothing in it validates or decides
+bgp/daemon/config.rb     the configuration as set lines, one per leaf:
+                         the text show.configuration, config.replace,
+                         config.load and config.compare speak. Its
+                         header has the decision and the one it rejected
+bgp/daemon/candidate.rb  the candidate configuration: what a commit can
+                         change live, what it changes by bouncing a
+                         session, and what it refuses. A file of its own
+                         rather than more methods on control.rb because
+                         it holds state and that one does not
 bgp/daemon/log_ring.rb   the last lines logged, so show.log can answer
                          them. Its header has the decision and the three
                          things it rejected
@@ -298,10 +318,9 @@ fallbacks are the recorded requirement that there is no root in the
 ordinary case: `/run` needs root, so an unprivileged standalone run
 works with no arguments beyond the file.
 
-**`SIGHUP` is not a reload.** It logs that reloading is not implemented
-yet and changes nothing, because `config.*` is a later piece of work and
-a signal that silently did nothing would read as a reload that worked.
-`INT` and `TERM` stop.
+**`SIGHUP` is a reload**, through `config.replace` and `config.commit`;
+see the SIGHUP heading under "The candidate configuration" for what it
+can and cannot apply. `INT` and `TERM` stop.
 
 ```
 bgp4r-cli [--socket PATH] [--style NAME] [--pretty] -c 'COMMAND' | METHOD [JSON]
@@ -314,8 +333,15 @@ a person types what they would type at a router:
 # in the VM
 bgp4r-cli -c 'show bgp summary'
 bgp4r-cli -c 'show bgp 10.255.10.0/24'
+bgp4r-cli -c 'show configuration'
+bgp4r-cli -c 'show configuration candidate'
 bgp4r-cli -c 'clear bgp 10.0.10.1'
 ```
+
+`show configuration` asks for the **set lines**, where the method form
+with no `format` answers YAML: a person typing an operator command wants
+the form a driver diffs, one leaf per line, and `bgp4r-cli
+show.configuration` gives them the file.
 
 `clear bgp PEER` is the one operator command that changes something, and
 it is there because the line above is an example a person types. The rest
@@ -471,7 +497,39 @@ capped at the same limit, so a caller can see there is more than it got.
 | `peer.clear`, `peer.stop`, `peer.start` | one session | built |
 | `peer.refresh` | a ROUTE-REFRESH, RFC 2918 and the RFC 7313 subtypes | built |
 | `route.originate`, `route.withdraw` | our own prefixes | built |
-| `config.load`, `config.commit`, `config.compare` | a candidate configuration | a design |
+| `show.configuration` | the running configuration, or the candidate | built |
+| `config.changed` | whether the candidate differs, as a **boolean** | built |
+| `config.compare` | what the candidate changes, as **lines** | built |
+| `config.replace` | the candidate, from lines | built |
+| `config.load` | lines on top of the candidate | built |
+| `config.commit` | check it, or do it | built |
+| `config.discard` | the candidate back to the running one | built |
+| `config.history` | the commits, newest first | built |
+| `config.rollback` | an older configuration as the candidate | built |
+
+**This table said `config.load`, `config.commit` and `config.compare`
+and that was wrong twice over.** It named three methods where
+routescope's Config pane calls **nine**, and one of the three it named,
+`config.load`, is the one the driver never calls. Read in
+`Drivers::Ospfd` at `7eabde1`: `running_config` calls
+`show.configuration` with `format: 'set'`, again with `candidate: true`
+when the candidate differs, and `config.changed`; `load_candidate`
+calls `config.replace`; `candidate` calls `config.compare` and
+`config.commit` with `check: true`; `commit_candidate` calls
+`config.commit` with `comment:`; `discard_candidate` calls
+`config.discard`; `rollbacks` calls `config.history`; and
+`load_rollback` calls `config.rollback`. **A driver needs all nine, not
+the subset the pane's main view uses**: `Config#with_candidate` in
+routescope refuses the whole pane unless the driver answers `candidate?`
+true, and `discard_candidate`, `rollbacks` and `load_rollback` are each
+a route in its `app.rb` and a button in `ConfigPanel.tsx`.
+
+**`config.load` is kept even though no driver calls it**, which is a
+decision rather than an oversight. ospfv2 has it, and it is the method
+that makes the API usable by hand: changing one key through
+`config.replace` means sending the whole configuration back, and this
+document's one principle is that every action a console takes must be a
+command a person can type. `config.load` is that command.
 
 Mutating methods are separate names rather than a flag, so a read-only
 client is a list of methods and not a trust decision. The reads go
@@ -481,10 +539,11 @@ through `bgp/daemon/views.rb` and the writes through
 `show.`, `api.`, `peer.` or `route.` and that the `peer.` and `route.`
 ones are exactly the write side.
 
-**`config.*` is not stubbed.** An unknown method answers an error naming
-the methods that exist, which is the shape `Events#publish` already
-answers an unknown kind with, and is what makes a typo self correcting.
-A method answering nothing reads as a feature that is broken.
+An unknown method answers an error naming the methods that exist, which
+is the shape `Events#publish` already answers an unknown kind with, and
+is what makes a typo self correcting. A method answering nothing reads
+as a feature that is broken, which is why `config.*` was left out of the
+registry entirely while it was a design rather than stubbed.
 
 `api.info` carries `event_seq` beside the stream, and it is still worth
 having: it is the number a reader resumes from, so a console can watch
@@ -642,6 +701,129 @@ Loc-RIB unchanged, because that peer's route then wins.
 what it does take. An ignored body key is a wrong answer and not a
 missing one, which is the rule `Speaker#export_options` already applies
 to a node file: a typo that silently drops the MED is the worst of both.
+
+## The candidate configuration
+
+A second copy of the running configuration that can be edited, compared,
+checked, committed, discarded and rolled back. `bgp/daemon/candidate.rb`
+holds it and `bgp/daemon/config.rb` is the text it speaks.
+
+```sh
+# in the VM
+bgp4r-cli -c 'show configuration'
+bgp4r-cli config.load '{"lines":["set neighbors 10.0.10.1 hold_time 60"]}'
+bgp4r-cli config.compare
+bgp4r-cli config.commit '{"check":true}'
+bgp4r-cli config.commit '{"comment":"hold time"}'
+```
+
+### Set lines, and why not YAML
+
+bgp4rd's configuration is a YAML file and this is a second rendering of
+it, one line per leaf, which is a cost worth stating a reason for.
+Answering YAML text would satisfy the driver, which only normalizes and
+diffs text, and it was rejected on three grounds:
+
+* **A `config.compare` line has to mean something on its own**, because
+  the pane lists those lines as the change list. `set neighbors
+  10.0.10.1 hold_time 60` names its whole leaf path. The YAML diff of
+  the same edit is `- hold_time: 30` and `+ hold_time: 60`, which does
+  not say which neighbor, and a list of those cannot tell two neighbors
+  apart.
+* **`config.replace` takes lines, and YAML's lines are not
+  independent.** A set line carries its own path, so their order does not
+  matter and each is complete. A YAML line means what its indentation
+  and the lines above it make it mean, so a caller that reflowed the file
+  gets a different tree or a parse error.
+* **A commit has to classify what changed**, and that is per leaf path,
+  which the set-line comparison already yields.
+
+The fourth argument is the one a reader expects and it is weaker in
+fact: `Drivers::Ospfd::SECRETS` is
+`/\b(key|simple-password)(\s+)(...)/`, which wants whitespace after the
+key name, so it matches `set ... key hunter2` and does **not** match
+YAML's `key: hunter2`, where the colon is where the `\s+` has to be. A
+driver copying that regexp would leak a YAML secret. **It leaks nothing
+today**, measured rather than assumed: no key of this configuration is a
+secret, so nothing is masked in either rendering.
+
+The grammar, with the four kinds of list a YAML file needs a key for,
+and the two empty tokens, is in `bgp/daemon/config.rb`'s own header.
+`{}` and `[]` are both there, and the second is not symmetry: `clients:
+[]` and no `clients` key mean **opposite** things, measured in
+`bgp/rib/export.rb`, where `Export#clients?` answers true for every
+internal peer given no list and false given an empty one.
+
+### What a commit does to a running speaker
+
+A key is one of three things, and the commit says which rather than
+hoping:
+
+| Effect | Keys | What a commit does |
+|---|---|---|
+| live | `log_level`, `originate`, a neighbor's `description` | applies it, and nothing on the wire stops |
+| bounce | a neighbor's `as`, `hold_time`, `capabilities`, `connect`, `port`, `retry` | ends that session and lets it come back |
+| bounce all | `announce` | ends every session and lets them come back |
+| restart | everything else | **refuses the commit**, naming the key |
+
+**A restart-class change is refused, and that is the honest answer of
+three possible ones.** A commit could apply `router_id`, which it
+cannot; record it in the running configuration and warn, which makes
+`show.configuration` describe a speaker that does not exist; or refuse.
+The second is the one to avoid, because this document's own rule is that
+a commit must not claim to apply a key it ignored, and a running
+configuration that disagrees with the running speaker is that claim in
+the one place a reader goes to check it. So it is refused, in `errors`,
+with the mechanism in the message, and the running configuration goes on
+being true.
+
+**Each group is refused for a measured reason.** The sharpest is
+`export` and `fib`: `Table#on_change` appends to a list of listeners and
+there is **no way to take one off**, read in `bgp/rib/table.rb`, where
+`@listeners` is only ever `<<`'d and `Router#stop` stops the pacer
+thread and leaves its listener registered. So replacing a `Router` live
+would leave the old one advertising beside the new one, with two
+Adj-RIB-Outs disagreeing about what each peer holds: a wrong answer on
+the wire rather than a missing feature. A neighbor added or taken away
+is refused because `@peers` is built in `Speaker#initialize` and read
+from every session thread with no lock, and whether anything listens for
+a passive peer is decided once in `Speaker#start`. A neighbor's `record`
+is refused because its `Recorder` counts `established_count` and `flaps`
+**across** sessions, so a bounce deliberately leaves those alone and
+replacing it would reset them.
+
+**`warnings` is where a bounce is reported**, because a bounce is
+something that happened to the session rather than something that went
+wrong: `"the session with 10.0.10.1 was bounced to pick up hold_time"`.
+A `check` says it in the future tense, so a person sees what a commit
+would cost before paying it, and a passive peer is named as one, since
+`config.commit` can end its session and not bring it back: only the peer
+can dial.
+
+**It refuses a configuration it cannot act on, and nothing else.**
+Nothing here validates what goes on the wire, per Conventions. What
+`config.commit` does refuse, besides a restart-class change, is a
+neighbor a session cannot be built from at all, and that check is **a
+dry run of `Peer#new_neighbor`** rather than a list of rules: the method
+a bounce is about to call is the one that says whether it can be called,
+so a bad capability name comes back with `Neighbor#capability`'s own
+message, which names every name there is. It opens no socket.
+
+### SIGHUP
+
+**SIGHUP is a reload**, and it is `config.replace` followed by
+`config.commit` so that it cannot drift from the methods a console
+calls. A key that needs a restart is refused by the commit, so the
+reason goes in the log and the running configuration stays true; that is
+function 9 above, "reload its configuration without dropping sessions it
+need not drop", and the sessions it need not drop are the ones whose keys
+did not change.
+
+**A reload builds its configuration the same way start-up does**,
+through `Server.with_defaults`. Without that the reloaded file lacks
+`rib: true`, which `with_defaults` adds, so every reload of an ordinary
+file compared as `delete rib` and was refused as restart class. Found by
+the test rather than by reading.
 
 ## The JSON
 
@@ -847,6 +1029,44 @@ route.withdraw  {"withdrawn":["10.255.0.0/24"],"not_held":[],"total":1,"changes"
 
 `changes` is how many Loc-RIB changes it caused, which is not always the
 same as `total`: see `route.withdraw` above.
+
+The configuration methods. `show.configuration` answers **text** and the
+rest answer what their own name says:
+
+```json
+show.configuration  "set router_id 10.255.0.1\nset as 65000\n..."
+config.changed      true
+config.compare      ["set neighbors 10.0.10.1 hold_time 60"]
+config.replace      {"errors":[]}
+config.load         {"errors":[]}
+config.commit       {"ok":true,"errors":[],"warnings":["the session with 10.0.10.1 was bounced to pick up hold_time"],"changes":["set neighbors 10.0.10.1 hold_time 60"]}
+config.discard      {"discarded":true,"changed":false}
+config.history      [{"time":"2026-11-02T03:18:31.004Z","comment":"hold time","changes":1}]
+config.rollback     {"rollback":1,"changed":true}
+```
+
+**Four of those shapes are not bgp4r's to choose**, and a mismatch is a
+wrong answer rather than a missing one. `config.changed` is a **bare
+boolean**, which `Drivers::Ospfd#running_config` uses as one directly.
+`config.compare` is a **bare Array of lines**, which the driver maps over
+to mask. `config.replace` answers a Hash with an `errors` key, which the
+driver reads and treats as success when it is empty. And
+`config.commit`'s four keys are read one by one: `ok` to decide whether
+to raise, `errors` and `changes` through the mask, `warnings` as they
+are.
+
+**`show.configuration` answers YAML unless asked for `set`**, which is
+the other way round from ospfd's curly braces: this configuration **is**
+a YAML file, so the form a person recognises is the one they get with no
+argument, and the driver passes `format: 'set'` already. `candidate:
+true` answers the candidate instead of the running one.
+
+**`config.history` row `i` describes rollback `i`**, which is what
+`Drivers::Ospfd#rollbacks` relies on when it labels each row with its
+own index: rollback 0 is the running configuration, rollback 1 is what
+was running before the newest commit. The oldest kept configuration is
+the file as it was read and has no history row of its own.
+`Candidate::ROLLBACKS` bounds both.
 
 # bgp4r-sim, the injector, with routegen
 

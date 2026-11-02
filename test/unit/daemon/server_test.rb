@@ -176,11 +176,86 @@ class BGP_Daemon_Server_Test < Test::Unit::TestCase
     end
   end
 
-  # SIGHUP is **not** a reload: config.* is a later pull request, and a
-  # signal that silently did nothing would read as a reload that worked.
-  def test_a_hangup_says_a_reload_is_not_implemented
+  # **SIGHUP is a reload now**, which is what the candidate
+  # configuration bought. This guard said it was not, because `config.*`
+  # was a later pull request and a signal that silently did nothing would
+  # read as a reload that worked; it is re-pointed rather than taken out,
+  # at the thing that would make the old warning true again. The reload
+  # itself is tested below over a real file, which is what the text match
+  # could never say.
+  def test_a_hangup_reloads
     src = File.read(File.expand_path('../../../bgp/daemon/server.rb', __dir__))
-    assert_match(/not implemented yet/, src[/def wait_for_a_signal.*?^      end$/m])
+    assert_match(/^\s+reload$/, src[/def wait_for_a_signal.*?^      end$/m])
+  end
+
+  # A reload is `config.replace` and then `config.commit`, which is what
+  # keeps it from drifting from the methods a console calls: the file
+  # becomes the candidate and is committed.
+  def test_a_reload_commits_the_file_as_it_is_now
+    with_a_running_daemon do |server, path|
+      write(path, config_text.sub('hold_time: 30', 'hold_time: 90'))
+      server.reload
+      assert_equal(90, server.speaker.peer('127.0.0.9').config['hold_time'])
+      assert_equal(1, server.candidate.history.size)
+      assert_match(/SIGHUP/, server.candidate.history.first[:comment])
+    end
+  end
+
+  # **A reload that cannot be done changes nothing and says why**, which
+  # is the whole reason a commit refuses a restart-class key rather than
+  # recording it: the running configuration goes on being true.
+  def test_a_reload_of_a_key_that_needs_a_restart_changes_nothing
+    with_a_running_daemon do |server, path|
+      write(path, config_text.sub('router_id: 10.0.0.1', 'router_id: 9.9.9.9'))
+      server.reload
+      assert_equal('10.0.0.1', server.speaker.router_id)
+      assert_equal('10.0.0.1', server.candidate.running['router_id'])
+      assert_equal([], server.candidate.history)
+      assert_equal(false, server.candidate.changed?, 'the candidate was left dirty')
+    end
+  end
+
+  def test_a_reload_of_a_file_that_is_gone_changes_nothing
+    with_a_running_daemon do |server, path|
+      File.unlink(path)
+      server.reload
+      assert_equal(30, server.speaker.peer('127.0.0.9').config['hold_time'])
+      assert_equal([], server.candidate.history)
+    end
+  end
+
+  private
+
+  def config_text
+    <<~YAML
+      as: 65000
+      router_id: 10.0.0.1
+      listen_address: 127.0.0.1
+      port: 17931
+      neighbors:
+        - address: 127.0.0.9
+          as: 65001
+          hold_time: 30
+    YAML
+  end
+
+  def write(path, text)
+    File.open(path, 'w') { |f| f.print text }
+  end
+
+  def with_a_running_daemon
+    require 'tmpdir'
+    dir = Dir.mktmpdir
+    path = File.join(dir, 'bgp4rd.yml')
+    write(path, config_text)
+    server = BGP::Daemon::Server.new(StringIO.new, StringIO.new)
+    opts = { :config => path, :socket => File.join(dir, 'd.sock') }
+    config = BGP::Daemon::Server.with_defaults(server.load_config(opts))
+    assert_not_nil(server.build(config, opts))
+    yield server, path
+  ensure
+    server.stop if server
+    FileUtils.remove_entry(dir) if dir
   end
 
 end

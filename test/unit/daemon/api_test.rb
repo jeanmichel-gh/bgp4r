@@ -69,21 +69,60 @@ class BGP_Daemon_Api_Test < Test::Unit::TestCase
   end
 
   # **Two sided, because the example in it has expired once already.**
-  # `show.adj_in`, `show.adj_out`, `show.fib`, `show.log`, the two event
-  # stream methods, `peer.*` and `route.*` were the later pull request
-  # this named, and they are built, so the first half asserts they
-  # answer. What is still a design is the whole of `config.*`, which is
-  # the candidate configuration and is somebody else's piece of work.
-  def test_the_write_side_answers_and_config_is_still_not_stubbed
+  # **Every method docs/daemon.md's table names now answers**, so there
+  # is no design left in it. This guard asserted the opposite half for
+  # `config.*` until the candidate configuration landed; it is
+  # re-pointed rather than taken out, because what it is for is keeping
+  # the document and the registry in step.
+  #
+  # **The nine a console calls are routescope's and not this
+  # document's**, read in `Drivers::Ospfd` at `7eabde1`, and the table in
+  # docs/daemon.md named three of them. A driver that answers
+  # `candidate?` true needs all nine: `discard_candidate`, `rollbacks`
+  # and `load_rollback` are each a route in routescope's `app.rb`, and
+  # `Config#with_candidate` refuses the whole pane without them.
+  DRIVER_CALLS = %w[show.configuration config.changed config.replace config.compare
+                    config.commit config.discard config.history config.rollback].freeze
+
+  def test_every_method_the_document_names_answers
     %w[show.adj_in show.adj_out show.fib show.log events.subscribe
        events.unsubscribe peer.clear peer.stop peer.start peer.refresh
        route.originate route.withdraw].each do |m|
       assert_include(BGP::Daemon::Api.names, m)
     end
-    %w[config.load config.commit config.compare].each do |m|
-      assert_equal(false, BGP::Daemon::Api.names.include?(m),
-                   "#{m} is a later pull request and must not answer anything yet")
-    end
+    DRIVER_CALLS.each { |m| assert_include(BGP::Daemon::Api.names, m) }
+    # The tenth, which no driver calls and a person does: changing one
+    # key without sending the whole configuration back.
+    assert_include(BGP::Daemon::Api.names, 'config.load')
+  end
+
+  # Each of them answers over `handle` rather than only being registered,
+  # which is the half a name list cannot say.
+  def test_the_config_methods_answer_over_handle
+    assert_equal(false, req('config.changed')[:result])
+    assert_equal([], req('config.compare')[:result])
+    assert_equal([], req('config.history')[:result])
+    assert_match(/^set as 65000$/, req('show.configuration', 'format' => 'set')[:result])
+    assert_equal({ :errors => [] },
+                 req('config.load', 'lines' => ['set log_level warn'])[:result])
+    assert_equal(true, req('config.changed')[:result])
+    assert_equal(['set log_level warn'], req('config.compare')[:result])
+    assert_equal(true, req('config.commit', 'check' => true)[:result][:ok])
+    assert_equal(true, req('config.commit')[:result][:ok])
+    assert_equal(1, req('config.history')[:result].size)
+    assert_equal(0, req('config.rollback')[:result][:rollback])
+    assert_equal(true, req('config.discard')[:result][:discarded])
+  end
+
+  def test_a_config_methods_refusal_is_an_error_line
+    assert_match(/unknown parameter/, req('config.compare', 'format' => 'set')[:error])
+    assert_match(/rollback 9 does not exist/, req('config.rollback', 'number' => 9)[:error])
+    # A text it cannot read is `errors` in the result and not an error
+    # line, because the driver reads `['errors']` and treats an empty
+    # Array as success.
+    r = req('config.replace', 'lines' => ['nonsense'])
+    assert_nil(r[:error])
+    assert_equal(1, r[:result][:errors].size)
   end
 
   # A request with no method at all is a request for a method named "",
@@ -158,14 +197,29 @@ class BGP_Daemon_Api_Test < Test::Unit::TestCase
   # then a list of methods and not a trust decision. So no read method
   # takes a parameter that changes anything, and the test for it is that
   # the write methods are all named `peer.` or `route.`.
+  # **`config.` is the one prefix with a method of each kind in it**, and
+  # that is the candidate configuration's shape rather than a hole in
+  # this rule: `config.compare` and `config.history` ask a question and
+  # `config.commit` changes a router. So the mutating ones are named here
+  # one by one, and what the rule still says is that no **read** takes a
+  # parameter that changes anything.
+  CONFIG_WRITES = %w[config.commit config.discard config.load
+                     config.replace config.rollback].freeze
+
   def test_the_write_side_is_separate_names_and_not_a_flag
     writes = BGP::Daemon::Api::METHODS.keys.select { |m| m.start_with?('peer.', 'route.') }
     assert_equal(%w[peer.clear peer.refresh peer.start peer.stop
                     route.originate route.withdraw].sort, writes.sort)
-    reads = BGP::Daemon::Api::METHODS.keys - writes
+    reads = BGP::Daemon::Api::METHODS.keys - writes - CONFIG_WRITES
     reads.each do |m|
-      assert_equal(true, m.start_with?('show.', 'api.'), m)
+      assert_equal(true, m.start_with?('show.', 'api.', 'config.'), m)
     end
+    # And every `config.` method is on one side or the other, so one
+    # added later cannot be left out of this test by being overlooked.
+    CONFIG_WRITES.each { |m| assert_include(BGP::Daemon::Api::METHODS.keys, m) }
+    assert_equal(%w[config.changed config.compare config.history],
+                 (BGP::Daemon::Api::METHODS.keys.select { |m| m.start_with?('config.') } -
+                  CONFIG_WRITES).sort)
   end
 
   def test_the_write_methods_answer_over_handle

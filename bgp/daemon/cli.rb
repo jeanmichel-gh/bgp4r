@@ -71,6 +71,7 @@ module BGP
       # would have to invent a syntax for, and this file is a string
       # match against a short list and not a parser.
       COMMANDS = ['show bgp summary', 'show bgp', 'show bgp PREFIX',
+                  'show configuration', 'show configuration candidate',
                   'clear bgp PEER'].freeze
 
       STYLES = %w[ios junos iosxr].freeze
@@ -93,6 +94,7 @@ Usage: bgp4r-cli [options] [METHOD [JSON]]
   bgp4r-cli -c 'show bgp summary'      an operator command, as text
   bgp4r-cli -c 'show bgp'              the Loc-RIB, as a router prints it
   bgp4r-cli -c 'show bgp 10.0.0.0/8'   one prefix, in detail
+  bgp4r-cli -c 'show configuration'    its configuration, as set lines
   bgp4r-cli -c 'clear bgp 10.0.10.1'   reset one session
   bgp4r-cli show.peers                 an API method, as JSON
   bgp4r-cli show.rib '{"prefix":"10.0.0.0/8"}'
@@ -214,12 +216,26 @@ TEXT
         when 'show bgp summary' then @out.print summary(client)
         when 'show bgp' then @out.print routes(client, opts[:style], nil)
         when /\Ashow bgp (\S+)\z/ then @out.print routes(client, opts[:style], $1)
+        when 'show configuration' then @out.print configuration(client, false)
+        when 'show configuration candidate' then @out.print configuration(client, true)
         when /\Aclear bgp (\S+)\z/ then @out.print cleared(client, $1)
         else
           @err.puts "bgp4r-cli: #{opts[:command].inspect} is not one of: #{COMMANDS.join(', ')}"
           return 1
         end
         0
+      end
+
+      # `show configuration`, which is the one operator command here
+      # whose text is not in the style of anybody's router: it is
+      # bgp4rd's own configuration, in the set lines
+      # `bgp/daemon/config.rb` defines, so a person can read what a
+      # driver diffs. `show.configuration` with no `format` answers YAML
+      # instead, which is the form the file is in.
+      def configuration(client, candidate)
+        params = { 'format' => 'set' }
+        params['candidate'] = true if candidate
+        client.call('show.configuration', params).to_s
       end
 
       # `show bgp summary`, in the shape of the command every router has.

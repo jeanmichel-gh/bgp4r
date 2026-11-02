@@ -330,9 +330,42 @@ bgp/daemon/              `bgp4rd` the daemon and `bgp4r-cli` its client;
                          form
                          server.rb `bgp4rd` itself: the command line, the
                          YAML file, the Speaker, the log ring, the socket
-                         and the wait. **Every method but `config.*`
-                         answers now**: the candidate configuration is its
-                         own piece of work and is not stubbed
+                         and the wait. **Every method answers now.**
+                         `SIGHUP` is a reload, and it is `config.replace`
+                         then `config.commit` so it cannot drift from the
+                         methods a console calls; it builds its
+                         configuration through `Server.with_defaults`,
+                         because the running one went through that at
+                         start-up and a file read without it compares as
+                         `delete rib`, which is restart class, so every
+                         reload of an ordinary file was refused until a
+                         test caught it
+                         config.rb the configuration as **set lines**, one
+                         per leaf, which is the text `show.configuration`,
+                         `config.replace`, `config.load` and
+                         `config.compare` speak. Its header has the
+                         decision and the one it rejected: YAML text would
+                         satisfy the driver, and a `compare` line has to
+                         mean something on its own, `replace` takes lines
+                         and YAML's are not independent, and a commit
+                         classifies per leaf path. `{}` and `[]` are both
+                         tokens, and the second is not symmetry:
+                         `clients: []` and no `clients` key mean opposite
+                         things in `bgp/rib/export.rb`
+                         candidate.rb the candidate configuration, and the
+                         one file here that holds state rather than
+                         methods over somebody else's, which is why it is
+                         not more methods on control.rb. **A changed key
+                         is live, a bounce, or refused**, and its header
+                         has the table and the mechanism for each refusal:
+                         the sharpest is that `Table#on_change` cannot
+                         take a listener off, so `export` and `fib` cannot
+                         change without a second Router advertising beside
+                         the first. A restart-class change is **refused**
+                         rather than recorded, because a running
+                         configuration that disagrees with the running
+                         speaker is the claim docs/daemon.md says a commit
+                         must not make. See "Known issues to work on"
 bgp/sim/                 `bgp4r-sim` the route injector, and `bgp4r
                          routegen`; require 'bgp/sim', which bgp4r.rb
                          does not, the same arrangement bgp/daemon.rb and
@@ -528,16 +561,26 @@ docs/                    protocol-testing.md: using bgp4r to test a router
                          is reachable with one terminal command. Read it
                          before adding an executable, a socket or HTTP
                          method, a config key or a state dump. **All four
-                         of its commands are built now** and the only
-                         part of it still a design is the candidate
-                         configuration. Its Capture section, its `bgp4rd`
+                         of its commands are built now and nothing in
+                         its method table is a design any more**; `lab
+                         new` on the umbrella is what is left. Its
+                         Capture section, its `bgp4rd`
                          sections and the whole of its `bgp4r-sim` half
                          describe what runs: `bgp4r capture` and `bgp4r
                          version` in exe/bgp4r over bgp/capture/,
                          `bgp4rd` and `bgp4r-cli` in exe/ over
-                         bgp/daemon/ with **every control API method but
-                         `config.*`**, and `bgp4r-sim` in exe/ over
-                         bgp/sim/. It carries the request envelope with
+                         bgp/daemon/ with **every control API method**,
+                         and `bgp4r-sim` in exe/ over
+                         bgp/sim/. Its "The candidate configuration"
+                         section is the last one added, with the set line
+                         decision, the table of what a commit can do, and
+                         **a correction to its own method table**, which
+                         named three `config.` methods where routescope's
+                         Config pane calls nine: the nine are read in
+                         `Drivers::Ospfd` at `7eabde1`, the commit the
+                         request envelope was read at, and one of the
+                         three it did name is the one no driver calls.
+                         It carries the request envelope with
                          the routescope commit it was read at, the page
                          envelope and the event stream's line shapes,
                          none of which it had, a section per control
@@ -907,10 +950,21 @@ a request a test wrote and every one on the client side reads an answer a
 fake wrote. **It is also the only place the event stream is exercised at
 all**, since a stream is many lines and `Api#handle` answers one, and the
 only place a ROUTE-REFRESH from the control socket reaches a session. No
-privilege, no router, no Docker. 1.2 seconds:
+privilege, no router, no Docker. 1.6 seconds:
 ```
 ruby -I. test/functional/daemon_test.rb
 ```
+It is also where the `config.` methods are asserted as a **JSON round
+trip**, which is the half a unit test cannot reach: `config.changed` is
+a bare boolean and `config.compare` a bare Array, and a Symbol or a Hash
+in either place is a wrong answer in a console rather than a missing
+one. And it holds **the only test that can say a bounce bounces
+anything**, `test_a_bounce_really_ends_the_session`, which was written
+because a sabotage that took `admin_stop` and `admin_start` out of the
+commit altogether **passed** everything else: with no session up there
+is nothing for a stop to end, so every other test asserted the new value
+reaching `Peer#config` and the wording of the warning and the two halves
+of the bounce were claimed and never checked.
 **Every read of that stream is bounded by `read_line`, and that is not
 tidiness.** A bare `gets` on a stream that went quiet blocks until the
 connection's `IDLE`, which is fifteen minutes, so the sabotage that
@@ -962,6 +1016,13 @@ ruby -I. exe/bgp4r-cli -s /tmp/d.sock -c 'show bgp' --style junos
 ruby -I. exe/bgp4r-cli -s /tmp/d.sock -c 'clear bgp 10.0.10.1'
 ruby -I. exe/bgp4r-cli -s /tmp/d.sock route.originate '{"prefixes":["10.255.0.0/24"]}'
 ruby -I. exe/bgp4r-cli -s /tmp/d.sock events.subscribe
+ruby -I. exe/bgp4r-cli -s /tmp/d.sock -c 'show configuration'
+ruby -I. exe/bgp4r-cli -s /tmp/d.sock config.load '{"lines":["set neighbors 10.0.10.1 hold_time 60"]}'
+ruby -I. exe/bgp4r-cli -s /tmp/d.sock config.compare
+ruby -I. exe/bgp4r-cli -s /tmp/d.sock config.commit '{"check":true}'
+ruby -I. exe/bgp4r-cli -s /tmp/d.sock config.commit '{"comment":"hold time"}'
+ruby -I. exe/bgp4r-cli -s /tmp/d.sock config.history
+kill -HUP %1    # the same thing from the file: config.replace then config.commit
 ```
 
 The capture command, over a pcap file, which needs no interface and no
@@ -1000,7 +1061,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. The `lab` job is a matrix, one job per group in `test/lab_groups.rb`, so its cost is the slowest group and not the total: it was 12m42s as one serial suite. Each job installs only what its group needs, which is why the matrix entry carries a `gobgp`, `frr`, `docker` or `netns` flag. The `gobgp` groups pin 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-11-02: 2974 tests, 31164 assertions, all passing. Line coverage of `bgp/` from the unit suite: 95.8%.
+Baseline on 2026-11-02: 3036 tests, 31428 assertions, all passing. Line coverage of `bgp/` from the unit suite: 96.1%.
 
 **That coverage figure is 98.5% for the library and the rest is the two
 programs, not a gap anywhere else.** Measured the same run: with
@@ -1113,6 +1174,22 @@ There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Cove
 * Run the full unit suite before opening a PR. All tests must pass.
 * New behavior needs a test. Bug fixes need a test that failed before the fix.
   * **Check that the proof proved something.** Two "this test catches the regression" runs in one session proved nothing: the first patched a marker string that did not match, so the library was unchanged and the test passed for the obvious reason, and the second made a change the constructor was lenient enough to absorb, so the round trip still worked and the test was right to pass. A sabotage run that passes means the sabotage missed, not that the test is weak. Assert on the thing you changed before you believe the result, and prefer breaking the code the way it would really break, which is usually deleting a line rather than mutating a value.
+  * **A test that walks a list of cases has to assert that each case did
+    something.** The shape: build an edited object per case, derive
+    something from it, and assert the derivation round trips. A case
+    whose edit is silently a **no-op** then compares the thing against
+    itself and passes, which is a vacuous pass rather than a weak test,
+    and no sabotage of the code under test can find it because that code
+    never runs. Two of eleven cases in `config_test.rb` were exactly
+    that, and each was hiding a real bug in `Config.unset`: `delete
+    neighbors A capabilities add_path` could not match
+    `{'add_path' => [...]}` through `Array#delete`, and `delete export
+    next_hops 1` could not match a Hash keyed by the **Integer** AFI. The
+    fix is one line per case, `assert_not_equal([], diff, "the edit
+    changed nothing")`, and it is worth writing wherever a case list
+    derives its expectation from its own input. Sabotage the **guard**
+    too, by making one listed edit a no-op, or it is one more claim
+    nothing checks.
   * **Commit before you sabotage, or revert from a copy rather than from git.** A sabotage pass that reverts with `git checkout -- <files>` reverts **nothing** when any of those files is untracked, because git aborts the whole command on an unknown pathspec. So a pull request adding new files is exactly where this bites: eleven sabotages in #218 accumulated into one broken tree, two of them reporting failures that were really earlier sabotages still in place, and unpicking it by hand took four repairs. Check the revert worked before trusting the next run, which is this rule applied to the harness instead of the test.
 * **A claim nothing checks reads as verified, in a document as much as in a comment.** The lesson came twice. Once from the conformance table, measured by hand and never re-run. Once from `docs/to-hash-round-trips.md`, since **retired**, where the tables stayed true across four pull requests because `to_hash_round_trip_test.rb` compares them against the catalog row by row, while the prose beside them drifted into ranking work that two of those pull requests had already finished. The enforced half held and the unenforced half did not, in one file, with nobody noticing. That is what retiring it was for: what a person reads is printed from the catalog now, by `rake to_hash:status`, so there is no unenforced half left to drift. So when a document makes claims a test could make, assert the load-bearing ones: `test/unit/building_objects_test.rb` is what that looks like, and writing it corrected two claims in the document it guards within the hour.
 * **Work out what the code and the tests were built to do before concluding that any of it is wrong.** bgp4r is behind on BGP features and it is not behind on robustness: encoding and decoding have held up for years because the test coverage around them is extensive and deliberate. So a shape that looks odd is far more likely to be a decision whose reason is not written down than a defect, and the burden is on the reader to find the reason first. This was said on 2026-10-29 after two claims in one afternoon that failed the same way.
@@ -6187,7 +6264,7 @@ Decisions taken before this starts, so they are not re-litigated:
   in a convenience form for test code, each with a reason recorded, and
   clearing the list to empty it is not worth a phase.
 
-### routescope labs. Items 1 to 6 and 8 of section 6 are Done, and so is every control API method but `config.*`; items 7 and 9 and the candidate configuration are left, then routescope's own column
+### routescope labs. Items 1 to 6 and 8 of section 6 are Done, and so is every control API method; items 7 and 9 are left, then routescope's own column
 
 **Done so far**: items 1 and 5, the `bgp4r` umbrella executable and
 `bgp4r capture`, which landed together because the capture contract
@@ -6203,13 +6280,34 @@ can point at a bgp4r image, and that modification is routescope's and
 is not blocked by this.
 
 **And `bgp4rd` with `bgp4r-cli` exist now, answering every control API
-method but `config.*`**, in `bgp/daemon/` over `exe/bgp4rd` and
+method**, in `bgp/daemon/` over `exe/bgp4rd` and
 `exe/bgp4r-cli`: the process, the YAML file, the Unix socket, the
-request envelope, nine `show.` methods, the event stream, and the four
-`peer.` and two `route.` methods that change something. So the first
+request envelope, ten `show.` methods, the event stream, the four
+`peer.` and two `route.` methods that change something, and the
+candidate configuration. So the first
 thing a routescope driver needs is there: it can ask a question rather
 than read a snapshot bgp4r chose to write, which is what section 5 says
 a driver should do and what `Frr` and `Bird` both do.
+
+**The candidate configuration was last, and the thing to know about it
+is that the design undercounted it.** `docs/daemon.md`'s method table
+named `config.load`, `config.commit` and `config.compare`. routescope's
+Config pane calls **nine** methods, read in `Drivers::Ospfd` at
+`7eabde1`: `show.configuration` twice over, `config.changed`,
+`config.replace`, `config.compare`, `config.commit` twice over,
+`config.discard`, `config.history` and `config.rollback`. And one of
+the three the table did name, `config.load`, is the one **no driver
+calls**; it is kept and ospfv2 has it too, because changing one key
+through `config.replace` means sending the whole configuration back and
+this document's own principle is that every action a console takes is a
+command a person can type. **A driver needs all nine and not the
+subset the main view uses**: `Config#with_candidate` refuses the whole
+pane unless `candidate?` is true, and `discard_candidate`, `rollbacks`
+and `load_rollback` are each a route in routescope's `app.rb` and a
+button in `ConfigPanel.tsx`. The lesson is the one section 12 of
+`docs/routescope-labs.md` already records: read the **consumer**, and
+when the consumer is another repository read it at a named commit rather
+than designing against what the shape ought to be.
 
 **And item 8 is Done, which is `bgp4r-sim`**, in `bgp/sim/` over
 `exe/bgp4r-sim`: the ten actions, the five reads, the HTTP API on the
@@ -6220,10 +6318,11 @@ the whole integration, and its own section 9.6 says why: `fault` and
 node kinds both have their programs now and **what is left of that
 document's own items is 7 and 9**: the injected logger, and the
 containerlab topologies with the privilege story, which needs a Docker
-daemon. The candidate configuration is left too, and it is not one of
-the nine. Everything else in its phases 1 to 5 is routescope's own
+daemon. Everything else in its phases 1 to 5 is routescope's own
 column: the kinds, the two drivers, the `bgp:` step and the four
-conditions, which its section 9.5 costs out.
+conditions, which its section 9.5 costs out, and now the Config pane as
+well, which needs a bgp4r driver answering `candidate?` true and the
+nine methods behind it.
 
 Nine things the building of the two settled, each in `docs/daemon.md`
 now:
@@ -6764,6 +6863,8 @@ Smaller things:
 * **An explicit `as_path` on an announce gets our own AS prepended on an external session, so the injector cannot send an AS_PATH that does not begin with our AS.** `Speaker#path_attribute` is `path = [@my_as] + path if ebgp`, which is right for a node file saying "this route reached us from 65020" and is the wrong default for a program whose whole job is sending what it was asked for. Measured on 2026-11-02 between a `bgp4r-sim` in AS 65010 and a `bgp4rd` in AS 65000: `POST /api/announce` with `"as_path":[65010,65020]` arrives at the router as `65010 65010 65020`. An AS_PATH whose leftmost AS is not the sender's is a classic eBGP receive check and there is no way to ask for one through `announce`. **`replay` is the escape hatch** and is the honest one, since hex goes out untouched. Not fixed because changing the prepend changes what every existing node file sends, which is the `path_id` entry above exactly; the other shape, a key that means "take my as_path literally", is a new option on a block two programs share. **`GET /api/sent` reports the requested path and not the sent one** for the same reason, `65010 65020` where the wire carries the prepend, so a scenario asserting against the injector and one asserting against the router disagree by one AS.
 * **`test/unit/neighbor/neighbor_test.rb`'s `test_start_stop_start_again` times out in the Docker 3.3 job and nothing here explains why.** The 6 second `Timeout::timeout` around it is the tightest in the suite and it covers two whole loopback sessions, so a slow runner is the obvious reading. What is measured: it failed twice on `docker ruby 3.3` while `docker ruby 3.4` and `docker ruby 4.0` passed the same commit both times, and 8 runs of the single test locally passed. **Do not write down a mechanism for it without one**, which is the trap `docs/flow-spec.md` records as a right answer with an invented reason: the first guess here was that a test file leaving threads behind was stealing time, and that does not hold up, because the threads in question were blocked in `connect` and a blocked connect costs no CPU. The threads were a real defect and are fixed; this is still open.
 * **A test must stop what it starts, and the way to tell is to count `Thread.list` at exit.** `test/unit/sim/server_test.rb` started Servers through a helper that dropped them on the floor, so the unit suite ran to the end with 4 of its threads still dialling: measured on 2026-11-02 by registering an `at_exit` that prints `Thread.list` grouped by `Thread.current['name']`, with and without `test/unit/sim/` in the tree, which gave 5 unnamed threads against 1. It is 1 again now. The library's own threads are named, which is what makes the count readable, so an unnamed one in that list is a test's.
+* **`Table#on_change` has no counterpart, so a `Router` or a `FibInstaller` cannot be detached, and that is what makes `export` and `fib` unchangeable while `bgp4rd` runs.** `@listeners` in `bgp/rib/table.rb` is only ever `<<`'d, at line 96, and `Router#stop` stops the pacer thread and leaves its listener registered. So replacing the Router a committed `export` block built would leave the old one advertising beside the new one, with two Adj-RIB-Outs disagreeing about what each peer holds, which is a wrong answer on the wire rather than a missing feature. Measured by reading rather than by trying it, because the trying is the damage. `BGP::Daemon::Candidate` refuses such a commit and its message is this paragraph in one sentence; `docs/daemon.md`'s "What a commit does to a running speaker" has the table. The fix is `Table#off_change`, or a listener handle `on_change` answers, plus a `Router#detach` that uses it, and it wants a decision about what an in-flight queued `:advertise` means for a Router that has gone: `PeerFeed`'s worker may already hold one. Worth doing: it is what would let `export`, `fib` and `rib` become live or bounce-class keys, which is most of what a reload cannot do today.
+* **`Log.level=` and `Log.level` raise when nothing has created a logger**, where one line above them `Log.level=` returns silently for a level out of range. `bgp/common.rb`: `def Log.level=(level) ; return unless (0..4) === level ; @@logger.level=(level) ; end`, with `@@logger` nil until `Log.create` or `Log.set_filename`. Measured on 2026-11-02: `ruby -I. -e 'require "bgp4r"; Log.level = 0'` raises `NoMethodError: undefined method 'level=' for nil`. Nothing is wrong in a `bgp4rd`, which calls `setup_log` before `build`, so only a Speaker built directly meets it, which is what a unit test has: `Candidate::Plan#apply_log_level` rescues it and says it could not apply the level rather than dying halfway through a commit. The honest fix is the same guard the range check already has, which is one line in a decade-old class and so is its own decision.
 * **`Log.create` reads as "use this logger" and silently keeps the one that is already there**, which is a trap rather than a wrong answer today. It is `@@logger ||= new(s)` in `bgp/common.rb`, so a second caller's IO is dropped and every line keeps going where the first caller sent it. `Log.set_filename` is the forcing form. Measured on 2026-11-02:
   `ruby -I. -e 'require "bgp4r"; f = File.open("/tmp/l1.log", "w"); Log.create(STDERR); Log.create(f); Log.info("to the file?"); f.flush; p File.size("/tmp/l1.log")'`
   prints `0`. Nothing is wrong now, because the two callers in the tree are `Speaker#setup_log`, which runs once in a fresh lab process, and `Server#setup_log`, which uses `set_filename` for exactly this reason and has a test that `--log FILE` really wrote there. Not fixed because renaming or changing `create` touches every caller of a decade-old class and is its own decision: the smallest honest fix is a comment on `create` saying it does not replace, which is a one line change nobody has made.

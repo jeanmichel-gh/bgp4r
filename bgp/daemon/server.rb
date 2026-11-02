@@ -23,6 +23,7 @@
 require 'bgp/daemon/speaker'
 require 'bgp/daemon/views'
 require 'bgp/daemon/log_ring'
+require 'bgp/daemon/candidate'
 require 'bgp/daemon/api'
 require 'bgp/daemon/client'
 
@@ -73,7 +74,7 @@ Usage: bgp4rd -f FILE [options]
 Talk to it with bgp4r-cli. See docs/daemon.md.
 TEXT
 
-      attr_reader :speaker, :api, :views, :log_ring
+      attr_reader :speaker, :api, :views, :log_ring, :candidate
 
       def initialize(out = $stdout, err = $stderr)
         @out = out
@@ -114,8 +115,13 @@ TEXT
       def build(config, opts = {})
         @speaker = Speaker.new(config)
         @views   = Views.new(@speaker, :log => @log_ring)
+        # The candidate is built here rather than left to `Api#candidate`
+        # so that it carries the logger and so that `--config`'s path is
+        # known to the reload: one of it, with one history.
+        @candidate = Candidate.new(@speaker, config, :logger => @logger)
+        @config_path = opts[:config]
         @api     = Api.new(@views, :path => opts[:socket] || Client.default_socket,
-                                   :logger => @logger)
+                                   :logger => @logger, :candidate => @candidate)
         @speaker.start
         @api.start
         log(:info, "bgp4rd #{BGP::VERSION} up, AS #{@speaker.my_as}, " \
@@ -151,6 +157,50 @@ TEXT
       rescue SystemCallError, Psych::SyntaxError => e
         @err.puts "bgp4rd: #{opts[:config]}: #{e.message}"
         nil
+      end
+
+      # SIGHUP **is** a reload now, which is what the candidate
+      # configuration bought: the file becomes the candidate and is
+      # committed, so a reload is the same code path as
+      # `config.replace` followed by `config.commit` and cannot drift
+      # from it.
+      #
+      # **A reload that cannot be done changes nothing and says so.** A
+      # key that needs a restart is refused by the commit, so the lines
+      # go in the log with the reason and the running configuration stays
+      # true; that is the whole of docs/daemon.md's function 9, "reload
+      # its configuration without dropping sessions it need not drop",
+      # and the sessions it need not drop are the ones whose keys did not
+      # change.
+      def reload
+        return log(:warn, 'SIGHUP: there is no configuration file to reload') unless @config_path
+        config = load_config(:config => @config_path) or
+          return log(:warn, 'SIGHUP: the configuration file could not be read; nothing changed')
+        # **`with_defaults` and not the file as it stands**, which is the
+        # one thing this method got wrong first. The running
+        # configuration went through it at start-up, so it carries `rib:
+        # true`; a file that does not say `rib` reads back without it, so
+        # the reload compared as `delete rib`, which is a restart-class
+        # change, and every reload of an ordinary file was refused. A
+        # reload has to build the configuration the same way `start`
+        # does or it is comparing against something that was never read.
+        errors = @candidate.replace(:lines => Config.to_set(Server.with_defaults(config)))[:errors]
+        unless errors.empty?
+          @candidate.discard
+          return log(:warn, "SIGHUP: #{errors.join('; ')}; nothing changed")
+        end
+        r = @candidate.commit(:comment => 'SIGHUP')
+        if r[:ok]
+          log(:info, "SIGHUP: #{r[:changes].size} change(s) committed")
+          r[:warnings].each { |w| log(:warn, "SIGHUP: #{w}") }
+        else
+          @candidate.discard
+          r[:errors].each { |e| log(:warn, "SIGHUP: #{e}") }
+          log(:warn, 'SIGHUP: nothing changed')
+        end
+      rescue Config::Error => e
+        @candidate.discard
+        log(:warn, "SIGHUP: #{e.message}; nothing changed")
       end
 
       private
@@ -221,16 +271,14 @@ TEXT
         @logger.call(level, message) if @logger
       end
 
-      # INT and TERM stop. HUP is **not** a reload: `config.*` is a later
-      # pull request, and a signal that silently did nothing would read
-      # as a reload that worked.
+      # INT and TERM stop. HUP reloads, above.
       def wait_for_a_signal
         signals = Queue.new
         %w[INT TERM HUP].each { |sig| trap(sig) { signals << sig } }
         loop do
           case signals.pop
           when 'HUP'
-            log(:warn, 'SIGHUP: reloading the configuration is not implemented yet; nothing changed')
+            reload
           else
             log(:info, 'bgp4rd stopping')
             stop
