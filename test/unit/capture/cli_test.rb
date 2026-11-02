@@ -111,11 +111,18 @@ class Capture_CLI_Test < Test::Unit::TestCase
   end
 
   def test_the_usage_lists_the_commands_that_do_not_exist_yet
-    # docs/daemon.md names four commands and this ships one. Saying so is
-    # the point: an executable in a released gem that answers nothing is
-    # worse than one that is not there.
+    # Saying so is the point: an executable in a released gem that
+    # answers nothing is worse than one that is not there. **`sim` and
+    # `routegen` were on this line and are built now**, so the guard is
+    # re-pointed at what is left rather than weakened, and the second
+    # half is what makes it a guard: a subcommand that exists must not
+    # still be listed as missing.
     @cli.start([])
-    assert_match(/Not yet implemented: sim, routegen, lab new/, @out.string)
+    assert_match(/Not yet implemented: lab new/, @out.string)
+    BGP::Capture::CLI::SUBCOMMANDS.each do |s|
+      assert_no_match(/Not yet implemented:.*\b#{s}\b/, @out.string,
+                      "#{s} exists and the usage still calls it missing")
+    end
   end
 
   def test_capture_is_reached_through_the_dispatch
@@ -145,8 +152,10 @@ class Capture_CLI_Test < Test::Unit::TestCase
     assert_equal(1, packets(lines).size)
   end
 
-  def test_the_subcommands_are_the_two_that_exist
-    assert_equal(%w{capture version}, BGP::Capture::CLI::SUBCOMMANDS)
+  # Three of docs/daemon.md's four commands reach something here:
+  # `capture`, `sim` and `routegen`, with `version` beside them.
+  def test_the_subcommands_are_the_four_that_exist
+    assert_equal(%w{capture sim routegen version}, BGP::Capture::CLI::SUBCOMMANDS)
   end
 
   # ---- the envelope

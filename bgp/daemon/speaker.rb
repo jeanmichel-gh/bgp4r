@@ -70,6 +70,17 @@ require 'thread'
 module BGP
   module Daemon
 
+    # Raised when something is asked of a peer's session and there is no
+    # session to ask it of.
+    #
+    # It is a class of its own so a control plane can answer a refusal
+    # rather than an internal error: `bgp4r-sim` turns it into a 4xx with
+    # the address in it, which is what tells a scenario that its announce
+    # went nowhere. Without it an announce to a peer that never came up
+    # would answer 200 and send nothing, which is the silent wrong answer
+    # this repository keeps paying for.
+    class NoSession < StandardError ; end
+
     # Records what one neighbor tells us: peer details, received routes and
     # timing. With mode 'count' it keeps counters and timing only, not each
     # route, so a sink can take a large feed.
@@ -239,23 +250,39 @@ module BGP
           'prefixes_per_second' => secs && secs > 0 ? (prefixes / secs).round(1) : nil }
       end
 
+      def iso(t) ; Recorder.iso(t) ; end
+
       # ISO 8601 with milliseconds, in UTC, which is what Time#iso8601(3)
       # answers. strftime and not that method, because iso8601 needs
       # `require 'time'`: Conventions records a standard library becoming
       # a bundled gem twice, once killing a CI job before a test ran, and
       # bgp/events.rb made the same swap for the same reason. The two
       # produce the same String.
-      def iso(t) ; t && t.utc.strftime('%Y-%m-%dT%H:%M:%S.%LZ') ; end
+      #
+      # **It is a class method so the send side can use the one that
+      # already exists.** `bgp/sim/sent.rb` reports `started_at` and
+      # `finished_at` for what it sent, as this reports them for what
+      # arrived, and two copies of a format string is how two timestamps
+      # in one console come to disagree.
+      def self.iso(t) ; t && t.utc.strftime('%Y-%m-%dT%H:%M:%S.%LZ') ; end
     end
 
     # One configured neighbor: its settings, its current session, its record.
     class Peer
+
       attr_reader :address, :recorder, :config
 
       # The BGP::Neighbor running the current session, or nil before the
-      # first one. It is here because `peer.refresh` has to put a message
-      # on this session and nothing else can reach it; a reader also wants
-      # `last_error` and `session_info`, which only a Neighbor answers.
+      # first one.
+      #
+      # **It is read for what it knows about a live session, and written
+      # to only through the methods below.** `peer.refresh` has to put a
+      # message on this session and nothing else can reach it;
+      # `session_info` sizes a message the way the session will encode
+      # it; `socket` gives the address the session runs from; and
+      # `last_error` is a Neighbor's alone. Sending goes through
+      # `send_message`, which is the one place that says what happens
+      # when there is no session.
       attr_reader :neighbor
 
       def initialize(speaker, config)
@@ -264,8 +291,9 @@ module BGP
         @recorder = Recorder.new(config.fetch('record', 'routes'))
         @neighbor = nil
         @busy = Mutex.new
-        # Administratively down, which is `peer.stop` and is a different
-        # thing from a session that dropped: see admin_stop.
+        # Administratively down, which is `peer.stop` and `session.stop`
+        # and is a different thing from a session that dropped: see
+        # admin_stop.
         @shutdown = false
         @admin = Mutex.new
         @resume = ConditionVariable.new
@@ -309,7 +337,7 @@ module BGP
         if shutdown?
           # Administratively down, so there is no session to have. A
           # passive peer cannot be stopped by not dialling, so this is
-          # where `peer.stop` holds for one.
+          # where `peer.stop` and `session.stop` hold for one.
           sock.close
           return
         end
@@ -362,6 +390,11 @@ module BGP
       # one; a peer that has never run gets its thread here, which is
       # what makes `peer.start` work on a node file that said nothing
       # about connecting.
+      #
+      # **For a passive peer this is a permission and not an action**,
+      # because nothing here can make the other side dial. The session
+      # comes back when the peer next tries, on the peer's own timer, so
+      # `session.start` reports which peers it only permitted.
       def admin_start
         @admin.synchronize { @shutdown = false ; @resume.broadcast }
         run_active if active?
@@ -389,6 +422,57 @@ module BGP
         msg = BGP::Route_refresh.new(afi, safi, subtype)
         n.send_message(msg)
         msg
+      end
+
+      # Messages queued for this session's writer and not yet handed to
+      # the socket. See `Neighbor#pending`: a program that sends and
+      # then stops drops them.
+      def pending
+        n = @neighbor
+        n ? n.pending : 0
+      end
+
+      # What the session negotiated, for sizing a message the way the
+      # session will encode it, or nil when there is no session.
+      def session_info
+        n = @neighbor
+        n && n.session_info
+      end
+
+      # The address this session runs from, which is what NEXT_HOP
+      # defaults to (RFC 4271 section 5.1.3). The socket's own address
+      # when there is a session, since that is what `announce` reads, and
+      # the configured one otherwise.
+      def local_ip
+        n = @neighbor
+        sock = n && n.socket
+        return @speaker.local_address if sock.nil? || sock.closed?
+        sock.local_address.ip_address
+      rescue IOError, SystemCallError
+        @speaker.local_address
+      end
+
+      # Sends one message on this peer's session, or raises NoSession.
+      #
+      # **Nothing here looks at what is being sent**, which is
+      # Conventions' first rule and, for `bgp4r-sim`, the product: any
+      # attribute, any length, any order, a Path Identifier on a session
+      # that negotiated none, a NOTIFICATION with a code RFC 4271 does
+      # not define. A String goes to the wire unchanged, which is what
+      # makes replaying a capture possible.
+      def send_message(msg)
+        n = @neighbor
+        raise NoSession, "no established session to #{@address}" unless n && n.is_established?
+        n.send_message(msg)
+      rescue RuntimeError => e
+        # The session went away between the check and the send. The
+        # active side reconnects; the caller gets a refusal rather than
+        # an internal error.
+        #
+        # `RuntimeError` covers both ways `Neighbor#send_message` says
+        # so: `Neighbor::SessionClosed`, which is a RuntimeError, and the
+        # bare `raise txt` it uses when there is no output queue at all.
+        raise NoSession, "session to #{@address} closed while sending: #{e.message}"
       end
 
       private
@@ -430,6 +514,7 @@ module BGP
           if n.is_established?
             @recorder.established!
             announce(n, sock)
+            @speaker.session_established(self)
             n.wait_for_state(:Idle)
           else
             @recorder.error!("session did not reach Established, state #{n.state}#{": #{n.last_error.message}" if n.last_error}")
@@ -545,6 +630,7 @@ module BGP
         @events = BGP::Events.new
         @started_at = Time.now
         @peers = Array(config.fetch('neighbors')).map { |c| Peer.new(self, c) }
+        @on_established = []
         @stopping = false
         @originate = Array(config['originate'])
         @export = config['export']
@@ -558,10 +644,13 @@ module BGP
 
       def stopping? ; @stopping ; end
 
-      # The configured neighbor with this address, or nil. Every control
-      # method that acts on one session goes through it, so a request
-      # naming an address nobody configured is refused by name rather
-      # than acting on whatever was first in the list.
+      # The configured neighbor with this address, or nil. A peer is
+      # named by its address, which is CLAUDE.md's "A peer is identified
+      # by its address", so this is the whole of how a control plane
+      # selects one. Every control method that acts on one session goes
+      # through it, so a request naming an address nobody configured is
+      # refused by name rather than acting on whatever was first in the
+      # list.
       def peer(address) ; @peers.find { |p| p.address == address.to_s } ; end
 
       # The one the caller named, or an ArgumentError listing the ones
@@ -572,6 +661,43 @@ module BGP
           raise ArgumentError,
                 "no neighbor #{address.inspect} is configured; this bgp4rd has " \
                 "#{@peers.empty? ? 'none' : @peers.collect(&:address).join(', ')}"
+      end
+
+      # The peers with a session up, which is who an action with no
+      # `peer` key reaches.
+      def established_peers
+        @peers.select(&:established?)
+      end
+
+      # Runs block with the Peer every time one of its sessions reaches
+      # Established, after the `announce` blocks of the node file have
+      # gone out.
+      #
+      # **What it is for is anything a control plane announced**, which a
+      # node file's `announce` block gets for free: `Peer#announce`
+      # replays `announcements` on every establishment, so a session that
+      # flapped comes back with the configured routes and without the
+      # ones an API asked for. `bgp4r-sim` listens here and sends those
+      # again; `bgp4rd` does not need it, because `Rib::Router` sends the
+      # whole Loc-RIB on Established already.
+      #
+      # The block runs on the session's own thread, as `announce` does,
+      # and an exception from it is logged rather than raised: that is
+      # `Neighbor#on_state_change`'s rule and the reason is the same, a
+      # listener must not be able to kill the session it is listening to.
+      def on_established(&block)
+        @on_established << block
+        self
+      end
+
+      def session_established(peer)
+        @on_established.each do |block|
+          begin
+            block.call(peer)
+          rescue StandardError => e
+            Log.error "bgp4r: on_established for #{peer.address}: #{e.class}: #{e.message}"
+          end
+        end
       end
 
       # True when the node file asks for a table at all. rib: on its own

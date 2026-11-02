@@ -152,19 +152,28 @@ class BGP_Daemon_Server_Test < Test::Unit::TestCase
   # neither git nor a .git, so `Gem::Specification.load` answers nil and
   # the next line raises. It failed the three `docker ruby` CI jobs and
   # passed every runner job and every local run.
-  def test_the_gemspec_declares_both_commands
+  # **All four of docs/daemon.md's commands are declared now.** This
+  # guard asserted that `bgp4r-sim` was **not**, which was true while it
+  # did not exist and is the fourth forward-looking guard in this
+  # repository to fire and be re-pointed rather than weakened: the
+  # assertion is the same, the truth it measures moved.
+  def test_the_gemspec_declares_every_command_that_exists
     root = File.expand_path('../../..', __dir__)
     src = File.read(File.join(root, 'bgp4r.gemspec'))
     line = src[/^\s*s\.executables\s*=.*$/]
     assert_not_nil(line, 's.executables must still be there')
-    %w[bgp4r bgp4rd bgp4r-cli].each do |cmd|
+    %w[bgp4r bgp4rd bgp4r-cli bgp4r-sim].each do |cmd|
       assert_match(/"#{Regexp.escape(cmd)}"/, line)
       path = File.join(root, 'exe', cmd)
       assert_equal(true, File.exist?(path), "exe/#{cmd} must exist")
       assert_equal(true, File.executable?(path), "exe/#{cmd} must be executable")
     end
-    assert_no_match(/"bgp4r-sim"/, line,
-                    'bgp4r-sim is a later piece of work and must not be declared')
+    # And nothing is declared that is not there, which is the half that
+    # keeps a released gem from shipping a command that answers nothing.
+    line.scan(/"([^"]+)"/).flatten.each do |cmd|
+      assert_equal(true, File.exist?(File.join(root, 'exe', cmd)),
+                   "the gemspec declares #{cmd} and exe/#{cmd} is not there")
+    end
   end
 
   # SIGHUP is **not** a reload: config.* is a later pull request, and a

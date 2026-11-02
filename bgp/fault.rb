@@ -168,6 +168,47 @@ module BGP
         entry[5].call
       end
 
+      # The catalog names, which is what a control plane lists and what
+      # a caller of build or update may pass.
+      def names
+        CATALOG.collect(&:first)
+      end
+
+      # One catalog case as a whole UPDATE, with the attributes a plain
+      # UPDATE needs added unless the fault is one of them.
+      #
+      #   Fault.update(:origin_length, :my_as => 65001,
+      #                :next_hop => '10.0.0.1',
+      #                :prefixes => ['203.0.113.0/24'])
+      #
+      # **Two programs want exactly this and it is here so that there is
+      # one answer.** lab/fault_matrix.rb sends every case to a router on
+      # a session of its own, and `bgp4r-sim` injects one case on a
+      # session that is already up. Two copies of "which attributes does
+      # a plain UPDATE need" is how two programs come to put different
+      # octets on the wire for one catalog name, which would make the
+      # matrix's verdicts and a scenario's disagree with no way to tell
+      # which was right.
+      #
+      # Nothing here validates, per Conventions: the whole point is an
+      # UPDATE no RFC allows. `my_as` left out gives an empty AS_PATH and
+      # `next_hop` left out gives an UPDATE with no NEXT_HOP, both of
+      # which are tests somebody will want; `prefixes` left out gives an
+      # UPDATE with no NLRI, which is how a case that carries its own
+      # NLRI inside MP_REACH_NLRI is sent on its own.
+      def update(name, arg = {})
+        built = build(name)
+        pa = built.is_a?(Path_attribute) ? built : Path_attribute.new(built)
+        have = pa.attributes.collect { |a| a.type }
+        pa.append Origin.new(0)                    unless have.include?(ATTR::ORIGIN)
+        pa.append As_path.new(*Array(arg[:my_as])) unless have.include?(ATTR::AS_PATH)
+        unless have.include?(ATTR::NEXT_HOP) || arg[:next_hop].nil?
+          pa.append Next_hop.new(arg[:next_hop])
+        end
+        prefixes = Array(arg[:prefixes])
+        prefixes.empty? ? Update.new(pa) : Update.new(pa, Nlri.new(*prefixes))
+      end
+
     end
   end
 

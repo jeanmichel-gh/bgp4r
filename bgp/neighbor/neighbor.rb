@@ -487,6 +487,24 @@ module BGP
       @out.thread
     end
 
+    # How many messages are queued for the session's writer and have not
+    # been handed to the socket yet, or 0 when there is no session.
+    #
+    # **It exists because `send_message` is asynchronous and `stop` drops
+    # what is still queued**, which `BGP::IO::Output#exit` says in so
+    # many words: it closes the queue rather than draining it. So a
+    # program that sends and then stops loses the tail of what it sent,
+    # and it loses it silently. A caller that must have its messages on
+    # the wire waits for this to reach 0 first; `bgp4r routegen` does,
+    # and found this by losing 5 prefixes of 20.
+    #
+    # Zero means dequeued and handed to `IO#write`, not acknowledged by
+    # anybody: the octets are in the socket's buffer, which an ordinary
+    # close still delivers.
+    def pending
+      defined?(@out) && @out ? @out.size : 0
+    end
+
     attr_reader :as4byte, :session_info, :socket
     
     def as4byte?
