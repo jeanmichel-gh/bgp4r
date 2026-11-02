@@ -272,19 +272,19 @@ module BGP
 
       attr_reader :address, :recorder, :config
 
-      # The BGP::Neighbor running the current session, or nil before the
-      # first one.
-      #
-      # **It is read for what it knows about a live session, and written
-      # to only through the methods below.** `peer.refresh` has to put a
-      # message on this session and nothing else can reach it;
-      # `session_info` sizes a message the way the session will encode
-      # it; `socket` gives the address the session runs from; and
-      # `last_error` is a Neighbor's alone. Sending goes through
-      # `send_message`, which is the one place that says what happens
-      # when there is no session.
-      attr_reader :neighbor
-
+      # **There is deliberately no reader for the session's Neighbor.**
+      # What a caller outside wants of a live session is `send_message`,
+      # `session_info`, `local_ip`, `pending`, `refresh` and
+      # `established?`, and each of those is a method here that says what
+      # it answers when there is no session. A reader was written first
+      # and nothing called it, which is the shape #223 found as a
+      # constant nothing read; handing the Neighbor out would also hand
+      # out `start` and `stop`, where the administrative pair below is
+      # how a session is driven from outside. Measured again when the
+      # control API's write side landed: `refresh` puts a ROUTE-REFRESH
+      # on the session from inside this class, and the `last_error` a
+      # peer row carries comes from the recorder rather than from a
+      # Neighbor, so nothing outside reads one.
       def initialize(speaker, config)
         @speaker, @config = speaker, config
         @address = config.fetch('address')

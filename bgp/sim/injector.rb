@@ -349,11 +349,16 @@ module BGP
       # Changes an attribute of something already announced, so a
       # scenario can move one input and watch a router re-decide.
       #
-      # **It re-announces, because that is what BGP does**: an UPDATE
-      # for a prefix the peer already has replaces it (RFC 4271 section
-      # 3.1), so there is no separate operation to perform. What makes it
-      # an action of its own is the lookup: the prefix keeps the
-      # attributes it was announced with and only the named keys change.
+      # **It re-announces, because that is what the protocol says this
+      # is.** RFC 4271 section 3.1, read on 2026-11-02 rather than
+      # recalled: "Changing the attribute(s) of a route is accomplished
+      # by advertising a replacement route", and "The replacement route
+      # carries new (changed) attributes and has the same address prefix
+      # as the original route." So there is no separate operation to
+      # perform and this action is named after the section's own
+      # sentence. What makes it an action rather than an announce is the
+      # lookup: the prefix keeps the attributes it was announced with
+      # and only the named keys change.
       #
       # A prefix with no history is refused rather than announced from
       # nothing, since a scenario asking to change an attribute of a
