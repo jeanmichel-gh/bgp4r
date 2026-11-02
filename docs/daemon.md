@@ -307,20 +307,49 @@ any router's output:
 `eliminated` a path to step map, so this is a serialisation and not a new
 computation. `reason` is words for a person.
 
-`lost_at` is one of fourteen values the decision process already uses,
-measured on 2026-11-01 rather than written from memory. Ten tie-break
-steps, in `Decision::STEPS` order:
+**The two paragraphs above are what `bgp/rib/view.rb` is built to, and
+it departs from them in two places**, both measured against the library
+in #230 and both corrected here rather than worked around.
+
+The example gives the **best** path `"reason": "med"`, the step symbol,
+where the prose says `reason` is words for a person. The view makes every
+`reason` words and puts the step in `decided_by` on the prefix row, which
+is where `Decision::Result` keeps it: one step per prefix rather than one
+hidden in whichever path won. So a daemon answering `show.rib` from the
+view answers `decided_by` beside `paths`, and the keys inside a path are
+these.
+
+And `show.status`'s peer row is mostly a **session** fact. A Table knows
+a peer's address, remote AS, router ID and Adj-RIB-In size and nothing of
+its state, uptime, flap count, last error or negotiated capabilities, so
+the view answers the four it has, under these key names, and adds `type`,
+`best` and, in router mode, `sent`. The daemon merges the session half
+onto that. Same for `uptime` and `summary.established`, which are the
+daemon's own.
+
+`lost_at` is one of **fifteen** values the decision process already uses,
+measured on 2026-11-01 rather than written from memory, and this said
+fourteen until the fifteenth was measured in #230. Ten tie-break steps,
+in `Decision::STEPS` order:
 
 ```
 local_pref  as_path_length  origin  med  ebgp_over_ibgp  igp_cost
 router_id  cluster_list_length  peer_address  path_id
 ```
 
-And four that drop a path before any comparison, `Decision::INELIGIBLE`:
+Four that drop a path before any comparison, `Decision::INELIGIBLE`:
 
 ```
 next_hop_unreachable  as_loop  originator_id_loop  cluster_list_loop
 ```
+
+And `duplicate`, the fifteenth, which `Decision#best` files when only
+identical routes are left after every step. **No Table can produce it**,
+because an imported route is keyed by its peer and its Path Identifier
+and a `Peer` is its address, so two candidates always differ at
+`peer_address` or at `path_id`; `Decision#best` is public and pure, so a
+caller can. A reader of this list wants it anyway, since the daemon will
+answer it the day something else feeds the decision process.
 
 Two things in that list are worth a reader's attention. `igp_cost` is
 always 0 here unless a resolver is given, because the daemon has no IGP.

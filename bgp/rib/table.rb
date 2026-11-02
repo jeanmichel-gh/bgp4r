@@ -25,6 +25,7 @@ require 'bgp/rib/loc_rib'
 require 'bgp/rib/peer_feed'
 require 'bgp/rib/router'
 require 'bgp/rib/show'
+require 'bgp/rib/view'
 
 module BGP
   module Rib
@@ -234,6 +235,15 @@ module BGP
       def show(style = :ios, prefix = nil)
         Show.new(self, :style => style).to_s(prefix)
       end
+
+      # The same state as plain data, ready for JSON, with no formatting.
+      # See View: this is what a console or a driver reads, where show is
+      # for a person.
+      #
+      #   rib.view.routes               # one row per prefix, its best path
+      #   rib.view.rib('10.0.0.0/8')    # every path to it, and why each lost
+      #   rib.view.json(:status)        # as JSON text
+      def view ; sync { @view ||= View.new(self) } ; end
 
       # Every prefix we originated, as the Loc-RIB knows them.
       def originated

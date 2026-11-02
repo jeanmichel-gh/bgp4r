@@ -270,7 +270,10 @@ test. ospfv2 separates the two in one file, `lib/ospfv2/daemon/views.rb`,
 "operational state as plain data, ready for JSON", with formatting
 elsewhere; one shape there serves its Junos output, its IOS output and
 its JSON. bgp4r wants the same split, and getting it buys the vendor
-style phase recorded in CLAUDE.md as well.
+style phase recorded in CLAUDE.md as well. **It has it as of #230**,
+`bgp/rib/view.rb`, and `rib/show.rb` reads its prefixes and paths rather
+than keeping a second copy, so what a driver reads and what those three
+styles print cannot disagree. Section 6 items 3 and 4 have the detail.
 
 ## 6. What bgp4r must build, in dependency order
 
@@ -296,18 +299,51 @@ unblocks, so the order is not arbitrary.
    anything at all, since that row wants a best path, a `paths` count
    and a `best` flag, which only a Loc-RIB has, and unblocks labs B, C,
    F and H in section 8.
-3. **A view layer: state as plain data.** Section 5. Feeds the state
-   file, the CLI and later the socket from one shape.
-4. **A JSON dump of the RIB.** Already a recorded decision in CLAUDE.md
-   that was never implemented: "Dump the RIB to JSON, as the lab speaker
-   dumps its state, so a test and a person can both see why a route
-   won." Measured on 2026-11-01: there is no JSON anywhere in
-   `bgp/rib/`. The decision process already returns the winner, the
-   step that decided it and why each other route lost, so the data
-   exists and only the serialisation is missing. This is the single
-   highest-value item for a console, because "why did this route win"
-   is the question a RIB pane exists to answer and no other
-   implementation in the lab can answer it about itself.
+3. **A view layer: state as plain data. Done**, in #230. Section 5.
+   `bgp/rib/view.rb`, reached as `rib.view`, answers Hashes and Arrays
+   with Symbol keys and no formatting, so one shape feeds the state
+   file, the CLI and later the socket. `bgp/rib/show.rb` reads its
+   `prefixes`, `paths` and `usable?` rather than keeping a second copy,
+   so a console and the three vendor styles cannot disagree about which
+   path lost where; those three answer Route objects and are the shared
+   basis, not part of the JSON surface. No vendor output changed, which
+   is what the column tests in `show_test.rb` are there to say.
+4. **A JSON dump of the RIB. Done**, in #230, on top of item 3.
+   `rib.view.json(:rib)`, with `:status` and `:routes` beside it, and
+   `require 'json'` inside the method rather than at the top of the
+   file so a Ruby where it is a bundled gem cannot kill the require of
+   the whole library. It was a recorded decision in CLAUDE.md that was
+   never implemented: "Dump the RIB to JSON, as the lab speaker dumps
+   its state, so a test and a person can both see why a route won."
+   The decision process already returned the winner, the step that
+   decided it and why each other route lost, so this is a
+   serialisation of `Decision::Result` and not a second decision. That
+   is the single highest-value item for a console, because "why did
+   this route win" is the question a RIB pane exists to answer and no
+   other implementation in the lab can answer it about itself.
+   * **Three corrections to `docs/daemon.md`'s shapes, measured
+     against the library rather than argued.** `lost_at` has fifteen
+     values and not fourteen: `Decision#best` also files
+     `:duplicate` when only identical routes are left, which no Table
+     can reach, because an imported route is keyed by its peer and
+     Path Identifier and a Peer is its address, so two candidates
+     always differ at `:peer_address` or `:path_id`. A peer row's
+     `state`, `uptime`, `flaps`, `last_error` and `capabilities` are
+     session facts a Table has none of, so the view answers the four
+     keys it can and the daemon merges the rest onto them. And the
+     design's example gives the best path's `reason` the step symbol
+     where its own prose says `reason` is words for a person, so the
+     step is `decided_by` on the prefix row, which is where
+     `Decision::Result` keeps it.
+   * **What it leaves out, with the reason.** A prefix whose every
+     path is ineligible is in neither view, because the Loc-RIB is
+     what both walk and it holds only prefixes that have a best route;
+     `rib.show` has the same blind spot from the same line, and
+     closing it means deciding over `Table#candidates` again, which is
+     the one thing this layer is not. The `show.adj_in`, `show.adj_out`
+     and `show.fib` shapes are not here either: each is another
+     object's state, an Adj-RIB-In, a Router's Adj-RIB-Outs or a Fib,
+     and each is its own small piece of work against the same rule.
 5. **`bgp4r capture -i IFACE`.** Section 4 gives the exact contract. A
    BGP dissector differs from OSPF's in three ways and no more: the
    filter is `tcp port 179`, messages are a stream rather than one per
@@ -1099,8 +1135,11 @@ The port also corrected a claim in CLAUDE.md, which is the second
 instance of this document's own lesson: the note about the code was
 wrong and one measurement settled it.
 
-**Sections 6 to 10 describe work that does not exist**, so there is
-nothing else to assert yet. What becomes assertable, and when:
+**Most of sections 6 to 10 describe work that does not exist**, so
+there is little else to assert yet. Items 3 and 4 of section 6 are the
+exception as of #230, and what they are held to is the bullet below
+rather than anything about routescope. What becomes assertable, and
+when:
 
 * The moment item 1 lands, `exe/bgp4r capture -i IFACE` can be tested
   against the format in section 4 by a test in this repository, since
@@ -1109,7 +1148,16 @@ nothing else to assert yet. What becomes assertable, and when:
   two row shapes in section 4, field by field, by a test here. That is
   the one guard worth writing early, because a driver in another
   repository will depend on it and nothing else will tell us we broke
-  it.
+  it. **Done**, in #230: three tests in
+  `test/unit/rib/view_test.rb` read the two row shapes and the state
+  method shape out of section 4 of this document and hold
+  `bgp/rib/view.rb` to them. The `bgp_routes` row is answered in full.
+  Four of `bgp_peers`' seven columns are answered and the three that are
+  not are named, `state`, `description` and `uptime`, which a Neighbor
+  has and a Table does not; `summary.established` is the fourth of the
+  same kind. So a column added here, or a key dropped there, fails the
+  suite, and what is missing is missing on the record rather than by
+  omission.
 * Lab A's existence is assertable the way `test/lab_groups.rb` asserts
   the others: a lab folder present, in a CI group, with a test. The
   add-path lab is that guard working already, and it went further than

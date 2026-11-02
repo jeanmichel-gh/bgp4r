@@ -198,6 +198,13 @@ bgp/rib/                 routes and the decision process (RFC 4271 section 9); r
                          prefixes into UPDATEs, mrai.rb paces them per destination,
                          router.rb joins them and sends; rib.advertise; show.rb prints
                          the Loc-RIB the way a router would, rib.show;
+                         view.rb answers the same state as plain data, ready
+                         for JSON, rib.view, with show.rb reading its
+                         prefixes, paths and usable? so the two cannot
+                         disagree about which path lost where; the rib view
+                         is the one answer no other implementation in a lab
+                         can give about itself, so see
+                         docs/routescope-labs.md section 6 item 4;
                          fib.rb plans what a forwarding table needs, ip_route.rb
                          builds and runs the iproute2 command and fib_installer.rb
                          joins them on the worker thread; rib.install;
@@ -627,7 +634,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. The `lab` job is a matrix, one job per group in `test/lab_groups.rb`, so its cost is the slowest group and not the total: it was 12m42s as one serial suite. Each job installs only what its group needs, which is why the matrix entry carries a `gobgp`, `frr`, `docker` or `netns` flag. The `gobgp` groups pin 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-11-01: 2412 tests, 28779 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.5%.
+Baseline on 2026-11-01: 2456 tests, 29047 assertions, all passing. Line coverage of `bgp/` from the unit suite: 98.5%.
 
 There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Coverage`: start it, register the report with `at_exit` before requiring any test file so it runs after the suite, then require `test/unit/**/*_test.rb`.
 
@@ -1610,7 +1617,13 @@ Decisions already taken that constrain the later phases:
   sets keyed by their encoded bytes rather than one object per route. Measure
   with `routegen`, do not guess.
 * Dump the RIB to JSON, as the lab speaker dumps its state, so a test and a
-  person can both see why a route won.
+  person can both see why a route won. **Done**, in #230, and it is a view
+  layer rather than a `to_json`: `bgp/rib/view.rb` answers the state as
+  plain data and the JSON is a thin layer on top, so one shape serves a
+  console, a driver and a test. `rib.view.rib` is the one that answers why,
+  carrying `lost_at` and a reason in words per path; see
+  docs/routescope-labs.md section 6 items 3 and 4 for what it is for and
+  docs/daemon.md's `## The JSON` for the shapes it is built to.
 
 ### Deliberately not in phase 0
 
@@ -5773,7 +5786,7 @@ Decisions taken before this starts, so they are not re-litigated:
   in a convenience form for test code, each with a reason recorded, and
   clearing the list to empty it is not worth a phase.
 
-### routescope labs, a phase with no pull request yet
+### routescope labs, items 3 and 4 done, the rest with no pull request yet
 
 **Two documents, and the split matters.** `docs/daemon.md` designs the
 two programs, `bgp4rd` and `bgp4r sim`, and says nothing about
@@ -5814,11 +5827,38 @@ The short version, so the direction is visible here:
   unblocks the best path, transit, route reflection, convergence and
   forwarding labs at once.
 * **The highest-value item for a console is a JSON dump of the RIB**,
-  which is already a decision recorded in this file and never
-  implemented. The decision process already returns the winner, the
-  step that decided it and why each other route lost, so only the
-  serialisation is missing, and "why did this route win" is a question
-  no other implementation in a lab can answer about itself.
+  which was a decision recorded in this file and never implemented.
+  **Done**, in #230, with the view layer of item 3 under it:
+  `bgp/rib/view.rb`, reached as `rib.view`, answers the three shapes
+  `docs/daemon.md` names as plain data, and `rib.view.json` is a thin
+  layer over them. The decision process already returned the winner,
+  the step that decided it and why each other route lost, so this was
+  the serialisation and not a second decision, which is what
+  `Decision::Result` makes checkable: `view_test.rb` builds a table per
+  reason a path can lose and asserts the view reports it.
+  * **Three things it measured that the design did not have right.**
+    `lost_at` has **fifteen** values and not fourteen, since
+    `Decision#best` also files `:duplicate`, which no Table can reach
+    but `Decision#best` can, and `docs/daemon.md` is corrected.
+    `show.status`'s peer rows are a **session** fact, so a Table can
+    answer four of their eleven keys and the daemon adds the rest; the
+    view answers its half under the design's own key names so nothing
+    is renamed later. And the design gives the best path's `reason` the
+    step symbol where its own prose says reason is words for a person,
+    so the step is `decided_by` on the prefix row, which is where
+    `Decision::Result` keeps it, and every `reason` is words.
+  * **The guard section 12 of that document asks for is in**, and it is
+    the reason to put a shape in a document at all: three tests read
+    routescope's own two table row shapes and its state method shape out
+    of section 4 and hold the view to them. The `bgp_routes` row is
+    answered in full; four of `bgp_peers`' seven columns are, and the
+    three that are not are named rather than missing by omission.
+  * **A prefix whose every path is ineligible is in neither view**,
+    because the Loc-RIB is what both walk and `LocRib#update` keeps
+    only prefixes that have a best route. `rib.show` has the same blind
+    spot from the same line. Closing it means a second decision over
+    `Table#candidates`, which is the one thing this layer is not, so it
+    wants a decision rather than a patch.
 * **Match ospfv2's capture contract rather than inventing one.**
   routescope runs `IMAGE capture -i IFACE` with the subcommand and the
   flag hard-coded and no filter passed, so a bgp4r image taking the
