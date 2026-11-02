@@ -34,19 +34,46 @@ require 'bgp/capture/cli'
 
 class BGP_Sim_Server_Test < Test::Unit::TestCase
 
+  # **Two values here are not decoration and a tidy-up would break
+  # them.** `connect: true` is what keeps the Speaker from opening a
+  # listener, since it only listens when a peer is passive and the
+  # default port is 179, which an unprivileged CI runner cannot bind.
+  # And the peer is `127.0.0.1:1`, which refuses at once, so the dial
+  # the active side makes costs nothing: an unroutable address would sit
+  # in a 5 second connect instead, and `teardown` cannot interrupt one.
+  # `retry: 1` is what lets the thread notice the stop and exit within
+  # the second, which is why the thread count at exit comes back where
+  # it was.
   CONFIG = <<~YAML
     router_id: 10.255.10.1
     as: 65010
     api: 127.0.0.1:0
     neighbors:
-      - address: 10.0.10.2
+      - address: 127.0.0.1
+        port: 1
         as: 65000
         connect: true
+        retry: 1
   YAML
+
+  # **Every Server this file starts is kept and stopped**, and the first
+  # draft dropped them on the floor. A `start` that succeeds leaves a
+  # listening socket, an HTTP accept thread and a `run_active` thread
+  # dialling its peer, forever: the
+  # unit suite ran to the end with **4 threads of this file's** still
+  # dialling, measured by counting `Thread.list` at exit with and
+  # without `test/unit/sim/` in the tree. A test must stop what it
+  # starts, and on a loaded runner those threads are time taken from
+  # whatever runs next.
+  def setup
+    @started = []
+  end
 
   def run_server(argv, env = {})
     out, err = StringIO.new, StringIO.new
-    status = BGP::Sim::Server.new(out, err).start(argv, env, :wait => false)
+    s = BGP::Sim::Server.new(out, err)
+    @started << s
+    status = s.start(argv, env, :wait => false)
     [status, out.string, err.string]
   end
 
@@ -63,6 +90,7 @@ class BGP_Sim_Server_Test < Test::Unit::TestCase
   # records the same thing for the daemon.
   def teardown
     @server.stop if @server
+    Array(@started).each { |s| s.stop }
     Log.set_filename(STDERR)
   end
 
