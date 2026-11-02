@@ -220,11 +220,13 @@ class BGP_Daemon_Candidate_Test < Test::Unit::TestCase
 
   # Each group says **why** rather than only that it cannot, because a
   # later reader has to be able to tell whether the reason still holds.
-  # `export` and `fib` are the sharpest: `Table#on_change` cannot take a
-  # listener off.
+  # One of them stopped holding and that is what this test is for: both
+  # `export` and `fib` used to read "Table#on_change cannot take a
+  # listener off", and that is fixed. Their reasons now differ from each
+  # other, `export`'s being in the library and `fib`'s in this daemon.
   def test_every_restart_group_refuses_with_its_mechanism
-    { 'set export route_reflector true' => /cannot take a listener off/,
-      'set fib table 101' => /cannot take a listener off/,
+    { 'set export route_reflector true' => /replacement Router starts with an empty Adj-RIB-Out/,
+      'set fib table 101' => /Speaker#reconfigure does not read it/,
       'set rib false' => /built in Speaker#initialize/,
       'set as 65001' => /carries it in its OPEN/,
       'set listen_address 127.0.0.2' => /read once, when bgp4rd starts/,

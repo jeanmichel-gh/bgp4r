@@ -777,14 +777,24 @@ the one place a reader goes to check it. So it is refused, in `errors`,
 with the mechanism in the message, and the running configuration goes on
 being true.
 
-**Each group is refused for a measured reason.** The sharpest is
-`export` and `fib`: `Table#on_change` appends to a list of listeners and
-there is **no way to take one off**, read in `bgp/rib/table.rb`, where
-`@listeners` is only ever `<<`'d and `Router#stop` stops the pacer
-thread and leaves its listener registered. So replacing a `Router` live
-would leave the old one advertising beside the new one, with two
-Adj-RIB-Outs disagreeing about what each peer holds: a wrong answer on
-the wire rather than a missing feature. A neighbor added or taken away
+**Each group is refused for a measured reason**, and the reasons worth
+reading are `export`'s and `fib`'s, because both moved once already.
+They used to be refused together, because `Table#on_change` appended to
+a list of listeners and there was no way to take one off, so a stopped
+`Router` went on advertising. That is fixed: `Table#off_change` exists
+and `Router#stop` and `FibInstaller#stop` use it. **The two reasons now
+differ.** `fib` is held up by the daemon alone: `@fib` is set in
+`Speaker#initialize` and `install_fib` runs once in
+`Speaker#start_rib`, and `Speaker#reconfigure` reads neither, so there
+is nothing to apply the change to. The library would take it, because
+stopping a `FibInstaller` flushes and a new one installs the whole
+Loc-RIB. `export` is held up by the library as well, and by something
+sharper: **a replacement `Router` starts with empty Adj-RIB-Outs**, so a
+route the new rules refuse is never withdrawn from a peer that holds it,
+since `Router#item_for` only withdraws a prefix its own Adj-RIB-Out has.
+Measured by replacing a reflecting `Router` with a non-reflecting one:
+the new one records `:ibgp_to_ibgp` in `skipped`, sends no withdrawal,
+and the peer keeps the route. A neighbor added or taken away
 is refused because `@peers` is built in `Speaker#initialize` and read
 from every session thread with no lock, and whether anything listens for
 a passive peer is decided once in `Speaker#start`. A neighbor's `record`
