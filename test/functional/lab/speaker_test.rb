@@ -402,12 +402,25 @@ class LabSpeakerTwoLoggersTest < Test::Unit::TestCase
     assert_nil(Log.level, 'and so there is no shared level between the two')
   end
 
-  # **Logging is observation, so a log call must not change behaviour.**
-  # The same session is run twice, once with a logger taking every level
-  # and once with none at all, and what crossed the wire is compared: the
-  # UPDATE's octets, what the peer's OPEN said and the sequence of state
-  # changes. A log statement that called a method with a side effect would
-  # show up here rather than in whatever it broke later.
+  # **Logging is observation, so installing a logger must not change
+  # behaviour.** The same session is run twice, once with a logger taking
+  # every level and once with none at all, and what crossed the wire is
+  # compared: the UPDATE's octets, what the peer's OPEN said and the
+  # sequence of state changes.
+  #
+  # **Be exact about what it can see, because the obvious reading is too
+  # wide.** The argument to `log(...)` is built by the caller and so is
+  # evaluated whether or not a logger is installed: `log_debug "Send
+  # #{m.to_s}"` calls `to_s` either way. So a side effect in the argument
+  # expression changes **both** runs identically and this comparison is
+  # blind to it, which a sabotage proved by passing. What it does catch
+  # is the class the injected logger brings in, which is behaviour that
+  # depends on whether a logger is there: everything in that diff that
+  # branches on `@logger`. The other half of that class, a logger that
+  # writes to the process log as well as to its callable, is caught by
+  # `test_a_logger_replaces_the_process_log_rather_than_writing_beside_it`
+  # in test/unit/logging_test.rb, since this file cannot see where a line
+  # went.
   def test_a_logger_at_debug_changes_nothing_that_crossed_the_wire
     with_logger = run_one_session(collect_into(:a))
     without     = run_one_session(nil)
@@ -440,22 +453,30 @@ class LabSpeakerTwoLoggersTest < Test::Unit::TestCase
     speaker.start
     far.start(:port => port)
     assert(wait_for { far.is_established? }, 'the far side came up')
-    assert(wait_for { !seen.empty? }, 'the announce block arrived')
+    # The OPEN and then the announce block, so both runs are compared at
+    # the same point of the session rather than wherever each got to.
+    assert(wait_for { seen.size >= 2 }, 'the OPEN and the announce block arrived')
     [seen.dup, far.rmt_as, far.rmt_bgp_id, states.dup]
   ensure
     far.stop if far
     speaker.stop if speaker
   end
 
-  # Keeps the hex of every UPDATE the far side received, which is the
-  # thing a log call must not be able to change. A Neighbor notifies its
-  # observers with the decoded message, one argument, which is why this
-  # takes a message and not the (:ev_msg, type, octets) triple the
-  # BGP::IO threads publish.
+  # Keeps the hex of every message the far side received, which is what
+  # "crossed the wire" has to mean here: the OPEN's octets carry our hold
+  # time, our AS, our router id and every capability, and a comparison on
+  # the UPDATE alone missed a sabotage that changed the hold time.
+  # KEEPALIVEs are left out because they are periodic, so counting them
+  # would make the comparison depend on how long each run took.
+  #
+  # A Neighbor notifies its observers with the decoded message, one
+  # argument, which is why this takes a message and not the (:ev_msg,
+  # type, octets) triple the BGP::IO threads publish.
   class Catcher
     def initialize(sink) ; @sink = sink ; end
     def update(msg)
-      @sink << msg.to_shex if msg.is_a?(BGP::Update)
+      return if msg.is_a?(BGP::Keepalive) || !msg.respond_to?(:to_shex)
+      @sink << msg.to_shex
     end
   end
 end

@@ -70,11 +70,20 @@ module BGP
   # in both places would mean a line could be dropped twice and enabled
   # once, so +log+ hands every level over and the destination decides.
   #
-  # **Logging is observation: a +log+ call must not change behaviour.**
-  # A log statement that calls a method with a side effect is a defect.
-  # +test/functional/lab/speaker_test.rb+ runs the same session twice,
-  # once with a logger at debug and once with none, and compares what
-  # crossed the wire.
+  # **Logging is observation: installing a logger must not change
+  # behaviour.** +test/functional/lab/speaker_test.rb+ runs the same
+  # session twice, once with a logger at debug and once with none, and
+  # compares every message the far side received.
+  #
+  # Be exact about what that covers, because the wider reading is
+  # tempting and wrong. The argument to +log+ is built by the caller, so
+  # it is evaluated whether or not a logger is installed: +log_debug
+  # "Send #{m.to_s}"+ calls +to_s+ either way. A side effect in the
+  # argument expression therefore changes **both** runs identically and
+  # that comparison is blind to it, which a sabotage proved by passing.
+  # It is still a defect; it is just not one this guard finds. What the
+  # guard does find is behaviour that depends on whether a logger is
+  # there, which is the class this file brings in.
   #
   # Nothing here rescues. ospfv2 does not, and the four places in this
   # tree that already hold an injected logger, +Daemon::Api+,
@@ -123,6 +132,14 @@ module BGP
     attr_accessor :logger
 
     # One line. +level+ is one of LEVELS and +message+ is for a person.
+    #
+    # **The +return+ is load bearing**: a logger *replaces* the process
+    # log rather than writing beside it. Dropping it is the ordinary
+    # slip, and it would leave a program that redirected its logs also
+    # filling the destination it redirected them away from, which for
+    # two speakers in one process is the whole thing being fixed.
+    # +test_a_logger_replaces_the_process_log_rather_than_writing_beside_it+
+    # is what fails on it.
     def log(level, message)
       return @logger.call(level, message) if @logger
       Logging.write(level, message)

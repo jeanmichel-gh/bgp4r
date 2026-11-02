@@ -78,6 +78,25 @@ class BGP_Logging_Test < Test::Unit::TestCase
     assert_equal(BGP::Logging::LEVELS, @lines.collect(&:first))
   end
 
+  # **A logger replaces the process log; it does not write beside it.**
+  # The `return` in #log is what says so, and forgetting one is the
+  # ordinary slip: a program that redirected its logs would then also be
+  # filling the destination it redirected them away from, which for two
+  # speakers in one process is the whole thing being fixed.
+  def test_a_logger_replaces_the_process_log_rather_than_writing_beside_it
+    state = save_log_state
+    io = StringIO.new
+    Log.class_variable_set(:@@logger, nil)
+    Log.start(io)
+    Log.level = Logger::DEBUG
+    @thing.logger = collector
+    BGP::Logging::LEVELS.each { |l| @thing.log(l, "line at #{l}") }
+    assert_equal(5, @lines.size, 'the callable got them')
+    assert_equal('', io.string, 'and the process log got none of them')
+  ensure
+    restore_log_state(state)
+  end
+
   def test_the_logger_can_be_read_and_replaced
     assert_nil(@thing.logger, 'nil until something sets one')
     first = collector
