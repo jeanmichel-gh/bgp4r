@@ -445,6 +445,16 @@ module BGP
     # `start`'s own rescue does not need it, since the exception leaves the
     # block before the rescue runs.
     #
+    # **The cost of that reentrancy, said plainly: a listener that calls
+    # the blocking `start` holds this lock for its whole `:timeout`.** It
+    # runs on the thread already inside `stop`, so the lock is held, and
+    # `start`'s wait is outside its own `sync_lifecycle` but still inside
+    # that outer one. Every other thread's `start` and `stop` waits on it.
+    # Nothing in the tree does this: both listeners in `bgp/rib/` only put
+    # a work item on a queue, which is the shape to copy, and
+    # `:no_blocking => true` is the way to start a session from a
+    # listener. Checked by reading both of them rather than assumed.
+    #
     # `Mutex#owned?` is core Ruby, so this needs no require, and it is the
     # same trade `BGP::Rib::Table#sync` makes for the same reason: the
     # `monitor` library would do it and is one more standard library that
