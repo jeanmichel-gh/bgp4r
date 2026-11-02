@@ -177,6 +177,17 @@ class TestBgpRibView < Test::Unit::TestCase
     rib
   end
 
+  # **A document read as UTF-8 and not as whatever the environment's
+  # default external encoding happens to be.** One em dash in
+  # docs/daemon.md made every assert_match against it raise
+  # "invalid byte sequence in US-ASCII", from a test that has nothing to
+  # do with the character and names neither the file nor the byte.
+  # CLAUDE.md records the same trap one file over, in
+  # to_hash_round_trip_test.rb, where the fix is the same line.
+  def read_doc(path)
+    File.read(path, :encoding => 'UTF-8')
+  end
+
   def paths_of(rib, prefix = P)
     rows = rib.view.rib(prefix)
     assert_equal(1, rows.size, "one row for #{prefix}")
@@ -272,7 +283,7 @@ class TestBgpRibView < Test::Unit::TestCase
   # The counts are asserted before the names, so a pattern that stops
   # matching fails loudly instead of comparing two empty lists.
   def test_the_daemon_design_lists_the_values_the_library_can_file
-    doc = File.read('docs/daemon.md')
+    doc = read_doc('docs/daemon.md')
     # From the paragraph that introduces the list, so a code block
     # somewhere else in the document cannot be read as one of these two.
     from = doc.index('`lost_at` is one of')
@@ -428,7 +439,7 @@ class TestBgpRibView < Test::Unit::TestCase
 
   # The columns of one of section 4's two row shapes.
   def columns(row)
-    doc = File.read('docs/routescope-labs.md')
+    doc = read_doc('docs/routescope-labs.md')
     m = doc.match(/^#{row}\s+(\S.*)$/)
     assert(m, "section 4 no longer carries the #{row} row shape")
     names = m[1].split.map(&:to_sym)
@@ -467,7 +478,7 @@ class TestBgpRibView < Test::Unit::TestCase
     assert_equal(%i[router_id as summary peers], s.keys)
     assert_equal(%i[peers rib], s[:summary].keys & %i[established peers rib])
     assert(!s[:summary].key?(:established), 'a session fact, and the daemon adds it')
-    doc = File.read('docs/routescope-labs.md')
+    doc = read_doc('docs/routescope-labs.md')
     assert_match(/summary: \{ established:, peers:, rib: \}/, doc,
                  'section 4 no longer gives that shape')
   end
