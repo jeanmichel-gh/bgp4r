@@ -287,18 +287,35 @@ unblocks, so the order is not arbitrary.
    and `bgp4r-sim` as an alias so a container command reads plainly.
    Unblocks everything, and the capture contract in section 4 forces the
    shape of one of them.
-2. **The speaker becomes a router.** This is the largest item and the
-   most valuable. `lab/README.md` states the limit outright: "A speaker
-   originates routes and records what it receives. It never passes
-   routes on from one neighbor to another, so it is not a route
-   reflector or a transit router yet." Meanwhile `bgp/rib/` has
+2. **The speaker becomes a router. Done**, on 2026-11-02. This was the
+   largest item and the most valuable. `lab/README.md` stated the limit
+   outright: "A speaker originates routes and records what it receives.
+   It never passes routes on from one neighbor to another, so it is not
+   a route reflector or a transit router yet." Meanwhile `bgp/rib/` had
    `rib.attach`, `rib.advertise`, `rib.originate`, `rib.show` and
-   `rib.install`, all finished and all tested over loopback, and
-   **none of it is wired into the lab speaker**, which predates it. Wire
-   it behind node-file keys. Unblocks `bgp_routes_table` meaning
-   anything at all, since that row wants a best path, a `paths` count
-   and a `best` flag, which only a Loc-RIB has, and unblocks labs B, C,
-   F and H in section 8.
+   `rib.install`, all finished and all tested over loopback, and none of
+   it wired into the lab speaker, which predates it. It is wired in now,
+   behind four node file keys, `rib`, `originate`, `export` and `fib`,
+   which are `docs/daemon.md`'s names, with `lab/README.md` "Router
+   mode" documenting them and
+   `test/functional/lab/speaker_router_test.rb` running three speakers
+   on loopback to watch a route cross the middle one. So
+   `bgp_routes_table` has a best path, a `paths` count and a `best` flag
+   to read, and labs B, C, F and H in section 8 are unblocked.
+   * **This design listed three keys and the speaker needed a fourth.**
+     In the daemon a RIB is always on, because a daemon is a router by
+     definition; in the speaker it has to be asked for, or every
+     topology written before this would start deciding routes. So
+     `export` present is what turns advertising on, `originate` and
+     `fib` each imply a table, and `rib: true` is the explicit form for
+     a table that advertises nothing, which is lab C and which none of
+     the other three can express.
+   * **And one claim in `docs/daemon.md` is honest only with a caveat
+     now written down.** Its `originate` example carries `med: 10`.
+     `Export` deletes MULTI_EXIT_DISC toward every external peer alike,
+     so that key reaches the Loc-RIB and everything downstream of it and
+     not an external peer. Measured, with the first lab test asserting
+     the opposite before the library corrected it.
 3. **A view layer: state as plain data. Done**, in #230. Section 5.
    `bgp/rib/view.rb`, reached as `rib.view`, answers Hashes and Arrays
    with Symbol keys and no formatting, so one shape feeds the state

@@ -30,12 +30,19 @@
 # a JSON file with the state of each session and the routes it received.
 # Tests read that file. See lab/README.md for the YAML keys.
 #
-# It is an origin and a sink, not a router: it never passes on routes it
-# learned from one neighbor to another.
+# With a rib, originate, export or fib block it is a router as well: the
+# tables of bgp/rib/ are wired in behind those keys, so a route learned
+# from one neighbor is decided and passed on to another with the export
+# rules applied. Without any of them nothing here builds a table, so a
+# node file that worked before this sends the same octets it sent before.
+#
+# The key names are docs/daemon.md's, because that daemon's configuration
+# is this node file with more in it and the two must not drift.
 
 $LOAD_PATH.unshift File.expand_path('..', __dir__)
 require 'bgp4r'
 require 'bgp/misc/route_generator'
+require 'bgp/rib'
 require 'yaml'
 require 'json'
 require 'socket'
@@ -250,8 +257,14 @@ module Lab
       @busy.synchronize do
         # Each session gets a new Neighbor. close ends the old one's thread.
         @neighbor.close if @neighbor
-        n = new_neighbor
+        n = new_neighbor(sock)
         @neighbor = n
+        # Attached before the session starts, so the table sees the first
+        # UPDATE and router mode sees Established. A Neighbor per session
+        # means an adapter per session, so the ensure below detaches: an
+        # adapter nobody detached is a peer whose routes stay in the table
+        # after its session is gone.
+        @speaker.rib&.attach(n)
         n.start(:session => sock, :timeout => @config.fetch('open_timeout', 30))
         if n.is_established?
           @recorder.established!
@@ -262,14 +275,36 @@ module Lab
         end
         @recorder.session_down!
       ensure
-        n.close if n
+        if n
+          # **Hygiene, and not what removes the peer's routes.** That is
+          # PeerAdapter#state_change, which queues :peer_down the moment a
+          # session leaves Established, so RFC 4271 section 6 is answered
+          # with or without this line: deleting it moved no assertion in
+          # the loopback lab. What it is for is the adapter, one per
+          # session because there is a Neighbor per session, and
+          # PeerFeed#adapters is what Router#run_changes walks. Left out,
+          # a speaker reconnecting every retry seconds to a peer that is
+          # down accumulates one adapter per attempt for as long as it
+          # runs.
+          @speaker.rib&.detach(n)
+          n.close
+        end
       end
     end
 
-    def new_neighbor
+    # sock is the session this Neighbor will run, when there is one.
+    #
+    # local_addr falls back to our address on that socket, which is what
+    # RFC 4271 section 5.1.3 wants in NEXT_HOP toward an external peer and
+    # what Rib::Router reads to build one. The speaker always hands
+    # Neighbor#start a socket, so local_addr is never used to dial, and a
+    # container with one address then needs no local_address key to be a
+    # transit router. export.next_hops still wins over both.
+    def new_neighbor(sock=nil)
+      local = @speaker.local_address || (sock && sock.local_address.ip_address)
       n = BGP::Neighbor.new(:my_as => @speaker.my_as, :id => @speaker.router_id,
                             :holdtime => @config.fetch('hold_time', 90),
-                            :remote_addr => @address, :local_addr => @speaker.local_address)
+                            :remote_addr => @address, :local_addr => local)
       Array(@config.fetch('capabilities', ['as4_byte'])).each { |c| add_capability(n, c) }
       n.add_observer @recorder
       n
@@ -315,7 +350,20 @@ module Lab
   end
 
   class Speaker
-    attr_reader :my_as, :router_id, :local_address, :announcements, :peers
+    attr_reader :my_as, :router_id, :local_address, :announcements, :peers, :rib, :router
+
+    # The export: keys that go to Rib::Export rather than to Rib::Router.
+    EXPORT_POLICY_KEYS = %w[route_reflector clients cluster_id default_local_pref].freeze
+    EXPORT_KEYS = (EXPORT_POLICY_KEYS + %w[next_hops mrai]).freeze
+
+    # The fib: keys, which are Rib::Fib::IpRoute's.
+    FIB_KEYS = %w[table netns dev proto].freeze
+
+    # ORIGIN of RFC 4271 section 5.1.1 as the state file spells it, which
+    # is docs/daemon.md's show.routes. Its own words rather than the ones
+    # bgp/rib/show.rb prints, because those are vendor presentation and a
+    # reader of this file must not depend on them. See rib_state.
+    ORIGINS = { 0 => 'igp', 1 => 'egp', 2 => 'incomplete' }.freeze
 
     def initialize(config)
       @config = config
@@ -326,12 +374,29 @@ module Lab
       @state_file = config.fetch('state_file', '/tmp/bgp4r-state.json')
       @peers = Array(config.fetch('neighbors')).map { |c| Peer.new(self, c) }
       @stopping = false
+      @originate = Array(config['originate'])
+      @export = config['export']
+      @fib = config['fib']
+      # One table, shared by every session, which is what makes this a
+      # router: a Rib::Table with two Neighbors attached decides what both
+      # sent and advertises the winner to both. Built here rather than in
+      # run, because it starts no thread until something attaches to it.
+      @rib = BGP::Rib::Table.new(:local_as => @my_as, :router_id => @router_id) if rib?
     end
 
     def stopping? ; @stopping ; end
 
+    # True when the node file asks for a table at all. rib: on its own
+    # builds one that decides and prints and advertises nothing, which is
+    # a speaker watching its peers rather than routing between them; the
+    # other three keys each need one, so each implies it.
+    def rib?
+      @config.fetch('rib', false) || !@originate.empty? || !@export.nil? || !@fib.nil?
+    end
+
     def run
       setup_log
+      start_rib
       @server = listen if @peers.any? { |p| !p.active? }
       @peers.select(&:active?).each(&:run_active)
       writer = Thread.new { loop { write_state ; sleep 0.5 } }
@@ -340,7 +405,120 @@ module Lab
       writer.kill
       @server.close if @server
       @peers.each(&:stop)
+      stop_rib
       write_state
+    end
+
+    # Router mode, the forwarding table and our own prefixes, in that
+    # order and before any session starts, so a peer that comes up at once
+    # finds the table ready and gets the whole Loc-RIB.
+    def start_rib
+      return unless @rib
+      @router = @rib.advertise(**export_options) if @export
+      install_fib if @fib
+      originate_routes
+    end
+
+    # Takes our routes back out of the forwarding table and stops the
+    # worker and pacer threads. Nothing else tidies a routing table up.
+    def stop_rib
+      return unless @rib
+      @rib.uninstall if @fib_installer
+      @rib.feed.stop
+    rescue StandardError => e
+      Log.error "lab: stopping the rib: #{e.class}: #{e.message}"
+    end
+
+    # Each originate: block, through Table#originate, so our own prefixes
+    # go in the Loc-RIB and out through the export rules rather than
+    # straight onto one session the way an announce: block does.
+    def originate_routes
+      @originate.each do |a|
+        Array(a.fetch('prefixes')).each { |p| @rib.originate(p, :path_attribute => originate_attribute(a)) }
+      end
+    end
+
+    # The path attributes of one originate: block.
+    #
+    # Two of them are deliberately not what an announce: block builds.
+    # AS_PATH starts **empty**, because RFC 4271 section 5.1.2 wants an
+    # empty one toward an internal peer and our AS alone toward an
+    # external one, and both fall out of prepending onto an empty
+    # attribute in the export step. NEXT_HOP is a placeholder, because
+    # section 5.1.3 makes it ours on each session and the export step
+    # replaces it there; a next_hop key here would be read and then
+    # overwritten, so there is none.
+    def originate_attribute(a)
+      attrs = [BGP::Origin.new(a.fetch('origin', 0)),
+               BGP::As_path.new(*Array(a['as_path'])),
+               BGP::Next_hop.new(@router_id)]
+      attrs << BGP::Multi_exit_disc.new(a['med']) if a['med']
+      attrs << BGP::Local_pref.new(a['local_pref']) if a['local_pref']
+      attrs << BGP::Communities.new(Array(a['communities']).join(' ')) if a['communities']
+      BGP::Path_attribute.new(*attrs)
+    end
+
+    # The export: block as Rib::Router.new's options. A key no option
+    # answers to raises rather than doing nothing quietly, which is what
+    # add_capability does for a capability name: a typo in a node file
+    # that silently turns reflection off is the worst of both.
+    def export_options
+      e = @export.is_a?(Hash) ? @export : {}
+      unknown = e.keys - EXPORT_KEYS
+      unless unknown.empty?
+        raise ArgumentError,
+              "export: unknown key(s) #{unknown.join(', ')}: use one of #{EXPORT_KEYS.join(', ')}"
+      end
+      opts = {}
+      # Ours per address family, toward an external peer. Export will not
+      # invent our address and a family with none is skipped rather than
+      # given a next hop that is not ours, which is how a route becomes a
+      # black hole. An IPv4 session falls back to its own local address.
+      opts[:next_hops] = e['next_hops'].to_h { |afi, address| [Integer(afi), address.to_s] } if e['next_hops']
+      # RFC 4271 section 9.2.1.1. Off is the default and stays it: a
+      # script driving a router through a sequence of UPDATEs wants each
+      # one on the wire when it says so.
+      opts[:mrai] = e['mrai'].to_h { |k, v| [k.to_sym, v] } if e['mrai']
+      policy = e.select { |k, _v| EXPORT_POLICY_KEYS.include?(k) }
+      unless policy.empty?
+        opts[:export] = BGP::Rib::Export.new(:local_as => @my_as, :router_id => @router_id,
+                                             **policy.to_h { |k, v| [k.to_sym, v] })
+      end
+      opts
+    end
+
+    # The fib: block as Rib::Fib::IpRoute's options. table has no default
+    # there and none here: a route in the main table changes where the
+    # machine sends its own traffic, so nobody reaches it without naming
+    # it.
+    def fib_options
+      f = @fib.is_a?(Hash) ? @fib : {}
+      unknown = f.keys - FIB_KEYS
+      unless unknown.empty?
+        raise ArgumentError,
+              "fib: unknown key(s) #{unknown.join(', ')}: use one of #{FIB_KEYS.join(', ')}"
+      end
+      raise ArgumentError, 'fib: table is required, and has no default' unless f['table']
+      f.to_h { |k, v| [k.to_sym, v] }
+    end
+
+    # Installing routes needs CAP_NET_ADMIN and the lab speaker runs as
+    # the non-root user bgp, so a node file asking for a forwarding table
+    # in a container that cannot write one is an ordinary thing to meet.
+    # It must say why rather than taking the speaker down with it: the
+    # reason goes in the state file under fib, beside the per prefix
+    # failures the installer itself records. A bad fib: block is a
+    # different thing and still aborts, which is why fib_options is
+    # outside the rescue.
+    def install_fib
+      opts = fib_options
+      @fib_table = opts[:table].to_s
+      begin
+        @fib_installer = @rib.install(**opts)
+      rescue StandardError => e
+        @fib_error = "#{e.class}: #{e.message}"
+        Log.error "lab: fib: #{@fib_error}"
+      end
     end
 
     # One UPDATE for one announce block. RFC 4271 section 5.1: an eBGP
@@ -402,8 +580,74 @@ module Lab
     end
 
     def state
-      { 'router_id' => @router_id, 'as' => @my_as, 'updated_at' => Time.now.utc.iso8601(3),
-        'neighbors' => @peers.to_h { |p| [p.address, { 'state' => p.state }.merge(p.recorder.snapshot)] } }
+      h = { 'router_id' => @router_id, 'as' => @my_as, 'updated_at' => Time.now.utc.iso8601(3),
+            'neighbors' => @peers.to_h { |p|
+              [p.address, { 'state' => p.state }.merge(p.recorder.snapshot).merge(peer_rib_state(p))]
+            } }
+      @rib ? h.merge(rib_state) : h
+    end
+
+    # The Loc-RIB, the export side and the forwarding table, as plain data.
+    #
+    # **Plain data and not rib.show.** docs/routescope-labs.md section 5
+    # says the state has to be the data under bgp/rib/show.rb rather than
+    # its text, and CLAUDE.md says of those three vendor styles that
+    # nothing in them has been diffed against a real device, so no test
+    # anywhere should depend on the text byte for byte. A state file a
+    # driver parses would be exactly such a test.
+    #
+    # The row shape is docs/daemon.md's show.routes. The serialising is
+    # here and not in bgp/rib/ on purpose: a view layer belongs there and
+    # is its own piece of work, item 3 of section 6. Move this onto it
+    # when it lands.
+    def rib_state
+      rows = @rib.synchronize do
+        @rib.loc_rib.prefixes.sort.collect do |prefix|
+          route_row(prefix, @rib.loc_rib.best(prefix), @rib.candidates(prefix).size)
+        end
+      end
+      { 'loc_rib' => rows, 'router' => router_state, 'fib' => fib_state }.compact
+    end
+
+    # One best route. best is always true here, because a Loc-RIB holds
+    # the winner and nothing else; the flag is in the row because the row
+    # shape is shared with a per path view that needs it.
+    def route_row(prefix, route, paths)
+      { 'prefix' => prefix,
+        'next_hop' => route.next_hop,
+        'as_path' => route.as_path == 'empty' ? '' : route.as_path,
+        'origin' => ORIGINS[route.origin],
+        'med' => route.med,
+        'local_pref' => route.local_pref,
+        'from' => route.peer.address,
+        'paths' => paths,
+        'best' => true }
+    end
+
+    def router_state
+      return nil unless @router
+      { 'advertising' => true, 'updates_sent' => @router.sent, 'held' => @router.held }
+    end
+
+    def fib_state
+      return nil unless @fib
+      { 'table' => @fib_table, 'installed' => @rib.fib ? @rib.fib.size : 0,
+        'error' => @fib_error,
+        'failed' => (@fib_installer ? @fib_installer.failed : {})
+                      .collect { |prefix, result| { 'prefix' => prefix, 'error' => result.to_s } } }
+    end
+
+    # What this speaker sent one peer, and what it could not send. A route
+    # silently not advertised is the hardest kind of bug to see from
+    # outside, which is what Rib::Router#skipped is for and why it is in
+    # this file rather than only in a log line.
+    def peer_rib_state(peer)
+      return {} unless @router
+      out = @router.peers.find { |p| p.address == peer.address }
+      { 'advertised' => out ? @router.adj_rib_out(out).size : 0,
+        'skipped' => @router.skipped
+                            .select { |(_prefix, p, _reason)| p && p.address == peer.address }
+                            .collect { |(prefix, _p, reason)| { 'prefix' => prefix, 'reason' => reason.to_s } } }
     end
 
     private

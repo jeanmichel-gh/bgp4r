@@ -124,6 +124,74 @@ A `prefixes` block is one UPDATE. A `generate` block is many: `count` prefixes o
 
 Over eBGP the speaker puts its own AS first in AS_PATH and sets NEXT_HOP to itself (RFC 4271 section 5.1). Over iBGP it sends LOCAL_PREF.
 
+## Router mode
+
+An `announce` block goes straight onto each session, which makes a speaker an origin and a sink. Four more keys make it a router: the tables of `bgp/rib/` are wired in behind them, so a route learned from one neighbor is decided and passed on to another with the export rules of RFC 4271 section 5.1 and RFC 4456 applied.
+
+```yaml
+rib: true                   # optional. Build a Loc-RIB from what the
+                            # peers send, and advertise nothing. The three
+                            # keys below each need a table, so each implies
+                            # this one; on its own it is a speaker watching
+                            # its peers rather than routing between them.
+
+originate:                  # our own prefixes, through the Loc-RIB
+  - prefixes: [10.255.0.0/24]
+    med: 10                 # optional
+    local_pref: 200         # optional
+    origin: 0               # optional, default 0 IGP
+    communities: ['65000:1']   # optional
+    as_path: [64999]        # optional, and nothing an RFC asks for
+
+export:                     # present at all turns router mode on
+  next_hops: { 1: 10.0.20.1 }   # ours, per AFI, toward external peers
+  route_reflector: false    # RFC 4456
+  clients: []               # RFC 4456 section 6, when a reflector
+  cluster_id: 7.7.7.7       # RFC 4456 section 7, default our router ID
+  default_local_pref: 100   # RFC 4271 section 5.1.5
+  mrai: { ebgp: 0, ibgp: 0 }    # RFC 4271 section 9.2.1.1. 0 is off,
+                                # which is the default.
+
+fib:                        # absent means compute and do not install
+  table: 100                # required, and with no default
+  netns: lab                # optional
+  dev: eth0                 # optional
+  proto: bgp                # optional
+```
+
+Those are `docs/daemon.md`'s key names, because that daemon's configuration is this node file with more in it and the two must not drift.
+
+`export: {}` is enough for a transit router. With no `next_hops` an IPv4 route takes our own address on each session, which is what RFC 4271 section 5.1.3 asks for, and the speaker fills that in from the socket so a container with one address needs no `local_address`. `next_hops` is **required** for any other address family going to an external peer: `Export` will not invent our address, and the alternative to refusing is sending a next hop that is not ours, which is how a route becomes a black hole. A family with none is not advertised, and the state file says so under `skipped`.
+
+An `originate` block is not an `announce` block, and two of the differences are RFC 4271 section 5.1's. Its AS_PATH starts **empty**, because section 5.1.2 wants an empty one toward an internal peer and ours alone toward an external one, and both fall out of prepending onto an empty attribute in the export step. There is **no `next_hop` key**, because section 5.1.3 makes the next hop ours on each session and the export step would overwrite anything written here. There is no `path_id` key either: the Loc-RIB keeps one best route per prefix, so nothing an Identifier could tell apart reaches the export side, and `announce` with `path_id` is still how a topology sends several paths.
+
+`med` is worth knowing about: it reaches the Loc-RIB and everything downstream of it, and **not an external peer**. `Export` deletes MULTI_EXIT_DISC for every external peer alike, which is RFC 4271 section 5.1.4 read strictly, so a MED of our own toward one of them is a policy block's business rather than a node file key.
+
+`mrai` is off by default and stays off. A script driving a router through a sequence of UPDATEs wants each one on the wire when it says so, and thirty seconds of silence reads as a bug in the device under test. RFC 4271 section 10's suggested values are `{ ebgp: 30, ibgp: 5 }`.
+
+`fib` needs CAP_NET_ADMIN, and the speaker runs as the non-root user `bgp`, so a container that cannot write a routing table is an ordinary thing to meet. It says why rather than dying: the reason is in the state file under `fib`, with a row per prefix the command failed for. `uninstall` runs on the way out, so a speaker takes its own routes out of the table it was given.
+
+### What router mode adds to the state file
+
+```json
+{ "loc_rib": [
+    { "prefix": "10.1.0.0/16", "next_hop": "10.0.10.1", "as_path": "65010",
+      "origin": "igp", "med": null, "local_pref": 100,
+      "from": "10.0.10.1", "paths": 2, "best": true } ],
+  "router": { "advertising": true, "updates_sent": 3, "held": 0 },
+  "fib": { "table": "100", "installed": 1, "error": null, "failed": [] },
+  "neighbors": {
+    "10.0.10.1": { "advertised": 1,
+                   "skipped": [ { "prefix": "10.1.0.0/16",
+                                  "reason": "back_to_sender" } ] } } }
+```
+
+`loc_rib` is one row per prefix, the best route and the attributes it carries, with `paths` the number of routes that were decided between and `from` the address of the peer it came from. A prefix we originated reads `from` as our own router ID. `best` is always true in these rows, because a Loc-RIB holds the winner and nothing else.
+
+It is **data and not the text of a show command**. `rib.show` has three vendor styles and none of them has been diffed against a real device, so nothing should depend on that text byte for byte; a state file a program parses would be exactly such a dependency. `as_path` is a string because that is the form a router prints and a reader compares, and an empty AS_PATH is `""`.
+
+`skipped` per neighbor is what was not advertised to it and why. A route silently not advertised is the hardest kind of bug to see from outside, which is the whole reason it is in the file: `back_to_sender`, `ibgp_to_ibgp`, `non_client_to_non_client`, `no_advertise`, `no_export`, `next_hop_is_the_peers_address`, `no_next_hop_for_family`, `policy`.
+
 ## Dockerized routegen
 
 `lab/topologies/routegen` runs a route generator and a sink, with no router needed. Use it to see how fast bgp4r sends and takes routes, or to try a feed before you point it at a real router.
@@ -155,7 +223,7 @@ Run the lab tests with `ruby test/run_lab.rb`. Without Docker, the Compose tests
 
 ## Limits
 
-* A speaker originates routes and records what it receives. It never passes routes on from one neighbor to another, so it is not a route reflector or a transit router yet.
+* A speaker is a router only when its node file asks for one. With none of `rib`, `originate`, `export` or `fib` it builds no table, originates routes and records what it receives, and passes nothing on. See [Router mode](#router-mode).
 * IPv4 unicast in plain NLRI only, for now.
 * One session per neighbor. If both sides connect at once, the second connection is closed.
 
