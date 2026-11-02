@@ -294,15 +294,22 @@ docs/                    protocol-testing.md: using bgp4r to test a router
                          worth building once it is, with **section 9** the
                          `bgp4r-sim` injector in detail: the config that
                          brings a session up, its actions, and the
-                         scenarios that drive it. A **design**: nothing in
-                         its sections 6 to 10 exists yet, and every fact in
-                         it about routescope or ospfv2 is a read of another
-                         repository at a named commit, which this suite
-                         cannot assert. Its section 12 says which claims
-                         become assertable here and when. Read it before
-                         adding an executable, a state dump, a capture
-                         command, an action API or a lab topology, because
-                         each of those has a contract in it
+                         scenarios that drive it. Mostly a **design**:
+                         little of its sections 6 to 10 exists yet, and
+                         every fact in it about routescope or ospfv2 is a
+                         read of another repository at a named commit,
+                         which this suite cannot assert. The exception is
+                         **section 8's porting subsection**, which says
+                         which of the 23 files in test/functional/lab/
+                         want to be scenarios and which do not, with
+                         lab/topologies/add-path as a worked example that
+                         exists and has a test. Read that one before
+                         porting any other lab test. Its section 12 says
+                         which claims become assertable here and when.
+                         Read it before adding an executable, a state
+                         dump, a capture command, an action API or a lab
+                         topology, because each of those has a contract
+                         in it
 examples/                runnable scripts
 test/unit/               unit tests, mirroring bgp/
 test/functional/         tests that open real TCP sessions
@@ -5758,6 +5765,16 @@ visible here:
 * Eight labs, phased, with phase 0 costing nothing: an unknown `kind`
   renders as `linux` in routescope, so a bgp4r container is useful
   there before either repository changes.
+* **Section 8's porting subsection is the one part of the document that
+  is not a design**, and it is where to start. The question it answers
+  is which of the 23 files in `test/functional/lab/` want to become
+  scenarios, and the answer is four, two of them in part, on top of
+  three that already run a Compose topology. **A lab test that runs in
+  CI in under a minute with no Docker is better than a scenario in every
+  way a maintainer cares about**, so a port needs a reason: more than
+  one receiver reading the same octets, an action after the session is
+  up, or a degraded link while traffic flows. The worked example is
+  `lab/topologies/add-path`, and what it cost is recorded there.
 * **Section 9 is `bgp4r-sim` in detail**, which is the part to read
   before building anything: the three config files that bring a session
   up, the twelve actions, the four scenario conditions and three worked

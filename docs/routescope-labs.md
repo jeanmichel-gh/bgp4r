@@ -345,6 +345,14 @@ found only by asking a real router what it read. A console that shows
 the negotiated capabilities of every session side by side is that check
 made visible and repeatable.
 
+**The add-path row of this lab exists**, as `lab/topologies/add-path`,
+and `lab/speaker.rb` records each capability of the peer's OPEN as data
+so a driver can read it. Read the porting subsection below before
+building the rest of the matrix: the one thing that did not port is the
+part of the test that opens a session per capability value, because a
+lab config is fixed and changing a capability on a live lab is an
+injector action.
+
 ### C. Best path, one decision step at a time
 
 Several paths to one prefix arrive at a bgp4r router; each case changes
@@ -449,6 +457,93 @@ topology. Revisit if a family's lab test ever needs more than two nodes.
 `compare.rb` is OSPF-only and widening it is a modification, and the
 thing worth comparing in BGP is a best-path decision, which only bgp4r
 can explain about itself. Lab C does the useful half with one node.
+
+### Porting the lab tests that already exist
+
+The catalogue above is written as eight new labs, which understates what
+is in hand: `test/functional/lab/` holds **23** test files, and most of
+them already set up a topology, drive it and assert an outcome. Three of
+them already run a Compose topology, so labs A, E and G exist in all but
+the console. So the first question for any of these labs is not "what do
+we build" but "which existing test does this already do, and what would
+a scenario add".
+
+That 23 was 16 in the first draft of this section, from memory, and the
+difference is the rule this document already states twice: measure
+rather than recall. `ls test/functional/lab/*_test.rb | wc -l`.
+
+**The answer is usually nothing, and that is the finding.** A lab test
+that runs in CI in under a minute, with no Docker, asserting a value in
+a router's RIB, is better than a scenario in every way a maintainer
+cares about: it is cheaper, it fails in CI, and it needs no console
+open. Porting one for symmetry trades a guard for a demonstration.
+
+**So the test decides, by one question: does the assertion need
+something a single test process cannot have?** Three things qualify.
+
+| Needs | Why a test cannot | Which tests have it |
+|---|---|---|
+| more than one receiver reading the same octets | a test asserts against one router and moves on | add-path, and nothing else today |
+| an action taken after the session is up | a test can send, but a topology's config cannot | add-path, the fault matrix |
+| a degraded or broken link while traffic flows | no test here touches a link at all | the fault matrix, convergence, forwarding |
+
+Everything else stays a test. All 23, grouped:
+
+| Files | Port it |
+|---|---|
+| `two_speakers_test`, `routegen_test`, `fault_matrix_test` | **already a Compose lab.** These are labs A, G and E, and what they want is a driver and a console, not a port |
+| `add_path_gobgp_test` | **yes**, and it is done: `lab/topologies/add-path` |
+| `fault_matrix_native_test`, `fault_matrix_frr_test` | **yes**, into lab E, and only for what they cannot do: a fault case while the link is degraded |
+| `fib_test` | **yes**, lab H, because a container supplies the namespace it needs root for |
+| `rib_router_gobgp_test`, `rib_router_frr_test` | **partly**, lab D. What the lab adds is real addresses: `test/functional/rib_router_test.rb`, which is not in this folder, runs three speakers on loopback and all six of its cases failed first because two listeners on 127.0.0.1 collapsed into one `Peer` |
+| `attr_set_gobgp_test` | **no**, and it is the closest call: it already runs a router in the middle, so its topology exists inside the test |
+| `evpn_*`, `flow_spec_*`, `link_state_*`, `mcast_vpn_*`, `rt_constrain_gobgp_test` (9 files) | **no**, which is what "per-family breadth" above already says |
+| `generate_test`, `log_level_test`, `speaker_test`, `routegen_loopback_test` | **no**, and not interop at all: these test the harness and the speaker in process |
+
+So four files to port, two of them in part, on top of three labs that
+exist already. A plan that assumed every lab test wanted to be a lab
+would have been five times the size and mostly re-rendering.
+
+**The worked example is add-path**, in `lab/topologies/add-path`, and
+what it cost is the useful record. Its README has the detail; the shape
+of it:
+
+* **Of three test cases, one ported whole, one needed an action after
+  Established, and one did not port at all.** The one that did not is
+  the capability matrix: that test opens three sessions, one per
+  Send/Receive value, and a lab config is fixed, so a scenario asserts
+  only the pair its node files set. That is not a loss. The test covers
+  all three rows in 35 seconds and should keep covering them.
+* **Two changes to `lab/speaker.rb`, both small, both found by trying.**
+  An announce block could not carry a Path Identifier, and the state
+  file did not say what the peer's OPEN advertised. Each is a few lines.
+  Expect this for any port: the speaker was written to originate and
+  record, so anything a scenario wants to *read* is usually one field
+  away and anything it wants to *do* is the injector.
+* **One claim in CLAUDE.md about this was wrong**, and finding out cost
+  one measurement. It said the recorder keyed routes by prefix alone so
+  two paths would overwrite each other. It keys by `Nlri#to_ary`, which
+  carries the identifier. The lesson is the one section 12 already
+  records from the other direction: measure the thing, do not port from
+  the note about it.
+* **The lab's own best case is not in the test file at all.** A Path
+  Identifier on a session that negotiated none: gobgpd 3.23.0 sends
+  NOTIFICATION 3/1 and resets, where bgp4r reports nothing and reads one
+  prefix as five, `51.100.0.0/198` among them. Two implementations, the
+  same octets, opposite outcomes. That is a thing to look at rather than
+  count, and it is the clearest argument in this document for building
+  any of this.
+* **It also found two gaps in bgp4r**, both receive side and both
+  recorded rather than fixed: `validation.rb` has no NLRI field checks
+  at all, and a malformed NLRI does not replay. Neither is an add-path
+  bug. Porting a test is a second reader of code the test already
+  covered, which is worth something on its own.
+
+**And one limit that shapes every later port**: `lab/speaker.rb`'s
+announce blocks are per-speaker, not per-neighbor, so every block goes
+to every neighbor. A config cannot aim one UPDATE at one of several
+sessions. That is why the negative case above needs the injector even
+though nothing about it needs an action in principle.
 
 ## 9. bgp4r-sim in detail
 
@@ -981,6 +1076,17 @@ Phase 0 is not a joke. It costs nothing, it proves the container runs
 under routescope's transport, and it is where every assumption in this
 document gets its first test.
 
+**Part of phase 0 is done.** `lab/topologies/add-path` is a topology
+with a `lab.yml` and a `scenarios/` folder, and the two changes to
+`lab/speaker.rb` that the port needed are in: a `path_id` on an announce
+block and the peer's capabilities as data in the state file. Nothing in
+routescope reads either file yet, which is exactly what phase 0 is, and
+the topology is useful on its own today as three containers with a log
+and a state file. The lesson from doing it is in section 8's porting
+subsection, and the one worth carrying into phase 1 is that what a
+scenario wants to **read** is usually one field away in the speaker,
+while what it wants to **do** is the injector.
+
 ## 11. Decisions taken, so they are not re-litigated
 
 * **Two node kinds, not one.** Section 3. A node that both answers and
@@ -1027,8 +1133,20 @@ carry a read of someone else's code: `partial_lsdb?` is read by
 more of that kind, and prefer reading the consumer over reading the
 definition.
 
+**One part of this document is no longer a design, and it is the one
+with a test.** Section 8's porting subsection has a worked example that
+exists: `lab/topologies/add-path`, with
+`test/functional/lab/add_path_topology_test.rb` holding its node files,
+its scenarios and its manifest to the folder's own README, with no
+Docker and no router. So the claims in that subsection about **what the
+port cost** are checked, and its claims about routescope are not,
+because the scenario language in those files is still a proposal.
+The port also corrected a claim in CLAUDE.md, which is the second
+instance of this document's own lesson: the note about the code was
+wrong and one measurement settled it.
+
 **Sections 6 to 10 describe work that does not exist**, so there is
-nothing to assert yet. What becomes assertable, and when:
+nothing else to assert yet. What becomes assertable, and when:
 
 * The moment item 1 lands, `exe/bgp4r capture -i IFACE` can be tested
   against the format in section 4 by a test in this repository, since
@@ -1039,7 +1157,12 @@ nothing to assert yet. What becomes assertable, and when:
   repository will depend on it and nothing else will tell us we broke
   it.
 * Lab A's existence is assertable the way `test/lab_groups.rb` asserts
-  the others: a lab folder present, in a CI group, with a test.
+  the others: a lab folder present, in a CI group, with a test. The
+  add-path lab is that guard working already, and it went further than
+  this bullet expected: a test can read a topology's node files and hold
+  them to its own README, so a wrong address or a mis-spelled capability
+  fails the unit suite rather than a container log nobody is watching.
+  Write that test for every topology this plan adds.
 * **The injector's action table is assertable here the day item 8
   lands, and it is the best guard in this document.** Section 9.3's
   table is a list of paths and body keys, and the API is bgp4r's own
