@@ -685,6 +685,44 @@ class BGP_Daemon_Functional_Test < Test::Unit::TestCase
     assert_equal(90, @server.speaker.peer('127.0.0.9').config['hold_time'])
   end
 
+  # **The only test that can say a bounce bounces anything**, and it had
+  # to be written: a sabotage that took `admin_stop` and `admin_start`
+  # out of the commit altogether passed every other test in this file
+  # and in candidate_test.rb. Every one of those asserts the new value
+  # reaching `Peer#config` and the wording of the warning, and with no
+  # session up there is nothing for a stop to end, so the two halves of
+  # the bounce were claimed and never checked.
+  #
+  # A session up, a bounce-class commit, and the session is gone. The
+  # neighbor here is passive, so nothing dials it again and the test does
+  # not have to wait out a reconnect to see the drop; a `peer.start`
+  # notice says the same thing about a passive peer for the same reason.
+  def test_a_bounce_really_ends_the_session
+    peer = Catcher.new(:my_as => 65_001, :remote_addr => '127.0.0.1', :id => '10.0.0.9')
+    server = TCPServer.new('127.0.0.1', PORT + 8)
+    begin
+      ours = @server.speaker.peer('127.0.0.9')
+      client = TCPSocket.new('127.0.0.1', PORT + 8)
+      accepted = server.accept
+      Thread.new { peer.start(:session => accepted, :timeout => 10) }
+      ours.instance_variable_set(:@neighbor, neighbor_on(client))
+      assert_equal(true, wait_until { ours.neighbor.is_established? }, 'the session came up')
+
+      routescope_client('config.load', 'lines' => ['set neighbors 127.0.0.9 hold_time 90'])
+      r = routescope_client('config.commit')['result']
+      assert_equal(true, r['ok'])
+      assert_match(/was bounced/, r['warnings'].first)
+      assert_equal(true, wait_until { !ours.neighbor.is_established? },
+                   'the commit said it bounced the session and the session is still up')
+      assert_equal(false, ours.shutdown?, 'a bounce leaves the peer administratively up')
+      assert_equal(90, ours.config['hold_time'])
+    ensure
+      ours.instance_variable_get(:@neighbor)&.close
+      peer.close
+      server.close
+    end
+  end
+
   def test_the_rollback_pane_crosses_the_socket
     routescope_client('config.load', 'lines' => ['set neighbors 127.0.0.9 description two'])
     routescope_client('config.commit', 'comment' => 'one')
