@@ -27,7 +27,9 @@
 # docs/daemon.md is the design and the guide.
 
 require 'bgp/daemon/speaker'
+require 'bgp/daemon/log_ring'
 require 'bgp/daemon/views'
+require 'bgp/daemon/control'
 require 'bgp/daemon/api'
 require 'bgp/daemon/client'
 require 'bgp/daemon/cli'

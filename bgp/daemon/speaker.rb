@@ -252,12 +252,23 @@ module BGP
     class Peer
       attr_reader :address, :recorder, :config
 
+      # The BGP::Neighbor running the current session, or nil before the
+      # first one. It is here because `peer.refresh` has to put a message
+      # on this session and nothing else can reach it; a reader also wants
+      # `last_error` and `session_info`, which only a Neighbor answers.
+      attr_reader :neighbor
+
       def initialize(speaker, config)
         @speaker, @config = speaker, config
         @address = config.fetch('address')
         @recorder = Recorder.new(config.fetch('record', 'routes'))
         @neighbor = nil
         @busy = Mutex.new
+        # Administratively down, which is `peer.stop` and is a different
+        # thing from a session that dropped: see admin_stop.
+        @shutdown = false
+        @admin = Mutex.new
+        @resume = ConditionVariable.new
       end
 
       def remote_as ; @config.fetch('as') ; end
@@ -269,10 +280,18 @@ module BGP
       def state ; @neighbor ? @neighbor.state : 'Idle' ; end
       def established? ; @neighbor && @neighbor.is_established? ; end
 
-      # Active side: connect, run the session, wait, reconnect, until shutdown.
+      # Active side: connect, run the session, wait, reconnect, until
+      # shutdown. One thread for the life of the Speaker, which is what
+      # makes `peer.stop` then `peer.start` work: it waits while this peer
+      # is administratively down rather than ending, so nothing has to
+      # start a second dialling thread beside one that is still sleeping
+      # out its retry interval. See admin_stop.
       def run_active
-        Thread.new do
+        @thread ||= Thread.new do
+          Thread.current['name'] = "BGP peer #{@address}"
           until @speaker.stopping?
+            wait_while_shutdown
+            break if @speaker.stopping?
             begin
               sock = Socket.tcp(@address, @config.fetch('port', 179),
                                 @speaker.local_address, connect_timeout: 5)
@@ -280,13 +299,20 @@ module BGP
             rescue SystemCallError, IOError, SocketError => e
               @recorder.error!("connect: #{e.message}")
             end
-            sleep(@config.fetch('retry', 2)) unless @speaker.stopping?
+            backoff
           end
         end
       end
 
       # Passive side: the speaker accepted a connection from this peer.
       def accept(sock)
+        if shutdown?
+          # Administratively down, so there is no session to have. A
+          # passive peer cannot be stopped by not dialling, so this is
+          # where `peer.stop` holds for one.
+          sock.close
+          return
+        end
         if @busy.locked?
           sock.close # one session per peer; keep the one we have
           return
@@ -294,11 +320,99 @@ module BGP
         Thread.new { run_session(sock) }
       end
 
+      # Ends the session, if there is one. The reconnect loop and the
+      # listener are untouched, so an active peer dials again after its
+      # retry interval and a passive one waits to be dialled: this is
+      # `peer.clear`, not `peer.stop`.
+      #
+      # **It closes the connection and sends no NOTIFICATION, and that is
+      # a gap recorded rather than a choice.** A router answers
+      # `clear bgp NEIGHBOR` with Cease and RFC 4486 section 4's
+      # Administrative Reset, subcode 4, or Administrative Shutdown,
+      # subcode 2. `Neighbor#stop` closes the output queue and the socket
+      # in one breath, so a NOTIFICATION queued just before it is one the
+      # writer thread may never get on the wire, and a method that
+      # reported sending one would be claiming something it cannot
+      # verify. Sending it properly means draining the output before the
+      # socket closes, which is a change to `bgp/io.rb` and its own piece
+      # of work.
       def stop
+        @admin.synchronize { @resume.broadcast }
         @neighbor.stop if @neighbor
+        self
+      end
+      alias clear stop
+
+      # True when `peer.stop` took this peer down and `peer.start` has not
+      # brought it back.
+      def shutdown? ; @admin.synchronize { @shutdown } ; end
+
+      # Administratively down: the session ends and does not come back.
+      # That is the whole difference from clear, and it is why the flag
+      # exists: without it the reconnect loop dials again two seconds
+      # later and a `peer.stop` reads as a session that flapped.
+      def admin_stop
+        @admin.synchronize { @shutdown = true ; @resume.broadcast }
+        @neighbor.stop if @neighbor
+        self
+      end
+
+      # Administratively up again. An active peer's thread is waiting on
+      # the condition variable, so this wakes it rather than starting
+      # one; a peer that has never run gets its thread here, which is
+      # what makes `peer.start` work on a node file that said nothing
+      # about connecting.
+      def admin_start
+        @admin.synchronize { @shutdown = false ; @resume.broadcast }
+        run_active if active?
+        self
+      end
+
+      # RFC 2918 section 3: a ROUTE-REFRESH message asks the peer to
+      # re-advertise the Adj-RIB-Out it holds for one <AFI, SAFI>. RFC
+      # 7313 section 3.2 redefines RFC 2918's Reserved octet as the
+      # Message Subtype, with 0 a normal request, 1 the beginning of a
+      # route refresh operation, 2 its end and 255 Reserved.
+      #
+      # **Nothing here checks that the peer advertised capability 2**, and
+      # that is Conventions rather than an omission: a tool for testing
+      # the protocol has to be able to send a refresh to a speaker that
+      # never asked for one and watch what it does. What is refused is a
+      # session that is not Established, because there is no connection
+      # to write to and `send_message` would raise a bare RuntimeError
+      # about a session that was never started.
+      def refresh(afi = 1, safi = 1, subtype = nil)
+        n = @neighbor
+        unless n && n.is_established?
+          raise ArgumentError, "#{@address}: the session is #{state.to_s.downcase}, not established"
+        end
+        msg = BGP::Route_refresh.new(afi, safi, subtype)
+        n.send_message(msg)
+        msg
       end
 
       private
+
+      # Waits while this peer is administratively down. The one second
+      # timeout is a backstop and not the mechanism: admin_start and stop
+      # both broadcast, so a resume is immediate, and the timeout is there
+      # so no path can leave this thread waiting for ever.
+      def wait_while_shutdown
+        @admin.synchronize do
+          @resume.wait(@admin, 1) while @shutdown && !@speaker.stopping?
+        end
+      end
+
+      # Between connection attempts. It waits on the same condition
+      # variable rather than sleeping, so a `peer.stop` during the retry
+      # interval is noticed at once instead of being followed by one more
+      # dial.
+      def backoff
+        @admin.synchronize do
+          next if @speaker.stopping? || @shutdown
+          @resume.wait(@admin, @config.fetch('retry', 2))
+        end
+      end
 
       def run_session(sock)
         @busy.synchronize do
@@ -443,6 +557,22 @@ module BGP
       end
 
       def stopping? ; @stopping ; end
+
+      # The configured neighbor with this address, or nil. Every control
+      # method that acts on one session goes through it, so a request
+      # naming an address nobody configured is refused by name rather
+      # than acting on whatever was first in the list.
+      def peer(address) ; @peers.find { |p| p.address == address.to_s } ; end
+
+      # The one the caller named, or an ArgumentError listing the ones
+      # there are, which is the shape an unknown API method is refused
+      # with.
+      def peer!(address)
+        peer(address) or
+          raise ArgumentError,
+                "no neighbor #{address.inspect} is configured; this bgp4rd has " \
+                "#{@peers.empty? ? 'none' : @peers.collect(&:address).join(', ')}"
+      end
 
       # True when the node file asks for a table at all. rib: on its own
       # builds one that decides and prints and advertises nothing, which is

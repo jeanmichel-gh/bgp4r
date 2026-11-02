@@ -33,6 +33,9 @@ module BGP
     #   view.routes                  # one row per prefix, its best path
     #   view.rib                     # every candidate path, and the decision
     #   view.rib('10.0.0.0/8')       # one prefix
+    #   view.adj_in('10.0.0.2')      # that peer's Adj-RIB-In, as received
+    #   view.adj_out('10.0.0.2')     # what went to it, and skipped why
+    #   view.fib                     # what the forwarding table is believed to hold
     #   view.json(:rib)              # the same as JSON text
     #
     # **Why this exists rather than a console parsing `rib.show`.** Show
@@ -70,8 +73,15 @@ module BGP
     # same line.
     class View
 
-      # The views, which are docs/daemon.md's control API names with the
-      # +show.+ dropped.
+      # The views +json+ can serialise, which are docs/daemon.md's control
+      # API names with the +show.+ dropped, for the three that take a
+      # prefix and nothing else.
+      #
+      # +adj_in+, +adj_out+ and +fib+ are deliberately not in it. The
+      # first two take a **peer address** where json's second argument is
+      # a prefix, so adding them would mean a second meaning for one
+      # argument, and whatever serves them has a JSON layer of its own:
+      # the daemon pages them, which json does not do for any view.
       VIEWS = %i[status routes rib].freeze
 
       # ORIGIN spelled out (RFC 4271 section 5.1.1: 0 IGP, 1 EGP, 2
@@ -168,6 +178,138 @@ module BGP
               :decided_by => step,
               :paths      => paths(p).map { |route, lost_at| path(route, lost_at, step) } }
           end
+        end
+      end
+
+      # One peer's Adj-RIB-In, as received, one row per path (RFC 4271
+      # section 3.2). With a prefix, only that prefix's paths.
+      #
+      # **As received, which is what no other view here answers.** The
+      # Adj-RIB-In holds what the peer sent before import policy, so a
+      # LOCAL_PREF an external peer sent is still in these rows where
+      # Table#import has already dropped it from everything downstream
+      # (RFC 4271 section 5.1.5). That is the whole reason to read it: a
+      # route the decision process never saw is otherwise invisible.
+      #
+      # A peer the table has never seen answers no rows. It must not
+      # answer by creating one: Table#adj_rib_in makes an Adj-RIB-In on
+      # first use, and a read that changes what it reads would put an
+      # empty RIB against every address anybody asked about. So the
+      # address is looked up in Table#peers first.
+      def adj_in(address, prefix = nil)
+        @table.synchronize do
+          ribin = adj_rib_in(address)
+          next [] unless ribin
+          routes = prefix ? ribin.paths(Route.normalize(prefix)) : ribin.routes
+          routes.sort_by { |r| [prefix_key(r.prefix), r.path_id || -1] }
+                .map { |r| received(r) }
+        end
+      end
+
+      # The prefixes in one peer's Adj-RIB-In, sorted as +prefixes+ sorts
+      # the Loc-RIB's. It is the key list a caller pages with, the way
+      # +prefixes+ is for +routes+: that is what keeps an Adj-RIB-In of a
+      # million prefixes from being built into one answer, which is the
+      # recorded requirement.
+      def adj_in_prefixes(address)
+        @table.synchronize do
+          ribin = adj_rib_in(address)
+          ribin ? ribin.prefixes.sort_by { |p| prefix_key(p) } : []
+        end
+      end
+
+      # What was advertised to one peer, one row per prefix and Path
+      # Identifier, and why anything was not.
+      #
+      # **These are the attributes that went out and not the Loc-RIB's**,
+      # which is the point: the export rules of RFC 4271 section 5.1 and
+      # RFC 4456 rewrite AS_PATH, NEXT_HOP, LOCAL_PREF and MED per peer,
+      # so a row here says what the peer was really told. An AdjRibOut
+      # holds a Path_attribute and not a Route, so the keys are the
+      # attributes it carries and there is no :from and no :local.
+      #
+      # Empty with no Router, since an Adj-RIB-Out belongs to router mode
+      # and a speaker that advertises nothing has none. Same first-use
+      # rule as adj_in: the peer is looked up in Router#peers.
+      def adj_out(address, prefix = nil)
+        @table.synchronize do
+          out = adj_rib_out(address)
+          next [] unless out
+          want = prefix && Route.normalize(prefix)
+          rows = []
+          out.each do |p, path_id, pa|
+            next if want && p != want
+            rows << { :prefix => p, :path_id => path_id }.merge(sent(pa))
+          end
+          rows.sort_by { |r| [prefix_key(r[:prefix]), r[:path_id] || -1] }
+        end
+      end
+
+      # The prefixes in one peer's Adj-RIB-Out, sorted, for the same
+      # reason +adj_in_prefixes+ exists.
+      def adj_out_prefixes(address)
+        @table.synchronize do
+          out = adj_rib_out(address)
+          out ? out.prefixes.sort_by { |p| prefix_key(p) } : []
+        end
+      end
+
+      # Why a prefix was not advertised to one peer, as [prefix, reason]
+      # rows, from Router#skipped. A route silently not advertised is the
+      # hardest kind of bug to see from outside, which is why Router
+      # keeps it at all.
+      def skipped(address)
+        router = @table.router
+        return [] unless router
+        router.skipped
+              .select { |(_prefix, peer, _reason)| peer && peer.address == address }
+              .map { |(prefix, _peer, reason)| { :prefix => prefix, :reason => reason && reason.to_s } }
+      end
+
+      # What the forwarding table is believed to hold, one row per prefix,
+      # and what the kernel refused.
+      #
+      # **Believed, not read back**, and the word is the honest one: Fib
+      # records what a command that exited 0 did, so these rows are
+      # bgp4r's own account and not an answer from the kernel. Reading
+      # the table back is `ip route show`, which is a different question
+      # and one a person asks with `ip`.
+      #
+      # :configured says whether anything is installing at all, so a
+      # daemon with no fib: in its configuration is distinguishable from
+      # one whose table happens to be empty. Both answer no rows.
+      def fib
+        @table.synchronize do
+          installer = @table.fib_installer
+          f = @table.fib
+          { :configured => !installer.nil?,
+            :backend    => installer && installer.backend.to_s,
+            :total      => f ? f.size : 0,
+            :failed     => (installer ? installer.failed : {})
+                             .map { |prefix, result| { :prefix => prefix, :error => result.to_s } },
+            :skipped    => (f ? f.skipped : {})
+                             .map { |prefix, reason| { :prefix => prefix, :reason => reason.to_s } } }
+        end
+      end
+
+      # The prefixes the forwarding table is believed to hold, sorted, for
+      # the same reason +adj_in_prefixes+ exists.
+      def fib_prefixes
+        @table.synchronize do
+          f = @table.fib
+          f ? f.prefixes.sort_by { |p| prefix_key(p) } : []
+        end
+      end
+
+      # One row per installed prefix, or that one prefix's row. The next
+      # hop is the one that went to the command, not one read back from
+      # the kernel; see +fib+.
+      def fib_routes(prefix = nil)
+        @table.synchronize do
+          f = @table.fib
+          next [] unless f
+          keys = prefix ? [Route.normalize(prefix)].select { |p| f.prefixes.include?(p) } : fib_prefixes
+          keys.map { |p| { :prefix => p, :next_hop => f[p] } }
         end
       end
 
@@ -278,6 +420,73 @@ module BGP
           next row unless out_peers.include?(p)
           row.merge(:sent => router.adj_rib_out(p).size)
         end
+      end
+
+      # The Adj-RIB-In of the peer with this address, or nil when the
+      # table has never seen one.
+      #
+      # **The address is looked up in Table#peers first and that is not
+      # tidiness.** Table#adj_rib_in makes an Adj-RIB-In on first use, so
+      # asking it directly would answer an empty RIB for every address
+      # anybody named and leave one behind in the table: a read that
+      # changes what it reads. Router#adj_rib_out has the same shape, and
+      # so does the peer row count in peer_rows, which is why that one
+      # tests membership too.
+      def adj_rib_in(address)
+        peer = @table.peers.find { |p| !p.local? && p.address == address }
+        peer && @table.adj_rib_in(peer)
+      end
+
+      # The Adj-RIB-Out of the peer with this address, or nil with no
+      # Router or no such peer. An Adj-RIB-Out belongs to router mode, so
+      # a speaker that advertises nothing has none at all.
+      def adj_rib_out(address)
+        router = @table.router
+        peer = router && router.peers.find { |p| !p.local? && p.address == address }
+        peer && router.adj_rib_out(peer)
+      end
+
+      # One row of an Adj-RIB-In: the route as received, and whether it is
+      # the one that won.
+      #
+      # best is answered by the peer and the Path Identifier and not by
+      # object identity, because Table#import builds a changed copy of an
+      # external peer's route when it drops LOCAL_PREF, so the Loc-RIB's
+      # winner is not the same object as the one in the Adj-RIB-In. Those
+      # two fields are the key an imported route is stored under, so they
+      # name one path exactly.
+      def received(route)
+        best = @table.best(route.prefix)
+        { :prefix => route.prefix }.merge(fields(route))
+                                   .merge(:best => !best.nil? && best.peer == route.peer &&
+                                                   best.path_id == route.path_id)
+      end
+
+      # The attributes one Adj-RIB-Out entry carries, read off the
+      # Path_attribute that went out. No :from and no :local: an
+      # Adj-RIB-Out holds attributes and not a Route, so there is nothing
+      # to answer them with and a key with a made up value would be
+      # worse than no key.
+      def sent(pa)
+        # As_path#as_path answers the word "empty" for a path with no
+        # segments, which is a thing to print and not a value, so the
+        # same rule as View#as_path applies: an empty path is an empty
+        # String, and no AS_PATH attribute at all is the same answer.
+        path = value(pa, As_path) { |a| a.as_path }
+        { :next_hop   => value(pa, Next_hop) { |a| a.next_hop },
+          :as_path    => (path.nil? || path == 'empty' ? '' : path),
+          :origin     => ORIGINS[value(pa, Origin) { |a| a.to_i }],
+          :local_pref => value(pa, Local_pref) { |a| a.to_i },
+          :med        => value(pa, Multi_exit_disc) { |a| a.to_i },
+          :communities => value(pa, Communities) { |a| a.communities } }
+      end
+
+      # One attribute of a Path_attribute, or nil when it carries none.
+      # Route#attr does the same thing for a Route; this is the same rule
+      # one layer down, for an Adj-RIB-Out entry that has no Route.
+      def value(pa, klass)
+        return nil unless pa && pa.has?(klass)
+        yield pa[klass]
       end
 
       # The value keys of one path, shared by both views.

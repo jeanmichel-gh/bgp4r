@@ -168,9 +168,25 @@ class BGP_Daemon_Views_Test < Test::Unit::TestCase
   # mcast_vpn_doc_test.rb's first draft paid for.
   def test_a_page_is_built_inside_one_table_lock
     src = File.read(File.expand_path('../../../bgp/daemon/views.rb', __dir__))
-    body = src[/^      def page\(params\)\n(.*?)^      end$/m, 1]
-    assert_not_nil(body, 'Views#page must still be there')
-    assert_match(/^        @speaker\.rib\.synchronize do$/, body)
+    body = src[/^      def keyed\(params, keys_fn\)\n(.*?)^      end$/m, 1]
+    assert_not_nil(body, 'Views#keyed must still be there: every paged view goes through it')
+    assert_match(/^        snapshot do$/, body)
+    assert_match(/^          keys = keys_fn\.call$/, body,
+                 'the key list is read inside the lock, not handed in from outside it')
+    lock = src[/^      def snapshot\n(.*?)^      end$/m, 1]
+    assert_not_nil(lock, 'Views#snapshot must still be there')
+    assert_match(/^        @speaker\.rib\.synchronize \{ yield \}$/, lock)
+  end
+
+  # **One envelope and one window, read by every paged view**, so a
+  # second set of rules about what next_offset nil means cannot grow
+  # beside the first. Matched as code for the reason above.
+  def test_one_envelope_builder_serves_every_paged_view
+    src = File.read(File.expand_path('../../../bgp/daemon/views.rb', __dir__))
+    assert_equal(1, src.scan(/:next_offset =>/).size,
+                 'the page envelope is built in one place')
+    assert_equal(1, src.scan(/^      def window\(params\)$/).size)
+    assert_equal(1, src.scan(/^      def envelope\(/).size)
   end
 
   def test_the_page_keys_are_the_same_for_both_views

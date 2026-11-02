@@ -55,21 +55,33 @@ class BGP_Daemon_Api_Test < Test::Unit::TestCase
     assert_equal('10.0.0.1', r[:result][:router_id])
   end
 
-  # **Not stubbed, named.** The methods this pull request leaves out are
+  # **Not stubbed, named.** The methods this daemon does not have are
   # each their own later piece of work, and an unknown one answers the
   # list rather than nothing, which is the shape Events#publish answers
-  # an unknown kind with.
+  # an unknown kind with. The streams are in that list too, since a
+  # reader guessing a name wants every name.
   def test_an_unknown_method_names_the_ones_there_are
     r = req('show.nonsense')
     assert_nil(r[:result])
     assert_match(/unknown method "show\.nonsense"/, r[:error])
-    BGP::Daemon::Api::METHODS.keys.each { |m| assert_match(/#{Regexp.escape(m)}/, r[:error]) }
+    BGP::Daemon::Api.names.each { |m| assert_match(/#{Regexp.escape(m)}/, r[:error]) }
+    BGP::Daemon::Api::STREAM_METHODS.each { |m| assert_match(/#{Regexp.escape(m)}/, r[:error]) }
   end
 
-  def test_the_methods_left_out_are_not_stubbed
+  # **Two sided, because the example in it has expired once already.**
+  # `show.adj_in`, `show.adj_out`, `show.fib`, `show.log`, the two event
+  # stream methods, `peer.*` and `route.*` were the later pull request
+  # this named, and they are built, so the first half asserts they
+  # answer. What is still a design is the whole of `config.*`, which is
+  # the candidate configuration and is somebody else's piece of work.
+  def test_the_write_side_answers_and_config_is_still_not_stubbed
     %w[show.adj_in show.adj_out show.fib show.log events.subscribe
-       peer.clear route.originate config.load].each do |m|
-      assert_equal(false, BGP::Daemon::Api::METHODS.key?(m),
+       events.unsubscribe peer.clear peer.stop peer.start peer.refresh
+       route.originate route.withdraw].each do |m|
+      assert_include(BGP::Daemon::Api.names, m)
+    end
+    %w[config.load config.commit config.compare].each do |m|
+      assert_equal(false, BGP::Daemon::Api.names.include?(m),
                    "#{m} is a later pull request and must not answer anything yet")
     end
   end
@@ -108,7 +120,8 @@ class BGP_Daemon_Api_Test < Test::Unit::TestCase
     i = req('api.info')[:result]
     assert_equal(BGP::VERSION, i[:version])
     assert_equal(BGP::Daemon::Api::VERSION, i[:api])
-    assert_equal(BGP::Daemon::Api::METHODS.keys.sort, i[:methods])
+    assert_equal(BGP::Daemon::Api.names, i[:methods])
+    assert_include(i[:methods], 'events.subscribe')
     assert_include(i[:event_kinds], 'session')
     assert_equal(0, i[:event_seq])
     @speaker.events.publish(:kind => :log, :message => 'something happened')
