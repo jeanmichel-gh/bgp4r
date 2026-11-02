@@ -26,6 +26,7 @@ require 'bgp/version'
 require 'bgp/events'
 require 'bgp/daemon/views'
 require 'bgp/daemon/control'
+require 'bgp/daemon/candidate'
 
 module BGP
   module Daemon
@@ -68,11 +69,14 @@ module BGP
     # address. A console maps it onto its own column. `bgp/events.rb` has
     # the reason and docs/daemon.md says so too.
     #
-    # **All of `config.*` is still a design and is deliberately not
-    # stubbed**: an unknown method answers an error naming the methods
-    # that exist, which is the shape `Events#publish` already answers an
-    # unknown kind with, and a method that answers nothing reads as a
-    # feature that is broken.
+    # **`config.*` answers now**, in `bgp/daemon/candidate.rb`: the
+    # candidate configuration, with `show.configuration` reading it. The
+    # nine methods a console calls were read in routescope's
+    # `Drivers::Ospfd` at `7eabde1` rather than designed here, and
+    # `config.load` is a tenth that no driver calls and a person does.
+    # An unknown method still answers an error naming the methods that
+    # exist, which is the shape `Events#publish` already answers an
+    # unknown kind with.
     #
     # **A bad request must not take the daemon down.** A console can send
     # anything, and a daemon a console can kill by accident is worse than
@@ -111,6 +115,7 @@ module BGP
       METHODS = {
         'api.info'        => ->(a, _p) { Api.api_info(a.views) },
         'show.status'     => ->(a, _p) { a.views.status },
+        'show.configuration' => ->(a, p) { a.candidate.configuration(p) },
         'show.peers'      => ->(a, _p) { a.views.peers },
         'show.routes'     => ->(a, p) { a.views.routes(p) },
         'show.rib'        => ->(a, p) { a.views.rib(p) },
@@ -124,7 +129,15 @@ module BGP
         'peer.start'      => ->(a, p) { a.control.peer_start(p) },
         'peer.refresh'    => ->(a, p) { a.control.peer_refresh(p) },
         'route.originate' => ->(a, p) { a.control.route_originate(p) },
-        'route.withdraw'  => ->(a, p) { a.control.route_withdraw(p) }
+        'route.withdraw'  => ->(a, p) { a.control.route_withdraw(p) },
+        'config.changed'  => ->(a, p) { a.candidate.changed?(p) },
+        'config.compare'  => ->(a, p) { a.candidate.compare(p) },
+        'config.history'  => ->(a, p) { a.candidate.history(p) },
+        'config.load'     => ->(a, p) { a.candidate.load(p) },
+        'config.replace'  => ->(a, p) { a.candidate.replace(p) },
+        'config.commit'   => ->(a, p) { a.candidate.commit(p) },
+        'config.discard'  => ->(a, p) { a.candidate.discard(p) },
+        'config.rollback' => ->(a, p) { a.candidate.rollback(p) }
       }.freeze
 
       # Every method this answers, the streams included, so one list is
@@ -154,10 +167,12 @@ module BGP
       attr_reader :path, :views
 
       # :path is the socket, :logger a ->(level, message) or nil,
-      # :views the Views this answers from, and :keepalive the interval
-      # between keepalive lines on an event stream, which a test shortens.
+      # :views the Views this answers from, :candidate the candidate
+      # configuration, and :keepalive the interval between keepalive lines
+      # on an event stream, which a test shortens.
       def initialize(views, arg={})
         @views     = views
+        @candidate = arg[:candidate]
         @path      = arg[:path]
         @logger    = arg[:logger]
         @keepalive = arg[:keepalive] || KEEPALIVE
@@ -169,6 +184,16 @@ module BGP
       # no Speaker is still an object a test can make.
       def control
         @lock.synchronize { @control ||= Control.new(@views.speaker) }
+      end
+
+      # The candidate configuration, which answers `show.configuration`
+      # and every `config.` method. Built on first use from the Speaker's
+      # own configuration for the same reason `control` is, and handed in
+      # by `Server` so that one of it carries the logger and the history.
+      def candidate
+        @lock.synchronize do
+          @candidate ||= Candidate.new(@views.speaker, @views.speaker.config, :logger => @logger)
+        end
       end
 
       def start
