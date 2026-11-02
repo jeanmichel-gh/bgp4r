@@ -110,16 +110,18 @@ class Capture_CLI_Test < Test::Unit::TestCase
     assert_match(/Usage: bgp4r SUBCOMMAND/, @out.string)
   end
 
-  def test_the_usage_lists_the_commands_that_do_not_exist_yet
-    # Saying so is the point: an executable in a released gem that
-    # answers nothing is worse than one that is not there. **`sim` and
-    # `routegen` were on this line and are built now**, so the guard is
-    # re-pointed at what is left rather than weakened, and the second
-    # half is what makes it a guard: a subcommand that exists must not
-    # still be listed as missing.
+  def test_the_usage_calls_nothing_unimplemented_any_more
+    # Saying so was the point while anything was missing: an executable
+    # in a released gem that answers nothing is worse than one that is
+    # not there. **`sim` and `routegen` came off that line, and `lab new`
+    # was the last name on it**, so the guard is re-pointed at the new
+    # truth rather than weakened: the usage must now claim nothing is
+    # missing at all, and no subcommand that exists may be listed as
+    # missing if the line ever comes back.
     @cli.start([])
-    assert_match(/Not yet implemented: lab new/, @out.string)
+    assert_no_match(/Not yet implemented/, @out.string)
     BGP::Capture::CLI::SUBCOMMANDS.each do |s|
+      assert_match(/^  #{s}\b/, @out.string, "#{s} is not in the usage")
       assert_no_match(/Not yet implemented:.*\b#{s}\b/, @out.string,
                       "#{s} exists and the usage still calls it missing")
     end
@@ -153,9 +155,11 @@ class Capture_CLI_Test < Test::Unit::TestCase
   end
 
   # Three of docs/daemon.md's four commands reach something here:
-  # `capture`, `sim` and `routegen`, with `version` beside them.
-  def test_the_subcommands_are_the_four_that_exist
-    assert_equal(%w{capture sim routegen version}, BGP::Capture::CLI::SUBCOMMANDS)
+  # `capture`, `sim` and `routegen`, with `lab` and `version` beside
+  # them. **`lab` is the last of the umbrella's own subcommands**, so
+  # this list is the whole of what that document's table names.
+  def test_the_subcommands_are_the_five_that_exist
+    assert_equal(%w{capture sim routegen lab version}, BGP::Capture::CLI::SUBCOMMANDS)
   end
 
   # ---- the envelope
@@ -381,6 +385,440 @@ class Capture_CLI_Test < Test::Unit::TestCase
     end
     assert_equal(1, status)
     assert_match(/produced nothing/, JSON.parse(@out.string)['error'])
+  end
+
+  # ---- lab new
+  #
+  # The assertions run against the **real** `lab/topologies/` folders
+  # wherever they can, so a discovery that stopped working fails here
+  # rather than passing against a copy of itself. What no real folder
+  # can make a claim about gets a source folder of its own, built here
+  # and reached through `CLI.topologies`'s injected root: a file mode
+  # that is not 0644, a `*.clab.yml`, a `.gitignore`, a folder with
+  # nothing in it, a name this repository has never had, and a
+  # `lab/topologies/` that is not there.
+  #
+  # `Dir.mktmpdir` for the destinations, as the capture tests above use
+  # it, so the whole file honours TMPDIR and nothing writes into the
+  # repository.
+
+  def lab_new(*argv)
+    Dir.mktmpdir('bgp4r-lab') do |tmp|
+      dir = File.join(tmp, 'lab')
+      yield dir, @cli.lab(['new', dir] + argv)
+    end
+  end
+
+  # The relative path of every file and directory under a folder, which
+  # is what "the copy reproduces the folder" means.
+  def entries(dir)
+    Dir.glob('**/*', File::FNM_DOTMATCH, :base => dir).
+      reject { |r| File.basename(r) == '.' || r.start_with?('.git/') || r == '.git' }.sort
+  end
+
+  def topologies_dir
+    BGP::Capture::CLI::TOPOLOGIES
+  end
+
+  def git?
+    system('git', '--version', :out => File::NULL, :err => File::NULL)
+  end
+
+  def test_the_topologies_are_discovered_and_not_listed
+    # The four folders in the repository when this was written must all
+    # be offered, and the default has to be one of whatever is there, or
+    # `bgp4r lab new DIR` with no name refuses its own default. A folder
+    # added later passes this unchanged, which is the point of
+    # discovering them; what says discovery really reads the filesystem
+    # is the test below.
+    found = BGP::Capture::CLI.topologies
+    %w{add-path fault-matrix routegen two-speakers}.each do |n|
+      assert(found.include?(n), "#{n} is a topology folder and was not discovered")
+    end
+    assert(found.include?(BGP::Capture::CLI::DEFAULT_TOPOLOGY),
+           'the default topology is not among the discovered ones')
+    found.each do |n|
+      assert(File.directory?(File.join(topologies_dir, n)), "#{n} is not a folder")
+    end
+  end
+
+  def test_discovery_reads_the_filesystem_and_not_a_list
+    # **The assertion that cannot pass by luck**, which is why it is
+    # here beside the one above: the four names in that test would be
+    # answered by a hard coded table exactly as well as by a directory
+    # read, the way CLAUDE.md's free port probe answered whether or not
+    # the code read its argument. A name this repository has never had
+    # cannot be in any table.
+    Dir.mktmpdir('bgp4r-lab-root') do |root|
+      Dir.mkdir(File.join(root, 'invented-topology'))
+      Dir.mkdir(File.join(root, 'another-one'))
+      File.write(File.join(root, 'not-a-folder.yml'), "x\n")
+      assert_equal(%w{another-one invented-topology},
+                   BGP::Capture::CLI.topologies(root))
+    end
+  end
+
+  def test_a_copy_reproduces_the_folders_contents
+    # `add-path` and not the default, because it is the only topology
+    # with a subfolder, so this is also the test that says the copy
+    # recurses. Naming a topology that is not the default is what makes
+    # it fail if NAME is ignored.
+    src = File.join(topologies_dir, 'add-path')
+    lab_new('add-path') do |dir, status|
+      assert_equal(0, status)
+      assert_equal(entries(src), entries(dir))
+      assert(entries(dir).include?('scenarios/two-paths.yml'),
+             'the scenarios subfolder did not come across')
+      entries(src).each do |rel|
+        from = File.join(src, rel)
+        next if File.directory?(from)
+        assert_equal(File.binread(from), File.binread(File.join(dir, rel)),
+                     "#{rel} differs from the one it was copied from")
+      end
+      # And the copy is of the topology that was asked for, not of
+      # whichever one came first: a default-name bug passes everything
+      # above except this.
+      assert_match(/^name: bgp4r-add-path$/,
+                   File.read(File.join(dir, 'compose.yml')))
+    end
+  end
+
+  def test_file_modes_are_preserved
+    # Two things make this test the shape it is, and the second was
+    # found by sabotaging the first version of it.
+    #
+    # **Every file in `lab/topologies/` is 0644 today**, which is what an
+    # 022 umask gives a freshly created file, so a copy that dropped the
+    # chmod would pass against the real folders. Hence a source folder
+    # built here with modes that are not the default.
+    #
+    # **And that was still not enough: with `File.chmod` deleted from
+    # `copy_lab` the whole file passed.** `FileUtils.cp` opens the
+    # destination with the source's mode, so under the usual 022 umask it
+    # already answers 0755 and the explicit chmod is redundant. Measured
+    # on 2026-11-02: under umask 077 it answers **0700** for the same
+    # source, because the umask applies to that open, and the chmod is
+    # then the whole of what keeps an executable bit. So the copy runs
+    # under a restrictive umask here, which is the only umask that can
+    # see the line, and it is the one a person in a hardened container
+    # has. Same family as CLAUDE.md's free port probe: the obvious
+    # assertion passed whether or not the code did its job.
+    Dir.mktmpdir('bgp4r-lab-root') do |root|
+      src = File.join(root, 'modes')
+      Dir.mkdir(src)
+      File.write(File.join(src, 'run.sh'), "#!/bin/sh\n")
+      File.chmod(0o755, File.join(src, 'run.sh'))
+      File.write(File.join(src, 'secret.yml'), "k: v\n")
+      File.chmod(0o600, File.join(src, 'secret.yml'))
+      Dir.mktmpdir('bgp4r-lab') do |tmp|
+        dir = File.join(tmp, 'lab')
+        old = File.umask(0o077)
+        begin
+          BGP::Capture::CLI.copy_lab(src, dir)
+        ensure
+          File.umask(old)
+        end
+        assert_equal(0o755, File.stat(File.join(dir, 'run.sh')).mode & 0o777)
+        assert_equal(0o600, File.stat(File.join(dir, 'secret.yml')).mode & 0o777)
+      end
+    end
+  end
+
+  def test_a_gitignore_in_the_source_is_honoured_and_its_absence_is_not_an_error
+    # The absent case is the one every other test here takes, since
+    # four of the five topologies have no `.gitignore`, so it is
+    # asserted by all of them. This is the present case, in the three
+    # shapes `copy_lab`'s header names: a comment and a blank line are
+    # skipped, a basename matches at any depth, a slash pattern matches
+    # the relative path and nothing else, and a trailing slash matches
+    # a directory and takes everything under it.
+    Dir.mktmpdir('bgp4r-lab-root') do |root|
+      src = File.join(root, 'ignores')
+      Dir.mkdir(src)
+      Dir.mkdir(File.join(src, 'runs'))
+      Dir.mkdir(File.join(src, 'recordings'))
+      Dir.mkdir(File.join(src, 'recordings', 'deep'))
+      Dir.mkdir(File.join(src, 'keep'))
+      Dir.mkdir(File.join(src, 'runs', 'deep'))
+      Dir.mkdir(File.join(src, 'clab-run'))
+      File.write(File.join(src, '.gitignore'),
+                 "# a comment\nstate.json\n\n*.log\nruns/*.yml\nrecordings/\nclab-*/\n")
+      File.write(File.join(src, 'compose.yml'), "name: x\n")
+      File.write(File.join(src, 'state.json'), "{}\n")
+      File.write(File.join(src, 'speaker.log'), "noise\n")
+      File.write(File.join(src, 'runs', 'state.json'), "{}\n")      # basename, any depth
+      File.write(File.join(src, 'runs', 'old.yml'), "x\n")          # the slash pattern
+      # **The case that makes FNM_PATHNAME load-bearing**, and it was
+      # added because sabotaging that flag away passed everything else:
+      # `runs/*.yml` is one directory deep, so git does not let its `*`
+      # cross a separator and this file is kept. Without the flag it is
+      # wrongly excluded, which is a file silently missing from a lab.
+      File.write(File.join(src, 'runs', 'deep', 'b.yml'), "x\n")
+      File.write(File.join(src, 'keep', 'old.yml'), "x\n")          # not under runs/, kept
+      File.write(File.join(src, 'recordings', 'run.pcap'), "x\n")   # the directory
+      File.write(File.join(src, 'recordings', 'deep', 'more'), "x\n")
+      File.write(File.join(src, 'clab-run', 'state'), "x\n")        # directory, excluded
+      # **The case that makes the `directory &&` guard load-bearing**,
+      # added for the same reason as the one above: sabotaging the guard
+      # away passed everything else. `clab-*/` is a directory pattern,
+      # so a *file* whose name it would otherwise match is kept, which
+      # is git's rule and is `bgp4r-lab`'s own pattern shape.
+      File.write(File.join(src, 'clab-notes.md'), "x\n")
+      Dir.mktmpdir('bgp4r-lab') do |tmp|
+        dir = File.join(tmp, 'lab')
+        BGP::Capture::CLI.copy_lab(src, dir)
+        assert_equal(%w{.gitignore clab-notes.md compose.yml keep keep/old.yml
+                        runs runs/deep runs/deep/b.yml},
+                     entries(dir))
+      end
+    end
+  end
+
+  def test_the_real_gitignore_of_bgp4r_lab_keeps_its_directories_out
+    # **The one real `.gitignore` in the tree, and the reason `copy_lab`
+    # is not ospfv2's basename `fnmatch`.** `bgp4r-lab`'s carries
+    # `recordings/` and `clab-*/`, which a basename match never fires
+    # on, so a lab somebody had deployed in the template folder would
+    # have had containerlab's own working directory copied into every
+    # new lab made from it. This reads that file verbatim rather than a
+    # paraphrase of it, by copying the real folder and then writing
+    # into the copy what its own comment says the patterns are about.
+    src0 = File.join(topologies_dir, 'bgp4r-lab')
+    omit 'bgp4r-lab has no .gitignore any more' unless
+      File.file?(File.join(src0, '.gitignore'))
+    Dir.mktmpdir('bgp4r-lab-src') do |t|
+      src = File.join(t, 'src')
+      BGP::Capture::CLI.copy_lab(src0, src)
+      Dir.mkdir(File.join(src, 'clab-bgp4r-lab'))
+      File.write(File.join(src, 'clab-bgp4r-lab', 'topology-data.json'), "{}\n")
+      Dir.mkdir(File.join(src, 'recordings'))
+      File.write(File.join(src, 'recordings', 'run.pcap'), "x\n")
+      File.write(File.join(src, 'rtr', 'bgp4rd.yml.sav'), "old\n")
+      File.write(File.join(src, '.frr.conf.bak'), "old\n")
+      Dir.mktmpdir('bgp4r-lab') do |tmp|
+        dir = File.join(tmp, 'lab')
+        BGP::Capture::CLI.copy_lab(src, dir)
+        got = entries(dir)
+        assert_equal([], got.grep(/\Aclab-/), 'containerlab working files came across')
+        assert_equal([], got.grep(/\Arecordings/), 'recordings came across')
+        assert_equal([], got.grep(/\.sav\z|\.bak\z/), 'router backups came across')
+        # And the folder itself still arrived, or the assertions above
+        # would pass against a copy of nothing.
+        assert(got.include?('bgp4r-lab.clab.yml'), 'the topology file did not')
+        assert(got.include?('rtr/bgp4rd.yml'), 'a nested config did not')
+        assert(got.size > 10, "only #{got.size} entries came across")
+      end
+    end
+  end
+
+  def test_the_copy_is_a_git_repository_with_one_commit
+    omit 'git is not installed here' unless git?
+    lab_new do |dir, status|
+      assert_equal(0, status)
+      assert(File.directory?(File.join(dir, '.git')), 'the copy is not a repository')
+      count = `git -C #{dir} rev-list --count HEAD`.strip
+      assert_equal('1', count)
+      subject = `git -C #{dir} log -1 --format=%s`.strip
+      assert_equal('Lab created from bgp4r lab/topologies/two-speakers', subject)
+      # The commit holds the lab and not an empty tree, which is the
+      # half `git init` alone would satisfy.
+      tracked = `git -C #{dir} ls-files`.split("\n").sort
+      assert_equal(%w{compose.yml r1.yml r2.yml}, tracked)
+      assert_match(/git: repository created with a first commit/, @out.string)
+    end
+  end
+
+  def test_no_git_copies_and_leaves_no_repository
+    lab_new('--no-git') do |dir, status|
+      assert_equal(0, status)
+      assert(File.file?(File.join(dir, 'compose.yml')), 'the copy did not happen')
+      assert(!File.exist?(File.join(dir, '.git')), '--no-git still made a repository')
+      assert_no_match(/^git:/, @out.string)
+    end
+  end
+
+  def test_an_unknown_topology_lists_what_was_found
+    Dir.mktmpdir('bgp4r-lab') do |tmp|
+      assert_equal(1, @cli.lab(['new', File.join(tmp, 'lab'), 'nonesuch']))
+    end
+    assert_match(/no topology nonesuch/, @out.string)
+    # The list is what was found and not a list written down anywhere,
+    # so every real folder has to be in it.
+    BGP::Capture::CLI.topologies.each do |n|
+      assert_match(/\b#{Regexp.escape(n)}\b/, @out.string, "#{n} is not in the refusal")
+    end
+  end
+
+  def test_lab_new_with_no_folder_prints_the_usage_and_fails
+    assert_equal(1, @cli.lab(['new']))
+    assert_match(/Usage: bgp4r lab new DIR/, @out.string)
+    # The usage lists what was found too, for the same reason.
+    BGP::Capture::CLI.topologies.each do |n|
+      assert_match(/^  #{Regexp.escape(n)}$/, @out.string, "#{n} is not in the usage")
+    end
+  end
+
+  def test_lab_without_new_prints_the_usage_and_fails
+    assert_equal(1, @cli.lab([]))
+    assert_match(/Usage: bgp4r lab new DIR/, @out.string)
+  end
+
+  def test_lab_is_reached_through_the_dispatch
+    # Without this the one arm of the case that matters is never taken,
+    # which is what `test_capture_is_reached_through_the_dispatch` says
+    # about capture.
+    assert_equal(1, @cli.start(['lab', 'new']))
+    assert_match(/Usage: bgp4r lab new DIR/, @out.string)
+  end
+
+  def test_a_destination_that_exists_and_is_not_empty_is_refused
+    Dir.mktmpdir('bgp4r-lab') do |tmp|
+      File.write(File.join(tmp, 'mine.yml'), "k: v\n")
+      assert_equal(1, @cli.lab(['new', tmp]))
+      assert_match(/exists and is not empty/, @out.string)
+      assert(!File.exist?(File.join(tmp, 'compose.yml')), 'it copied anyway')
+    end
+  end
+
+  def test_an_empty_destination_that_exists_is_accepted
+    Dir.mktmpdir('bgp4r-lab') do |tmp|
+      assert_equal(0, @cli.lab(['new', tmp, 'two-speakers', '--no-git']))
+      assert(File.file?(File.join(tmp, 'r1.yml')))
+    end
+  end
+
+  def test_an_unknown_flag_prints_the_usage_and_fails
+    Dir.mktmpdir('bgp4r-lab') do |tmp|
+      assert_equal(1, @cli.lab(['new', File.join(tmp, 'lab'), '--nope']))
+      assert_match(/invalid option: --nope/, @out.string)
+      assert_match(/Usage: bgp4r lab new DIR/, @out.string)
+    end
+  end
+
+  def test_a_folder_that_cannot_be_made_is_a_message_and_not_a_backtrace
+    # The one thing a caller gets wrong that nothing above catches: a
+    # destination whose parent is not a directory, or is not writable.
+    # A file in the path is the shape that reproduces everywhere,
+    # including as root, where an unwritable directory does not.
+    Dir.mktmpdir('bgp4r-lab') do |tmp|
+      blocker = File.join(tmp, 'afile')
+      File.write(blocker, "not a directory\n")
+      assert_equal(1, @cli.lab(['new', File.join(blocker, 'lab')]))
+      assert_match(/cannot make the lab folder/, @out.string)
+    end
+  end
+
+  def test_a_topology_with_nothing_in_it_degrades_to_messages
+    # Two of the "say so rather than fail" paths at once, and the only
+    # source that reaches either: an empty folder gives `git commit`
+    # nothing to commit, so the init succeeds and the commit does not,
+    # and it holds neither a *.clab.yml nor a compose.yml, so there is
+    # nothing truthful to say about starting it. **The status is still
+    # 0**, because the copy is what was asked for and it happened.
+    Dir.mktmpdir('bgp4r-lab-root') do |root|
+      Dir.mkdir(File.join(root, 'empty'))
+      Dir.mktmpdir('bgp4r-lab') do |tmp|
+        dir = File.join(tmp, 'lab')
+        assert_equal(0, @cli.lab(['new', dir, 'empty'], root))
+        assert(File.directory?(dir), 'the folder was not made')
+        assert_match(/holds neither a \*\.clab\.yml nor a compose\.yml/, @out.string)
+        if git?
+          assert_match(/the first commit failed/, @out.string)
+          assert(File.directory?(File.join(dir, '.git')),
+                 'the repository was not created either')
+        end
+      end
+    end
+  end
+
+  def test_a_missing_topologies_folder_is_a_message_and_not_a_crash
+    # Running as an installed gem the topologies are shipped, since
+    # `s.files` is `git ls-files` and all sixteen are tracked. This is
+    # the case where something has gone wrong with that anyway: it must
+    # name the folder it looked in rather than raise.
+    Dir.mktmpdir('bgp4r-lab') do |tmp|
+      gone = File.join(tmp, 'no-such-topologies')
+      assert_equal(1, @cli.lab(['new', File.join(tmp, 'lab')], gone))
+      assert_match(/no lab topologies here/, @out.string)
+      assert_match(/#{Regexp.escape(gone)}/, @out.string)
+    end
+  end
+
+  def test_a_compose_topology_says_how_to_start_it
+    # Every Compose topology here builds from the bgp4r checkout with a
+    # context three directories up, so the message has to say the copy
+    # cannot build it where it landed.
+    lab_new('two-speakers', '--no-git') do |dir, status|
+      assert_equal(0, status)
+      assert_match(/is a Compose topology/, @out.string)
+      assert_match(/bgp4r-speaker/, @out.string)
+      assert_match(/docker compose up -d/, @out.string)
+      assert_no_match(/containerlab/, @out.string)
+    end
+  end
+
+  def test_the_image_to_build_is_read_out_of_the_compose_file
+    # Not every topology builds the same image: `fault-matrix` builds
+    # `bgp4r-conformance`, so a message naming one constant would be
+    # wrong for it. And the GoBGP image is pulled, so it must not be
+    # named as something to build.
+    assert_equal(%w{bgp4r-speaker},
+                 BGP::Capture::CLI.local_images(
+                   File.join(topologies_dir, 'two-speakers', 'compose.yml')))
+    assert_equal(%w{bgp4r-conformance},
+                 BGP::Capture::CLI.local_images(
+                   File.join(topologies_dir, 'fault-matrix', 'compose.yml')))
+    assert_equal(%w{bgp4r-speaker},
+                 BGP::Capture::CLI.local_images(
+                   File.join(topologies_dir, 'add-path', 'compose.yml')))
+  end
+
+  def test_a_containerlab_topology_says_how_to_start_it
+    # Which kind a topology is comes from its own files and not from a
+    # list, which is what let `bgp4r-lab` take this arm with no change to
+    # cli.rb: this test was written against a fixture folder because no
+    # `*.clab.yml` was in the tree, and it asserts against the real one
+    # now that there is.
+    lab_new('bgp4r-lab', '--no-git') do |_, status|
+      assert_equal(0, status)
+      assert_match(/is a containerlab topology/, @out.string)
+      assert_match(/containerlab deploy -t bgp4r-lab\.clab\.yml/, @out.string)
+      assert_match(/containerlab destroy -t bgp4r-lab\.clab\.yml/, @out.string)
+      assert_no_match(/is a Compose topology/, @out.string)
+      assert_no_match(/docker compose/, @out.string)
+    end
+  end
+
+  def test_the_clab_file_is_found_whatever_it_is_called
+    # The real folder names its topology file after itself, so the
+    # assertion above would pass against a message that printed the
+    # topology's name rather than the file it found. A fixture whose
+    # two do not match is what tells them apart.
+    Dir.mktmpdir('bgp4r-lab-root') do |root|
+      src = File.join(root, 'six-nodes')
+      Dir.mkdir(src)
+      File.write(File.join(src, 'ring.clab.yml'), "name: ring\n")
+      Dir.mktmpdir('bgp4r-lab') do |tmp|
+        dir = File.join(tmp, 'lab')
+        assert_equal(0, @cli.lab(['new', dir, 'six-nodes', '--no-git'], root))
+        assert_match(/containerlab deploy -t ring\.clab\.yml/, @out.string)
+      end
+    end
+  end
+
+  # `add-path` is the one folder with a README and the other three have
+  # none, so this is two tests rather than one assertion: a message that
+  # always mentioned a README would be wrong three times out of four,
+  # and one that never did would be wrong for the fourth.
+
+  def test_a_readme_is_mentioned_when_the_topology_has_one
+    lab_new('add-path', '--no-git') { |_, status| assert_equal(0, status) }
+    assert_match(%r{/README\.md says what it shows}, @out.string)
+  end
+
+  def test_no_readme_is_mentioned_when_the_topology_has_none
+    lab_new('two-speakers', '--no-git') { |_, status| assert_equal(0, status) }
+    assert_no_match(/README/, @out.string)
   end
 
   def test_every_line_is_one_json_object

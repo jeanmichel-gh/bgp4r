@@ -21,6 +21,40 @@ docker compose -f lab/topologies/two-speakers/compose.yml exec r1 cat /tmp/bgp4r
 docker compose -f lab/topologies/two-speakers/compose.yml down
 ```
 
+### A copy of your own
+
+`bgp4r lab new DIR [NAME]` copies one of these folders somewhere you can
+edit it and makes the copy a git repository, so your edits have history.
+`NAME` is any folder here, defaulting to `two-speakers`; with no `DIR`
+it prints the ones it found. `--no-git` skips the repository. What a
+folder's `.gitignore` lists is left out of the copy, which is how
+`bgp4r-lab` keeps containerlab's own `clab-*/` working directory out of
+a new lab made from a template somebody deployed in place.
+
+```
+ruby -I. exe/bgp4r lab new ~/labs/my-lab two-speakers
+ruby -I. exe/bgp4r lab new ~/labs/bgp4r-lab bgp4r-lab
+```
+
+The message after the copy says how to start that topology, which for
+`bgp4r-lab` is `containerlab deploy` and for the rest is `docker
+compose up`.
+
+**A Compose copy cannot build its own image.** Every `compose.yml` here builds
+with `context: ../../..`, the repo root, which a copy three directories
+somewhere else does not have. The image is named, though, and `docker
+compose up` builds only when the named image is missing, so build it
+once here and run the copy without `--build`:
+
+```
+docker compose -f lab/topologies/two-speakers/compose.yml build
+cd ~/labs/my-lab && docker compose up -d
+```
+
+`lab new` names the image for the topology you asked for, since
+`fault-matrix` builds `bgp4r-conformance` where the other Compose
+topologies build `bgp4r-speaker`.
+
 ### Logs
 
 Each speaker logs every message it sends and receives, and every session state change, to `docker compose logs`. Pick the level on the command line:
