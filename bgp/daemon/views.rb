@@ -21,6 +21,7 @@
 #++
 
 require 'bgp/daemon/speaker'
+require 'bgp/daemon/log_ring'
 
 module BGP
   module Daemon
@@ -66,10 +67,14 @@ module BGP
       PAGE_LIMIT = 500
       MAX_LIMIT  = 10_000
 
-      attr_reader :speaker
+      attr_reader :speaker, :log_ring
 
-      def initialize(speaker)
-        @speaker = speaker
+      # :log is the LogRing `show.log` answers from, which only the
+      # program that set up logging can have: see `Server#setup_log`.
+      # With none, `show.log` answers no lines and says it keeps none.
+      def initialize(speaker, arg = {})
+        @speaker  = speaker
+        @log_ring = arg[:log]
       end
 
       # The router, its peers and a summary, which is the shape
@@ -104,6 +109,80 @@ module BGP
       # it; see PAGE_LIMIT.
       def rib(params = {})
         page(params) { |prefix| rib_view.rib(prefix) }
+      end
+
+      # One peer's Adj-RIB-In, as received, one page of it.
+      #
+      # **A `peer` parameter is required and an unknown one is refused by
+      # name.** A per peer view with no peer has no sensible default: the
+      # first configured neighbor would be an answer about a peer nobody
+      # asked about, and every peer at once is the thing the page
+      # envelope exists to prevent.
+      def adj_in(params = {})
+        address = peer_param(params)
+        keyed(params, -> { rib_view.adj_in_prefixes(address) }) do |prefix|
+          rib_view.adj_in(address, prefix)
+        end
+      end
+
+      # What was advertised to one peer, one page of it, and what was not
+      # advertised to it and why.
+      #
+      # **`skipped` rides beside the page rather than in it**, because it
+      # is not keyed by the prefixes this page walks: a prefix that was
+      # skipped is by definition not in the Adj-RIB-Out. It carries its
+      # own total and is capped at the same limit, so a caller can see
+      # there is more than it got. `Router#skipped` builds its whole list
+      # either way, which is the library's own shape and is bounded by
+      # the number of refusals rather than by the table.
+      def adj_out(params = {})
+        address = peer_param(params)
+        snapshot do
+          page = keyed(params, -> { rib_view.adj_out_prefixes(address) }) do |prefix|
+            rib_view.adj_out(address, prefix)
+          end
+          skipped = rib_view ? rib_view.skipped(address) : []
+          page.merge(:skipped => { :total => skipped.size,
+                                   :rows => skipped.first(page[:limit]) })
+        end
+      end
+
+      # What the daemon believes is in the kernel table, one page of it,
+      # and what the kernel refused.
+      #
+      # **Believed and not read back.** `Fib` records what a command that
+      # exited 0 did, so these rows are bgp4r's own account; `ip route
+      # show` is the other question and a person asks it with `ip`.
+      #
+      # The facts that are not per prefix ride beside the page under
+      # `fib`, for the reason `adj_out`'s `skipped` does, and `fib
+      # .configured` is what tells a daemon with no `fib:` in its
+      # configuration from one whose table happens to be empty: both
+      # answer no rows.
+      def fib(params = {})
+        snapshot do
+          page = keyed(params, -> { rib_view.fib_prefixes }) { |prefix| rib_view.fib_routes(prefix) }
+          page.merge(:fib => rib_view ? rib_view.fib : no_fib)
+        end
+      end
+
+      # The last lines this daemon logged, oldest first.
+      #
+      # `count` is how many, clamped. `kept` is how many the ring holds
+      # and `keeps` its capacity, so a reader can tell the whole log from
+      # the tail of one; `keeps` 0 says nothing is kept at all, which is a
+      # Views built without one rather than a daemon with an empty log.
+      #
+      # **Text and not structure, which is where this parts company with
+      # ospfv2's `show.log`**: see `bgp/daemon/log_ring.rb`, which has the
+      # decision and the three things it rejected. A program wanting
+      # structure reads `events.subscribe`.
+      def log(params = {})
+        count = integer(params, 'count', 100)
+        ring  = @log_ring
+        { :lines => ring ? ring.lines(count) : [],
+          :kept  => ring ? ring.size : 0,
+          :keeps => ring ? ring.keeps : 0 }
       end
 
       # The Loc-RIB the way a router prints it, through
@@ -178,28 +257,77 @@ module BGP
       # materialised is the sorted prefix list, because that is where
       # `View#prefixes` sorts; the rows, which are the expensive part,
       # are built for one page only.
-      def page(params)
+      def page(params, &block)
+        keyed(params, -> { rib_view.prefixes }, &block)
+      end
+
+      # A page of a view keyed by prefix, given the sorted key list and a
+      # block that builds one key's rows.
+      #
+      # **One envelope builder and one window, read by every paged view**,
+      # which is why `page` is three lines: `show.routes` and `show.rib`
+      # walk the Loc-RIB's prefixes, `show.adj_in` and `show.adj_out` one
+      # peer's, and `show.fib` the installed ones, and all five answer the
+      # same shape because they come through here. A second envelope would
+      # be a second set of rules about what `next_offset` nil means.
+      def keyed(params, keys_fn)
         return empty_page(params) unless rib_view
         prefix = params['prefix'] || params[:prefix]
         offset, limit = window(params)
-        @speaker.rib.synchronize do
+        snapshot do
+          keys = keys_fn.call
           if prefix
             rows = yield(prefix)
-            { :rows => rows, :total => rows.size, :offset => 0,
-              :limit => limit, :next_offset => nil }
+            envelope(rows, rows.size, 0, limit)
           else
-            all = rib_view.prefixes
-            rows = all[offset, limit].to_a.flat_map { |p| yield(p) }
+            rows = keys[offset, limit].to_a.flat_map { |p| yield(p) }
             nxt = offset + limit
-            { :rows => rows, :total => all.size, :offset => offset,
-              :limit => limit, :next_offset => nxt < all.size ? nxt : nil }
+            envelope(rows, keys.size, offset, limit, nxt < keys.size ? nxt : nil)
           end
         end
       end
 
+      # The page envelope, and the one place it is built.
+      #
+      # **`next_offset` nil is what says the walk is over**, which is why
+      # the envelope exists at all: a caller handed a short list cannot
+      # tell the end of the table from a truncated answer, and `total`
+      # beside it says which. One builder, so a view added later cannot
+      # answer a page that means something slightly different.
+      def envelope(rows, total, offset, limit, next_offset = nil)
+        { :rows => rows, :total => total, :offset => offset,
+          :limit => limit, :next_offset => next_offset }
+      end
+
       def empty_page(params)
         _offset, limit = window(params)
-        { :rows => [], :total => 0, :offset => 0, :limit => limit, :next_offset => nil }
+        envelope([], 0, 0, limit)
+      end
+
+      # Runs the block holding the table's lock, so everything in one
+      # answer is one state rather than N reads of a RIB that may be
+      # deciding in between. The lock is reentrant and public for exactly
+      # this, so a view's own synchronize and a nested page both nest
+      # inside it. With no table there is no lock and nothing to protect.
+      def snapshot
+        return yield unless @speaker.rib
+        @speaker.rib.synchronize { yield }
+      end
+
+      # The `peer` parameter of a per peer view: an address this bgp4rd is
+      # configured to have, or an ArgumentError naming the ones it has.
+      # `Speaker#peer!` does the refusal, so one place names them and a
+      # control method and a view answer the same message.
+      def peer_param(params)
+        address = params['peer'] || params[:peer]
+        raise ArgumentError, 'peer is required: the address of one neighbor' if address.nil?
+        @speaker.peer!(address).address
+      end
+
+      # What `show.fib` says when there is no table at all, so the answer
+      # has the same keys either way.
+      def no_fib
+        { :configured => false, :backend => nil, :total => 0, :failed => [], :skipped => [] }
       end
 
       # `offset` and `limit` from a request, clamped. A limit of 0 or

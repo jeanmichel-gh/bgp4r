@@ -363,10 +363,17 @@ unblocks, so the order is not arbitrary.
      what both walk and it holds only prefixes that have a best route;
      `rib.show` has the same blind spot from the same line, and
      closing it means deciding over `Table#candidates` again, which is
-     the one thing this layer is not. The `show.adj_in`, `show.adj_out`
-     and `show.fib` shapes are not here either: each is another
-     object's state, an Adj-RIB-In, a Router's Adj-RIB-Outs or a Fib,
-     and each is its own small piece of work against the same rule.
+     the one thing this layer is not.
+   * **The `show.adj_in`, `show.adj_out` and `show.fib` shapes are here
+     now**, which this entry recorded as three later pieces of work
+     against the same rule. Each is another object's state, an
+     Adj-RIB-In, a Router's Adj-RIB-Outs or a Fib, and each came out
+     where that rule says it belongs: all three are things a Table knows,
+     so they are in `bgp/rib/view.rb` beside the other three, and the
+     daemon pages them and adds nothing. Each answers a key list and a
+     per key row builder, `adj_in_prefixes` beside `adj_in`, the way
+     `prefixes` sits beside `routes`, so a page is built for one page's
+     rows and an Adj-RIB-In of a million prefixes is never one answer.
 5. **`bgp4r capture -i IFACE`. Done.** `bgp/capture/pcap.rb` reads the
    classic pcap format off an IO a record at a time, so it works on a
    live pipe; `bgp/capture/dissect.rb` reads a frame down to its TCP
@@ -461,12 +468,27 @@ unblocks, so the order is not arbitrary.
      wants to know which, so `data[:reason]` says. Both carry no
      sequence number of their own, which is how they say they are
      synthetic.
-   * **Serving it is not part of this**, so `events.subscribe` in
-     `docs/daemon.md` and `GET /api/events?since=N` are still designs.
-     There is no JSON in `bgp/events.rb` either, deliberately: whether
-     `json` is a default gem is a per Ruby version question that bgp4r's
-     own Conventions records breaking CI twice, and `JSON.generate(ev
-     .to_h)` is one line in the program that serves the socket.
+   * **Serving it was not part of this and `events.subscribe` is built
+     now**, in `bgp/daemon/api.rb`: the line shapes above, with
+     `replayed` and a keepalive line, and `events.unsubscribe` to hand
+     the connection back. `GET /api/events?since=N` is still a design,
+     because the injector is. There is still no JSON in
+     `bgp/events.rb`, deliberately: whether `json` is a default gem is a
+     per Ruby version question that bgp4r's own Conventions records
+     breaking CI twice, and `JSON.generate(ev.to_h)` is the one line the
+     socket does.
+     * **One thing the table above did not carry**, found by reading
+       ospfv2's own daemon rather than routescope's driver: the reply to
+       `events.subscribe` is `{"seq":N,"replayed":M,"kinds":[...]}` and
+       not a bare `seq`. `bgp/events.rb`'s `subscribe` answered a
+       Subscription and had no way to say how many kept events it
+       replayed, so `Subscription#replayed` is new. Changing `subscribe`
+       to answer a pair, as ospfv2's does, was rejected: that method is
+       documented and tested as answering a Subscription, and an Array
+       answers `pop(:timeout => 5)` with a TypeError rather than an
+       event. Counting outside it was rejected too, because the replay
+       happens inside the Events lock and a count taken afterwards races
+       with a publish.
    * **`Table#on_change` is deliberately still unwired.** The RIB side
      of the stream belongs with the daemon, and item 2 above is what has
      to land first for its events to mean anything.

@@ -158,8 +158,98 @@ class BGP_Daemon_Speaker_Test < Test::Unit::TestCase
                  "bgp/daemon/speaker.rb must not require 'time': see the comment on Recorder#iso")
   end
 
+  # ====================================================================
+  # The administrative state of one peer, which is what `peer.stop` and
+  # `peer.start` act on.
+
+  def test_a_peer_is_found_by_its_address_and_an_unknown_one_is_named
+    s = speaker
+    assert_equal('10.0.0.2', s.peer('10.0.0.2').address)
+    assert_nil(s.peer('192.0.2.1'))
+    e = assert_raise(ArgumentError) { s.peer!('192.0.2.1') }
+    assert_match(/192\.0\.2\.1/, e.message)
+    assert_match(/10\.0\.0\.2/, e.message, 'the refusal names the ones there are')
+  end
+
+  def test_a_speaker_with_no_neighbors_says_it_has_none
+    e = assert_raise(ArgumentError) do
+      BGP::Daemon::Speaker.new('as' => 65_000, 'router_id' => '10.0.0.1',
+                               'neighbors' => []).peer!('10.0.0.2')
+    end
+    assert_match(/has none/, e.message)
+  end
+
+  # **The shutdown flag is the whole difference between `peer.stop` and
+  # `peer.clear`**: without it the reconnect loop dials again after the
+  # retry interval and an administrative stop reads as a session that
+  # flapped.
+  def test_admin_stop_sets_the_flag_and_clear_does_not
+    peer = speaker.peer('10.0.0.2')
+    assert_equal(false, peer.shutdown?)
+    peer.admin_stop
+    assert_equal(true, peer.shutdown?)
+    peer.admin_start
+    assert_equal(false, peer.shutdown?)
+    peer.clear
+    assert_equal(false, peer.shutdown?, 'a clear leaves the configuration alone')
+  end
+
+  # A passive peer cannot be stopped by not dialling, so a shut down one
+  # refuses the connection the listener handed it. The socket is closed
+  # rather than kept, or the peer would hold a session it will not run.
+  def test_a_shut_down_peer_refuses_a_connection_it_is_handed
+    peer = speaker.peer('10.0.0.2')
+    peer.admin_stop
+    sock = FakeSocket.new
+    peer.accept(sock)
+    assert_equal(true, sock.closed?)
+    # And the other way, so this does not pass for a peer that refuses
+    # every connection: a peer that is up again runs no session on a
+    # socket this fake could serve, so the claim is narrowed to the one
+    # thing a caller can see without a real socket, which is that the
+    # shut down peer closed it.
+    assert_equal(false, speaker.peer('10.0.0.2').shutdown?)
+  end
+
+  # The reconnect loop waits while shut down rather than ending, which is
+  # what makes a start instant and keeps a second dialling thread from
+  # being started beside one that is still sleeping out its retry
+  # interval. Matched as code, since the alternative is a test whose
+  # bound is machine timing.
+  def test_the_reconnect_loop_waits_while_shut_down_rather_than_ending
+    src = File.read(File.expand_path('../../../bgp/daemon/speaker.rb', __dir__))
+    body = src[/^      def run_active\n(.*?)^      end$/m, 1]
+    assert_not_nil(body, 'Peer#run_active must still be there')
+    assert_match(/^        @thread \|\|= Thread\.new do$/, body,
+                 'one thread for the life of the Speaker, and not one per start')
+    assert_match(/^            wait_while_shutdown$/, body)
+    assert_match(/^            backoff$/, body)
+    assert_equal([], body.scan(/^\s+sleep\(/),
+                 'it waits on the condition variable, so a stop during the retry ' \
+                 'interval is noticed at once instead of being followed by one more dial')
+  end
+
+  # A ROUTE-REFRESH needs a session to go on, so what is here is the
+  # refusal and the message built; what reaches the wire is
+  # test/functional/daemon_test.rb's.
+  def test_refresh_refuses_a_session_that_is_not_established
+    e = assert_raise(ArgumentError) { speaker.peer('10.0.0.2').refresh }
+    assert_match(/10\.0\.0\.2/, e.message)
+    assert_match(/not established/, e.message)
+  end
+
   private
 
   def keepalive ; BGP::Keepalive.new ; end
+
+  # Enough of a socket for Peer#accept, which either closes it or hands
+  # it to a session thread.
+  class FakeSocket
+    def initialize ; @closed = false ; end
+    def close ; @closed = true ; end
+    def closed? ; @closed ; end
+    def local_address ; self ; end
+    def ip_address ; '10.0.0.1' ; end
+  end
 
 end

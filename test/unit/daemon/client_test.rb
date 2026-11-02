@@ -99,11 +99,20 @@ class BGP_Daemon_Client_Test < Test::Unit::TestCase
 
   # A socket that answers something that is not JSON is a wrong answer
   # and not a missing one, so it says which.
+  #
+  # **The fake reads the request line before answering**, which is the
+  # fix for a race this test shipped with: closing the socket as soon as
+  # the answer was written could beat the client's own write, so the
+  # write raised EPIPE and the client answered "lost the connection"
+  # instead. It failed about half the time, measured over fifteen runs
+  # each way, and it failed the same way against #234's code, so it is a
+  # fault in the test and not in the Client. The test two below already
+  # reads first, and says why.
   def test_an_answer_that_is_not_json_says_so
     Dir.mktmpdir do |dir|
       path = File.join(dir, 's.sock')
       server = UNIXServer.new(path)
-      t = Thread.new { s = server.accept ; s.write("not json\n") ; s.close }
+      t = Thread.new { s = server.accept ; s.gets ; s.write("not json\n") ; s.close }
       e = assert_raise(C::Error) { C.new(path, {}).call('api.info') }
       assert_match(/not JSON/, e.message)
       t.join

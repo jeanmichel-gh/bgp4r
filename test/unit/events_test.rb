@@ -349,6 +349,54 @@ class EventsTest < Test::Unit::TestCase
     assert_equal(0, @events.subscribe.size)
   end
 
+  # **A reader resuming from a sequence number has to be told how many
+  # kept events came back**, which is why the count is here at all: with
+  # none, a short answer and a quiet stream look the same, and that is
+  # the gap-against-quiet failure the overflow event exists for one step
+  # further on.
+  def test_a_subscription_says_how_many_events_were_replayed_into_it
+    3.times { |i| pub(i) }
+    assert_equal(2, @events.subscribe(:since => 1).replayed)
+    assert_equal(3, @events.subscribe(:since => 0).replayed)
+    assert_equal(0, @events.subscribe(:since => 3).replayed)
+  end
+
+  def test_a_subscription_with_no_since_replayed_nothing
+    3.times { |i| pub(i) }
+    assert_equal(0, @events.subscribe.replayed)
+  end
+
+  # The count is frozen when the subscription is created, so what is
+  # published afterwards is not counted as a replay however soon it
+  # arrives. Without that a reader could not tell what it had already
+  # been given from what was about to happen.
+  def test_what_is_published_after_subscribing_is_not_a_replay
+    3.times { |i| pub(i) }
+    sub = @events.subscribe(:since => 0)
+    pub(4)
+    assert_equal(3, sub.replayed)
+    assert_equal(4, sub.size)
+  end
+
+  # The synthetic overflow event is one of the replayed lines, because a
+  # reader gets it: it is how the answer says the events between were
+  # already gone.
+  def test_an_overflow_counts_as_one_of_the_replayed
+    small = BGP::Events.new(:backlog => 2)
+    4.times { |i| small.publish(:kind => :log, :message => "m#{i}") }
+    sub = small.subscribe(:since => 0)
+    assert_equal(3, sub.replayed, 'the overflow plus the two still kept')
+    assert_equal(:overflow, sub.pop(:timeout => 1).kind)
+  end
+
+  # A kind filter counts what the subscriber would take, not what was
+  # kept, since those are the lines it is actually handed.
+  def test_a_filter_narrows_the_replay_count
+    pub(1)
+    @events.publish(:kind => :notification, :message => 'n')
+    assert_equal(1, @events.subscribe(:kinds => [:notification], :since => 0).replayed)
+  end
+
   def test_a_kind_filter_keeps_the_other_kinds_out
     sub = @events.subscribe(:kinds => [:notification])
     pub(1)

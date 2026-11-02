@@ -9,19 +9,18 @@ configuration, their command lines and the JSON they answer with.
 `docs/routescope-labs.md` owns the integration: the drivers, the
 inspector tables, the map and the labs. Neither repeats the other.
 
-**Status: three commands of four built, and `bgp4rd` answers its reads.**
-`bgp4r`, the umbrella, has `capture` and `version`, in `exe/bgp4r` over
-`bgp/capture/`, so the Capture section at the end of this document is no
-longer a design. **`bgp4rd` and `bgp4r-cli` exist**, in `exe/` over
-`bgp/daemon/`: the process, the configuration file, the control socket,
-the request envelope, and the **read** methods `api.info`, `show.status`,
-`show.peers`, `show.routes`, `show.rib` and `show.text`. Everything that
-changes something is still a design: `show.adj_in`, `show.adj_out`,
-`show.fib`, `show.log`, `events.subscribe`, `peer.*`, `route.*` and all
-of `config.*`, each its own piece of work, and **none of them is
-stubbed**, because an unknown method naming the ones that exist reads
-better than a method that answers nothing. `bgp4r-sim` does not exist and
-is not declared in the gemspec, for the same reason.
+**Status: three commands of four built, and `bgp4rd` answers everything
+but `config.*`.** `bgp4r`, the umbrella, has `capture` and `version`, in
+`exe/bgp4r` over `bgp/capture/`, so the Capture section at the end of
+this document is no longer a design. **`bgp4rd` and `bgp4r-cli` exist**,
+in `exe/` over `bgp/daemon/`: the process, the configuration file, the
+control socket, the request envelope, every `show.` method, the event
+stream, and the `peer.` and `route.` methods that change something. The
+only design left in the method table is **`config.*`**, the candidate
+configuration, which is its own piece of work and is **not stubbed**,
+because an unknown method naming the ones that exist reads better than a
+method that answers nothing. `bgp4r-sim` does not exist and is not
+declared in the gemspec, for the same reason.
 
 What exists under all of it is the
 library under them, which is most of the work: `bgp/neighbor/` for the
@@ -72,7 +71,7 @@ Four commands, matching ospfv2's `ospfv2`, `ospfd` and `ospf-cli`.
 
 | Command | What it is | Status |
 |---|---|---|
-| `bgp4rd` | the daemon | built, with the read side of its API |
+| `bgp4rd` | the daemon | built, with every API method but `config.*` |
 | `bgp4r-cli` | its client, over the socket | built |
 | `bgp4r` | the umbrella: `sim`, `routegen`, `capture`, `lab new`, `version` | built, with `capture` and `version` |
 | `bgp4r-sim` | an alias for `bgp4r sim`, so a container command reads plainly | a design |
@@ -175,6 +174,12 @@ bgp/daemon/speaker.rb    the sessions, the configuration, the recording,
 bgp/daemon/views.rb      what the API answers, as plain data: it merges
                          bgp/rib/view.rb with the session facts a Table
                          has none of
+bgp/daemon/control.rb    what it can be told to do: the peer. and route.
+                         methods. A file of its own because views.rb says
+                         nothing in it validates or decides
+bgp/daemon/log_ring.rb   the last lines logged, so show.log can answer
+                         them. Its header has the decision and the three
+                         things it rejected
 bgp/daemon/api.rb        the socket server and the method registry
 bgp/daemon/client.rb     the other half of the socket
 bgp/daemon/cli.rb        bgp4r-cli, the two forms
@@ -300,6 +305,13 @@ bgp4r-cli -c 'show bgp 10.255.10.0/24'
 bgp4r-cli -c 'clear bgp 10.0.10.1'
 ```
 
+`clear bgp PEER` is the one operator command that changes something, and
+it is there because the line above is an example a person types. The rest
+of the write side is the method form: `peer.stop` and `route.originate`
+take parameters a one line command grammar would have to invent a syntax
+for, and `bgp/daemon/cli.rb` is a string match against a short list and
+not a parser.
+
 The method form takes an API method and prints JSON, so a script and a
 driver read data rather than parse a table:
 
@@ -307,6 +319,21 @@ driver read data rather than parse a table:
 # in the VM
 bgp4r-cli show.peers
 bgp4r-cli show.rib '{"prefix":"10.255.10.0/24"}'
+bgp4r-cli show.adj_in '{"peer":"10.0.10.1"}'
+bgp4r-cli peer.stop '{"peer":"10.0.10.1"}'
+bgp4r-cli route.originate '{"prefixes":["10.255.0.0/24"],"med":10}'
+```
+
+**`events.subscribe` prints every line as it arrives** rather than one
+reply and nothing, which is the whole point of a stream, so there is no
+`--pretty` for it: a line a reader pipes into `jq` has to be one line.
+`Ctrl-C` ends it with `events.unsubscribe`, so the daemon is not left
+with a subscriber behind:
+
+```sh
+# in the VM
+bgp4r-cli events.subscribe
+bgp4r-cli events.subscribe '{"kinds":["session"],"since":0}'
 ```
 
 `show bgp` renders through `bgp/rib/show.rb`, which already prints the
@@ -337,7 +364,7 @@ are `bgp/daemon/cli.rb`'s own and no test depends on them.
 vendor's `show bgp` prints the table and this prints the table. A
 million prefixes of it is a million prefixes of it, which is what
 `| head` is for, and a paged vendor style would be a format no router
-has. `show.routes` and `show.rib` are the paged pair.
+has. The paged methods are the five named under the page envelope.
 
 ## The control API
 
@@ -376,10 +403,14 @@ is by file permission.
 
 ### The page envelope
 
-**`show.routes` and `show.rib` are paged and nothing else is.** A full
-table is about a million prefixes and the recorded requirement is that no
-endpoint builds a million element array; a peer list is bounded by the
-configuration file. So both answer one shape:
+**Five methods are paged and nothing else is**: `show.routes`,
+`show.rib`, `show.adj_in`, `show.adj_out` and `show.fib`. A full table is
+about a million prefixes and the recorded requirement is that no endpoint
+builds a million element array, and an Adj-RIB-In, an Adj-RIB-Out and a
+FIB are each as large as the table; a peer list is bounded by the
+configuration file and a log by its ring. All five answer one shape, from
+one builder in `bgp/daemon/views.rb`, because a second envelope would be
+a second set of rules about what `next_offset` nil means:
 
 ```json
 { "rows": [ ... ], "total": 7, "offset": 0, "limit": 500, "next_offset": null }
@@ -397,9 +428,18 @@ question with one answer.
 The whole page is built inside one `Table#synchronize`, so it is a
 coherent snapshot rather than N reads of a RIB that is deciding in
 between; the lock is reentrant and public for exactly that. What is
-still materialised is the sorted prefix list, because that is where
-`View#prefixes` sorts. The rows, which are the expensive part, are built
-for one page only.
+still materialised is the sorted key list, because that is where
+`View#prefixes` and its three siblings sort, and it is read **inside**
+the lock rather than handed in from outside it. The rows, which are the
+expensive part, are built for one page only.
+
+**Two of the five carry one key beside the envelope**, which is additive:
+`show.adj_out` carries `skipped` and `show.fib` carries `fib`. Both hold
+facts that are not keyed by the prefixes the page walks, since a skipped
+prefix is by definition not in the Adj-RIB-Out, and `configured` and
+`table` are not per prefix at all. A reader keyed on `rows`, `total` and
+`next_offset` is unaffected. `skipped` carries its own total and is
+capped at the same limit, so a caller can see there is more than it got.
 
 ### The methods
 
@@ -411,30 +451,185 @@ for one page only.
 | `show.routes` | the Loc-RIB, one row per prefix, its best path | built |
 | `show.rib` | every candidate path per prefix, with the decision | built |
 | `show.text` | the Loc-RIB as a router prints it, for `bgp4r-cli -c` | built |
-| `show.adj_in` | one peer's Adj-RIB-In | a design |
-| `show.adj_out` | what was sent to one peer, and what was skipped | a design |
-| `show.fib` | what the daemon believes is in the kernel table, and what failed | a design |
-| `show.log` | the last N lines | a design |
-| `events.subscribe` | a stream, one event per line | a design |
+| `show.adj_in` | one peer's Adj-RIB-In, as received | built |
+| `show.adj_out` | what was sent to one peer, and what was skipped | built |
+| `show.fib` | what the daemon believes is in the kernel table, and what failed | built |
+| `show.log` | the last N lines | built |
+| `events.subscribe`, `events.unsubscribe` | a stream, one event per line | built |
+| `peer.clear`, `peer.stop`, `peer.start` | one session | built |
+| `peer.refresh` | a ROUTE-REFRESH, RFC 2918 and the RFC 7313 subtypes | built |
+| `route.originate`, `route.withdraw` | our own prefixes | built |
 | `config.load`, `config.commit`, `config.compare` | a candidate configuration | a design |
-| `peer.clear`, `peer.stop`, `peer.start` | one session | a design |
-| `peer.refresh` | a ROUTE-REFRESH, RFC 2918 and the RFC 7313 subtypes | a design |
-| `route.originate`, `route.withdraw` | our own prefixes | a design |
 
 Mutating methods are separate names rather than a flag, so a read-only
-client is a list of methods and not a trust decision.
+client is a list of methods and not a trust decision. The reads go
+through `bgp/daemon/views.rb` and the writes through
+`bgp/daemon/control.rb`, which is the same split one layer down, and
+`bgp/daemon/api.rb`'s own test asserts that every method is named
+`show.`, `api.`, `peer.` or `route.` and that the `peer.` and `route.`
+ones are exactly the write side.
 
-**Nothing in the second half of that table is stubbed.** An unknown
-method answers an error naming the methods that exist, which is the
-shape `Events#publish` already answers an unknown kind with, and is what
-makes a typo self correcting. A method answering nothing reads as a
-feature that is broken.
+**`config.*` is not stubbed.** An unknown method answers an error naming
+the methods that exist, which is the shape `Events#publish` already
+answers an unknown kind with, and is what makes a typo self correcting.
+A method answering nothing reads as a feature that is broken.
 
-`api.info` carries `event_seq` with no `events.subscribe` beside it on
-purpose: it is the number a reader resumes from, `bgp/events.rb` already
-numbers every session's events into one shared stream, and a console can
-watch the stream advance and know how far behind it is before the
-subscription method exists.
+`api.info` carries `event_seq` beside the stream, and it is still worth
+having: it is the number a reader resumes from, so a console can watch
+the stream advance and know how far behind it is without subscribing at
+all. `api.info`'s `methods` lists the two stream methods with the rest,
+because a reader guessing a name wants every name.
+
+**`events.subscribe` is the one method `handle` cannot answer**, since a
+stream is many lines and `handle` returns one response. So the two event
+methods are registered apart, in `Api::STREAM_METHODS`, and the loop that
+owns the connection dispatches them. Asked through `handle` rather than
+over a socket, `events.subscribe` is an unknown method, and a unit test
+pins that.
+
+### The event stream
+
+**Exact, because routescope's driver reads these lines**, read in its
+`Drivers::Ospfd::STREAM` and in ospfv2's own `lib/ospfv2/daemon/api.rb`.
+The subscriber writes the ordinary request line and then reads:
+
+```
+-> {"id":2,"method":"events.subscribe","params":{"kinds":["session"],"since":120}}
+<- {"id":2,"result":{"seq":131,"replayed":11,"kinds":["session"]}}
+<- {"event":{"seq":121,"time":"...","level":"info","kind":"session","peer":"10.0.0.2",...}}
+<- {"keepalive":"2026-11-02T03:18:31.004Z","seq":131}
+-> {"id":3,"method":"events.unsubscribe"}
+<- {"id":3,"result":{"unsubscribed":true}}
+```
+
+One JSON object per line, the `result` line first, then one `event` line
+each as they happen. `since` replays whatever is kept above it and
+`replayed` says how many lines came back that way, which is what a
+reader resuming from a sequence number needs: a short answer and a quiet
+stream are otherwise the same thing, and a synthetic `overflow` event
+among the replayed lines is how the answer says something was lost.
+`kinds` is echoed, and null when none was named. `seq` is **where the
+stream has got to** and not the `since` it was asked with, so it is the
+number to resume from next time.
+
+**`peer` is bgp4r's own key where ospfv2 has `interface`**, and a console
+maps it onto its own column. Interface is OSPF's word for a circuit, BGP
+has none, and a peer is named by its address; naming it `interface` here
+would be borrowing another protocol's vocabulary for a thing BGP does
+not have. `bgp/events.rb` carries the same note.
+
+**The keepalive line is not decoration.** With nothing written, a reader
+cannot tell a quiet lab from a socket that died, which is the
+gap-against-quiet failure `bgp/events.rb` already publishes a synthetic
+overflow event for one step further on. So after `Api::KEEPALIVE`
+seconds of silence one line goes out carrying the time and the sequence
+the stream has reached.
+
+**`events.unsubscribe` ends the stream and the connection takes requests
+again**, so a console does not need a second socket to stop watching.
+The subscription is closed **before** that reply is written, not after,
+so a caller that read the reply can go on to assert that the subscriber
+is gone; closing it afterwards left a window a test found about one run
+in five. Any other request on a streaming connection is refused with a
+line of its own and the stream goes on: a request answered mid stream
+would interleave with the event lines, and dropping the stream over a
+stray line would lose the events the caller asked for.
+
+**One thread per connection and no extra thread.** The connection's own
+thread polls three things in turn: a line arriving, an event waiting and
+the keepalive deadline, so `MAX_CLIENTS` bounds the subscribers as it
+bounds everything else.
+
+### What each new method answers, and the decisions in them
+
+**`show.adj_in` and `show.adj_out` take a required `peer`**, the address
+of one configured neighbor, and an unknown one is refused naming the ones
+there are. A per peer view has no sensible default: the first configured
+neighbor would be an answer about a peer nobody asked about, and every
+peer at once is what the page envelope exists to prevent.
+
+**`show.adj_in` is the routes as received**, before import policy, which
+is the thing no other view answers: RFC 4271 section 5.1.5 says a
+LOCAL_PREF from an external peer must be ignored and `Table#import` drops
+it, so the value the peer sent is in these rows and nowhere else. Each
+row carries `best`, which says whether that path is the one that won.
+
+**`show.adj_out` is the attributes that went out and not the Loc-RIB's.**
+The export rules rewrite AS_PATH, NEXT_HOP, LOCAL_PREF and MED per peer,
+so a row here is what the peer was really told. It holds a
+`Path_attribute` and not a `Route`, so there is no `from` and no `local`:
+a key with a made up value would be worse than no key.
+
+**`show.fib` is what the daemon believes is installed and not what the
+kernel holds.** `Fib` records what a command that exited 0 did, so these
+rows are bgp4r's own account; `ip route show` is the other question and a
+person asks it with `ip`. `fib.configured` is what tells a daemon with no
+`fib:` in its configuration from one whose table happens to be empty,
+since both answer no rows.
+
+**`show.log` answers text, and that is where it parts company with
+ospfv2's `show.log`, which answers its event list.** It can, because in
+ospfv2 every non-debug log line is published as an event. bgp4r is not
+built that way: `bgp/events.rb` is published from two places, a session's
+state changes and a NOTIFICATION, and every other line goes straight to
+`Log` from wherever it happened, so the same implementation here would
+answer three entries where the log holds three hundred and call that the
+log. So a ring of formatted lines sits in front of the real log
+destination and sees every line the library writes;
+`bgp/daemon/log_ring.rb` has the decision and the two other things it
+rejected, which were reading the `--log` file back and publishing each
+line as a `:log` event. A program that wants structure reads
+`events.subscribe`; the log is for a person.
+
+**`peer.clear` resets a session and `peer.stop` takes the peer
+administratively down**, which is the whole difference: without the
+shutdown flag the reconnect loop dials again after the retry interval and
+a `peer.stop` reads as a session that flapped. A shut down passive peer
+refuses the connection the listener hands it, because a passive peer
+cannot be stopped by not dialling. Both are idempotent.
+
+**Neither sends a NOTIFICATION, and that is a gap recorded rather than a
+choice.** A router answers `clear bgp NEIGHBOR` with Cease and RFC 4486
+section 4's Administrative Reset, subcode 4, or Administrative Shutdown,
+subcode 2. `Neighbor#stop` closes the output queue and the socket in one
+breath, so a NOTIFICATION queued just before it is one the writer thread
+may never get on the wire, and a method reporting that it sent one would
+be claiming something it cannot verify. Sending it properly means
+draining the output before the socket closes, which is a change to
+`bgp/io.rb` and its own piece of work.
+
+**`peer.refresh` is RFC 2918 section 3's message with RFC 7313 section
+3.2's Message Subtype**, which that RFC redefines out of RFC 2918's
+Reserved octet: 0 a normal request, 1 the beginning of a route refresh
+operation, 2 its end, 255 Reserved. `subtype` takes those numbers or the
+three names `BGP::Route_refresh` answers to, `normal`, `borr` and `eorr`,
+and any octet value encodes, so a router can be watched handling one the
+RFC does not define. **Nothing checks that the peer advertised capability
+2**, which is Conventions rather than an omission: a tool for testing the
+protocol has to be able to send a refresh to a speaker that never asked
+for one. What is refused is a session that is not Established, because
+there is no connection to write to.
+
+**`route.originate` takes the `originate:` block's own keys**, so the
+runtime vocabulary is the configuration vocabulary and a prefix
+originated here carries the same attributes, built by the same method, as
+one originated at start-up. Two of them are deliberately not settable:
+AS_PATH starts empty, because RFC 4271 section 5.1.2 wants it empty
+toward an internal peer and our AS alone toward an external one, and
+NEXT_HOP is a placeholder, because section 5.1.3 makes it ours on each
+session. It validates nothing, so an ORIGIN no RFC defines goes in.
+
+**`route.withdraw` answers `not_held` rather than refusing it.**
+Withdrawing a route nobody has is not an error, and a caller walking a
+list wants to know which ones did nothing. Membership is read before the
+withdrawal and not inferred from the change list, which is ambiguous: a
+prefix another peer also advertises can be withdrawn by us and leave the
+Loc-RIB unchanged, because that peer's route then wins.
+
+**An unknown parameter name is refused by every write method**, naming
+what it does take. An ignored body key is a wrong answer and not a
+missing one, which is the rule `Speaker#export_options` already applies
+to a node file: a typo that silently drops the MED is the worst of both.
 
 ## The JSON
 
@@ -566,6 +761,80 @@ Two things in that list are worth a reader's attention. `igp_cost` is
 always 0 here unless a resolver is given, because the daemon has no IGP.
 And `cluster_list_length` sits between `router_id` and `peer_address`,
 which is RFC 4456 section 9 putting it between RFC 4271's steps f and g.
+
+`show.adj_in`, one row per path the peer sent, inside the page envelope:
+
+```json
+{ "rows": [
+    { "prefix": "10.255.10.0/24", "from": "10.0.10.1", "next_hop": "10.0.10.1",
+      "as_path": "65010", "origin": "igp", "local_pref": 120, "med": 100,
+      "path_id": null, "local": false, "best": true } ],
+  "total": 4, "offset": 0, "limit": 500, "next_offset": null }
+```
+
+**That `local_pref` is the point of the view.** An external peer sent it,
+so RFC 4271 section 5.1.5 says to ignore it and `Table#import` drops it;
+`show.routes` for the same prefix answers null. The Adj-RIB-In is what
+the peer sent, so it is here.
+
+`show.adj_out`, one row per prefix and Path Identifier, with `skipped`
+beside the page:
+
+```json
+{ "rows": [
+    { "prefix": "10.255.10.0/24", "path_id": null, "next_hop": "10.0.20.1",
+      "as_path": "65000 65010", "origin": "igp", "local_pref": null,
+      "med": null, "communities": "65000:1" } ],
+  "total": 1, "offset": 0, "limit": 500, "next_offset": null,
+  "skipped": { "total": 1,
+               "rows": [ { "prefix": "10.255.11.0/24",
+                           "reason": "back_to_sender" } ] } }
+```
+
+**The three examples above were measured against the library** rather
+than written from this design, which is the rule #230 earned when two of
+the shapes here turned out wrong. `med` and `local_pref` are null in the
+`adj_out` row because MULTI_EXIT_DISC does not cross into another AS (RFC
+4271 section 5.1.4) and LOCAL_PREF never goes to an external peer
+(section 5.1.5): those two nulls are the export rules showing through,
+not missing data.
+
+`show.fib`, with the facts that are not per prefix beside the page:
+
+```json
+{ "rows": [ { "prefix": "10.255.10.0/24", "next_hop": "10.0.10.1" } ],
+  "total": 1, "offset": 0, "limit": 500, "next_offset": null,
+  "fib": { "configured": true, "backend": "ip route, table 100, proto bgp",
+           "total": 1,
+           "failed": [ { "prefix": "10.255.11.0/24",
+                         "error": "Error: Nexthop has invalid gateway." } ],
+           "skipped": [] } }
+```
+
+`show.log`, the last lines, oldest first:
+
+```json
+{ "lines": ["02:13 INFO -- : bgp4rd 0.5.0 up, AS 65000, ..."],
+  "kept": 1, "keeps": 2000 }
+```
+
+`keeps` 0 says nothing is kept at all, which is a daemon that set up no
+logging rather than one whose log is empty.
+
+The write methods, each answering what it did, so a caller can assert on
+it rather than reading a view back:
+
+```json
+peer.clear    {"peer":"10.0.10.1","cleared":true,"was":"established","state":"idle","shutdown":false}
+peer.stop     {"peer":"10.0.10.1","was":"established","state":"idle","shutdown":true}
+peer.start    {"peer":"10.0.10.1","state":"idle","shutdown":false,"connect":true}
+peer.refresh  {"peer":"10.0.10.1","afi":1,"safi":1,"subtype":0,"sent":true}
+route.originate {"originated":["10.255.0.0/24"],"total":1,"changes":1,"rib":7}
+route.withdraw  {"withdrawn":["10.255.0.0/24"],"not_held":[],"total":1,"changes":1,"rib":6}
+```
+
+`changes` is how many Loc-RIB changes it caused, which is not always the
+same as `total`: see `route.withdraw` above.
 
 # bgp4r-sim, the injector, with routegen
 

@@ -120,7 +120,7 @@ class BGP_Daemon_Functional_Test < Test::Unit::TestCase
     s = UNIXSocket.new(@socket)
     %w[api.info show.status show.peers show.routes show.rib].each_with_index do |m, i|
       s.write("#{JSON.generate(:id => i + 1, :method => m, :params => {})}\n")
-      r = JSON.parse(s.gets)
+      r = read_line(s)
       assert_equal(i + 1, r['id'], "#{m} answered the wrong id")
       assert_equal(false, r.key?('error'), "#{m}: #{r['error']}")
     end
@@ -191,9 +191,9 @@ class BGP_Daemon_Functional_Test < Test::Unit::TestCase
   def test_a_method_that_refuses_its_parameters_answers_and_lives
     s = UNIXSocket.new(@socket)
     s.write("#{JSON.generate(:id => 1, :method => 'show.routes', :params => { :limit => 'lots' })}\n")
-    assert_match(/limit must be an integer/, JSON.parse(s.gets)['error'])
+    assert_match(/limit must be an integer/, read_line(s)['error'])
     s.write("#{JSON.generate(:id => 2, :method => 'api.info', :params => {})}\n")
-    assert_equal(2, JSON.parse(s.gets)['id'], 'the connection still takes requests')
+    assert_equal(2, read_line(s)['id'], 'the connection still takes requests')
     s.close
     assert_still_alive
   end
@@ -210,7 +210,7 @@ class BGP_Daemon_Functional_Test < Test::Unit::TestCase
   def test_many_clients_at_once_are_all_answered
     socks = Array.new(8) { UNIXSocket.new(@socket) }
     socks.each_with_index { |s, i| s.write("#{JSON.generate(:id => i, :method => 'api.info')}\n") }
-    socks.each_with_index { |s, i| assert_equal(i, JSON.parse(s.gets)['id']) }
+    socks.each_with_index { |s, i| assert_equal(i, read_line(s)['id']) }
     socks.each(&:close)
     assert_still_alive
   end
@@ -307,7 +307,7 @@ class BGP_Daemon_Functional_Test < Test::Unit::TestCase
       assert_equal(true, File.socket?(sock))
       s = UNIXSocket.new(sock)
       s.write("#{JSON.generate(:id => 1, :method => 'show.status', :params => {})}\n")
-      r = JSON.parse(s.gets)
+      r = read_line(s)
       s.close
       assert_equal('10.0.0.2', r['result']['router_id'])
       assert_equal(65_002, r['result']['as'])
@@ -317,13 +317,334 @@ class BGP_Daemon_Functional_Test < Test::Unit::TestCase
       # --log FILE really wrote there, which Log.create would not have.
       assert_match(/bgp4rd #{Regexp.escape(BGP::VERSION)} up/, File.read(log))
       assert_match(/socket #{Regexp.escape(sock)}/, File.read(log))
+      # **And the ring saw the same line, which is the whole claim
+      # `show.log` rests on**: the ring sits in front of the real
+      # destination, so it sees every line the library formats wherever
+      # in the library it was written, and the file still gets them.
+      s = UNIXSocket.new(sock)
+      s.write("#{JSON.generate(:id => 2, :method => 'show.log', :params => {})}
+")
+      lines = read_line(s)['result']
+      s.close
+      assert_operator(lines['kept'], :>, 0, 'the daemon logged at least its own startup line')
+      assert_equal(BGP::Daemon::LogRing::KEEP, lines['keeps'])
+      assert_equal(true, lines['lines'].any? { |l| l =~ /bgp4rd #{Regexp.escape(BGP::VERSION)} up/ },
+                   'the line in the file is the line in the ring')
+      s = UNIXSocket.new(sock)
+      s.write("#{JSON.generate(:id => 3, :method => 'show.log', :params => { 'count' => 1 })}
+")
+      assert_equal(1, read_line(s)['result']['lines'].size)
+      s.close
     ensure
       daemon.stop
       Log.set_filename(STDERR)
     end
   end
 
+  # ====================================================================
+  # The write side over the socket
+
+  def test_the_write_methods_answer_over_the_socket
+    r = routescope_client('route.originate', 'prefix' => '10.255.9.0/24', 'med' => 7)
+    assert_equal(['10.255.9.0/24'], r['result']['originated'])
+    assert_equal(3, routescope_client('show.routes')['result']['total'])
+    assert_equal(7, routescope_client('show.routes', 'prefix' => '10.255.9.0/24')['result']['rows']
+                                     .first['med'])
+    r = routescope_client('route.withdraw', 'prefix' => '10.255.9.0/24')
+    assert_equal(['10.255.9.0/24'], r['result']['withdrawn'])
+    assert_equal(2, routescope_client('show.routes')['result']['total'])
+    assert_still_alive
+  end
+
+  def test_the_peer_methods_answer_over_the_socket
+    assert_equal(true, routescope_client('peer.stop', 'peer' => '127.0.0.9')['result']['shutdown'])
+    assert_equal(true, @server.speaker.peer('127.0.0.9').shutdown?)
+    assert_equal(false, routescope_client('peer.start', 'peer' => '127.0.0.9')['result']['shutdown'])
+    assert_equal(true, routescope_client('peer.clear', 'peer' => '127.0.0.9')['result']['cleared'])
+    assert_equal(false, @server.speaker.peer('127.0.0.9').shutdown?)
+    assert_still_alive
+  end
+
+  def test_a_write_methods_refusal_crosses_the_socket_as_an_error
+    assert_match(/no neighbor "9\.9\.9\.9"/,
+                 routescope_client('peer.stop', 'peer' => '9.9.9.9')['error'])
+    assert_match(/prefix or prefixes is required/,
+                 routescope_client('route.originate')['error'])
+    assert_match(/not established/,
+                 routescope_client('peer.refresh', 'peer' => '127.0.0.9')['error'])
+    assert_still_alive
+  end
+
+  def test_the_new_read_methods_answer_over_the_socket
+    page = routescope_client('show.adj_in', 'peer' => '127.0.0.9')['result']
+    assert_equal(%w[limit next_offset offset rows total], page.keys.sort)
+    out = routescope_client('show.adj_out', 'peer' => '127.0.0.9')['result']
+    assert_equal(%w[limit next_offset offset rows skipped total], out.keys.sort)
+    fib = routescope_client('show.fib')['result']
+    assert_equal(false, fib['fib']['configured'],
+                 'no fib: in the configuration, which is not the same as an empty table')
+    assert_equal(%w[fib limit next_offset offset rows total], fib.keys.sort)
+  end
+
+  # **This daemon was built without going through the command line, so it
+  # set up no logging and keeps no ring**, and `show.log` says so rather
+  # than answering as though the log were empty. The ring itself is
+  # asserted in test_the_whole_command_line_starts_a_daemon_that_answers,
+  # which is the only test here that calls `start`.
+  def test_show_log_says_when_nothing_is_kept
+    lines = routescope_client('show.log')['result']
+    assert_equal([], lines['lines'])
+    assert_equal(0, lines['keeps'], 'keeps 0 says nothing is kept at all')
+  end
+
+  # ====================================================================
+  # events.subscribe, which is the one method that answers many lines
+
+  # **The exact line shapes**, because routescope's driver reads them:
+  # one `result` line carrying where the stream starts and how many kept
+  # events it replayed, then one `event` line each.
+  def test_a_subscription_answers_a_result_line_then_one_event_per_line
+    @server.speaker.events.publish(:kind => :log, :message => 'before the subscription')
+    s = UNIXSocket.new(@socket)
+    s.write("#{JSON.generate(:id => 2, :method => 'events.subscribe', :params => { 'since' => 0 })}\n")
+    r = read_line(s)
+    assert_equal(2, r['id'])
+    assert_equal(1, r['result']['replayed'], 'the kept event above since 0')
+    assert_equal(1, r['result']['seq'], 'where the stream has got to')
+    assert_nil(r['result']['kinds'], 'every kind, since none was named')
+    replay = read_line(s)
+    assert_equal('before the subscription', replay['event']['message'])
+    @server.speaker.events.publish(:kind => :session, :peer => '127.0.0.9',
+                                   :message => 'Active -> Established',
+                                   :data => { :state => :Established })
+    ev = read_line(s)['event']
+    assert_equal(%w[data kind level message peer seq time], ev.keys.sort)
+    assert_equal('session', ev['kind'])
+    assert_equal('127.0.0.9', ev['peer'],
+                 "bgp4r's own key where ospfv2 has interface: BGP has no circuits")
+    assert_equal('Established', ev['data']['state'])
+    assert_match(/\A\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z\z/, ev['time'])
+    s.close
+    assert_still_alive
+  end
+
+  def test_a_subscription_with_no_since_replays_nothing_and_starts_here
+    @server.speaker.events.publish(:kind => :log, :message => 'already happened')
+    s = UNIXSocket.new(@socket)
+    s.write("#{JSON.generate(:id => 1, :method => 'events.subscribe')}\n")
+    r = read_line(s)
+    assert_equal(0, r['result']['replayed'])
+    assert_equal(1, r['result']['seq'])
+    @server.speaker.events.publish(:kind => :log, :message => 'and this one is live')
+    assert_equal('and this one is live', read_line(s)['event']['message'])
+    s.close
+  end
+
+  def test_a_kind_filter_is_echoed_and_keeps_the_other_kinds_out
+    s = UNIXSocket.new(@socket)
+    s.write("#{JSON.generate(:id => 1, :method => 'events.subscribe',
+                             :params => { 'kinds' => ['notification'] })}\n")
+    assert_equal(['notification'], read_line(s)['result']['kinds'])
+    @server.speaker.events.publish(:kind => :log, :message => 'not this one')
+    @server.speaker.events.publish(:kind => :notification, :peer => '127.0.0.9',
+                                   :message => 'this one')
+    assert_equal('this one', read_line(s)['event']['message'])
+    s.close
+  end
+
+  # **Without a keepalive a reader cannot tell a quiet lab from a socket
+  # that died**, which is the gap-against-quiet failure the synthetic
+  # overflow event exists for one step further on. This daemon's
+  # interval is shortened so the test does not wait fifteen seconds.
+  def test_a_quiet_stream_says_so_rather_than_going_silent
+    api = BGP::Daemon::Api.new(@server.views, :path => "#{@socket}.ka", :keepalive => 0.2).start
+    begin
+      s = UNIXSocket.new(api.path)
+      s.write("#{JSON.generate(:id => 1, :method => 'events.subscribe')}\n")
+      read_line(s)
+      line = read_line(s)
+      assert_match(/\A\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z\z/, line['keepalive'])
+      assert_kind_of(Integer, line['seq'])
+      s.close
+    ensure
+      api.stop
+    end
+  end
+
+  # The stream ends and the same connection takes requests again, which
+  # is what keeps a console from needing a second socket to stop
+  # watching.
+  def test_unsubscribing_ends_the_stream_and_the_connection_takes_requests
+    s = UNIXSocket.new(@socket)
+    s.write("#{JSON.generate(:id => 1, :method => 'events.subscribe')}\n")
+    read_line(s)
+    assert_equal(1, @server.speaker.events.subscribers)
+    s.write("#{JSON.generate(:id => 2, :method => 'events.unsubscribe')}\n")
+    r = read_line(s)
+    assert_equal(2, r['id'])
+    assert_equal(true, r['result']['unsubscribed'])
+    s.write("#{JSON.generate(:id => 3, :method => 'api.info')}\n")
+    assert_equal(BGP::VERSION, read_line(s)['result']['version'])
+    s.close
+    assert_equal(0, @server.speaker.events.subscribers, 'and the subscription is gone')
+  end
+
+  # Refused and the stream lives: a request answered mid stream would
+  # interleave with the event lines, and dropping the stream over a
+  # stray line would lose the events the caller asked for.
+  def test_another_request_mid_stream_is_refused_and_the_stream_goes_on
+    s = UNIXSocket.new(@socket)
+    s.write("#{JSON.generate(:id => 1, :method => 'events.subscribe')}\n")
+    read_line(s)
+    s.write("#{JSON.generate(:id => 9, :method => 'show.status')}\n")
+    r = read_line(s)
+    assert_equal(9, r['id'])
+    assert_match(/only events\.unsubscribe/, r['error'])
+    @server.speaker.events.publish(:kind => :log, :message => 'still streaming')
+    assert_equal('still streaming', read_line(s)['event']['message'])
+    s.close
+  end
+
+  # An unsubscribe with no subscription is an error on that request and
+  # the connection goes on, because a console can send anything.
+  def test_unsubscribing_without_a_subscription_is_an_error_and_not_a_crash
+    r = JSON.parse(raw("#{JSON.generate(:id => 1, :method => 'events.unsubscribe')}\n"))
+    assert_match(/not subscribed/, r['error'])
+    assert_still_alive
+  end
+
+  def test_a_kind_nobody_publishes_is_refused_and_the_connection_lives
+    s = UNIXSocket.new(@socket)
+    s.write("#{JSON.generate(:id => 1, :method => 'events.subscribe',
+                             :params => { 'kinds' => ['nonsense'] })}\n")
+    assert_match(/unknown event kind/, read_line(s)['error'])
+    s.write("#{JSON.generate(:id => 2, :method => 'api.info')}\n")
+    assert_equal(2, read_line(s)['id'], 'the connection still takes requests')
+    s.close
+    assert_equal(0, @server.speaker.events.subscribers)
+  end
+
+  # A subscriber that walks away leaves no subscription behind, or a
+  # long running daemon accumulates one per console that ever watched.
+  def test_a_subscriber_that_disappears_leaves_no_subscription
+    s = UNIXSocket.new(@socket)
+    s.write("#{JSON.generate(:id => 1, :method => 'events.subscribe')}\n")
+    read_line(s)
+    assert_equal(1, @server.speaker.events.subscribers)
+    s.close
+    deadline = Time.now + 5
+    sleep 0.05 while @server.speaker.events.subscribers > 0 && Time.now < deadline
+    assert_equal(0, @server.speaker.events.subscribers)
+    assert_still_alive
+  end
+
+  # bgp4r-cli's stream form against the real daemon, which is the only
+  # thing that says the client reads what the server writes line by line
+  # rather than one reply.
+  def test_the_cli_reads_a_stream_from_the_real_daemon
+    @server.speaker.events.publish(:kind => :log, :message => 'one kept event')
+    out, err = StringIO.new, StringIO.new
+    client = BGP::Daemon::Client.new(@socket, {})
+    lines = []
+    client.stream('events.subscribe', 'since' => 0) do |line|
+      lines << line
+      lines.size < 2
+    end
+    client.close
+    assert_equal(2, lines.size)
+    assert_equal(1, lines[0]['result']['replayed'])
+    assert_equal('one kept event', lines[1]['event']['message'])
+    assert_equal('', err.string)
+    assert_equal('', out.string)
+    assert_equal(0, @server.speaker.events.subscribers,
+                 'returning false from the block unsubscribed')
+  end
+
+  # ====================================================================
+  # peer.refresh on a session that is really up
+
+  # **The only test that puts a ROUTE-REFRESH on a wire from the control
+  # socket.** Everything else about refresh is a refusal, because a
+  # message needs a session, and a session needs two speakers. RFC 2918
+  # section 3 is the message and RFC 7313 section 3.2 the subtype.
+  def test_a_route_refresh_reaches_the_peer_over_a_real_session
+    peer = Catcher.new(:my_as => 65_001, :remote_addr => '127.0.0.1', :id => '10.0.0.9')
+    peer.capability :route_refresh
+    server = TCPServer.new('127.0.0.1', PORT + 7)
+    begin
+      ours = @server.speaker.peer('127.0.0.9')
+      client = TCPSocket.new('127.0.0.1', PORT + 7)
+      accepted = server.accept
+      Thread.new { peer.start(:session => accepted, :timeout => 10) }
+      ours.instance_variable_set(:@neighbor, neighbor_on(client))
+      assert_equal(true, wait_until { ours.neighbor.is_established? }, 'the session came up')
+
+      r = routescope_client('peer.refresh', 'peer' => '127.0.0.9')
+      assert_equal(1, r['result']['afi'])
+      assert_equal(1, r['result']['safi'])
+      assert_equal(0, r['result']['subtype'], 'RFC 2918, which is RFC 7313 subtype 0')
+      assert_equal(true, wait_until { peer.refreshes.size == 1 })
+      assert_equal(1, peer.refreshes.first.afi)
+      assert_equal(BGP::Route_refresh::NORMAL, peer.refreshes.first.subtype)
+
+      # RFC 7313 section 3.2's subtypes, by name and by number, and a
+      # value the RFC does not define, because building never validates.
+      routescope_client('peer.refresh', 'peer' => '127.0.0.9', 'afi' => 2, 'safi' => 128,
+                        'subtype' => 'borr')
+      assert_equal(true, wait_until { peer.refreshes.size == 2 })
+      assert_equal([2, 128, BGP::Route_refresh::BORR],
+                   [peer.refreshes.last.afi, peer.refreshes.last.safi,
+                    peer.refreshes.last.subtype])
+      routescope_client('peer.refresh', 'peer' => '127.0.0.9', 'subtype' => 200)
+      assert_equal(true, wait_until { peer.refreshes.size == 3 })
+      assert_equal(200, peer.refreshes.last.subtype,
+                   'a subtype no RFC defines still goes on the wire')
+    ensure
+      ours.instance_variable_get(:@neighbor)&.close
+      peer.close
+      server.close
+    end
+  end
+
   private
+
+  # A Neighbor that keeps the ROUTE-REFRESH messages it is sent.
+  class Catcher < BGP::Neighbor
+    def refreshes ; @refreshes ||= [] ; end
+
+    def rcv_route_refresh(m)
+      refreshes << m
+      super
+    end
+  end
+
+  # Our side of that session, started on an accepted socket.
+  def neighbor_on(sock)
+    n = BGP::Neighbor.new(:my_as => 65_000, :id => '10.0.0.1',
+                          :remote_addr => '127.0.0.1', :local_addr => '127.0.0.1',
+                          :events => @server.speaker.events)
+    n.capability :route_refresh
+    Thread.new { n.start(:session => sock, :timeout => 10) }
+    n
+  end
+
+  # **One line of a stream, or a failure saying none came.** A bare
+  # `gets` on a stream that went quiet blocks until the connection's
+  # IDLE, which is fifteen minutes, so every sabotage aimed at the
+  # stream would hang the suite rather than fail it, and a hang names
+  # nothing. Measured: with the keepalive line taken out,
+  # test_a_quiet_stream_says_so_rather_than_going_silent hung instead of
+  # failing until this was here.
+  def read_line(sock, timeout = 10)
+    assert_not_nil(sock.wait_readable(timeout), "no line arrived within #{timeout}s")
+    JSON.parse(sock.gets)
+  end
+
+  def wait_until(timeout = 10)
+    deadline = Time.now + timeout
+    sleep 0.05 until yield || Time.now > deadline
+    yield
+  end
 
   def cli(argv, env = {})
     out, err = StringIO.new, StringIO.new

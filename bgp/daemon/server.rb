@@ -22,6 +22,7 @@
 
 require 'bgp/daemon/speaker'
 require 'bgp/daemon/views'
+require 'bgp/daemon/log_ring'
 require 'bgp/daemon/api'
 require 'bgp/daemon/client'
 
@@ -72,7 +73,7 @@ Usage: bgp4rd -f FILE [options]
 Talk to it with bgp4r-cli. See docs/daemon.md.
 TEXT
 
-      attr_reader :speaker, :api, :views
+      attr_reader :speaker, :api, :views, :log_ring
 
       def initialize(out = $stdout, err = $stderr)
         @out = out
@@ -112,7 +113,7 @@ TEXT
       # Answers nil and prints the reason on anything a person can fix.
       def build(config, opts = {})
         @speaker = Speaker.new(config)
-        @views   = Views.new(@speaker)
+        @views   = Views.new(@speaker, :log => @log_ring)
         @api     = Api.new(@views, :path => opts[:socket] || Client.default_socket,
                                    :logger => @logger)
         @speaker.start
@@ -203,7 +204,15 @@ TEXT
                File.open(opts[:log], File::WRONLY | File::APPEND | File::CREAT, 0o640)
              end
         io.sync = true if io.respond_to?(:sync=)
-        Log.set_filename(io)
+        # **The ring goes in front of the real destination, which is the
+        # only place it can go.** `show.log` answers the last N lines, and
+        # the lines are written by `Log` from every session thread rather
+        # than through the `@logger` below, which only this file and the
+        # Api use. A ring fed from that lambda would answer the daemon's
+        # own handful of lines and call them the log.
+        # `bgp/daemon/log_ring.rb` has the decision and what it rejected.
+        @log_ring = LogRing.new(io)
+        Log.set_filename(@log_ring)
         Log.level = opts[:debug] ? Logger::DEBUG : Speaker.log_level(config)
         @logger = ->(level, message) { Log.send(level, message) }
       end

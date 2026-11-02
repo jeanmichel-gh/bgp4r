@@ -308,6 +308,9 @@ module BGP
       @lock.synchronize do
         sub = Subscription.new(self, kinds, @queue_limit)
         _since(arg[:since]).each { |e| sub.push(e) } if arg.has_key?(:since)
+        # Before it joins @subscribers, so the count is the replay and
+        # nothing else. See Subscription#replayed.
+        sub.replayed!
         @subscribers << sub
         sub
       end
@@ -348,14 +351,41 @@ module BGP
       attr_reader :kinds
 
       def initialize(events, kinds, limit)
-        @events = events
-        @kinds  = kinds
-        @limit  = limit
-        @queue  = []
-        @missed = 0
-        @lock   = Mutex.new
-        @ready  = ConditionVariable.new
-        @closed = false
+        @events   = events
+        @kinds    = kinds
+        @limit    = limit
+        @queue    = []
+        @missed   = 0
+        @replayed = 0
+        @lock     = Mutex.new
+        @ready    = ConditionVariable.new
+        @closed   = false
+      end
+
+      # How many kept events were replayed into this subscription when it
+      # was created, which is what a reader resuming from a sequence
+      # number has to be told: it says whether anything came back, and a
+      # synthetic :overflow among them says whether anything was lost.
+      # 0 for a subscription created with no :since.
+      #
+      # **It lives here rather than in subscribe's return value, and that
+      # is a decision with two things rejected.** ospfv2's equivalent
+      # answers `[sub, replayed]` from its own subscribe, which is the
+      # obvious shape and would break every caller here: `events
+      # .subscribe` is documented and tested as answering a Subscription,
+      # and an Array answers `pop(:timeout => 5)` with a TypeError rather
+      # than an event, so the breakage would be loud and in the wrong
+      # place. Counting in whatever serves the socket was the other
+      # option, and it cannot be done without a race: the replay happens
+      # inside Events' own lock, so a count taken after subscribe returns
+      # may already include an event published since.
+      attr_reader :replayed
+
+      # Called by Events#subscribe, holding the Events lock, before this
+      # subscription is in @subscribers. Nothing else can have pushed
+      # into it, so what is queued is exactly the replay.
+      def replayed!
+        @lock.synchronize { @replayed = @queue.size }
       end
 
       # :overflow always passes the filter. A reader watching one kind

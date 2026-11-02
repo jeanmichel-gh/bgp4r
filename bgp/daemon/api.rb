@@ -21,9 +21,11 @@
 #++
 
 require 'socket'
+require 'io/wait'
 require 'bgp/version'
 require 'bgp/events'
 require 'bgp/daemon/views'
+require 'bgp/daemon/control'
 
 module BGP
   module Daemon
@@ -47,13 +49,30 @@ module BGP
     # mismatch here is a wrong answer rather than a missing one. The same
     # shape is written in docs/daemon.md with the commit it was read at.
     #
-    # **This pull request is the read side only.** `show.adj_in`,
-    # `show.adj_out`, `show.fib`, `show.log`, `events.subscribe`,
-    # `peer.*`, `route.*` and all of `config.*` are each their own later
-    # piece of work and **are deliberately not stubbed**: an unknown
-    # method answers an error naming the methods that exist, which is the
-    # shape `Events#publish` already answers an unknown kind with. A
-    # method that answers nothing reads as a feature that is broken.
+    # `events.subscribe` turns the connection into a stream: after its
+    # reply, one line per event, and a keepalive line when nothing has
+    # happened for KEEPALIVE seconds. `events.unsubscribe` ends the stream
+    # and the connection takes requests again; use another connection for
+    # requests meanwhile.
+    #
+    #   -> {"id":2,"method":"events.subscribe","params":{"kinds":["session"],"since":120}}
+    #   <- {"id":2,"result":{"seq":131,"replayed":11,"kinds":["session"]}}
+    #   <- {"event":{"seq":121,"time":"...","level":"info","kind":"session","peer":"10.0.0.2",...}}
+    #   <- {"keepalive":"2026-11-02T03:18:31.004Z","seq":131}
+    #   -> {"id":3,"method":"events.unsubscribe"}
+    #   <- {"id":3,"result":{"unsubscribed":true}}
+    #
+    # **An event carries `peer` where ospfv2's carries `interface`**, and
+    # that is bgp4r's own key rather than a mismatch: interface is OSPF's
+    # word for a circuit, BGP has none, and a peer is named by its
+    # address. A console maps it onto its own column. `bgp/events.rb` has
+    # the reason and docs/daemon.md says so too.
+    #
+    # **All of `config.*` is still a design and is deliberately not
+    # stubbed**: an unknown method answers an error naming the methods
+    # that exist, which is the shape `Events#publish` already answers an
+    # unknown kind with, and a method that answers nothing reads as a
+    # feature that is broken.
     #
     # **A bad request must not take the daemon down.** A console can send
     # anything, and a daemon a console can kill by accident is worse than
@@ -73,49 +92,83 @@ module BGP
       MAX_LINE    = 1 << 20   # octets in one request
       MAX_CLIENTS = 32         # connections served at once
       IDLE        = 900        # seconds a connection may sit silent
+      KEEPALIVE   = 15         # seconds between keepalive lines on an event stream
       VERSION     = 1          # of this API, raised when a method changes incompatibly
 
-      # name => ->(views, params) { result }
+      # The two that turn a connection into a stream and back, which
+      # `handle` cannot answer because a stream is many lines. See
+      # `stream`.
+      STREAM_METHODS = %w[events.subscribe events.unsubscribe].freeze
+
+      # name => ->(api, params) { result }
       #
-      # Dotted names, so a reader can guess them. Reads only; see the
-      # class comment for what is deliberately absent.
+      # Dotted names, so a reader can guess them. **A mutating method is
+      # a name of its own and never a flag on a read**, which is
+      # docs/daemon.md's decision and its reason: a read-only client is
+      # then a list of methods and not a trust decision. The reads go
+      # through `Views` and the writes through `Control`, which is the
+      # same split one layer down.
       METHODS = {
-        'api.info'    => ->(v, _p) { Api.api_info(v) },
-        'show.status' => ->(v, _p) { v.status },
-        'show.peers'  => ->(v, _p) { v.peers },
-        'show.routes' => ->(v, p) { v.routes(p) },
-        'show.rib'    => ->(v, p) { v.rib(p) },
-        'show.text'   => ->(v, p) { v.text(p) }
+        'api.info'        => ->(a, _p) { Api.api_info(a.views) },
+        'show.status'     => ->(a, _p) { a.views.status },
+        'show.peers'      => ->(a, _p) { a.views.peers },
+        'show.routes'     => ->(a, p) { a.views.routes(p) },
+        'show.rib'        => ->(a, p) { a.views.rib(p) },
+        'show.adj_in'     => ->(a, p) { a.views.adj_in(p) },
+        'show.adj_out'    => ->(a, p) { a.views.adj_out(p) },
+        'show.fib'        => ->(a, p) { a.views.fib(p) },
+        'show.log'        => ->(a, p) { a.views.log(p) },
+        'show.text'       => ->(a, p) { a.views.text(p) },
+        'peer.clear'      => ->(a, p) { a.control.peer_clear(p) },
+        'peer.stop'       => ->(a, p) { a.control.peer_stop(p) },
+        'peer.start'      => ->(a, p) { a.control.peer_start(p) },
+        'peer.refresh'    => ->(a, p) { a.control.peer_refresh(p) },
+        'route.originate' => ->(a, p) { a.control.route_originate(p) },
+        'route.withdraw'  => ->(a, p) { a.control.route_withdraw(p) }
       }.freeze
+
+      # Every method this answers, the streams included, so one list is
+      # what `api.info` reports and what an unknown method is refused
+      # with.
+      def self.names
+        (METHODS.keys + STREAM_METHODS).sort
+      end
 
       # Raised when another bgp4rd already answers on the socket path.
       class InUse < StandardError ; end
 
       # The version, the methods and where the event stream has got to.
       #
-      # **`event_seq` is here with no `events.subscribe` beside it on
-      # purpose.** It is the number a reader resumes from, and
-      # `bgp/events.rb` already numbers every session's events into one
-      # shared stream, so a console can see the stream advancing and know
-      # how far behind it is before the subscription method exists.
+      # `event_seq` is the number a reader resumes `events.subscribe`
+      # from, and it is answered here as well so a console can see the
+      # stream advancing and know how far behind it is without
+      # subscribing at all.
       def self.api_info(views)
         { :version     => BGP::VERSION,
           :api         => VERSION,
-          :methods     => METHODS.keys.sort,
+          :methods     => names,
           :event_kinds => BGP::Events::KINDS.collect { |k| k.to_s },
           :event_seq   => views.speaker.events.seq }
       end
 
       attr_reader :path, :views
 
-      # :path is the socket, :logger a ->(level, message) or nil, and
-      # :views the Views this answers from.
+      # :path is the socket, :logger a ->(level, message) or nil,
+      # :views the Views this answers from, and :keepalive the interval
+      # between keepalive lines on an event stream, which a test shortens.
       def initialize(views, arg={})
-        @views   = views
-        @path    = arg[:path]
-        @logger  = arg[:logger]
-        @clients = []
-        @lock    = Mutex.new
+        @views     = views
+        @path      = arg[:path]
+        @logger    = arg[:logger]
+        @keepalive = arg[:keepalive] || KEEPALIVE
+        @clients   = []
+        @lock      = Mutex.new
+      end
+
+      # The mutating half, built on first use so an Api over a Views with
+      # no Speaker is still an object a test can make.
+      def control
+        @lock.synchronize { @control ||= Control.new(@views.speaker) }
       end
 
       def start
@@ -156,7 +209,7 @@ module BGP
         fn   = METHODS[name]
         return { :id => id, :error => unknown_method(name) } unless fn
         params = req['params'].is_a?(Hash) ? req['params'] : {}
-        { :id => id, :result => fn.call(@views, params) }
+        { :id => id, :result => fn.call(self, params) }
       rescue ArgumentError => e
         { :id => id, :error => e.message }
       rescue StandardError => e
@@ -169,7 +222,7 @@ module BGP
       # the same way.
       def unknown_method(name)
         "unknown method #{name.inspect}; this bgp4rd answers " \
-        "#{METHODS.keys.sort.join(', ')}"
+        "#{Api.names.join(', ')}"
       end
 
       private
@@ -243,10 +296,146 @@ module BGP
             write(sock, :error => 'a request is a JSON object')
             next
           end
-          write(sock, handle(req))
+          case req['method']
+          when 'events.subscribe'
+            # The stream owns the connection until the client
+            # unsubscribes, and then this loop takes requests again. A
+            # client that went away ends the thread.
+            return unless stream(sock, req)
+          when 'events.unsubscribe'
+            write(sock, :id => req['id'], :error => 'not subscribed')
+          else
+            write(sock, handle(req))
+          end
         end
       rescue IOError, Errno::ECONNRESET, Errno::EPIPE
         nil # the client went away
+      end
+
+      # Streams events on this connection until the client unsubscribes,
+      # which answers true so the caller takes requests again, or goes
+      # away, which answers false.
+      #
+      # **One thread and no second one.** This is the connection's own
+      # thread, polling three things in turn: a line arriving, an event
+      # waiting, and the keepalive deadline. A writer thread per
+      # subscriber would be a thread per console and nothing to bound it,
+      # where MAX_CLIENTS already bounds this.
+      #
+      # **The keepalive line is not decoration.** With nothing written, a
+      # reader cannot tell a quiet lab from a socket that died, which is
+      # the gap-against-quiet failure `bgp/events.rb` already carries a
+      # synthetic overflow event for. So after KEEPALIVE seconds of
+      # silence one line goes out carrying the time and the sequence the
+      # stream has reached.
+      def stream(sock, req)
+        params = req['params'].is_a?(Hash) ? req['params'] : {}
+        kinds  = params['kinds'] && Array(params['kinds']).collect { |k| k.to_sym }
+        since  = params.has_key?('since') ? Integer(params['since']) : events.seq
+        # A caller that named no :since gets the current sequence, so the
+        # replay is empty and the stream starts here. Either way
+        # Events#subscribe is given one, which is what makes
+        # Subscription#replayed an answer rather than a guess: it is the
+        # number of kept events that came back.
+        sub = events.subscribe(:kinds => kinds, :since => since)
+        # **`seq` is where the stream has got to and not the `since` it
+        # was asked with**, which is the number a reader resumes from: it
+        # already has everything up to it, through the replay or through
+        # the event lines that follow. An event published between the
+        # subscribe above and this read is on the stream as well, so a
+        # reader loses nothing by it and may at worst see one line twice
+        # across a reconnect.
+        write(sock, :id => req['id'],
+                    :result => { :seq => events.seq, :replayed => sub.replayed,
+                                 :kinds => kinds && kinds.collect { |k| k.to_s } })
+        pump(sock, sub)
+      rescue ArgumentError, TypeError => e
+        # A kind nobody publishes, or a :since that is not a number.
+        # Refused on this request and the connection lives, because a
+        # console can send anything.
+        write(sock, :id => req['id'], :error => e.message)
+        true
+      ensure
+        sub.close if sub
+      end
+
+      # The stream's loop. True when the client unsubscribed, false when
+      # it went away.
+      def pump(sock, sub)
+        # String.new and not +'', because this holds what came off a
+        # socket: Conventions says an octet buffer is ASCII-8BIT, which
+        # String.new with no argument gives and +'' does not. ospfv2's
+        # equivalent uses +'' and bgp4r's own rule is the other one.
+        buffer = String.new
+        last = monotonic
+        loop do
+          if sock.wait_readable(0)
+            chunk = sock.read_nonblock(4096, :exception => false)
+            return false if chunk.nil?             # the client closed its end
+            buffer << chunk unless chunk == :wait_readable
+            return false if buffer.bytesize > MAX_LINE
+            while (i = buffer.index("\n"))
+              line = buffer.slice!(0..i)
+              return true if unsubscribed?(sock, line, sub)
+            end
+          end
+          ev = sub.pop(:timeout => 0.2)
+          now = monotonic
+          if ev
+            write(sock, :event => ev.to_h)
+            last = now
+          elsif now - last >= @keepalive
+            # ISO 8601 with milliseconds in UTC, which is the shape
+            # Event#iso_time answers. strftime and not Time#iso8601,
+            # which would need `require 'time'`: Conventions records a
+            # standard library becoming a bundled gem twice, once
+            # killing a CI job before a test ran, and a format string
+            # needs nothing at all.
+            write(sock, :keepalive => Time.now.utc.strftime('%Y-%m-%dT%H:%M:%S.%LZ'),
+                        :seq => events.seq)
+            last = now
+          end
+        end
+      end
+
+      # True when this line ended the stream. Anything else on the
+      # connection is refused and the stream goes on: a request answered
+      # mid stream would interleave with the event lines, and dropping
+      # the stream over a stray line would lose the events the caller
+      # asked for.
+      def unsubscribed?(sock, line, sub)
+        msg = begin
+                JSON.parse(line)
+              rescue JSON::ParserError
+                nil
+              end
+        if msg.is_a?(Hash) && msg['method'] == 'events.unsubscribe'
+          # **Closed before the reply and not after it.** The reply means
+          # the subscription is gone, so a caller that reads it can go on
+          # to assert that it is; closing in the ensure below leaves a
+          # window in which the reply has arrived and the subscriber is
+          # still registered, which is a race a test found. The ensure
+          # stays, for the path where the client simply went away, and a
+          # second close is harmless.
+          sub.close
+          write(sock, :id => msg['id'], :result => { :unsubscribed => true })
+          return true
+        end
+        write(sock, :id => (msg.is_a?(Hash) ? msg['id'] : nil),
+                    :error => 'streaming events: only events.unsubscribe, ' \
+                              'or use another connection')
+        false
+      end
+
+      def events
+        @views.speaker.events
+      end
+
+      # The clock a deadline is measured on. Process::CLOCK_MONOTONIC and
+      # not Time.now, so a keepalive is not skipped or doubled when the
+      # wall clock steps.
+      def monotonic
+        Process.clock_gettime(Process::CLOCK_MONOTONIC)
       end
 
       def write(sock, h)

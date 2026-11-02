@@ -118,6 +118,50 @@ module BGP
         raise Error, "bgp4rd answered something that is not JSON: #{e.message[0, 120]}"
       end
 
+      # Calls one method and yields every line it answers, parsed, which
+      # is what `events.subscribe` needs: it answers one `result` line and
+      # then one line per event, for as long as the caller reads.
+      #
+      # It yields the `result` line too, so a caller sees the sequence the
+      # stream starts from and how many kept events were replayed. Return
+      # false from the block to stop, which sends `events.unsubscribe` and
+      # leaves the connection taking requests again; the loop otherwise
+      # ends when the daemon closes it.
+      #
+      # **It does not raise on the daemon's error line**, unlike `call`:
+      # a stream carries an error for one stray request and goes on, so
+      # the caller decides what an error line means.
+      def stream(method, params = {})
+        require 'json'
+        connect
+        @id += 1
+        @sock.write("#{JSON.generate(:id => @id, :method => method, :params => params)}\n")
+        while (line = @sock.gets)
+          reply = begin
+                    JSON.parse(line)
+                  rescue JSON::ParserError => e
+                    raise Error, "bgp4rd answered something that is not JSON: #{e.message[0, 120]}"
+                  end
+          break if yield(reply) == false
+        end
+        unsubscribe
+      rescue Errno::EPIPE, Errno::ECONNRESET, IOError
+        @sock = nil
+        raise Error, 'lost the connection to bgp4rd'
+      end
+
+      # Ends a stream this client started. The reply is read so the
+      # connection is left clean for the next request.
+      def unsubscribe
+        return nil unless @sock && !@sock.closed?
+        @id += 1
+        @sock.write("#{JSON.generate(:id => @id, :method => 'events.unsubscribe', :params => {})}\n")
+        @sock.gets
+        nil
+      rescue Errno::EPIPE, Errno::ECONNRESET, IOError
+        nil
+      end
+
       def close
         @sock.close if @sock && !@sock.closed?
         @sock = nil

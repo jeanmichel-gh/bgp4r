@@ -210,8 +210,19 @@ bgp/events.rb            the structured event stream: an Event carrying a kind a
                          numbers one ordered timeline rather than N streams
                          each numbering from 1, and `api.info` answers
                          `event_seq` so a console can watch it advance.
-                         `events.subscribe` is still a later pull request. See
-                         "routescope labs"
+                         `events.subscribe` serves it over the control
+                         socket now, which is what added
+                         `Subscription#replayed`: a reader resuming from a
+                         sequence number has to be told how many kept
+                         events came back, or a short answer and a quiet
+                         stream are the same thing. It is on the
+                         Subscription and not in `subscribe`'s return
+                         value, which ospfv2 makes a pair: that method is
+                         documented and tested as answering a
+                         Subscription, and an Array answers
+                         `pop(:timeout => 5)` with a TypeError rather
+                         than an event. `Table#on_change` is still
+                         deliberately unwired. See "routescope labs"
 bgp/rib/                 routes and the decision process (RFC 4271 section 9); require 'bgp/rib'
                          peer_adapter.rb turns a Neighbor's UPDATEs into table operations,
                          peer_feed.rb applies them on one worker thread; rib.attach(neighbor)
@@ -226,7 +237,17 @@ bgp/rib/                 routes and the decision process (RFC 4271 section 9); r
                          disagree about which path lost where; the rib view
                          is the one answer no other implementation in a lab
                          can give about itself, so see
-                         docs/routescope-labs.md section 6 item 4;
+                         docs/routescope-labs.md section 6 item 4. It
+                         answers another object's state too, each with a
+                         key list beside the rows so the daemon can page
+                         it: adj_in, as **received**, before import drops
+                         an external peer's LOCAL_PREF, which is the one
+                         place that value survives; adj_out, the
+                         attributes that **went out** and not the
+                         Loc-RIB's, with skipped saying what did not;
+                         and fib, what the forwarding table is
+                         **believed** to hold, where configured tells a
+                         table nothing installs from one that is empty;
                          fib.rb plans what a forwarding table needs, ip_route.rb
                          builds and runs the iproute2 command and fib_installer.rb
                          joins them on the worker thread; rib.install;
@@ -250,26 +271,62 @@ bgp/daemon/              `bgp4rd` the daemon and `bgp4r-cli` its client;
                          merges bgp/rib/view.rb with the **session** facts a
                          Table has none of, and its peer list is every
                          **configured** neighbor where the view's is the
-                         peers the table has seen. The page envelope is here
+                         peers the table has seen. The page envelope is
+                         here, built in one place and read by all **five**
+                         paged views: show.routes, show.rib, show.adj_in,
+                         show.adj_out and show.fib, each a key list and a
+                         per key row builder so no answer is a million rows
+                         control.rb what the daemon can be **told** to do:
+                         `peer.clear`, `peer.stop`, `peer.start`,
+                         `peer.refresh`, `route.originate` and
+                         `route.withdraw`. A file of its own and not more
+                         methods on views.rb, because that file's own
+                         header says nothing in it validates or decides.
+                         Nothing here validates what goes on the wire
+                         either: what it refuses is an input it cannot act
+                         on, an address nobody configured, a session that
+                         is not up, or a parameter name it does not read
+                         log_ring.rb the last lines logged, as text, in
+                         front of the real log destination so it sees every
+                         line the library writes. Its header has the
+                         decision and the three things it rejected, the
+                         first being the obvious one: ospfv2's `show.log`
+                         is its event list, and bgp4r publishes events from
+                         two places only, so the same implementation would
+                         answer a subset of the log and call it the log
                          api.rb the Unix socket, one JSON object per line
                          each way, and the method registry. The envelope is
                          routescope's own client line read at 7eabde1 and is
                          exact; an unknown method answers the list rather
                          than nothing, and no bad request line takes the
-                         daemon down
+                         daemon down. **`events.subscribe` is the one method
+                         `handle` cannot answer**, since a stream is many
+                         lines, so the two event methods are registered
+                         apart in STREAM_METHODS and the loop that owns the
+                         connection dispatches them: the result line with
+                         `seq`, `replayed` and `kinds`, then one `event`
+                         line each, a `keepalive` line after KEEPALIVE
+                         seconds of silence, and `events.unsubscribe` to
+                         hand the connection back
                          client.rb the other half of the socket, and where
-                         both programs work out the socket path
+                         both programs work out the socket path. `stream`
+                         yields every line of an event stream, where `call`
+                         is one request and one reply
                          cli.rb `bgp4r-cli`, two forms on purpose: `-c` an
                          operator command as text, a bare method name as
                          JSON. `show bgp` asks the daemon for the text
                          through `show.text`, because bgp/rib/show.rb takes
                          a Table and a second renderer here would be two
-                         copies of three vendor styles
+                         copies of three vendor styles. `clear bgp PEER` is
+                         the one operator command that changes something,
+                         because docs/daemon.md gives it as a line a person
+                         types; the rest of the write side is the method
+                         form
                          server.rb `bgp4rd` itself: the command line, the
-                         YAML file, the Speaker, the socket and the wait.
-                         **This is the read side only**: every method that
-                         changes something is a later pull request and none
-                         of them is stubbed
+                         YAML file, the Speaker, the log ring, the socket
+                         and the wait. **Every method but `config.*`
+                         answers now**: the candidate configuration is its
+                         own piece of work and is not stubbed
 bgp/capture/             reading BGP off a wire; require 'bgp/capture', which
                          bgp4r.rb does not, the same arrangement bgp/rib.rb has
                          pcap.rb reads the classic pcap format off an IO a
@@ -411,13 +468,14 @@ docs/                    protocol-testing.md: using bgp4r to test a router
                          longer designs: `bgp4r capture` and `bgp4r
                          version` in exe/bgp4r over bgp/capture/, and
                          `bgp4rd` and `bgp4r-cli` in exe/ over
-                         bgp/daemon/, with the **read** side of the
-                         control API. What is still a design is every
-                         method that changes something, `events.subscribe`,
-                         and the whole of `bgp4r-sim`. It carries the
-                         request envelope with the routescope commit it
-                         was read at, and the page envelope, neither of
-                         which it had
+                         bgp/daemon/, with **every control API method but
+                         `config.*`**. What is still a design is the
+                         candidate configuration and the whole of
+                         `bgp4r-sim`. It carries the request envelope
+                         with the routescope commit it was read at, the
+                         page envelope and the event stream's line
+                         shapes, none of which it had, and a section per
+                         new method saying what it answers and why
                          routescope-labs.md: how those two programs
                          become nodes the routescope console can drive,
                          and the eight labs worth building once they are.
@@ -768,10 +826,19 @@ ruby -I. test/functional/lab/link_state_frr_test.rb
 `bgp4rd` over its real control socket, and the only test that can say
 the two halves of a line agree: every unit test on the server side reads
 a request a test wrote and every one on the client side reads an answer a
-fake wrote. No privilege, no router, no Docker. A tenth of a second:
+fake wrote. **It is also the only place the event stream is exercised at
+all**, since a stream is many lines and `Api#handle` answers one, and the
+only place a ROUTE-REFRESH from the control socket reaches a session. No
+privilege, no router, no Docker. 1.2 seconds:
 ```
 ruby -I. test/functional/daemon_test.rb
 ```
+**Every read of that stream is bounded by `read_line`, and that is not
+tidiness.** A bare `gets` on a stream that went quiet blocks until the
+connection's `IDLE`, which is fifteen minutes, so the sabotage that
+removed the keepalive line **hung** the file rather than failing it.
+Measured. A hang names nothing, which is the opposite of what the
+check-the-proof rule in Rules for agents wants.
 
 The daemon and its client by hand, which is how the shapes in
 `docs/daemon.md` were measured. `--socket` and `$BGP4R_SOCKET` both work,
@@ -781,8 +848,12 @@ and with neither it is `/run/bgp4r/bgp4rd.sock` or a path under
 ruby -I. exe/bgp4rd -f /etc/bgp4r/bgp4rd.yml -s /tmp/d.sock -l - &
 ruby -I. exe/bgp4r-cli -s /tmp/d.sock api.info
 ruby -I. exe/bgp4r-cli -s /tmp/d.sock show.rib --pretty
+ruby -I. exe/bgp4r-cli -s /tmp/d.sock show.adj_in '{"peer":"10.0.10.1"}'
 ruby -I. exe/bgp4r-cli -s /tmp/d.sock -c 'show bgp summary'
 ruby -I. exe/bgp4r-cli -s /tmp/d.sock -c 'show bgp' --style junos
+ruby -I. exe/bgp4r-cli -s /tmp/d.sock -c 'clear bgp 10.0.10.1'
+ruby -I. exe/bgp4r-cli -s /tmp/d.sock route.originate '{"prefixes":["10.255.0.0/24"]}'
+ruby -I. exe/bgp4r-cli -s /tmp/d.sock events.subscribe
 ```
 
 The capture command, over a pcap file, which needs no interface and no
@@ -821,18 +892,20 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. The `lab` job is a matrix, one job per group in `test/lab_groups.rb`, so its cost is the slowest group and not the total: it was 12m42s as one serial suite. Each job installs only what its group needs, which is why the matrix entry carries a `gobgp`, `frr`, `docker` or `netns` flag. The `gobgp` groups pin 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-11-02: 2749 tests, 30374 assertions, all passing. Line coverage of `bgp/` from the unit suite: 96.5%.
+Baseline on 2026-11-02: 2826 tests, 30657 assertions, all passing. Line coverage of `bgp/` from the unit suite: 96.1%.
 
 **That coverage figure fell from 98.5% and the reason is `bgp/daemon/`,
 not a gap anywhere else.** Measured the same run: with `bgp/daemon/`
-excluded it is still 98.5% over the same 12311 lines, and the new files
-are at 47% to 85% from the unit suite alone, because most of what they
-do needs a socket or a session. Measured over the six unit files plus
-`test/functional/daemon_test.rb`, `speaker_test.rb` and
-`speaker_router_test.rb`, `bgp/daemon/` is **87.9%**, with `views.rb`
-and `cli.rb` at 100%, `api.rb` at 91%, `client.rb` at 94%, `server.rb`
-at 83% and `speaker.rb` at 82%. What is left uncovered is the session
-loop that only a Compose topology reaches, the accept loop's
+excluded it is still **98.5%** over 12388 lines, and `bgp/daemon/` is at
+**66.1%** from the unit suite alone, because most of what it does needs
+a socket or a session: `api.rb` is 44% there, and the stream, the accept
+loop and the signal wait are the bulk of what is missing. Measured over
+the eight unit files plus `test/functional/daemon_test.rb`,
+`speaker_test.rb` and `speaker_router_test.rb`, `bgp/daemon/` is
+**89.6%**, with `log_ring.rb` at 100%, `control.rb` at 99%, `views.rb`
+at 98%, `cli.rb` at 98%, `api.rb` at 94%, `client.rb` at 89%,
+`server.rb` at 83% and `speaker.rb` at 82%. What is left uncovered is
+the session loop that only a Compose topology reaches, the accept loop's
 out-of-descriptors branch, and the signal wait. So read the one-line
 figure as what it says, which is the unit suite, and do not chase it by
 unit testing a socket.
@@ -5991,7 +6064,7 @@ Decisions taken before this starts, so they are not re-litigated:
   in a convenience form for test code, each with a reason recorded, and
   clearing the list to empty it is not worth a phase.
 
-### routescope labs. Items 1 to 6 of section 6 are Done, and so is the daemon's read side; the rest is a plan
+### routescope labs. Items 1 to 6 of section 6 are Done, and so is every control API method but `config.*`; the rest is a plan
 
 **Done so far**: items 1 and 5, the `bgp4r` umbrella executable and
 `bgp4r capture`, which landed together because the capture contract
@@ -6006,15 +6079,16 @@ because routescope's own capture path needs a modification before it
 can point at a bgp4r image, and that modification is routescope's and
 is not blocked by this.
 
-**And `bgp4rd` with `bgp4r-cli` exist now, with the read side of the
-control API**, in `bgp/daemon/` over `exe/bgp4rd` and `exe/bgp4r-cli`:
-the process, the YAML file, the Unix socket, the request envelope, and
-`api.info`, `show.status`, `show.peers`, `show.routes`, `show.rib` and
-`show.text`. So the first thing a routescope driver needs is there: it
-can ask a question rather than read a snapshot bgp4r chose to write,
-which is what section 5 says a driver should do and what `Frr` and
-`Bird` both do. Five things that work settled, each in
-`docs/daemon.md` now:
+**And `bgp4rd` with `bgp4r-cli` exist now, answering every control API
+method but `config.*`**, in `bgp/daemon/` over `exe/bgp4rd` and
+`exe/bgp4r-cli`: the process, the YAML file, the Unix socket, the
+request envelope, nine `show.` methods, the event stream, and the four
+`peer.` and two `route.` methods that change something. So the first
+thing a routescope driver needs is there: it can ask a question rather
+than read a snapshot bgp4r chose to write, which is what section 5 says
+a driver should do and what `Frr` and `Bird` both do, and item 8's
+actions have a precedent to copy on the injector side. Five things the
+read side settled, each in `docs/daemon.md` now:
 
 * **The request envelope is routescope's own client line**, read at
   `7eabde1`, and the document did not carry it. `{"id":1,"method":...,
@@ -6022,13 +6096,18 @@ which is what section 5 says a driver should do and what `Frr` and
   out, one JSON object per line each way. The driver will be that line
   with the paths changed, so a mismatch would be a wrong answer rather
   than a missing one.
-* **A page envelope for the two unbounded views**, `{"rows":[...],
+* **A page envelope for the unbounded views**, `{"rows":[...],
   "total":N,"offset":O,"limit":L,"next_offset":O+L or null}`, where the
   design had a bare Array. A full table is about a million prefixes and
   the recorded requirement is that no endpoint builds a million element
   array; a bare Array also cannot tell the end of a table from a
   truncated answer, which is the gap-against-quiet failure this file
-  keeps meeting. A driver reads `result["rows"]`.
+  keeps meeting. A driver reads `result["rows"]`. It was two views when
+  this was written and is **five** now, `show.adj_in`, `show.adj_out`
+  and `show.fib` having joined, all through one builder, because an
+  Adj-RIB-In, an Adj-RIB-Out and a FIB are each as large as the table.
+  Two of the five carry one key beside the envelope, `skipped` and
+  `fib`, which hold facts not keyed by the prefixes the page walks.
 * **`show.text` is one method beyond the read list**, and it exists
   because `bgp/rib/show.rb` takes a `Rib::Table`. ospfv2 renders every
   view client side, and copying that would mean a second IOS, Junos and
@@ -6050,6 +6129,33 @@ which is what section 5 says a driver should do and what `Frr` and
   never set. That matters because routescope **drops** a value outside
   the list, so a wrong case shows as an empty peer list and not as an
   error.
+
+**Four more the write side settled, each in `docs/daemon.md` now.**
+
+* **The event stream's reply carries more than `seq`.** It is
+  `{"seq":N,"replayed":M,"kinds":[...]}`, which is ospfv2's own daemon
+  rather than the bare `seq` routescope's simulator driver synthesises,
+  and matching the daemon is the point since one driver reads both.
+  `replayed` is what a reader resuming from a number needs, so
+  `bgp/events.rb` grew `Subscription#replayed` for it; the two things
+  rejected are in that file and in the layout entry above. There is a
+  `keepalive` line as well, after 15 seconds of silence, because
+  without one a reader cannot tell a quiet lab from a dead socket.
+* **`events.unsubscribe` exists** and hands the connection back to
+  taking requests, and the subscription is closed **before** that
+  reply goes out: closing it in the `ensure` afterwards left a window
+  in which the reply had arrived and the subscriber was still
+  registered, which a test found about one run in five.
+* **`show.log` answers text where ospfv2's answers its event list**,
+  and the mechanism is that ospfv2 publishes every non-debug log line
+  as an event and bgp4r publishes from two places only.
+  `bgp/daemon/log_ring.rb` has the decision and the three things it
+  rejected.
+* **`peer.clear` and `peer.stop` send no NOTIFICATION**, which is a
+  gap recorded with its mechanism rather than a choice: `Neighbor#stop`
+  closes the output queue and the socket in one breath, so a Cease
+  queued before it may never reach the wire. See "Known issues to work
+  on".
 
 **And a decision with a cost, recorded with the two options it beat.**
 `lab/speaker.rb` was most of a daemon and `lab/` is not on an installed
@@ -6464,6 +6570,7 @@ Found while fixing other bugs, not fixed yet. Verified against master on
 
 Smaller things:
 
+* **A session this library closes sends no NOTIFICATION, so `peer.clear` and `peer.stop` cannot either.** A router answers `clear bgp NEIGHBOR` with Cease and RFC 4486 section 4's Administrative Reset, subcode 4, or Administrative Shutdown, subcode 2. `Neighbor#stop` is `@out.close` and then `@socket.close` on the next line, so a NOTIFICATION queued just before it is one the writer thread may never get on the wire: `BGP::IO::Output`'s thread has to be scheduled, take it off the queue and write it before the socket goes, and nothing waits for that. Measured by reading `bgp/io.rb` rather than by trying it, which is why the two control methods close the connection and **report no NOTIFICATION at all** rather than claiming one they cannot verify. The honest fix is for `stop` to drain the output queue before closing the socket, which is a change to `bgp/io.rb` and to every caller's timing, so it is its own piece of work. There is no bug today: `bgp/daemon/speaker.rb` says in `Peer#stop` what is missing and why, and nothing in the tree claims a Cease was sent.
 * **`Log.create` reads as "use this logger" and silently keeps the one that is already there**, which is a trap rather than a wrong answer today. It is `@@logger ||= new(s)` in `bgp/common.rb`, so a second caller's IO is dropped and every line keeps going where the first caller sent it. `Log.set_filename` is the forcing form. Measured on 2026-11-02:
   `ruby -I. -e 'require "bgp4r"; f = File.open("/tmp/l1.log", "w"); Log.create(STDERR); Log.create(f); Log.info("to the file?"); f.flush; p File.size("/tmp/l1.log")'`
   prints `0`. Nothing is wrong now, because the two callers in the tree are `Speaker#setup_log`, which runs once in a fresh lab process, and `Server#setup_log`, which uses `set_filename` for exactly this reason and has a test that `--log FILE` really wrote there. Not fixed because renaming or changing `create` touches every caller of a decade-old class and is its own decision: the smallest honest fix is a comment on `create` saying it does not replace, which is a one line change nobody has made.
@@ -6593,8 +6700,9 @@ Lab and conformance:
 * **BGP-LS is the only family measured in both directions, and `docs/bgp-ls.md` section 11 has it.** GoBGP 3.23.0 can originate a BGP-LS route, so its encoder feeds our decoder: `gobgp global rib add -a ls link` wants sixteen keyword and value pairs (`LINK_ARGS` in the test has them) and refuses `node` and `prefix`, so NLRI type 2 is the only one. What that bought: sub-TLV 516 kept and echoed on real traffic, the Protocol-ID table corrected because GoBGP originates with 7 and bgp4r said Unassigned, and the finding that decided part 6's scope, which is that **GoBGP's own node descriptors break section 5.2.1.4's ascending-order MUST** while GoBGP also enforces a mandatory-TLV check section 8.2.2 forbids. So part 6 follows the RFC and not the router. **Two GoBGP faults, recorded and not filed**: a node descriptor carrying only an Autonomous System is refused with "Required TLV missing" and costs the whole capability, and the client panics rendering an IP Reachability TLV whose prefix is more than one octet, which is why the send-side prefix case uses a /8. **What the receive direction cannot check**: GoBGP sends one NLRI per UPDATE, so `Link_state.nlri_size` wrong by a constant leaves every receive case passing; the multi-NLRI cases in `test/functional/link_state_test.rb` are the only cover the parse-side framing has. FRR 8.4.4 has neither SAFI and logs `afi/safi: bad-value/unknown`, naming neither half where for MCAST-VPN it named the AFI, then resets on a BGP-LS UPDATE as it does for SAFI 5. SAFI 72 has no reference at all.
 * **Flow spec interop lives in `docs/flow-spec.md` section 12**, measured and asserted rather than written down here, the same way the fault matrix columns are. The short version: both routers accept a rule from bgp4r and read it back, and they disagree on every part of RFC 8955 section 4.2. Two harness facts worth knowing before writing another flow spec lab test: GoBGP's **config file and its client use different names for the VPN family**, `l3vpn-ipv4-flowspec` and `ipv4-l3vpn-flowspec`, each rejecting the other; and **FRR 8.4.4 has no VPN flow spec family**, refusing a session that offers SAFI 134 alone with 2/7 and silently discarding the rule when SAFI 133 is there too.
 * **`to_hash_round_trip_test.rb` cannot read a test file that is not pure ASCII.** `test_every_working_round_trip_is_asserted_in_a_class_test_file` reads every test file body and matches regexps against it, and a single non-ASCII character in any of them makes it error with `ArgumentError: invalid byte sequence in US-ASCII`, pointing at its own line 190 and naming neither the file nor the character. Found on 2026-10-31 by putting one arrow in a comment in a new test file: that file passed on its own and the suite errored in a test it has nothing to do with. Every test file is ASCII today, so nothing is wrong now; what is wrong is the diagnosis the next person gets. The fix is an encoding on the read or a `scrub`, and it is one line in a file this change does not otherwise touch.
+  * **The same trap has a second home and that one bit**, which is the reason to believe it will bite a third time. `test/unit/rib/view_test.rb` reads `docs/daemon.md` and `docs/routescope-labs.md` the same way, and one em dash written into `docs/daemon.md` made three `assert_match` calls raise the same `invalid byte sequence in US-ASCII`, from a test with nothing to do with the character and naming neither the file nor the byte. Fixed there, in `read_doc`, which passes `:encoding => 'UTF-8'`. So the rule is wider than "a test file is ASCII": **any test that reads a file as text and matches a regexp against it has to name the encoding**, because the default external one is the environment's and the file is somebody's prose. `to_hash_round_trip_test.rb` is still the unfixed one.
 * **`bgp4r capture` has three gaps, each a decision rather than a patch, and each said in the file it is in.** The live path, `tcpdump` into a pipe, is the only code in `bgp/capture/` no test runs: tcpdump is not installed in this sandbox and spawning it in a unit test wants a privileged interface, so the file path is exercised in full and the nine lines of the spawn and the two that kill the child are not. The Dockerfile's **`capture` stage has not been built**, for want of a Docker daemon, and it is what makes routescope's hard coded `IMAGE capture -i IFACE` reach anything, so build it before trusting it. And **reordered segments are not handled**: `bgp/capture/stream.rb` reads each direction in arrival order, trims a retransmission by sequence number and does nothing about a capture whose segments crossed, which would frame garbage from that point with nothing saying so. Reordering means held segments, timers and a reassembly queue, which is a TCP implementation and not a dissector; the file says so rather than leaving it to be found out.
-* Lowest coverage (unit suite): `daemon/speaker.rb` 47%, `daemon/api.rb` 50%, `daemon/server.rb` 57%, `daemon/client.rb` 85%, `bgp/capture/cli.rb` 87% (the live tcpdump path, above), `neighbor/neighbor.rb` 92%, `messages/update.rb` 92%, `neighbor/add_path_cap.rb` 93%, `path_attributes/mp_unreach.rb` 93%, `path_attributes/ipv6_extended_communities.rb` 93%, `optional_parameters/graceful_restart.rb` 93%, `path_attributes/mp_reach.rb` 93%. **The four `daemon/` rows are not a gap and must not be chased by unit testing a socket**: the note under the baseline has the same files at 87.9% once `test/functional/daemon_test.rb` and the two speaker lab tests are counted.
+* Lowest coverage (unit suite), measured on 2026-11-02: `daemon/api.rb` 44%, `daemon/speaker.rb` 52%, `daemon/server.rb` 57%, `daemon/client.rb` 64%, `bgp/capture/cli.rb` 87% (the live tcpdump path, above), `messages/update.rb` 92%, `neighbor/neighbor.rb` 92%, `neighbor/add_path_cap.rb` 93%, `path_attributes/mp_unreach.rb` 93%, `path_attributes/ipv6_extended_communities.rb` 93%, `optional_parameters/graceful_restart.rb` 93%, `path_attributes/mp_reach.rb` 94%. **The four `daemon/` rows are not a gap and must not be chased by unit testing a socket**: the note under the baseline has the same files at 89.6% once `test/functional/daemon_test.rb` and the two speaker lab tests are counted, and `api.rb` is the lowest of them in the unit suite precisely because the event stream and the accept loop are the two things a unit test cannot reach.
 
 ## Attribute work left
 
