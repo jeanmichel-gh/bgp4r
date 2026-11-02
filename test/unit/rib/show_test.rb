@@ -124,6 +124,22 @@ class TestBgpRibShow < Test::Unit::TestCase
     assert_equal('* ', rows[1][0, 2], 'valid, not best')
   end
 
+  # A path that lost a comparison is still valid; one set aside before any
+  # comparison (RFC 4271 section 9.1.2) is not, and neither style calls it
+  # valid. The question is View#usable?, which both styles read, so this
+  # is what holds that method to what the two of them print.
+  def test_an_ineligible_path_is_not_marked_valid
+    @rib.announce(route(E1, '10.1.0.0/16'))
+    @rib.announce(route(E2, '10.1.0.0/16', :as_path => [65003, LOCAL_AS]))
+    rows = ios_rows
+    assert_equal(2, rows.size)
+    assert_equal('*>', rows[0][0, 2], 'valid and best')
+    assert_equal('  ', rows[1][0, 2], 'our own AS is in its AS_PATH')
+    detail = @rib.show(:iosxr, '10.1.0.0/16')
+    assert_equal(1, detail.lines.count { |l| l.include?('valid') },
+                 'one of the two paths is valid')
+  end
+
   # The prefix is printed on the first path of a group and left blank under
   # it, the way the sample does.
   def test_the_prefix_is_printed_once_per_group

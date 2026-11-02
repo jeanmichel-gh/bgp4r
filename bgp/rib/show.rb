@@ -21,6 +21,7 @@
 #++
 
 require 'bgp/rib/decision'
+require 'bgp/rib/view'
 
 module BGP
   module Rib
@@ -43,6 +44,11 @@ module BGP
     # release of any of them will differ in details, so do not write a test
     # elsewhere that depends on this text byte for byte, and do not read a
     # difference from your router as a bug here.
+    #
+    # **For a program rather than a person, read View instead.** It
+    # answers the same state as plain data, `rib.view`, and these three
+    # styles read their prefixes and paths from it, so a console and this
+    # text cannot disagree about which path lost where.
     #
     # IOS-XR is here as of #157, and was not before: no sample of its
     # `show bgp` output could be found, and inventing a format while calling
@@ -110,6 +116,7 @@ module BGP
           raise ArgumentError, "unknown style #{style.inspect}, use #{STYLES.inspect}"
         end
         @table = table
+        @view = View.new(table)
       end
 
       # The whole Loc-RIB, or one prefix in detail.
@@ -121,14 +128,15 @@ module BGP
 
       private
 
-      def prefixes ; @table.loc_rib.prefixes.sort_by { |p| sort_key(p) } ; end
-
-      # Shortest prefix first, then by address, which is near enough to what
-      # a router prints and is at least stable.
-      def sort_key(prefix)
-        ip = IPAddr.new(prefix)
-        [ip.family, ip.to_i, ip.prefix]
-      end
+      # Which prefixes, the paths to one of them, and whether a path took
+      # part in the comparison, all three from View. They are shared so
+      # that there is one definition of "the paths to a prefix, best
+      # first, with why each one lost": a console reads it as data and
+      # these three styles print it, and if they were two definitions
+      # they could disagree about which path lost where.
+      def prefixes ; @view.prefixes ; end
+      def paths(prefix) ; @view.paths(prefix) ; end
+      def usable?(reason) ; @view.usable?(reason) ; end
 
       # STYLES has already been checked in initialize, so the style names a
       # pair of methods below.
@@ -138,18 +146,6 @@ module BGP
 
       def one(prefix)
         send("#{@style}_one", prefix)
-      end
-
-      # Every path to a prefix, best first, then the ones that lost.
-      def paths(prefix)
-        result = @table.result(prefix)
-        return [] unless result
-        rest = @table.candidates(prefix).reject { |r| result.best && r.equal?(result.best) }
-        [[result.best, nil]] + rest.map { |r| [r, (result.eliminated || {})[r]] }
-      end
-
-      def usable?(reason)
-        !Decision::INELIGIBLE.include?(reason)
       end
 
       # IOS. The header, the legend and the column layout are the ones in
