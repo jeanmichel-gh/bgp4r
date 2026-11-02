@@ -761,6 +761,72 @@ class Capture_Dissect_Test < Test::Unit::TestCase
     assert_equal(:ip, D::LINKS[228])
   end
 
+  # ---- the promise that nothing here raises
+
+  # The file says it never raises on a bad frame or a bad message, which
+  # is a promise the cases above cannot keep on their own: each of them
+  # feeds octets this reader chose, and the shapes that break a parser
+  # are the ones nobody thought of. So this walks a bounded, **seeded**
+  # set of random bodies, which makes it a deterministic test and not a
+  # flake: the same octets every run, and a failure names a size and a
+  # Length a reader can reproduce.
+  def test_no_message_raises_however_its_octets_read
+    rng = Random.new(1234)
+    raised = []
+    (0..8).each do |type|
+      (0..40).each do |n|
+        body = Array.new(n) { rng.rand(256) }.pack('C*')
+        [nil, 0, 19, 4096, 65_535].each do |len|
+          octets = msg(type, body, len)
+          begin
+            # to_h is called and not asserted on: building the hash is
+            # where a nil child would raise, and the assertion that
+            # matters is the empty list below. Asserting per iteration
+            # would add some 3700 assertions to the suite's baseline for
+            # no more signal than this one line gives.
+            r = D.message(octets)
+            r.summary.to_s
+            r.to_h
+          rescue StandardError => e
+            raised << "type #{type} body #{n} length #{len.inspect}: #{e.class}: #{e.message}"
+          end
+        end
+      end
+    end
+    assert_equal([], raised[0, 5])
+  end
+
+  def test_no_frame_raises_however_its_octets_read
+    # The frame path has three link layers and four headers under them,
+    # and a short or nonsense frame is the ordinary case in a capture
+    # with a snaplen.
+    #
+    # The reassembly is **not** run here, and the first draft of this
+    # test ran it: this file requires bgp/capture/dissect alone, so
+    # naming BGP::Capture::Stream passed in the suite, where
+    # stream_test.rb had loaded it, and failed standalone with
+    # "uninitialized constant". That is the load order trap CLAUDE.md
+    # records, met in a new test rather than an old one, and caught only
+    # by running the file on its own. The same fuzz over a payload going
+    # into a buffer lives in stream_test.rb, which is where it belongs
+    # anyway, one test file per source file.
+    rng = Random.new(5678)
+    raised = []
+    300.times do
+      f = Array.new(rng.rand(80)) { rng.rand(256) }.pack('C*')
+      [:ethernet, :ip, :sll].each do |link|
+        begin
+          seg = D.segment(f, :link => link)
+          seg.errors.size
+          seg.flow
+        rescue StandardError => e
+          raised << "#{link} #{f.bytesize} octets: #{e.class}: #{e.message}"
+        end
+      end
+    end
+    assert_equal([], raised[0, 5])
+  end
+
   # ---- the hash form a console reads
 
   def test_the_hash_leaves_out_what_is_not_set

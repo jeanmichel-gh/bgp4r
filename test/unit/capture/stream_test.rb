@@ -295,6 +295,89 @@ class Capture_Stream_Test < Test::Unit::TestCase
     assert_equal(29, @s.pending.values.first.bytesize)
   end
 
+  # A seeded run of messages, some of them lying, cut into segments at
+  # random points. Returns the whole stream and the pieces to push.
+  #
+  # **The payloads are real messages and not random octets, and the
+  # first draft of these two tests used random octets.** Measured, that
+  # framed **one** message in 300 runs: random data almost never holds a
+  # plausible Length, so the buffer accumulates and everything ends in
+  # `pending`, and the octet conservation assertion passed by doing
+  # nothing. That is the pass-by-luck case Rules for agents warns about,
+  # and the guard against it is the floor on `framed` that both tests
+  # assert.
+  def fuzz_stream(rng)
+    whole = String.new
+    6.times do
+      case rng.rand(10)
+      when 0 then whole << Array.new(rng.rand(20)) { rng.rand(256) }.pack('C*')  # noise
+      when 1 then whole << msg(rng.rand(7), 'x' * rng.rand(20), rng.rand(19))    # Length too low
+      when 2 then whole << msg(rng.rand(7), 'x' * rng.rand(20), 5000)            # Length too high
+      when 3 then whole << (("\x00".b * 16) + [19, 4].pack('nC'))                # Marker wrong
+      else        whole << msg(rng.rand(7), Array.new(rng.rand(30)) { rng.rand(256) }.pack('C*'))
+      end
+    end
+    pieces = []
+    at = 0
+    while at < whole.bytesize
+      n = 1 + rng.rand(25)
+      pieces << whole[at, n]
+      at += n
+    end
+    [whole, pieces]
+  end
+
+  def test_no_stream_raises_however_its_octets_read
+    rng = Random.new(91_011)
+    raised = []
+    framed = 0
+    200.times do |i|
+      s = BGP::Capture::Stream.new
+      _whole, pieces = fuzz_stream(rng)
+      at = 0
+      pieces.each_with_index do |p, j|
+        begin
+          framed += s.push(seg(p, 1 + at)).size
+        rescue StandardError => e
+          raised << "run #{i} segment #{j}: #{e.class}: #{e.message}"
+        end
+        at += p.bytesize
+      end
+    end
+    assert_equal([], raised[0, 5])
+    # The floor: without it this passes against a framer that frames
+    # nothing at all.
+    assert(framed > 400, "only #{framed} messages framed, so the fuzz is not reaching the framing")
+  end
+
+  def test_every_octet_pushed_comes_back_in_a_message_or_is_held
+    # The other promise, measured on its own so a failure says which one
+    # broke. A resynchronisation is the only place octets could be
+    # dropped, so the stream is built to hit it: one case in ten writes
+    # a Length below the minimum.
+    rng = Random.new(121_314)
+    framed = 0
+    resynced = 0
+    200.times do
+      s = BGP::Capture::Stream.new
+      whole, pieces = fuzz_stream(rng)
+      out = String.new
+      at = 0
+      pieces.each do |p|
+        s.push(seg(p, 1 + at)).each do |m|
+          out << m.octets
+          framed += 1
+          resynced += 1 unless m.errors.empty?
+        end
+        at += p.bytesize
+      end
+      out << s.pending.values.join
+      assert_equal(hex(whole), hex(out))
+    end
+    assert(framed > 400, "only #{framed} messages framed")
+    assert(resynced > 20, "only #{resynced} resynchronisations, so the one lossy path is not reached")
+  end
+
   def test_a_segment_with_no_sequence_number_is_still_appended
     # A link layer this dissector reads without one is not a case today,
     # and the framing must not depend on it.
