@@ -713,6 +713,38 @@ test/coverage_matrix.rb  what is exercised and what is not, per path
                          suite on a SAFI with no name, a lab test with no
                          place, a verdict with no file behind it and a
                          cited document that is not there
+test/features.rb         which test exercises which BGP feature, so a person
+                         can run every tier of one feature at once:
+                         `ruby test/run_feature.rb evpn`. **It is a second
+                         axis and replaces nothing**: the tree is laid out by
+                         source file, which is what somebody changing a class
+                         wants, and test/lab_groups.rb groups the lab tests by
+                         the binary they need, which is what CI wants. None of
+                         the three answers the other two's question.
+                         **Features are tags and they overlap**, where the lab
+                         groups partition, and that difference is forced: a CI
+                         matrix must not run a file twice, and about a quarter
+                         of the files here carry two tags or more, since
+                         `rd_test` is the Route Distinguisher of five families
+                         and `validation_test` reaches seven. Nothing in it
+                         says what a tier needs; that is derived from
+                         LabGroups, which already knows, so the two cannot
+                         drift. test/features_doc.rb generates
+                         docs/running-tests.md from it and
+                         test/unit/features_test.rb fails the suite when a
+                         test file carries no feature or the document is stale
+test/log_switch.rb       `BGP4R_LOG=debug` turns the library's log on for a
+                         test run, on standard error. **Nothing did this
+                         before**: `Log` starts with no logger, so every
+                         `Log.info` in the library was a silent no-op and a
+                         person who wanted to see what a functional test did
+                         had to edit the test. The three runners install it;
+                         test/log_on.rb is the `-r` hook for one file,
+                         `ruby -I. -rtest/log_on <file>`, and is a separate
+                         file because requiring log_switch.rb has to stay
+                         free of side effects. Two limits, both in its header:
+                         a test that silences the log itself wins, and an
+                         object handed its own logger writes there instead
 test/unit/               unit tests, mirroring bgp/
                          test/unit/capture/capture_fixtures.rb builds the BGP
                          messages, frames and pcap streams the four capture
@@ -890,6 +922,29 @@ test/functional/lab/     lab tests: loopback speaker test and one Compose test p
 
 Ruby 3.3, 3.4 and 4.0 are supported and tested in CI. Tests use test-unit. The load path is the repo root, so pass `-I.` when you run a single file.
 
+**`docs/running-tests.md` is the generated map of everything below**, by
+BGP feature rather than by file: which command runs what, what each tier
+costs, the logging flags and every environment variable. It is generated
+from `test/features.rb` by `test/features_doc.rb`, and
+`test/unit/features_test.rb` asserts the file on disk is what the
+generator produces, so it cannot be stale. Regenerate it in the same
+pull request that adds a test file:
+```
+ruby test/features_doc.rb > docs/running-tests.md
+```
+**`rake coverage:matrix` is the other half of that question**, below: this
+document says which tests exist and that one says what they leave out.
+
+By feature, which is the axis a person exercising one wants. It runs the
+unit, functional and lab tiers of that feature, cheapest first:
+```
+ruby test/run_feature.rb                 # the features, by area
+ruby test/run_feature.rb evpn            # every tier of one feature
+ruby test/run_feature.rb evpn --unit     # the tier that needs no binary
+ruby test/run_feature.rb evpn --list     # the files, and what each needs
+ruby test/run_feature.rb --area families # every feature of one area
+```
+
 All unit tests:
 ```
 ruby test/run_unit.rb
@@ -900,6 +955,23 @@ One file:
 ```
 ruby -I. test/unit/path_attributes/as_path_test.rb
 ```
+
+**`BGP4R_LOG=debug` turns the library's log on for a test run**, on
+standard error, which nothing could do before: a person who wanted to
+see what a functional test did had to edit the test. `debug`, `info` or
+`warn`, and an unknown value warns rather than guessing. The three
+runners install it; one file needs the `-r` hook, since it goes through
+no runner:
+```
+BGP4R_LOG=debug ruby test/run_unit.rb 2> /tmp/bgp4r.log
+BGP4R_LOG=debug ruby test/run_feature.rb evpn
+BGP4R_LOG=debug ruby -I. -rtest/log_on test/functional/rib_router_test.rb
+```
+At `debug` that last one is about a thousand lines, each message decoded
+and in hex. Two limits, in `test/log_switch.rb`'s header: a test that
+silences the log itself wins, which `sim_test.rb` and
+`candidate_test.rb` do on purpose, and an object handed its own logger
+through `bgp/logging.rb` writes there instead.
 
 Functional test over loopback (port 3456):
 ```
@@ -1251,7 +1323,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. The `lab` job is a matrix, one job per group in `test/lab_groups.rb`, so its cost is the slowest group and not the total: it was 12m42s as one serial suite. Each job installs only what its group needs, which is why the matrix entry carries a `gobgp`, `frr`, `docker` or `netns` flag. The `gobgp` groups pin 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-11-03: 3129 tests, 31807 assertions, all passing. Line coverage of `bgp/` from the unit suite: 96.2%.
+Baseline on 2026-11-03: 3158 tests, 32249 assertions, all passing. Line coverage of `bgp/` from the unit suite: 96.2%.
 
 **That coverage figure is 98.5% for the library and the rest is the two
 programs, not a gap anywhere else.** Measured the same run: with
@@ -1387,6 +1459,7 @@ There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Cove
     too, by making one listed edit a no-op, or it is one more claim
     nothing checks.
   * **Commit before you sabotage, or revert from a copy rather than from git.** A sabotage pass that reverts with `git checkout -- <files>` reverts **nothing** when any of those files is untracked, because git aborts the whole command on an unknown pathspec. So a pull request adding new files is exactly where this bites: eleven sabotages in #218 accumulated into one broken tree, two of them reporting failures that were really earlier sabotages still in place, and unpicking it by hand took four repairs. Check the revert worked before trusting the next run, which is this rule applied to the harness instead of the test.
+    * **Committing first is not enough, and the second shape of this is quieter.** `git checkout --` reverts to the last commit, so any fix made **after** that commit is thrown away by the next revert, and the file comes back with the bug still in it. That happened in #246: `--area` was fixed after the commit, one sabotage later the revert restored the broken version, and the pass went on reporting failures from a file nobody had sabotaged. The tell is that `git status` is clean and a feature that worked a minute ago does not. So either commit again before each sabotage, or keep a copy and restore from that; and re-run the clean suite after the pass, not only after each revert.
 * **A timeout that fires is reporting something, so time the phases before widening it.** `test_start_stop_start_again` carried "nothing here explains why" for weeks and a heading that blamed a slow runner, and it took `docker ruby 3.3`, `3.4` and `4.0` down in turn, master's own CI among them. Timing its sequence phase by phase over 60 runs settled it in one afternoon: 59 under a second and **one where the second `start` took a flat 60.00s**, which is `Neighbor#start`'s default `:timeout` and so a session that was never coming up. A flat number is a constant and a constant is a code path; a slow machine gives a spread. Widening the 6 second bound would have turned a 6 second red into a 60 second red, which is the shape of hiding a defect rather than fixing one. **And test the hypothesis you reach for**: the first one here, a stale event queued against the old session, was forced both ways and did not reproduce, so it was written down as wrong rather than left to be re-proposed.
 * **A claim nothing checks reads as verified, in a document as much as in a comment.** The lesson came twice. Once from the conformance table, measured by hand and never re-run. Once from `docs/to-hash-round-trips.md`, since **retired**, where the tables stayed true across four pull requests because `to_hash_round_trip_test.rb` compares them against the catalog row by row, while the prose beside them drifted into ranking work that two of those pull requests had already finished. The enforced half held and the unenforced half did not, in one file, with nobody noticing. That is what retiring it was for: what a person reads is printed from the catalog now, by `rake to_hash:status`, so there is no unenforced half left to drift. So when a document makes claims a test could make, assert the load-bearing ones: `test/unit/building_objects_test.rb` is what that looks like, and writing it corrected two claims in the document it guards within the hour.
 * **Work out what the code and the tests were built to do before concluding that any of it is wrong.** bgp4r is behind on BGP features and it is not behind on robustness: encoding and decoding have held up for years because the test coverage around them is extensive and deliberate. So a shape that looks odd is far more likely to be a decision whose reason is not written down than a defect, and the burden is on the reader to find the reason first. This was said on 2026-10-29 after two claims in one afternoon that failed the same way.

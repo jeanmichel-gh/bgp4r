@@ -46,6 +46,13 @@ Dir.chdir(root)
 
 require './test/lab_groups'
 
+# BGP4R_LOG=debug logs the bgp4r speakers these tests run **in process**,
+# which is every gobgp and FRR test here. LAB_LOG_LEVEL is the other one
+# and reaches the speakers spawned as child processes instead, so a lab
+# run watched closely wants both.
+require './test/log_switch'
+LogSwitch.install
+
 if ARGV.first == '--groups'
   puts LabGroups.groups
   exit 0
