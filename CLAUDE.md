@@ -688,6 +688,31 @@ docs/                    protocol-testing.md: using bgp4r to test a router
                          and its section 12 says which claims become
                          assertable here and when
 examples/                runnable scripts
+test/coverage_matrix.rb  what is exercised and what is not, per path
+                         attribute and per address family, **computed from
+                         the library** rather than written down: the
+                         attributes are `Attr.registrations`, the fault
+                         coverage is `Fault.catalog` keyed by the attribute
+                         each case builds, the families are **probed** from
+                         the build gate in mp_reach.rb and named by
+                         `IANA.safi_name`, and the lab tests are a glob. So
+                         a family wired in, an attribute registered or a
+                         fault case added appears here the day it lands.
+                         `VOUCHES` is the one declared part and has to be:
+                         what a lab test's existence *proves* is a
+                         judgement, and two files of the same shape can
+                         mean opposite things, since evpn_gobgp_test.rb
+                         says a router read our octets where
+                         mcast_vpn_gobgp_test.rb says the router has no
+                         such family and so vouches for nothing about our
+                         encoding. A column printing yes for both would be
+                         the confident wrong answer Conventions calls the
+                         worst failure a conformance tool has. It prints
+                         and asserts nothing; the guard is
+                         test/unit/coverage_matrix_test.rb, which fails the
+                         suite on a SAFI with no name, a lab test with no
+                         place, a verdict with no file behind it and a
+                         cited document that is not there
 test/unit/               unit tests, mirroring bgp/
                          test/unit/capture/capture_fixtures.rb builds the BGP
                          messages, frames and pcap streams the four capture
@@ -1194,6 +1219,26 @@ ruby -I. test/unit/to_hash_status.rb
 ruby -I. test/unit/to_hash_status.rb pending
 ```
 
+What is exercised and what is not, per path attribute and per address
+family: which attributes have a case in `BGP::Fault::CATALOG`, which
+have been in front of a real router at all, which families the build
+gate knows, and what each router's lab tests **vouch for** about each
+one. Read `test/coverage_matrix.rb`'s header before trusting a column;
+the four verdicts are not worth the same and `absence` vouches for
+nothing about our octets:
+```
+rake coverage:matrix
+ruby -I. test/coverage_matrix.rb
+```
+**Its first run, on 2026-11-03, said twelve registered path attributes
+have never been sent to a router**, which nothing in the tree had said
+and which is the hole the inverted ADD-PATH Send/Receive field sat in
+for years. Everything there but the interop verdicts is derived from the
+library, so a family wired in or an attribute registered appears with no
+edit, and `test/unit/coverage_matrix_test.rb` fails the suite when the
+declared half goes stale. **Do not write its counts down anywhere**,
+including here, for the reason the `to_hash` entry above gives.
+
 Do not run `test/functional/live_feed_test.rb`. It connects to a public feed that no longer answers and hangs forever.
 
 In Docker, on any Ruby version (the default is 3.4):
@@ -1206,7 +1251,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. The `lab` job is a matrix, one job per group in `test/lab_groups.rb`, so its cost is the slowest group and not the total: it was 12m42s as one serial suite. Each job installs only what its group needs, which is why the matrix entry carries a `gobgp`, `frr`, `docker` or `netns` flag. The `gobgp` groups pin 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-11-02: 3101 tests, 31705 assertions, all passing. Line coverage of `bgp/` from the unit suite: 96.2%.
+Baseline on 2026-11-03: 3127 tests, 31801 assertions, all passing. Line coverage of `bgp/` from the unit suite: 96.2%.
 
 **That coverage figure is 98.5% for the library and the rest is the two
 programs, not a gap anywhere else.** Measured the same run: with
