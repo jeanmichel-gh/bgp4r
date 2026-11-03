@@ -42,7 +42,12 @@ cli() { ex "$1" ruby -I/app exe/bgp4r-cli -s "$SOCK" "${@:2}"; }
 rshow() { echo "===== $1 bgp4r-cli $2 ${3:-}"; cli "$1" "$2" ${3:+"$3"} 2>&1; echo; }
 # The injector's HTTP API on its loopback, as routescope's driver reaches it.
 sget() { ex "$1" ruby -rnet/http -e "print Net::HTTP.get(URI('http://127.0.0.1:8080' + ARGV[0]))" "$2"; }
-spost() { ex "$1" ruby -rnet/http -e 'r = Net::HTTP.post(URI("http://127.0.0.1:8080" + ARGV[0]), ARGV[1], "X-BGP4R" => "capture"); puts r.code, r.body' "$2" "$3"; }
+# A POST must carry X-BGP4R: routescope, the injector's one guard; a
+# refusal stops the capture rather than capturing a lab with nothing in it.
+spost() {
+  ex "$1" ruby -rnet/http -e 'r = Net::HTTP.post(URI("http://127.0.0.1:8080" + ARGV[0]), ARGV[1], "X-BGP4R" => "routescope"); puts r.code, r.body; exit(r.code.start_with?("2") ? 0 : 1)' "$2" "$3" \
+    || { echo "$1 refused POST $2"; exit 1; }
+}
 sshow() { echo "===== $1 sim GET $2"; sget "$1" "$2" 2>&1; echo; }
 
 established() {
@@ -75,7 +80,17 @@ protocol static capture { ipv4; route 172.16.9.0/24 blackhole; }
 EOF
 sed -i "s/export none;/export where proto = \"capture\";/" /etc/bird/bird.conf'
 ex r3 birdc configure
-sleep 20
+# Wait for what was set up to arrive, and stop if it does not.
+two_paths() { vt r1 'show bgp ipv4 unicast 172.16.9.0/24 json' | ruby -rjson -e 'exit(Array((JSON.parse(STDIN.read) rescue {})["paths"]).size == 2 ? 0 : 1)'; }
+for i in $(seq 1 30); do
+  ex r3 birdc show route all for 10.1.0.0/24 | grep -q 'BGP.large_community' && \
+    ex r3 birdc show route all for 172.16.9.0/24 | grep -q unicast && \
+    two_paths && break
+  sleep 2
+done
+ex r3 birdc show route all for 10.1.0.0/24 | grep -q 'BGP.large_community' || { echo "10.1.0.0/24 did not reach r3 with its communities"; exit 1; }
+two_paths || { echo "r1 does not hold two paths to 172.16.9.0/24"; exit 1; }
+sleep 5
 
 echo "### FRR"
 for n in r1 r2; do

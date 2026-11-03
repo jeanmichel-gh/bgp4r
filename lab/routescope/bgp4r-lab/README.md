@@ -115,6 +115,19 @@ docker exec clab-bgp4r-lab-r3 birdc show route all where source = RTS_BGP
 `curl` is not in the `lab-node` image either; `ruby -rnet/http` is what
 routescope's driver uses and is what is there.
 
+`capture.sh` prints what every router answers to the commands
+routescope's BGP drivers send, for routescope's unit test fixtures. It
+changes the running lab first (two paths, all three community kinds,
+soft reconfiguration on r1, a prefix originated by both r2 and r3, then
+a flap), so run it on a lab you can redeploy. CI runs it on every push
+that changes this folder, in `.github/workflows/capture.yml`, which is
+also the one place this lab is deployed. It is a copy of ospfv2's own
+capture job, adapted, so neither repository depends on the other.
+
+```
+bash lab/routescope/bgp4r-lab/capture.sh > capture.log
+```
+
 ## The scenarios
 
 Six files, one per point 2 to 7, in the language
