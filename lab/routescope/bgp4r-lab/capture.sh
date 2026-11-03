@@ -17,9 +17,10 @@
 #
 # Before capturing it changes the running lab, not its files, so the
 # output has what the panes need to show:
-#   - inj1 announces 10.1.0.0/24 with MED 100 and all three kinds of
-#     community, and inj2 the same prefix with MED 50, so rtr holds two
-#     paths and says why one won;
+#   - inj1 announces 10.1.0.0/24 and 10.2.0.0/24 with MED 100 and all
+#     three kinds of community, and inj2 10.1.0.0/24 with MED 50, so rtr
+#     holds two paths to it and says why inj2's won; 10.2.0.0/24 is the
+#     one that carries the communities on to r3;
 #   - r1 keeps what rtr sends before policy (soft reconfiguration
 #     inbound), and r2 does not, so both answers are captured;
 #   - r2 (FRR) and r3 (BIRD) both originate 172.16.9.0/24, so r1 holds
@@ -83,7 +84,7 @@ ex r3 birdc configure
 # Wait for what was set up to arrive, and stop if it does not.
 two_paths() { vt r1 'show bgp ipv4 unicast 172.16.9.0/24 json' | ruby -rjson -e 'exit(Array((JSON.parse(STDIN.read) rescue {})["paths"]).size == 2 ? 0 : 1)'; }
 for i in $(seq 1 30); do
-  ex r3 birdc show route all for 10.1.0.0/24 | grep -q 'BGP.large_community' && \
+  ex r3 birdc show route all for 10.2.0.0/24 | grep -q 'BGP.large_community' && \
     ex r3 birdc show route all for 172.16.9.0/24 | grep -q unicast && \
     two_paths && break
   sleep 2
@@ -98,7 +99,7 @@ why() {
   docker logs --tail 30 "clab-$LAB-r3" 2>&1
   exit 1
 }
-ex r3 birdc show route all for 10.1.0.0/24 | grep -q 'BGP.large_community' || why "10.1.0.0/24 did not reach r3 with its communities"
+ex r3 birdc show route all for 10.2.0.0/24 | grep -q 'BGP.large_community' || why "10.2.0.0/24 did not reach r3 with its communities"
 two_paths || why "r1 does not hold two paths to 172.16.9.0/24"
 sleep 5
 
@@ -121,7 +122,8 @@ vshow r2 'show bgp ipv4 unicast neighbors 10.1.12.1 routes json'
 echo "### BIRD"
 for c in 'show protocols all' 'show route all' \
   'show route all protocol r1' 'show route all export r1' \
-  'show route all for 172.16.9.0/24' 'show route all for 10.1.0.0/24' 'show route count'; do
+  'show route all for 172.16.9.0/24' 'show route all for 10.1.0.0/24' 'show route all for 10.2.0.0/24' \
+  'show route count'; do
   bshow r3 "$c"
 done
 
