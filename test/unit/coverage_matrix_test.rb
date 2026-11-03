@@ -47,6 +47,24 @@ class CoverageMatrixTest < Test::Unit::TestCase
                  "CoverageMatrix::SLUGS, so it would print as a blank row")
   end
 
+  # What PROBE_AFIS is for, measured rather than assumed, because the
+  # comment on it first claimed EVPN appeared only under AFI 25. The
+  # gate's `set` branches on the SAFI for every family but unicast and
+  # multicast, so AFI 1 is a superset for the family table; and the AFI
+  # does decide the two that have to build a prefix. If a gate ever
+  # grows an AFI check, this fails rather than a row vanishing.
+  def test_the_gate_keys_on_the_safi_for_every_family_but_two
+    all = CM.families
+    under_one = all.select { |afi, _| afi == 1 }.collect { |_, s| s }.sort
+    every = all.collect { |_, s| s }.uniq.sort
+    assert_equal(every, under_one,
+                 'AFI 1 no longer yields every SAFI the gate knows, so the ' \
+                 'family table depends on PROBE_AFIS in a new way')
+    assert(CM.gate_knows?(1, 1), 'AFI 1 SAFI 1')
+    assert(!CM.gate_knows?(25, 1), 'AFI 25 SAFI 1 has no prefix class')
+    assert(!CM.gate_knows?(16388, 2), 'AFI 16388 SAFI 2 has no prefix class')
+  end
+
   def test_every_family_the_gate_knows_has_a_vouches_entry
     missing = CM.family_slugs.reject { |s| CM::VOUCHES.key?(s) }
     assert_equal([], missing,
@@ -128,6 +146,14 @@ class CoverageMatrixTest < Test::Unit::TestCase
                  'a *_gobgp_test.rb or *_frr_test.rb on disk is neither in ' \
                  'LAB_FAMILIES nor declared in NOT_A_FAMILY, so it is ' \
                  'absent from the family table with nothing saying so')
+  end
+
+  # The test above is satisfied by a method that answers [] whatever it
+  # is handed, which a sabotage proved: nothing else in the report reads
+  # it. So the rejection is asserted on an input of its own.
+  def test_the_unplaced_check_really_rejects
+    assert_equal(%w[made_up], CM.unplaced(%w[evpn fault_matrix made_up]))
+    assert_equal([], CM.unplaced(%w[evpn fault_matrix]))
   end
 
   def test_lab_families_names_no_file_that_is_not_there

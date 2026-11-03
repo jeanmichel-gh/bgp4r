@@ -61,9 +61,23 @@ require 'bgp/fault'
 # exists.
 module CoverageMatrix
 
-  # The AFIs worth probing. The gate keys on the SAFI almost everywhere,
-  # so these are the four that carry a family of their own: 1 and 2 for
-  # the ordinary pairs, 25 for EVPN and 16388 for BGP-LS.
+  # The AFIs worth probing.
+  #
+  # **Measured on 2026-11-03, because the comment here first guessed and
+  # a sabotage caught it.** It said these were the four that carry a
+  # family of their own, 25 for EVPN and 16388 for BGP-LS, which reads
+  # as though EVPN appeared only under AFI 25. It does not. The gate's
+  # `set` branches on the **SAFI** for every family but unicast and
+  # multicast, so AFI 1 with SAFI 70 is accepted, and **AFI 1 alone
+  # yields every SAFI in the table**. Narrowing this list to [1] changed
+  # no row, which is how the guess surfaced.
+  #
+  # The list stays at four because the question it asks is which
+  # [afi, safi] pairs the gate accepts, and there the AFI does matter:
+  # AFI 25 and 16388 refuse SAFI 1 and 2, since that arm has to build a
+  # prefix. `test_the_gate_keys_on_the_safi_for_every_family_but_two`
+  # pins both halves, so a gate that grows an AFI check fails there
+  # rather than quietly dropping a row.
   PROBE_AFIS = [1, 2, 25, 16388].freeze
 
   # What a router's lab tests actually vouch for about one family.
@@ -252,10 +266,18 @@ module CoverageMatrix
 
     # A router test whose stem is neither a family's nor declared as not
     # being one. The guard fails on it.
+    #
+    # **Split in two so the rejection itself is testable.** Its only
+    # consumer is its own guard, so stubbing it to answer [] passed the
+    # whole suite: nothing else in the report reads it, which is the
+    # #246 row-parser case again. `unplaced` takes the stems, so a test
+    # can hand it a made up one and watch it come back.
     def unplaced_router_tests
-      router_tests.collect { |stem, _, _| stem }.uniq.reject { |s|
-        LAB_FAMILIES.key?(s) || NOT_A_FAMILY.key?(s)
-      }
+      unplaced(router_tests.collect { |stem, _, _| stem }.uniq)
+    end
+
+    def unplaced(stems)
+      stems.reject { |s| LAB_FAMILIES.key?(s) || NOT_A_FAMILY.key?(s) }
     end
 
     def vouches(slug) ; VOUCHES[slug] ; end
