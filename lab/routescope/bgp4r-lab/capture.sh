@@ -148,6 +148,7 @@ ex r1 ip link set eth1 down; sleep 15; ex r1 ip link set eth1 up
 ex r3 birdc 'disable r1' >/dev/null; sleep 3; ex r3 birdc 'enable r1' >/dev/null
 sleep 40
 vshow r1 'show bgp summary json'
+vshow r1 'show bgp neighbors json'
 vshow r1 'show bgp neighbors 10.0.20.1 json'
 bshow r3 'show protocols all r1'
 rshow rtr show.peers
