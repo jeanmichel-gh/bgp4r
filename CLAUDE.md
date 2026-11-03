@@ -315,7 +315,17 @@ bgp/daemon/              `bgp4rd` the daemon and `bgp4r-cli` its client;
                          here, built in one place and read by all **five**
                          paged views: show.routes, show.rib, show.adj_in,
                          show.adj_out and show.fib, each a key list and a
-                         per key row builder so no answer is a million rows
+                         per key row builder so no answer is a million rows.
+                         A peer row answers `inq`, `outq` and `held`, what
+                         is left to receive, send and release per session,
+                         which is how routescope's `bgp_drained` asks
+                         whether a speaker is done with its work: BGP does
+                         not converge, so that is the question to ask.
+                         Every path row of every view carries
+                         `communities`, `extended_communities` and
+                         `large_communities` as lists; the three keys a
+                         node file, a set line and an action body take
+                         for them are read in `CommunityKeys`
                          control.rb what the daemon can be **told** to do:
                          `peer.clear`, `peer.stop`, `peer.start`,
                          `peer.refresh`, `route.originate` and
@@ -1329,7 +1339,7 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. The `lab` job is a matrix, one job per group in `test/lab_groups.rb`, so its cost is the slowest group and not the total: it was 12m42s as one serial suite. Each job installs only what its group needs, which is why the matrix entry carries a `gobgp`, `frr`, `docker` or `netns` flag. The `gobgp` groups pin 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-11-03: 3158 tests, 32249 assertions, all passing. Line coverage of `bgp/` from the unit suite: 96.2%.
+Baseline on 2026-11-03: 3167 tests, 32280 assertions, all passing. Line coverage of `bgp/` from the unit suite: 96.2%.
 
 **That coverage figure is 98.5% for the library and the rest is the two
 programs, not a gap anywhere else.** Measured the same run: with
