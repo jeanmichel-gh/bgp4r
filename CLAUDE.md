@@ -315,7 +315,17 @@ bgp/daemon/              `bgp4rd` the daemon and `bgp4r-cli` its client;
                          here, built in one place and read by all **five**
                          paged views: show.routes, show.rib, show.adj_in,
                          show.adj_out and show.fib, each a key list and a
-                         per key row builder so no answer is a million rows
+                         per key row builder so no answer is a million rows.
+                         A peer row answers `inq`, `outq` and `held`, what
+                         is left to receive, send and release per session,
+                         which is how routescope's `bgp_drained` asks
+                         whether a speaker is done with its work: BGP does
+                         not converge, so that is the question to ask.
+                         Every path row of every view carries
+                         `communities`, `extended_communities` and
+                         `large_communities` as lists; the three keys a
+                         node file, a set line and an action body take
+                         for them are read in `CommunityKeys`
                          control.rb what the daemon can be **told** to do:
                          `peer.clear`, `peer.stop`, `peer.start`,
                          `peer.refresh`, `route.originate` and
@@ -805,6 +815,12 @@ test/functional/         tests that open real TCP sessions
                          the octets another speaker reads
 test/helpers/            a small test BGP server
 lab/                     speakers in containers: lab/speaker.rb and lab/topologies/ (see lab/README.md)
+                         lab/routescope/ holds the containerlab labs
+                         written for the routescope console, apart from
+                         the Compose topologies under lab/topologies/
+                         that this suite drives; `bgp4r lab new` reads
+                         both (CLI::ROOTS), and routescope's CI deploys
+                         from here
                          lab/speaker.rb is the **command line** now and nothing
                          else: the sessions, the configuration and the recording
                          moved into bgp/daemon/speaker.rb, because `bgp4rd`
@@ -842,7 +858,7 @@ lab/                     speakers in containers: lab/speaker.rb and lab/topologi
                          invented, and the routescope lab is containerlab
                          rather than Compose, so a Compose topology for
                          bgp4r's own tests has no reason to carry one
-                         lab/topologies/bgp4r-lab is **the one
+                         lab/routescope/bgp4r-lab is **the one
                          containerlab topology** and the only one written
                          for the routescope console rather than for this
                          test suite: six nodes and three
@@ -854,9 +870,13 @@ lab/                     speakers in containers: lab/speaker.rb and lab/topologi
                          comparable, which is what lets one action flip
                          which path wins; `rtr` routes rather than
                          originates what they send. Its four scenarios
-                         are that section's points 2 to 5. **It has
-                         never been deployed**, so nothing in it is a
-                         measurement, and it wants the Dockerfile's
+                         are that section's points 2 to 7. **CI deploys
+                         it**, in `.github/workflows/capture.yml`,
+                         whose `capture.sh` prints every router's
+                         answers for routescope's fixtures; the first
+                         run, 2026-11-03, found BIRD dropping rtr's
+                         routes until `gateway recursive`. Its
+                         scenarios have not been run. It wants the Dockerfile's
                          `lab-node` stage rather than `speaker`: a
                          containerlab node sets its addresses with `ip`
                          and `bgp4rd` has to be able to create
@@ -896,7 +916,7 @@ test/functional/lab/     lab tests: loopback speaker test and one Compose test p
                          no router and no socket, which is all the cover those files
                          have until the Compose form can be run;
                          bgp4r_lab_topology_test.rb is the same shape for
-                         lab/topologies/bgp4r-lab and loads each of its
+                         lab/routescope/bgp4r-lab and loads each of its
                          three node files through the program that reads
                          it, `Sim::Injector.new` for the two injectors
                          and `Daemon::Server#load_config` with
@@ -1128,8 +1148,9 @@ second:
 ruby -I. test/functional/lab/add_path_topology_test.rb
 ```
 
-The same for `lab/topologies/bgp4r-lab`, the containerlab one, which has
-never been deployed, so this is the only cover its files have. It parses
+The same for `lab/routescope/bgp4r-lab`, the containerlab one, which only
+the Capture workflow deploys, so this is the cover its files have on every
+pull request. It parses
 the `*.clab.yml`, loads each of the three node files through the program
 that reads it, and holds the folder to its own README and the four
 scenarios to routescope's own vocabulary. Hundredths of a second:
@@ -1380,7 +1401,9 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. The `lab` job is a matrix, one job per group in `test/lab_groups.rb`, so its cost is the slowest group and not the total: it was 12m42s as one serial suite. Each job installs only what its group needs, which is why the matrix entry carries a `gobgp`, `frr`, `docker` or `netns` flag. The `gobgp` groups pin 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-11-03: 3176 tests, 32561 assertions, all passing. Line coverage of `bgp/` from the unit suite: 96.2%.
+`.github/workflows/capture.yml` is the one workflow that deploys a containerlab lab: it builds the `lab-node` and BIRD images, deploys `lab/routescope/bgp4r-lab`, and runs its `capture.sh`, on demand and on a push that changes that folder or the Dockerfile. Its log is what routescope's BGP fixtures are cut from.
+
+Baseline on 2026-11-03: 3185 tests, 32592 assertions, all passing. Line coverage of `bgp/` from the unit suite: 96.2%.
 
 **That coverage figure is 98.5% for the library and the rest is the two
 programs, not a gap anywhere else.** Measured the same run: with
@@ -6694,19 +6717,22 @@ container registry; see "Lab and conformance" for why the daemon is not
 what is missing.
 
 **The topology itself is written**, which is the other half of item 9:
-`lab/topologies/bgp4r-lab`, the six node lab of that document's section
+`lab/routescope/bgp4r-lab`, the six node lab of that document's section
 8, with both labels on every node, node files for the two injectors and
 the daemon, FRR and BIRD configs, and four scenarios covering its points
 2 to 5. The privilege story came out of writing it and is a Dockerfile
 stage, `lab-node`: a containerlab node sets its addresses with `ip addr
 add` and `bgp4rd` has to create `/run/bgp4r`, which is the one socket
 path `Drivers::Bgp4rd` looks in for such a node, and the `speaker` stage
-the Compose topologies use has neither iproute2 nor root. **Neither
-image has been built and nothing has been deployed**, so it is a folder
-and not a measurement, and `test/functional/lab/bgp4r_lab_topology_test.rb`
-is most of the cover it has until a container registry is reachable.
-**What could be measured without one was**, and it is the three router
-configs: `bird -p` parses `r3/bird.conf` clean under BIRD 2.14, and
+the Compose topologies use has neither iproute2 nor root. **It is deployed
+by CI now**, in `.github/workflows/capture.yml`, where GitHub's runners
+reach the registries this sandbox cannot. The first run, 2026-11-03,
+built both images, brought up all six sessions on FRR 10.2.1 and BIRD
+2.0.12, and found the one bug a parse could not: on a `direct` iBGP
+session BIRD dropped every route from rtr, whose next hop is not on its
+links, until `r3/bird.conf` took `gateway recursive`. The scenarios have
+not been run. Before that, the three router configs were measured here
+without a registry: `bird -p` parses `r3/bird.conf` clean under BIRD 2.14, and
 `bgpd -C` accepts every BGP line of both FRR configs under bgpd 8.4.4,
 rejecting only `no ipv6 forwarding` and `service
 integrated-vtysh-config`, which are zebra and vtysh lines a standalone
@@ -7343,7 +7369,7 @@ Smaller things:
 Lab and conformance:
 
 * **"No Docker daemon" is the wrong name for the block, and this file says it in six places.** A daemon starts here: `dockerd` is at `/usr/bin/dockerd`, this session is uid 0, and starting it by hand gave **29.9.2** with `API listen on /var/run/docker.sock`, measured on 2026-11-02. What actually blocks every image is the **proxy refusing the registries**: `docker build --target speaker` dies at `FROM ruby:3.4-slim` with `Forbidden` from `registry-1.docker.io`, and `curl https://HOST/v2/` answers `CONNECT tunnel failed, response 403` for `registry-1.docker.io`, `quay.io`, `ghcr.io`, `public.ecr.aws` and `mirror.gcr.io` alike. There is no local image cache to fall back on, `docker images` being empty.
-  * **So what has to be arranged is a route to a registry, not a daemon**, and that is a different request to make of whoever runs the sandbox. Everything downstream is still blocked: the `test`, `speaker`, `capture`, `lab-node` and `conformance` stages have none of them ever been built, the `compose` lab group cannot run because it needs `bgp4r-speaker`, and `containerlab` is not installed either, so `lab/topologies/bgp4r-lab` cannot be deployed.
+  * **So what has to be arranged is a route to a registry, not a daemon**, and that is a different request to make of whoever runs the sandbox. Everything downstream is still blocked: the `test`, `speaker`, `capture`, `lab-node` and `conformance` stages have none of them ever been built, the `compose` lab group cannot run because it needs `bgp4r-speaker`, and `containerlab` is not installed either, so `lab/routescope/bgp4r-lab` cannot be deployed **from this sandbox**. GitHub's runners reach the registries, which is why `.github/workflows/capture.yml` builds `lab-node` and deploys that lab there.
   * **This is the fourth recorded Docker block here to come apart on being tried**, after phase 3 part 7 in #151, add-path in #153 and the FIB's network namespace in #156, and the lesson is the one those three already wrote down: probe before recording a block. The three before this were blocks that did not exist at all; this one exists and was misattributed, which is the subtler failure, because the recorded reason sends the next reader to ask for the wrong thing.
   * `gem install` from the proxy fails the same way, `index.rubygems.org` answering 403 to CONNECT. `gem install --local --ignore-dependencies` from a built `.gem` works, which is how `bgp4r lab new` was checked against an installed gem.
 * **The fault matrix dials the router, and that is where its time went.** Each fault needs a session of its own, because a reset leaves nothing to reuse, so the per case cost is however long it takes to get one. Waiting for the router to dial back in was 10 to 14s a case against GoBGP 3.23.0, which was 219s of the matrix's 257s where the 2s settle on 18 cases is 30s. `lab/fault_matrix.rb --dial PORT` reverses the direction, and both native tests pass it: the GoBGP matrix went from 265s to 123s and the FRR one from 46s to 23s, with every verdict unchanged. Listening stays the default because the header's reason holds, that it works with any implementation that can be told to peer with us, and the Compose test still exercises it.

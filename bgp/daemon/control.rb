@@ -58,7 +58,7 @@ module BGP
       # vocabulary is the configuration vocabulary and lab/README.md is
       # already the reference for both.
       ORIGINATE_KEYS = %w[prefix prefixes origin as_path med local_pref
-                          communities path_id].freeze
+                          communities extended_communities large_communities path_id].freeze
 
       # `route.withdraw` names what to take back and nothing else: the
       # attributes are not part of the key a route is held under, which is

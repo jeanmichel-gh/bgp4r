@@ -249,7 +249,7 @@ module FeaturesDoc
       no `--log-level` flag.
 
       ```
-      ruby -I. exe/bgp4rd -f lab/topologies/bgp4r-lab/rtr/bgp4rd.yml \\
+      ruby -I. exe/bgp4rd -f lab/routescope/bgp4r-lab/rtr/bgp4rd.yml \\
         -s /tmp/d.sock -l - -d
       ruby -I. exe/bgp4r-sim examples/sim.yml --api 127.0.0.1:8080 -l - -d
       ruby -I. exe/bgp4r routegen --peer 10.0.0.2 --peer-as 65002 -l - -d

@@ -60,6 +60,9 @@ module BGP
         @lock = Mutex.new
         @worker = nil
         @errors = []
+        @count_lock = Mutex.new
+        @kinds = Hash.new(0)
+        @unapplied = Hash.new(0)
       end
 
       # Feeds table from neighbor. Returns the PeerAdapter, the same one on
@@ -108,11 +111,31 @@ module BGP
 
       # Queues one work item. Called from the neighbours' threads.
       def <<(work)
+        @count_lock.synchronize { count(work, 1) }
         @queue << work
         self
       end
 
       def pending ; @queue.size ; end
+
+      # How many UPDATEs from neighbor are queued or being applied, which
+      # is the half of a session's input queue that is past the session:
+      # received, decoded, and not yet in the table. Zero once the worker
+      # has applied the last of them.
+      def unapplied(neighbor)
+        @count_lock.synchronize { @unapplied[neighbor] }
+      end
+
+      # How many work items that send something are queued or being
+      # applied: a Loc-RIB change waiting to be advertised, a session
+      # waiting for the table, an MRAI flush. They are not any one peer's,
+      # since one change goes to every peer, so a console counts them
+      # against every peer's output queue.
+      def unsent
+        @count_lock.synchronize { SENDING.sum { |k| @kinds[k] } }
+      end
+
+      SENDING = %i[advertise session_up session_down mrai].freeze
 
       # Waits until everything queued before this call has been applied.
       # Returns true, or false if timeout seconds passed first. Tests need
@@ -153,6 +176,15 @@ module BGP
         @worker
       end
 
+      # Called with @count_lock held, which is a lock of its own because
+      # `<<` is reached from inside `attach`, which holds @lock. An :ops item counts against the neighbor
+      # that sent it, when it says which; every item counts by its kind.
+      def count(work, n)
+        return unless work.is_a?(Array)
+        @kinds[work.first] += n
+        @unapplied[work[2]] += n if work.first == :ops && work[2]
+      end
+
       def work_loop
         loop do
           work = @queue.deq
@@ -163,6 +195,8 @@ module BGP
             # One bad UPDATE must not take the table's only worker with it.
             @lock.synchronize { @errors << e }
             log(:error, "#{self.class}: #{e.class}: #{e.message}")
+          ensure
+            @count_lock.synchronize { count(work, -1) }
           end
         end
       end

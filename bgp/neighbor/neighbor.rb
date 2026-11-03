@@ -635,6 +635,14 @@ module BGP
       defined?(@out) && @out ? @out.size : 0
     end
 
+    # How many events are waiting for the dispatch thread: messages read
+    # off the socket and not yet handled, plus the FSM's own events. The
+    # first half of a session's input queue; Rib::PeerFeed#unapplied is
+    # the second, what was handled and is not in the table yet.
+    def inq
+      @eventQ ? @eventQ.size : 0
+    end
+
     attr_reader :as4byte, :session_info, :socket
     
     def as4byte?

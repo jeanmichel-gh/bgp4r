@@ -20,7 +20,7 @@
 # along with BGP4R.  If not, see <http://www.gnu.org/licenses/>.
 #++
 
-# What lab/topologies/bgp4r-lab says, read out of its own files.
+# What lab/routescope/bgp4r-lab says, read out of its own files.
 #
 #   ruby -I. test/functional/lab/bgp4r_lab_topology_test.rb
 #
@@ -51,7 +51,7 @@ require 'bgp/sim'
 
 class LabBgp4rLabTopologyTest < Test::Unit::TestCase
 
-  DIR = File.expand_path('../../../lab/topologies/bgp4r-lab', __dir__)
+  DIR = File.expand_path('../../../lab/routescope/bgp4r-lab', __dir__)
 
   # The six nodes and what each one is, which is the README's own table.
   # Asserted against the files rather than trusted, in both directions.
@@ -63,7 +63,10 @@ class LabBgp4rLabTopologyTest < Test::Unit::TestCase
   ROUTER = 'rtr/bgp4rd.yml'
 
   # The scenario language, **copied** from routescope `7eabde1` on its
-  # `claude/bgp4r-driver` branch, read on 2026-11-02:
+  # `claude/bgp4r-driver` branch, read on 2026-11-02, and then from its
+  # `claude/bgp-panes` branch on 2026-11-03, which added
+  # `extended_communities` and `large_communities` to the body keys,
+  # `bgp_drained` and the `community` key of `bgp_prefix`:
   # `Scenario::BGP_ACTIONS`, `Scenario::BGP_KEYS`, `Scenario::CONDITIONS`
   # and `Scenario::COMMON`. docs/routescope-labs.md section 12 is why
   # this is a copy: every fact in this repository about that one is a read
@@ -74,13 +77,15 @@ class LabBgp4rLabTopologyTest < Test::Unit::TestCase
                    peer.start peer.stop refresh replay route.originate
                    route.withdraw session.flap session.start session.stop
                    withdraw].freeze
-  BGP_KEYS = %w[afi as_path case code communities count data generate hex interval
+  BGP_KEYS = %w[afi as_path case code communities count data extended_communities
+                generate hex interval large_communities
                 local_pref med next_hop node origin path_id peer prefix prefixes
                 safi subcode subtype].freeze
   CONDITIONS = { 'bgp_session' => %w[node peer state],
                  'bgp_routes' => %w[node count],
-                 'bgp_prefix' => %w[node prefix present next_hop med as_path local_pref],
-                 'bgp_best' => %w[node prefix reason] }.freeze
+                 'bgp_prefix' => %w[node prefix present next_hop med as_path local_pref community],
+                 'bgp_best' => %w[node prefix reason],
+                 'bgp_drained' => %w[node] }.freeze
   COMMON = %w[name continue].freeze
 
   def read(rel) ; File.read(File.join(DIR, rel), :encoding => 'UTF-8') ; end
@@ -352,8 +357,8 @@ class LabBgp4rLabTopologyTest < Test::Unit::TestCase
   # ---------------------------------------------------------------- the scenarios
 
   def test_every_scenario_loads_and_has_a_name_steps_and_a_timeout
-    assert_equal %w[flip-the-winner.yml inject-and-cross.yml med-decides.yml
-                    withdraw-reaches-bird.yml], scenario_files
+    assert_equal %w[communities-cross.yml flap-and-drain.yml flip-the-winner.yml
+                    inject-and-cross.yml med-decides.yml withdraw-reaches-bird.yml], scenario_files
     scenario_files.each do |f|
       s = load_yaml("scenarios/#{f}")
       assert_equal [], s.keys - %w[name description capture timeout steps],
@@ -396,6 +401,8 @@ class LabBgp4rLabTopologyTest < Test::Unit::TestCase
           allowed = CONDITIONS[name]
           assert_not_nil allowed, "#{where}: unknown condition #{name}"
           assert_equal [], params.keys - allowed, "#{where}: #{name} does not take those keys"
+          # bgp_drained with no node asks every speaker, so it names none.
+          next if name == 'bgp_drained' && !params.key?('node')
           assert_include NODES.keys, params['node'].to_s, "#{where}: no node #{params['node']}"
         end
       end
@@ -403,13 +410,14 @@ class LabBgp4rLabTopologyTest < Test::Unit::TestCase
     assert_operator checked, :>=, 40, 'the walk found almost no steps, so it checked nothing'
   end
 
-  # A reader who runs one of these against a lab that was never deployed
-  # gets steps that never pass and nothing saying why. Matched at the
-  # start of a comment line, so the words have to be the file's own
-  # statement and not a phrase inside a step.
+  # The lab is deployed by the Capture job, but nothing runs these
+  # scenarios here: routescope does. A reader has to know that before
+  # trusting an expectation in one. Matched at the start of a comment
+  # line, so the words have to be the file's own statement and not a
+  # phrase inside a step.
   def test_every_scenario_says_it_has_not_been_run
     scenario_files.each do |f|
-      assert_match(/^# NOT RUN: this lab has not been deployed/, read("scenarios/#{f}"),
+      assert_match(/^# NOT RUN: the lab is deployed by bgp4r's Capture job, but this scenario\n# has not been run/, read("scenarios/#{f}"),
                    "#{f} does not say it has never been run")
     end
   end
@@ -424,8 +432,8 @@ class LabBgp4rLabTopologyTest < Test::Unit::TestCase
     rows = readme.scan(/^\| `(\S+\.yml)` \| (\d) \| (.+?) \|$/)
     assert_equal scenario_files, rows.collect { |r| r[0] }.sort,
                  'the README scenario table and the folder disagree'
-    assert_equal %w[2 3 4 5], rows.collect { |r| r[1] }.sort,
-                 "the four rows must cover the README's points 2 to 5, one each"
+    assert_equal %w[2 3 4 5 6 7], rows.collect { |r| r[1] }.sort,
+                 "the six rows must cover the README's points 2 to 7, one each"
     rows.each do |file, _point, actions|
       listed = actions.scan(/`([\w.]+)`/).flatten.sort
       used = load_yaml("scenarios/#{file}")['steps']
@@ -451,13 +459,15 @@ class LabBgp4rLabTopologyTest < Test::Unit::TestCase
     end
   end
 
-  # Both of these say the lab has never been deployed, which is the one
-  # claim in the folder a reader most needs and the one a later edit is
-  # most likely to leave stale. When it has been, both lines go.
-  def test_the_topology_and_the_readme_both_say_it_has_not_been_deployed
-    assert_match(/^# \*\*This topology has not been deployed\.\*\*/,
-                 read('bgp4r-lab.clab.yml'))
-    assert_match(/^\*\*The topology has not been deployed\.\*\*/, readme)
+  # Both of these say where the lab is deployed, which is the one claim in
+  # the folder a reader most needs, and the workflow they name has to
+  # deploy this topology and run its capture.
+  def test_the_topology_and_the_readme_both_say_ci_deploys_it
+    assert_match(/^# \*\*This topology is deployed by CI\*\*/, read('bgp4r-lab.clab.yml'))
+    assert_match(/^\*\*The topology is deployed by CI\*\*/, readme)
+    wf = File.read(File.expand_path('../../../.github/workflows/capture.yml', __dir__))
+    assert_match(%r{containerlab deploy -t lab/routescope/bgp4r-lab/bgp4r-lab\.clab\.yml}, wf)
+    assert_match(%r{bash lab/routescope/bgp4r-lab/capture\.sh}, wf)
   end
 
   # The images the topology names have to be the ones the README builds,

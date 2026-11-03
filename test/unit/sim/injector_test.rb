@@ -146,6 +146,32 @@ class BGP_Sim_Injector_Test < Test::Unit::TestCase
 
   # ---- announce ------------------------------------------------------
 
+  def test_an_announce_carries_all_three_kinds_of_community
+    inj = injector
+    inj.act('announce', 'prefixes' => ['10.1.0.0/24'],
+                        'communities' => ['65001:7'],
+                        'extended_communities' => ['route_target:65001:9', 'route_origin:10.0.0.1:3'],
+                        'large_communities' => ['65001:1:2'])
+    pa = peer.updates.first.path_attribute
+    assert_equal('65001:7', pa[:communities].communities)
+    assert_equal([{ :route_target => [65001, 9] }, { :route_origin => ['10.0.0.1', 3] }],
+                 pa[:extended_communities].to_hash[:extended_communities])
+    assert_equal(['65001:1:2'], pa[:large_communities].communities.collect(&:to_s))
+  end
+
+  def test_an_extended_community_that_is_not_kind_and_value_is_refused
+    assert_raise(ArgumentError) do
+      injector.act('announce', 'prefixes' => ['10.1.0.0/24'], 'extended_communities' => ['65001'])
+    end
+  end
+
+  def test_the_extended_community_text_is_the_hash_spelled_flat_both_ways
+    k = BGP::Daemon::CommunityKeys
+    ['route_target:65000:7', 'route_origin:10.0.0.1:3'].each do |t|
+      assert_equal(t, k.extended_community_text(k.extended_community_hash(t)))
+    end
+  end
+
   def test_an_announce_sends_one_update_with_the_blocks_attributes
     inj = injector
     r = inj.act('announce', 'prefixes' => ['10.1.0.0/24'], 'med' => 100,

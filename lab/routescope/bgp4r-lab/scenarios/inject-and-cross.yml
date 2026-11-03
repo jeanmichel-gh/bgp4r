@@ -7,8 +7,8 @@
 # where the injected prefix reaches it with two. Transit and origination
 # are different jobs and this scenario asserts both at once.
 #
-# NOT RUN: this lab has not been deployed, so nothing here is a
-# measurement. Every expectation is read out of the node files and the
+# NOT RUN: the lab is deployed by bgp4r's Capture job, but this scenario
+# has not been run, so nothing here is a measurement. Every expectation is read out of the node files and the
 # RFC sections they cite.
 
 name: A prefix injected on command crosses to FRR and BIRD
@@ -33,7 +33,7 @@ steps:
     measure: r1_session
   - expect: { bgp_session: { node: r1, peer: 10.1.12.2, state: established } }
     within: 60
-  - expect: { bgp_session: { node: r1, peer: 10.1.23.2, state: established } }
+  - expect: { bgp_session: { node: r1, peer: 10.1.13.2, state: established } }
     within: 60
     name: r1 to r3 is read from r1, since BIRD is the far end
 

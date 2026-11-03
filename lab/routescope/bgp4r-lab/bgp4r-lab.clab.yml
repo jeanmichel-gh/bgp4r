@@ -32,15 +32,15 @@
 #
 # Deploy it, then point routescope at the folder:
 #
-#   sudo containerlab deploy -t lab/topologies/bgp4r-lab/bgp4r-lab.clab.yml
-#   LAB=$PWD/lab/topologies/bgp4r-lab docker compose -f ~/routescope/compose.yml up -d
-#   sudo containerlab destroy -t lab/topologies/bgp4r-lab/bgp4r-lab.clab.yml
+#   sudo containerlab deploy -t lab/routescope/bgp4r-lab/bgp4r-lab.clab.yml
+#   LAB=$PWD/lab/routescope/bgp4r-lab docker compose -f ~/routescope/compose.yml up -d
+#   sudo containerlab destroy -t lab/routescope/bgp4r-lab/bgp4r-lab.clab.yml
 #
 # Three images, and the first is bgp4r's own:
 #
 #   docker build --target lab-node -t bgp4r-lab:latest .
-#   docker build -f lab/topologies/bgp4r-lab/Dockerfile.bird \
-#                -t bgp4r-bird:latest lab/topologies/bgp4r-lab
+#   docker build -f lab/routescope/bgp4r-lab/Dockerfile.bird \
+#                -t bgp4r-bird:latest lab/routescope/bgp4r-lab
 #   docker pull quay.io/frrouting/frr:10.2.1
 #
 # **`lab-node` and not `speaker`, and the reason is not cosmetic.** The
@@ -65,14 +65,16 @@
 # file. A baseline the configuration created is a baseline no assertion
 # can rest on, so `scenarios/` is what puts anything on the wire.
 #
-# **This topology has not been deployed.** No Docker daemon was reachable
-# where it was written, so nothing here is a measurement: the addresses,
-# the sessions and the five points its README lists are read out of these
-# files and not out of a run. routescope's own
-# `examples/containerlab/bgp4r-inject/bgp4r-inject.clab.yml` records the
-# same of itself, and so does this repository's Dockerfile of its capture
-# stage. `test/functional/lab/bgp4r_lab_topology_test.rb` is what holds
-# these files to each other and to the README with no Docker.
+# **This topology is deployed by CI**, in `.github/workflows/capture.yml`,
+# first on 2026-11-03. That run measured the six sessions up, a route from
+# inj1 crossing rtr to FRR and BIRD with AS_PATH 65000 65010, rtr deciding
+# 10.1.0.0/24 on MED, all three kinds of community reaching BIRD, and a
+# flap counted by FRR, bgp4rd and the injector. It also found the one bug
+# a parse could not: BIRD dropped every route from rtr until r3 took
+# `gateway recursive`, which its bird.conf says. The scenarios are not run
+# by that job; routescope runs them.
+# `test/functional/lab/bgp4r_lab_topology_test.rb` holds these files to
+# each other and to the README with no Docker.
 name: bgp4r-lab
 
 topology:

@@ -8,7 +8,7 @@ Each node runs the same program, `lab/speaker.rb`, driven by its own YAML file. 
 
 The machinery behind that program is in the library, as `BGP::Daemon::Speaker` in `bgp/daemon/speaker.rb`, because `bgp4rd` needs the same sessions, the same configuration and the same recording and `lab/` is not on an installed gem's load path. `lab/speaker.rb` is its command line, its state file writer and three constants pointing at it, so `Lab::Speaker`, `Lab::Peer` and `Lab::Recorder` mean what they always did. That file's header has the decision and the two options it rejected, and `docs/daemon.md` is the daemon.
 
-**Three programs read this node file now**, which is why its keys are worth knowing: `lab/speaker.rb`, `bgp4rd` with `rib` on by default and a `socket` key, and `bgp4r-sim`, which adds `api` and refuses the four router keys because an injector holds no Loc-RIB. The announce block below is the injector's runtime vocabulary as well: `prefixes`, `generate`, `med`, `as_path`, `communities`, `next_hop`, `local_pref`, `path_id` and `origin` are what `POST /api/announce` takes, so there is one thing to learn. `docs/daemon.md` has both programs and `examples/sim.yml` is a node file for the injector.
+**Three programs read this node file now**, which is why its keys are worth knowing: `lab/speaker.rb`, `bgp4rd` with `rib` on by default and a `socket` key, and `bgp4r-sim`, which adds `api` and refuses the four router keys because an injector holds no Loc-RIB. The announce block below is the injector's runtime vocabulary as well: `prefixes`, `generate`, `med`, `as_path`, `communities`, `extended_communities`, `large_communities`, `next_hop`, `local_pref`, `path_id` and `origin` are what `POST /api/announce` takes, so there is one thing to learn. `docs/daemon.md` has both programs and `examples/sim.yml` is a node file for the injector.
 
 ## Run a topology
 
@@ -146,6 +146,10 @@ announce:                   # each block is one UPDATE, sent to every neighbor
   - prefixes: [192.168.1.0/24, 192.168.11.0/24]
     med: 10                 # optional
     communities: ['65001:100']   # optional
+    extended_communities: ['route_target:65001:7']   # optional, KIND:VALUE...,
+                            # KIND a key of Extended_communities#to_hash:
+                            # route_target, route_origin, ...
+    large_communities: ['65001:1:1']   # optional, RFC 8092
     as_path: [64999]        # optional, put after our own AS over eBGP
     local_pref: 200         # optional, iBGP only, default 100
     next_hop: 10.10.0.9     # optional, default our address on that session

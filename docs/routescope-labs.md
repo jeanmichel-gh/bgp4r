@@ -109,11 +109,15 @@ mode it was in.
 These are routescope's, verbatim, and they are the specification for
 the driver. Quoted from `lib/routescope/drivers.rb`.
 
-**The two table row shapes**, documented at `drivers.rb:146-147`:
+**The two table row shapes**, documented beside `BGP_TABLES` in
+`drivers.rb`. Read at `7eabde1` they ended at `sent` and `best`; the BGP
+panes work in routescope (its `docs/bgp.md`, November 2026) added the
+last three columns of each, the community lists and what a peer row says
+about flaps and the queues:
 
 ```
-bgp_peers   address remote_as state description uptime received sent
-bgp_routes  prefix next_hop as_path origin med local_pref from paths best
+bgp_peers   address remote_as state description uptime received sent flaps inq outq
+bgp_routes  prefix next_hop as_path origin med local_pref from paths best communities extended_communities large_communities
 ```
 
 **The state method.** `Base#bgp(container)` raises by default; a driver
@@ -724,15 +728,24 @@ tells the command to print `containerlab deploy` rather than `docker
 compose up`, and its `.gitignore` is what made the copier read a
 directory pattern rather than a basename.
 
-**The folder exists now**, as `lab/topologies/bgp4r-lab`: the
+**It lives in `lab/routescope/`, and that folder is where every lab
+written for the routescope console goes.** It started in
+`lab/topologies/` and moved on 2026-11-03, so the Compose topologies
+bgp4r's own suite drives and the containerlab labs routescope deploys are
+two folders a reader can tell apart. `bgp4r lab new` reads both.
+routescope's CI checks out bgp4r on the branch of the same name, else
+master, and deploys it from there.
+
+**The folder exists now**, as `lab/routescope/bgp4r-lab`: the
 `*.clab.yml` with those six nodes and both labels on each, node files for
 the two injectors and the daemon, FRR and BIRD configs, and four
 scenarios, one per point 2 to 5 above. Its README says what each node is
 and what it proves, and
 `test/functional/lab/bgp4r_lab_topology_test.rb` holds the files to it
-with no Docker. **It has not been deployed**, so nothing in it is a
-measurement; that is said in its README, in the topology's own header and
-in every scenario.
+with no Docker. **It is deployed by bgp4r's Capture workflow**, first on
+2026-11-03, which measured points 2, 3, 6 and 7 and found one bug (BIRD
+needs `gateway recursive` to resolve rtr's next hop); its scenarios have
+not been run, and each says so.
 
 Four things the building of it settled, each in that README:
 

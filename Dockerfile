@@ -81,7 +81,7 @@ ENTRYPOINT ["ruby", "-I/app"]
 #
 #   docker build --target lab-node -t bgp4r-lab:latest .
 #
-# `lab/topologies/bgp4r-lab` is the one topology that needs it, and the
+# `lab/routescope/bgp4r-lab` is the one topology that needs it, and the
 # two things it adds are both things the `speaker` stage cannot be given
 # from a topology file.
 #
@@ -99,9 +99,8 @@ ENTRYPOINT ["ruby", "-I/app"]
 # set their addresses through Compose rather than with `ip`, and nothing
 # in them opens a control socket.
 #
-# **Not built here**, for the same reason the capture stage below is not:
-# no Docker daemon was reachable where this was written. Build it before
-# trusting it.
+# Built and run by `.github/workflows/capture.yml`, which deploys
+# bgp4r-lab on it, first on 2026-11-03.
 FROM speaker AS lab-node
 USER root
 RUN apt-get update && apt-get install -y --no-install-recommends iproute2 \
