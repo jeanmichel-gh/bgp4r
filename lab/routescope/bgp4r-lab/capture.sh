@@ -143,7 +143,7 @@ for n in inj1 inj2; do
 done
 
 echo "### a flap"
-spost inj1 /api/session.flap '{}'
+spost inj1 /api/session/flap '{}'
 ex r1 ip link set eth1 down; sleep 15; ex r1 ip link set eth1 up
 ex r3 birdc 'disable r1' >/dev/null; sleep 3; ex r3 birdc 'enable r1' >/dev/null
 sleep 40
