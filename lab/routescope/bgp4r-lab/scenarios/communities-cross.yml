@@ -14,8 +14,8 @@
 # question before asserting where a route is, is whether every speaker
 # has sent what it had to and processed what it received.
 #
-# NOT RUN: this lab has not been deployed, so nothing here is a
-# measurement. Every expectation is read out of the node files and the
+# NOT RUN: the lab is deployed by bgp4r's Capture job, but this scenario
+# has not been run, so nothing here is a measurement. Every expectation is read out of the node files and the
 # RFC sections they cite.
 name: Three kinds of community cross FRR and BIRD
 description: >-

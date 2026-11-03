@@ -153,42 +153,36 @@ no Docker.
 **Unlike add-path's, none of them is waiting on bgp4r.** That folder's
 table records two of its three scenarios as needing the injector, which
 did not exist when it was written; `bgp4r-sim` is built now, so every
-action these four use is one the injector answers today. What they are
-waiting on is being run, which needs a Docker daemon.
+action these six use is one the injector answers today. What they are
+waiting on is being run, by routescope's `bgp4r-lab` job.
 
-## What has not been run, and what could not be verified
+## What has been run, and what has not
 
-**The topology has not been deployed.** No Docker daemon was reachable
-where it was written, so nothing in this folder is a measurement: the
-addresses, the sessions and the seven points above are read out of these
-files and out of the RFC sections they cite. routescope's own
-`examples/containerlab/bgp4r-inject` records the same of itself, and so
-does this repository's Dockerfile of its capture stage.
+**The topology is deployed by CI**, in `.github/workflows/capture.yml`,
+first on 2026-11-03, against FRR 10.2.1 and BIRD 2.0.12. That run is
+what `capture.sh` prints, and it measured:
 
-Specifically unverified, each worth knowing before a first deploy:
+* both images build, `exec: ip addr add` runs, and all six sessions come
+  up across the three implementations;
+* point 2's chain: 10.2.0.0/24 from inj1 reaches r1, r2 and r3 with
+  AS_PATH 65000 65010 and rtr as the next hop;
+* point 3: rtr holds two paths to 10.1.0.0/24 and `show.rib` says MED
+  decided, for inj2's MED 50 over inj1's 100;
+* point 6: all three kinds of community reach BIRD intact;
+* point 7: a flap is counted by FRR (`connectionsDropped`), by bgp4rd
+  and by the injector.
 
-* **Neither new image has been built.** `lab-node` and
-  `bgp4r-bird:latest` are both Dockerfiles nothing has run.
-* **Whether `exec: ip addr add` runs as root in a containerlab node.**
-  containerlab runs these through `docker exec` and the image's own user
-  is what decides; `lab-node` is root so that it can, but that is a
-  reading of the Dockerfile rather than a measurement.
-* **The three router configs parse, which is less than being accepted
-  by the pinned versions.** Measured on 2026-11-02 with the binaries
-  this sandbox turned out to have: `bird -p -c r3/bird.conf` is clean
-  under BIRD **2.14**, and `bgpd -C -f` accepts every BGP line of both
-  FRR configs under bgpd **8.4.4**. The only lines it rejects are `no
-  ipv6 forwarding` and `service integrated-vtysh-config`, which are
-  zebra and vtysh lines a standalone `bgpd` does not own and which the
-  bound `daemons` file routes to zebra and staticd. **This lab pins FRR
-  10.2.1**, so an older bgpd accepting these commands says they are not
-  10.x-only and says nothing about 10.2.1 itself, and a parse is not a
-  session. Their shapes are ospfv2's `examples/bgp-lab`, read at ospfv2
-  `2dfc03a`, and each file says so; what is bgp4r's own in them is the
-  eBGP session to `rtr`, the timers matching `hold_time: 30`, the
-  deliberate absence of `next-hop-self` on `r1` and the static routes
-  that absence needs on `r2` and `r3`. None of those four is checked by
-  a parse.
+**It found one bug, which a parse could not.** On a `direct` iBGP
+session BIRD wants the next hop on one of its own links. 10.0.20.1 is
+not, so BIRD logged "Invalid NEXT_HOP attribute - address 10.0.20.1 not
+directly reachable" and dropped every route from rtr while r1 and r2
+held them. `r3/bird.conf` now has `gateway recursive`, which resolves
+the next hop through the static route it already had for this.
+
+**The scenarios have not been run.** Nothing in this repository runs
+them; routescope does, in a job of its own, which has not run either.
+What is left unverified:
+
 * **Whether `rtr` can write routing table 100.** `fib:` needs
   CAP_NET_ADMIN as well as `ip`. Where it cannot, bgp4r says so rather
   than dying: the reason lands under `fib` in the state file, with a row

@@ -16,8 +16,8 @@
 # replacement route", so the injector re-announces with the named keys
 # changed and the rest of the block as it was.
 #
-# NOT RUN: this lab has not been deployed, so nothing here is a
-# measurement.
+# NOT RUN: the lab is deployed by bgp4r's Capture job, but this scenario
+# has not been run, so nothing here is a measurement.
 
 name: One action flips which path wins
 description: >-

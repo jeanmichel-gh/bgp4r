@@ -14,8 +14,8 @@
 # 9.1.2.2 c), so in two ASes these two paths would be decided at
 # as_path_length and no MED would be reached.
 #
-# NOT RUN: this lab has not been deployed, so nothing here is a
-# measurement.
+# NOT RUN: the lab is deployed by bgp4r's Capture job, but this scenario
+# has not been run, so nothing here is a measurement.
 
 name: MED decides, and rtr says so
 description: >-

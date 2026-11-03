@@ -410,13 +410,14 @@ class LabBgp4rLabTopologyTest < Test::Unit::TestCase
     assert_operator checked, :>=, 40, 'the walk found almost no steps, so it checked nothing'
   end
 
-  # A reader who runs one of these against a lab that was never deployed
-  # gets steps that never pass and nothing saying why. Matched at the
-  # start of a comment line, so the words have to be the file's own
-  # statement and not a phrase inside a step.
+  # The lab is deployed by the Capture job, but nothing runs these
+  # scenarios here: routescope does. A reader has to know that before
+  # trusting an expectation in one. Matched at the start of a comment
+  # line, so the words have to be the file's own statement and not a
+  # phrase inside a step.
   def test_every_scenario_says_it_has_not_been_run
     scenario_files.each do |f|
-      assert_match(/^# NOT RUN: this lab has not been deployed/, read("scenarios/#{f}"),
+      assert_match(/^# NOT RUN: the lab is deployed by bgp4r's Capture job, but this scenario\n# has not been run/, read("scenarios/#{f}"),
                    "#{f} does not say it has never been run")
     end
   end
@@ -458,13 +459,15 @@ class LabBgp4rLabTopologyTest < Test::Unit::TestCase
     end
   end
 
-  # Both of these say the lab has never been deployed, which is the one
-  # claim in the folder a reader most needs and the one a later edit is
-  # most likely to leave stale. When it has been, both lines go.
-  def test_the_topology_and_the_readme_both_say_it_has_not_been_deployed
-    assert_match(/^# \*\*This topology has not been deployed\.\*\*/,
-                 read('bgp4r-lab.clab.yml'))
-    assert_match(/^\*\*The topology has not been deployed\.\*\*/, readme)
+  # Both of these say where the lab is deployed, which is the one claim in
+  # the folder a reader most needs, and the workflow they name has to
+  # deploy this topology and run its capture.
+  def test_the_topology_and_the_readme_both_say_ci_deploys_it
+    assert_match(/^# \*\*This topology is deployed by CI\*\*/, read('bgp4r-lab.clab.yml'))
+    assert_match(/^\*\*The topology is deployed by CI\*\*/, readme)
+    wf = File.read(File.expand_path('../../../.github/workflows/capture.yml', __dir__))
+    assert_match(%r{containerlab deploy -t lab/routescope/bgp4r-lab/bgp4r-lab\.clab\.yml}, wf)
+    assert_match(%r{bash lab/routescope/bgp4r-lab/capture\.sh}, wf)
   end
 
   # The images the topology names have to be the ones the README builds,

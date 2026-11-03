@@ -11,8 +11,8 @@
 # reading: everything in its table arrived from somewhere else, so an
 # absence there cannot be satisfied by anything r3 did itself.
 #
-# NOT RUN: this lab has not been deployed, so nothing here is a
-# measurement.
+# NOT RUN: the lab is deployed by bgp4r's Capture job, but this scenario
+# has not been run, so nothing here is a measurement.
 
 name: A withdraw reaches BIRD
 description: >-

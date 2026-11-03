@@ -34,9 +34,8 @@
 # `iproute2` is what the topology's `exec:` lines need and `procps` is
 # for a person in its shell.
 #
-# **Not built here.** No Docker daemon was reachable where this was
-# written, which the Dockerfile at the repository root records of its own
-# capture stage for the same reason. Build it before trusting it.
+# Built and run by `.github/workflows/capture.yml`, first on 2026-11-03,
+# where it is BIRD 2.0.12.
 FROM debian:bookworm-slim
 RUN apt-get update \
  && apt-get install -y --no-install-recommends bird2 iproute2 procps \

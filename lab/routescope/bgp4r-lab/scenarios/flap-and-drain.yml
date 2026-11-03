@@ -7,8 +7,8 @@
 # so 10.5.0.0/24 goes from r3 and comes back, and nothing in this
 # scenario re-announces it by hand.
 #
-# NOT RUN: this lab has not been deployed, so nothing here is a
-# measurement. Every expectation is read out of the node files and the
+# NOT RUN: the lab is deployed by bgp4r's Capture job, but this scenario
+# has not been run, so nothing here is a measurement. Every expectation is read out of the node files and the
 # RFC sections they cite.
 name: A flap is counted and the lab drains again
 description: >-

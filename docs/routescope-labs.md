@@ -742,9 +742,10 @@ the two injectors and the daemon, FRR and BIRD configs, and four
 scenarios, one per point 2 to 5 above. Its README says what each node is
 and what it proves, and
 `test/functional/lab/bgp4r_lab_topology_test.rb` holds the files to it
-with no Docker. **It has not been deployed**, so nothing in it is a
-measurement; that is said in its README, in the topology's own header and
-in every scenario.
+with no Docker. **It is deployed by bgp4r's Capture workflow**, first on
+2026-11-03, which measured points 2, 3, 6 and 7 and found one bug (BIRD
+needs `gateway recursive` to resolve rtr's next hop); its scenarios have
+not been run, and each says so.
 
 Four things the building of it settled, each in that README:
 
