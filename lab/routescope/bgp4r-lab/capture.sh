@@ -151,6 +151,10 @@ vshow r1 'show bgp summary json'
 vshow r1 'show bgp neighbors json'
 vshow r1 'show bgp neighbors 10.0.20.1 json'
 bshow r3 'show protocols all r1'
+# Both programs answer routescope's status read with their peers in it,
+# so the status is what the Peers pane reads after the flap.
+rshow rtr show.status
 rshow rtr show.peers
+sshow inj1 /api/status
 sshow inj1 /api/peers
 echo "### done"
