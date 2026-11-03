@@ -175,8 +175,8 @@ docker exec clab-bgp4r-lab-g1 gobgp -j global rib
 docker exec clab-bgp4r-lab-g1 gobgp -j neighbor
 ```
 
-The two reads worth putting side by side are the last three: `r1`, `r3`
-and `g1` on one prefix, which is the whole reason `g1` is on this
+The three reads worth putting side by side are the last three: `r1`,
+`r3` and `g1` on one prefix, which is the whole reason `g1` is on this
 topology. `gobgp` needs no `-u` or `-p` here, because
 `Dockerfile.gobgp`'s entrypoint puts the API on `127.0.0.1:50051`, which
 is the client's own default. **That flag is not decoration**: GoBGP's
@@ -187,6 +187,47 @@ loopback for the same reason.
 
 `curl` is not in the `lab-node` image either; `ruby -rnet/http` is what
 routescope's driver uses and is what is there.
+
+## What each node does with the kernel, which is three answers and a fourth that is none
+
+Every read above is a BGP table. The kernel is a separate question and
+the four implementations answer it four ways, so comparing one node's
+`ip route` against another's compares different things:
+
+| node | what programs the kernel | where |
+|---|---|---|
+| `rtr` | `bgp4rd`, through iproute2, from its `fib:` key | table 100 |
+| `r1` | FRR's zebra, `zebra=yes` in its daemons file | main |
+| `r2` | the same | main |
+| `r3` | BIRD's `protocol kernel`, exporting `source = RTS_BGP` | main |
+| `g1` | nothing | nowhere |
+
+`rtr` is table 100 and not the main table on purpose: a route in the
+main table changes where the container sends its own traffic, which is
+`bgp/rib/ip_route.rb`'s own reason for giving `table:` no default.
+
+**`g1` programs nothing, and that is GoBGP rather than this config being
+short of a key.** GoBGP's own `docs/sources/zebra.md` routes FIB
+programming through an external zebra over ZAPI, as a `[zebra]` block
+naming its socket. There is no such block here and no zebra in that
+container, so GoBGP learns, selects, advertises and withdraws in BGP and
+leaves the kernel alone. `NET_ADMIN` on the container would not change
+it. That is also why `g1` is read with `gobgp global rib`: it answers in
+full what rtr sent and what a withdrawal took away, which is the one
+thing this node is on the topology for.
+
+To watch a kernel install rather than a BGP table, run `ip monitor
+route` in the node that programs one while a scenario announces and
+withdraws:
+
+```
+docker exec clab-bgp4r-lab-r1 ip monitor route &
+docker exec clab-bgp4r-lab-rtr ip -4 route show table 100
+docker exec clab-bgp4r-lab-r3 ip -4 route show
+```
+
+None of this is measured. The topology has not been deployed, so the
+table above is read out of the four config files and not out of a run.
 
 ## The scenarios
 

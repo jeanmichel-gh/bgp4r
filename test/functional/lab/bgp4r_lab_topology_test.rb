@@ -254,7 +254,64 @@ class LabBgp4rLabTopologyTest < Test::Unit::TestCase
     # MED step and med-decides.yml would stop meaning anything.
     assert_not_match(/^\[\[defined-sets|^\s*prefix-list|^\[\[policy-definitions/, toml,
                      'g1 has grown a policy, so read what it now sends')
-    assert_not_match(/^\s*rpki|^\[\[zebra/, toml)
+
+    # **`[zebra]`, one bracket, and the first draft of this line wrote
+    # two.** The array-of-tables form it asserted does not exist, so a
+    # guard that claimed to watch for a zebra integration could not have
+    # matched one. Read in GoBGP's own `docs/sources/zebra.md`: the block
+    # is `[zebra]` then `[zebra.config]` with `enabled = true`.
+    assert_not_match(/^\[zebra\]/, toml,
+                     'g1 has grown a zebra integration, so it now programs ' \
+                     'a kernel FIB and the asymmetry below is stale')
+    assert_not_match(/^\s*rpki/, toml)
+  end
+
+  # **What each implementation does with the kernel, which is three
+  # answers and a fourth that is none.** A reader comparing what is
+  # installed across these nodes is comparing four different things, so
+  # the differences are asserted rather than left to be discovered:
+  #
+  #   rtr  bgp4rd, `fib: table: 100`, through iproute2, and **not** the
+  #        main table, because a route there changes where the container
+  #        sends its own traffic
+  #   r1   FRR, `zebra=yes` in its daemons file, so zebra programs it
+  #   r2   the same
+  #   r3   BIRD, `protocol kernel` exporting `source = RTS_BGP`
+  #   g1   GoBGP, nothing at all
+  #
+  # GoBGP does not program the Linux FIB by itself: its own
+  # `docs/sources/zebra.md` routes that through an external zebra over
+  # ZAPI, which this node has no block for and no zebra to talk to.
+  # `NET_ADMIN` on the container would not change that.
+  #
+  # **That is deliberate and not a gap.** g1 is on this topology to read
+  # what rtr's export side sends, which `gobgp global rib` answers in
+  # full. A zebra would mean a second daemon in that container for a FIB
+  # no scenario asserts.
+  def test_what_each_node_does_with_the_kernel_is_stated_and_differs
+    rtr = load_yaml(ROUTER)
+    assert_equal 100, rtr.dig('fib', 'table'),
+                 'rtr installs into table 100, which is what its own ' \
+                 'comment says and why it is not the main table'
+
+    %w[r1 r2].each do |n|
+      assert_match(/^zebra=yes$/, read("#{n}/daemons"),
+                   "#{n} has no zebra, so FRR there programs no kernel route")
+    end
+
+    assert_match(/^protocol kernel \{/, read('r3/bird.conf'),
+                 'BIRD has no kernel protocol, so it programs no kernel route')
+
+    # And the one that does nothing, asserted from its own config.
+    toml = read('g1/gobgpd.toml')
+    assert_not_match(/^\[zebra\]/, toml)
+    assert_include toml, 'zebra',
+                   'g1/gobgpd.toml does not say why it programs no kernel ' \
+                   'route, so a reader comparing FIBs has nothing to read'
+
+    # The README has to carry it too, since that is where a person looks.
+    assert_include readme, 'ip monitor route',
+                   'the README does not say how to watch a kernel install'
   end
 
   # The claim g1 exists for, asserted rather than left in prose: one

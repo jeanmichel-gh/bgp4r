@@ -28,6 +28,35 @@
 # global RIB where `gobgp global rib` can read it. GoBGP needs no import
 # statement to accept one, unlike BIRD, whose own config in this folder
 # has to say so.
+#
+# **And no `[zebra]` block, so this node programs no kernel route, which
+# is not the same answer the other three nodes give.** GoBGP's own
+# `docs/sources/zebra.md` routes FIB programming through an external
+# zebra over ZAPI: the block is `[zebra]` then `[zebra.config]` with
+# `enabled = true`, a `url`, a `redistribute-route-type-list` and a
+# `version`. Without it GoBGP learns, selects, advertises and withdraws
+# in BGP and leaves the kernel alone, and `NET_ADMIN` on the container
+# would not change that, because nothing here tries to write a route.
+#
+# So read this node with `gobgp global rib`, which answers in full what
+# it learned from rtr and what a withdrawal took away. `ip route` in this
+# container answers nothing about BGP.
+#
+# **That is deliberate and the whole topology is asymmetric about it**,
+# which is worth knowing before comparing one node's routes against
+# another's:
+#
+#   rtr  bgp4rd, `fib: table: 100`, through iproute2, into table 100 and
+#        not the main table
+#   r1   FRR, `zebra=yes` in its daemons file, so zebra programs it
+#   r2   the same
+#   r3   BIRD, `protocol kernel` exporting `source = RTS_BGP`
+#   g1   nothing
+#
+# Adding a zebra here would mean a second daemon in this container, a
+# larger image and a FIB no scenario asserts, for a node that is on this
+# topology to read octets. See the README for how to watch a kernel
+# install on the nodes that do program one.
 
 [global.config]
   as = 65002

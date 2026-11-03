@@ -914,7 +914,20 @@ test/functional/lab/     lab tests: loopback speaker test and one Compose test p
                          topology for had nothing holding the scenario
                          to it. Its two next hops are **derived** from
                          the topology's own `exec:` lines, so a
-                         readdressed link moves them;
+                         readdressed link moves them.
+                         `test_what_each_node_does_with_the_kernel_is_stated_and_differs`
+                         is the other one worth knowing about, because
+                         what it asserts is an **asymmetry**: three of
+                         the four implementations program a kernel route
+                         and by three different routes, `rtr` through
+                         iproute2 into table 100, FRR through zebra and
+                         BIRD through `protocol kernel`, and **`g1`
+                         programs nothing at all**, since GoBGP reaches
+                         a FIB only through an external zebra. So
+                         comparing one node's `ip route` against
+                         another's compares different things, and the
+                         table is in the README and in g1/gobgpd.toml
+                         rather than left to be found out;
                          fault_matrix_scenario.rb holds the RFC 7606 checks, and both
                          fault_matrix_test.rb (Compose) and fault_matrix_native_test.rb
                          (a gobgpd on loopback, no Docker) assert them;
@@ -1494,6 +1507,7 @@ There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Cove
 * Run the full unit suite before opening a PR. All tests must pass.
 * New behavior needs a test. Bug fixes need a test that failed before the fix.
   * **Check that the proof proved something.** Two "this test catches the regression" runs in one session proved nothing: the first patched a marker string that did not match, so the library was unchanged and the test passed for the obvious reason, and the second made a change the constructor was lenient enough to absorb, so the round trip still worked and the test was right to pass. A sabotage run that passes means the sabotage missed, not that the test is weak. Assert on the thing you changed before you believe the result, and prefer breaking the code the way it would really break, which is usually deleting a line rather than mutating a value.
+  * **A guard that watches for a thing has to be able to match that thing, and a negative assertion never says whether it can.** `assert_not_match(/^\[\[zebra/, toml)` in `bgp4r_lab_topology_test.rb` was written to fail the day `g1` grew a GoBGP zebra integration, so the node would stop quietly programming a kernel route behind a README that says it does not. It could never fire: the config form is `[zebra]`, a table, and `[[zebra]]`, an array of tables, is a form GoBGP has no such block for. Read in GoBGP's own `docs/sources/zebra.md` after the guard was written, which is the wrong order. A passing `assert_not_match` is the same information whether the pattern is right, wrong, or nonsense, so the only way to know is to **put the thing in and watch the guard fail**. Write the sabotage for a negative assertion before believing it, every time; that is the check-the-proof rule above, and the shape it takes when the assertion is a `not`.
   * **A test that walks a list of cases has to assert that each case did
     something.** The shape: build an edited object per case, derive
     something from it, and assert the derivation round trips. A case
