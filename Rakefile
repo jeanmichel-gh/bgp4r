@@ -29,3 +29,19 @@ namespace :to_hash do
   end
 
 end
+
+# What is exercised and what is not, per path attribute and per address
+# family. Printed from test/coverage_matrix.rb, which derives everything
+# but its interop verdicts from the library itself, so a family wired in,
+# an attribute registered or a fault case added shows up with no edit.
+# Same rule as to_hash above: no document holds these numbers.
+namespace :coverage do
+
+  desc 'Per attribute and per family: fault cases, lab tests, what each router vouches for'
+  task :matrix do
+    $LOAD_PATH.unshift File.expand_path(__dir__)
+    require 'test/coverage_matrix'
+    print CoverageMatrix.report
+  end
+
+end
