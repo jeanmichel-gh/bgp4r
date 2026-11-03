@@ -73,11 +73,18 @@ args  = []
 # non-zero with every test having passed. Measured, and it is why
 # `run_lab.rb` shifts its argument rather than reading it in place.
 rest = []
+areas = []
 passthrough = false
+want_area = false
 
 ARGV.each do |a|
   if passthrough
     rest << a
+    next
+  end
+  if want_area
+    areas << a
+    want_area = false
     next
   end
   case a
@@ -86,6 +93,7 @@ ARGV.each do |a|
   when '--lab'        then tiers << :lab
   when '--list'       then list = true
   when '--'           then passthrough = true
+  when '--area'       then want_area = true
   when '--doc'
     require './test/features_doc'
     print FeaturesDoc.document
@@ -104,25 +112,23 @@ ARGV.each do |a|
   end
 end
 
+raise ArgumentError, '--area needs an area name' if want_area
+
 ARGV.replace(rest)
 
 tiers = TIERS if tiers.empty?
 
-if args.empty?
+if args.empty? && areas.empty?
   print usage
   exit 0
 end
 
-# --area NAME, so one word selects a whole area. ArgumentError on a name
-# that is neither, rather than running nothing and exiting 0.
-features =
-  if args.first == '--area' || args.first == 'area'
-    args.shift
-    name = args.shift or raise ArgumentError, '--area needs an area name'
-    Features.in_area(name)
-  else
-    args.collect { |a| Features.feature(a) ; a }
-  end
+# `--area NAME` selects every feature of one area, and may be given with
+# feature names and more than once. `Features.in_area` and
+# `Features.feature` each raise on a name they do not know, rather than
+# resolving to nothing and exiting 0, which reads as a pass.
+features = (areas.flat_map { |a| Features.in_area(a) } +
+            args.collect { |a| Features.feature(a) ; a }).uniq
 
 paths = features.flat_map { |n| tiers.flat_map { |t| Features.files(n, t) } }.uniq
 

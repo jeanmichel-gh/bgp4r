@@ -266,6 +266,52 @@ class TestFeatures < Test::Unit::TestCase
     assert_match(/unknown feature/, out)
   end
 
+  # `--area` had no test and was broken: the flag fell through to the
+  # list of arguments meant for test-unit, so `--area attributes` printed
+  # the usage and ran nothing, exit 0. A run that silently does nothing
+  # and succeeds is the failure every guard in this file is against, and
+  # it reached the document before a test did.
+  def test_the_runner_runs_a_whole_area
+    out = `ruby test/run_feature.rb --area errors --unit --list 2>&1`
+    assert_equal(0, $?.exitstatus, out)
+    Features.in_area('errors').each do |n|
+      Features.files(n, :unit).each { |p| assert_match(/#{Regexp.escape(p)}/, out) }
+    end
+    assert_equal(false, out.include?('Usage:'), '--area printed the usage')
+  end
+
+  def test_an_area_and_a_feature_compose
+    out = `ruby test/run_feature.rb --area errors flow-spec --unit --list 2>&1`
+    assert_equal(0, $?.exitstatus, out)
+    assert_match(%r{test/unit/fault_test\.rb}, out)
+    assert_match(%r{test/unit/nlris/flow_spec_test\.rb}, out)
+  end
+
+  def test_the_runner_refuses_an_unknown_area_and_a_missing_one
+    %w[--area\ nope --area].each do |a|
+      out = `ruby test/run_feature.rb #{a} 2>&1`
+      assert_not_equal(0, $?.exitstatus, "#{a.inspect} must not exit 0: #{out}")
+      assert_match(/ArgumentError|unknown area/, out)
+    end
+  end
+
+  # The flags this runner owns must not reach test-unit, which parses
+  # ARGV itself at exit: one left in it makes the run print test-unit's
+  # own help and exit non-zero with every test having passed.
+  def test_the_runners_own_flags_do_not_reach_test_unit
+    out = `ruby test/run_feature.rb rt-constrain --unit 2>&1`
+    assert_equal(0, $?.exitstatus, out)
+    assert_equal(false, out.include?('Display this help'),
+                 'test-unit parsed a flag that belongs to run_feature')
+  end
+
+  # And what it does not own must reach it, or `-n` is unusable.
+  def test_test_units_own_flags_reach_it
+    out = `ruby test/run_feature.rb rt-constrain --unit -n test_nothing_validates 2>&1`
+    assert_equal(0, $?.exitstatus, out)
+    assert_match(/^1 tests,/, out, '-n did not reach test-unit')
+  end
+
   def test_the_runner_prints_the_document
     out = `ruby test/run_feature.rb --doc 2>&1`
     assert_equal(0, $?.exitstatus)
