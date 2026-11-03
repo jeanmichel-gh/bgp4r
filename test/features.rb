@@ -419,7 +419,8 @@ module Features
       :about => 'The object contract, the hash round trips and the suite-wide guards',
       :doc   => 'docs/building-objects.md',
       :unit  => %w[building_objects_test to_hash_round_trip_test
-                   lab_groups_test features_test common_test iana_test],
+                   lab_groups_test features_test coverage_matrix_test
+                   common_test iana_test],
     },
 
   }.freeze

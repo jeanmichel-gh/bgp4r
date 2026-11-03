@@ -420,15 +420,25 @@ module FeaturesDoc
 
       ### What the library knows
 
-      Three registries answer for themselves, so nothing about them needs
-      to be written down:
+      Four things answer for themselves, so nothing about them needs to be
+      written down:
 
       ```
       ruby -I. -e 'require "bgp4r"; p BGP::Attr.registrations.size'
       ruby -I. -e 'require "bgp4r"; p BGP::Extended_community::FACTORY.size'
       ruby -I. test/unit/to_hash_status.rb
       ruby -I. test/unit/to_hash_status.rb pending
+      ruby -I. test/coverage_matrix.rb
       ```
+
+      The last one is the other way of reading this document. **This one
+      says which tests exist, and that one says what they leave out**: per
+      path attribute, whether a case in `BGP::Fault::CATALOG` sends it and
+      whether any router has ever seen it; per address family, which ones
+      the build gate knows and what each router's lab tests vouch for.
+      Read its header before trusting a column, because `absence` means a
+      router does not have the family and so vouches for nothing about our
+      octets.
 
     MD
   end

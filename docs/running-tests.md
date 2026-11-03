@@ -19,7 +19,7 @@ amounts. Measured 2026-11-03:
 
 | Tier | What it needs | Files | Time | Command |
 |---|---|---:|---|---|
-| unit | Ruby | 133 | 21s | `ruby test/run_unit.rb` |
+| unit | Ruby | 134 | 21s | `ruby test/run_unit.rb` |
 | functional | a loopback socket | 12 | 18s | one file at a time, below |
 | lab | gobgpd, FRR, Docker or root | 26 | 10s to 400s per group | `ruby test/run_lab.rb GROUP` |
 
@@ -144,7 +144,7 @@ Guards over the library and the suite, not over BGP.
 
 | Feature | unit | func | lab | What |
 |---|---:|---:|---:|---|
-| `contracts` | 6 | 0 | 0 | The object contract, the hash round trips and the suite-wide guards |
+| `contracts` | 7 | 0 | 0 | The object contract, the hash round trips and the suite-wide guards |
 
 ## What each feature covers
 
@@ -220,7 +220,7 @@ ruby test/run_feature.rb communities
 The object contract, the hash round trips and the suite-wide guards.
 
 - Read first: `docs/building-objects.md`
-- 6 unit files
+- 7 unit files
 
 ```
 ruby test/run_feature.rb contracts
@@ -782,15 +782,25 @@ checkout and run the copy without `--build`.
 
 ### What the library knows
 
-Three registries answer for themselves, so nothing about them needs
-to be written down:
+Four things answer for themselves, so nothing about them needs to be
+written down:
 
 ```
 ruby -I. -e 'require "bgp4r"; p BGP::Attr.registrations.size'
 ruby -I. -e 'require "bgp4r"; p BGP::Extended_community::FACTORY.size'
 ruby -I. test/unit/to_hash_status.rb
 ruby -I. test/unit/to_hash_status.rb pending
+ruby -I. test/coverage_matrix.rb
 ```
+
+The last one is the other way of reading this document. **This one
+says which tests exist, and that one says what they leave out**: per
+path attribute, whether a case in `BGP::Fault::CATALOG` sends it and
+whether any router has ever seen it; per address family, which ones
+the build gate knows and what each router's lab tests vouch for.
+Read its header before trusting a column, because `absence` means a
+router does not have the family and so vouches for nothing about our
+octets.
 
 ## The guard
 
@@ -802,5 +812,5 @@ test file has to be tagged before the suite is green again, which is
 the same arrangement `test/unit/lab_groups_test.rb` has with the CI
 matrix.
 
-171 of 171 test files are tagged. The
+172 of 172 test files are tagged. The
 remainder, if any, is what the guard names.
