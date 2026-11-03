@@ -741,6 +741,30 @@ class LabBgp4rLabTopologyTest < Test::Unit::TestCase
                  'the failure log loop and the topology name different nodes'
   end
 
+  # And the script that job runs has to read every one of them, which is
+  # the point of deploying the lab at all: the log is where routescope's
+  # BGP fixtures are cut from, so a node nothing reads contributes
+  # nothing. `g1` was deployed before it was read, which is how this came
+  # to be written.
+  #
+  # The node list is derived from the read helpers, one per tool, with
+  # the `for` loops expanded, so neither side is a list anybody keeps in
+  # step by hand.
+  def test_the_capture_script_reads_every_node_the_topology_has
+    sh = read('capture.sh')
+
+    loops = sh.scan(/^\s*for\s+(\w+)\s+in\s+([a-z0-9 ]+);?\s*do/)
+              .each_with_object({}) { |(var, list), h| (h["$#{var}"] ||= []).concat(list.split) }
+    assert_not_empty loops, 'no for loop was parsed, so $n never expands and this cannot pass'
+
+    tokens = sh.scan(/^\s*(?:vshow|bshow|rshow|sshow|gshow)\s+(\S+)/).flatten.uniq
+    assert_not_empty tokens, 'no read helper call was parsed, so this guard measures nothing'
+
+    assert_equal nodes.keys.sort,
+                 tokens.flat_map { |t| loops.fetch(t, [t]) }.uniq.sort,
+                 'capture.sh and the topology name different nodes'
+  end
+
   # The images the topology names have to be the ones the README builds,
   # and the bgp4r one has to be a stage the Dockerfile has. A `--target`
   # that does not exist fails at build time with a message about the

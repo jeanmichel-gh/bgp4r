@@ -900,12 +900,18 @@ lab/                     speakers in containers: lab/speaker.rb and lab/topologi
                          the day a driver lands. The read side such a
                          driver needs is already written and tested in
                          `LabHelper::Gobgpd`.
-                         **`g1` was added after that capture run, so
-                         nothing is measured about it**: the run's own
-                         list says six sessions and three
-                         implementations, `bgp4r-gobgp:latest` has
-                         never been built and that node has never come
-                         up. It wants the Dockerfile's
+                         **`g1` came after the first capture run and is
+                         measured by the second**, 2026-11-03: the image
+                         builds, all seven nodes run, its session is
+                         established with 0 flaps, and `rtr` reports
+                         `sent` 6 and `received` 0 to it, which is what
+                         a node that reads and originates nothing should
+                         report. The first of those two runs **failed
+                         the whole deploy** over this one node, which is
+                         the `exec:` ordering fact under "routescope
+                         labs". Its RIB has still not been read: the
+                         `### GoBGP` block of `capture.sh` is new and
+                         has not run. It wants the Dockerfile's
                          `lab-node` stage rather than `speaker`: a
                          containerlab node sets its addresses with `ip`
                          and `bgp4rd` has to be able to create
@@ -918,6 +924,10 @@ lab/                     speakers in containers: lab/speaker.rb and lab/topologi
                          `exec:` lines, and it says the one command that
                          would settle whether the base image already has
                          `ip`, which no registry was reachable to check.
+                         **That question is still open** and the second
+                         capture run did not settle it: the wrapper
+                         works, which says nothing about whether the
+                         wrapper is needed.
                          Its GOBGP_IMAGE default is the two Compose
                          topologies' and the root Dockerfile's, which
                          the topology test asserts rather than asking a
@@ -6847,26 +6857,7 @@ reach the registries this sandbox cannot. The first run, 2026-11-03,
 built both images, brought up all six sessions on FRR 10.2.1 and BIRD
 2.0.12, and found the one bug a parse could not: on a `direct` iBGP
 session BIRD dropped every route from rtr, whose next hop is not on its
-links, until `r3/bird.conf` took `gateway recursive`. The scenarios have
-not been run.
-
-**The run after `g1` was added found the other thing no parse could, and
-it is a containerlab fact rather than a BGP one: `exec:` runs after a
-node's entrypoint.** So an address the topology assigns does not exist
-while that node's daemon is reading its config, and a daemon told to
-**bind** a listener to it dies there, with containerlab then failing the
-**whole** deploy on `namespace path not available` and cancelling the
-other nodes' `exec:` with it. gobgpd with `local-address-list` set to
-its own link address did exactly that. The fix is the wildcard, which is
-what the other six already use, and the distinction to keep is the
-timing and not the key: a **dial** to a specific address is fine, since
-it retries every `connect-retry`, which is why both injectors' own
-`local_address` has always worked. Half of this was already written, in
-the r1 comment about FRR missing an address on a link wired after it
-starts; nobody had said it generally.
-`test_no_node_binds_a_link_address_before_the_topology_adds_it` says it
-now, and `g1/gobgpd.toml` carries the log line and the two GoBGP source
-files that settle which key binds when. Before that, the three router configs were measured here
+links, until `r3/bird.conf` took `gateway recursive`. Before that, the three router configs were measured here
 without a registry: `bird -p` parses `r3/bird.conf` clean under BIRD 2.14, and
 `bgpd -C` accepts every BGP line of both FRR configs under bgpd 8.4.4,
 rejecting only `no ipv6 forwarding` and `service
@@ -6886,6 +6877,46 @@ column: the kinds, now three of them rather than two, the drivers, the
 conditions, which its section 9.5 costs out, and now the Config pane as
 well, which needs a bgp4r driver answering `candidate?` true and the
 nine methods behind it.
+
+**`g1` came after that first run, and the two runs after it are its own
+story, because the first of those failed the whole deploy.** The fact is
+containerlab's rather than BGP's: **`exec:` runs after a node's
+entrypoint**, so an address the topology assigns does not exist while
+that node's daemon is reading its config. A daemon told to **bind** a
+listener to it dies there, and containerlab then fails the **whole**
+deploy on `namespace path not available`, cancelling the other nodes'
+`exec:` with it. gobgpd with `local-address-list` set to its own link
+address did exactly that. The fix is the wildcard, which the other six
+already use, and the distinction to keep is the **timing and not the
+key**: a dial to a specific address is fine, since it retries every
+`connect-retry`, which is why both injectors' `local_address` has
+always worked. Half of this was already written, in the r1 comment
+about FRR missing an address on a link wired after it starts; nobody
+had said it generally.
+`test_no_node_binds_a_link_address_before_the_topology_adds_it` says it
+now, and `g1/gobgpd.toml` carries the log line and the two GoBGP source
+files that settle which key binds when.
+
+**The run after the fix is what measures the node**: the image builds,
+all seven run, the session is established with 0 flaps, and `rtr`
+reports `sent` 6 and `received` 0 to it, which is what a node that
+reads and originates nothing should report. So the lab is four
+implementations now. Its RIB has still not been read, since
+`capture.sh` gained a `### GoBGP` block in the same change and that has
+not run, and **the scenarios have not been run** either.
+
+**And it found a capability gap, which is the first prioritised list of
+one anybody here has.** bgp4r read two of g1's six capabilities as
+`Unknown`, codes 6 and 73, and four of r1's ten the same way, 6, 71, 73
+and 76. Named from the IANA Capability Codes registry, read 2026-11-03:
+**6 is BGP Extended Message, RFC 8654**, and **71 is Long-Lived
+Graceful Restart, RFC 9494**, where 73 (FQDN) and 76 (PATHS-LIMIT) are
+drafts. So two routers between them offer five code points bgp4r does
+not name and two of the five have an RFC. Nothing breaks, because an
+unknown capability round trips, and this file's own "8 of 22 live
+capability code points" says the aggregate; what is new is **which two
+a real peer actually sends**, which is a better order to work in than
+the registry's.
 
 Nine things the building of the two settled, each in `docs/daemon.md`
 now:

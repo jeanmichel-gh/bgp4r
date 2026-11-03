@@ -50,6 +50,15 @@ spost() {
     || { echo "$1 refused POST $2"; exit 1; }
 }
 sshow() { echo "===== $1 sim GET $2"; sget "$1" "$2" 2>&1; echo; }
+# GoBGP's own client, over the API Dockerfile.gobgp binds to the
+# loopback. `-u 127.0.0.1 -p 50051` are the client's own defaults, read
+# in cmd/gobgp/root.go, and are written out because they have to match
+# that entrypoint's `--api-hosts` and a reader comparing the two should
+# not have to check. No node here has a routescope driver yet, so the
+# tool name is `gobgp` and the commands are the ones
+# `LabHelper::Gobgpd` already sends, which is what such a driver would
+# be built from.
+gshow() { echo "===== $1 gobgp $2"; ex "$1" sh -c "gobgp -u 127.0.0.1 -p 50051 $2" 2>&1; echo; }
 
 established() {
   vt r1 'show bgp summary json' 2>/dev/null | ruby -rjson -e '
@@ -134,6 +143,31 @@ rshow rtr show.routes
 rshow rtr show.rib '{"prefix":"10.1.0.0/24"}'
 rshow rtr show.adj_in '{"peer":"10.0.10.1"}'
 rshow rtr show.adj_out '{"peer":"10.0.20.2"}'
+
+# The second reader of what rtr's export side sends, which is the one
+# thing this node is on the topology for. It receives and originates
+# nothing, so everything here came out of rtr, and nothing about
+# `export` is per peer: r1 and g1 are handed the same decision from the
+# same encoder. 10.2.0.0/24 is the prefix that carries all three kinds
+# of community, so g1's reading of it is a second implementation's view
+# of how rtr exported them.
+#
+# `neighbor` without -j as well as with: the JSON form wraps every
+# capability in a protobuf Any with a base64 value, which is why
+# `LabHelper::Gobgpd#remote_add_path` parses the human output instead.
+echo "### GoBGP"
+# Not through gshow: read in cmd/gobgp/main.go, `--version` is handled
+# before cobra sees the arguments and only as os.Args[1], so it has to
+# come first and gshow's own -u and -p would be in front of it.
+echo "===== g1 gobgp --version"; ex g1 gobgp --version 2>&1; echo
+gshow g1 'neighbor'
+gshow g1 'neighbor 10.0.21.1'
+gshow g1 'neighbor -j'
+gshow g1 'neighbor 10.0.21.1 -j'
+gshow g1 'global rib -j'
+gshow g1 'global rib 10.1.0.0/24 -j'
+gshow g1 'global rib 10.2.0.0/24 -j'
+gshow g1 'neighbor 10.0.21.1 adj-in -j'
 
 echo "### bgp4r-sim"
 for n in inj1 inj2; do

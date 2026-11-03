@@ -299,13 +299,44 @@ what `capture.sh` prints, and it measured:
 * point 7: a flap is counted by FRR (`connectionsDropped`), by bgp4rd
   and by the injector.
 
-**`g1` came after that run, so nothing above covers it.** The GoBGP
-node and its seventh session were added once that measurement was
-taken, which is why the list says six sessions and three
-implementations. So `bgp4r-gobgp:latest` has never been built, `g1` has
-never come up, and nothing has read its RIB. The next capture run is
-what settles whether the wrapper image is needed at all, which
-`Dockerfile.gobgp` names the one command for.
+**`g1` came after that run, so the list above is of six sessions and
+three implementations.** Two more runs followed, the same day, and the
+first of the two **failed the whole deploy over this one node**.
+gobgpd was told to bind its listener to 10.0.21.2, and containerlab
+runs `exec:` **after** a node's entrypoint, so that address did not
+exist yet: `bind: cannot assign requested address`, then `node "g1"
+deploy: namespace path not available`, which cancelled r1, r2 and rtr's
+own `exec:` with it. `g1/gobgpd.toml` has the fix and the two GoBGP
+source files behind it. A **dial** to a specific address is fine, since
+it retries; a start-up **bind** is not.
+
+**The run after the fix is the one that measures the node:**
+
+* `bgp4r-gobgp:latest` builds, `exec: ip addr add` runs in it, and all
+  seven nodes reach `running`, so the lab is four implementations now;
+* the g1 session is established with 0 flaps, and `rtr` reports `sent`
+  6 to it and `received` 0, which is what the node is configured for:
+  it reads and originates nothing;
+* the capabilities GoBGP 4.10.0 offers, which `show.peers` prints, and
+  which are a bgp4r gap. Below.
+
+**That gap is a capability one, and it is the first prioritised list of
+them anybody here has.** bgp4r read two of g1's six capabilities as
+`Unknown`, codes 6 and 73, and four of r1's ten the same way, codes 6,
+71, 73 and 76. Named from the IANA Capability Codes registry, read
+2026-11-03: **6 is BGP Extended Message, RFC 8654**, and **71 is
+Long-Lived Graceful Restart, RFC 9494**; 73 (FQDN) and 76
+(PATHS-LIMIT) are drafts. So two routers between them offer five code
+points bgp4r does not name and two of the five have an RFC. Nothing is
+broken by it, since an unknown capability round trips, but it says
+which capability to implement next, and it came from routers rather
+than from the registry.
+
+**Nothing has read g1's RIB yet beyond this.** `capture.sh` reads it
+now, in its `### GoBGP` block, and that block has not run.
+`Dockerfile.gobgp`'s own open question is also still open: the wrapper
+works, which says nothing about whether `${GOBGP_IMAGE}` already has
+`ip` and the wrapper could go.
 
 **It found one bug, which a parse could not.** On a `direct` iBGP
 session BIRD wants the next hop on one of its own links. 10.0.20.1 is
