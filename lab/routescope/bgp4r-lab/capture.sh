@@ -88,8 +88,18 @@ for i in $(seq 1 30); do
     two_paths && break
   sleep 2
 done
-ex r3 birdc show route all for 10.1.0.0/24 | grep -q 'BGP.large_community' || { echo "10.1.0.0/24 did not reach r3 with its communities"; exit 1; }
-two_paths || { echo "r1 does not hold two paths to 172.16.9.0/24"; exit 1; }
+# Each router's view of the two prefixes, for when a check below fails.
+why() {
+  echo "### $1"
+  cli rtr show.routes; echo
+  vt r1 'show bgp ipv4 unicast'; vt r1 'show bgp ipv4 unicast 10.1.0.0/24'
+  vt r2 'show bgp ipv4 unicast'
+  ex r3 birdc show route all; ex r3 birdc show protocols all r1
+  docker logs --tail 30 "clab-$LAB-r3" 2>&1
+  exit 1
+}
+ex r3 birdc show route all for 10.1.0.0/24 | grep -q 'BGP.large_community' || why "10.1.0.0/24 did not reach r3 with its communities"
+two_paths || why "r1 does not hold two paths to 172.16.9.0/24"
 sleep 5
 
 echo "### FRR"
