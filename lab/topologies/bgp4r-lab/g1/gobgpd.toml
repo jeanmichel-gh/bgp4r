@@ -1,0 +1,54 @@
+# g1, a GoBGP in AS 65002: the fourth implementation on this lab and the
+# second reader of what rtr's export side sends.
+#
+# Read by the container as /etc/gobgp/gobgpd.toml, which is where
+# Dockerfile.gobgp's entrypoint looks. The schema is the one
+# lab/topologies/fault-matrix/gobgp.toml uses, which was verified against
+# GoBGP 3.23 and which 4.10 reads unchanged; that file records how that
+# was settled and what the earlier suspicion turned out to be. On a newer
+# image, if the daemon rejects a key its own log names it.
+#
+# **Why this node is here, and it is not for a fourth opinion of the
+# protocol.** docs/routescope-labs.md section 8 gives three reasons a lab
+# test is worth porting to a scenario, and the first is more than one
+# receiver reading the same octets. Until this node, rtr's export side
+# had exactly one reader on this topology, r1, and FRR's chain behind it.
+# Now one UPDATE out of rtr is read by two implementations at once, which
+# is the one thing no bgp4r test can say and the one thing a console can
+# show side by side.
+#
+# **It receives and does not originate.** Nothing here announces a
+# prefix, so whatever its RIB holds came from rtr. That is deliberate:
+# the topology's own comment explains that both injectors sit in AS 65010
+# so that MULTI_EXIT_DISC is the step that decides rtr's best path, and a
+# node originating the same prefix from a third AS would be compared at
+# an earlier step and the MED scenario would stop meaning anything.
+#
+# No policy, so the default applies and a route rtr sends lands in the
+# global RIB where `gobgp global rib` can read it. GoBGP needs no import
+# statement to accept one, unlike BIRD, whose own config in this folder
+# has to say so.
+
+[global.config]
+  as = 65002
+  router-id = "10.255.2.1"
+  # The address on the one link, so the daemon does not pick another.
+  local-address-list = ["10.0.21.2"]
+
+[[neighbors]]
+  [neighbors.config]
+    neighbor-address = "10.0.21.1"
+    peer-as = 65000
+    description = "rtr, the bgp4rd in AS 65000"
+  [neighbors.transport.config]
+    local-address = "10.0.21.2"
+  [neighbors.timers.config]
+    hold-time = 30
+    # rtr dials us as well, so keep coming back if a restart loses the
+    # race. The fault-matrix config records that 3.23.0 ignores both of
+    # these keys; they cost nothing and a later GoBGP may honour them.
+    connect-retry = 2
+    idle-hold-time-after-reset = 0
+  [[neighbors.afi-safis]]
+    [neighbors.afi-safis.config]
+      afi-safi-name = "ipv4-unicast"

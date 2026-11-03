@@ -801,16 +801,40 @@ lab/                     speakers in containers: lab/speaker.rb and lab/topologi
                          lab/topologies/bgp4r-lab is **the one
                          containerlab topology** and the only one written
                          for the routescope console rather than for this
-                         test suite: six nodes and three
+                         test suite: seven nodes and **four**
                          implementations, two `bgp4r-sim` injectors in
                          one AS feeding a `bgp4rd` that feeds an FRR and
-                         BIRD AS, which is docs/routescope-labs.md
+                         BIRD AS and a GoBGP of its own, which is
+                         docs/routescope-labs.md
                          section 8's "lab to build first". Both
                          injectors are in one AS so that MED is
                          comparable, which is what lets one action flip
                          which path wins; `rtr` routes rather than
                          originates what they send. Its four scenarios
-                         are that section's points 2 to 5. **It has
+                         are that section's points 2 to 5.
+                         **`g1`, the GoBGP, is a second reader of
+                         `rtr`'s export side and not a fourth opinion of
+                         the protocol**: section 8 gives three reasons a
+                         lab test earns a scenario and the first is more
+                         than one receiver reading the same octets, and
+                         before it one UPDATE out of `rtr` had one
+                         reader. Nothing about `export` is per peer, so
+                         `r1` and `g1` are handed the same decision from
+                         the same encoder, which is what neither
+                         rib_router_frr_test.rb nor
+                         rib_router_gobgp_test.rb can show, each having
+                         one router. It receives and **does not
+                         originate**, because a third AS announcing the
+                         injected prefix would be compared before the
+                         MED step and med-decides.yml would stop meaning
+                         anything. **routescope has no `gobgp` kind**,
+                         read at b8e2704, so today it renders as a plain
+                         Linux node and answers nothing about BGP; the
+                         label says `gobgp` anyway so the node is right
+                         the day a driver lands. The read side such a
+                         driver needs is already written and tested in
+                         `LabHelper::Gobgpd`.
+                         **It has
                          never been deployed**, so nothing in it is a
                          measurement, and it wants the Dockerfile's
                          `lab-node` stage rather than `speaker`: a
@@ -818,7 +842,17 @@ lab/                     speakers in containers: lab/speaker.rb and lab/topologi
                          and `bgp4rd` has to be able to create
                          `/run/bgp4r`, and `speaker` has neither
                          iproute2 nor root. The four Compose topologies
-                         stay on `speaker` and are untouched
+                         stay on `speaker` and are untouched.
+                         Dockerfile.gobgp is a wrapper over
+                         `${GOBGP_IMAGE}` for the same one reason
+                         Dockerfile.bird exists, iproute2 for the
+                         `exec:` lines, and it says the one command that
+                         would settle whether the base image already has
+                         `ip`, which no registry was reachable to check.
+                         Its GOBGP_IMAGE default is the two Compose
+                         topologies' and the root Dockerfile's, which
+                         the topology test asserts rather than asking a
+                         reader to keep four places in step
 test/functional/lab/     lab tests: loopback speaker test and one Compose test per topology;
                          speaker_test.rb also checks the capability names a topology can ask for,
                          and what a topology can say about ADD-PATH: a path_id on an
@@ -862,7 +896,25 @@ test/functional/lab/     lab tests: loopback speaker test and one Compose test p
                          holds both ends of every link to one prefix and
                          the four scenarios to routescope's own action,
                          key and condition lists, copied at a named
-                         commit;
+                         commit. `g1` has no bgp4r node file, being a
+                         GoBGP, so what stands in for the loader check
+                         is its TOML read as **text**, since `toml` is
+                         not a default gem: the address it names against
+                         the one the topology gives its interface, and
+                         the peer-as on each side against the other's
+                         AS. It carries routescope's `Lab::KINDS` copied
+                         at b8e2704 too, so the one kind that read did
+                         not have is a measurement and **this fails the
+                         day routescope gains it**, which is what it is
+                         for.
+                         `test_one_scenario_asserts_both_readers_of_one_update`
+                         exists because a sabotage passed: deleting the
+                         `g1` expectation from inject-and-cross.yml moved
+                         no test, so the one claim that node is on the
+                         topology for had nothing holding the scenario
+                         to it. Its two next hops are **derived** from
+                         the topology's own `exec:` lines, so a
+                         readdressed link moves them;
                          fault_matrix_scenario.rb holds the RFC 7606 checks, and both
                          fault_matrix_test.rb (Compose) and fault_matrix_native_test.rb
                          (a gobgpd on loopback, no Docker) assert them;
@@ -6635,10 +6687,41 @@ container registry; see "Lab and conformance" for why the daemon is not
 what is missing.
 
 **The topology itself is written**, which is the other half of item 9:
-`lab/topologies/bgp4r-lab`, the six node lab of that document's section
-8, with both labels on every node, node files for the two injectors and
+`lab/topologies/bgp4r-lab`, that document's section 8 lab, with both
+labels on every node, node files for the two injectors and
 the daemon, FRR and BIRD configs, and four scenarios covering its points
-2 to 5. The privilege story came out of writing it and is a Dockerfile
+2 to 5. **It is seven nodes and four implementations now, not the six
+and three section 8 designs**, because a GoBGP was added in AS 65002 as
+a second eBGP peer of `rtr`. That is section 8's own first reason for a
+scenario, more than one receiver reading the same octets: before it one
+UPDATE out of `rtr` had one reader, and `rib_router_frr_test.rb` and
+`rib_router_gobgp_test.rb` each point the export side at one router, so
+neither can show the two answering the same octets together. The node
+receives and does not originate, since a third AS announcing the
+injected prefix would be compared before the MED step and
+`med-decides.yml` would stop meaning anything.
+
+**routescope has no `gobgp` kind, and that is measured rather than
+assumed.** At `b8e2704`, `Lab::KINDS` is `ospfd frr ospfv2-sim bird
+srlinux bgp4r bgp4r-sim linux`, and `grep -rln gobgp` across its Ruby,
+Markdown, TSX and YAML finds **nothing at all**. `Drivers.for` is
+`BY_KIND.fetch(node.kind, Linux)`, so the node renders as a plain Linux
+box today and answers nothing about BGP, which is the state a bgp4r node
+was in before routescope gained its kind. The label says `gobgp` anyway,
+so the node is right the day a driver lands and the file needs no edit
+then, and the topology test holds a copy of `KINDS` so that gap fails
+the day it closes.
+
+**The driver is the cheap half and the read side is already written.**
+`LabHelper::Gobgpd` answers `neighbors`, `neighbor(address)`, `rib`,
+`path(prefix)` and `rib_family(family)` out of `gobgp ... -j`, exercised
+by ten lab test files against 3.23.0 and 4.10.0. routescope's existing
+drivers are 114 lines for `Bgp4rd`, 203 for `Sim`, 240 for `Bird` and
+300 for `Frr`; a GoBGP one sits near the low end, because its client
+answers JSON where BIRD needs a text parser. That is routescope's own
+column, like the kinds and the four conditions.
+
+The privilege story came out of writing it and is a Dockerfile
 stage, `lab-node`: a containerlab node sets its addresses with `ip addr
 add` and `bgp4rd` has to create `/run/bgp4r`, which is the one socket
 path `Drivers::Bgp4rd` looks in for such a node, and the `speaker` stage
@@ -6654,8 +6737,15 @@ integrated-vtysh-config`, which are zebra and vtysh lines a standalone
 `bgpd` does not own and which the bound `daemons` file routes to zebra
 and staticd. Read that for what it is: the lab pins FRR **10.2.1**, so
 an older bgpd accepting the commands says they are not 10.x-only and
-says nothing about 10.2.1 itself. Everything else in its phases 1 to 5 is routescope's own
-column: the kinds, the two drivers, the `bgp:` step and the four
+says nothing about 10.2.1 itself. **`g1/gobgpd.toml` could not be
+measured even that far**, since `gobgpd` is in the image rather than on
+PATH here and no registry was reachable; what holds it is the topology
+test reading it as text against the addresses the topology gives, and
+the fault matrix's own record that this schema was verified against
+3.23 and that 4.10 reads it unchanged. Everything else in its phases 1
+to 5 is routescope's own
+column: the kinds, now three of them rather than two, the drivers, the
+`bgp:` step and the four
 conditions, which its section 9.5 costs out, and now the Config pane as
 well, which needs a bgp4r driver answering `candidate?` true and the
 nine methods behind it.

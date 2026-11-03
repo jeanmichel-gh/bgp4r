@@ -53,10 +53,26 @@ class LabBgp4rLabTopologyTest < Test::Unit::TestCase
 
   DIR = File.expand_path('../../../lab/topologies/bgp4r-lab', __dir__)
 
-  # The six nodes and what each one is, which is the README's own table.
+  # The seven nodes and what each one is, which is the README's own table.
   # Asserted against the files rather than trusted, in both directions.
   NODES = { 'inj1' => 'bgp4r-sim', 'inj2' => 'bgp4r-sim', 'rtr' => 'bgp4r',
-            'r1' => 'frr', 'r2' => 'frr', 'r3' => 'bird' }.freeze
+            'r1' => 'frr', 'r2' => 'frr', 'r3' => 'bird',
+            'g1' => 'gobgp' }.freeze
+
+  # `Lab::KINDS`, **copied** from routescope `b8e2704`, read on
+  # 2026-11-03, for the same reason the scenario vocabulary below is a
+  # copy: this suite cannot assert another repository. What it can do is
+  # say which of this topology's kinds that read knew, so a kind
+  # routescope does not have is a recorded measurement rather than a
+  # silence. `Drivers.for` is `BY_KIND.fetch(node.kind, Linux)`, so an
+  # unknown kind is a plain Linux node that answers nothing about BGP.
+  ROUTESCOPE_KINDS = %w[ospfd frr ospfv2-sim bird srlinux
+                        bgp4r bgp4r-sim linux].freeze
+
+  # The kinds on this topology that routescope had no driver for at that
+  # commit. One, and it is the GoBGP node: `grep -rln gobgp` across
+  # routescope's Ruby, Markdown, TSX and YAML found nothing at all.
+  KINDS_ROUTESCOPE_LACKS = %w[gobgp].freeze
 
   # The bgp4r node files, by node, and the program that reads each.
   INJECTORS = { 'inj1' => 'inj1/sim.yml', 'inj2' => 'inj2/sim.yml' }.freeze
@@ -90,6 +106,9 @@ class LabBgp4rLabTopologyTest < Test::Unit::TestCase
   def nodes ; clab['topology']['nodes'] ; end
   def links ; clab['topology']['links'] ; end
   def readme ; @readme ||= read('README.md') ; end
+  # The topology as text, for the claims that are in its comments rather
+  # than in its YAML.
+  def clab_text ; @clab_text ||= read('bgp4r-lab.clab.yml') ; end
 
   # Every `ip addr add A/L dev IFACE` the topology runs, per node, as
   # { node => { iface => 'A/L' } }. Both spellings are read, the bare one
@@ -110,10 +129,30 @@ class LabBgp4rLabTopologyTest < Test::Unit::TestCase
 
   # ---------------------------------------------------------------- the topology
 
-  def test_the_topology_names_six_nodes_and_six_links
+  def test_the_topology_names_seven_nodes_and_seven_links
     assert_equal 'bgp4r-lab', clab['name']
     assert_equal NODES.keys.sort, nodes.keys.sort
-    assert_equal 6, links.size, 'six links, one per session'
+    assert_equal 7, links.size, 'seven links, one per session'
+  end
+
+  # The one kind here routescope had no driver for, stated rather than
+  # left to be discovered. **This fails the day routescope gains the
+  # gobgp kind**, which is what it is for: strike the entry, and strike
+  # the paragraph in the topology file and the README that say the node
+  # renders as linux.
+  def test_the_kinds_routescope_knows_and_the_one_it_does_not
+    kinds = NODES.values.uniq
+    known, unknown = kinds.partition { |k| ROUTESCOPE_KINDS.include?(k) }
+    assert_equal KINDS_ROUTESCOPE_LACKS.sort, unknown.sort,
+                 'the set of kinds routescope has no driver for has ' \
+                 'changed: re-read Lab::KINDS and move the copy above'
+    assert_equal %w[bgp4r bgp4r-sim bird frr].sort, known.sort
+    # And the gap is written where a reader of the lab meets it, not
+    # only here.
+    assert_include clab_text, 'routescope b8e2704',
+                   'the topology does not say when routescope was read'
+    assert_include readme, 'gobgp',
+                   'the README does not mention the kind it is waiting on'
   end
 
   # Both labels on every node, and not inherited from a defaults block:
@@ -131,8 +170,9 @@ class LabBgp4rLabTopologyTest < Test::Unit::TestCase
   end
 
   # The links of the README's diagram, as ends rather than as a drawing.
-  def test_the_links_are_the_six_sessions_the_readme_draws
+  def test_the_links_are_the_seven_sessions_the_readme_draws
     want = [%w[inj1:eth1 rtr:eth1], %w[inj2:eth1 rtr:eth2], %w[rtr:eth3 r1:eth1],
+            %w[rtr:eth4 g1:eth1],
             %w[r1:eth2 r2:eth1], %w[r1:eth3 r3:eth1], %w[r2:eth2 r3:eth2]]
     assert_equal want, links.collect { |l| l['endpoints'] }
   end
@@ -175,8 +215,105 @@ class LabBgp4rLabTopologyTest < Test::Unit::TestCase
     end
 
     s = router_speaker
-    assert_equal 3, s.peers.size, 'rtr has three sessions'
+    assert_equal 4, s.peers.size, 'rtr has four sessions'
     assert_not_nil s.rib, 'rtr holds a Loc-RIB'
+  end
+
+  # g1 has no bgp4r node file, since it is a GoBGP, so what stands in for
+  # the loader check is the TOML and the one thing it must agree with:
+  # the address the topology gives its interface.
+  #
+  # **It is read as text and not parsed**, because `toml` is not a
+  # default gem and Conventions says to check that before requiring one.
+  # The claims here are a handful of lines, so matching them is cheaper
+  # than a dependency the library's one-runtime-gem rule would not
+  # allow. Each pattern is anchored, which is the lesson
+  # `mcast_vpn_doc_test.rb` records: a bare word matches a comment as
+  # readily as a setting.
+  def test_the_gobgp_config_agrees_with_the_topology
+    toml = read('g1/gobgpd.toml')
+    addr = addresses.fetch('g1')['eth1'].split('/').first
+    peer = addresses.fetch('rtr')['eth4'].split('/').first
+
+    assert_match(/^  as = 65002$/, toml, 'g1 is in AS 65002')
+    assert_match(/^  local-address-list = \["#{Regexp.escape(addr)}"\]$/, toml,
+                 "the global address list is not g1's own #{addr}")
+    assert_match(/^    neighbor-address = "#{Regexp.escape(peer)}"$/, toml,
+                 "the neighbor is not rtr's #{peer} on that link")
+    assert_match(/^    local-address = "#{Regexp.escape(addr)}"$/, toml)
+    assert_match(/^      afi-safi-name = "ipv4-unicast"$/, toml)
+
+    # rtr's own side has to name the same pair the other way round.
+    n = router_speaker.peers.find { |p| p.remote_as == 65002 }
+    assert_not_nil n, 'rtr has no session in AS 65002'
+    assert_equal addr, n.address.to_s, "rtr peers with g1 at #{addr}"
+    assert_equal 'g1', n.description
+
+    # It receives and does not originate, which g1/gobgpd.toml explains:
+    # a third AS announcing the same prefix would be compared before the
+    # MED step and med-decides.yml would stop meaning anything.
+    assert_not_match(/^\[\[defined-sets|^\s*prefix-list|^\[\[policy-definitions/, toml,
+                     'g1 has grown a policy, so read what it now sends')
+    assert_not_match(/^\s*rpki|^\[\[zebra/, toml)
+  end
+
+  # The claim g1 exists for, asserted rather than left in prose: one
+  # UPDATE out of rtr, read by two implementations, same AS_PATH and a
+  # next hop each.
+  #
+  # **Written because a sabotage passed.** Deleting the g1 expectation
+  # from inject-and-cross.yml moved no test: the vocabulary guards only
+  # ask whether the YAML is routescope's, and the README table guard only
+  # compares the actions column. So the one thing this node is on the
+  # topology for had nothing holding the scenario to it. Same shape as
+  # the unplaced-lab-test check in test/coverage_matrix.rb, which had its
+  # own consumer and nothing else.
+  #
+  # The two next hops are **derived** from the topology's own `exec:`
+  # lines rather than written here, so a readdressed link moves them and
+  # this guard follows.
+  def test_one_scenario_asserts_both_readers_of_one_update
+    s = load_yaml('scenarios/inject-and-cross.yml')
+    reach = s['steps'].filter_map { |x| x.dig('expect', 'bgp_prefix') }
+                      .reject { |x| x['present'] == false }
+
+    on = lambda { |node| reach.select { |x| x['node'] == node } }
+    r1, g1 = on['r1'], on['g1']
+    assert_not_empty g1, 'no scenario step reads the prefix at g1, so ' \
+                         'nothing asserts the second reader this node is for'
+
+    prefix = g1.first['prefix']
+    twin = r1.find { |x| x['prefix'] == prefix }
+    assert_not_nil twin, "r1 is not asserted on #{prefix}, so the two " \
+                         'readers are not compared on one UPDATE'
+
+    assert_equal twin['as_path'], g1.first['as_path'],
+                 'the two readers are asserted with different AS_PATHs: ' \
+                 'export is not per peer, so one of the two is wrong'
+
+    # A next hop **is** per peer (RFC 4271 section 5.1.3) and rtr sets no
+    # `next_hops`, so each reader sees rtr's address on its own link.
+    want = { 'r1' => rtr_address_facing('r1'), 'g1' => rtr_address_facing('g1') }
+    assert_not_equal want['r1'], want['g1'], 'the two links share an address'
+    assert_equal want['r1'], twin['next_hop'], "r1's next hop is rtr's own end"
+    assert_equal want['g1'], g1.first['next_hop'], "g1's next hop is rtr's own end"
+  end
+
+  # rtr's own address on the link to node, read out of the topology.
+  def rtr_address_facing(node)
+    link = links.find { |l| l['endpoints'].any? { |e| e.start_with?("#{node}:") } &&
+                            l['endpoints'].any? { |e| e.start_with?('rtr:') } }
+    assert_not_nil link, "no rtr link to #{node}"
+    iface = link['endpoints'].find { |e| e.start_with?('rtr:') }.split(':').last
+    addresses.fetch('rtr')[iface].split('/').first
+  end
+
+  # And the peer-as on each side is the other's AS, which is the mistake
+  # a reader cannot see from one file.
+  def test_the_two_sides_of_the_gobgp_session_agree_on_the_as
+    toml = read('g1/gobgpd.toml')
+    assert_match(/^    peer-as = 65000$/, toml, 'g1 peers with rtr in AS 65000')
+    assert_equal 65000, router_speaker.config['as']
   end
 
   # The router, built the way `bgp4rd -f FILE` builds it. The two IOs are
@@ -466,8 +603,8 @@ class LabBgp4rLabTopologyTest < Test::Unit::TestCase
   # Dockerfile and nothing about this lab.
   def test_the_images_the_topology_names_are_the_ones_that_can_be_built
     images = nodes.values.collect { |n| n['image'] }.uniq.sort
-    assert_equal ['bgp4r-bird:latest', 'bgp4r-lab:latest', 'quay.io/frrouting/frr:10.2.1'],
-                 images
+    assert_equal ['bgp4r-bird:latest', 'bgp4r-gobgp:latest', 'bgp4r-lab:latest',
+                  'quay.io/frrouting/frr:10.2.1'], images
     images.each { |i| assert_include readme, i, "the README does not say where #{i} comes from" }
 
     dockerfile = File.read(File.expand_path('../../../Dockerfile', __dir__), :encoding => 'UTF-8')
@@ -476,6 +613,30 @@ class LabBgp4rLabTopologyTest < Test::Unit::TestCase
     assert_match(/iproute2/, dockerfile[/^FROM speaker AS lab-node$.*?^FROM /m].to_s,
                  'the lab-node stage adds no iproute2, so ip addr add has nothing to run')
     assert_path_exist File.join(DIR, 'Dockerfile.bird')
+    assert_path_exist File.join(DIR, 'Dockerfile.gobgp')
+  end
+
+  # The GoBGP wrapper exists for one reason, iproute2 for the `exec:`
+  # lines, which is `Dockerfile.bird`'s reason too. And its GOBGP_IMAGE
+  # default has to be the one the rest of the repository uses, or this
+  # lab measures a different GoBGP than the Compose topologies and the
+  # conformance stage do.
+  def test_the_gobgp_wrapper_adds_iproute2_and_pins_the_same_image
+    f = read('Dockerfile.gobgp')
+    assert_match(/iproute2/, f, 'the wrapper adds no iproute2')
+    assert_match(/^ARG GOBGP_IMAGE=(\S+)$/, f)
+    mine = f[/^ARG GOBGP_IMAGE=(\S+)$/, 1]
+
+    root = File.read(File.expand_path('../../../Dockerfile', __dir__),
+                     :encoding => 'UTF-8')
+    assert_equal root[/^ARG GOBGP_IMAGE=(\S+)$/, 1], mine,
+                 'the wrapper and the root Dockerfile pin different GoBGP ' \
+                 'images, so this lab and the conformance stage disagree'
+
+    compose = File.read(File.expand_path('../../../lab/topologies/fault-matrix/compose.yml',
+                                         __dir__), :encoding => 'UTF-8')
+    assert_include compose, mine,
+                   'the fault matrix pins a different GoBGP image than this lab'
   end
 
 end

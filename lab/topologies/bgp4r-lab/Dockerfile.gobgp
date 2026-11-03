@@ -1,0 +1,84 @@
+# Copyright 2026 Jean-Michel Esnault.
+# All rights reserved.
+# See LICENSE.txt for permissions.
+#
+#
+# This file is part of BGP4R.
+#
+# BGP4R is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# BGP4R is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with BGP4R.  If not, see <http://www.gnu.org/licenses/>.
+
+# GoBGP for the bgp4r-lab topology: the fourth implementation on it.
+#
+#   docker build -f lab/topologies/bgp4r-lab/Dockerfile.gobgp \
+#                -t bgp4r-gobgp:latest lab/topologies/bgp4r-lab
+#
+# **Why a wrapper at all, when `jauderho/gobgp` is already this
+# repository's GoBGP image.** The two Compose topologies use it directly,
+# and on Compose that works: Docker gives each service its address from
+# the network definition and nothing in the container has to run `ip`. A
+# containerlab node sets its own addresses from the `exec:` lines in the
+# topology file, so it needs iproute2, and `Dockerfile.bird` in this
+# folder exists for exactly that reason and says so.
+#
+# **Whether the base image already has `ip` was not verifiable where this
+# was written**, since no container registry was reachable from it. If it
+# does, this file is dead weight and the topology can point `g1` straight
+# at `${GOBGP_IMAGE}`. That is one command to settle:
+#
+#   docker run --rm --entrypoint sh jauderho/gobgp:v4.10.0 \
+#              -c 'command -v ip || echo no-iproute2'
+#
+# **The binaries are copied out of the GoBGP image rather than
+# downloaded**, which is what the repository root's Dockerfile already
+# does for its conformance stage: `COPY --from=gobgp-cli
+# /usr/local/bin/gobgp`. So that directory is the one measured fact this
+# file rests on. The whole directory is copied rather than two named
+# paths, because only the client's own path is measured and `gobgpd`'s is
+# not: the Compose topology records that the image "ships both the daemon
+# and the gobgp client" and that `gobgpd` is on PATH, and neither says
+# where.
+#
+# Nothing is fetched and no version is kept in step by hand: GOBGP_IMAGE
+# has the same default as the two Compose topologies and the root
+# Dockerfile, so one value moves all four.
+#
+# **Not built here.** No container registry was reachable where this was
+# written, which `Dockerfile.bird` beside it and the root Dockerfile both
+# record of themselves for the same reason. Build it before trusting it.
+ARG GOBGP_IMAGE=jauderho/gobgp:v4.10.0
+FROM ${GOBGP_IMAGE} AS gobgp
+
+FROM debian:bookworm-slim
+# `iproute2` is what the topology's `exec:` lines need and `procps` is
+# for a person in its shell, which is `Dockerfile.bird`'s pair exactly.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends iproute2 procps \
+ && rm -rf /var/lib/apt/lists/*
+COPY --from=gobgp /usr/local/bin/ /usr/local/bin/
+
+# Foreground, logging to stderr (docker logs), and the API on the
+# loopback.
+#
+# **`--api-hosts` is not decoration.** Read in GoBGP's own
+# `cmd/gobgpd/main.go`, its default is `:50051`, which is every
+# interface, so without this the gRPC API is reachable from every other
+# node on the lab segment. The two injectors' own comment in the
+# topology file makes the same point about their HTTP API. A console
+# reaches this one by `docker exec`, so the loopback is all it needs.
+#
+# `-t toml` is the default, measured in the same file, and is written out
+# because the Compose topology's own override example writes it and a
+# reader comparing the two should not have to wonder.
+ENTRYPOINT ["gobgpd", "-f", "/etc/gobgp/gobgpd.toml", "-t", "toml", \
+            "--api-hosts", "127.0.0.1:50051"]

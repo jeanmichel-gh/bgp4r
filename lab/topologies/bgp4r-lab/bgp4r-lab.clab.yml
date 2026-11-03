@@ -1,20 +1,39 @@
-# bgp4r-lab: six nodes, three implementations, one containerlab topology.
+# bgp4r-lab: seven nodes, four implementations, one containerlab
+# topology.
 # docs/routescope-labs.md section 8, "The lab to build first, concretely".
 #
 #   AS 65010                    AS 65000       AS 65001 (iBGP full mesh)
 #
 #   inj1 .10.1 --eBGP--\
 #    (bgp4r-sim)         >-- rtr --eBGP-- r1 ------- r2
-#   inj2 .11.1 --eBGP--/  (bgp4rd)      (FRR) \     / (FRR)
-#    (bgp4r-sim)                               r3 (BIRD)
+#   inj2 .11.1 --eBGP--/  (bgp4rd)  |   (FRR) \     / (FRR)
+#    (bgp4r-sim)                    |          r3 (BIRD)
+#                                   |
+#                                 eBGP           AS 65002
+#                                   |
+#                                  g1 (GoBGP)
 #
 #   link            prefix          ends
 #   inj1 - rtr      10.0.10.0/30    inj1:eth1 .1    rtr:eth1 .2
 #   inj2 - rtr      10.0.11.0/30    inj2:eth1 .1    rtr:eth2 .2
 #   rtr  - r1       10.0.20.0/30    rtr:eth3  .1    r1:eth1  .2
+#   rtr  - g1       10.0.21.0/30    rtr:eth4  .1    g1:eth1  .2
 #   r1   - r2       10.1.12.0/30    r1:eth2   .1    r2:eth1  .2
 #   r1   - r3       10.1.13.0/30    r1:eth3   .1    r3:eth1  .2
 #   r2   - r3       10.1.23.0/30    r2:eth2   .1    r3:eth2  .2
+#
+# **g1 is a second reader of rtr's export side and nothing more.**
+# docs/routescope-labs.md section 8 gives three reasons a lab test earns
+# a scenario, and the first is more than one receiver reading the same
+# octets. Before g1, one UPDATE out of rtr had one reader, r1, with FRR's
+# chain behind it. Now two implementations read it at once, which is the
+# one thing no bgp4r test can say: `rib_router_gobgp_test.rb` and
+# `rib_router_frr_test.rb` each ask one router on its own, and neither
+# can show the two answering the same octets together.
+#
+# It receives and does not originate, so whatever its RIB holds came from
+# rtr. See g1/gobgpd.toml for why originating there would break the MED
+# scenario below.
 #
 # **Both injectors are in one AS on purpose.** MULTI_EXIT_DISC only
 # compares paths from the same neighbouring AS, so that is what makes
@@ -36,11 +55,13 @@
 #   LAB=$PWD/lab/topologies/bgp4r-lab docker compose -f ~/routescope/compose.yml up -d
 #   sudo containerlab destroy -t lab/topologies/bgp4r-lab/bgp4r-lab.clab.yml
 #
-# Three images, and the first is bgp4r's own:
+# Four images, and the first is bgp4r's own:
 #
 #   docker build --target lab-node -t bgp4r-lab:latest .
 #   docker build -f lab/topologies/bgp4r-lab/Dockerfile.bird \
 #                -t bgp4r-bird:latest lab/topologies/bgp4r-lab
+#   docker build -f lab/topologies/bgp4r-lab/Dockerfile.gobgp \
+#                -t bgp4r-gobgp:latest lab/topologies/bgp4r-lab
 #   docker pull quay.io/frrouting/frr:10.2.1
 #
 # **`lab-node` and not `speaker`, and the reason is not cosmetic.** The
@@ -130,6 +151,7 @@ topology:
         - ip addr add 10.0.10.2/30 dev eth1
         - ip addr add 10.0.11.2/30 dev eth2
         - ip addr add 10.0.20.1/30 dev eth3
+        - ip addr add 10.0.21.1/30 dev eth4
 
     # AS 65001, the iBGP full mesh. r1 is the only one with a session
     # outside the AS, so it is where a route from rtr enters and from
@@ -179,10 +201,44 @@ topology:
         - ip addr add 10.1.23.2/30 dev eth2
         - ip addr add 10.255.1.3/32 dev lo
 
+    # AS 65002, GoBGP: the second reader of what rtr's export side sends,
+    # peered straight off rtr and in an AS of its own.
+    #
+    # **The kind label is `gobgp` and routescope does not know it yet.**
+    # Read at routescope b8e2704, `Lab::KINDS` is ospfd, frr,
+    # ospfv2-sim, bird, srlinux, bgp4r, bgp4r-sim and linux, and
+    # `grep -rln gobgp` across its Ruby, Markdown, TSX and YAML finds
+    # nothing at all. `Drivers.for` is `BY_KIND.fetch(node.kind, Linux)`,
+    # so today this node renders as a linux box and answers nothing about
+    # BGP. That is the same state a bgp4r node was in before routescope
+    # gained its kind, and it is written here as the label it should have
+    # rather than as `linux`, so the node is right the day the driver
+    # lands and the file needs no edit then.
+    #
+    # The read side a driver needs is already written and tested, in
+    # `LabHelper::Gobgpd`: `neighbors`, `neighbor(address)`, `rib`,
+    # `path(prefix)` and `rib_family(family)`, all out of `gobgp ... -j`,
+    # exercised by ten lab test files against 3.23.0 and 4.10.0.
+    #
+    # `bgp4r-gobgp:latest` and not `${GOBGP_IMAGE}` directly, which the
+    # two Compose topologies do use. Dockerfile.gobgp says why, and says
+    # the one command that would settle whether the wrapper is needed.
+    g1:
+      kind: linux
+      image: bgp4r-gobgp:latest
+      labels:
+        routescope.kind: gobgp
+        routescope.protocols: bgp
+      binds:
+        - g1:/etc/gobgp
+      exec:
+        - ip addr add 10.0.21.2/30 dev eth1
+
   links:
     - endpoints: ["inj1:eth1", "rtr:eth1"]
     - endpoints: ["inj2:eth1", "rtr:eth2"]
     - endpoints: ["rtr:eth3", "r1:eth1"]
+    - endpoints: ["rtr:eth4", "g1:eth1"]
     - endpoints: ["r1:eth2", "r2:eth1"]
     - endpoints: ["r1:eth3", "r3:eth1"]
     - endpoints: ["r2:eth2", "r3:eth2"]

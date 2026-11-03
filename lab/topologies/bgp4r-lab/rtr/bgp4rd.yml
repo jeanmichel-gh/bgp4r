@@ -1,6 +1,6 @@
 # rtr, a bgp4rd in AS 65000: the one node in this lab that can say why a
-# path won. Three sessions, all eBGP: the two injectors in AS 65010 and
-# r1 in AS 65001.
+# path won. Four sessions, all eBGP: the two injectors in AS 65010, r1 in
+# AS 65001 and g1 in AS 65002.
 #
 # The keys are `lab/speaker.rb`'s node file keys, which `lab/README.md`
 # documents, and `docs/daemon.md`'s Configuration section is the daemon's
@@ -53,6 +53,25 @@ neighbors:
     connect: true              # we dial r1; FRR dials us too and one wins
     hold_time: 30
     description: r1
+    capabilities: [as4_byte, route_refresh]
+    record: routes
+
+  # g1, the GoBGP in AS 65002, and the second reader of what `export`
+  # below puts on the wire. The same three keys as r1 for the same
+  # reasons: GoBGP dials us as well, so one side wins the race, and a
+  # recorded session is what lets the state file say what went out.
+  #
+  # **Nothing about `export` is per peer**, which is the point of having
+  # this node at all: one Loc-RIB change goes through one `Export#for`
+  # per peer and the rules are the same ones, so r1 and g1 are handed
+  # the same decision rendered by the same encoder. Two implementations
+  # reading that at once is what neither `rib_router_frr_test.rb` nor
+  # `rib_router_gobgp_test.rb` can show, since each has one router.
+  - address: 10.0.21.2
+    as: 65002
+    connect: true
+    hold_time: 30
+    description: g1
     capabilities: [as4_byte, route_refresh]
     record: routes
 
