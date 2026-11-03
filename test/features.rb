@@ -331,12 +331,16 @@ module Features
                    fault_matrix_test],
     },
 
+    # specimen_test is tagged here as well as under contracts, which is
+    # what overlapping tags are for: its last test pairs each fault case
+    # against the valid specimen for the same attribute, so a fault case
+    # whose rule went away fails there and nowhere else.
     'fault' => {
       :area  => 'errors',
       :about => 'Building the UPDATEs no RFC allows, and the catalog of them',
       :rfc   => 'RFC 7606',
       :doc   => 'docs/protocol-testing.md',
-      :unit  => %w[fault_test],
+      :unit  => %w[fault_test specimen_test],
     },
 
     # ---- programs ---------------------------------------------------
@@ -420,7 +424,7 @@ module Features
       :doc   => 'docs/building-objects.md',
       :unit  => %w[building_objects_test to_hash_round_trip_test
                    lab_groups_test features_test coverage_matrix_test
-                   common_test iana_test],
+                   specimen_test common_test iana_test],
     },
 
   }.freeze
