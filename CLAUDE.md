@@ -861,28 +861,78 @@ lab/                     speakers in containers: lab/speaker.rb and lab/topologi
                          lab/routescope/bgp4r-lab is **the one
                          containerlab topology** and the only one written
                          for the routescope console rather than for this
-                         test suite: six nodes and three
+                         test suite: seven nodes and **four**
                          implementations, two `bgp4r-sim` injectors in
                          one AS feeding a `bgp4rd` that feeds an FRR and
-                         BIRD AS, which is docs/routescope-labs.md
+                         BIRD AS and a GoBGP of its own, which is
+                         docs/routescope-labs.md
                          section 8's "lab to build first". Both
                          injectors are in one AS so that MED is
                          comparable, which is what lets one action flip
                          which path wins; `rtr` routes rather than
-                         originates what they send. Its four scenarios
+                         originates what they send. Its six scenarios
                          are that section's points 2 to 7. **CI deploys
                          it**, in `.github/workflows/capture.yml`,
                          whose `capture.sh` prints every router's
                          answers for routescope's fixtures; the first
                          run, 2026-11-03, found BIRD dropping rtr's
                          routes until `gateway recursive`. Its
-                         scenarios have not been run. It wants the Dockerfile's
+                         scenarios have not been run.
+                         **`g1`, the GoBGP, is a second reader of
+                         `rtr`'s export side and not a fourth opinion of
+                         the protocol**: section 8 gives three reasons a
+                         lab test earns a scenario and the first is more
+                         than one receiver reading the same octets, and
+                         before it one UPDATE out of `rtr` had one
+                         reader. Nothing about `export` is per peer, so
+                         `r1` and `g1` are handed the same decision from
+                         the same encoder, which is what neither
+                         rib_router_frr_test.rb nor
+                         rib_router_gobgp_test.rb can show, each having
+                         one router. It receives and **does not
+                         originate**, because a third AS announcing the
+                         injected prefix would be compared before the
+                         MED step and med-decides.yml would stop meaning
+                         anything. **routescope has no `gobgp` kind**,
+                         read at b8e2704, so today it renders as a plain
+                         Linux node and answers nothing about BGP; the
+                         label says `gobgp` anyway so the node is right
+                         the day a driver lands. The read side such a
+                         driver needs is already written and tested in
+                         `LabHelper::Gobgpd`.
+                         **`g1` came after the first capture run and is
+                         measured by the second**, 2026-11-03: the image
+                         builds, all seven nodes run, its session is
+                         established with 0 flaps, and `rtr` reports
+                         `sent` 6 and `received` 0 to it, which is what
+                         a node that reads and originates nothing should
+                         report. The first of those two runs **failed
+                         the whole deploy** over this one node, which is
+                         the `exec:` ordering fact under "routescope
+                         labs". Its RIB is read now too, by
+                         `capture.sh`'s `### GoBGP` block, which is what
+                         measured all three community kinds reaching a
+                         second implementation. It wants the Dockerfile's
                          `lab-node` stage rather than `speaker`: a
                          containerlab node sets its addresses with `ip`
                          and `bgp4rd` has to be able to create
                          `/run/bgp4r`, and `speaker` has neither
                          iproute2 nor root. The four Compose topologies
-                         stay on `speaker` and are untouched
+                         stay on `speaker` and are untouched.
+                         Dockerfile.gobgp is a wrapper over
+                         `${GOBGP_IMAGE}` for the same one reason
+                         Dockerfile.bird exists, iproute2 for the
+                         `exec:` lines, and it says the one command that
+                         would settle whether the base image already has
+                         `ip`, which no registry was reachable to check.
+                         **That question is still open** and the second
+                         capture run did not settle it: the wrapper
+                         works, which says nothing about whether the
+                         wrapper is needed.
+                         Its GOBGP_IMAGE default is the two Compose
+                         topologies' and the root Dockerfile's, which
+                         the topology test asserts rather than asking a
+                         reader to keep four places in step
 test/functional/lab/     lab tests: loopback speaker test and one Compose test per topology;
                          speaker_test.rb also checks the capability names a topology can ask for,
                          and what a topology can say about ADD-PATH: a path_id on an
@@ -926,7 +976,53 @@ test/functional/lab/     lab tests: loopback speaker test and one Compose test p
                          holds both ends of every link to one prefix and
                          the four scenarios to routescope's own action,
                          key and condition lists, copied at a named
-                         commit;
+                         commit. `g1` has no bgp4r node file, being a
+                         GoBGP, so what stands in for the loader check
+                         is its TOML read as **text**, since `toml` is
+                         not a default gem: the address it names against
+                         the one the topology gives its interface, and
+                         the peer-as on each side against the other's
+                         AS. It carries routescope's `Lab::KINDS` copied
+                         at b8e2704 too, so the one kind that read did
+                         not have is a measurement and **this fails the
+                         day routescope gains it**, which is what it is
+                         for.
+                         `test_one_scenario_asserts_both_readers_of_one_update`
+                         exists because a sabotage passed: deleting the
+                         `g1` expectation from inject-and-cross.yml moved
+                         no test, so the one claim that node is on the
+                         topology for had nothing holding the scenario
+                         to it. Its two next hops are **derived** from
+                         the topology's own `exec:` lines, so a
+                         readdressed link moves them.
+                         `test_what_each_node_does_with_the_kernel_is_stated_and_differs`
+                         is the other one worth knowing about, because
+                         what it asserts is an **asymmetry**: three of
+                         the four implementations program a kernel route
+                         and by three different routes, `rtr` through
+                         iproute2 into table 100, FRR through zebra and
+                         BIRD through `protocol kernel`, and **`g1`
+                         programs nothing at all**, since GoBGP reaches
+                         a FIB only through an external zebra. So
+                         comparing one node's `ip route` against
+                         another's compares different things, and the
+                         table is in the README and in g1/gobgpd.toml
+                         rather than left to be found out.
+                         `test_no_node_binds_a_link_address_before_the_topology_adds_it`
+                         is the one that came from a real deploy failure:
+                         **containerlab runs `exec:` after the
+                         entrypoint**, so a daemon told to bind a link
+                         address at start-up dies before the address
+                         exists, and containerlab fails the whole deploy
+                         rather than that node. `g1` did it and nothing
+                         caught it. It is one pattern per config format,
+                         scanned over every node's own files, and a bind
+                         fails only when it names an address `exec:`
+                         adds, since a wildcard is what all seven use;
+                         the file set comes from the node list, so a
+                         later node is covered with no edit. All three
+                         patterns were proved live by sabotage, and the
+                         wildcard case proved not to fire;
                          fault_matrix_scenario.rb holds the RFC 7606 checks, and both
                          fault_matrix_test.rb (Compose) and fault_matrix_native_test.rb
                          (a gobgpd on loopback, no Docker) assert them;
@@ -1524,6 +1620,7 @@ There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Cove
 * Run the full unit suite before opening a PR. All tests must pass.
 * New behavior needs a test. Bug fixes need a test that failed before the fix.
   * **Check that the proof proved something.** Two "this test catches the regression" runs in one session proved nothing: the first patched a marker string that did not match, so the library was unchanged and the test passed for the obvious reason, and the second made a change the constructor was lenient enough to absorb, so the round trip still worked and the test was right to pass. A sabotage run that passes means the sabotage missed, not that the test is weak. Assert on the thing you changed before you believe the result, and prefer breaking the code the way it would really break, which is usually deleting a line rather than mutating a value.
+  * **A guard that watches for a thing has to be able to match that thing, and a negative assertion never says whether it can.** `assert_not_match(/^\[\[zebra/, toml)` in `bgp4r_lab_topology_test.rb` was written to fail the day `g1` grew a GoBGP zebra integration, so the node would stop quietly programming a kernel route behind a README that says it does not. It could never fire: the config form is `[zebra]`, a table, and `[[zebra]]`, an array of tables, is a form GoBGP has no such block for. Read in GoBGP's own `docs/sources/zebra.md` after the guard was written, which is the wrong order. A passing `assert_not_match` is the same information whether the pattern is right, wrong, or nonsense, so the only way to know is to **put the thing in and watch the guard fail**. Write the sabotage for a negative assertion before believing it, every time; that is the check-the-proof rule above, and the shape it takes when the assertion is a `not`.
   * **A test that walks a list of cases has to assert that each case did
     something.** The shape: build an edited object per case, derive
     something from it, and assert the derivation round trips. A case
@@ -6717,10 +6814,41 @@ container registry; see "Lab and conformance" for why the daemon is not
 what is missing.
 
 **The topology itself is written**, which is the other half of item 9:
-`lab/routescope/bgp4r-lab`, the six node lab of that document's section
-8, with both labels on every node, node files for the two injectors and
-the daemon, FRR and BIRD configs, and four scenarios covering its points
-2 to 5. The privilege story came out of writing it and is a Dockerfile
+`lab/routescope/bgp4r-lab`, that document's section 8 lab, with both
+labels on every node, node files for the two injectors and
+the daemon, FRR and BIRD configs, and six scenarios covering its points
+2 to 7. **It is seven nodes and four implementations now, not the six
+and three section 8 designs**, because a GoBGP was added in AS 65002 as
+a second eBGP peer of `rtr`. That is section 8's own first reason for a
+scenario, more than one receiver reading the same octets: before it one
+UPDATE out of `rtr` had one reader, and `rib_router_frr_test.rb` and
+`rib_router_gobgp_test.rb` each point the export side at one router, so
+neither can show the two answering the same octets together. The node
+receives and does not originate, since a third AS announcing the
+injected prefix would be compared before the MED step and
+`med-decides.yml` would stop meaning anything.
+
+**routescope has no `gobgp` kind, and that is measured rather than
+assumed.** At `b8e2704`, `Lab::KINDS` is `ospfd frr ospfv2-sim bird
+srlinux bgp4r bgp4r-sim linux`, and `grep -rln gobgp` across its Ruby,
+Markdown, TSX and YAML finds **nothing at all**. `Drivers.for` is
+`BY_KIND.fetch(node.kind, Linux)`, so the node renders as a plain Linux
+box today and answers nothing about BGP, which is the state a bgp4r node
+was in before routescope gained its kind. The label says `gobgp` anyway,
+so the node is right the day a driver lands and the file needs no edit
+then, and the topology test holds a copy of `KINDS` so that gap fails
+the day it closes.
+
+**The driver is the cheap half and the read side is already written.**
+`LabHelper::Gobgpd` answers `neighbors`, `neighbor(address)`, `rib`,
+`path(prefix)` and `rib_family(family)` out of `gobgp ... -j`, exercised
+by ten lab test files against 3.23.0 and 4.10.0. routescope's existing
+drivers are 114 lines for `Bgp4rd`, 203 for `Sim`, 240 for `Bird` and
+300 for `Frr`; a GoBGP one sits near the low end, because its client
+answers JSON where BIRD needs a text parser. That is routescope's own
+column, like the kinds and the four conditions.
+
+The privilege story came out of writing it and is a Dockerfile
 stage, `lab-node`: a containerlab node sets its addresses with `ip addr
 add` and `bgp4rd` has to create `/run/bgp4r`, which is the one socket
 path `Drivers::Bgp4rd` looks in for such a node, and the `speaker` stage
@@ -6730,8 +6858,7 @@ reach the registries this sandbox cannot. The first run, 2026-11-03,
 built both images, brought up all six sessions on FRR 10.2.1 and BIRD
 2.0.12, and found the one bug a parse could not: on a `direct` iBGP
 session BIRD dropped every route from rtr, whose next hop is not on its
-links, until `r3/bird.conf` took `gateway recursive`. The scenarios have
-not been run. Before that, the three router configs were measured here
+links, until `r3/bird.conf` took `gateway recursive`. Before that, the three router configs were measured here
 without a registry: `bird -p` parses `r3/bird.conf` clean under BIRD 2.14, and
 `bgpd -C` accepts every BGP line of both FRR configs under bgpd 8.4.4,
 rejecting only `no ipv6 forwarding` and `service
@@ -6739,11 +6866,80 @@ integrated-vtysh-config`, which are zebra and vtysh lines a standalone
 `bgpd` does not own and which the bound `daemons` file routes to zebra
 and staticd. Read that for what it is: the lab pins FRR **10.2.1**, so
 an older bgpd accepting the commands says they are not 10.x-only and
-says nothing about 10.2.1 itself. Everything else in its phases 1 to 5 is routescope's own
-column: the kinds, the two drivers, the `bgp:` step and the four
+says nothing about 10.2.1 itself. **`g1/gobgpd.toml` could not be
+measured even that far**, since `gobgpd` is in the image rather than on
+PATH here and no registry was reachable; what holds it is the topology
+test reading it as text against the addresses the topology gives, and
+the fault matrix's own record that this schema was verified against
+3.23 and that 4.10 reads it unchanged. Everything else in its phases 1
+to 5 is routescope's own
+column: the kinds, now three of them rather than two, the drivers, the
+`bgp:` step and the four
 conditions, which its section 9.5 costs out, and now the Config pane as
 well, which needs a bgp4r driver answering `candidate?` true and the
 nine methods behind it.
+
+**`g1` came after that first run, and the two runs after it are its own
+story, because the first of those failed the whole deploy.** The fact is
+containerlab's rather than BGP's: **`exec:` runs after a node's
+entrypoint**, so an address the topology assigns does not exist while
+that node's daemon is reading its config. A daemon told to **bind** a
+listener to it dies there, and containerlab then fails the **whole**
+deploy on `namespace path not available`, cancelling the other nodes'
+`exec:` with it. gobgpd with `local-address-list` set to its own link
+address did exactly that. The fix is the wildcard, which the other six
+already use, and the distinction to keep is the **timing and not the
+key**: a dial to a specific address is fine, since it retries every
+`connect-retry`, which is why both injectors' `local_address` has
+always worked. Half of this was already written, in the r1 comment
+about FRR missing an address on a link wired after it starts; nobody
+had said it generally.
+`test_no_node_binds_a_link_address_before_the_topology_adds_it` says it
+now, and `g1/gobgpd.toml` carries the log line and the two GoBGP source
+files that settle which key binds when.
+
+**The run after the fix is what measures the node**: the image builds,
+all seven run, the session is established with 0 flaps, and `rtr`
+reports `sent` 6 and `received` 0 to it, which is what a node that
+reads and originates nothing should report. So the lab is four
+implementations now. **The scenarios have not been run** on it, and
+nothing in this repository runs them.
+
+**And it found a capability gap, which is the first prioritised list of
+one anybody here has.** bgp4r read two of g1's six capabilities as
+`Unknown`, codes 6 and 73, and four of r1's ten the same way, 6, 71, 73
+and 76. Named from the IANA Capability Codes registry, read 2026-11-03:
+**6 is BGP Extended Message, RFC 8654**, and **71 is Long-Lived
+Graceful Restart, RFC 9494**, where 73 (FQDN) and 76 (PATHS-LIMIT) are
+drafts. So two routers between them offer **four** code points bgp4r
+does not name and two of the four have an RFC. Nothing breaks, because
+an unknown capability round trips, and this file's own "8 of 22 live
+capability code points" says the aggregate; what is new is **which two
+a real peer actually sends**, which is a better order to work in than
+the registry's.
+* **That list was written as five first and the fix is to count it.**
+  The fifth was code 5, Extended Next Hop Encoding, which bgp4r
+  **does** name: it prints as `Extended_nexthop` with `{afi 1, safi 1,
+  nexthop_afi 2}`. Same shape as every hand-written count in this file
+  that turned out wrong, one register up: a union of two lists is
+  arithmetic, so compute it.
+
+**The `### GoBGP` block of `capture.sh` ran next, and it settles the
+two things that node is on the topology for.** All three kinds of
+community reach GoBGP intact, which the first run had proved only at
+BIRD: 10.2.0.0/24 arrives with attribute 8 as 65010:100 and 65010:200,
+attribute 16 as route target 65010:7 and attribute 32 as 65010:1:1. And
+the second-reader claim is **measured** rather than only guarded: g1
+and r1 hold 10.1.0.0/24 with the same AS_PATH, 65000 65010, and a next
+hop each, 10.0.21.1 against 10.0.20.1, which is one decision from one
+encoder with the per-session next hop of RFC 4271 section 5.1.3 on top.
+It also found that **`gobgp neighbor -j` prints capabilities readably
+on 4.10.0**, where `LabHelper::Gobgpd#remote_add_path` records the JSON
+form wrapping each in a protobuf Any with a base64 value; that helper
+runs against 3.23.0 too, where its own claim was measured, so this is a
+version difference and not an error in it. The human form is captured
+beside the JSON because it is the only one that labels a capability
+`advertised` against `advertised and received`.
 
 Nine things the building of the two settled, each in `docs/daemon.md`
 now:

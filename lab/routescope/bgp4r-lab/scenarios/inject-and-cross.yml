@@ -7,20 +7,31 @@
 # where the injected prefix reaches it with two. Transit and origination
 # are different jobs and this scenario asserts both at once.
 #
+# **The two readers are asserted in this one scenario and not a second
+# one**, which is the whole claim: one UPDATE out of rtr, read by FRR and
+# by GoBGP. A scenario of its own would inject again and prove two
+# UPDATEs, which is not the thing. g1's next hop is rtr's address on g1's
+# own link, 10.0.21.1, where r1 sees 10.0.20.1, because a next hop is per
+# session (RFC 4271 section 5.1.3) and rtr has no `next_hops` key: that
+# difference is what says the two are separate sessions off one
+# Loc-RIB.
+#
 # NOT RUN: the lab is deployed by bgp4r's Capture job, but this scenario
-# has not been run, so nothing here is a measurement. Every expectation is read out of the node files and the
+# has not been run, so nothing here is a measurement. Every expectation
+# is read out of the node files and the
 # RFC sections they cite.
 
 name: A prefix injected on command crosses to FRR and BIRD
 description: >-
-  The injectors start silent, so r2 and r3 hold nothing of ours to begin
-  with. inj1 announces 10.1.0.0/24 and it must reach r1, r2 and r3 with
-  AS_PATH 65000 65010 and rtr's own address as the next hop.
+  The injectors start silent, so r2, r3 and g1 hold nothing of ours to
+  begin with. inj1 announces 10.1.0.0/24 and it must reach r1, r2, r3 and
+  g1 with AS_PATH 65000 65010 and rtr's own address on each session as
+  the next hop.
 capture: [rtr]
 timeout: 180
 
 steps:
-  # Point 1: six sessions across three implementations. Read from each
+  # Point 1: seven sessions across four implementations. Read from each
   # end that can see it, which for the iBGP mesh is r1.
   - expect: { bgp_session: { node: rtr, peer: 10.0.10.1, state: established } }
     within: 60
@@ -36,6 +47,10 @@ steps:
   - expect: { bgp_session: { node: r1, peer: 10.1.13.2, state: established } }
     within: 60
     name: r1 to r3 is read from r1, since BIRD is the far end
+  - expect: { bgp_session: { node: rtr, peer: 10.0.21.2, state: established } }
+    within: 60
+    measure: g1_session
+    name: rtr to g1, the fourth implementation
 
   # The empty baseline, and it is what stops a later step passing on a
   # route a configuration created. An injector announces nothing on its
@@ -44,6 +59,7 @@ steps:
   - expect: { bgp_prefix: { node: rtr, prefix: 10.1.0.0/24, present: false } }
   - expect: { bgp_prefix: { node: r2, prefix: 10.1.0.0/24, present: false } }
   - expect: { bgp_prefix: { node: r3, prefix: 10.1.0.0/24, present: false } }
+  - expect: { bgp_prefix: { node: g1, prefix: 10.1.0.0/24, present: false } }
 
   - bgp: announce
     node: inj1
@@ -75,6 +91,16 @@ steps:
                             as_path: '65000 65010', next_hop: 10.0.20.1 } }
     within: 20
     measure: announce_to_bird
+
+  # The second reader of the same UPDATE. Same AS_PATH as r1 sees, since
+  # the export rules are not per peer, and a different next hop, since a
+  # next hop is. If these two ever disagree about the AS_PATH, one
+  # encoder produced two answers and that is worth the whole lab.
+  - expect: { bgp_prefix: { node: g1, prefix: 10.1.0.0/24,
+                            as_path: '65000 65010', next_hop: 10.0.21.1 } }
+    within: 15
+    measure: announce_to_gobgp
+    name: GoBGP reads the same decision FRR did, off its own session
 
   # The contrast: rtr's own prefix has one AS in its path at r1 where the
   # injected one has two, so the two jobs are visibly different.

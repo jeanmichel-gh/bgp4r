@@ -1,0 +1,107 @@
+# g1, a GoBGP in AS 65002: the fourth implementation on this lab and the
+# second reader of what rtr's export side sends.
+#
+# Read by the container as /etc/gobgp/gobgpd.toml, which is where
+# Dockerfile.gobgp's entrypoint looks. The schema is the one
+# lab/topologies/fault-matrix/gobgp.toml uses, which was verified against
+# GoBGP 3.23 and which 4.10 reads unchanged; that file records how that
+# was settled and what the earlier suspicion turned out to be. On a newer
+# image, if the daemon rejects a key its own log names it.
+#
+# **Why this node is here, and it is not for a fourth opinion of the
+# protocol.** docs/routescope-labs.md section 8 gives three reasons a lab
+# test is worth porting to a scenario, and the first is more than one
+# receiver reading the same octets. Until this node, rtr's export side
+# had exactly one reader on this topology, r1, and FRR's chain behind it.
+# Now one UPDATE out of rtr is read by two implementations at once, which
+# is the one thing no bgp4r test can say and the one thing a console can
+# show side by side.
+#
+# **It receives and does not originate.** Nothing here announces a
+# prefix, so whatever its RIB holds came from rtr. That is deliberate:
+# the topology's own comment explains that both injectors sit in AS 65010
+# so that MULTI_EXIT_DISC is the step that decides rtr's best path, and a
+# node originating the same prefix from a third AS would be compared at
+# an earlier step and the MED scenario would stop meaning anything.
+#
+# No policy, so the default applies and a route rtr sends lands in the
+# global RIB where `gobgp global rib` can read it. GoBGP needs no import
+# statement to accept one, unlike BIRD, whose own config in this folder
+# has to say so.
+#
+# **And no `[zebra]` block, so this node programs no kernel route, which
+# is not the same answer the other three nodes give.** GoBGP's own
+# `docs/sources/zebra.md` routes FIB programming through an external
+# zebra over ZAPI: the block is `[zebra]` then `[zebra.config]` with
+# `enabled = true`, a `url`, a `redistribute-route-type-list` and a
+# `version`. Without it GoBGP learns, selects, advertises and withdraws
+# in BGP and leaves the kernel alone, and `NET_ADMIN` on the container
+# would not change that, because nothing here tries to write a route.
+#
+# So read this node with `gobgp global rib`, which answers in full what
+# it learned from rtr and what a withdrawal took away. `ip route` in this
+# container answers nothing about BGP.
+#
+# **That is deliberate and the whole topology is asymmetric about it**,
+# which is worth knowing before comparing one node's routes against
+# another's:
+#
+#   rtr  bgp4rd, `fib: table: 100`, through iproute2, into table 100 and
+#        not the main table
+#   r1   FRR, `zebra=yes` in its daemons file, so zebra programs it
+#   r2   the same
+#   r3   BIRD, `protocol kernel` exporting `source = RTS_BGP`
+#   g1   nothing
+#
+# Adding a zebra here would mean a second daemon in this container, a
+# larger image and a FIB no scenario asserts, for a node that is on this
+# topology to read octets. See the README for how to watch a kernel
+# install on the nodes that do program one.
+#
+# **And no `local-address-list`, which is not tidiness: this node died
+# at start-up with it.** containerlab runs a node's `exec:` lines
+# **after** the container's entrypoint, so 10.0.21.2 does not exist when
+# gobgpd reads this file. With the key set, gobgpd binds its listener to
+# it there and then, fails with `listen tcp4 10.0.21.2:179: bind: cannot
+# assign requested address`, logs `Failed to apply initial
+# configuration` and exits, and containerlab then fails the whole deploy
+# with `namespace path not available`, cancelling r1, r2 and rtr's own
+# `exec:` with it. Measured in CI on 2026-11-03.
+#
+# Read in GoBGP's own source rather than guessed at.
+# `pkg/config/oc/default.go` sets the list to the IPv4 and IPv6 wildcard
+# when it is empty, and `pkg/server/server.go` is the loop that opens one
+# listener per entry, before any neighbour is dialled. So leaving the key
+# out is what makes the listener wildcard, which is what every other node
+# here does: `bgp4rd` defaults `listen_address` to 0.0.0.0, and neither
+# the FRR nor the BIRD config restricts a listener either.
+#
+# The neighbour's own `local-address` below stays, and it is the key that
+# actually pins the session's source address. It binds on the **dial**,
+# in `pkg/server/fsm.go`, which is after start-up and is retried every
+# `connect-retry`, so by the time it matters containerlab has added the
+# address. The injectors' `local_address` survives for the same reason.
+# **So the rule is the timing and not the key**: a specific address is
+# fine where a retry covers it and fatal where a start-up bind does not.
+
+[global.config]
+  as = 65002
+  router-id = "10.255.2.1"
+
+[[neighbors]]
+  [neighbors.config]
+    neighbor-address = "10.0.21.1"
+    peer-as = 65000
+    description = "rtr, the bgp4rd in AS 65000"
+  [neighbors.transport.config]
+    local-address = "10.0.21.2"
+  [neighbors.timers.config]
+    hold-time = 30
+    # rtr dials us as well, so keep coming back if a restart loses the
+    # race. The fault-matrix config records that 3.23.0 ignores both of
+    # these keys; they cost nothing and a later GoBGP may honour them.
+    connect-retry = 2
+    idle-hold-time-after-reset = 0
+  [[neighbors.afi-safis]]
+    [neighbors.afi-safis.config]
+      afi-safi-name = "ipv4-unicast"
