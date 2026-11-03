@@ -713,6 +713,38 @@ test/coverage_matrix.rb  what is exercised and what is not, per path
                          suite on a SAFI with no name, a lab test with no
                          place, a verdict with no file behind it and a
                          cited document that is not there
+test/features.rb         which test exercises which BGP feature, so a person
+                         can run every tier of one feature at once:
+                         `ruby test/run_feature.rb evpn`. **It is a second
+                         axis and replaces nothing**: the tree is laid out by
+                         source file, which is what somebody changing a class
+                         wants, and test/lab_groups.rb groups the lab tests by
+                         the binary they need, which is what CI wants. None of
+                         the three answers the other two's question.
+                         **Features are tags and they overlap**, where the lab
+                         groups partition, and that difference is forced: a CI
+                         matrix must not run a file twice, and about a quarter
+                         of the files here carry two tags or more, since
+                         `rd_test` is the Route Distinguisher of five families
+                         and `validation_test` reaches seven. Nothing in it
+                         says what a tier needs; that is derived from
+                         LabGroups, which already knows, so the two cannot
+                         drift. test/features_doc.rb generates
+                         docs/running-tests.md from it and
+                         test/unit/features_test.rb fails the suite when a
+                         test file carries no feature or the document is stale
+test/log_switch.rb       `BGP4R_LOG=debug` turns the library's log on for a
+                         test run, on standard error. **Nothing did this
+                         before**: `Log` starts with no logger, so every
+                         `Log.info` in the library was a silent no-op and a
+                         person who wanted to see what a functional test did
+                         had to edit the test. The three runners install it;
+                         test/log_on.rb is the `-r` hook for one file,
+                         `ruby -I. -rtest/log_on <file>`, and is a separate
+                         file because requiring log_switch.rb has to stay
+                         free of side effects. Two limits, both in its header:
+                         a test that silences the log itself wins, and an
+                         object handed its own logger writes there instead
 test/unit/               unit tests, mirroring bgp/
                          test/unit/capture/capture_fixtures.rb builds the BGP
                          messages, frames and pcap streams the four capture
@@ -890,6 +922,27 @@ test/functional/lab/     lab tests: loopback speaker test and one Compose test p
 
 Ruby 3.3, 3.4 and 4.0 are supported and tested in CI. Tests use test-unit. The load path is the repo root, so pass `-I.` when you run a single file.
 
+**`docs/running-tests.md` is the generated map of everything below**, by
+BGP feature rather than by file: which command runs what, what each tier
+costs, the logging flags and every environment variable. It is generated
+from `test/features.rb` by `test/features_doc.rb`, and
+`test/unit/features_test.rb` asserts the file on disk is what the
+generator produces, so it cannot be stale. Regenerate it in the same
+pull request that adds a test file:
+```
+ruby test/features_doc.rb > docs/running-tests.md
+```
+
+By feature, which is the axis a person exercising one wants. It runs the
+unit, functional and lab tiers of that feature, cheapest first:
+```
+ruby test/run_feature.rb                 # the features, by area
+ruby test/run_feature.rb evpn            # every tier of one feature
+ruby test/run_feature.rb evpn --unit     # the tier that needs no binary
+ruby test/run_feature.rb evpn --list     # the files, and what each needs
+ruby test/run_feature.rb --area families # every feature of one area
+```
+
 All unit tests:
 ```
 ruby test/run_unit.rb
@@ -900,6 +953,23 @@ One file:
 ```
 ruby -I. test/unit/path_attributes/as_path_test.rb
 ```
+
+**`BGP4R_LOG=debug` turns the library's log on for a test run**, on
+standard error, which nothing could do before: a person who wanted to
+see what a functional test did had to edit the test. `debug`, `info` or
+`warn`, and an unknown value warns rather than guessing. The three
+runners install it; one file needs the `-r` hook, since it goes through
+no runner:
+```
+BGP4R_LOG=debug ruby test/run_unit.rb 2> /tmp/bgp4r.log
+BGP4R_LOG=debug ruby test/run_feature.rb evpn
+BGP4R_LOG=debug ruby -I. -rtest/log_on test/functional/rib_router_test.rb
+```
+At `debug` that last one is about a thousand lines, each message decoded
+and in hex. Two limits, in `test/log_switch.rb`'s header: a test that
+silences the log itself wins, which `sim_test.rb` and
+`candidate_test.rb` do on purpose, and an object handed its own logger
+through `bgp/logging.rb` writes there instead.
 
 Functional test over loopback (port 3456):
 ```

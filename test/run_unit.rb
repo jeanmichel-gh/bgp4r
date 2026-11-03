@@ -26,9 +26,17 @@
 #   ruby test/run_unit.rb
 #
 # It sets the load path and working directory itself, so no -I. is needed.
+#
+# BGP4R_LOG=debug turns the library's log on, on standard error, so a
+# failure can be read. test/log_switch.rb has the two limits.
+#
+#   BGP4R_LOG=debug ruby test/run_unit.rb 2> /tmp/bgp4r.log
 
 root = File.expand_path('..', __dir__)
 $LOAD_PATH.unshift(root) unless $LOAD_PATH.include?(root)
 Dir.chdir(root)
+
+require './test/log_switch'
+LogSwitch.install
 
 Dir['test/unit/**/*test.rb'].sort.each { |f| require "./#{f}" }
