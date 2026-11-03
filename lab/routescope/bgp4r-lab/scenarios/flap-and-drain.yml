@@ -1,0 +1,45 @@
+# Point 7 of this lab's README: a session that flaps is counted, and the
+# speakers drain again afterwards. The BGP Peers pane shows the flap twice
+# over, as rtr's own count and as the one routescope saw between reads.
+#
+# session.flap stops the injector's session and starts it again. The
+# injector re-announces what it had announced when the session returns,
+# so 10.5.0.0/24 goes from r3 and comes back, and nothing in this
+# scenario re-announces it by hand.
+#
+# NOT RUN: this lab has not been deployed, so nothing here is a
+# measurement. Every expectation is read out of the node files and the
+# RFC sections they cite.
+name: A flap is counted and the lab drains again
+description: >-
+  inj1 announces 10.5.0.0/24, flaps its session to rtr once, and every
+  speaker must be done with its work afterwards, with the prefix back on
+  r3.
+capture: [rtr]
+timeout: 240
+
+steps:
+  - expect: { bgp_session: { node: rtr, peer: 10.0.10.1, state: established } }
+    within: 60
+  - bgp: announce
+    node: inj1
+    prefixes: [10.5.0.0/24]
+  - expect: { bgp_drained: {} }
+    within: 30
+  - expect: { bgp_prefix: { node: r3, prefix: 10.5.0.0/24, present: true } }
+
+  - mark: flapping inj1 to rtr
+  - bgp: session.flap
+    node: inj1
+    count: 1
+  - expect: { bgp_session: { node: rtr, peer: 10.0.10.1, state: established } }
+    within: 60
+    measure: back_up
+  - expect: { bgp_drained: { node: rtr } }
+    within: 30
+    name: rtr is done with its work again
+  - expect: { bgp_drained: {} }
+    within: 30
+    measure: drained
+  - expect: { bgp_prefix: { node: r3, prefix: 10.5.0.0/24, present: true } }
+    name: the prefix is back on r3

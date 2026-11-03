@@ -48,7 +48,9 @@ would be origination and the injectors would be decoration.
 
 ## What it proves
 
-The five points of `docs/routescope-labs.md` section 8, in its order.
+The five points of `docs/routescope-labs.md` section 8, in its order,
+then two for routescope's BGP panes (its `docs/bgp.md`): communities
+for the RIB pane, and a flap for the Peers pane.
 
 | | What | Where |
 |---|---|---|
@@ -57,6 +59,8 @@ The five points of `docs/routescope-labs.md` section 8, in its order.
 | 3 | `rtr`'s decision answering **why**, the loser naming `med` | `scenarios/med-decides.yml` |
 | 4 | One action flipping the winner | `scenarios/flip-the-winner.yml` |
 | 5 | A withdraw removing it from BIRD | `scenarios/withdraw-reaches-bird.yml` |
+| 6 | A standard, an extended and a large community reaching BIRD intact | `scenarios/communities-cross.yml` |
+| 7 | A flap counted, and every speaker done with its work afterwards | `scenarios/flap-and-drain.yml` |
 
 Point 3 is the one no other node here can answer about itself. `show bgp`
 and `birdc show route` give the winner; `rtr` gives the RFC 4271 section
@@ -113,9 +117,11 @@ routescope's driver uses and is what is there.
 
 ## The scenarios
 
-Four files, one per point 2 to 5, in the language
+Six files, one per point 2 to 7, in the language
 `docs/routescope-labs.md` section 9.3 designs: a `bgp:` step key with
-its own action list, and the four `bgp_` conditions.
+its own action list, and the `bgp_` conditions. Points 6 and 7 use the
+two that routescope's BGP panes work added, `bgp_drained` and the
+`community` key of `bgp_prefix`.
 
 | Scenario | Point | Actions it uses |
 |---|---|---|
@@ -123,6 +129,8 @@ its own action list, and the four `bgp_` conditions.
 | `med-decides.yml` | 3 | `announce` |
 | `flip-the-winner.yml` | 4 | `announce`, `attribute` |
 | `withdraw-reaches-bird.yml` | 5 | `announce`, `withdraw` |
+| `communities-cross.yml` | 6 | `announce` |
+| `flap-and-drain.yml` | 7 | `announce`, `session.flap` |
 
 **Nothing in bgp4r reads them**, which is also true of
 `lab/topologies/add-path/scenarios/`. They are held to the vocabulary and
@@ -139,7 +147,7 @@ waiting on is being run, which needs a Docker daemon.
 
 **The topology has not been deployed.** No Docker daemon was reachable
 where it was written, so nothing in this folder is a measurement: the
-addresses, the sessions and the five points above are read out of these
+addresses, the sessions and the seven points above are read out of these
 files and out of the RFC sections they cite. routescope's own
 `examples/containerlab/bgp4r-inject` records the same of itself, and so
 does this repository's Dockerfile of its capture stage.

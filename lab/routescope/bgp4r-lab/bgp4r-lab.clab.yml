@@ -67,7 +67,7 @@
 #
 # **This topology has not been deployed.** No Docker daemon was reachable
 # where it was written, so nothing here is a measurement: the addresses,
-# the sessions and the five points its README lists are read out of these
+# the sessions and the seven points its README lists are read out of these
 # files and not out of a run. routescope's own
 # `examples/containerlab/bgp4r-inject/bgp4r-inject.clab.yml` records the
 # same of itself, and so does this repository's Dockerfile of its capture

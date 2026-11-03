@@ -63,7 +63,10 @@ class LabBgp4rLabTopologyTest < Test::Unit::TestCase
   ROUTER = 'rtr/bgp4rd.yml'
 
   # The scenario language, **copied** from routescope `7eabde1` on its
-  # `claude/bgp4r-driver` branch, read on 2026-11-02:
+  # `claude/bgp4r-driver` branch, read on 2026-11-02, and then from its
+  # `claude/bgp-panes` branch on 2026-11-03, which added
+  # `extended_communities` and `large_communities` to the body keys,
+  # `bgp_drained` and the `community` key of `bgp_prefix`:
   # `Scenario::BGP_ACTIONS`, `Scenario::BGP_KEYS`, `Scenario::CONDITIONS`
   # and `Scenario::COMMON`. docs/routescope-labs.md section 12 is why
   # this is a copy: every fact in this repository about that one is a read
@@ -74,13 +77,15 @@ class LabBgp4rLabTopologyTest < Test::Unit::TestCase
                    peer.start peer.stop refresh replay route.originate
                    route.withdraw session.flap session.start session.stop
                    withdraw].freeze
-  BGP_KEYS = %w[afi as_path case code communities count data generate hex interval
+  BGP_KEYS = %w[afi as_path case code communities count data extended_communities
+                generate hex interval large_communities
                 local_pref med next_hop node origin path_id peer prefix prefixes
                 safi subcode subtype].freeze
   CONDITIONS = { 'bgp_session' => %w[node peer state],
                  'bgp_routes' => %w[node count],
-                 'bgp_prefix' => %w[node prefix present next_hop med as_path local_pref],
-                 'bgp_best' => %w[node prefix reason] }.freeze
+                 'bgp_prefix' => %w[node prefix present next_hop med as_path local_pref community],
+                 'bgp_best' => %w[node prefix reason],
+                 'bgp_drained' => %w[node] }.freeze
   COMMON = %w[name continue].freeze
 
   def read(rel) ; File.read(File.join(DIR, rel), :encoding => 'UTF-8') ; end
@@ -352,8 +357,8 @@ class LabBgp4rLabTopologyTest < Test::Unit::TestCase
   # ---------------------------------------------------------------- the scenarios
 
   def test_every_scenario_loads_and_has_a_name_steps_and_a_timeout
-    assert_equal %w[flip-the-winner.yml inject-and-cross.yml med-decides.yml
-                    withdraw-reaches-bird.yml], scenario_files
+    assert_equal %w[communities-cross.yml flap-and-drain.yml flip-the-winner.yml
+                    inject-and-cross.yml med-decides.yml withdraw-reaches-bird.yml], scenario_files
     scenario_files.each do |f|
       s = load_yaml("scenarios/#{f}")
       assert_equal [], s.keys - %w[name description capture timeout steps],
@@ -396,6 +401,8 @@ class LabBgp4rLabTopologyTest < Test::Unit::TestCase
           allowed = CONDITIONS[name]
           assert_not_nil allowed, "#{where}: unknown condition #{name}"
           assert_equal [], params.keys - allowed, "#{where}: #{name} does not take those keys"
+          # bgp_drained with no node asks every speaker, so it names none.
+          next if name == 'bgp_drained' && !params.key?('node')
           assert_include NODES.keys, params['node'].to_s, "#{where}: no node #{params['node']}"
         end
       end
@@ -424,8 +431,8 @@ class LabBgp4rLabTopologyTest < Test::Unit::TestCase
     rows = readme.scan(/^\| `(\S+\.yml)` \| (\d) \| (.+?) \|$/)
     assert_equal scenario_files, rows.collect { |r| r[0] }.sort,
                  'the README scenario table and the folder disagree'
-    assert_equal %w[2 3 4 5], rows.collect { |r| r[1] }.sort,
-                 "the four rows must cover the README's points 2 to 5, one each"
+    assert_equal %w[2 3 4 5 6 7], rows.collect { |r| r[1] }.sort,
+                 "the six rows must cover the README's points 2 to 7, one each"
     rows.each do |file, _point, actions|
       listed = actions.scan(/`([\w.]+)`/).flatten.sort
       used = load_yaml("scenarios/#{file}")['steps']

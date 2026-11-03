@@ -33,7 +33,7 @@ steps:
     measure: r1_session
   - expect: { bgp_session: { node: r1, peer: 10.1.12.2, state: established } }
     within: 60
-  - expect: { bgp_session: { node: r1, peer: 10.1.23.2, state: established } }
+  - expect: { bgp_session: { node: r1, peer: 10.1.13.2, state: established } }
     within: 60
     name: r1 to r3 is read from r1, since BIRD is the far end
 

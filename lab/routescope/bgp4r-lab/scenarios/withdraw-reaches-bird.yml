@@ -26,7 +26,7 @@ timeout: 240
 steps:
   - expect: { bgp_session: { node: rtr, peer: 10.0.10.1, state: established } }
     within: 60
-  - expect: { bgp_session: { node: r1, peer: 10.1.23.2, state: established } }
+  - expect: { bgp_session: { node: r1, peer: 10.1.13.2, state: established } }
     within: 60
     name: and the BIRD session, read from r1
 

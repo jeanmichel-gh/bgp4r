@@ -1,0 +1,53 @@
+# Point 6 of this lab's README: a route carrying all three kinds of
+# community crosses rtr, FRR and BIRD with each kind intact. The BGP RIB
+# pane shows them per router and filters on any of them; this is the
+# scenario that gives it something to show.
+#
+# Every community is optional transitive (RFC 1997 section 2, RFC 4360
+# section 2, RFC 8092 section 2), so each router passes it on unless a
+# policy strips it, and none here has one. An extended community is
+# written the way routescope compares them across routers,
+# KIND:VALUE..., which is bgp4r's own spelling: FRR's RT:65010:4 and
+# BIRD's (rt, 65010, 4) are both route_target:65010:4 there.
+#
+# bgp_drained comes first in each check: BGP does not converge, so the
+# question before asserting where a route is, is whether every speaker
+# has sent what it had to and processed what it received.
+#
+# NOT RUN: this lab has not been deployed, so nothing here is a
+# measurement. Every expectation is read out of the node files and the
+# RFC sections they cite.
+name: Three kinds of community cross FRR and BIRD
+description: >-
+  inj1 announces 10.4.0.0/24 with a standard, an extended and a large
+  community. Each must reach rtr, r1, r2 and r3 unchanged.
+capture: [rtr]
+timeout: 240
+
+steps:
+  - expect: { bgp_session: { node: rtr, peer: 10.0.10.1, state: established } }
+    within: 60
+  - expect: { bgp_session: { node: r1, peer: 10.1.13.2, state: established } }
+    within: 60
+  - expect: { bgp_prefix: { node: r3, prefix: 10.4.0.0/24, present: false } }
+    name: nothing injected yet
+
+  - bgp: announce
+    node: inj1
+    prefixes: [10.4.0.0/24]
+    communities: ['65010:4']
+    extended_communities: ['route_target:65010:4']
+    large_communities: ['65010:4:4']
+
+  - expect: { bgp_drained: {} }
+    within: 30
+    measure: drained
+    name: every speaker has sent and processed what it had to
+
+  - expect: { bgp_prefix: { node: rtr, prefix: 10.4.0.0/24, community: '65010:4' } }
+  - expect: { bgp_prefix: { node: r1, prefix: 10.4.0.0/24, community: 'route_target:65010:4' } }
+  - expect: { bgp_prefix: { node: r2, prefix: 10.4.0.0/24, community: '65010:4:4' } }
+  - expect: { bgp_prefix: { node: r3, prefix: 10.4.0.0/24, community: '65010:4' } }
+  - expect: { bgp_prefix: { node: r3, prefix: 10.4.0.0/24, community: 'route_target:65010:4' } }
+  - expect: { bgp_prefix: { node: r3, prefix: 10.4.0.0/24, community: '65010:4:4' } }
+    name: and BIRD, the far end, holds all three
