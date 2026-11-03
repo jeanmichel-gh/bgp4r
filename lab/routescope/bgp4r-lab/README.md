@@ -89,7 +89,9 @@ would be origination and the injectors would be decoration.
 
 ## What it proves
 
-The five points of `docs/routescope-labs.md` section 8, in its order.
+The five points of `docs/routescope-labs.md` section 8, in its order,
+then two for routescope's BGP panes (its `docs/bgp.md`): communities
+for the RIB pane, and a flap for the Peers pane.
 
 | | What | Where |
 |---|---|---|
@@ -99,6 +101,8 @@ The five points of `docs/routescope-labs.md` section 8, in its order.
 | 3 | `rtr`'s decision answering **why**, the loser naming `med` | `scenarios/med-decides.yml` |
 | 4 | One action flipping the winner | `scenarios/flip-the-winner.yml` |
 | 5 | A withdraw removing it from BIRD | `scenarios/withdraw-reaches-bird.yml` |
+| 6 | A standard, an extended and a large community reaching BIRD intact | `scenarios/communities-cross.yml` |
+| 7 | A flap counted, and every speaker done with its work afterwards | `scenarios/flap-and-drain.yml` |
 
 Point 3 is the one no other node here can answer about itself. `show bgp`
 and `birdc show route` give the winner; `rtr` gives the RFC 4271 section
@@ -112,10 +116,10 @@ Four images.
 
 ```
 docker build --target lab-node -t bgp4r-lab:latest .
-docker build -f lab/topologies/bgp4r-lab/Dockerfile.bird \
-             -t bgp4r-bird:latest lab/topologies/bgp4r-lab
-docker build -f lab/topologies/bgp4r-lab/Dockerfile.gobgp \
-             -t bgp4r-gobgp:latest lab/topologies/bgp4r-lab
+docker build -f lab/routescope/bgp4r-lab/Dockerfile.bird \
+             -t bgp4r-bird:latest lab/routescope/bgp4r-lab
+docker build -f lab/routescope/bgp4r-lab/Dockerfile.gobgp \
+             -t bgp4r-gobgp:latest lab/routescope/bgp4r-lab
 docker pull quay.io/frrouting/frr:10.2.1
 ```
 
@@ -156,9 +160,9 @@ test asserts that rather than asking you to keep them in step.
 ## Run it
 
 ```
-sudo containerlab deploy -t lab/topologies/bgp4r-lab/bgp4r-lab.clab.yml
-LAB=$PWD/lab/topologies/bgp4r-lab docker compose -f ~/routescope/compose.yml up -d
-sudo containerlab destroy -t lab/topologies/bgp4r-lab/bgp4r-lab.clab.yml
+sudo containerlab deploy -t lab/routescope/bgp4r-lab/bgp4r-lab.clab.yml
+LAB=$PWD/lab/routescope/bgp4r-lab docker compose -f ~/routescope/compose.yml up -d
+sudo containerlab destroy -t lab/routescope/bgp4r-lab/bgp4r-lab.clab.yml
 ```
 
 By hand, without routescope:
@@ -187,6 +191,19 @@ loopback for the same reason.
 
 `curl` is not in the `lab-node` image either; `ruby -rnet/http` is what
 routescope's driver uses and is what is there.
+
+`capture.sh` prints what every router answers to the commands
+routescope's BGP drivers send, for routescope's unit test fixtures. It
+changes the running lab first (two paths, all three community kinds,
+soft reconfiguration on r1, a prefix originated by both r2 and r3, then
+a flap), so run it on a lab you can redeploy. CI runs it on every push
+that changes this folder, in `.github/workflows/capture.yml`, which is
+also the one place this lab is deployed. It is a copy of ospfv2's own
+capture job, adapted, so neither repository depends on the other.
+
+```
+bash lab/routescope/bgp4r-lab/capture.sh > capture.log
+```
 
 ## What each node does with the kernel, which is three answers and a fourth that is none
 
@@ -226,14 +243,20 @@ docker exec clab-bgp4r-lab-rtr ip -4 route show table 100
 docker exec clab-bgp4r-lab-r3 ip -4 route show
 ```
 
-None of this is measured. The topology has not been deployed, so the
-table above is read out of the four config files and not out of a run.
+**None of this is measured, even though the lab is deployed now.** CI
+deploys it and runs `capture.sh`, and `capture.sh` reads BGP tables: its
+one `ip route` is a static route configured into `r2`'s FRR, not a
+kernel table read anywhere. So the table above is read out of the four
+config files, and the three `ip` commands here are what a person runs
+to check it.
 
 ## The scenarios
 
-Four files, one per point 2 to 5, in the language
+Six files, one per point 2 to 7, in the language
 `docs/routescope-labs.md` section 9.3 designs: a `bgp:` step key with
-its own action list, and the four `bgp_` conditions.
+its own action list, and the `bgp_` conditions. Points 6 and 7 use the
+two that routescope's BGP panes work added, `bgp_drained` and the
+`community` key of `bgp_prefix`.
 
 | Scenario | Point | Actions it uses |
 |---|---|---|
@@ -241,6 +264,8 @@ its own action list, and the four `bgp_` conditions.
 | `med-decides.yml` | 3 | `announce` |
 | `flip-the-winner.yml` | 4 | `announce`, `attribute` |
 | `withdraw-reaches-bird.yml` | 5 | `announce`, `withdraw` |
+| `communities-cross.yml` | 6 | `announce` |
+| `flap-and-drain.yml` | 7 | `announce`, `session.flap` |
 
 Point 2b is in that first file and not a fifth scenario, which is why
 the table has four rows and the points column one digit: a scenario of
@@ -255,42 +280,44 @@ no Docker.
 **Unlike add-path's, none of them is waiting on bgp4r.** That folder's
 table records two of its three scenarios as needing the injector, which
 did not exist when it was written; `bgp4r-sim` is built now, so every
-action these four use is one the injector answers today. What they are
-waiting on is being run, which needs a Docker daemon.
+action these six use is one the injector answers today. What they are
+waiting on is being run, by routescope's `bgp4r-lab` job.
 
-## What has not been run, and what could not be verified
+## What has been run, and what has not
 
-**The topology has not been deployed.** No Docker daemon was reachable
-where it was written, so nothing in this folder is a measurement: the
-addresses, the sessions and the five points above are read out of these
-files and out of the RFC sections they cite. routescope's own
-`examples/containerlab/bgp4r-inject` records the same of itself, and so
-does this repository's Dockerfile of its capture stage.
+**The topology is deployed by CI**, in `.github/workflows/capture.yml`,
+first on 2026-11-03, against FRR 10.2.1 and BIRD 2.0.12. That run is
+what `capture.sh` prints, and it measured:
 
-Specifically unverified, each worth knowing before a first deploy:
+* both images build, `exec: ip addr add` runs, and all six sessions come
+  up across the three implementations;
+* point 2's chain: 10.2.0.0/24 from inj1 reaches r1, r2 and r3 with
+  AS_PATH 65000 65010 and rtr as the next hop;
+* point 3: rtr holds two paths to 10.1.0.0/24 and `show.rib` says MED
+  decided, for inj2's MED 50 over inj1's 100;
+* point 6: all three kinds of community reach BIRD intact;
+* point 7: a flap is counted by FRR (`connectionsDropped`), by bgp4rd
+  and by the injector.
 
-* **Neither new image has been built.** `lab-node` and
-  `bgp4r-bird:latest` are both Dockerfiles nothing has run.
-* **Whether `exec: ip addr add` runs as root in a containerlab node.**
-  containerlab runs these through `docker exec` and the image's own user
-  is what decides; `lab-node` is root so that it can, but that is a
-  reading of the Dockerfile rather than a measurement.
-* **The three router configs parse, which is less than being accepted
-  by the pinned versions.** Measured on 2026-11-02 with the binaries
-  this sandbox turned out to have: `bird -p -c r3/bird.conf` is clean
-  under BIRD **2.14**, and `bgpd -C -f` accepts every BGP line of both
-  FRR configs under bgpd **8.4.4**. The only lines it rejects are `no
-  ipv6 forwarding` and `service integrated-vtysh-config`, which are
-  zebra and vtysh lines a standalone `bgpd` does not own and which the
-  bound `daemons` file routes to zebra and staticd. **This lab pins FRR
-  10.2.1**, so an older bgpd accepting these commands says they are not
-  10.x-only and says nothing about 10.2.1 itself, and a parse is not a
-  session. Their shapes are ospfv2's `examples/bgp-lab`, read at ospfv2
-  `2dfc03a`, and each file says so; what is bgp4r's own in them is the
-  eBGP session to `rtr`, the timers matching `hold_time: 30`, the
-  deliberate absence of `next-hop-self` on `r1` and the static routes
-  that absence needs on `r2` and `r3`. None of those four is checked by
-  a parse.
+**`g1` came after that run, so nothing above covers it.** The GoBGP
+node and its seventh session were added once that measurement was
+taken, which is why the list says six sessions and three
+implementations. So `bgp4r-gobgp:latest` has never been built, `g1` has
+never come up, and nothing has read its RIB. The next capture run is
+what settles whether the wrapper image is needed at all, which
+`Dockerfile.gobgp` names the one command for.
+
+**It found one bug, which a parse could not.** On a `direct` iBGP
+session BIRD wants the next hop on one of its own links. 10.0.20.1 is
+not, so BIRD logged "Invalid NEXT_HOP attribute - address 10.0.20.1 not
+directly reachable" and dropped every route from rtr while r1 and r2
+held them. `r3/bird.conf` now has `gateway recursive`, which resolves
+the next hop through the static route it already had for this.
+
+**The scenarios have not been run.** Nothing in this repository runs
+them; routescope does, in a job of its own, which has not run either.
+What is left unverified:
+
 * **Whether `rtr` can write routing table 100.** `fib:` needs
   CAP_NET_ADMIN as well as `ip`. Where it cannot, bgp4r says so rather
   than dying: the reason lands under `fib` in the state file, with a row

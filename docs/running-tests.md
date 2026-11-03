@@ -19,7 +19,7 @@ amounts. Measured 2026-11-03:
 
 | Tier | What it needs | Files | Time | Command |
 |---|---|---:|---|---|
-| unit | Ruby | 134 | 21s | `ruby test/run_unit.rb` |
+| unit | Ruby | 135 | 21s | `ruby test/run_unit.rb` |
 | functional | a loopback socket | 12 | 18s | one file at a time, below |
 | lab | gobgpd, FRR, Docker or root | 26 | 10s to 400s per group | `ruby test/run_lab.rb GROUP` |
 
@@ -121,7 +121,7 @@ What a receiver makes of something wrong.
 | Feature | unit | func | lab | What |
 |---|---:|---:|---:|---|
 | `validation` | 1 | 0 | 3 | Receive-side error handling, and the matrix of what three routers do |
-| `fault` | 1 | 0 | 0 | Building the UPDATEs no RFC allows, and the catalog of them |
+| `fault` | 2 | 0 | 0 | Building the UPDATEs no RFC allows, and the catalog of them |
 
 ### programs
 
@@ -144,7 +144,7 @@ Guards over the library and the suite, not over BGP.
 
 | Feature | unit | func | lab | What |
 |---|---:|---:|---:|---|
-| `contracts` | 7 | 0 | 0 | The object contract, the hash round trips and the suite-wide guards |
+| `contracts` | 8 | 0 | 0 | The object contract, the hash round trips and the suite-wide guards |
 
 ## What each feature covers
 
@@ -220,7 +220,7 @@ ruby test/run_feature.rb communities
 The object contract, the hash round trips and the suite-wide guards.
 
 - Read first: `docs/building-objects.md`
-- 7 unit files
+- 8 unit files
 
 ```
 ruby test/run_feature.rb contracts
@@ -283,7 +283,7 @@ Building the UPDATEs no RFC allows, and the catalog of them.
 
 - RFC 7606
 - Read first: `docs/protocol-testing.md`
-- 1 unit file
+- 2 unit files
 
 ```
 ruby test/run_feature.rb fault
@@ -621,7 +621,7 @@ which is `debug`, `info` or `warn` and defaults to `info`. There is
 no `--log-level` flag.
 
 ```
-ruby -I. exe/bgp4rd -f lab/topologies/bgp4r-lab/rtr/bgp4rd.yml \
+ruby -I. exe/bgp4rd -f lab/routescope/bgp4r-lab/rtr/bgp4rd.yml \
   -s /tmp/d.sock -l - -d
 ruby -I. exe/bgp4r-sim examples/sim.yml --api 127.0.0.1:8080 -l - -d
 ruby -I. exe/bgp4r routegen --peer 10.0.0.2 --peer-as 65002 -l - -d
@@ -812,5 +812,5 @@ test file has to be tagged before the suite is green again, which is
 the same arrangement `test/unit/lab_groups_test.rb` has with the CI
 matrix.
 
-172 of 172 test files are tagged. The
+173 of 173 test files are tagged. The
 remainder, if any, is what the guard names.

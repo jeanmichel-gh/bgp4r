@@ -357,15 +357,37 @@ class TestBgpRibView < Test::Unit::TestCase
     assert_equal(1, rows.size)
     assert_equal({ :prefix => P, :from => '10.0.0.2', :next_hop => '10.0.0.2',
                    :as_path => '65002', :origin => :igp, :local_pref => nil,
-                   :med => 10, :path_id => nil, :local => false, :paths => 2,
-                   :best => true, :decided_by => :med }, rows.first)
+                   :med => 10, :path_id => nil, :local => false,
+                   :communities => [], :extended_communities => [], :large_communities => [],
+                   :paths => 2, :best => true, :decided_by => :med }, rows.first)
+  end
+
+  # The three community attributes, on every row of every view that
+  # carries a path. A route with none answers three empty lists, which the
+  # two tests above pin; this is the route that has all three.
+  def test_every_path_row_carries_the_three_community_lists
+    pa = BGP::Path_attribute.new(BGP::Origin.new(0), BGP::Next_hop.new('10.0.0.2'),
+                                 BGP::As_path.new(65002),
+                                 BGP::Communities.new('65000:1 no_export'),
+                                 BGP::Extended_communities.new(BGP::Route_target.new(65000, 7)),
+                                 BGP::Large_communities.new('65000:1:1'))
+    @rib.announce(BGP::Rib::Route.new(P, pa, E1))
+    want = { :communities => ['65000:1', '65535:65281'],
+             :extended_communities => [{ :route_target => [65000, 7] }],
+             :large_communities => ['65000:1:1'] }
+    [@rib.view.routes.first, @rib.view.rib.first[:paths].first,
+     @rib.view.adj_in('10.0.0.2').first].each do |row|
+      assert_equal(want, row.slice(*want.keys))
+    end
   end
 
   def test_a_rib_path_carries_the_decision_as_well
     rib = loss_table(:med)
     assert_equal({ :from => '10.0.0.9', :next_hop => '10.0.0.9', :as_path => '65002',
                    :origin => :igp, :local_pref => nil, :med => 20, :path_id => nil,
-                   :local => false, :best => false, :usable => true, :lost_at => :med,
+                   :local => false,
+                   :communities => [], :extended_communities => [], :large_communities => [],
+                   :best => false, :usable => true, :lost_at => :med,
                    :reason => 'higher MED from the same neighbouring AS' },
                  paths_of(rib).last)
   end
@@ -465,7 +487,7 @@ class TestBgpRibView < Test::Unit::TestCase
     @rib.announce(route(peer('10.9.9.9', 65009, '9.9.9.9'), P, :as_path => [65009]))
     row = advertise_to_a_peer
     assert_equal(%i[address remote_as received sent], cols & row.keys)
-    assert_equal(%i[state description uptime], cols - row.keys,
+    assert_equal(%i[state description uptime flaps inq outq], cols - row.keys,
                  'what a session owns and a Table does not')
     assert_equal(%i[router_id type best], row.keys - cols)
   end

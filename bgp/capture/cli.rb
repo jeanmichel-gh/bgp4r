@@ -81,6 +81,15 @@ module BGP
       # `lab` answers a message naming this path rather than raising.
       TOPOLOGIES = File.expand_path('../../lab/topologies', __dir__)
 
+      # The labs written for the routescope console, `lab/routescope/`,
+      # beside the Compose topologies bgp4r's own suite drives. Kept apart
+      # so a reader can tell which folder is for which, and searched by
+      # `lab new` all the same, so `bgp4r lab new DIR bgp4r-lab` works
+      # whichever folder a lab lives in. A name in both is taken from the
+      # first, which is why the order is fixed here.
+      ROUTESCOPE = File.expand_path('../../lab/routescope', __dir__)
+      ROOTS = [TOPOLOGIES, ROUTESCOPE].freeze
+
       # `two-speakers` because of the topologies in the repository when
       # this was written it is the only one that needs nothing but
       # bgp4r: `add-path` and `fault-matrix` each want a GoBGP image and
@@ -162,9 +171,20 @@ See docs/daemon.md.
       # repository has never had, and a hard coded table cannot answer
       # that. It also gives the missing-folder case somewhere to be
       # tested from.
-      def self.topologies(root = TOPOLOGIES)
-        return [] unless File.directory?(root)
-        Dir.children(root).select { |n| File.directory?(File.join(root, n)) }.sort
+      #
+      # `root` is one folder or a list of them; the default is both of
+      # ROOTS.
+      def self.topologies(root = ROOTS)
+        Array(root).flat_map do |r|
+          next [] unless File.directory?(r)
+          Dir.children(r).select { |n| File.directory?(File.join(r, n)) }
+        end.uniq.sort
+      end
+
+      # The folder a topology name is in: the first of the roots that has
+      # it, or nil.
+      def self.topology_dir(name, root = ROOTS)
+        Array(root).map { |r| File.join(r, name) }.find { |d| File.directory?(d) }
       end
 
       # Copies a topology folder, leaving out what its own `.gitignore`
@@ -296,7 +316,7 @@ See docs/daemon.md.
       # none of them, so the containerlab topology that document designs
       # is `bgp4r lab new DIR bgp4r-lab` and arrives with no change
       # here.
-      def lab(argv, root = TOPOLOGIES)
+      def lab(argv, root = ROOTS)
         require 'optparse'
         return lab_help(@err, root, 1) unless argv.first == 'new'
         argv = argv[1..-1]
@@ -311,7 +331,7 @@ See docs/daemon.md.
         return lab_help(@err, root, 1) unless dir
         names = CLI.topologies(root)
         if names.empty?
-          @err.puts "no lab topologies here: #{root} is not in this install"
+          @err.puts "no lab topologies here: #{Array(root).join(' and ')} not in this install"
           return 1
         end
         name = argv.shift || DEFAULT_TOPOLOGY
@@ -319,7 +339,7 @@ See docs/daemon.md.
           @err.puts "no topology #{name}. Found here: #{names.join(', ')}"
           return 1
         end
-        src = File.join(root, name)
+        src = CLI.topology_dir(name, root)
         dir = File.expand_path(dir)
         if File.exist?(dir) && !(File.directory?(dir) && Dir.empty?(dir))
           @err.puts "#{dir} exists and is not empty"
@@ -335,12 +355,12 @@ See docs/daemon.md.
           return 1
         end
         @out.puts "lab created in #{dir}"
-        @out.puts lab_git_init(dir, name) if git
+        @out.puts lab_git_init(dir, "#{File.basename(File.dirname(src))}/#{name}") if git
         @out.print lab_start(name, src, dir)
         0
       end
 
-      def lab_help(io, root = TOPOLOGIES, status = 0)
+      def lab_help(io, root = ROOTS, status = 0)
         names = CLI.topologies(root)
         found = names.empty? ? '  (none)' : names.collect { |n| "  #{n}" }.join("\n")
         io.print <<~TEXT
@@ -350,7 +370,7 @@ See docs/daemon.md.
             NAME       the topology to copy (default: #{DEFAULT_TOPOLOGY})
             --no-git   copy it and do not make it a git repository
 
-          Topologies found in #{root}:
+          Topologies found in #{Array(root).join(' and ')}:
           #{found}
 
           See docs/routescope-labs.md.
@@ -372,7 +392,7 @@ See docs/daemon.md.
              system('git', '-C', dir, 'add', '-A', :out => File::NULL, :err => File::NULL)
         return 'git: not available, the lab folder has no history' unless ok
         if system('git', '-C', dir, 'commit', '-q', '-m',
-                  "Lab created from bgp4r lab/topologies/#{name}",
+                  "Lab created from bgp4r lab/#{name}",
                   :out => File::NULL, :err => File::NULL)
           'git: repository created with a first commit'
         else

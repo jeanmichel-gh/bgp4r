@@ -110,7 +110,19 @@ class BGP_Daemon_Views_Test < Test::Unit::TestCase
       assert_equal(0, r[:best])
       assert_nil(r[:uptime])
       assert_equal(0, r[:flaps])
+      # No Neighbor, so no queues: nil, which is an answer that says it
+      # cannot say, where 0 would claim the session had nothing to do.
+      assert_nil(r[:inq])
+      assert_nil(r[:outq])
     end
+  end
+
+  # held is router mode's, and a speaker with no router has nothing to
+  # hold, so it is nil there and a count with one.
+  def test_held_is_a_count_in_router_mode_and_nil_without_it
+    with = views(loaded(1, 'export' => { 'next_hops' => { 1 => '10.0.0.1' } }))
+    assert_equal(0, with.peers.first[:held])
+    assert_nil(views(loaded).peers.first[:held])
   end
 
   def test_sent_is_there_in_router_mode_and_absent_without_it

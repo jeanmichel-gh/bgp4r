@@ -98,10 +98,10 @@ module BGP
       # documentation.
       ACTIONS = {
         'announce'      => %w[peer prefixes generate next_hop as_path med
-                              local_pref communities path_id origin],
+                              local_pref communities extended_communities large_communities path_id origin],
         'withdraw'      => %w[peer prefixes generate path_id],
         'attribute'     => %w[peer prefixes next_hop as_path med
-                              local_pref communities path_id origin],
+                              local_pref communities extended_communities large_communities path_id origin],
         'fault'         => %w[peer case prefixes next_hop],
         'replay'        => %w[peer hex],
         'notification'  => %w[peer code subcode data],

@@ -1,0 +1,39 @@
+name: Capture
+
+# Real router output for routescope's unit test fixtures: bgp4r-lab
+# deployed with containerlab, then lab/routescope/bgp4r-lab/capture.sh
+# prints what FRR 10.2.1, BIRD, bgp4rd and bgp4r-sim answer to
+# routescope's BGP driver commands, to the job log. Runs on demand, and on
+# a push that changes the lab or this file.
+#
+# It is also the one place bgp4r-lab is deployed at all, so a lab that
+# does not come up fails here first.
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/capture.yml
+      - lab/routescope/**
+      - Dockerfile
+
+jobs:
+  bgp4r-lab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: containerlab and images
+        run: |
+          bash -c "$(curl -sL https://get.containerlab.dev)"
+          docker pull -q quay.io/frrouting/frr:10.2.1
+          docker build -q --target lab-node -t bgp4r-lab:latest .
+          docker build -q -f lab/routescope/bgp4r-lab/Dockerfile.bird -t bgp4r-bird:latest lab/routescope/bgp4r-lab
+          docker build -q -f lab/routescope/bgp4r-lab/Dockerfile.gobgp -t bgp4r-gobgp:latest lab/routescope/bgp4r-lab
+      - name: bgp4r-lab up
+        run: sudo containerlab deploy -t lab/routescope/bgp4r-lab/bgp4r-lab.clab.yml
+      - name: capture
+        run: bash lab/routescope/bgp4r-lab/capture.sh
+      - name: logs on failure
+        if: failure()
+        run: |
+          for n in inj1 inj2 rtr r1 r2 r3 g1; do echo "--- $n"; docker logs --tail 60 clab-bgp4r-lab-$n 2>&1 || true; done
