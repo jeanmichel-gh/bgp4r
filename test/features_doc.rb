@@ -176,9 +176,10 @@ module FeaturesDoc
       n = Features.files(name, :functional).size
       lab = Features.files(name, :lab)
       out << "### `#{name}`\n\n#{f[:about]}.\n\n"
-      out << "- RFC: #{f[:rfc]}\n" if f[:rfc]
+      out << "- #{f[:rfc]}\n" if f[:rfc]
       out << "- Read first: `#{f[:doc]}`\n" if f[:doc]
-      out << "- #{u} unit file(s)" + (n.zero? ? "\n" : ", #{n} functional\n")
+      out << "- #{u} unit #{u == 1 ? 'file' : 'files'}" +
+             (n.zero? ? "\n" : ", #{n} functional\n")
       unless lab.empty?
         out << "- lab:\n"
         lab.each do |p|

@@ -155,8 +155,8 @@ what each needs. These are the parts that are not in that list.
 
 Several paths to one prefix, and the Path Identifier.
 
-- RFC: RFC 7911
-- 2 unit file(s), 1 functional
+- RFC 7911
+- 2 unit files, 1 functional
 - lab:
   - `add_path_gobgp_test`, needs gobgpd
   - `add_path_topology_test`
@@ -169,8 +169,8 @@ ruby test/run_feature.rb add-path
 
 ATTR_SET, a path attribute set inside a path attribute.
 
-- RFC: RFC 6368 section 5
-- 1 unit file(s)
+- RFC 6368 section 5
+- 1 unit file
 - lab:
   - `attr_set_gobgp_test`, needs gobgpd
 
@@ -182,9 +182,9 @@ ruby test/run_feature.rb attr-set
 
 BGP-LS, AFI 16388 SAFI 71 and 72, the NLRI and every attribute TLV.
 
-- RFC: RFC 9552
+- RFC 9552
 - Read first: `docs/bgp-ls.md`
-- 11 unit file(s), 1 functional
+- 11 unit files, 1 functional
 - lab:
   - `link_state_frr_test`, needs frr
   - `link_state_gobgp_test`, needs gobgpd
@@ -198,7 +198,7 @@ ruby test/run_feature.rb bgp-ls
 Reading BGP off a wire or a pcap file, and bgp4r lab new.
 
 - Read first: `docs/daemon.md`
-- 4 unit file(s)
+- 4 unit files
 
 ```
 ruby test/run_feature.rb capture
@@ -208,8 +208,8 @@ ruby test/run_feature.rb capture
 
 Communities, extended, IPv6 extended and large, and every sub-type.
 
-- RFC: RFC 1997, RFC 4360, RFC 5701, RFC 8092
-- 5 unit file(s)
+- RFC 1997, RFC 4360, RFC 5701, RFC 8092
+- 5 unit files
 
 ```
 ruby test/run_feature.rb communities
@@ -220,7 +220,7 @@ ruby test/run_feature.rb communities
 The object contract, the hash round trips and the suite-wide guards.
 
 - Read first: `docs/building-objects.md`
-- 6 unit file(s)
+- 6 unit files
 
 ```
 ruby test/run_feature.rb contracts
@@ -231,7 +231,7 @@ ruby test/run_feature.rb contracts
 bgp4rd and bgp4r-cli: the control socket, the views and the configuration.
 
 - Read first: `docs/daemon.md`
-- 10 unit file(s), 1 functional
+- 10 unit files, 1 functional
 
 ```
 ruby test/run_feature.rb daemon
@@ -241,7 +241,7 @@ ruby test/run_feature.rb daemon
 
 The structured event stream both programs serve.
 
-- 2 unit file(s)
+- 2 unit files
 
 ```
 ruby test/run_feature.rb events
@@ -251,9 +251,9 @@ ruby test/run_feature.rb events
 
 EVPN, AFI 25 SAFI 70, all eleven route types.
 
-- RFC: RFC 7432, RFC 9136, RFC 9251, RFC 9572
+- RFC 7432, RFC 9136, RFC 9251, RFC 9572
 - Read first: `docs/evpn.md`
-- 3 unit file(s), 1 functional
+- 3 unit files, 1 functional
 - lab:
   - `evpn_frr_test`, needs frr
   - `evpn_gobgp_test`, needs gobgpd
@@ -266,8 +266,8 @@ ruby test/run_feature.rb evpn
 
 The export rules, Adj-RIB-Out, UPDATE building and the MRAI timer.
 
-- RFC: RFC 4271 sections 5.1 and 9.2.1.1, RFC 4456
-- 5 unit file(s), 1 functional
+- RFC 4271 sections 5.1 and 9.2.1.1, RFC 4456
+- 5 unit files, 1 functional
 - lab:
   - `rib_router_frr_test`, needs frr
   - `rib_router_gobgp_test`, needs gobgpd
@@ -281,9 +281,9 @@ ruby test/run_feature.rb export
 
 Building the UPDATEs no RFC allows, and the catalog of them.
 
-- RFC: RFC 7606
+- RFC 7606
 - Read first: `docs/protocol-testing.md`
-- 1 unit file(s)
+- 1 unit file
 
 ```
 ruby test/run_feature.rb fault
@@ -293,7 +293,7 @@ ruby test/run_feature.rb fault
 
 Putting the Loc-RIB in a forwarding table.
 
-- 3 unit file(s)
+- 3 unit files
 - lab:
   - `fib_test`, needs root
 
@@ -305,9 +305,9 @@ ruby test/run_feature.rb fib
 
 Flow specification rules, SAFI 133 and 134.
 
-- RFC: RFC 8955, RFC 8956
+- RFC 8955, RFC 8956
 - Read first: `docs/flow-spec.md`
-- 3 unit file(s), 1 functional
+- 3 unit files, 1 functional
 - lab:
   - `flow_spec_frr_test`, needs frr
   - `flow_spec_gobgp_test`, needs gobgpd
@@ -320,8 +320,8 @@ ruby test/run_feature.rb flow-spec
 
 The finite state machine, the TCP session and the two IO threads.
 
-- RFC: RFC 4271 section 8
-- 3 unit file(s)
+- RFC 4271 section 8
+- 3 unit files
 
 ```
 ruby test/run_feature.rb fsm
@@ -332,7 +332,7 @@ ruby test/run_feature.rb fsm
 bgp4r-sim: the ten actions, the HTTP API and what it sent.
 
 - Read first: `docs/daemon.md`
-- 5 unit file(s), 1 functional
+- 5 unit files, 1 functional
 
 ```
 ruby test/run_feature.rb injector
@@ -342,8 +342,8 @@ ruby test/run_feature.rb injector
 
 Labelled unicast, SAFI 4, and the label stack.
 
-- RFC: RFC 8277
-- 2 unit file(s)
+- RFC 8277
+- 2 unit files
 
 ```
 ruby test/run_feature.rb labelled
@@ -353,7 +353,7 @@ ruby test/run_feature.rb labelled
 
 The client for an old public BGP feed, whose functional twin must never run.
 
-- 1 unit file(s)
+- 1 unit file
 
 ```
 ruby test/run_feature.rb live-feed
@@ -363,7 +363,7 @@ ruby test/run_feature.rb live-feed
 
 The injected logger, the process log and the log level.
 
-- 1 unit file(s)
+- 1 unit file
 - lab:
   - `log_level_test`
 
@@ -375,9 +375,9 @@ ruby test/run_feature.rb logging
 
 MCAST-VPN, SAFI 5, all seven route types.
 
-- RFC: RFC 6514, RFC 6515, RFC 7441
+- RFC 6514, RFC 6515, RFC 7441
 - Read first: `docs/mcast-vpn.md`
-- 3 unit file(s), 1 functional
+- 3 unit files, 1 functional
 - lab:
   - `mcast_vpn_frr_test`, needs frr
   - `mcast_vpn_gobgp_test`, needs gobgpd
@@ -390,8 +390,8 @@ ruby test/run_feature.rb mcast-vpn
 
 The common header, KEEPALIVE, UPDATE and NOTIFICATION.
 
-- RFC: RFC 4271 section 4
-- 5 unit file(s)
+- RFC 4271 section 4
+- 5 unit files
 
 ```
 ruby test/run_feature.rb messages
@@ -401,8 +401,8 @@ ruby test/run_feature.rb messages
 
 MP_REACH_NLRI and MP_UNREACH_NLRI, the gates every family goes through.
 
-- RFC: RFC 4760 sections 3 and 4, RFC 8950
-- 3 unit file(s)
+- RFC 4760 sections 3 and 4, RFC 8950
+- 3 unit files
 
 ```
 ruby test/run_feature.rb mp-reach
@@ -412,8 +412,8 @@ ruby test/run_feature.rb mp-reach
 
 OPEN, the optional parameters, and every capability.
 
-- RFC: RFC 4271 section 4.2, RFC 5492, RFC 9072
-- 10 unit file(s)
+- RFC 4271 section 4.2, RFC 5492, RFC 9072
+- 10 unit files
 
 ```
 ruby test/run_feature.rb open
@@ -423,9 +423,9 @@ ruby test/run_feature.rb open
 
 The attribute container, the registry, and the well-known set.
 
-- RFC: RFC 4271 section 5
+- RFC 4271 section 5
 - Read first: `docs/building-objects.md`
-- 15 unit file(s)
+- 15 unit files
 
 ```
 ruby test/run_feature.rb path-attributes
@@ -435,8 +435,8 @@ ruby test/run_feature.rb path-attributes
 
 Adj-RIB-In, the decision process and the Loc-RIB.
 
-- RFC: RFC 4271 section 9
-- 7 unit file(s), 1 functional
+- RFC 4271 section 9
+- 7 unit files, 1 functional
 
 ```
 ruby test/run_feature.rb rib
@@ -446,8 +446,8 @@ ruby test/run_feature.rb rib
 
 ROUTE-REFRESH and outbound route filtering.
 
-- RFC: RFC 2918, RFC 7313, RFC 5291 section 4
-- 6 unit file(s)
+- RFC 2918, RFC 7313, RFC 5291 section 4
+- 6 unit files
 
 ```
 ruby test/run_feature.rb route-refresh
@@ -458,7 +458,7 @@ ruby test/run_feature.rb route-refresh
 Generating many prefixes and packing them into UPDATEs.
 
 - Read first: `docs/daemon.md`
-- 2 unit file(s), 1 functional
+- 2 unit files, 1 functional
 - lab:
   - `generate_test`
   - `routegen_loopback_test`
@@ -472,8 +472,8 @@ ruby test/run_feature.rb routegen
 
 Route Target membership, AFI 1 SAFI 132.
 
-- RFC: RFC 4684 section 4
-- 1 unit file(s), 1 functional
+- RFC 4684 section 4
+- 1 unit file, 1 functional
 - lab:
   - `rt_constrain_gobgp_test`, needs gobgpd
 
@@ -485,8 +485,8 @@ ruby test/run_feature.rb rt-constrain
 
 The BGP Prefix-SID.
 
-- RFC: RFC 8669
-- 1 unit file(s)
+- RFC 8669
+- 1 unit file
 
 ```
 ruby test/run_feature.rb segment-routing
@@ -496,7 +496,7 @@ ruby test/run_feature.rb segment-routing
 
 The three vendor styles, and the same state as plain data.
 
-- 2 unit file(s)
+- 2 unit files
 
 ```
 ruby test/run_feature.rb show
@@ -507,7 +507,7 @@ ruby test/run_feature.rb show
 lab/speaker.rb and the five topologies under lab/topologies.
 
 - Read first: `docs/routescope-labs.md`
-- 1 unit file(s)
+- 1 unit file
 - lab:
   - `add_path_topology_test`
   - `bgp4r_lab_topology_test`
@@ -522,8 +522,8 @@ ruby test/run_feature.rb speaker
 
 Tunnel encapsulation and the PMSI tunnel.
 
-- RFC: RFC 9012, RFC 6514 section 5
-- 2 unit file(s)
+- RFC 9012, RFC 6514 section 5
+- 2 unit files
 
 ```
 ruby test/run_feature.rb tunnel-encap
@@ -533,8 +533,8 @@ ruby test/run_feature.rb tunnel-encap
 
 IPv4 and IPv6 unicast, SAFI 1 and 2, and the prefix encodings.
 
-- RFC: RFC 4271 section 4.3, RFC 4760
-- 4 unit file(s)
+- RFC 4271 section 4.3, RFC 4760
+- 4 unit files
 
 ```
 ruby test/run_feature.rb unicast
@@ -544,9 +544,9 @@ ruby test/run_feature.rb unicast
 
 Receive-side error handling, and the matrix of what three routers do.
 
-- RFC: RFC 7606
+- RFC 7606
 - Read first: `docs/protocol-testing.md`
-- 1 unit file(s)
+- 1 unit file
 - lab:
   - `fault_matrix_frr_test`, needs frr
   - `fault_matrix_native_test`, needs gobgpd
@@ -560,8 +560,8 @@ ruby test/run_feature.rb validation
 
 VPN-IPv4 and VPN-IPv6, SAFI 128 and 129, and the Route Distinguisher.
 
-- RFC: RFC 4364 section 4.2
-- 2 unit file(s)
+- RFC 4364 section 4.2
+- 2 unit files
 
 ```
 ruby test/run_feature.rb vpn
