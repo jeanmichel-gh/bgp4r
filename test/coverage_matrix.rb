@@ -123,6 +123,7 @@ module CoverageMatrix
     'bgp-ls-vpn'   => { :gobgp => :absence, :frr => :absence,
                         :doc => 'docs/bgp-ls.md' },
     'vpn'          => { :gobgp => :none,    :frr => :none },
+    'vpn-multicast' => { :gobgp => :none,   :frr => :none },
     'rt-constrain' => { :gobgp => :send,    :frr => :none,
                         :doc => 'docs/flow-spec.md' },
     'flow-spec'    => { :gobgp => :send,    :frr => :send,
@@ -223,7 +224,14 @@ module CoverageMatrix
     SLUGS = {
       1 => 'unicast', 2 => 'multicast', 4 => 'labelled', 5 => 'mcast-vpn',
       70 => 'evpn', 71 => 'bgp-ls', 72 => 'bgp-ls-vpn',
-      128 => 'vpn', 129 => 'vpn', 132 => 'rt-constrain',
+      # 128 and 129 shared the slug 'vpn' until 2026-11-03, which made
+      # this report say eleven families where the gate accepts twelve
+      # SAFIs: IANA names them Labeled VPN Unicast and Labeled VPN
+      # Multicast, so one row printed under the other's name. That is
+      # `unnamed_safis` one step subtler, a family the gate knows that
+      # the report cannot show, and it was found by building a specimen
+      # per family in bgp/specimen.rb rather than by reading this table.
+      128 => 'vpn', 129 => 'vpn-multicast', 132 => 'rt-constrain',
       133 => 'flow-spec', 134 => 'flow-spec-vpn',
     }.freeze
 

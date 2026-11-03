@@ -510,6 +510,37 @@ bgp/capture/             reading BGP off a wire; require 'bgp/capture', which
                          and not at the top, as `bgp/sim` is for `sim`.
                          docs/daemon.md's `bgp4r lab new` section is the
                          guide
+bgp/specimen.rb          `BGP::Specimen::CATALOG`, the valid counterpart
+                         of `BGP::Fault`: one named, well formed object
+                         per path attribute and per address family, so a
+                         test or a control plane can ask for a correct
+                         LARGE_COMMUNITIES attribute or a correct BGP-LS
+                         NLRI by name. Fault's shape, so `names`,
+                         `catalog`, `build` and `wire` read alike, with
+                         `attributes` and `families` filtering the one
+                         catalog: a family specimen is an MP_REACH_NLRI
+                         and that **is** attribute 14, so the two kinds
+                         of entry build the same kind of object and share
+                         one name space. **Nothing in the library
+                         consults it and nothing should**: building never
+                         validates, so these are representatives and not
+                         a specification, and the header says so because
+                         a file full of valid objects invites exactly the
+                         check Conventions forbids. It exists because
+                         test/coverage_matrix.rb measured twelve
+                         registered attributes that have never been sent
+                         to a router, and a thing with no name cannot be
+                         sent by name. `Specimen.update`, the twin of
+                         `Fault.update`, is deliberately **not** here:
+                         those four lines are written once in fault.rb,
+                         whose own comment says they are there so two
+                         programs have one answer, so sharing them
+                         belongs with the pull request that has a caller.
+                         The guard is test/unit/specimen_test.rb, which
+                         derives the expected set from
+                         `Attr.registrations` and from the build gate, so
+                         an attribute registered or a SAFI wired in fails
+                         the suite until it has a specimen
 bgp/misc/                extras: route_generator.rb (many prefixes packed in UPDATEs), live_feed.rb (a client for an old public BGP feed)
 exe/bgp4r                the umbrella command, with `capture`, `sim`,
                          `routegen`, `lab new` and `version`. `sim` and
@@ -698,8 +729,21 @@ test/coverage_matrix.rb  what is exercised and what is not, per path
                          `IANA.safi_name`, and the lab tests are a glob. So
                          a family wired in, an attribute registered or a
                          fault case added appears here the day it lands.
-                         `VOUCHES` is the one declared part and has to be:
-                         what a lab test's existence *proves* is a
+                         `VOUCHES` is the one declared part that has to
+                         be, and `SLUGS` is the one that is declared and
+                         **went wrong**: it mapped SAFI 128 and 129 both
+                         to 'vpn', so the report said eleven families
+                         where the gate accepts twelve SAFIs and Labeled
+                         VPN Multicast printed under Labeled VPN
+                         Unicast's name. That is `unnamed_safis` one step
+                         subtler, a family the gate knows that the report
+                         cannot show, and no guard in
+                         coverage_matrix_test.rb caught it because every
+                         one of them reasons in slugs. It was found by
+                         building a specimen per family in
+                         bgp/specimen.rb, which derives from the gate's
+                         SAFIs instead, and fixed in #248.
+                         What a lab test's existence *proves* is a
                          judgement, and two files of the same shape can
                          mean opposite things, since evpn_gobgp_test.rb
                          says a router read our octets where
@@ -1311,6 +1355,19 @@ edit, and `test/unit/coverage_matrix_test.rb` fails the suite when the
 declared half goes stale. **Do not write its counts down anywhere**,
 including here, for the reason the `to_hash` entry above gives.
 
+The valid thing to send, per attribute and per family, which is the half
+of that report's question a test can act on. `BGP::Specimen` is the
+counterpart of `BGP::Fault`, so these read like the fault catalog's:
+```
+ruby -I. -e 'require "bgp4r"; puts BGP::Specimen.names'
+ruby -I. -e 'require "bgp4r"; p BGP::Specimen.build(:large_communities).to_s'
+ruby -I. -e 'require "bgp4r"; puts BGP::Specimen.wire(:bgp_ls).unpack1("H*")'
+ruby -I. test/unit/specimen_test.rb
+```
+`wire` takes the session's AS width and defaults to the 4-octet form,
+which matters for two entries and for nothing else; `bgp/specimen.rb`
+has which two and why.
+
 Do not run `test/functional/live_feed_test.rb`. It connects to a public feed that no longer answers and hangs forever.
 
 In Docker, on any Ruby version (the default is 3.4):
@@ -1323,11 +1380,11 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. The `lab` job is a matrix, one job per group in `test/lab_groups.rb`, so its cost is the slowest group and not the total: it was 12m42s as one serial suite. Each job installs only what its group needs, which is why the matrix entry carries a `gobgp`, `frr`, `docker` or `netns` flag. The `gobgp` groups pin 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-Baseline on 2026-11-03: 3158 tests, 32249 assertions, all passing. Line coverage of `bgp/` from the unit suite: 96.2%.
+Baseline on 2026-11-03: 3176 tests, 32561 assertions, all passing. Line coverage of `bgp/` from the unit suite: 96.2%.
 
 **That coverage figure is 98.5% for the library and the rest is the two
 programs, not a gap anywhere else.** Measured the same run: with
-`bgp/sim/` and `bgp/daemon/` excluded it is **98.5%** over 12585 lines,
+`bgp/sim/` and `bgp/daemon/` excluded it is **98.5%** over 12650 lines,
 which is the same figure the daemon's arrival was measured against, so
 the core has not moved. From the unit suite alone `bgp/sim/` is **85.9%**
 and `bgp/daemon/` is **82.5%**, because most of what both do needs a
@@ -1383,6 +1440,8 @@ There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Cove
   * **Two of those claims are worth knowing even without the document.** A constructor may **consume** the String it is handed, since `parse` reads with `slice!`: `Origin`, `Aggregator`, `Communities` and `Path_attribute` all empty it and `Nlri` does not, so pass a `dup` if you need the octets afterwards. This is what makes `assert_equal(octets, Klass.new(octets).encode)` fail while both sides print the same hex, because the left side was emptied before the comparison ran; compare `to_shex`. And **not every class reads wire bytes**: `Prefix` takes a prefix string, and octets are the business of `Nlri` or `Withdrawn`, which slice them, so binary handed to `Prefix` dies inside `IPAddr` whether it is marked or not.
 * `encode` returns wire bytes. `to_hash` returns a hash that round trips through `new`. `to_s` returns the human readable form.
   * **A generic `encode` in the parent, finalized by `super` in the child, is a deliberate shape here and not an accident.** Measured on 2026-10-29, after a session read "base encode" as a git revision and the owner meant the parent method. Two instances. `Orf#encode` writes the whole RFC 5291 section 4 layout, ORF Type, Length and the entries joined, and `Prefix_orf` does **not** override it: the subclass supplies `Entry` objects and never touches encoding. On the capability side it is three layers, each wrapping the one below: `CAP::Orf#encode` joins its entries and hands them to `Capability#encode`, which wraps them in code and length and hands that to `Optional_parameter#encode` with `extended:`. So when a field is missing from the wire, find which layer owns it before editing: a plain class nested inside one of these, such as `CAP::Orf::Entry`, has `Object` for a superclass and no `super` at all, so its own `encode` is the only place its octets can come from.
+    * **That shape makes `Method#arity` the wrong question about `encode`, and the right one is the parameter's name.** `ATTR#encode(value, value_fmt)` is the parent that frames every attribute, so a class that does not override it has an `encode` whose first argument is the **value**: `Atomic_aggregate` has arity -1 and takes no `as4byte`, where `As_path`, `Aggregator`, `As4_path` and `As4_aggregator` have the same arity and do. `bgp/specimen.rb` asked the arity first and died on `undefined method 'size' for true`, three frames away inside `attribute.rb`. It asks `method(:encode).parameters.first` now. Same family as the `const_defined?` and `and`-versus-`&&` entries: a Ruby rule that is easy to state and silent when broken, and here it is the composition idiom showing through reflection.
+    * **Two of those four take `as4byte` and ignore it, which is correct and is not a bug to fix.** `As4_path` and `As4_aggregator` encode identically either way, because RFC 6793 gives them the job of carrying a 4-octet AS **across** a 2-octet session, so their octets are 4-octet whatever was negotiated. Measured on 2026-11-03, after a test asserted all four would differ. `test_the_as4byte_argument_reaches_the_attributes_that_take_one` in `test/unit/specimen_test.rb` pins the two that do.
   * **That round trip is kept by most classes and broken by some, and the record is `test/unit/to_hash_catalog.rb`**, one entry per class, with what the hash loses, a reproduction, and what has been decided about it. Read it before assuming a hash form works or assuming it does not; both have been assumed wrongly here. **Do not write the counts down anywhere**, including here: `rake to_hash:status` prints them, and `rake to_hash:pending` prints what is still to fix. Without rake, which is not on PATH everywhere, `ruby -I. test/unit/to_hash_status.rb` and the same with `pending`. Every line of that output is read out of the catalog, which the suite measures against the library on every run, so a number it prints cannot be stale without a test failing first.
     * **There used to be a document, `docs/to-hash-round-trips.md`, and it was retired rather than updated.** Its table was generated from the catalog and stayed true. Its prose was not and did not: it spent four pull requests ranking work that two of them had already finished, in the same file as the table that was correct. The generated view replaced it once the root cause was understood, which is that a hash is an argument to `initialize` and what has to come back is the instance state, so a field no key sets cannot survive. Every lossy entry is an instance of that one sentence, which is why 97 paragraphs of prose were not buying anything a list and a reason each does not.
   * **The rule is one way: a gap may stay a gap, a round trip that works must not stop working.** The hash form exists so test code can be written as values rather than hex, so a working round trip is something other people's tests are already built on. `test/unit/to_hash_round_trip_test.rb` enforces that, from declarations in `test/unit/to_hash_catalog.rb`: breaking a working one fails the suite, and closing a gap fails it too, so the record is struck rather than left reading as verified. A new class answering `to_hash` and listed in neither place also fails, so it has to be measured and decided.
