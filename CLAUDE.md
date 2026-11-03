@@ -909,9 +909,10 @@ lab/                     speakers in containers: lab/speaker.rb and lab/topologi
                          report. The first of those two runs **failed
                          the whole deploy** over this one node, which is
                          the `exec:` ordering fact under "routescope
-                         labs". Its RIB has still not been read: the
-                         `### GoBGP` block of `capture.sh` is new and
-                         has not run. It wants the Dockerfile's
+                         labs". Its RIB is read now too, by
+                         `capture.sh`'s `### GoBGP` block, which is what
+                         measured all three community kinds reaching a
+                         second implementation. It wants the Dockerfile's
                          `lab-node` stage rather than `speaker`: a
                          containerlab node sets its addresses with `ip`
                          and `bgp4rd` has to be able to create
@@ -6901,9 +6902,8 @@ files that settle which key binds when.
 all seven run, the session is established with 0 flaps, and `rtr`
 reports `sent` 6 and `received` 0 to it, which is what a node that
 reads and originates nothing should report. So the lab is four
-implementations now. Its RIB has still not been read, since
-`capture.sh` gained a `### GoBGP` block in the same change and that has
-not run, and **the scenarios have not been run** either.
+implementations now. **The scenarios have not been run** on it, and
+nothing in this repository runs them.
 
 **And it found a capability gap, which is the first prioritised list of
 one anybody here has.** bgp4r read two of g1's six capabilities as
@@ -6911,12 +6911,35 @@ one anybody here has.** bgp4r read two of g1's six capabilities as
 and 76. Named from the IANA Capability Codes registry, read 2026-11-03:
 **6 is BGP Extended Message, RFC 8654**, and **71 is Long-Lived
 Graceful Restart, RFC 9494**, where 73 (FQDN) and 76 (PATHS-LIMIT) are
-drafts. So two routers between them offer five code points bgp4r does
-not name and two of the five have an RFC. Nothing breaks, because an
-unknown capability round trips, and this file's own "8 of 22 live
+drafts. So two routers between them offer **four** code points bgp4r
+does not name and two of the four have an RFC. Nothing breaks, because
+an unknown capability round trips, and this file's own "8 of 22 live
 capability code points" says the aggregate; what is new is **which two
 a real peer actually sends**, which is a better order to work in than
 the registry's.
+* **That list was written as five first and the fix is to count it.**
+  The fifth was code 5, Extended Next Hop Encoding, which bgp4r
+  **does** name: it prints as `Extended_nexthop` with `{afi 1, safi 1,
+  nexthop_afi 2}`. Same shape as every hand-written count in this file
+  that turned out wrong, one register up: a union of two lists is
+  arithmetic, so compute it.
+
+**The `### GoBGP` block of `capture.sh` ran next, and it settles the
+two things that node is on the topology for.** All three kinds of
+community reach GoBGP intact, which the first run had proved only at
+BIRD: 10.2.0.0/24 arrives with attribute 8 as 65010:100 and 65010:200,
+attribute 16 as route target 65010:7 and attribute 32 as 65010:1:1. And
+the second-reader claim is **measured** rather than only guarded: g1
+and r1 hold 10.1.0.0/24 with the same AS_PATH, 65000 65010, and a next
+hop each, 10.0.21.1 against 10.0.20.1, which is one decision from one
+encoder with the per-session next hop of RFC 4271 section 5.1.3 on top.
+It also found that **`gobgp neighbor -j` prints capabilities readably
+on 4.10.0**, where `LabHelper::Gobgpd#remote_add_path` records the JSON
+form wrapping each in a protobuf Any with a base64 value; that helper
+runs against 3.23.0 too, where its own claim was measured, so this is a
+version difference and not an error in it. The human form is captured
+beside the JSON because it is the only one that labels a capability
+`advertised` against `advertised and received`.
 
 Nine things the building of the two settled, each in `docs/daemon.md`
 now:

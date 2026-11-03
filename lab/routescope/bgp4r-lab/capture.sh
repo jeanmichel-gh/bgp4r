@@ -152,9 +152,17 @@ rshow rtr show.adj_out '{"peer":"10.0.20.2"}'
 # of community, so g1's reading of it is a second implementation's view
 # of how rtr exported them.
 #
-# `neighbor` without -j as well as with: the JSON form wraps every
-# capability in a protobuf Any with a base64 value, which is why
-# `LabHelper::Gobgpd#remote_add_path` parses the human output instead.
+# `neighbor` without -j as well as with, and the reason written here
+# first was wrong, which the first run of this block showed.
+# `LabHelper::Gobgpd#remote_add_path` parses the human output because
+# the JSON form wraps every capability in a protobuf Any with a base64
+# value, and on **4.10.0 it does not**: measured 2026-11-03, where
+# `neighbor -j` prints `"local_cap":[{"Cap":{"ExtendedMessage":{}}}...]`
+# readably. That helper runs against 3.23.0 as well, which is where its
+# own claim was measured, so this is a version difference and not an
+# error in it. Both forms are captured because the human one is the one
+# that labels each capability advertised, received or both, which
+# neither JSON form does.
 echo "### GoBGP"
 # Not through gshow: read in cmd/gobgp/main.go, `--version` is handled
 # before cobra sees the arguments and only as os.Args[1], so it has to

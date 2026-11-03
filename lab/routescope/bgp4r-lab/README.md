@@ -326,17 +326,47 @@ them anybody here has.** bgp4r read two of g1's six capabilities as
 71, 73 and 76. Named from the IANA Capability Codes registry, read
 2026-11-03: **6 is BGP Extended Message, RFC 8654**, and **71 is
 Long-Lived Graceful Restart, RFC 9494**; 73 (FQDN) and 76
-(PATHS-LIMIT) are drafts. So two routers between them offer five code
-points bgp4r does not name and two of the five have an RFC. Nothing is
-broken by it, since an unknown capability round trips, but it says
-which capability to implement next, and it came from routers rather
-than from the registry.
+(PATHS-LIMIT) are drafts. So two routers between them offer **four**
+code points bgp4r does not name, and two of the four have an RFC.
+Nothing is broken by it, since an unknown capability round trips, but
+it says which capability to implement next, and it came from routers
+rather than from the registry.
 
-**Nothing has read g1's RIB yet beyond this.** `capture.sh` reads it
-now, in its `### GoBGP` block, and that block has not run.
-`Dockerfile.gobgp`'s own open question is also still open: the wrapper
+Count that list rather than reasoning about it. The first version of
+this paragraph said five, by including code 5, Extended Next Hop
+Encoding, which bgp4r **does** name: `show.peers` prints it as
+`Extended_nexthop` with `{afi 1, safi 1, nexthop_afi 2}`. g1 offers
+it, rtr does not offer it back, and `gobgp neighbor` labels it
+`advertised` rather than `advertised and received`, which is the
+distinction a reader of only the JSON form would miss.
+
+**The run after that is the one that read g1's RIB**, the `### GoBGP`
+block, and it settles the two things this node is on the topology for:
+
+* **all three kinds of community reach GoBGP intact**, which the first
+  run proved only at BIRD. On 10.2.0.0/24 g1 holds attribute 8 as
+  65010:100 and 65010:200, attribute 16 as route target 65010:7 and
+  attribute 32 as 65010:1:1. So two independent implementations read
+  rtr's export of all three the same way;
+* **the second-reader claim is measured and not only guarded.** g1
+  holds 10.1.0.0/24 with AS_PATH 65000 65010 and next hop 10.0.21.1
+  where r1 holds it with the same AS_PATH and next hop 10.0.20.1: the
+  same decision from the same encoder, and a next hop each because a
+  next hop is per session. That is what `inject-and-cross.yml` claims
+  and what `test_one_scenario_asserts_both_readers_of_one_update`
+  holds it to.
+
+It also found that **`gobgp neighbor -j` prints capabilities readably
+on 4.10.0**, as `{"Cap":{"ExtendedMessage":{}}}`, where
+`LabHelper::Gobgpd#remote_add_path` records the JSON form wrapping each
+one in a protobuf Any with a base64 value. That helper runs against
+3.23.0 too, which is where its own claim was measured, so this is a
+version difference and not an error in it.
+
+**`Dockerfile.gobgp`'s own open question is still open**: the wrapper
 works, which says nothing about whether `${GOBGP_IMAGE}` already has
-`ip` and the wrapper could go.
+`ip` and the wrapper could go. The one command that settles it is in
+that file.
 
 **It found one bug, which a parse could not.** On a `direct` iBGP
 session BIRD wants the next hop on one of its own links. 10.0.20.1 is
