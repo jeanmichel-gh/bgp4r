@@ -996,7 +996,22 @@ test/functional/lab/     lab tests: loopback speaker test and one Compose test p
                          comparing one node's `ip route` against
                          another's compares different things, and the
                          table is in the README and in g1/gobgpd.toml
-                         rather than left to be found out;
+                         rather than left to be found out.
+                         `test_no_node_binds_a_link_address_before_the_topology_adds_it`
+                         is the one that came from a real deploy failure:
+                         **containerlab runs `exec:` after the
+                         entrypoint**, so a daemon told to bind a link
+                         address at start-up dies before the address
+                         exists, and containerlab fails the whole deploy
+                         rather than that node. `g1` did it and nothing
+                         caught it. It is one pattern per config format,
+                         scanned over every node's own files, and a bind
+                         fails only when it names an address `exec:`
+                         adds, since a wildcard is what all seven use;
+                         the file set comes from the node list, so a
+                         later node is covered with no edit. All three
+                         patterns were proved live by sabotage, and the
+                         wildcard case proved not to fire;
                          fault_matrix_scenario.rb holds the RFC 7606 checks, and both
                          fault_matrix_test.rb (Compose) and fault_matrix_native_test.rb
                          (a gobgpd on loopback, no Docker) assert them;
@@ -6833,7 +6848,25 @@ built both images, brought up all six sessions on FRR 10.2.1 and BIRD
 2.0.12, and found the one bug a parse could not: on a `direct` iBGP
 session BIRD dropped every route from rtr, whose next hop is not on its
 links, until `r3/bird.conf` took `gateway recursive`. The scenarios have
-not been run. Before that, the three router configs were measured here
+not been run.
+
+**The run after `g1` was added found the other thing no parse could, and
+it is a containerlab fact rather than a BGP one: `exec:` runs after a
+node's entrypoint.** So an address the topology assigns does not exist
+while that node's daemon is reading its config, and a daemon told to
+**bind** a listener to it dies there, with containerlab then failing the
+**whole** deploy on `namespace path not available` and cancelling the
+other nodes' `exec:` with it. gobgpd with `local-address-list` set to
+its own link address did exactly that. The fix is the wildcard, which is
+what the other six already use, and the distinction to keep is the
+timing and not the key: a **dial** to a specific address is fine, since
+it retries every `connect-retry`, which is why both injectors' own
+`local_address` has always worked. Half of this was already written, in
+the r1 comment about FRR missing an address on a link wired after it
+starts; nobody had said it generally.
+`test_no_node_binds_a_link_address_before_the_topology_adds_it` says it
+now, and `g1/gobgpd.toml` carries the log line and the two GoBGP source
+files that settle which key binds when. Before that, the three router configs were measured here
 without a registry: `bird -p` parses `r3/bird.conf` clean under BIRD 2.14, and
 `bgpd -C` accepts every BGP line of both FRR configs under bgpd 8.4.4,
 rejecting only `no ipv6 forwarding` and `service

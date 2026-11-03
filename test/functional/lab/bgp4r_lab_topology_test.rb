@@ -241,11 +241,15 @@ class LabBgp4rLabTopologyTest < Test::Unit::TestCase
     peer = addresses.fetch('rtr')['eth4'].split('/').first
 
     assert_match(/^  as = 65002$/, toml, 'g1 is in AS 65002')
-    assert_match(/^  local-address-list = \["#{Regexp.escape(addr)}"\]$/, toml,
-                 "the global address list is not g1's own #{addr}")
     assert_match(/^    neighbor-address = "#{Regexp.escape(peer)}"$/, toml,
                  "the neighbor is not rtr's #{peer} on that link")
-    assert_match(/^    local-address = "#{Regexp.escape(addr)}"$/, toml)
+    # The neighbour's own key, and the only place g1's address belongs:
+    # it binds on the dial, which retries. There is deliberately no
+    # `local-address-list`, which binds the listener at start-up and
+    # killed the deploy; the guard on that is
+    # test_no_node_binds_a_link_address_before_the_topology_adds_it.
+    assert_match(/^    local-address = "#{Regexp.escape(addr)}"$/, toml,
+                 "the session's source address is not g1's own #{addr}")
     assert_match(/^      afi-safi-name = "ipv4-unicast"$/, toml)
 
     # rtr's own side has to name the same pair the other way round.
@@ -474,6 +478,53 @@ class LabBgp4rLabTopologyTest < Test::Unit::TestCase
     assert_nil rtr['local_address'],
                'rtr names one of its three addresses, so one session would advertise another'
     rtr['neighbors'].each { |p| assert_include assigned, p['address'], "rtr peer #{p['address']}" }
+  end
+
+  # The other half of that, and it is the one that took the lab down.
+  # containerlab runs a node's `exec:` lines **after** the container's
+  # entrypoint, so an address the topology assigns does not exist while
+  # the daemon is reading its config. A daemon that merely **dials** that
+  # address is fine, because a dial retries; one told to **bind** a
+  # listener to it is not, and it exits, and containerlab then fails the
+  # whole deploy rather than the one node.
+  #
+  # `g1` did exactly that on 2026-11-03 and nothing here caught it. So:
+  # one pattern per config format, scanned over every node's own files,
+  # and a bind is a failure only when it names an address `exec:` adds,
+  # since a wildcard is what all seven are supposed to use. The file set
+  # comes from the node list, so a node added later is covered with no
+  # edit here.
+  STARTUP_LISTEN_KEYS = {
+    'local-address-list' => 'gobgpd opens one listener per entry as it reads the file, ' \
+                            'before any neighbour is dialled, and exits when a bind fails',
+    'listen_address' => "bgp4rd hands it to TCPServer.new as the daemon starts",
+    'listen bgp address' => "BIRD's global listen option binds as the daemon starts",
+  }.freeze
+
+  def test_no_node_binds_a_link_address_before_the_topology_adds_it
+    wired = addresses.values.flat_map { |h| h.values }.collect { |a| a.split('/').first }
+    assert_not_empty wired, 'the topology assigns no addresses, so this guard measures nothing'
+
+    nodes.each_key do |name|
+      files = Dir[File.join(DIR, name, '*')].select { |f| File.file?(f) }
+      assert_not_empty files, "#{name} has no config file, so nothing was scanned for it"
+
+      files.each do |path|
+        File.read(path, :encoding => 'UTF-8').each_line do |line|
+          next if line =~ %r{^\s*(?:[#!]|//)} # a comment may name the key and the address
+
+          STARTUP_LISTEN_KEYS.each do |key, why|
+            next unless line.include?(key)
+
+            named = wired.select { |a| line.include?(a) }
+            assert_empty named,
+                         "#{name}/#{File.basename(path)} binds #{named.join(' ')} through " \
+                         "#{key}, and the topology adds that address in exec:, which runs " \
+                         "after the entrypoint, so #{why}"
+          end
+        end
+      end
+    end
   end
 
   # Who dials whom, which is what makes the lab come up the same way every

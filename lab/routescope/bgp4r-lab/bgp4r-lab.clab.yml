@@ -225,6 +225,17 @@ topology:
     # `bgp4r-gobgp:latest` and not `${GOBGP_IMAGE}` directly, which the
     # two Compose topologies do use. Dockerfile.gobgp says why, and says
     # the one command that would settle whether the wrapper is needed.
+    #
+    # **`exec:` runs after the entrypoint, and this node is where that
+    # cost a deploy.** The r1 comment above says it narrowly, of FRR
+    # missing an address on a link wired after it starts. Said generally:
+    # 10.0.21.2 does not exist while gobgpd is reading its config, so a
+    # daemon told to **bind** a link address at start-up dies before
+    # containerlab can add it, and containerlab then fails the whole
+    # deploy rather than this one node. `g1/gobgpd.toml` has the log line
+    # and the two source files that settle which key does it. Every node
+    # here listens on the wildcard; a specific address is for a dial,
+    # which retries.
     g1:
       kind: linux
       image: bgp4r-gobgp:latest

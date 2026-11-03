@@ -57,12 +57,36 @@
 # larger image and a FIB no scenario asserts, for a node that is on this
 # topology to read octets. See the README for how to watch a kernel
 # install on the nodes that do program one.
+#
+# **And no `local-address-list`, which is not tidiness: this node died
+# at start-up with it.** containerlab runs a node's `exec:` lines
+# **after** the container's entrypoint, so 10.0.21.2 does not exist when
+# gobgpd reads this file. With the key set, gobgpd binds its listener to
+# it there and then, fails with `listen tcp4 10.0.21.2:179: bind: cannot
+# assign requested address`, logs `Failed to apply initial
+# configuration` and exits, and containerlab then fails the whole deploy
+# with `namespace path not available`, cancelling r1, r2 and rtr's own
+# `exec:` with it. Measured in CI on 2026-11-03.
+#
+# Read in GoBGP's own source rather than guessed at.
+# `pkg/config/oc/default.go` sets the list to the IPv4 and IPv6 wildcard
+# when it is empty, and `pkg/server/server.go` is the loop that opens one
+# listener per entry, before any neighbour is dialled. So leaving the key
+# out is what makes the listener wildcard, which is what every other node
+# here does: `bgp4rd` defaults `listen_address` to 0.0.0.0, and neither
+# the FRR nor the BIRD config restricts a listener either.
+#
+# The neighbour's own `local-address` below stays, and it is the key that
+# actually pins the session's source address. It binds on the **dial**,
+# in `pkg/server/fsm.go`, which is after start-up and is retried every
+# `connect-retry`, so by the time it matters containerlab has added the
+# address. The injectors' `local_address` survives for the same reason.
+# **So the rule is the timing and not the key**: a specific address is
+# fine where a retry covers it and fatal where a start-up bind does not.
 
 [global.config]
   as = 65002
   router-id = "10.255.2.1"
-  # The address on the one link, so the daemon does not pick another.
-  local-address-list = ["10.0.21.2"]
 
 [[neighbors]]
   [neighbors.config]
