@@ -109,11 +109,15 @@ mode it was in.
 These are routescope's, verbatim, and they are the specification for
 the driver. Quoted from `lib/routescope/drivers.rb`.
 
-**The two table row shapes**, documented at `drivers.rb:146-147`:
+**The two table row shapes**, documented beside `BGP_TABLES` in
+`drivers.rb`. Read at `7eabde1` they ended at `sent` and `best`; the BGP
+panes work in routescope (its `docs/bgp.md`, November 2026) added the
+last three columns of each, the community lists and what a peer row says
+about flaps and the queues:
 
 ```
-bgp_peers   address remote_as state description uptime received sent
-bgp_routes  prefix next_hop as_path origin med local_pref from paths best
+bgp_peers   address remote_as state description uptime received sent flaps inq outq
+bgp_routes  prefix next_hop as_path origin med local_pref from paths best communities extended_communities large_communities
 ```
 
 **The state method.** `Base#bgp(container)` raises by default; a driver

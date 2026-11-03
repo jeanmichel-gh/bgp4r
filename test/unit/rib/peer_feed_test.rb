@@ -94,6 +94,31 @@ class TestBgpRibPeerFeed < Test::Unit::TestCase
     assert_equal(%w[10.0.0.0/8 192.168.1.0/24], @changes.map(&:prefix).sort)
   end
 
+  # What a console reads to say a speaker is done with what it received:
+  # an UPDATE counts against the neighbor that sent it from the moment it
+  # is queued until the worker has applied it, and not one moment less.
+  def test_unapplied_counts_a_neighbors_updates_until_they_are_applied
+    n = neighbor
+    m = neighbor(3, 65003)
+    adapter = BGP::Rib::PeerAdapter.new(n, @rib.feed)
+    adapter.update(update('10.0.0.0/8'))
+    adapter.update(update('10.1.0.0/16'))
+    assert_equal(2, @rib.feed.unapplied(n), 'no worker yet, so both are waiting')
+    assert_equal(0, @rib.feed.unapplied(m), 'and they are counted against their own neighbor')
+    @rib.feed.start
+    assert(@rib.drain)
+    assert_equal(0, @rib.feed.unapplied(n))
+    assert_equal(2, @rib.loc_rib.size)
+  end
+
+  def test_unsent_counts_the_items_that_send_and_nothing_else
+    @rib.feed << [:advertise, []] << [:session_up, nil] << [:sync, Queue.new]
+    assert_equal(2, @rib.feed.unsent, 'advertise and session_up send; sync does not')
+    @rib.feed.start
+    assert(@rib.drain)
+    assert_equal(0, @rib.feed.unsent)
+  end
+
   # The worker runs behind the session, so a read without drain can be early.
   # The test asserts what drain is for, not a timing coincidence.
   def test_drain_is_what_makes_a_read_safe

@@ -385,9 +385,49 @@ module BGP
           :state        => peer.state.to_s.downcase,
           :uptime       => uptime(peer.recorder.established_at),
           :flaps        => peer.recorder.flaps,
+          :inq          => inq(peer),
+          :outq         => outq(peer),
+          :held         => held(peer),
           :last_error   => d['last_error'],
           :updates      => d['updates_received'],
           :capabilities => d['peer_capabilities'] }
+      end
+
+      # What is left to do for one session, which is what a console
+      # asks to say whether this speaker is done with its work (routescope's
+      # `bgp_drained`). Three counts and not one, because they are three
+      # different waits:
+      #
+      #   inq   received and not yet in the table: events the session has
+      #         not dispatched, plus its UPDATEs the RIB worker has not
+      #         applied
+      #   outq  not yet on the wire: messages in the session's output
+      #         queue, plus the RIB worker's items that send something,
+      #         which belong to no one peer and so count against each
+      #   held  routes the MinRouteAdvertisementInterval is holding back
+      #         for this peer on purpose (RFC 4271 section 9.2.1.1). They
+      #         still have to go, so a speaker holding one is not done
+      #
+      # nil is not reported: a session with no Neighbor yet has no queues,
+      # and a speaker with no table has no worker and no router.
+      def inq(peer)
+        n = peer.neighbor
+        return nil unless n
+        feed = @speaker.rib && @speaker.rib.feed
+        n.inq + (feed ? feed.unapplied(n) : 0)
+      end
+
+      def outq(peer)
+        n = peer.neighbor
+        return nil unless n
+        feed = @speaker.rib && @speaker.rib.feed
+        n.pending + (feed ? feed.unsent : 0)
+      end
+
+      def held(peer)
+        r = @speaker.router
+        return nil unless r
+        r.waiting.count { |p, _| p.address == peer.address }
       end
 
       # Whole seconds since t, or nil when there is no t. nil means the

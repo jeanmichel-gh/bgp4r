@@ -255,6 +255,8 @@ originate:
   - prefixes: [10.255.0.0/24]
     med: 10
     communities: ['65000:1']
+    extended_communities: ['route_target:65000:7']   # KIND:VALUE..., KIND a to_hash key
+    large_communities: ['65000:1:1']
 
 export:
   next_hops: { 1: 10.0.20.1 }      # ours, per AFI, toward external peers
@@ -848,7 +850,8 @@ the test rather than by reading.
     { "address": "10.0.10.1", "router_id": "10.255.10.1", "remote_as": 65010,
       "state": "established", "description": "inj1", "uptime": 380,
       "received": 4, "sent": 2, "best": 2, "type": "ebgp",
-      "flaps": 0, "last_error": null, "updates": 6,
+      "flaps": 0, "inq": 0, "outq": 0, "held": 0,
+      "last_error": null, "updates": 6,
       "capabilities": [ { "name": "As4", "code": 65, "capability": { "as": 65010 } } ] } ],
   "summary": { "established": 1, "peers": 2, "rib": 7, "paths": 9, "originated": 1 } }
 ```
@@ -882,6 +885,26 @@ in `bgp/rib/view.rb` answers `address`, `remote_as`, `router_id`,
 `state`, `description`, `uptime`, `flaps`, `last_error`, `updates` and
 `capabilities`, which come from the sessions, and `uptime` and
 `summary.established` of its own.
+
+**`inq`, `outq` and `held` say whether this speaker is done with its
+work**, which is what routescope's `bgp_drained` asks. BGP does not
+converge the way a link state protocol does: what matters for one
+speaker is that its sessions are up, it has sent what it has to send,
+and it has processed what it received. So:
+
+* `inq` is what was received and is not in the table yet: events the
+  session has not dispatched, plus its UPDATEs the RIB worker has not
+  applied (`Rib::PeerFeed#unapplied`).
+* `outq` is what is not on the wire yet: the session's output queue,
+  plus the RIB worker's items that send something
+  (`Rib::PeerFeed#unsent`). Those belong to no one peer, since one
+  Loc-RIB change goes to every peer, so they count against each.
+* `held` is what the MinRouteAdvertisementInterval holds back for this
+  peer (RFC 4271 section 9.2.1.1). It still has to go, so a speaker
+  holding one is not done. nil with no router.
+
+nil means not reported, never 0: a session with no Neighbor yet has no
+queues to read.
 
 Two more things the daemon does rather than the view, each because the
 view answers a different question:
@@ -991,7 +1014,8 @@ beside the page:
 { "rows": [
     { "prefix": "10.255.10.0/24", "path_id": null, "next_hop": "10.0.20.1",
       "as_path": "65000 65010", "origin": "igp", "local_pref": null,
-      "med": null, "communities": "65000:1" } ],
+      "med": null, "communities": ["65000:1"],
+      "extended_communities": [], "large_communities": [] } ],
   "total": 1, "offset": 0, "limit": 500, "next_offset": null,
   "skipped": { "total": 1,
                "rows": [ { "prefix": "10.255.11.0/24",
@@ -1368,7 +1392,7 @@ Actions, as `action => [path, body keys]`, which is the table
 
 | Action | Path | Body |
 |---|---|---|
-| `announce` | `/api/announce` | `prefixes` or `generate`, `next_hop`, `as_path`, `med`, `local_pref`, `communities`, `path_id`, `peer` |
+| `announce` | `/api/announce` | `prefixes` or `generate`, `next_hop`, `as_path`, `med`, `local_pref`, `communities`, `extended_communities`, `large_communities`, `path_id`, `peer` |
 | `withdraw` | `/api/withdraw` | the same selectors |
 | `attribute` | `/api/attribute` | a prefix set and the attributes to change |
 | `fault` | `/api/fault` | `case` from `BGP::Fault::CATALOG`, `prefixes` |

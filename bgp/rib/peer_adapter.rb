@@ -85,7 +85,11 @@ module BGP
       def update(msg)
         return unless msg.is_a?(BGP::Update)
         ops = operations(msg)
-        @sink << [:ops, ops] unless ops.empty?
+        # The peer rides along so the feed can say per peer how much of
+        # what that session sent is still waiting (PeerFeed#unapplied).
+        # It is the Neighbor's own, which is what a console names a
+        # session by; apply reads only the first two elements.
+        @sink << [:ops, ops, @neighbor] unless ops.empty?
       end
 
       # The Peer this session learned from its peer's OPEN, or nil before one

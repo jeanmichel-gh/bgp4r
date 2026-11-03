@@ -477,8 +477,32 @@ module BGP
           :as_path    => (path.nil? || path == 'empty' ? '' : path),
           :origin     => ORIGINS[value(pa, Origin) { |a| a.to_i }],
           :local_pref => value(pa, Local_pref) { |a| a.to_i },
-          :med        => value(pa, Multi_exit_disc) { |a| a.to_i },
-          :communities => value(pa, Communities) { |a| a.communities } }
+          :med        => value(pa, Multi_exit_disc) { |a| a.to_i } }.merge(communities(pa))
+      end
+
+      # The three community attributes of a path, each a list, empty when
+      # the path carries none. **The same three keys on every row of every
+      # view**, so a console reads one shape whichever view it asked.
+      #
+      #   :communities           RFC 1997, "ASN:VALUE" in decimal, a
+      #                          well-known one too: NO_EXPORT is
+      #                          "65535:65281" and not a name, since a
+      #                          name is a vendor's choice and the numbers
+      #                          are the attribute
+      #   :extended_communities  RFC 4360 and its successors, each its own
+      #                          to_hash entry: {:route_target=>[65000, 7]}.
+      #                          Data rather than text because the eight
+      #                          octets have a layout per type and a string
+      #                          would have to be parsed back into it
+      #   :large_communities     RFC 8092, "GLOBAL:DATA1:DATA2"
+      #
+      # Until 2026-11-03 only adj_out answered communities, and as the one
+      # String the attribute prints, "65000:1 65000:2". A list is what the
+      # other two have to be, so the first is one too.
+      def communities(pa)
+        { :communities => value(pa, Communities) { |a| a.communities.split } || [],
+          :extended_communities => value(pa, Extended_communities) { |a| a.to_hash[:extended_communities] } || [],
+          :large_communities => value(pa, Large_communities) { |a| a.communities.collect { |c| c.to_s } } || [] }
       end
 
       # One attribute of a Path_attribute, or nil when it carries none.
@@ -498,7 +522,7 @@ module BGP
           :local_pref => route.local_pref,
           :med        => route.med,
           :path_id    => route.path_id,
-          :local      => route.local? }
+          :local      => route.local? }.merge(communities(route.path_attribute))
       end
 
       # One path in the rib view. lost_at is nil for the best one, and
