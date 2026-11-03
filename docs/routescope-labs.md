@@ -724,7 +724,15 @@ tells the command to print `containerlab deploy` rather than `docker
 compose up`, and its `.gitignore` is what made the copier read a
 directory pattern rather than a basename.
 
-**The folder exists now**, as `lab/topologies/bgp4r-lab`: the
+**It lives in `lab/routescope/`, and that folder is where every lab
+written for the routescope console goes.** It started in
+`lab/topologies/` and moved on 2026-11-03, so the Compose topologies
+bgp4r's own suite drives and the containerlab labs routescope deploys are
+two folders a reader can tell apart. `bgp4r lab new` reads both.
+routescope's CI checks out bgp4r on the branch of the same name, else
+master, and deploys it from there.
+
+**The folder exists now**, as `lab/routescope/bgp4r-lab`: the
 `*.clab.yml` with those six nodes and both labels on each, node files for
 the two injectors and the daemon, FRR and BIRD configs, and four
 scenarios, one per point 2 to 5 above. Its README says what each node is

@@ -438,7 +438,33 @@ class Capture_CLI_Test < Test::Unit::TestCase
     assert(found.include?(BGP::Capture::CLI::DEFAULT_TOPOLOGY),
            'the default topology is not among the discovered ones')
     found.each do |n|
-      assert(File.directory?(File.join(topologies_dir, n)), "#{n} is not a folder")
+      assert(BGP::Capture::CLI.topology_dir(n), "#{n} is not a folder in either root")
+    end
+  end
+
+  def test_the_routescope_labs_are_offered_beside_the_topologies
+    # bgp4r-lab lives in lab/routescope/, apart from the Compose
+    # topologies bgp4r's own suite drives, and `lab new` still finds it.
+    # Asserting the folder it came from is what says the second root is
+    # read, rather than the lab having been left where it was.
+    assert(BGP::Capture::CLI.topologies.include?('bgp4r-lab'))
+    assert_equal(File.join(BGP::Capture::CLI::ROUTESCOPE, 'bgp4r-lab'),
+                 BGP::Capture::CLI.topology_dir('bgp4r-lab'))
+    assert(!File.exist?(File.join(topologies_dir, 'bgp4r-lab')),
+           'bgp4r-lab is in lab/topologies/ again')
+    lab_new('bgp4r-lab') do |dir, status|
+      assert_equal(0, status)
+      assert(File.file?(File.join(dir, 'bgp4r-lab.clab.yml')))
+    end
+  end
+
+  def test_two_roots_are_read_and_the_first_wins_a_name_in_both
+    Dir.mktmpdir('bgp4r-lab-root') do |t|
+      a = File.join(t, 'a') ; b = File.join(t, 'b')
+      [a, b, File.join(a, 'same'), File.join(b, 'same'), File.join(b, 'only-b')].each { |d| Dir.mkdir(d) }
+      assert_equal(%w{only-b same}, BGP::Capture::CLI.topologies([a, b]))
+      assert_equal(File.join(a, 'same'), BGP::Capture::CLI.topology_dir('same', [a, b]))
+      assert_nil(BGP::Capture::CLI.topology_dir('none', [a, b]))
     end
   end
 
@@ -583,7 +609,7 @@ class Capture_CLI_Test < Test::Unit::TestCase
     # new lab made from it. This reads that file verbatim rather than a
     # paraphrase of it, by copying the real folder and then writing
     # into the copy what its own comment says the patterns are about.
-    src0 = File.join(topologies_dir, 'bgp4r-lab')
+    src0 = BGP::Capture::CLI.topology_dir('bgp4r-lab')
     omit 'bgp4r-lab has no .gitignore any more' unless
       File.file?(File.join(src0, '.gitignore'))
     Dir.mktmpdir('bgp4r-lab-src') do |t|

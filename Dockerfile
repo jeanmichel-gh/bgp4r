@@ -81,7 +81,7 @@ ENTRYPOINT ["ruby", "-I/app"]
 #
 #   docker build --target lab-node -t bgp4r-lab:latest .
 #
-# `lab/topologies/bgp4r-lab` is the one topology that needs it, and the
+# `lab/routescope/bgp4r-lab` is the one topology that needs it, and the
 # two things it adds are both things the `speaker` stage cannot be given
 # from a topology file.
 #

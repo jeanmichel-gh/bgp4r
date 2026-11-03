@@ -20,7 +20,7 @@
 # along with BGP4R.  If not, see <http://www.gnu.org/licenses/>.
 #++
 
-# What lab/topologies/bgp4r-lab says, read out of its own files.
+# What lab/routescope/bgp4r-lab says, read out of its own files.
 #
 #   ruby -I. test/functional/lab/bgp4r_lab_topology_test.rb
 #
@@ -51,7 +51,7 @@ require 'bgp/sim'
 
 class LabBgp4rLabTopologyTest < Test::Unit::TestCase
 
-  DIR = File.expand_path('../../../lab/topologies/bgp4r-lab', __dir__)
+  DIR = File.expand_path('../../../lab/routescope/bgp4r-lab', __dir__)
 
   # The six nodes and what each one is, which is the README's own table.
   # Asserted against the files rather than trusted, in both directions.

@@ -20,8 +20,8 @@
 
 # BIRD 2 for the bgp4r-lab topology: the third implementation on it.
 #
-#   docker build -f lab/topologies/bgp4r-lab/Dockerfile.bird \
-#                -t bgp4r-bird:latest lab/topologies/bgp4r-lab
+#   docker build -f lab/routescope/bgp4r-lab/Dockerfile.bird \
+#                -t bgp4r-bird:latest lab/routescope/bgp4r-lab
 #
 # **This is ospfv2's docker/bird/Dockerfile**, read at ospfv2 2dfc03a,
 # with the entrypoint's socket path unchanged so `birdc` and routescope's

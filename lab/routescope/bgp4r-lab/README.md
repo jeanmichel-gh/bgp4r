@@ -70,8 +70,8 @@ Three images.
 
 ```
 docker build --target lab-node -t bgp4r-lab:latest .
-docker build -f lab/topologies/bgp4r-lab/Dockerfile.bird \
-             -t bgp4r-bird:latest lab/topologies/bgp4r-lab
+docker build -f lab/routescope/bgp4r-lab/Dockerfile.bird \
+             -t bgp4r-bird:latest lab/routescope/bgp4r-lab
 docker pull quay.io/frrouting/frr:10.2.1
 ```
 
@@ -91,9 +91,9 @@ instead, `ospfv2-bird:latest` included.
 ## Run it
 
 ```
-sudo containerlab deploy -t lab/topologies/bgp4r-lab/bgp4r-lab.clab.yml
-LAB=$PWD/lab/topologies/bgp4r-lab docker compose -f ~/routescope/compose.yml up -d
-sudo containerlab destroy -t lab/topologies/bgp4r-lab/bgp4r-lab.clab.yml
+sudo containerlab deploy -t lab/routescope/bgp4r-lab/bgp4r-lab.clab.yml
+LAB=$PWD/lab/routescope/bgp4r-lab docker compose -f ~/routescope/compose.yml up -d
+sudo containerlab destroy -t lab/routescope/bgp4r-lab/bgp4r-lab.clab.yml
 ```
 
 By hand, without routescope:
