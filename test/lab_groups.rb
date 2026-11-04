@@ -110,8 +110,12 @@ module LabGroups
 
     # What GoBGP makes of our export side and of RFC 7911. A new
     # send-side lab test against GoBGP goes here. 74s.
+    #
+    # gen_gobgp_test is here because it is a send-side test of the
+    # same shape: bgp4r sends, GoBGP reads, the RIB is compared.
     'gobgp-router' => %w[
       add_path_gobgp_test
+      gen_gobgp_test
       rib_router_gobgp_test
     ],
 

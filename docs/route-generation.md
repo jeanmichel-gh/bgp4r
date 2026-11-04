@@ -2,9 +2,9 @@
 
 This is the design for generating BGP traffic in bulk, in every address
 family bgp4r can build, with path attributes that vary from route to
-route. Nothing here is built yet. It records the design and the plan,
-so the work can be picked up in any session. The plan is at the end,
-with the status of each phase.
+route. It records the design and the plan, so the work can be picked
+up in any session. Phase 1 is built; section 13 says what it does.
+The plan is at the end, with the status of each phase.
 
 Written on 2026-11-03.
 
@@ -244,7 +244,7 @@ can fail. Update this table in the pull request that moves a step.
 |---|---|---|
 | 0a | `path_id` on a `generate` block reaches every prefix, announce and withdraw. | Done |
 | 0b | `as_path_literal: true` sends `as_path` as written over eBGP; the prepend stays the default (section 11). | Done |
-| 1 | `bgp/gen`: spec reader that refuses unknown keys, unicast generator for IPv4 and IPv6, the packer, `updates`, `withdrawals`, `expected`. | To do |
+| 1 | `bgp/gen`: spec reader that refuses unknown keys, unicast generator for IPv4 and IPv6, the packer, `updates`, `withdrawals`, `expected`. | Done |
 | 2 | `Vary`: the five patterns, `group`, the property patterns for AS_PATH and communities. | To do |
 | 3 | Injector wiring: `announce` and `withdraw` read a spec, `POST /api/plan`, the `mp_reach`, `mp_unreach` and `specimen` keys. | To do |
 | 4a | Multicast and labelled. | To do |
@@ -262,3 +262,34 @@ Phase 1 is the foundation and the rest depend on it. Phases 4a to 4g
 are independent of each other once 3 is in, and can be taken in any
 order. A done step means its tests are in the suite, the full unit suite
 passes, CLAUDE.md's baseline is re-measured, and this table says Done.
+
+## 13. What is built
+
+**Phase 1.** `require 'bgp/gen'`, then `BGP::Gen.new(spec)` for
+`family: unicast`, IPv4 or IPv6, with fixed attributes and a fixed
+`path_id`. Every other family name from `BGP::Specimen.families` is
+refused as having no generator yet, and `seed`, `group` and patterns
+are refused as later phases rather than ignored.
+
+* `updates`, `withdrawals` and `expected` are Enumerators, so a million
+  routes are built one message or one row at a time.
+* **Attributes are sent as written.** The library knows no session, so
+  it prepends no AS and fills in no next hop. ORIGIN and AS_PATH are
+  always there, IGP and empty by default. The injector adds the session
+  half in phase 3.
+* **`expected` holds for a 4-octet AS session.** On a 2-octet session a
+  4-octet AS in `as_path` goes out as AS_TRANS, 23456, and bgp4r adds no
+  AS4_PATH. The functional test asserts that difference.
+* Communities in `expected` are spelled the way the attribute reads
+  back, so `no_export` is `65535:65281`, which is what a RIB shows.
+* **The packing is checked against itself.** The first message of each
+  feed is measured, and a difference from the packer's arithmetic
+  raises `Gen::PackingError`. A spec whose attributes leave no room for
+  one route is refused at `new`, not mid feed.
+
+Tests: `test/unit/gen_test.rb` runs the section 10 properties over
+random specs (`GEN_SEEDS=500` for a longer sweep),
+`test/functional/gen_test.rb` compares a receiver's Adj-RIB-In with
+`expected`, and `test/functional/lab/gen_gobgp_test.rb` does the same
+against gobgpd 3.23.0. GoBGP's JSON prints no Path Identifier, so that
+test vouches for where the identifiers sit and not for their value.

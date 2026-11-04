@@ -156,6 +156,7 @@ module CoverageMatrix
     'rib_router'   => 'our export side, which is per route and not per family',
     'add_path'     => 'RFC 7911, which cuts across families',
     'attr_set'     => 'attribute 128, which has no NLRI',
+    'gen'          => 'bgp/gen, a generator; docs/route-generation.md phase 6 reports those',
   }.freeze
 
   # An attribute a lab test names outright, with no fault case behind

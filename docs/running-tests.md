@@ -19,9 +19,9 @@ amounts. Measured 2026-11-03:
 
 | Tier | What it needs | Files | Time | Command |
 |---|---|---:|---|---|
-| unit | Ruby | 135 | 21s | `ruby test/run_unit.rb` |
-| functional | a loopback socket | 12 | 18s | one file at a time, below |
-| lab | gobgpd, FRR, Docker or root | 26 | 10s to 400s per group | `ruby test/run_lab.rb GROUP` |
+| unit | Ruby | 140 | 21s | `ruby test/run_unit.rb` |
+| functional | a loopback socket | 13 | 18s | one file at a time, below |
+| lab | gobgpd, FRR, Docker or root | 27 | 10s to 400s per group | `ruby test/run_lab.rb GROUP` |
 
 **The first two tiers together are under a minute and need nothing
 installed.** That is worth knowing before reaching for a lab test.
@@ -129,9 +129,10 @@ The four executables.
 
 | Feature | unit | func | lab | What |
 |---|---:|---:|---:|---|
-| `daemon` | 10 | 1 | 0 | bgp4rd and bgp4r-cli: the control socket, the views and the configuration |
+| `daemon` | 11 | 1 | 0 | bgp4rd and bgp4r-cli: the control socket, the views and the configuration |
 | `injector` | 5 | 1 | 0 | bgp4r-sim: the ten actions, the HTTP API and what it sent |
 | `routegen` | 2 | 1 | 3 | Generating many prefixes and packing them into UPDATEs |
+| `gen` | 5 | 1 | 1 | bgp/gen: UPDATEs and withdrawals from a spec, and what they meant |
 | `capture` | 4 | 0 | 0 | Reading BGP off a wire or a pcap file, and bgp4r lab new |
 | `speaker` | 1 | 0 | 4 | lab/speaker.rb and the five topologies under lab/topologies |
 | `events` | 2 | 0 | 0 | The structured event stream both programs serve |
@@ -231,7 +232,7 @@ ruby test/run_feature.rb contracts
 bgp4rd and bgp4r-cli: the control socket, the views and the configuration.
 
 - Read first: `docs/daemon.md`
-- 10 unit files, 1 functional
+- 11 unit files, 1 functional
 
 ```
 ruby test/run_feature.rb daemon
@@ -325,6 +326,19 @@ The finite state machine, the TCP session and the two IO threads.
 
 ```
 ruby test/run_feature.rb fsm
+```
+
+### `gen`
+
+bgp/gen: UPDATEs and withdrawals from a spec, and what they meant.
+
+- Read first: `docs/route-generation.md`
+- 5 unit files, 1 functional
+- lab:
+  - `gen_gobgp_test`, needs gobgpd
+
+```
+ruby test/run_feature.rb gen
 ```
 
 ### `injector`
@@ -812,5 +826,5 @@ test file has to be tagged before the suite is green again, which is
 the same arrangement `test/unit/lab_groups_test.rb` has with the CI
 matrix.
 
-173 of 173 test files are tagged. The
+180 of 180 test files are tagged. The
 remainder, if any, is what the guard names.
