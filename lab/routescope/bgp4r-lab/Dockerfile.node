@@ -1,0 +1,56 @@
+# syntax=docker/dockerfile:1
+# Copyright 2026 Jean-Michel Esnault.
+# All rights reserved.
+# See LICENSE.txt for permissions.
+#
+#
+# This file is part of BGP4R.
+#
+# BGP4R is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# BGP4R is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with BGP4R.  If not, see <http://www.gnu.org/licenses/>.
+
+# The bgp4r node image for this lab, built from this folder alone:
+#
+#   docker build -f Dockerfile.node -t bgp4r-lab:latest .
+#
+# **Why a second recipe for an image the root Dockerfile already
+# builds.** The root one's `lab-node` stage builds from a bgp4r
+# checkout, which is what CI wants: it tests the branch. A copy of this
+# folder made by `bgp4r lab new` has no checkout behind it, so it cannot
+# build that stage, and routescope builds a lab's images from the lab
+# folder (the `routescope.build` label on each node). This one fetches
+# bgp4r from GitHub instead, so it builds anywhere, and what it runs is
+# master rather than a local edit. To run a local edit, build the root
+# Dockerfile's `lab-node` stage under the same tag.
+#
+# **It rebuilds only when master moves.** `ADD` of a git URL is
+# BuildKit's: each build resolves `master` to a commit and reuses the
+# layer while the commit is the same. So building on every lab start
+# costs a few seconds, and a new commit on master is picked up on the
+# next start. It needs BuildKit, which `docker build` uses whenever the
+# buildx plugin is installed; the legacy builder cannot add a git URL.
+#
+# The rest is `lab-node`: Ruby, iproute2 for the `exec: ip addr add`
+# lines, and root so `bgp4rd` can create `/run/bgp4r`. No gems: the
+# library's one runtime gem, `logger`, ships with Ruby 3.4, and the
+# root Dockerfile's Gemfile install is test and development gems.
+
+ARG RUBY_VERSION=3.4
+FROM ruby:${RUBY_VERSION}-slim
+RUN apt-get update && apt-get install -y --no-install-recommends iproute2 \
+    && rm -rf /var/lib/apt/lists/*
+ARG BGP4R_REF=master
+ADD https://github.com/jeanmichel-gh/bgp4r.git#${BGP4R_REF} /app
+WORKDIR /app
+EXPOSE 179
+ENTRYPOINT ["ruby", "-I/app"]

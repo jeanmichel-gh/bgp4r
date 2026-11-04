@@ -112,7 +112,16 @@ routescope's `bgp_best` condition reads.
 
 ## What it needs first
 
-Four images.
+Four images. **routescope builds the three local ones when it starts the
+lab**, from the `routescope.build` label on each node, so from a console
+there is nothing to do first. Each label names a Dockerfile in this
+folder and the folder is the build context, so a copy made by `bgp4r lab
+new` builds as well as the checkout. `Dockerfile.node` fetches bgp4r from
+GitHub master and rebuilds only when master moves; its header says why it
+exists beside the root Dockerfile's `lab-node` stage.
+
+By hand, from a bgp4r checkout, which runs the checkout's code rather
+than master:
 
 ```
 docker build --target lab-node -t bgp4r-lab:latest .
