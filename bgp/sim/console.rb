@@ -21,7 +21,7 @@
 #++
 
 require 'bgp/sim/injector'
-require 'bgp/sim/guide'
+require 'bgp/prompt'
 
 module BGP
   module Sim
@@ -58,16 +58,10 @@ module BGP
     # That is why the list of verbs is `verbs`.
     class Console
       include BGP
-
-      # How many received messages `received` keeps.
-      KEEP = 200
-
-      # The message printed when irb cannot be loaded. Ruby 4.0 made irb
-      # a bundled gem, so under Bundler it loads only when the Gemfile
-      # names it, which is the trap CLAUDE.md records for `base64`.
-      IRB_MISSING = 'irb cannot be loaded. Ruby 4.0 made it a bundled gem, ' \
-                    "so under Bundler add gem 'irb' to the Gemfile, or run " \
-                    'without bundle exec.'
+      # irb loading, verbs, guide, received, last, watch and the tap, which
+      # the daemon's prompt shares. KEEP, IRB_MISSING, Received, Tap,
+      # Console.load_irb and Console.describe all come from there.
+      include BGP::Prompt
 
       # What a session opened at the prompt uses when a keyword is not
       # given. The same numbers `bgp4r routegen` uses, so the two agree.
@@ -130,25 +124,6 @@ module BGP
         exit stops the session and quits. ls lists every method here.
       TEXT
 
-      # One message in, from one peer, at one time.
-      Received = Struct.new(:at, :peer, :message) do
-        def to_s
-          format('%s %s %s', at.strftime('%H:%M:%S.%L'), peer, Console.describe(message))
-        end
-      end
-
-      # The observer on one Neighbor. A separate object, so an Observable
-      # sees `update` and nothing else of the console.
-      class Tap
-        def initialize(console, address)
-          @console, @address = console, address
-        end
-
-        def update(msg)
-          @console.received_from(@address, msg)
-        end
-      end
-
       # The injectors behind the prompt, one per session opened here and
       # the one handed to new, if any.
       attr_reader :sessions
@@ -157,13 +132,9 @@ module BGP
       # arg[:factory] builds the Injector for `connect` and `listen` from
       # a node file Hash, which is the seam a test uses.
       def initialize(injector = nil, out = $stdout, keep = KEEP, arg = {})
-        @out, @keep = out, keep
+        initialize_prompt(out, keep)
         @factory = arg[:factory] || ->(config) { Injector.new(config) }
         @name = arg[:name]
-        @received = []
-        @lock = Mutex.new
-        @watch = false
-        @tapped = {}
         @sessions = []
         @owned = []
         attach(injector) if injector
@@ -219,39 +190,9 @@ module BGP
         @remote or raise ArgumentError, NO_REMOTE
       end
 
-      # Opens irb on this object and returns when the person exits.
-      def interact
-        Console.load_irb
-        @out.puts "bgp4r console: self is the console, n is the Neighbor. " \
-                  "'verbs' lists what to type, exit quits."
-        instance_eval { binding }.irb(show_code: false)
-        nil
-      end
-
-      # Requires irb, or raises LoadError with IRB_MISSING.
-      def self.load_irb
-        require 'irb'
-      rescue LoadError
-        raise LoadError, IRB_MISSING
-      end
-
-      def verbs
-        @out.print VERBS
-        nil
-      end
-
-      # docs/console.md, rendered: the whole guide, or the section whose
-      # number or heading matches key. Through a pager on a terminal.
-      # Named `guide` because `help` is an irb command and would win.
-      def guide(key = nil)
-        g = Guide.new(File.read(Guide::PATH, :encoding => 'UTF-8'), terminal?)
-        text = key.nil? ? g.to_s : g.section(key)
-        text ||= "No section #{key.inspect}. The sections are:\n#{g.contents}"
-        page(text)
-        nil
-      rescue Errno::ENOENT
-        @out.puts "#{Guide::PATH} is not there; the guide ships with a checkout or the gem."
-        nil
+      # The line irb prints when the prompt opens.
+      def banner
+        "bgp4r console: self is the console, n is the Neighbor. #{super}"
       end
 
       # ---- sessions ------------------------------------------------------
@@ -369,69 +310,13 @@ module BGP
 
       # ---- watching ------------------------------------------------------
 
-      def received(count = 10)
-        @lock.synchronize { @received.last(count) }.each { |r| @out.puts r }
-        nil
-      end
-
-      def last
-        r = @lock.synchronize { @received.last }
-        r && r.message
-      end
-
-      def watch ; @watch = true ; end
-      def quiet ; @watch = false ; true ; end
-      def watching? ; @watch ; end
-
       def sent(peer: nil) ; injector(peer).sent.summary ; end
       def announced(peer: nil) ; injector(peer).announced ; end
 
       def specimens ; BGP::Specimen.names ; end
       def faults ; BGP::Fault.names ; end
 
-      # Called by a Tap, on the session's reader thread.
-      def received_from(address, msg)
-        r = Received.new(Time.now, address, msg)
-        @lock.synchronize do
-          @received << r
-          @received.shift while @received.size > @keep
-        end
-        @out.puts r if @watch
-      end
-
-      # One line about a message, for `received` and `watch`.
-      def self.describe(msg)
-        case msg
-        when BGP::Update
-          format('Update, %d prefixes, %d withdrawn',
-                 Injector.prefix_count(msg), Injector.withdrawn_count(msg))
-        when BGP::Message then msg.class.name.split('::').last
-        when Exception then "malformed: #{msg.message}"
-        else msg.to_s
-        end
-      end
-
       private
-
-      # True when the output is a person's terminal, which is when the
-      # guide gets colour and a pager.
-      def terminal?
-        @out.respond_to?(:tty?) && @out.tty?
-      end
-
-      # Text through $PAGER, or less, on a terminal; printed otherwise, or
-      # when no pager runs. `::IO`, since `IO` here is BGP::IO. LESS gets
-      # F, R and X so a short section prints and returns, colour shows,
-      # and the screen is not cleared.
-      def page(text)
-        return @out.print(text) unless terminal?
-        env = { 'LESS' => ENV.fetch('LESS', 'FRX') }
-        ::IO.popen(env, ENV.fetch('PAGER', 'less'), 'w') { |io| io.print(text) }
-      rescue Errno::EPIPE
-        nil # the person quit the pager before the end
-      rescue Errno::ENOENT
-        @out.print(text)
-      end
 
       def peer(address = nil)
         s = injector(address).speaker
@@ -484,16 +369,6 @@ module BGP
       def cease(p, subcode)
         return unless p.established?
         act('notification', 'peer' => p.address, 'code' => CEASE, 'subcode' => subcode)
-      end
-
-      def tap(peer)
-        n = peer.neighbor
-        return if n.nil?
-        @lock.synchronize do
-          return if @tapped.key?(n.object_id)
-          @tapped[n.object_id] = true
-        end
-        n.add_observer(Tap.new(self, peer.address))
       end
 
       def body(prefixes, opts)

@@ -776,7 +776,8 @@ Cease, go to `idle`, and keep trying to dial.
 * **3a**: `bgp4r sim --interact`. Done.
 * **3b-i**: the parts of the prompt both consoles share, moved into one
   module: loading irb, `verbs`, `guide`, `received`, `watch` and the tap
-  on each Neighbor. No change in behavior.
+  on each Neighbor. No change in behavior. Done, as `BGP::Prompt` in
+  bgp/prompt.rb, which loads without the injector.
 * **3b-ii**: `bgp4rd --interact` with the reading and acting verbs, the
   `mark` key, and Cease 6/2 on `exit`.
 * **3b-iii**: sending by hand on the daemon: an Injector over the
