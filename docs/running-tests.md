@@ -19,7 +19,7 @@ amounts. Measured 2026-11-03:
 
 | Tier | What it needs | Files | Time | Command |
 |---|---|---:|---|---|
-| unit | Ruby | 151 | 21s | `ruby test/run_unit.rb` |
+| unit | Ruby | 152 | 21s | `ruby test/run_unit.rb` |
 | functional | a loopback socket | 14 | 18s | one file at a time, below |
 | lab | gobgpd, FRR, Docker or root | 27 | 10s to 400s per group | `ruby test/run_lab.rb GROUP` |
 
@@ -132,7 +132,7 @@ The four executables.
 | `daemon` | 12 | 1 | 0 | bgp4rd and bgp4r-cli: the control socket, the views and the configuration |
 | `injector` | 5 | 1 | 0 | bgp4r-sim: the ten actions, the HTTP API and what it sent |
 | `routegen` | 2 | 1 | 3 | Generating many prefixes and packing them into UPDATEs |
-| `console` | 1 | 1 | 0 | An irb prompt on a live session: bgp4r routegen --interact |
+| `console` | 2 | 1 | 0 | An irb prompt on bgp4r: bgp4r console, and routegen --interact |
 | `gen` | 16 | 1 | 1 | bgp/gen: UPDATEs and withdrawals from a spec, and what they meant |
 | `capture` | 4 | 0 | 0 | Reading BGP off a wire or a pcap file, and bgp4r lab new |
 | `speaker` | 1 | 0 | 4 | lab/speaker.rb and the five topologies under lab/topologies |
@@ -219,10 +219,10 @@ ruby test/run_feature.rb communities
 
 ### `console`
 
-An irb prompt on a live session: bgp4r routegen --interact.
+An irb prompt on bgp4r: bgp4r console, and routegen --interact.
 
 - Read first: `docs/console.md`
-- 1 unit file, 1 functional
+- 2 unit files, 1 functional
 
 ```
 ruby test/run_feature.rb console
@@ -838,5 +838,5 @@ test file has to be tagged before the suite is green again, which is
 the same arrangement `test/unit/lab_groups_test.rb` has with the CI
 matrix.
 
-192 of 192 test files are tagged. The
+193 of 193 test files are tagged. The
 remainder, if any, is what the guard names.

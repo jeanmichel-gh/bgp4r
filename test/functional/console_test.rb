@@ -131,6 +131,158 @@ class TestConsole < Test::Unit::TestCase
     assert_match(/127\.0\.0\.1 Update, 1 prefixes, 0 withdrawn/, @out.string)
   end
 
+  # ---- connect, listen, shutdown and clear: bgp4r console ---------------
+
+  # Every message the test server reads, NOTIFICATIONs included.
+  class AllCatcher < Catcher
+    def update(msg) ; @q << msg if msg.is_a?(BGP::Message) ; end
+  end
+
+  # A console with no session, which opens one at the prompt.
+  def empty_console
+    @out = StringIO.new
+    @owned = BGP::Sim::Console.new(nil, @out)
+  end
+
+  def connected_console
+    c = empty_console
+    row = c.connect('127.0.0.1', remote_as: PEER_AS, port: @port)
+    assert_equal('Established', row[:state].to_s, 'connect waited for the session')
+    c
+  end
+
+  def teardown_console
+    @owned.stop if @owned
+  end
+
+  def notification_from(catcher)
+    loop do
+      m = catcher.shift
+      return m if m.nil? || m.is_a?(BGP::Notification)
+    end
+  end
+
+  def test_connect_at_the_prompt_opens_a_session_and_an_announcement_crosses
+    c = connected_console
+    assert(@s.is_established?)
+    c.announce('10.5.0.0/24', med: 4)
+    u = @catcher.shift
+    assert_equal(['10.5.0.0/24'], nlri_of(u))
+    assert_equal(4, u.path_attribute[:multi_exit_disc].to_i)
+  ensure
+    teardown_console
+  end
+
+  def test_clear_sends_administrative_reset_and_the_session_comes_back
+    all = AllCatcher.new
+    @s.add_observer all
+    c = connected_console
+    c.clear
+    n = notification_from(all)
+    assert_kind_of(BGP::Notification, n, 'no NOTIFICATION reached the peer')
+    assert_equal([6, 4], n.to_hash.values_at(:code, :subcode))
+    assert(wait(15) { c.state == 'Established' }, "clear left it #{c.state}")
+  ensure
+    teardown_console
+  end
+
+  def test_shutdown_sends_administrative_shutdown_and_it_stays_down
+    all = AllCatcher.new
+    @s.add_observer all
+    c = connected_console
+    c.shutdown
+    n = notification_from(all)
+    assert_kind_of(BGP::Notification, n, 'no NOTIFICATION reached the peer')
+    assert_equal([6, 2], n.to_hash.values_at(:code, :subcode))
+    sleep 3 # longer than the 2 second retry
+    assert_not_equal('Established', c.state.to_s, 'it came back on its own')
+    c.no_shutdown
+    assert(wait(15) { c.state == 'Established' }, "no_shutdown left it #{c.state}")
+  ensure
+    teardown_console
+  end
+
+  # Two bgp4r speakers in one process, one listening and one dialling,
+  # each a console of its own. What one announces the other reads.
+  def test_listen_takes_a_session_a_second_console_dials
+    port = TCPServer.open('127.0.0.1', 0) { |srv| srv.addr[1] }
+    near = empty_console
+    near.listen('127.0.0.1', remote_as: 65_002, port: port, local_address: '127.0.0.1', wait: 0)
+    far = BGP::Sim::Console.new(nil, StringIO.new)
+    begin
+      row = far.connect('127.0.0.1', remote_as: 65_001, local_as: 65_002, port: port)
+      assert_equal('Established', row[:state].to_s)
+      assert(wait { near.state == 'Established' })
+      far.announce('10.4.0.0/24')
+      assert(wait { near.last.is_a?(BGP::Update) }, 'nothing reached the listening side')
+      assert_equal(['10.4.0.0/24'], nlri_of(near.last))
+      assert_equal([65_002], near.last.path_attribute[:as_path].as_path.split.collect(&:to_i))
+    ensure
+      far.stop
+    end
+  ensure
+    teardown_console
+  end
+
+  def test_a_second_listen_on_a_taken_port_is_refused_in_words
+    port = TCPServer.open('127.0.0.1', 0) { |srv| srv.addr[1] }
+    c = empty_console
+    c.listen('127.0.0.1', remote_as: 65_002, port: port, local_address: '127.0.0.1', wait: 0)
+    e = assert_raise(ArgumentError) do
+      c.listen('127.0.0.9', remote_as: 65_009, port: port, local_address: '127.0.0.1', wait: 0)
+    end
+    assert_match(/port #{port} is taken/, e.message)
+    assert_equal(['127.0.0.1'], c.peers.collect { |p| p[:address] })
+  ensure
+    teardown_console
+  end
+
+  # The program: no session until `connect` is typed.
+  def test_bgp4r_console_opens_with_no_session_and_connect_opens_one
+    begin
+      BGP::Sim::Console.load_irb
+    rescue LoadError => e
+      omit(e.message)
+    end
+    argv = [RbConfig.ruby, '-I', ROOT, File.join(ROOT, 'exe', 'bgp4r'), 'console', '-l', File::NULL]
+    out = ::IO.popen(argv, 'r+', :err => [:child, :out]) do |io|
+      io.puts 'p peers'
+      io.puts 'p Specimen.build(:origin).class'
+      io.puts "connect '127.0.0.1', remote_as: #{PEER_AS}, port: #{@port}"
+      io.puts "announce '10.3.0.0/24'"
+      io.puts 'exit'
+      io.close_write
+      io.read
+    end
+    assert_equal(0, $?.exitstatus, out)
+    assert_match(/^\[\]$/, out, 'peers answered no session')
+    assert_match(/^BGP::Origin$/, out, 'the library is loaded, with BGP included')
+    assert_match(/:state=>"Established"|state: "Established"/, out, 'connect answered the row')
+    u = @catcher.shift
+    assert_kind_of(BGP::Update, u, 'nothing crossed: ' + out)
+    assert_equal(['10.3.0.0/24'], nlri_of(u))
+    assert(wait { !@s.is_established? }, 'exit left the session up')
+  end
+
+  def test_bgp4r_console_with_peer_connects_before_the_prompt
+    begin
+      BGP::Sim::Console.load_irb
+    rescue LoadError => e
+      omit(e.message)
+    end
+    argv = [RbConfig.ruby, '-I', ROOT, File.join(ROOT, 'exe', 'bgp4r'), 'console',
+            '--peer', '127.0.0.1', '--peer-as', PEER_AS.to_s, '--port', @port.to_s, '-l', File::NULL]
+    out = ::IO.popen(argv, 'r+', :err => [:child, :out]) do |io|
+      io.puts "announce '10.2.0.0/24'"
+      io.puts 'exit'
+      io.close_write
+      io.read
+    end
+    assert_equal(0, $?.exitstatus, out)
+    assert_match(/session to 127\.0\.0\.1 is established/, out)
+    assert_equal(['10.2.0.0/24'], nlri_of(@catcher.shift))
+  end
+
   # ---- bgp4r routegen --interact ----------------------------------------
 
   # The whole program, with its prompt fed from a pipe: the line typed

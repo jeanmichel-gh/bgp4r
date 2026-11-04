@@ -464,9 +464,14 @@ bgp/sim/                 `bgp4r-sim` the route injector, and `bgp4r
                          one, and it reads a **node file**;
                          `examples/routegen` keeps its own format and
                          its own script
-                         console.rb `bgp4r routegen --interact`: irb
-                         opened with a `Console` as self over the
-                         running Injector, so a person types
+                         console.rb `bgp4r routegen --interact` and
+                         `bgp4r console`: irb
+                         opened with a `Console` as self over a list
+                         of Injectors, none to start with for `bgp4r
+                         console`, one per `connect` or `listen` typed
+                         at the prompt, since a Speaker reads its peers
+                         once; console_command.rb is that command's
+                         flags. A person types
                          `announce`, `specimen`, `fault`, `received`
                          or `n` for the Neighbor. **Every verb that
                          sends goes through `Injector#act`**, inline,
@@ -607,8 +612,8 @@ bgp/specimen.rb          `BGP::Specimen::CATALOG`, the valid counterpart
                          the suite until it has a specimen
 bgp/misc/                extras: route_generator.rb (many prefixes packed in UPDATEs), live_feed.rb (a client for an old public BGP feed)
 exe/bgp4r                the umbrella command, with `capture`, `sim`,
-                         `routegen`, `lab new` and `version`. `sim` and
-                         `routegen`
+                         `routegen`, `console`, `lab new` and `version`.
+                         `sim`, `routegen` and `console`
                          require bgp/sim in their own branch, and `lab`
                          requires fileutils in its own, so a
                          capture container loads neither injector nor
@@ -1596,7 +1601,7 @@ CI: `.github/workflows/test.yml` runs both suites on every push to master and ev
 
 `.github/workflows/capture.yml` is the one workflow that deploys a containerlab lab: it builds the `lab-node` and BIRD images, deploys `lab/routescope/bgp4r-lab`, and runs its `capture.sh`, on demand and on a push that changes that folder or the Dockerfile. Its log is what routescope's BGP fixtures are cut from.
 
-Baseline on 2026-11-04: 3491 tests, 34783 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
+Baseline on 2026-11-04: 3532 tests, 34945 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
 
 **That coverage figure is 98.5% for the library and the rest is the two
 programs, not a gap anywhere else.** Measured the same run: with
@@ -7786,7 +7791,7 @@ the guide.
 
 1. **Done.** `BGP::Sim::Console` in bgp/sim/console.rb and `bgp4r
    routegen --interact`. The verbs go through `Injector#act`.
-2. **Designed, 2a done.** `bgp4r console`: the library loaded, and
+2. **Designed, 2a and 2b done.** `bgp4r console`: the library loaded, and
    sessions opened at the prompt with `connect` and `listen`, or by flag.
    `--back-to-back` runs two bgp4r speakers in one process over
    loopback, with `remote` the console on the other side. The design was
@@ -7796,9 +7801,21 @@ the guide.
      and `Neighbor#render` names a `to_s` that raises rather than
      letting it kill the event thread. All 18 fault cases now cross to a
      bgp4r receiver on one session, which `sim_test.rb` asserts.
-   * **2b.** `bgp4r console`, with `connect`, `listen`, `shutdown` and
-     `clear`. Each `connect` or `listen` builds an Injector of its own,
-     because a Speaker reads its peer list once.
+   * **2b. Done.** `bgp4r console`, in bgp/sim/console_command.rb,
+     with `connect`, `listen`, `shutdown`, `no_shutdown` and `clear`.
+     Each `connect` or `listen` builds an Injector of its own, because a
+     Speaker reads its peer list once, and a verb with no `peer:` goes
+     to the only session or the only one up. `shutdown` and `clear` send
+     the RFC 4486 Cease, 6/2 and 6/4, and the functional test reads each
+     off the wire. Two departures from the design, both in
+     docs/console.md section 9: `no_shutdown` was added, since a
+     `shutdown` could not otherwise be undone, and `flap` stayed the
+     `session.flap` action rather than becoming an alias of `clear`,
+     which would have taken `count:` away. **No unit test may reach
+     irb**, which reads standard input: a sabotage that let a refusal
+     fall through to the prompt hung the file rather than failing it,
+     so `ConsoleCommand` takes the prompt as a lambda and the tests pass
+     one that records.
    * **2c.** `--back-to-back` and `remote`, with every family offered.
    Two decisions to keep: **networking terms at the prompt**, so
    `remote_as`, `listen`, `shutdown` and `clear`; and **`remote` and not

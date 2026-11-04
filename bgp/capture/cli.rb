@@ -53,7 +53,7 @@ module BGP
     # nothing needs.
     class CLI
 
-      SUBCOMMANDS = %w{capture sim routegen lab version}
+      SUBCOMMANDS = %w{capture sim routegen console lab version}
 
       # `docs/routescope-labs.md` section 4: routescope's capture argv is
       # hard coded to `IMAGE capture -i IFACE`, so it passes **no
@@ -111,6 +111,7 @@ Usage: bgp4r SUBCOMMAND [options]
   capture   dissect BGP messages off an interface or a pcap file
   sim       run the route injector, with its HTTP API (also: bgp4r-sim)
   routegen  send one generated range to a peer and exit
+  console   an irb prompt with bgp4r loaded, and sessions opened there
   lab new   copy a lab topology into a folder of your own, and git-init it
   version   print the bgp4r version
 
@@ -127,6 +128,7 @@ See docs/daemon.md.
         when 'capture'  then capture(argv[1..-1])
         when 'sim'      then sim(argv[1..-1])
         when 'routegen' then routegen(argv[1..-1])
+        when 'console'  then console(argv[1..-1])
         when 'lab'      then lab(argv[1..-1])
         when 'version'  then version
         when nil, '-h', '--help'
@@ -150,6 +152,12 @@ See docs/daemon.md.
       def routegen(argv)
         require 'bgp/sim/routegen'
         BGP::Sim::Routegen.new(@out, @err).start(argv)
+      end
+
+      # `bgp4r console`, which requires bgp/sim for the same reason.
+      def console(argv)
+        require 'bgp/sim/console_command'
+        BGP::Sim::ConsoleCommand.new(@out, @err).start(argv)
       end
 
       def version
