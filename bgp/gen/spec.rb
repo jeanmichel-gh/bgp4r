@@ -56,6 +56,7 @@ module BGP
       KEYS = %w[family afi count per_update start path_id label rd vrfs route_target
                 source protocol destination_port rate redirect marking
                 route_type ip esi ethernet_tag gateway mac_mobility router_mac pmsi_label
+                origin_as prefix_length default
                 seed group attributes].freeze
 
       # The keys that belong to some families only, and which. A spec
@@ -63,6 +64,7 @@ module BGP
       # a label on a unicast spec is not dropped in silence.
       FLOW = %w[flow_spec flow_spec_vpn].freeze
       EVPN = %w[evpn].freeze
+      RTC = %w[rt_constrain].freeze
       RD = %w[vpn vpn_multicast flow_spec_vpn evpn].freeze
       FAMILY_KEYS = { 'label' => %w[labelled vpn vpn_multicast evpn],
                       'rd' => RD, 'vrfs' => RD, 'route_target' => RD,
@@ -72,7 +74,8 @@ module BGP
                       'route_type' => EVPN, 'ip' => EVPN, 'esi' => EVPN,
                       'ethernet_tag' => EVPN, 'gateway' => EVPN,
                       'mac_mobility' => EVPN, 'router_mac' => EVPN,
-                      'pmsi_label' => EVPN }.freeze
+                      'pmsi_label' => EVPN,
+                      'origin_as' => RTC, 'prefix_length' => RTC, 'default' => RTC }.freeze
 
       # The EVPN keys that are integers, with the largest value each
       # field holds: an Ethernet Tag ID and a MAC Mobility sequence
@@ -135,6 +138,16 @@ module BGP
           out[k] = value(s[k], k, :int, max, out['seed']) if s.key?(k)
         end
         out['route_type'] = integer(s, 'route_type', false, 0, 0xff)
+        # RFC 4684 section 4: a 4-octet origin AS, and a prefix length in
+        # one octet, which is all the bound there is.
+        out['origin_as'] = value(s['origin_as'], 'origin_as', :int, U32, out['seed']) if s.key?('origin_as')
+        out['prefix_length'] = integer(s, 'prefix_length', false, 0, 0xff)
+        if s.key?('default')
+          unless s['default'] == true || s['default'] == false
+            raise SpecError, "default is true or false, not #{s['default'].inspect}"
+          end
+          out['default'] = s['default']
+        end
         EVPN_MAX.each do |k, max|
           out[k] = value(s[k], k, :int, max, out['seed']) if s.key?(k)
         end

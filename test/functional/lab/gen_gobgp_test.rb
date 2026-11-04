@@ -108,7 +108,7 @@ class LabGenGobgpTest < Test::Unit::TestCase
                G::VPN_IPV4 => [1, 128], G::VPN_IPV6 => [2, 128],
                G::VPN_MULTICAST_IPV4 => [1, 129],
                G::FS_IPV4 => [1, 133], G::FS_IPV6 => [2, 133], G::FS_VPN => [1, 134],
-               G::EVPN => [25, 70] }
+               G::EVPN => [25, 70], G::RTC => [1, 132] }
 
   def rib(afi)
     @router.rib_family(FAMILY[afi])
@@ -700,5 +700,47 @@ class LabGenGobgpTest < Test::Unit::TestCase
       assert_equal('::', path['nlri']['value']['gateway'], 'RFC 9136 section 3.1: no gateway is zero')
       assert_equal([{ 'type' => 6, 'subtype' => 3, 'mac' => '00:00:5e:00:53:01' }], a[EXT_COMMUNITIES]['value'])
     end
+  end
+
+  # ---- phase 4e: RT-constrain -------------------------------------------
+
+  # GoBGP's key for a membership route: the origin AS, then the route
+  # target by its own fields, a 4-octet AS in asdot. Measured in
+  # rt_constrain_gobgp_test.rb, where 70000 reads back as 1.4464.
+  def rtc_key(origin, admin, n)
+    a = admin.is_a?(Integer) && admin > 0xffff ? "#{admin >> 16}.#{admin & 0xffff}" : admin
+    "#{origin}:#{a}:#{n}"
+  end
+
+  # A membership feed into GoBGP's `rtc` table, sampled. The key of each
+  # sampled route is built here from `start` and the route's number, and
+  # not from expected, so a generator that stepped the wrong field would
+  # fail. **No default route target**: GoBGP 3.23.0 panics on the
+  # default followed by a second route, which rt_constrain_gobgp_test.rb
+  # asserts, so the default crosses over loopback in gen_test.rb only.
+  def rtc_crosses(admin, first, count, origin)
+    g = BGP::Gen.new('family' => 'rt_constrain', 'start' => "#{admin}:#{first}", 'count' => count,
+                     'origin_as' => origin, 'attributes' => { 'as_path' => [OUR_AS], 'next_hop' => '192.0.2.1' })
+    g.updates.each { |u| @peer.send_message u }
+    wait_for("GoBGP to hold #{count} membership routes", :timeout => 60) { count_in(G::RTC) == count }
+    held = @router.rib_family(G::RTC)
+    (0..9).collect { |k| (count - 1) * k / 9 }.uniq.each do |i|
+      key = rtc_key(origin, admin, first + i)
+      paths = held[key]
+      assert_not_nil(paths, "GoBGP holds #{key}")
+      path = paths.first
+      assert_equal(key, path['nlri']['prefix'])
+      assert_equal([OUR_AS], G.as_path(path))
+      assert_equal('192.0.2.1', G.attrs(path)[14]['nexthop'], 'RFC 4684 section 4: read by its length')
+    end
+    g.withdrawals.each { |u| @peer.send_message u }
+    wait_for('GoBGP to hold no membership route', :timeout => 60) { count_in(G::RTC) == 0 }
+  end
+
+  def test_rt_constrain
+    session(false, [G::RTC])
+    rtc_crosses(65000, 100, 2000, 65001)
+    rtc_crosses('192.0.2.1', 1, 1000, 65001)
+    rtc_crosses(4200000000, 5, 1000, 4200000001)
   end
 end

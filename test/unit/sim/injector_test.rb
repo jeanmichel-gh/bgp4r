@@ -955,6 +955,23 @@ class BGP_Sim_Injector_Test < Test::Unit::TestCase
     assert_equal(2, inj.sent.summary[:prefixes_withdrawn])
   end
 
+  # Phase 4e. A membership route goes out in SAFI 132 with the session's
+  # next hop, and the plan names its route target as ADMIN:N.
+  def test_a_route_target_membership_route_goes_out
+    inj = injector
+    spec = { 'family' => 'rt_constrain', 'start' => '65001:7', 'count' => 2, 'origin_as' => 65_001,
+             'default' => true }
+    inj.act('announce', { 'spec' => spec }, false)
+    mp = peer.updates.first.path_attribute[:mp_reach]
+    assert_equal([1, 132, '10.0.0.1', 3], [mp.afi, mp.safi, mp.nexthops, mp.nlris.size])
+    rows = inj.plan('spec' => spec)[:plans].first[:rows]
+    assert_equal([true, nil, nil], rows.collect { |r| r['default'] })
+    assert_equal({ 'origin_as' => 65_001, 'route_target' => '65001:8', 'prefix_length' => 96,
+                   'origin' => 0, 'as_path' => [65_001], 'next_hop' => '10.0.0.1' }, rows.last)
+    inj.act('withdraw', { 'spec' => spec }, false)
+    assert_equal(3, inj.sent.summary[:prefixes_withdrawn])
+  end
+
   # One spec, two sessions, two answers: the prepend and LOCAL_PREF
   # differ between an external and an internal peer.
   def test_a_plan_answers_per_peer

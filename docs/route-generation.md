@@ -173,7 +173,7 @@ route key.
 | `labelled` (SAFI 4) | prefix, `label` fixed or per route, required | none | The 3-octet Compatibility field of RFC 8277 section 2.4, written as 0x800000. |
 | `vpn`, `vpn_multicast` (128, 129) | `rd` of type 0, 1 or 2 stepped per VRF, `label`, prefix, the range once per VRF (`vrfs`) | `route_target` stepped per VRF, so each VRF has its own attribute set | RD plus prefix, with the Compatibility field. |
 | `flow_spec`, `flow_spec_vpn` (133, 134) | destination prefix from `start`, `source`, `protocol` and `destination_port`, each one `eq` match, so a rule set N wide; for 134 `rd`, `vrfs` and `route_target` as VPN | `rate`, `redirect` and `marking`, the actions of RFC 8955 section 7; no next hop | The same rule in MP_UNREACH. |
-| `rt_constrain` (132) | origin AS, route target, the zero length default | none | GoBGP 3.23.0 panics on the default plus a second route. |
+| `rt_constrain` (132) | route target from `start` as `ADMIN:N`, `origin_as`, `prefix_length`, `default` for the zero length default in front | none | The same NLRI. GoBGP 3.23.0 panics on the default plus a second route. |
 | `evpn` (25, 70) | `route_type`; type 2: MAC from `start`, `ip`, `esi`, `label`; type 3: originator from `start`; type 5: prefix from `start`, `gateway`, `esi`, `label`; `ethernet_tag`; `rd`, `vrfs` and `route_target` as VPN | `mac_mobility` (a MAC move), `router_mac`, `pmsi_label` for type 3; the ESI label goes with type 1 | The same NLRI; a receiver matches the route key, which leaves out the ESI, the labels and the gateway. |
 | `mcast_vpn` (5) | type 1 originator, type 5 (S,G), types 6 and 7 per Source AS | route targets | No lab router has the family. |
 | `bgp_ls`, `bgp_ls_vpn` (71, 72) | a **topology**: N nodes, links as a ring or a grid, prefixes per node | attribute 29 TLVs per link: IGP metric, bandwidths, SRLG, admin group, node name | By NLRI. The VPN next hop is 12, 24 or 40 octets. |
@@ -281,7 +281,7 @@ can fail. Update this table in the pull request that moves a step.
 | 4c | Flow spec, both SAFIs. | Done |
 | 4d | EVPN types 2, 3 and 5. | Done |
 | 4d2 | EVPN types 1, 4 and 6 to 11, and the ESI label community. | To do |
-| 4e | RT-constrain. | To do |
+| 4e | RT-constrain. | Done |
 | 4f | MCAST-VPN. | To do |
 | 4g | BGP-LS topologies. | To do |
 | 5 | Churn. | To do |
@@ -590,6 +590,36 @@ one spec is one route type and `vrfs` copies of it, one per EVI.
 * **GoBGP 3.23.0 reads all three types back**, labels as the whole
   three-octet field, 16 as 257, and the PMSI Tunnel's label with no
   bottom of stack bit, 10 as 160. FRR was not run here.
+
+**Phase 4e.** Route target membership, AFI 1 SAFI 132 (RFC 4684).
+`Rt_constrain_routes` is a subclass of `Unicast`.
+
+* **`start` is a route target, `ADMIN:N`**, read by the same reader as
+  an RD, so the administrator picks the layout: an AS that fits two
+  octets, an IPv4 address or a 4-octet AS. Route i is N + i.
+* **`origin_as` is required** and runs on the route number, since
+  section 4 puts it in the NLRI.
+* **`prefix_length` is 96 by default.** 64 is section 4's own example,
+  every route target of one administrator, and 32 is the origin AS
+  alone. Any length is sent. One that cuts into the stepped number
+  sends the same route more than once, which is why the property test
+  leaves it at 96.
+* **`default: true` puts the zero length default in front**, so the
+  spec makes `count` + 1 routes. GoBGP 3.23.0 panics on the default
+  followed by a second route, so the lab sends none and the default
+  crosses over loopback only.
+* **A Path Identifier works here**, unlike flow spec and EVPN, because
+  validation.rb walks no NLRI of this family. The property test sends
+  one.
+* **What `expected` cannot catch, a fifth time.** Route numbers not
+  shifted past the default passed the property test, since `expected`
+  shifted with them. The unit and functional tests state the ends of
+  each range by hand.
+* **The property test needed more seeds.** With nine families, 27 and
+  36 seeds each left a flow spec key the corpus test asks for undrawn,
+  so it runs 45, five per family.
+* GoBGP 3.23.0 reads all three layouts back, keyed by origin AS and
+  route target, with a 4-octet AS in asdot.
 
 Measured against gobgpd 3.23.0 on 2026-11-04:
 
