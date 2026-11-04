@@ -130,6 +130,14 @@ module BGP
         '/api/refresh'       => 'refresh'
       }.freeze
 
+      # `POST path => the Injector method that answers it` for a POST
+      # that sends nothing. It carries the same header as an action,
+      # so a driver writes every POST one way, and a dry run is no
+      # reason for a second rule about which ones need it.
+      DRY_RUNS = {
+        '/api/plan' => :plan
+      }.freeze
+
       REASONS = { 200 => 'OK', 400 => 'Bad Request', 403 => 'Forbidden',
                   404 => 'Not Found', 405 => 'Method Not Allowed',
                   409 => 'Conflict', 413 => 'Payload Too Large',
@@ -240,10 +248,12 @@ module BGP
           return [200, @views.send(READS[route], params(query))]
         end
         action = ACTIONS[route]
-        return not_found(route) unless action
+        dry = DRY_RUNS[route]
+        return not_found(route) unless action || dry
         return [405, { :error => "#{route} is a POST" }] unless method == 'POST'
         return [403, { :error => "a POST needs #{HEADER.upcase}: #{HEADER_VALUE}" }] unless
           headers[HEADER].to_s == HEADER_VALUE
+        return [200, @injector.send(dry, parse_body(body))] if dry
         [200, @injector.act(action, parse_body(body))]
       end
 
@@ -256,6 +266,7 @@ module BGP
         [200, { :bgp4r => BGP::VERSION, :api => VERSION,
                 :reads => READS.keys.sort,
                 :actions => ACTIONS.sort.to_h,
+                :dry_runs => DRY_RUNS.keys.sort,
                 :post_header => "#{HEADER.upcase}: #{HEADER_VALUE}" }]
       end
 
@@ -263,7 +274,7 @@ module BGP
 
       def not_found(route)
         [404, { :error => "no such path #{route}; this injector answers " \
-                          "#{(READS.keys + ACTIONS.keys).sort.join(', ')}" }]
+                          "#{(READS.keys + ACTIONS.keys + DRY_RUNS.keys).sort.join(', ')}" }]
       end
 
       def parse_body(body)

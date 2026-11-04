@@ -197,7 +197,16 @@ module BGP
       # UPDATE with no NLRI, which is how a case that carries its own
       # NLRI inside MP_REACH_NLRI is sent on its own.
       def update(name, arg = {})
-        built = build(name)
+        wrap(build(name), arg)
+      end
+
+      # The same four lines for any attribute or attribute list, which
+      # is how they are shared: `Specimen.update` calls this with a
+      # specimen where `update` calls it with a fault case, so the
+      # catalog of what is wrong and the catalog of what is right put a
+      # case on the wire in one envelope. `bgp4r-sim`'s `specimen`,
+      # `fault` and `mp_reach` keys all come through here.
+      def wrap(built, arg = {})
         pa = built.is_a?(Path_attribute) ? built : Path_attribute.new(built)
         have = pa.attributes.collect { |a| a.type }
         pa.append Origin.new(0)                    unless have.include?(ATTR::ORIGIN)

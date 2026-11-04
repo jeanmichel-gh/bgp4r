@@ -23,6 +23,7 @@
 require 'bgp/path_attributes/attributes'
 require 'bgp/path_attributes/validation'
 require 'bgp/nlris/nlris'
+require 'bgp/fault'
 
 module BGP
 
@@ -48,13 +49,10 @@ module BGP
   # the other: a CATALOG of entries, then `names`, `catalog`, `build`
   # and `wire`.
   #
-  # What is **not** here is `Specimen.update`, the twin of
-  # `Fault.update`. Those four lines of "which attributes does a plain
-  # UPDATE need" are already written once, in `Fault.update`, whose own
-  # comment says they are there so that two programs have one answer.
-  # Copying them would be a third answer and sharing them is a change to
-  # `bgp/fault.rb`, so it belongs with the pull request that has a
-  # caller for it rather than with this one.
+  # `Specimen.update` is the twin of `Fault.update` and shares its
+  # envelope rather than copying it: both go through `Fault.wrap`, so
+  # "which attributes does a plain UPDATE need" is answered once. It
+  # waited for a caller, which `bgp4r-sim`'s `specimen` key is.
   module Specimen
 
     include ATTR
@@ -259,6 +257,19 @@ module BGP
         built = build(name)
         takes = built.method(:encode).parameters.first
         takes && takes.last == :as4byte ? built.encode(as4byte) : built.encode
+      end
+
+      # One specimen as a whole UPDATE, in `Fault.update`'s envelope and
+      # with its arguments: ORIGIN, an AS_PATH of `my_as`, a NEXT_HOP
+      # when one is given and the specimen has none, and `prefixes` as
+      # the NLRI. A family specimen carries its own NLRI inside
+      # MP_REACH_NLRI, so it is sent with no `prefixes` at all.
+      #
+      #   Specimen.update(:large_communities, :my_as => 65001,
+      #                   :next_hop => '10.0.0.1', :prefixes => ['203.0.113.0/24'])
+      #   Specimen.update(:evpn, :my_as => 65001)
+      def update(name, arg = {})
+        Fault.wrap(build(name), arg)
       end
 
       # The CATALOG entries, as Hashes. A family entry carries :afi and

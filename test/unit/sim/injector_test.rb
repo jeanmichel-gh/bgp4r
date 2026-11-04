@@ -783,4 +783,249 @@ class BGP_Sim_Injector_Test < Test::Unit::TestCase
     assert_nothing_raised { inj.speaker.session_established(peer) }
   end
 
+
+  # ---- a BGP::Gen spec ------------------------------------------------
+
+  SPEC = { 'start' => '11.0.0.0/24', 'count' => 10, 'per_update' => 4,
+           'attributes' => { 'as_path' => [65_020], 'med' => { 'cycle' => [10, 20] } } }.freeze
+
+  def sender(peer, literal = false)
+    { 'as' => 65_001, 'ebgp' => peer.ebgp?, 'next_hop' => peer.local_ip,
+      'as_path_literal' => literal }
+  end
+
+  # The octets are the library's own with this session's sender, which
+  # is the claim: the injector adds the session and nothing else.
+  def test_a_spec_sends_what_the_library_generates_for_this_session
+    inj = injector
+    inj.act('announce', { 'spec' => SPEC }, false)
+    want = BGP::Gen.new(SPEC, sender(peer)).updates.collect(&:to_shex)
+    assert_equal(want, peer.updates.collect(&:to_shex))
+    assert_equal('65001 65020', peer.updates.first.path_attribute[:as_path].as_path)
+    assert_equal(10, inj.sent.summary[:prefixes_sent])
+  end
+
+  def test_a_spec_takes_as_path_literal
+    inj = injector
+    inj.act('announce', { 'spec' => SPEC, 'as_path_literal' => true }, false)
+    assert_equal('65020', peer.updates.first.path_attribute[:as_path].as_path)
+  end
+
+  # A feed, counted and not listed, as a generated range is.
+  def test_a_spec_is_a_feed_record_and_not_rows
+    inj = injector
+    r = inj.act('announce', { 'spec' => SPEC }, false)
+    feed = r[:feeds].first
+    assert_equal('unicast 11.0.0.0/24 x 10', feed[:range])
+    assert_equal(10, feed[:prefixes_sent])
+    assert_equal([], inj.announced)
+  end
+
+  def test_a_spec_is_withdrawn_by_regenerating_it
+    inj = injector
+    inj.act('withdraw', { 'spec' => SPEC }, false)
+    assert_equal(BGP::Gen.new(SPEC).withdrawals.collect(&:to_shex), peer.updates.collect(&:to_shex))
+    assert_equal(10, inj.sent.summary[:prefixes_withdrawn])
+  end
+
+  # A prefix `prefixes` announced, then withdrawn by a spec whose range
+  # covers it, is no longer listed and is not resent after a flap.
+  def test_a_spec_withdrawal_forgets_what_prefixes_announced
+    inj = injector
+    inj.act('announce', 'prefixes' => ['11.0.1.0/24'])
+    inj.act('withdraw', { 'spec' => SPEC }, false)
+    assert_equal([], inj.announced)
+  end
+
+  # Read before anything starts, so a 400 now and not a failed feed.
+  def test_a_spec_the_library_refuses_is_a_refusal_before_the_feed
+    inj = injector
+    [{ 'family' => 'evpn', 'start' => '11.0.0.0/24', 'count' => 1 },
+     { 'start' => '11.0.0.0/24', 'count' => 1, 'colour' => 1 },
+     { 'start' => 'nowhere', 'count' => 1 }].each do |bad|
+      e = assert_raise(BGP::Sim::Injector::Refused, bad.inspect) { inj.act('announce', 'spec' => bad) }
+      assert_match(/\Aspec: /, e.message)
+    end
+    assert_equal([], peer.updates)
+    assert_equal([], inj.sent.feeds)
+  end
+
+  # A spec carries its own attributes, so an announce key beside it
+  # would change nothing in silence.
+  def test_an_announce_key_beside_a_spec_is_refused
+    e = assert_raise(BGP::Sim::Injector::Refused) do
+      injector.act('announce', 'spec' => SPEC, 'med' => 5)
+    end
+    assert_match(/med do\(es\) not go with spec/, e.message)
+    assert_raise(BGP::Sim::Injector::Refused) do
+      injector.act('withdraw', 'spec' => SPEC, 'path_id' => 1)
+    end
+  end
+
+  def test_a_spec_beside_another_selector_is_refused
+    assert_raise(BGP::Sim::Injector::Refused) do
+      injector.act('announce', 'spec' => SPEC, 'prefixes' => ['10.1.0.0/24'])
+    end
+  end
+
+  # A set that grows too large halfway is a failed feed with its reason,
+  # since it cannot be known at the start: see bgp/gen/unicast.rb.
+  def test_a_spec_that_stops_halfway_is_a_failed_feed
+    spec = { 'start' => '11.0.0.0/24', 'count' => 3, 'per_update' => 1,
+             'attributes' => { 'communities' => { 'count' => { 'base' => '1:1',
+                                                  'n' => { 'cycle' => [1, 1100] } } } } }
+    inj = injector
+    inj.act('announce', { 'spec' => spec }, false)
+    feed = inj.sent.feeds.first
+    assert_match(/Unpackable/, feed[:error].to_s)
+    assert_equal(1, peer.updates.size, 'the first set went out before the second was reached')
+  end
+
+  # ---- plan ------------------------------------------------------------
+
+  # The rows are `expected` for this session, and nothing is sent.
+  def test_a_plan_is_expected_for_each_peer_and_sends_nothing
+    inj = injector
+    r = inj.plan('spec' => SPEC)
+    assert_equal([], peer.sent)
+    plan = r[:plans].first
+    assert_equal('10.0.10.2', plan[:peer])
+    assert_equal(BGP::Gen.new(SPEC, sender(peer)).expected.to_a, plan[:rows])
+    assert_equal([65_001, 65_020], plan[:rows].first['as_path'])
+    assert_equal(10, plan[:total])
+    assert_nil(plan[:next_offset])
+  end
+
+  # One spec, two sessions, two answers: the prepend and LOCAL_PREF
+  # differ between an external and an internal peer.
+  def test_a_plan_answers_per_peer
+    two = [FakePeer.new('10.0.10.2', 65_000, 65_001), FakePeer.new('10.0.11.2', 65_001, 65_001)]
+    inj = injector({}, two)
+    a, b = inj.plan('spec' => SPEC)[:plans].collect { |p| p[:rows].first }
+    assert_equal([65_001, 65_020], a['as_path'])
+    assert_equal([65_020], b['as_path'])
+    assert_equal(100, b['local_pref'])
+    # A LOCAL_PREF the spec asks for reaches the internal peer and not
+    # the external one (RFC 4271 section 5.1.5).
+    spec = SPEC.merge('attributes' => SPEC['attributes'].merge('local_pref' => 300))
+    a, b = inj.plan('spec' => spec)[:plans].collect { |p| p[:rows].first }
+    assert_nil(a['local_pref'])
+    assert_equal(300, b['local_pref'])
+  end
+
+  # Paged with the daemon's envelope, so a million rows is never one
+  # answer.
+  def test_a_plan_is_paged
+    inj = injector
+    p1 = inj.plan('spec' => SPEC, 'limit' => 4)[:plans].first
+    assert_equal(%w[11.0.0.0/24 11.0.1.0/24 11.0.2.0/24 11.0.3.0/24], p1[:rows].collect { |r| r['prefix'] })
+    assert_equal(4, p1[:next_offset])
+    last = inj.plan('spec' => SPEC, 'offset' => 8, 'limit' => 4)[:plans].first
+    assert_equal(%w[11.0.8.0/24 11.0.9.0/24], last[:rows].collect { |r| r['prefix'] })
+    assert_nil(last[:next_offset])
+    big = inj.plan('spec' => SPEC, 'limit' => 10**9)[:plans].first
+    assert_equal(BGP::Daemon::Views::MAX_LIMIT, big[:limit])
+  end
+
+  def test_a_plan_refuses_what_it_does_not_read
+    inj = injector
+    assert_raise(BGP::Sim::Injector::Refused) { inj.plan({}) }
+    e = assert_raise(BGP::Sim::Injector::Refused) { inj.plan('spec' => SPEC, 'med' => 1) }
+    assert_match(/med/, e.message)
+    assert_raise(BGP::Sim::Injector::Refused) { inj.plan('spec' => SPEC, 'as_path_literal' => 'yes') }
+    assert_raise(BGP::Sim::Injector::Refused) { inj.plan('spec' => { 'count' => 1 }) }
+  end
+
+  def test_a_plan_with_no_session_is_no_session
+    inj = injector
+    peer.established = false
+    assert_raise(BGP::Daemon::NoSession) { inj.plan('spec' => SPEC) }
+  end
+
+  # ---- mp_reach, mp_unreach and specimen ------------------------------
+
+  MP = { 'afi' => 2, 'safi' => 1, 'nexthop' => ['2001:db8::1'],
+         'nlris' => ['2001:db8:1::/48', '2001:db8:2::/48'] }.freeze
+
+  # One MP_REACH_NLRI in Fault.wrap's envelope: ORIGIN and our AS toward
+  # an external peer, and no NEXT_HOP attribute (RFC 4760 section 3).
+  def test_mp_reach_is_one_message_in_the_fault_envelope
+    inj = injector
+    r = inj.act('announce', 'mp_reach' => MP)
+    u = peer.updates.last
+    want = BGP::Fault.wrap(BGP::Mp_reach.new(:afi => 2, :safi => 1, :nexthop => ['2001:db8::1'],
+                                             :nlris => ['2001:db8:1::/48', '2001:db8:2::/48']),
+                           :my_as => 65_001)
+    assert_equal(want.to_shex, u.to_shex)
+    assert_equal(false, u.path_attribute.has?(BGP::Next_hop))
+    assert_equal(2, r[:prefixes])
+    assert_equal(2, inj.sent.summary[:prefixes_sent])
+  end
+
+  # Nested NLRI hashes read too, since JSON keys are strings at every
+  # depth: an EVPN route is the one with the deepest nesting.
+  def test_mp_reach_reads_nested_json_keys
+    evpn = { 'afi' => 25, 'safi' => 70, 'nexthop' => ['10.0.0.1'],
+             'nlris' => [{ 'inclusive_multicast' => { 'rd' => [100, 200], 'tag' => 0,
+                                                      'originator' => '10.0.0.1' } }] }
+    injector.act('announce', 'mp_reach' => evpn)
+    assert_kind_of(BGP::Evpn, peer.updates.last.path_attribute[:mp_reach].nlris.first)
+  end
+
+  def test_mp_unreach_is_an_update_with_nothing_else
+    inj = injector
+    inj.act('withdraw', 'mp_unreach' => MP.reject { |k, _| k == 'nexthop' })
+    u = peer.updates.last
+    assert_equal([BGP::Mp_unreach], u.path_attribute.attributes.collect(&:class))
+    assert_equal(2, inj.sent.summary[:prefixes_withdrawn])
+  end
+
+  def test_mp_reach_the_library_cannot_build_is_a_refusal
+    inj = injector
+    e = assert_raise(BGP::Sim::Injector::Refused) do
+      inj.act('announce', 'mp_reach' => MP.merge('safi' => 255))
+    end
+    assert_match(/\Amp_reach: /, e.message)
+    assert_raise(BGP::Sim::Injector::Refused) { inj.act('announce', 'mp_reach' => [1]) }
+    assert_raise(BGP::Sim::Injector::Refused) { inj.act('announce', 'mp_reach' => MP, 'med' => 1) }
+    assert_equal([], peer.updates)
+  end
+
+  # A specimen by name in Specimen.update's envelope, so the same octets
+  # the library answers for that name and this session.
+  def test_a_specimen_is_sent_by_name
+    inj = injector
+    inj.act('announce', 'specimen' => 'large_communities', 'prefixes' => ['11.0.0.0/24'])
+    want = BGP::Specimen.update(:large_communities, :my_as => 65_001, :next_hop => '10.0.0.1',
+                                                    :prefixes => ['11.0.0.0/24'])
+    assert_equal(want.to_shex, peer.updates.last.to_shex)
+    assert_equal('65001', peer.updates.last.path_attribute[:as_path].as_path, 'our AS to an external peer')
+    assert_equal('10.0.0.1', peer.updates.last.path_attribute[:next_hop].next_hop, 'our address')
+  end
+
+  # A family specimen needs no prefixes, and gets no NEXT_HOP without
+  # them (RFC 4760 section 3).
+  def test_a_family_specimen_needs_no_prefixes
+    injector.act('announce', 'specimen' => 'bgp_ls')
+    u = peer.updates.last
+    assert_nil(u.nlri)
+    assert_equal(false, u.path_attribute.has?(BGP::Next_hop))
+    assert(u.path_attribute.has?(BGP::Mp_reach))
+  end
+
+  def test_an_unknown_specimen_is_refused_and_names_the_catalog
+    e = assert_raise(BGP::Sim::Injector::Refused) { injector.act('announce', 'specimen' => 'nope') }
+    assert_match(/large_communities/, e.message)
+    assert_raise(BGP::Sim::Injector::Refused) do
+      injector.act('announce', 'specimen' => 'origin', 'med' => 1)
+    end
+  end
+
+  def test_the_topology_says_what_can_be_generated_and_specimens
+    t = injector.topology
+    assert_equal(BGP::Specimen.names.collect(&:to_s), t[:specimens])
+    assert_equal(BGP::Gen::GENERATORS.keys, t[:generators])
+    assert_equal(BGP::Sim::Injector::PLAN_KEYS, t[:plan])
+  end
+
 end

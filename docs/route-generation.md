@@ -54,7 +54,7 @@ each test in this repository writes its own UPDATEs by hand.
 |---|---|
 | bgp4r unit tests | `BGP::Gen.new(spec)`, then inspect the UPDATE objects. |
 | bgp4r functional and lab tests | Send the same UPDATEs over a `Neighbor`, then compare a RIB with `expected`. |
-| `bgp4r-sim` | `announce` and `withdraw` hand the JSON body to `BGP::Gen` unchanged. |
+| `bgp4r-sim` | `announce` and `withdraw` hand the body's `spec` key to `BGP::Gen` unchanged, with the session's rules. |
 | `bgp4r routegen` | Goes through `Injector#act`, so it gets the engine for free. |
 | routescope | Sends the spec as JSON to an injector. It does not load bgp4r. |
 
@@ -275,7 +275,7 @@ can fail. Update this table in the pull request that moves a step.
 | 0b | `as_path_literal: true` sends `as_path` as written over eBGP; the prepend stays the default (section 11). | Done |
 | 1 | `bgp/gen`: spec reader that refuses unknown keys, unicast generator for IPv4 and IPv6, the packer, `updates`, `withdrawals`, `expected`. | Done |
 | 2 | `Vary`: the five patterns, `group`, the property patterns for AS_PATH and communities. | Done |
-| 3 | Injector wiring: `announce` and `withdraw` read a spec, `POST /api/plan`, the `mp_reach`, `mp_unreach` and `specimen` keys. | To do |
+| 3 | Injector wiring: `announce` and `withdraw` read a spec, `POST /api/plan`, the `mp_reach`, `mp_unreach` and `specimen` keys. | Done |
 | 4a | Multicast and labelled. | To do |
 | 4b | VPN, both SAFIs. | To do |
 | 4c | Flow spec, both SAFIs. | To do |
@@ -305,7 +305,7 @@ and patterns by name rather than ignoring them; phase 2 reads all three.
 * **Attributes are sent as written.** The library knows no session, so
   it prepends no AS and fills in no next hop. ORIGIN and AS_PATH are
   always there, IGP and empty by default. The injector adds the session
-  half in phase 3.
+  half, which phase 3 does.
 * **`expected` holds for a 4-octet AS session.** On a 2-octet session a
   4-octet AS in `as_path` goes out as AS_TRANS, 23456, and bgp4r adds no
   AS4_PATH. The functional test asserts that difference.
@@ -347,3 +347,43 @@ of section 5, and `seed` and `group` are read.
   message failed both lab cases, where bgp4r's own first message check
   could not see it.
 
+
+**Phase 3.** `bgp4r-sim` takes a spec, a dry run answers what it
+means, and three keys send one message by hand.
+
+* **A spec rides under its own `spec` key**, not as the whole body.
+  The action body keys are the node file's, and a spec has keys of its
+  own, so keeping them apart means neither vocabulary bleeds into the
+  other. Any announce key beside `spec` is refused except
+  `as_path_literal`, which is the session's and not the spec's.
+* **The session's rules are in the library, in `bgp/gen/sender.rb`**,
+  as a second argument to `BGP::Gen.new`. Over eBGP our AS goes in
+  front unless `as_path_literal`; our address is the next hop when the
+  spec gives none; LOCAL_PREF goes to an internal peer only, 100 by
+  default. They run on the row of plain values, so `updates` and
+  `expected` read the same row and the dry run cannot disagree with the
+  send. Those are `Speaker#path_attribute`'s rules, so a spec and an
+  announce block sent by one injector agree.
+* **`POST /api/plan` answers per peer and is paged.** The prepend and
+  LOCAL_PREF depend on the session, so one spec has as many answers as
+  targets. The page is `Daemon::Views`' envelope and limits.
+* **An IPv6 spec on an IPv4 session gets an IPv4-mapped next hop**,
+  which `Mp_reach` writes on its own. GoBGP 3.23.0 prints it back as
+  the IPv4 address. Measured.
+* **`mp_reach`, `mp_unreach` and `specimen`** send one message in any
+  family. `Specimen.update` exists now, the twin `bgp/specimen.rb` held
+  back until a caller came: it and `Fault.update` both go through
+  `Fault.wrap`, so the two catalogs share one envelope.
+* **A set too large halfway now sends what fit first.** `Packer.batches`
+  checked a route for room before yielding the batch of the set before
+  it, so the injector's first test of a spec that stops halfway found
+  nothing sent where one message should have gone. The check runs after
+  that yield now.
+
+Tests: `test/unit/gen/sender_test.rb` reads each rule off the octets
+and off `expected`; `test/unit/sim/injector_test.rb` and
+`test/unit/sim/http_test.rb` cover the keys, the refusals and the
+route; `test/functional/sim_test.rb` asks for the plan over HTTP, sends
+the spec over HTTP, and compares what a bgp4r peer read route by route;
+and `test/functional/lab/gen_gobgp_test.rb` does the same against
+gobgpd 3.23.0 through an in-process injector, IPv4 and IPv6.

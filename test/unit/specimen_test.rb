@@ -239,6 +239,49 @@ class SpecimenTest < Test::Unit::TestCase
                     'specimen: did Fault::CATALOG shrink?')
   end
 
+  # ---- Specimen.update -----------------------------------------------
+
+  # Every specimen as a whole UPDATE, read back strictly by a 4-octet
+  # session, reports nothing and still carries its own attribute. That
+  # is what `bgp4r-sim`'s `specimen` key sends, so a specimen whose
+  # envelope made it invalid would be a valid thing that is not.
+  def test_every_specimen_is_a_whole_update_that_reads_back_clean
+    families = Specimen.families.collect(&:first)
+    Specimen.names.each do |name|
+      prefixes = families.include?(name) ? [] : ['203.0.113.0/24']
+      u = Specimen.update(name, :my_as => 65_001, :next_hop => '10.0.0.1', :prefixes => prefixes)
+      octets = u.encode(Update::Info.new(true))
+      back = Update.new(octets.is_packed, Update::Info.new(true, :lenient))
+      assert_equal([], back.path_attribute.errors.collect(&:reason), name.to_s)
+      assert_equal(octets.unpack1('H*'), back.encode(Update::Info.new(true)).unpack1('H*'), name.to_s)
+      type = Specimen.catalog.find { |e| e[:name] == name }[:type]
+      assert(back.path_attribute.attributes.any? { |a| a.type == type }, "#{name}: its attribute went out")
+    end
+  end
+
+  # A family specimen carries its own NLRI inside MP_REACH_NLRI, so with
+  # no prefixes there is no NLRI field and, with no next hop given, no
+  # NEXT_HOP attribute: RFC 4760 section 3 says an UPDATE with no other
+  # NLRI should not carry one.
+  def test_a_family_specimen_needs_no_prefixes_and_gets_no_next_hop
+    u = Specimen.update(:evpn, :my_as => 65_001)
+    assert_nil(u.nlri)
+    assert_equal(false, u.path_attribute.has?(Next_hop))
+    assert_equal('65001', u.path_attribute[:as_path].as_path)
+  end
+
+  # **One envelope, shared and not copied**, which is why this waited
+  # for a caller: `Specimen.update` and `Fault.update` both go through
+  # `Fault.wrap`, so the catalog of what is right and the catalog of
+  # what is wrong put a case on the wire the same way.
+  def test_the_envelope_is_fault_wrap
+    arg = { :my_as => 65_001, :next_hop => '10.0.0.1', :prefixes => ['203.0.113.0/24'] }
+    assert_equal(Fault.wrap(Specimen.build(:large_communities), arg).to_shex,
+                 Specimen.update(:large_communities, arg).to_shex)
+    assert_equal(Fault.wrap(Fault.build(:med_length), arg).to_shex,
+                 Fault.update(:med_length, arg).to_shex)
+  end
+
   private
 
   # [attribute type, fault name] for every Fault::CATALOG case, keyed by

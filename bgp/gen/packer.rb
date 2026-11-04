@@ -88,15 +88,18 @@ module BGP
         return enum_for(:batches, items) unless block_given?
         batch, octets, current = [], 0, nil
         items.each do |item, len, packer|
-          unless packer.fits?(len)
-            raise Unpackable, "a route of #{len} octets makes a #{packer.size(len)} octet message on its own, " \
-                              "where BGP allows #{MAX} (RFC 4271 section 4); the attributes leave no room"
-          end
           unless batch.empty?
             if !packer.equal?(current) || batch.size == current.per_update || !current.fits?(octets + len)
               yield batch, octets, current
               batch, octets = [], 0
             end
+          end
+          # After the batch before it has gone, so a feed that stops here
+          # has sent every route that fit rather than losing the last
+          # batch of the set before.
+          unless packer.fits?(len)
+            raise Unpackable, "a route of #{len} octets makes a #{packer.size(len)} octet message on its own, " \
+                              "where BGP allows #{MAX} (RFC 4271 section 4); the attributes leave no room"
           end
           current = packer
           batch << item

@@ -38,9 +38,10 @@ module BGP
     # sections 3 and 4), which is what `RouteGenerator` does without its
     # `mp_reach` option.
     #
-    # **The attributes are sent as written.** This is the library, which
-    # knows nothing of sessions, so unlike `Daemon::Speaker` it puts no AS
-    # in front of `as_path` and fills in no next hop. ORIGIN and AS_PATH
+    # **The attributes are sent as written** unless a `Sender` says what
+    # session they go out on: the library knows nothing of sessions, so
+    # on its own it puts no AS in front of `as_path` and fills in no
+    # next hop. bgp/gen/sender.rb is the other case. ORIGIN and AS_PATH
     # are always there, IGP and empty by default, because those are
     # what every other block in bgp4r writes; NEXT_HOP, MULTI_EXIT_DISC,
     # LOCAL_PREF and the communities are there only when the spec gives
@@ -97,7 +98,8 @@ module BGP
 
       attr_reader :afi, :count, :per_update, :group
 
-      def initialize(spec)
+      def initialize(spec, sender = nil)
+        @sender = sender
         @count, @per_update = spec['count'], spec['per_update']
         @group = spec['group'] || 1
         @patterns = Spec.patterns(spec)
@@ -132,11 +134,12 @@ module BGP
         1 + (@mlen + 7) / 8 + (add_path? ? 4 : 0)
       end
 
-      # The attribute values of group g, plain data, defaults filled in.
+      # The attribute values of group g, plain data, defaults filled in,
+      # and the sender's rules applied when there is a sender.
       def row(g)
         r = { 'origin' => 0, 'as_path' => [] }
         @patterns.each { |k, p| r[k] = p.at(g) }
-        r
+        @sender ? @sender.apply(r) : r
       end
 
       # The UPDATEs that announce every route, as an Enumerator, so a

@@ -264,6 +264,157 @@ class BGP_Sim_Functional_Test < Test::Unit::TestCase
     assert_equal('11.0.0.0/28', withdrawn.first)
   end
 
+  # ---- a BGP::Gen spec ------------------------------------------------
+
+  # A spec whose attributes vary, so a row that arrived with another
+  # route's attributes cannot pass.
+  SPEC = { 'start' => '11.0.0.0/26', 'count' => 60, 'per_update' => 7, 'group' => 5,
+           'attributes' => {
+             'as_path' => [65_020],
+             'med' => { 'cycle' => [10, 20, 30] },
+             'communities' => { 'count' => { 'base' => '65001:1',
+                                             'n' => { 'step' => { 'start' => 0, 'by' => 1, 'wrap' => 4 } } } } } }.freeze
+
+  # What a received UPDATE says, one row per route, in the shape
+  # `BGP::Gen#expected` answers, so the two compare as data.
+  def rows_of(updates)
+    updates.flat_map do |u|
+      pa = u.path_attribute
+      row = { 'origin' => pa[:origin].to_i,
+              'as_path' => pa[:as_path].to_hash[:as_path].fetch(:sequence, []) }
+      mp = pa[:mp_reach]
+      row['next_hop'] = mp ? mp.to_hash[:mp_reach][:nexthop].first : pa[:next_hop].next_hop
+      row['med'] = pa[:multi_exit_disc].to_i if pa[:multi_exit_disc]
+      row['local_pref'] = pa[:local_pref].to_i if pa[:local_pref]
+      row['communities'] = pa[:communities].communities.split if pa[:communities]
+      prefixes = mp ? mp.nlris.collect { |n| n.to_s } : u.nlri.to_ary
+      prefixes.collect { |p| { 'prefix' => p }.merge(row) }
+    end
+  end
+
+  def plan(spec, extra = {})
+    code, answer = post('/api/plan', { 'spec' => spec }.merge(extra))
+    assert_equal(200, code, answer.inspect)
+    answer['plans'].first
+  end
+
+  # Waits for the feed to finish and for the peer to have read every
+  # UPDATE it sent, and answers that count.
+  def feed_done(count, key = 'prefixes_sent')
+    assert(wait { get('/api/sent')['summary'][key] >= count },
+           "the feed did not finish: #{get('/api/sent').inspect}")
+    n = get('/api/sent')['feeds'].last['updates_sent']
+    assert(wait { @catcher.size >= n }, "#{n} UPDATEs sent and #{@catcher.size} read")
+    n
+  end
+
+  # **The claim of the phase.** The plan is asked for over HTTP and sends
+  # nothing; the spec is then sent over HTTP; and what another BGP
+  # speaker reads off the socket, route by route, is the plan. Our AS is
+  # in front of the path and our address is the next hop, because the
+  # session is eBGP and the spec gave none.
+  def test_what_crosses_is_what_the_plan_said
+    p = plan(SPEC, 'limit' => 100)
+    assert_equal(0, @catcher.size, 'the plan sent something')
+    assert_equal(60, p['total'])
+    assert_equal(60, p['rows'].size)
+    assert_equal([OUR_AS, 65_020], p['rows'].first['as_path'])
+    assert_equal('127.0.0.1', p['rows'].first['next_hop'])
+    assert_nil(p['rows'].first['local_pref'], 'no LOCAL_PREF to an external peer')
+    code, answer = post('/api/announce', 'spec' => SPEC)
+    assert_equal(200, code, answer.inspect)
+    assert_equal('unicast 11.0.0.0/26 x 60', answer['feeds'].first['range'])
+    assert_equal(12, feed_done(60), 'twelve groups of five, one message each')
+    got = rows_of(@catcher.to_a)
+    assert_equal(p['rows'].sort_by { |r| r['prefix'] }, got.sort_by { |r| r['prefix'] })
+  end
+
+  def test_a_spec_withdrawal_crosses
+    post('/api/announce', 'spec' => SPEC)
+    feed_done(60)
+    @catcher.clear
+    code, answer = post('/api/withdraw', 'spec' => SPEC)
+    assert_equal(200, code, answer.inspect)
+    assert_equal(9, feed_done(60, 'prefixes_withdrawn'), 'sixty prefixes, seven to a withdrawal')
+    withdrawn = @catcher.to_a.flat_map { |u| u.withdrawn.to_ary }
+    assert_equal(plan(SPEC, 'limit' => 100)['rows'].collect { |r| r['prefix'] }, withdrawn)
+  end
+
+  # IPv6 in MP_REACH_NLRI on an IPv4 session: the next hop is ours, as
+  # an IPv4-mapped address, and the plan says the IPv4 form it was given.
+  def test_an_ipv6_spec_crosses
+    spec = { 'start' => '2001:db8::/48', 'count' => 20, 'per_update' => 6,
+             'attributes' => { 'med' => { 'step' => { 'start' => 1, 'by' => 1 } } } }
+    p = plan(spec)
+    post('/api/announce', 'spec' => spec)
+    feed_done(20)
+    updates = @catcher.to_a
+    assert_equal('::ffff:127.0.0.1', updates.first.path_attribute[:mp_reach].nexthops)
+    got = rows_of(updates).each { |r| r['next_hop'] = '127.0.0.1' }
+    assert_equal(p['rows'], got)
+    assert(updates.all? { |u| u.path_attribute.errors.empty? })
+  end
+
+  # The JSON boolean reaches the generator, so the plan and what crosses
+  # both carry the path as written.
+  def test_a_spec_with_a_literal_as_path_crosses_as_written
+    spec = SPEC.merge('count' => 5)
+    p = plan(spec, 'as_path_literal' => true)
+    assert_equal([65_020], p['rows'].first['as_path'])
+    post('/api/announce', 'spec' => spec, 'as_path_literal' => true)
+    feed_done(5)
+    assert_equal(p['rows'], rows_of(@catcher.to_a))
+  end
+
+  def test_a_spec_the_library_refuses_is_a_400_over_the_socket
+    code, answer = post('/api/announce', 'spec' => SPEC.merge('family' => 'evpn'))
+    assert_equal(400, code)
+    assert_match(/no generator yet/, answer['error'])
+    assert_equal(1, exit_status(code))
+    assert_equal(400, post('/api/plan', 'spec' => SPEC, 'med' => 1).first)
+    assert_equal(403, post('/api/plan', { 'spec' => SPEC }, nil).first)
+  end
+
+  # ---- mp_reach, mp_unreach, specimen --------------------------------
+
+  # One message in a family with no generator, EVPN here, read by the
+  # other side as the route it is.
+  def test_mp_reach_and_mp_unreach_cross
+    evpn = { 'afi' => 25, 'safi' => 70, 'nexthop' => ['10.0.0.1'],
+             'nlris' => [{ 'inclusive_multicast' => { 'rd' => [100, 200], 'tag' => 0,
+                                                      'originator' => '10.0.0.1' } }] }
+    code, answer = post('/api/announce', 'mp_reach' => evpn)
+    assert_equal(200, code, answer.inspect)
+    u = @catcher.shift
+    assert_not_nil(u)
+    nlri = u.path_attribute[:mp_reach].nlris.first
+    assert_kind_of(BGP::Evpn, nlri)
+    assert_equal(0, u.path_attribute.errors.size)
+    code, = post('/api/withdraw', 'mp_unreach' => evpn.reject { |k, _| k == 'nexthop' })
+    assert_equal(200, code)
+    w = @catcher.shift
+    assert_equal(nlri.to_shex, w.path_attribute[:mp_unreach].nlris.first.to_shex)
+  end
+
+  # A specimen by name crosses and reads back clean, which is what the
+  # valid half of the catalog is for.
+  def test_a_specimen_crosses_clean
+    code, answer = post('/api/announce', 'specimen' => 'large_communities',
+                                         'prefixes' => ['10.9.0.0/24'])
+    assert_equal(200, code, answer.inspect)
+    u = @catcher.shift
+    assert_equal(['10.9.0.0/24'], u.nlri.to_ary)
+    assert_not_nil(u.path_attribute[:large_communities])
+    assert_equal(0, u.path_attribute.errors.size)
+    assert_equal(0, u.path_attribute.undecoded.size)
+    code, = post('/api/announce', 'specimen' => 'flow_spec')
+    assert_equal(200, code)
+    f = @catcher.shift
+    assert_nil(f.nlri)
+    assert_kind_of(BGP::Flow_spec, f.path_attribute[:mp_reach].nlris.first)
+    assert_equal(0, f.path_attribute.errors.size)
+  end
+
   # ---- a fault -------------------------------------------------------
 
   # **A fault case crosses and the receiver reports it**, which is the

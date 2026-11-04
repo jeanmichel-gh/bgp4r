@@ -23,6 +23,8 @@
 require 'bgp/daemon/speaker'
 require 'bgp/logging'
 require 'bgp/misc/route_generator'
+require 'bgp/gen'
+require 'bgp/daemon/views'
 require 'bgp/events'
 require 'bgp/sim/sent'
 
@@ -97,9 +99,10 @@ module BGP
       # says so. It also makes this table load bearing rather than
       # documentation.
       ACTIONS = {
-        'announce'      => %w[peer prefixes generate next_hop as_path as_path_literal med
-                              local_pref communities extended_communities large_communities path_id origin],
-        'withdraw'      => %w[peer prefixes generate path_id],
+        'announce'      => %w[peer prefixes generate spec mp_reach specimen next_hop as_path
+                              as_path_literal med local_pref communities extended_communities
+                              large_communities path_id origin],
+        'withdraw'      => %w[peer prefixes generate spec mp_unreach path_id],
         'attribute'     => %w[peer prefixes next_hop as_path as_path_literal med
                               local_pref communities extended_communities large_communities path_id origin],
         'fault'         => %w[peer case prefixes next_hop],
@@ -110,6 +113,33 @@ module BGP
         'session.flap'  => %w[peer count interval],
         'refresh'       => %w[peer afi safi subtype]
       }.freeze
+
+      # The keys that go with each of the four selectors that are not an
+      # announce block, beside the selector itself and `peer`. Any other
+      # key in the body is refused, for the reason ACTIONS gives: `med`
+      # beside a `spec` would otherwise change nothing in silence, since
+      # a spec carries its own attributes.
+      #
+      # * **`spec`** is a `BGP::Gen` spec, docs/route-generation.md
+      #   section 4, handed to the library unchanged. `as_path_literal`
+      #   is the one announce key it reads, because the eBGP prepend is
+      #   the session's rule and not the spec's.
+      # * **`mp_reach` and `mp_unreach`** take the Hash `Mp_reach.new`
+      #   and `Mp_unreach.new` read, so one message in any family the
+      #   library builds, with no generator.
+      # * **`specimen`** is a `BGP::Specimen` name, sent in the envelope
+      #   `Fault.update` uses. `prefixes` is its NLRI and `next_hop` goes
+      #   with them; a family specimen carries its own NLRI and takes
+      #   neither.
+      SELECTORS = {
+        'announce' => { 'spec' => %w[as_path_literal], 'mp_reach' => [],
+                        'specimen' => %w[prefixes next_hop] },
+        'withdraw' => { 'spec' => [], 'mp_unreach' => [] }
+      }.freeze
+
+      # What `plan` reads: the spec and what decides how it is sent, and
+      # one page of the answer. See `plan`.
+      PLAN_KEYS = %w[peer spec as_path_literal offset limit].freeze
 
       # What an event line says happened. `attribute` re-announces, so
       # its line says so rather than inventing a verb for it.
@@ -274,7 +304,10 @@ module BGP
           },
           :announce_at_start => @speaker.announcements.size,
           :actions           => ACTIONS,
-          :faults            => BGP::Fault.names.collect { |n| n.to_s } }
+          :plan              => PLAN_KEYS,
+          :generators        => BGP::Gen::GENERATORS.keys,
+          :faults            => BGP::Fault.names.collect { |n| n.to_s },
+          :specimens         => BGP::Specimen.names.collect { |n| n.to_s } }
       end
 
       # One row per prefix announced on command, in the shape
@@ -304,6 +337,48 @@ module BGP
         }.sort_by { |r| r[:prefix].to_s }
       end
 
+      # What a spec would send to each target, as `BGP::Gen#expected`
+      # rows, and nothing sent. This is `POST /api/plan`, and it is how a
+      # program that does not load bgp4r, routescope above all, gets the
+      # routes to assert a router's RIB against.
+      #
+      # **It answers per peer because the answer differs per peer**: the
+      # same spec gets our AS in front of its AS_PATH and no LOCAL_PREF
+      # toward an external peer, and the session's own address as next
+      # hop when it gives none. Those are the rules of
+      # bgp/gen/sender.rb, and they are applied to the same row both
+      # `updates` and `expected` read, so the plan and the send cannot
+      # disagree. The targets are `announce`'s: the named peer, or every
+      # session that is up.
+      #
+      # **It is paged**, with `Daemon::Views`' envelope and limits,
+      # because a spec of a million routes is a million rows: `offset`
+      # and `limit`, then `rows`, `total`, `offset`, `limit` and
+      # `next_offset`, which is nil on the last page.
+      def plan(body)
+        body = {} if body.nil?
+        raise Refused, "a request body is a JSON object, got #{body.class}" unless body.is_a?(Hash)
+        block = body.to_h { |k, v| [k.to_s, v] }
+        unknown = block.keys - PLAN_KEYS
+        unless unknown.empty?
+          raise Refused, "plan: unknown key(s) #{unknown.join(', ')}; it reads #{PLAN_KEYS.join(', ')}"
+        end
+        raise Refused, 'plan: spec is required' if block['spec'].nil?
+        check(block.reject { |k, _| %w[offset limit].include?(k) }, 'announce')
+        offset = integer(block, 'offset', 0)
+        offset = 0 if offset.negative?
+        limit = integer(block, 'limit', Daemon::Views::PAGE_LIMIT).clamp(1, Daemon::Views::MAX_LIMIT)
+        plans = targets(block).collect { |peer|
+          gen = generator(block, peer)
+          total = gen.spec['count']
+          rows = gen.expected.lazy.drop(offset).first(limit)
+          nxt = offset + limit
+          { :peer => peer.address, :rows => rows, :total => total, :offset => offset,
+            :limit => limit, :next_offset => nxt < total ? nxt : nil }
+        }
+        { :action => 'plan', :plans => plans }
+      end
+
       private
 
       # ---- the actions -------------------------------------------------
@@ -319,7 +394,12 @@ module BGP
       # is what `bgp4r routegen` wants.
       def announce(body, action = 'announce', async = true)
         block = check(body, action)
-        one_of(block, 'prefixes', 'generate') unless action == 'attribute'
+        if action == 'announce'
+          return specimen(block) if block['specimen']
+          one_of(block, 'prefixes', 'generate', 'spec', 'mp_reach', 'specimen')
+          return spec_feed(block, targets(selector(block, 'announce')), 'announce', async) if block['spec']
+          return mp_reach(selector(block, 'announce', 'mp_reach')) if block['mp_reach']
+        end
         peers = targets(block)
         return feed(block, peers, action, async) if block['generate']
         prefixes = Array(block['prefixes'])
@@ -337,7 +417,9 @@ module BGP
       # requirement that goes with a streaming feed.
       def withdraw(body, async = true)
         block = check(body, 'withdraw')
-        one_of(block, 'prefixes', 'generate')
+        one_of(block, 'prefixes', 'generate', 'spec', 'mp_unreach')
+        return spec_feed(block, targets(selector(block, 'withdraw')), 'withdraw', async) if block['spec']
+        return mp_unreach(selector(block, 'withdraw', 'mp_unreach')) if block['mp_unreach']
         peers = targets(block)
         if block['generate']
           r = feed(block, peers, 'withdraw', async)
@@ -555,6 +637,147 @@ module BGP
         result.merge(h)
       end
 
+      # A `BGP::Gen` spec, announced or withdrawn, as a feed.
+      #
+      # It is `feed` with the library in place of `RouteGenerator`, and
+      # it keeps `feed`'s two rules: one record per peer in `/api/sent`,
+      # and a thread of its own unless `async` is false. **The spec is
+      # read before anything starts**, once per peer since the sender
+      # differs, so a spec the library refuses is a 400 now and never a
+      # failed feed on a thread later. A spec that reads but stops
+      # halfway, `Gen::Unpackable` from a set that grew too large, is a
+      # failed feed with the reason in its record.
+      #
+      # **Nothing is remembered**, as for a generated range: there is no
+      # list of a million prefixes here and `resend` replays only what
+      # `prefixes` announced. A withdrawal still forgets any of those
+      # its range covers, so `/api/sent` does not go on listing a prefix
+      # the peer was told to drop.
+      def spec_feed(block, peers, action, async)
+        gens = peers.collect { |peer| [peer, generator(block, peer)] }
+        records = gens.collect { |peer, gen|
+          s = gen.spec
+          record = @sent.start_feed(action, "#{gen.family} #{s['start']} x #{s['count']}", peer.address)
+          run = lambda do
+            begin
+              messages = action == 'withdraw' ? gen.withdrawals : gen.updates
+              messages.each do |msg|
+                peer.send_message(msg)
+                @sent.tick(record, Injector.prefix_count(msg) + Injector.withdrawn_count(msg))
+              end
+              @sent.finish_feed(record)
+            rescue StandardError => e
+              @sent.finish_feed(record, "#{e.class}: #{e.message}")
+            end
+          end
+          async ? @lock.synchronize { @threads << Thread.new { run.call } } : run.call
+          record
+        }
+        forget_expected(gens.first[1]) if action == 'withdraw' && !gens.empty?
+        s = gens.first ? gens.first[1].spec : block['spec']
+        publish(ROUTE, "#{action} spec #{s['family']} #{s['start']} x #{s['count']} to " \
+                       "#{peers.collect(&:address).join(', ')}",
+                :action => action, :spec => s)
+        { :action => action, :feeds => records.collect(&:to_h) }
+      end
+
+      # The generator for one peer, with that session's rules. A spec
+      # the library cannot read is the caller's to fix, so a 400.
+      def generator(block, peer)
+        BGP::Gen.new(block['spec'], 'as' => @speaker.my_as, 'ebgp' => peer.ebgp?,
+                                    'next_hop' => peer.local_ip,
+                                    'as_path_literal' => block['as_path_literal'] == true)
+      rescue BGP::Gen::SpecError => e
+        raise Refused, "spec: #{e.message}"
+      end
+
+      # One MP_REACH_NLRI, built from the Hash `Mp_reach.new` reads, in
+      # the envelope `Fault.wrap` gives every catalog case: ORIGIN and an
+      # AS_PATH of our AS toward an external peer. No NEXT_HOP attribute,
+      # since the next hop is inside the MP_REACH_NLRI and RFC 4760
+      # section 3 says an UPDATE with no other NLRI should not carry one.
+      def mp_reach(block)
+        attr = build_mp(BGP::Mp_reach, block['mp_reach'], 'mp_reach')
+        result = send_to(targets(block), 'announce') { |peer|
+          msg = BGP::Fault.wrap(attr, :my_as => (peer.ebgp? ? @speaker.my_as : nil))
+          send_one(peer, msg, 'announce', Injector.prefix_count(msg))
+        }
+        publish(ROUTE, "announced an MP_REACH_NLRI, AFI #{attr.afi} SAFI #{attr.safi}",
+                :action => 'announce', :afi => attr.afi, :safi => attr.safi)
+        result.merge(:afi => attr.afi, :safi => attr.safi, :prefixes => attr.nlris.size)
+      end
+
+      # One MP_UNREACH_NLRI and nothing else, which RFC 4760 section 4
+      # allows: an UPDATE that only withdraws carries no other attribute.
+      def mp_unreach(block)
+        attr = build_mp(BGP::Mp_unreach, block['mp_unreach'], 'mp_unreach')
+        msg = BGP::Update.new(BGP::Path_attribute.new(attr))
+        result = send_to(targets(block), 'withdraw') { |peer|
+          send_one(peer, msg, 'withdraw', attr.nlris.size)
+        }
+        publish(ROUTE, "withdrew with an MP_UNREACH_NLRI, AFI #{attr.afi} SAFI #{attr.safi}",
+                :action => 'withdraw', :afi => attr.afi, :safi => attr.safi)
+        result.merge(:afi => attr.afi, :safi => attr.safi, :prefixes => attr.nlris.size)
+      end
+
+      # A `BGP::Specimen` by name, sent once like a fault case and not
+      # resent after a flap, in the envelope `Specimen.update` and
+      # `Fault.update` share. A NEXT_HOP goes with `prefixes` only, for
+      # the RFC 4760 section 3 reason `mp_reach` gives.
+      def specimen(block)
+        block = selector(block, 'announce', 'specimen')
+        name = block['specimen'].to_s
+        unless BGP::Specimen.names.include?(name.to_sym)
+          raise Refused, "specimen: unknown name #{name.inspect}; the catalog has " \
+                         "#{BGP::Specimen.names.join(', ')}"
+        end
+        prefixes = Array(block['prefixes'])
+        result = send_to(targets(block), 'announce') { |peer|
+          msg = BGP::Specimen.update(name.to_sym,
+                                     :my_as    => (peer.ebgp? ? @speaker.my_as : nil),
+                                     :next_hop => (prefixes.empty? ? nil : block.fetch('next_hop', peer.local_ip)),
+                                     :prefixes => prefixes)
+          send_one(peer, msg, 'announce', Injector.prefix_count(msg))
+        }
+        publish(ROUTE, "announced specimen #{name}", :action => 'announce', :specimen => name)
+        result.merge(:specimen => name, :prefixes => prefixes)
+      end
+
+      # The body of one of the SELECTORS, refusing the keys that do not
+      # go with it.
+      def selector(block, action, name = nil)
+        name ||= SELECTORS.fetch(action).keys.find { |k| !block[k].nil? }
+        allowed = %w[peer] + [name] + SELECTORS.fetch(action).fetch(name)
+        extra = block.keys - allowed
+        unless extra.empty?
+          raise Refused, "#{action}: #{extra.join(', ')} do(es) not go with #{name}; " \
+                         "#{name} takes #{(allowed - [name]).join(', ')}"
+        end
+        block
+      end
+
+      # An attribute from a JSON Hash. JSON keys are Strings and the
+      # constructors read Symbols, at every depth, since an NLRI Hash
+      # nests. A constructor that cannot represent the input raises, and
+      # `Mp_reach.new` raises a RuntimeError for a SAFI it has no arm
+      # for, so anything it raises is the caller's to fix.
+      def build_mp(klass, h, name)
+        raise Refused, "#{name} is a JSON object, got #{h.class}" unless h.is_a?(Hash)
+        klass.new(Injector.symbolize(h))
+      rescue Refused
+        raise
+      rescue StandardError => e
+        raise Refused, "#{name}: #{e.class}: #{e.message}"
+      end
+
+      def self.symbolize(o)
+        case o
+        when Hash then o.to_h { |k, v| [k.is_a?(String) ? k.to_sym : k, symbolize(v)] }
+        when Array then o.collect { |v| symbolize(v) }
+        else o
+        end
+      end
+
       # ---- sending -----------------------------------------------------
 
       # One announce block to one peer, through the Speaker, so the path
@@ -694,6 +917,16 @@ module BGP
         n
       end
 
+      # How many prefixes one UPDATE withdraws, in either field, which
+      # is what a withdrawal feed counts.
+      def self.withdrawn_count(msg)
+        return 0 unless msg.is_a?(BGP::Update)
+        n = msg.withdrawn ? msg.withdrawn.size : 0
+        pa = msg.path_attribute
+        n += pa[:mp_unreach].nlris.size if pa && pa.has?(BGP::Mp_unreach)
+        n
+      end
+
       # ---- what was announced -----------------------------------------
 
       def remember(prefixes, body)
@@ -710,6 +943,14 @@ module BGP
         g = generate_options(block)
         gen = BGP::RouteGenerator.new(g['start'], g['count'], g['per_update'])
         @lock.synchronize { gen.each_prefix { |p| @announced.delete(p) } }
+      end
+
+      # A withdrawn spec, forgotten by walking what it meant to send.
+      # Skipped when nothing was announced by `prefixes`, which is the
+      # usual case and saves walking a million rows for nothing.
+      def forget_expected(gen)
+        return if @lock.synchronize { @announced.empty? }
+        gen.expected.each { |r| @lock.synchronize { @announced.delete(r['prefix']) } }
       end
 
       # What was announced on command, again, because the peer that has

@@ -40,6 +40,7 @@ require 'test/unit'
 require 'socket'
 require 'bgp4r'
 require 'bgp/gen'
+require 'bgp/sim'
 require_relative 'lab_helper'
 
 class LabGenGobgpTest < Test::Unit::TestCase
@@ -57,6 +58,7 @@ class LabGenGobgpTest < Test::Unit::TestCase
   end
 
   def teardown
+    @injector.stop if @injector
     @thread.kill if @thread
     @peer.close if @peer
     @server.close if @server && !@server.closed?
@@ -205,4 +207,67 @@ class LabGenGobgpTest < Test::Unit::TestCase
               'as_path' => { 'length' => { 'count' => { 'cycle' => [1, 3] }, 'min' => 64512, 'max' => 64600 } },
               'med' => { 'step' => { 'start' => 0, 'by' => 7 } } })
   end
+
+  # ---- phase 3: through bgp4r-sim -------------------------------------
+
+  # The same gobgpd dialling an injector instead of a bare Neighbor, so
+  # the session rules come from the injector: our AS in front of the
+  # path and our address as the next hop.
+  def sim_session
+    @router = LabHelper::Gobgpd.new(:local => '127.0.0.2', :as => THEIR_AS,
+                                    :router_id => '10.0.0.2',
+                                    :peer => '127.0.0.1', :peer_as => OUR_AS)
+    @router.up
+    @injector = BGP::Sim::Injector.new(
+      'router_id' => '10.0.0.1', 'as' => OUR_AS,
+      'listen_address' => '127.0.0.1', 'port' => @router.port,
+      'neighbors' => [{ 'address' => '127.0.0.2', 'as' => THEIR_AS,
+                        'capabilities' => ['as4_byte', { 'mbgp' => %w[ipv4 unicast] },
+                                           { 'mbgp' => %w[ipv6 unicast] }] }])
+    @injector.start
+    wait_for('the injector session', :timeout => 40) { !@injector.speaker.established_peers.empty? }
+  end
+
+  # **The interop claim of phase 3**: what the injector's dry run says is
+  # what a router that is not bgp4r holds after the injector sends the
+  # spec, sampled across the feed, and nothing after the withdrawal.
+  def plan_crosses(spec)
+    rows = []
+    offset = 0
+    loop do
+      p = @injector.plan('spec' => spec, 'offset' => offset, 'limit' => 1000)[:plans].first
+      rows.concat(p[:rows])
+      break unless p[:next_offset]
+      offset = p[:next_offset]
+    end
+    assert_equal(spec['count'], rows.size)
+    afi = spec['start'].include?(':') ? 2 : 1
+    @injector.act('announce', { 'spec' => spec }, false)
+    wait_for("GoBGP to hold #{spec['count']} routes", :timeout => 60) { path_count(afi) == spec['count'] }
+    held = rib(afi)
+    (0..9).collect { |k| (rows.size - 1) * k / 9 }.uniq.each do |i|
+      want = rows[i].dup
+      assert_equal(OUR_AS, want['as_path'].first, 'the plan has our AS in front')
+      # An IPv4 next hop under AFI 2 goes out IPv4-mapped, and GoBGP
+      # prints it back as the IPv4 address, so the plan's own form is the
+      # one to compare. Measured on 3.23.0; sim_test.rb asserts the
+      # octets.
+      paths = held[want['prefix']]
+      assert_not_nil(paths, "GoBGP holds #{want['prefix']}")
+      read(paths.first, want)
+    end
+    @injector.act('withdraw', { 'spec' => spec }, false)
+    wait_for('GoBGP to hold nothing', :timeout => 60) { path_count(afi) == 0 }
+  end
+
+  def test_the_router_holds_what_the_injector_planned
+    sim_session
+    plan_crosses('start' => '10.0.0.0/24', 'count' => 2000, 'group' => 4,
+                 'attributes' => { 'as_path' => [65010], 'med' => { 'cycle' => [5, 50, 500] },
+                                   'communities' => { 'count' => { 'base' => '65000:1',
+                                                                   'n' => { 'cycle' => [1, 2] } } } })
+    plan_crosses('start' => '2001:db8::/64', 'count' => 1000,
+                 'attributes' => { 'med' => { 'step' => { 'start' => 1, 'by' => 3 } } })
+  end
+
 end

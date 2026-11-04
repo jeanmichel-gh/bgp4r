@@ -231,4 +231,28 @@ class BGP_Sim_Http_Test < Test::Unit::TestCase
     assert_equal('http://[::1]:8080', h.url)
   end
 
+
+  # ---- the dry run ----------------------------------------------------
+
+  SPEC = { 'start' => '11.0.0.0/24', 'count' => 2 }.freeze
+
+  def test_the_plan_is_a_post_that_needs_the_header
+    assert_equal(405, get('/api/plan').first)
+    assert_equal(403, post('/api/plan', { 'spec' => SPEC }, {}).first)
+  end
+
+  # It reaches the Injector, which with no session answers 409 like an
+  # action, and a spec it cannot read is a 400.
+  def test_the_plan_reaches_the_injector
+    status, answer = post('/api/plan', 'spec' => SPEC)
+    assert_equal(409, status, answer.inspect)
+    assert_equal(400, post('/api/plan', {}).first)
+  end
+
+  def test_the_index_and_a_404_name_the_dry_run
+    _, index = get('/api')
+    assert_equal(['/api/plan'], index[:dry_runs])
+    assert_match(%r{/api/plan}, get('/api/nope').last[:error])
+  end
+
 end

@@ -89,6 +89,17 @@ class TestBgpGenPacker < Test::Unit::TestCase
     assert_kind_of(ArgumentError, e, 'the spec asked for it, so it is an ArgumentError')
   end
 
+  # A later set that leaves no room stops the feed, but only after the
+  # batch of the set before it has gone, so nothing that fit is lost.
+  def test_a_set_that_cannot_fit_stops_after_the_batch_before_it
+    small, big = P.new(100), P.new(4090)
+    got = []
+    assert_raise(BGP::Gen::Unpackable) do
+      BGP::Gen::Packer.batches([[:a, 7, small], [:b, 7, small], [:c, 7, big]]) { |b, _, _| got << b }
+    end
+    assert_equal([[:a, :b]], got)
+  end
+
   def test_nothing_in_nothing_out
     assert_equal([], P.new(23).each_batch([]).to_a)
   end

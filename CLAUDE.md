@@ -527,7 +527,10 @@ bgp/gen.rb bgp/gen/      `BGP::Gen`, UPDATEs and withdrawals in bulk from a
                          and refuses only what it cannot read, vary.rb is
                          the patterns, packer.rb packs routes by
                          arithmetic and unicast.rb is the one generator
-                         so far. **The first message of each
+                         so far. sender.rb is the session a spec goes out
+                         on, the eBGP and iBGP rules an announce block
+                         gets, so `bgp4r-sim` and `expected` agree.
+                         **The first message of each
                          feed is measured against the packer's arithmetic**,
                          so a slip raises `Gen::PackingError` before it
                          reaches a wire, and that check is what caught two
@@ -556,11 +559,10 @@ bgp/specimen.rb          `BGP::Specimen::CATALOG`, the valid counterpart
                          registered attributes that have never been sent
                          to a router, and a thing with no name cannot be
                          sent by name. `Specimen.update`, the twin of
-                         `Fault.update`, is deliberately **not** here:
-                         those four lines are written once in fault.rb,
-                         whose own comment says they are there so two
-                         programs have one answer, so sharing them
-                         belongs with the pull request that has a caller.
+                         `Fault.update`, waited for a caller and has one
+                         now, `bgp4r-sim`'s `specimen` key: both go
+                         through `Fault.wrap`, so the four lines of what
+                         a plain UPDATE needs are still written once.
                          The guard is test/unit/specimen_test.rb, which
                          derives the expected set from
                          `Attr.registrations` and from the build gate, so
@@ -1534,7 +1536,7 @@ CI: `.github/workflows/test.yml` runs both suites on every push to master and ev
 
 `.github/workflows/capture.yml` is the one workflow that deploys a containerlab lab: it builds the `lab-node` and BIRD images, deploys `lab/routescope/bgp4r-lab`, and runs its `capture.sh`, on demand and on a push that changes that folder or the Dockerfile. Its log is what routescope's BGP fixtures are cut from.
 
-Baseline on 2026-11-03: 3283 tests, 33101 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.2%.
+Baseline on 2026-11-03: 3330 tests, 33326 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
 
 **That coverage figure is 98.5% for the library and the rest is the two
 programs, not a gap anywhere else.** Measured the same run: with
@@ -7443,7 +7445,7 @@ in place, with a dated block in the header naming them.
   own test confirms is the most expensive kind of wrong, because
   nothing fails until somebody runs the real thing.
 
-### Route generation, `bgp/gen`. Phases 0, 1 and 2 Done
+### Route generation, `bgp/gen`. Phases 0 to 3 Done
 
 `docs/route-generation.md` is the design and the plan. Read it before
 any work on generating traffic, on `RouteGenerator`, or on what
@@ -7505,7 +7507,18 @@ Phases, with status kept in the document's section 12 table:
      it compared attributes without MP_REACH_NLRI, where an IPv6 next
      hop lives. `GEN_SEEDS=500` passes.
 3. Injector wiring, `/api/plan`, `mp_reach`, `mp_unreach`, `specimen`.
-   To do.
+   **Done.** `announce` and `withdraw` take a `spec` key, `POST
+   /api/plan` answers `expected` per peer and sends nothing, and three
+   keys send one message by hand. Three things worth knowing:
+   * **The session's rules are in the library**, `bgp/gen/sender.rb`, a
+     second argument to `BGP::Gen.new`, so the plan and the send read
+     the same row and cannot disagree. A spec's `local_pref` is dropped
+     over eBGP, as an announce block's is, and the plan says so.
+   * **`Packer.batches` raised before yielding the batch it held**, so a
+     spec whose later set had no room lost the last batch that fit. The
+     injector's first test of that case found it. It yields first now.
+   * GoBGP 3.23.0 prints an IPv4-mapped IPv6 next hop as the IPv4
+     address, so the lab compares the plan's own form.
 4. One family per pull request, 4a to 4g, in any order after 3. To do.
 5. Churn. To do.
 6. `LabHelper` and the coverage matrix take specs. To do.
