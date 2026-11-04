@@ -589,11 +589,12 @@ module BGP
       # A generated range, on a thread of its own unless asked otherwise.
       def feed(block, peers, action, async)
         g = generate_options(block)
-        if block['path_id'] && action != 'withdraw'
-          raise Refused,
-                'path_id is not carried into a generated range: ' \
-                'Speaker#each_update hands RouteGenerator no Path Identifier. ' \
-                'Use prefixes for an add-path test.'
+        # Checked here rather than inside the feed, so a bad one is a 400
+        # now and not a failed feed on a thread later. The range is RFC
+        # 7911 section 3's four octets, the same one RouteGenerator holds.
+        path_id = integer(block, 'path_id', nil)
+        if path_id && !(0..BGP::RouteGenerator::MAX_PATH_ID).include?(path_id)
+          raise Refused, "path_id #{path_id} does not fit in 4 octets (RFC 7911 section 3)"
         end
         records = peers.collect { |peer|
           range = "#{g['start']} x #{g['count']}"

@@ -542,15 +542,50 @@ class BGP_Sim_Injector_Test < Test::Unit::TestCase
     assert_match(/generate/, e.message)
   end
 
-  # The documented gap, refused rather than ignored: Speaker#each_update
-  # hands RouteGenerator no Path Identifier, so a path_id on a generate
-  # block would be dropped in silence.
-  def test_a_path_id_on_a_generated_announce_is_refused_rather_than_dropped
-    e = assert_raise(BGP::Sim::Injector::Refused) do
-      injector.act('announce', 'generate' => { 'start' => '11.0.0.0/28', 'count' => 2 },
-                               'path_id' => 7)
+  # A path_id on a generate block goes in front of every prefix of the
+  # range (RFC 7911 section 3). This used to be refused, because
+  # Speaker#each_update dropped it; phase 0 of docs/route-generation.md
+  # carries it through, so the refusal is gone and this is what replaced
+  # it. Every prefix is checked, not the first, since a range that lost
+  # the identifier after its first UPDATE would pass a first-only check.
+  def test_a_path_id_on_a_generated_announce_reaches_every_prefix
+    inj = injector
+    inj.act('announce',
+            { 'generate' => { 'start' => '11.0.0.0/28', 'count' => 5, 'per_update' => 2 },
+              'path_id' => 7 },
+            false)
+    assert_equal(3, peer.updates.size)
+    nlris = peer.updates.flat_map { |u| u.nlri.nlris }
+    assert_equal(5, nlris.size)
+    assert_equal([7] * 5, nlris.collect(&:path_id))
+  end
+
+  # The withdrawal of the same range names the same Path Identifier, so
+  # an add-path test can take back one path of a generated range and
+  # leave another. That half already worked; it is asserted beside the
+  # announce half so the pair is read together.
+  def test_a_path_id_on_a_generated_withdrawal_reaches_every_prefix
+    inj = injector
+    inj.act('withdraw',
+            { 'generate' => { 'start' => '11.0.0.0/28', 'count' => 5, 'per_update' => 2 },
+              'path_id' => 7 },
+            false)
+    assert_equal([7] * 5, peer.updates.flat_map { |u| u.withdrawn.nlris }.collect(&:path_id))
+  end
+
+  # Refused before the feed starts, so a bad value is a 400 and not a
+  # feed that failed on a thread nobody is watching.
+  def test_a_path_id_that_is_not_four_octets_is_refused_before_the_feed
+    inj = injector
+    ['seven', -1, 2**32].each do |bad|
+      e = assert_raise(BGP::Sim::Injector::Refused, bad.inspect) do
+        inj.act('announce', 'generate' => { 'start' => '11.0.0.0/28', 'count' => 2 },
+                            'path_id' => bad)
+      end
+      assert_match(/path_id/, e.message)
     end
-    assert_match(/path_id/, e.message)
+    assert_equal([], peer.updates, 'nothing went out')
+    assert_equal([], inj.sent.feeds, 'no feed was started')
   end
 
   # Our arithmetic, checked once, which is the half of the packing

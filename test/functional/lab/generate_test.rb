@@ -73,6 +73,24 @@ class LabGenerateTest < Test::Unit::TestCase
     end
   end
 
+  # A node file's path_id reaches a generated range too (RFC 7911
+  # section 3), the way it reaches a prefixes block through nlri_for. It
+  # used to be dropped here in silence; phase 0 of
+  # docs/route-generation.md.
+  def test_generate_carries_the_path_id_to_every_prefix
+    list = updates(BLOCK.merge('path_id' => 7), true)
+    ids = list.flat_map { |u| u.nlri.nlris }.collect(&:path_id)
+    assert_equal([7] * 10, ids)
+  end
+
+  # Without one nothing changes, which is what makes the fix safe for
+  # every node file written before it: none of them sets path_id on a
+  # generate block, and a block without one sends the octets it sent.
+  def test_generate_without_a_path_id_sends_none
+    list = updates(BLOCK, true)
+    assert_equal([nil] * 10, list.flat_map { |u| u.nlri.nlris }.collect(&:path_id))
+  end
+
   def test_prefixes_block_is_one_update
     list = updates({ 'prefixes' => ['192.168.1.0/24', '192.168.2.0/24'] }, true)
     assert_equal(1, list.size)

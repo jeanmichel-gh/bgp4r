@@ -241,7 +241,8 @@ can fail. Update this table in the pull request that moves a step.
 
 | Phase | Step | Status |
 |---|---|---|
-| 0 | Fix the two gaps: `path_id` dropped on a `generate` block, and decide the `as_path` prepend. | To do |
+| 0a | `path_id` on a `generate` block reaches every prefix, announce and withdraw. | Done |
+| 0b | Decide the eBGP `as_path` prepend (section 11), then implement it. | To do |
 | 1 | `bgp/gen`: spec reader that refuses unknown keys, unicast generator for IPv4 and IPv6, the packer, `updates`, `withdrawals`, `expected`. | To do |
 | 2 | `Vary`: the five patterns, `group`, the property patterns for AS_PATH and communities. | To do |
 | 3 | Injector wiring: `announce` and `withdraw` read a spec, `POST /api/plan`, the `mp_reach`, `mp_unreach` and `specimen` keys. | To do |
