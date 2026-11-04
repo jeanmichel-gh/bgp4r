@@ -59,6 +59,32 @@ class LabGenerateTest < Test::Unit::TestCase
     assert_nil(a['local_pref'])
   end
 
+  # as_path_literal: true sends the AS_PATH as written over eBGP, on a
+  # prefixes block and on every UPDATE of a generate block alike.
+  def test_as_path_literal_sends_the_path_as_written
+    lit = BLOCK.merge('as_path_literal' => true)
+    list = updates(lit, true)
+    assert_equal(3, list.size)
+    list.each { |u| assert_equal('90 80', Lab::Recorder.attributes(u.path_attribute)['as_path']) }
+    plain = lit.reject { |k, _| k == 'generate' }.merge('prefixes' => ['11.0.0.0/28'])
+    assert_equal('90 80', Lab::Recorder.attributes(updates(plain, true).first.path_attribute)['as_path'])
+  end
+
+  # Only true turns the prepend off, so a node file written before the key
+  # and one with a string in it send what they always sent.
+  def test_as_path_literal_other_than_true_keeps_the_prepend
+    [false, 'true', 'yes', 1].each do |v|
+      a = Lab::Recorder.attributes(updates(BLOCK.merge('as_path_literal' => v), true).first.path_attribute)
+      assert_equal('65001 90 80', a['as_path'], "as_path_literal #{v.inspect}")
+    end
+  end
+
+  # Over iBGP there is nothing to prepend, so the key changes nothing.
+  def test_as_path_literal_changes_nothing_over_ibgp
+    a = Lab::Recorder.attributes(updates(BLOCK.merge('as_path_literal' => true), false).first.path_attribute)
+    assert_equal('90 80', a['as_path'])
+  end
+
   def test_generate_ibgp_attributes
     a = Lab::Recorder.attributes(updates(BLOCK, false).first.path_attribute)
     assert_equal('90 80', a['as_path'])
