@@ -641,4 +641,80 @@ class GenFunctionalTest < Test::Unit::TestCase
     assert_equal(['::'], @rows.collect { |r| r['gateway'] }.uniq)
   end
 
+  # ---- phase 4e: RT-constrain -------------------------------------------
+
+  # Rows read off the NLRIs the far side parsed, with nothing from
+  # bgp/gen: the route target from the community's own hash.
+  def rtc_rows(updates, key = :mp_reach)
+    updates.flat_map do |u|
+      pa = u.path_attribute
+      mp = pa && pa[key]
+      next [] unless mp
+      attrs = pa[:origin] && { 'origin' => pa[:origin].to_i, 'as_path' => pa[:as_path].segments.flat_map(&:as),
+                               'next_hop' => mp.nexthops }
+      mp.nlris.collect do |n|
+        h = n.to_hash
+        r = if n.default?
+              { 'default' => true }
+            else
+              { 'origin_as' => h[:origin_as], 'route_target' => h[:route_target].values.first.join(':'),
+                'prefix_length' => n.mlen }
+            end
+        r['path_id'] = n.path_id if n.path_id
+        attrs ? r.merge(attrs) : r
+      end
+    end
+  end
+
+  # Announce, compare, withdraw, compare. The AFI and SAFI are stated
+  # here and not read from the generator.
+  def rtc_crosses(spec)
+    c = catcher
+    g = BGP::Gen.new(spec)
+    sent = g.updates.count
+    g.updates.each { |u| @c.send_update u }
+    got = []
+    assert(wait_for { got.concat(c.drain) ; got.size >= sent }, "#{got.size} of #{sent} UPDATEs arrived")
+    assert_equal([], got.flat_map { |u| u.path_attribute.errors + u.path_attribute.undecoded }, 'no protocol error')
+    assert_equal([[1, 132]], got.collect { |u| mp = u.path_attribute[:mp_reach] ; [mp.afi, mp.safi] }.uniq)
+    @rows = rtc_rows(got)
+    assert_equal(g.expected.to_a, @rows)
+    back = g.withdrawals.count
+    g.withdrawals.each { |u| @c.send_update u }
+    gone = []
+    assert(wait_for { gone.concat(c.drain) ; gone.size >= back }, "#{gone.size} of #{back} withdrawals arrived")
+    keys = %w[default origin_as route_target prefix_length path_id]
+    assert_equal(g.expected.collect { |r| r.slice(*keys) }, rtc_rows(gone, :mp_unreach))
+    [sent, back]
+  end
+
+  # 2000 route targets of each of the three layouts, the default in
+  # front of the first. The route targets are stated by hand at the ends
+  # of each range, since a generator that stepped the wrong field would
+  # agree with its own expected.
+  def test_rt_constrain
+    session
+    { '65000:100' => ['65000:100', '65000:2099'], '192.0.2.1:1' => ['192.0.2.1:1', '192.0.2.1:2000'],
+      '4200000000:5' => ['4200000000:5', '4200000000:2004'] }.each_with_index do |(start, ends), k|
+      n = rtc_crosses('family' => 'rt_constrain', 'start' => start, 'count' => 2000, 'default' => k.zero?,
+                      'origin_as' => { 'step' => { 'start' => 64512, 'by' => 1 } },
+                      'attributes' => { 'as_path' => [CLIENT_AS], 'next_hop' => '192.0.2.1' })
+      assert_operator(n[0], :>=, 6)
+      body = @rows.reject { |r| r['default'] }
+      assert_equal(ends, [body.first['route_target'], body.last['route_target']])
+      assert_equal([64512, 64512 + 1999], [body.first['origin_as'], body.last['origin_as']])
+      assert_equal(k.zero?, @rows.first['default'] == true)
+    end
+  end
+
+  # RFC 7911 on SAFI 132: a Path Identifier in front of every route,
+  # the default among them, and none reported as a protocol error, since
+  # validation.rb walks no NLRI of this family.
+  def test_rt_constrain_with_a_path_id
+    session(BGP::OPT_PARM::CAP::Add_path.new(:send_and_receive, 1, 132))
+    rtc_crosses('family' => 'rt_constrain', 'start' => '65000:1', 'count' => 500, 'default' => true,
+                'origin_as' => 65001, 'path_id' => { 'step' => { 'start' => 10, 'by' => 1 } },
+                'attributes' => { 'as_path' => [CLIENT_AS], 'next_hop' => '192.0.2.1' })
+    assert_equal((10..510).to_a, @rows.collect { |r| r['path_id'] })
+  end
 end

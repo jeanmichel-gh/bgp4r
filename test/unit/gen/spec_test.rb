@@ -108,7 +108,9 @@ class TestBgpGenSpec < Test::Unit::TestCase
                    'redirect' => flow, 'marking' => flow,
                    'route_type' => evpn, 'ip' => evpn, 'esi' => evpn, 'ethernet_tag' => evpn,
                    'gateway' => evpn, 'mac_mobility' => evpn, 'router_mac' => evpn,
-                   'pmsi_label' => evpn }, S::FAMILY_KEYS)
+                   'pmsi_label' => evpn,
+                   'origin_as' => %w[rt_constrain], 'prefix_length' => %w[rt_constrain],
+                   'default' => %w[rt_constrain] }, S::FAMILY_KEYS)
     assert_equal([], S::FAMILY_KEYS.keys - S::KEYS)
   end
 
@@ -151,7 +153,19 @@ class TestBgpGenSpec < Test::Unit::TestCase
     refused(minimal.merge('router_mac' => '00:00:5e:00:53'), /router_mac "00:00:5e:00:53" is 6 octets/)
   end
 
-  # Phase 4b. An RD and a route target read as ADMIN:N, and the
+  # Phase 4e. The RT-constrain keys: an origin AS of 4 octets, a prefix
+  # length of one, and a default that is a JSON boolean and nothing else.
+  def test_the_rt_constrain_keys_read
+    s = S.read(minimal.merge('origin_as' => { 'step' => { 'start' => 1, 'by' => 1 } }, 'prefix_length' => 64,
+                             'default' => false))
+    assert_equal([{ 'step' => { 'start' => 1, 'by' => 1 } }, 64, false],
+                 s.values_at('origin_as', 'prefix_length', 'default'))
+    refused(minimal.merge('origin_as' => 2**32), /origin_as: 4294967296 does not fit/)
+    refused(minimal.merge('prefix_length' => -1), /prefix_length is at least 0/)
+    refused(minimal.merge('default' => 1), /default is true or false, not 1/)
+  end
+
+    # Phase 4b. An RD and a route target read as ADMIN:N, and the
   # administrator says the type, RFC 4364 section 4.2. The check that a
   # stepped number fits runs here, once vrfs is known.
   def test_an_rd_a_route_target_and_vrfs_read

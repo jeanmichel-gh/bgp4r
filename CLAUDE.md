@@ -529,8 +529,9 @@ bgp/gen.rb bgp/gen/      `BGP::Gen`, UPDATEs and withdrawals in bulk from a
                          arithmetic and unicast.rb is the generator the
                          others build on: multicast.rb is SAFI 2,
                          labelled.rb SAFI 4, vpn.rb SAFI 128 and 129,
-                         flow_rules.rb SAFI 133 and 134 and
-                         evpn_routes.rb EVPN route types 2, 3 and 5,
+                         flow_rules.rb SAFI 133 and 134,
+                         evpn_routes.rb EVPN route types 2, 3 and 5
+                         and rt_constrain_routes.rb SAFI 132,
                          each a subclass, with per_vrf.rb the RD, VRF
                          and route target logic VPN, VPN flow spec and
                          EVPN share. Only IPv4
@@ -759,10 +760,11 @@ docs/                    protocol-testing.md: using bgp4r to test a router
                          attributes that vary per route, as one pure
                          module that bgp4r's tests, `bgp4r-sim` and
                          routescope's scenarios all drive with the same
-                         JSON spec. **Phases 0 to 3 and 4a to 4d are
+                         JSON spec. **Phases 0 to 3 and 4a to 4e are
                          built**: unicast, multicast, labelled, both
                          VPN families and both flow spec families, both
-                         AFIs, and EVPN route types 2, 3 and 5,
+                         AFIs, EVPN route types 2, 3 and 5, and
+                         RT-constrain,
                          with patterns and the injector, and section 13
                          says what they measured;
                          section 12 is the plan and its status table
@@ -1547,7 +1549,7 @@ CI: `.github/workflows/test.yml` runs both suites on every push to master and ev
 
 `.github/workflows/capture.yml` is the one workflow that deploys a containerlab lab: it builds the `lab-node` and BIRD images, deploys `lab/routescope/bgp4r-lab`, and runs its `capture.sh`, on demand and on a push that changes that folder or the Dockerfile. Its log is what routescope's BGP fixtures are cut from.
 
-Baseline on 2026-11-04: 3406 tests, 33782 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
+Baseline on 2026-11-04: 3420 tests, 34051 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
 
 **That coverage figure is 98.5% for the library and the rest is the two
 programs, not a gap anywhere else.** Measured the same run: with
@@ -7456,7 +7458,7 @@ in place, with a dated block in the header naming them.
   own test confirms is the most expensive kind of wrong, because
   nothing fails until somebody runs the real thing.
 
-### Route generation, `bgp/gen`. Phases 0 to 3 and 4a to 4d Done
+### Route generation, `bgp/gen`. Phases 0 to 3 and 4a to 4e Done
 
 `docs/route-generation.md` is the design and the plan. Read it before
 any work on generating traffic, on `RouteGenerator`, or on what
@@ -7583,8 +7585,8 @@ Phases, with status kept in the document's section 12 table:
    **4d Done**: EVPN route types 2, 3 and 5, with `rd`, `vrfs` and
    `route_target` per EVI. `route_type` is required and `start` is what
    steps in it: a MAC, an originator or a prefix. 4d2, the other eight
-   route types and the ESI label community, and 4e to 4g are to do.
-   Three things worth knowing:
+   route types and the ESI label community, is to do. Three things
+   worth knowing:
    * **The add-path gap holds for EVPN, measured**: validation.rb reads
      the Path Identifier as a Route Type and a Length. The property test
      sends EVPN without one, and `evpn_routes_test.rb` pins it.
@@ -7594,6 +7596,18 @@ Phases, with status kept in the document's section 12 table:
    * **This phase's own test sent a route RFC 9136 section 3.2
      forbids**, a non-zero ESI and gateway together, and the strict read
      caught it. It sends them apart now.
+
+   **4e Done**: RT-constrain, SAFI 132. `start` is a route target as
+   `ADMIN:N`, stepped per route, with `origin_as`, `prefix_length` and
+   `default`. 4f and 4g are to do. Three things worth knowing:
+   * **A Path Identifier works here**, since validation.rb walks no
+     NLRI of this family, so the add-path gap of 4c and 4d does not
+     apply and the property test sends one.
+   * **The lab sends no default**: GoBGP 3.23.0 panics on the default
+     followed by a second route. It crosses over loopback only.
+   * **The property test runs 45 seeds now**, five per family: with
+     nine families, 27 and 36 left a flow spec key the corpus test
+     asks for undrawn.
 5. Churn. To do.
 6. `LabHelper` and the coverage matrix take specs. To do.
 7. routescope scenarios use specs. routescope's column.

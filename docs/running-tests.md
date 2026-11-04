@@ -19,7 +19,7 @@ amounts. Measured 2026-11-03:
 
 | Tier | What it needs | Files | Time | Command |
 |---|---|---:|---|---|
-| unit | Ruby | 147 | 21s | `ruby test/run_unit.rb` |
+| unit | Ruby | 148 | 21s | `ruby test/run_unit.rb` |
 | functional | a loopback socket | 13 | 18s | one file at a time, below |
 | lab | gobgpd, FRR, Docker or root | 27 | 10s to 400s per group | `ruby test/run_lab.rb GROUP` |
 
@@ -132,7 +132,7 @@ The four executables.
 | `daemon` | 12 | 1 | 0 | bgp4rd and bgp4r-cli: the control socket, the views and the configuration |
 | `injector` | 5 | 1 | 0 | bgp4r-sim: the ten actions, the HTTP API and what it sent |
 | `routegen` | 2 | 1 | 3 | Generating many prefixes and packing them into UPDATEs |
-| `gen` | 13 | 1 | 1 | bgp/gen: UPDATEs and withdrawals from a spec, and what they meant |
+| `gen` | 14 | 1 | 1 | bgp/gen: UPDATEs and withdrawals from a spec, and what they meant |
 | `capture` | 4 | 0 | 0 | Reading BGP off a wire or a pcap file, and bgp4r lab new |
 | `speaker` | 1 | 0 | 4 | lab/speaker.rb and the five topologies under lab/topologies |
 | `events` | 2 | 0 | 0 | The structured event stream both programs serve |
@@ -333,7 +333,7 @@ ruby test/run_feature.rb fsm
 bgp/gen: UPDATEs and withdrawals from a spec, and what they meant.
 
 - Read first: `docs/route-generation.md`
-- 13 unit files, 1 functional
+- 14 unit files, 1 functional
 - lab:
   - `gen_gobgp_test`, needs gobgpd
 
@@ -826,5 +826,5 @@ test file has to be tagged before the suite is green again, which is
 the same arrangement `test/unit/lab_groups_test.rb` has with the CI
 matrix.
 
-187 of 187 test files are tagged. The
+188 of 188 test files are tagged. The
 remainder, if any, is what the guard names.

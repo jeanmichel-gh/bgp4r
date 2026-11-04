@@ -42,13 +42,17 @@ class TestBgpGen < Test::Unit::TestCase
   AS4 = BGP::Update::Info.new(true)
 
   # GEN_SEEDS=500 runs a longer sweep. The default keeps the unit suite
-  # quick, since every message is parsed several times over. It is three
+  # quick, since every message is parsed several times over. It is five
   # feeds per family, which the corpus deals out in turn, so a family
-  # added to FAMILIES needs three more.
-  SEEDS = Integer(ENV.fetch('GEN_SEEDS', 24))
+  # added to FAMILIES needs five more. It was three until phase 4e: with
+  # nine families, 27 and 36 seeds each left a flow spec key the corpus
+  # test asks for undrawn, since the families moved to other seeds.
+  SEEDS = Integer(ENV.fetch('GEN_SEEDS', 45))
 
   def test_the_generators_are_the_ones_built
-    assert_equal(%w[unicast multicast labelled vpn vpn_multicast flow_spec flow_spec_vpn evpn], BGP::Gen::GENERATORS.keys)
+    assert_equal(%w[unicast multicast labelled vpn vpn_multicast flow_spec flow_spec_vpn evpn rt_constrain],
+                 BGP::Gen::GENERATORS.keys)
+    assert_equal(BGP::Gen::Rt_constrain_routes, BGP::Gen::GENERATORS['rt_constrain'])
     assert_equal(BGP::Gen::Evpn_routes, BGP::Gen::GENERATORS['evpn'])
     assert_equal(BGP::Gen::Flow_rules, BGP::Gen::GENERATORS['flow_spec'])
     assert_equal(BGP::Gen::Flow_rules_vpn, BGP::Gen::GENERATORS['flow_spec_vpn'])
@@ -147,7 +151,7 @@ class TestBgpGen < Test::Unit::TestCase
     # raises. That is a gap in the receive checks and not in the
     # generator; flow_rules_test.rb and evpn_routes_test.rb each send
     # one and read it back leniently.
-    case MEASURED.include?(family) ? 0 : r.rand(3)
+    case NO_PATH_ID.include?(family) ? 0 : r.rand(3)
     when 1 then s['path_id'] = r.rand(2**32)
     when 2 then s['path_id'] = { 'step' => { 'start' => r.rand(1000), 'by' => 1 } }
     end
@@ -169,6 +173,7 @@ class TestBgpGen < Test::Unit::TestCase
       s['redirect'] = "65000:#{r.rand(100)}" if r.rand(3) == 0
     end
     evpn(r, s, v6, n) if family == 'evpn'
+    rt_constrain(r, s) if family == 'rt_constrain'
     if RD.include?(family)
       admin = [r.rand(65536), "192.0.2.#{r.rand(1..254)}", r.rand(65536..2**32 - 1)][r.rand(3)]
       s['rd'] = "#{admin}:#{r.rand(1000)}"
@@ -206,20 +211,37 @@ class TestBgpGen < Test::Unit::TestCase
     s['router_mac'] = '00:00:5e:00:53:01' if type != 3 && r.rand(2) == 1
   end
 
-  FAMILIES = %w[unicast multicast labelled vpn vpn_multicast flow_spec flow_spec_vpn evpn]
+  # Phase 4e: a range of route targets in one of the three layouts, an
+  # origin AS, and sometimes the default in front. The prefix length is
+  # left at 96, since a shorter one sends one route several times over,
+  # which test_withdrawals_cover_exactly_what_was_announced counts.
+  def rt_constrain(r, s)
+    admin = [r.rand(65536), "192.0.2.#{r.rand(1..254)}", r.rand(65536..2**32 - 1)][r.rand(3)]
+    s['start'] = "#{admin}:#{r.rand(1000)}"
+    s['origin_as'] = [r.rand(2**32), { 'step' => { 'start' => 64512, 'by' => 1 } }][r.rand(2)]
+    s['default'] = true if r.rand(3) == 0
+    s['prefix_length'] = 96 if r.rand(4) == 0
+  end
+
+  FAMILIES = %w[unicast multicast labelled vpn vpn_multicast flow_spec flow_spec_vpn evpn rt_constrain]
   LABELLED = %w[labelled vpn vpn_multicast]
   FLOW = %w[flow_spec flow_spec_vpn]
   VPN = %w[vpn vpn_multicast flow_spec_vpn]
   # The families with a Route Distinguisher, and the ones whose routes
   # differ in length so the packing test measures each.
   RD = VPN + %w[evpn]
-  MEASURED = FLOW + %w[evpn]
+  MEASURED = FLOW + %w[evpn rt_constrain]
+  # The families whose NLRI validation.rb walks without knowing add-path,
+  # which CLAUDE.md records under Known issues.
+  NO_PATH_ID = FLOW + %w[evpn]
   EVPN_TYPES = [2, 3, 5]
   SAFI = { 'unicast' => 1, 'multicast' => 2, 'labelled' => 4, 'vpn' => 128, 'vpn_multicast' => 129,
-           'flow_spec' => 133, 'flow_spec_vpn' => 134, 'evpn' => 70 }
+           'flow_spec' => 133, 'flow_spec_vpn' => 134, 'evpn' => 70, 'rt_constrain' => 132 }
 
-  # How many routes a spec makes: count, once per VRF.
-  def self.total(spec) ; spec['count'] * (spec['vrfs'] || 1) ; end
+  # How many routes a spec makes: count, once per VRF, and the RT-constrain
+  # default in front.
+  def self.total(spec) ; spec['count'] * (spec['vrfs'] || 1) + (spec['default'] ? 1 : 0) ; end
+
 
   def info_for(spec)
     spec['path_id'] ? AddPath.new : PLAIN
@@ -235,6 +257,7 @@ class TestBgpGen < Test::Unit::TestCase
     list.collect do |n|
       # An EVPN route's whole hash, RD included, is its key here.
       next [n.to_hash, n.path_id, nil] if n.is_a?(BGP::Evpn)
+      next [n.to_hash.reject { |k, _| k == :path_id }, n.path_id, nil] if n.is_a?(BGP::Rt_constrain)
       if n.is_a?(BGP::Flow_spec)
         # A rule's key is its components and its RD, RFC 8955 section 8.
         h = n.to_hash
@@ -420,6 +443,7 @@ class TestBgpGen < Test::Unit::TestCase
     %w[protocol destination_port source rate marking].each do |k|
       assert_operator(specs.count { |sp| sp[k] }, :>=, 1, "flow spec feeds with #{k}")
     end
+    assert_operator(specs.count { |sp| sp['default'] }, :>=, 1, 'RT-constrain feeds with the default')
     EVPN_TYPES.each do |t|
       assert_operator(specs.count { |sp| sp['route_type'] == t }, :>=, 1, "EVPN feeds of route type #{t}")
     end
@@ -433,6 +457,7 @@ class TestBgpGen < Test::Unit::TestCase
   # CommunityKeys, which would compare it with itself.
   def row_of(prefix, path_id, rd, pa)
     return evpn_row_of(prefix, path_id, pa) if prefix.is_a?(Hash) && pa[:mp_reach].safi == 70
+    return rtc_row_of(prefix, path_id, pa) if prefix.is_a?(Hash) && pa[:mp_reach].safi == 132
     return flow_row_of(prefix, path_id, rd, pa) if prefix.is_a?(Hash)
     r = { 'prefix' => prefix }
     r['path_id'] = path_id if path_id
@@ -447,6 +472,25 @@ class TestBgpGen < Test::Unit::TestCase
     r['as_path'] = pa[:as_path].segments.flat_map(&:as)
     nh = pa[:mp_reach] ? pa[:mp_reach].nexthops : pa[:next_hop].next_hop
     r['next_hop'] = nh
+    r['med'] = pa[:multi_exit_disc].to_i if pa[:multi_exit_disc]
+    r['local_pref'] = pa[:local_pref].to_i if pa[:local_pref]
+    r['communities'] = pa[:communities].communities.split if pa[:communities]
+    r['large_communities'] = pa[:large_communities].large_communities.split if pa[:large_communities]
+    r
+  end
+
+  # An RT-constrain row, read off the NLRI's own hash.
+  def rtc_row_of(h, path_id, pa)
+    r = if h[:mlen] == 0
+          { 'default' => true }
+        else
+          rt = h[:route_target].values.first
+          { 'origin_as' => h[:origin_as], 'route_target' => rt.join(':'), 'prefix_length' => 96 }
+        end
+    r['path_id'] = path_id if path_id
+    r['origin'] = pa[:origin].to_i
+    r['as_path'] = pa[:as_path].segments.flat_map(&:as)
+    r['next_hop'] = pa[:mp_reach].nexthops
     r['med'] = pa[:multi_exit_disc].to_i if pa[:multi_exit_disc]
     r['local_pref'] = pa[:local_pref].to_i if pa[:local_pref]
     r['communities'] = pa[:communities].communities.split if pa[:communities]
