@@ -23,6 +23,7 @@
 require 'bgp4r'
 require 'bgp/gen/spec'
 require 'bgp/gen/packer'
+require 'bgp/gen/sender'
 require 'bgp/gen/unicast'
 
 module BGP
@@ -46,13 +47,19 @@ module BGP
   # the names are BGP::Specimen's, so the library has one vocabulary,
   # and a name Specimen knows that has no generator yet is refused as
   # such rather than as unknown.
+  #
+  # A second argument says what session the spec goes out on, so the
+  # eBGP and iBGP rules an announce block gets apply here too: see
+  # bgp/gen/sender.rb. `bgp4r-sim` passes one; the library alone sends
+  # what the spec says.
   class Gen
     GENERATORS = { 'unicast' => Unicast }.freeze
 
-    attr_reader :spec, :family
+    attr_reader :spec, :family, :sender
 
-    def initialize(spec)
+    def initialize(spec, sender = nil)
       @spec = Spec.read(spec)
+      @sender = Sender.read(sender)
       @family = @spec['family']
       klass = GENERATORS[@family]
       unless klass
@@ -62,7 +69,7 @@ module BGP
         end
         raise SpecError, "unknown family '#{@family}'; the families are #{known.join(', ')}"
       end
-      @generator = klass.new(@spec)
+      @generator = klass.new(@spec, @sender)
     end
 
     def afi ; @generator.afi ; end

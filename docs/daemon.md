@@ -1394,8 +1394,8 @@ Actions, as `action => [path, body keys]`, which is the table
 
 | Action | Path | Body |
 |---|---|---|
-| `announce` | `/api/announce` | `prefixes` or `generate`, `next_hop`, `as_path`, `as_path_literal`, `med`, `local_pref`, `communities`, `extended_communities`, `large_communities`, `path_id`, `peer` |
-| `withdraw` | `/api/withdraw` | the same selectors |
+| `announce` | `/api/announce` | `prefixes` or `generate`, `next_hop`, `as_path`, `as_path_literal`, `med`, `local_pref`, `communities`, `extended_communities`, `large_communities`, `path_id`, `peer`; or one of `spec`, `mp_reach`, `specimen` |
+| `withdraw` | `/api/withdraw` | the same selectors, or `spec` or `mp_unreach` |
 | `attribute` | `/api/attribute` | a prefix set and the attributes to change |
 | `fault` | `/api/fault` | `case` from `BGP::Fault::CATALOG`, `prefixes` |
 | `replay` | `/api/replay` | `hex`, the octets to send unchanged |
@@ -1419,6 +1419,38 @@ router to make. The key is a JSON boolean and anything else is refused,
 because a string `"true"` would prepend in silence. `attribute` takes it
 too, so a scenario can flip one announced prefix to a literal path. It
 changes nothing over iBGP, where nothing is prepended.
+
+**Three selectors are not an announce block, and each refuses the
+announce keys that do not go with it**, since a `med` beside a `spec`
+would change nothing in silence. Phase 3 of `docs/route-generation.md`
+added them:
+
+* **`spec`** is a `BGP::Gen` spec, that document's section 4, handed to
+  the library unchanged under its own key. The injector adds the
+  session: our AS in front of the path over eBGP unless
+  `as_path_literal`, our address as next hop when the spec gives none,
+  and LOCAL_PREF to an internal peer only, 100 by default. Those are
+  `Speaker#path_attribute`'s rules for an announce block, applied in
+  `bgp/gen/sender.rb`. A spec is a feed, like `generate`: one record
+  in `/api/sent`, counted and not listed, and not resent after a flap.
+* **`mp_reach` and `mp_unreach`** take the Hash `Mp_reach.new` and
+  `Mp_unreach.new` read, so one message in any family the library
+  builds. JSON keys are Strings and the constructors read Symbols, at
+  every depth, which the injector converts.
+* **`specimen`** names a `BGP::Specimen` entry and sends it in the
+  envelope `Fault.update` uses, so the valid catalog and the faulty one
+  reach a wire the same way. `prefixes` is its NLRI; a family specimen
+  carries its own and takes none.
+
+**`POST /api/plan` is a dry run**: the same `spec`, `peer` and
+`as_path_literal`, and `offset` and `limit` for a page. It sends
+nothing and answers `{"plans": [{"peer", "rows", "total", "offset",
+"limit", "next_offset"}]}`, one entry per target, where the rows are
+`BGP::Gen#expected` with that session's rules. **Per peer, because the
+answer differs per peer**: the prepend and LOCAL_PREF are the
+session's. It takes the action header, so a driver writes every POST
+one way. This is what lets routescope assert a router's RIB against a
+spec without loading bgp4r.
 
 **`fault` and `replay` are the point.** An injector that ships without
 them is a worse FRR, and the argument for building any of this is gone.
