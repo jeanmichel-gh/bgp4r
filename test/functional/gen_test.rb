@@ -188,4 +188,41 @@ class GenFunctionalTest < Test::Unit::TestCase
     crosses('start' => '2001:db8::/48', 'count' => 2000, 'path_id' => 77,
             'attributes' => { 'next_hop' => '2001:db8::1', 'as_path' => [CLIENT_AS] })
   end
+
+  # Phase 2: patterns over a real session. The receiver's Adj-RIB-In
+  # holds one row per route, so a value that varies has to arrive on the
+  # route it was meant for, not just somewhere in the feed.
+  PATTERNS = {
+    'origin' => { 'every' => { 'n' => 2, 'values' => [0, 1, 2] } },
+    'as_path' => { 'prepend' => { 'as' => CLIENT_AS, 'count' => { 'cycle' => [1, 2, 3] }, 'path' => [65010] } },
+    'med' => { 'random' => { 'min' => 0, 'max' => 5 } },
+    'local_pref' => { 'step' => { 'start' => 100, 'by' => 10, 'wrap' => 160 } },
+    'communities' => { 'count' => { 'base' => '65000:1', 'n' => { 'cycle' => [0, 1, 4] } } },
+    'large_communities' => { 'cycle' => [['65000:1:1'], ['65000:2:2', '65000:2:3']] },
+  }
+
+  def test_ipv4_unicast_with_patterns_and_a_group
+    session
+    n = crosses('start' => '10.0.0.0/24', 'count' => 3000, 'group' => 7, 'seed' => 11,
+                'attributes' => PATTERNS.merge('next_hop' => { 'step' => { 'start' => '192.0.2.1', 'by' => 1, 'wrap' => '192.0.2.9' } }))
+    assert_operator(n[0], :>, 3000 / 7 / 4, 'the sets changed, so the messages did')
+  end
+
+  # IPv6 sends no LOCAL_PREF, for the reason test_ipv6_unicast gives.
+  def test_ipv6_unicast_with_patterns
+    session
+    crosses('start' => '2001:db8::/64', 'count' => 1500, 'seed' => 12, 'group' => 5,
+            'attributes' => PATTERNS.reject { |k, _| k == 'local_pref' }
+                                    .merge('next_hop' => { 'cycle' => %w[2001:db8::1 2001:db8::2] }))
+  end
+
+  # A Path Identifier that changes every route keys the Adj-RIB-In on a
+  # different identifier per prefix, which is the only place its value
+  # is checked by something other than bgp4r's own encoder.
+  def test_a_path_id_pattern
+    session(BGP::OPT_PARM::CAP::Add_path.new(:send_and_receive, 1, 1))
+    crosses('start' => '10.0.0.0/24', 'count' => 1000, 'seed' => 13, 'group' => 4,
+            'path_id' => { 'random' => { 'min' => 1, 'max' => 2**32 - 1 } },
+            'attributes' => { 'next_hop' => '192.0.2.1', 'as_path' => [CLIENT_AS] })
+  end
 end

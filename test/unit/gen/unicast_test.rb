@@ -182,4 +182,97 @@ class TestBgpGenUnicast < Test::Unit::TestCase
     assert_operator(size + 5, :>, 4096, 'and a /32 more would not fit')
     assert_operator(Time.now - t, :<, 2)
   end
+
+  # ---- phase 2: patterns ------------------------------------------
+
+  def routes_per_message(g, info = BGP::Update::Info.new(true, :strict))
+    g.updates.collect { |m| parse(m, info).nlri.size }
+  end
+
+  # RFC 4271 section 4.3: one UPDATE carries one set of attributes, so a
+  # MED that changes every route sends one route per message whatever
+  # per_update says. That is what group is for.
+  def test_a_value_that_changes_every_route_sends_a_route_per_message
+    g = gen('count' => 6, 'attributes' => { 'next_hop' => '192.0.2.1', 'med' => { 'cycle' => [10, 20] } })
+    assert_equal([1] * 6, routes_per_message(g))
+    assert_equal([10, 20, 10, 20, 10, 20], g.expected.collect { |r| r['med'] })
+  end
+
+  def test_group_holds_a_set_for_n_routes
+    g = gen('count' => 9, 'group' => 3,
+            'attributes' => { 'next_hop' => '192.0.2.1', 'med' => { 'cycle' => [10, 20] } })
+    assert_equal([3, 3, 3], routes_per_message(g))
+    assert_equal([10, 10, 10, 20, 20, 20, 10, 10, 10], g.expected.collect { |r| r['med'] })
+    meds = g.updates.collect { |m| parse(m).path_attribute[:multi_exit_disc].to_i }
+    assert_equal([10, 20, 10], meds)
+  end
+
+  # Two groups whose sets come out identical share a message, since
+  # nothing on the wire tells them apart.
+  def test_neighbouring_groups_with_the_same_set_share_a_message
+    g = gen('count' => 8, 'group' => 2,
+            'attributes' => { 'next_hop' => '192.0.2.1', 'med' => { 'every' => { 'n' => 2, 'values' => [10, 20] } } })
+    assert_equal([4, 4], routes_per_message(g))
+  end
+
+  def test_per_update_still_bounds_a_run
+    g = gen('count' => 9, 'group' => 9, 'per_update' => 4, 'attributes' => { 'next_hop' => '192.0.2.1' })
+    assert_equal([4, 4, 1], routes_per_message(g))
+  end
+
+  # The Path Identifier runs on the route number and not on the group,
+  # and it does not split a message, since it is not an attribute.
+  def test_a_path_id_pattern_runs_per_route_and_shares_a_message
+    %w[10.0.0.0/24 2001:db8::/48].each do |start|
+      g = gen('start' => start, 'count' => 4, 'group' => 4,
+              'path_id' => { 'step' => { 'start' => 100, 'by' => 1 } },
+              'attributes' => { 'next_hop' => start.include?(':') ? '2001:db8::1' : '192.0.2.1' })
+      assert_equal([100, 101, 102, 103], g.expected.collect { |r| r['path_id'] })
+      [g.updates, g.withdrawals].each do |msgs|
+        assert_equal(1, msgs.count, start)
+        u = parse(msgs.first, AddPath.new)
+        list = u.nlri || u.withdrawn ||
+               (u.path_attribute[:mp_reach] || u.path_attribute[:mp_unreach]).nlris
+        ids = (list.respond_to?(:nlris) ? list.nlris : list).collect(&:path_id)
+        assert_equal([100, 101, 102, 103], ids, start)
+      end
+    end
+  end
+
+  def test_a_next_hop_pattern_reaches_the_wire_in_both_families
+    g = gen('count' => 2, 'attributes' => { 'next_hop' => { 'cycle' => %w[192.0.2.1 192.0.2.2] } })
+    assert_equal(%w[192.0.2.1 192.0.2.2], g.updates.collect { |m| parse(m).path_attribute[:next_hop].next_hop })
+    g = gen('start' => '2001:db8::/48', 'count' => 2,
+            'attributes' => { 'next_hop' => { 'cycle' => %w[2001:db8::1 2001:db8::2] } })
+    assert_equal(%w[2001:db8::1 2001:db8::2], g.updates.collect { |m| parse(m).path_attribute[:mp_reach].nexthops })
+  end
+
+  # More distinct sets than the cache holds: it clears, the sets after
+  # are built again, and every message still matches the arithmetic.
+  def test_more_sets_than_the_cache_holds
+    n = BGP::Gen::Unicast::SETS + 50
+    g = gen('start' => '10.0.0.0/32', 'count' => n,
+            'attributes' => { 'next_hop' => '192.0.2.1', 'med' => { 'step' => { 'start' => 0, 'by' => 1 } } })
+    msgs = g.updates.to_a
+    assert_equal(n, msgs.size)
+    assert_equal((0...n).to_a, msgs.collect { |m| parse(m).path_attribute[:multi_exit_disc].to_i })
+  end
+
+  # Documented in Unicast: only the first set is checked at new, so a
+  # later set too large for one route stops the feed when it is reached.
+  def test_a_later_set_with_no_room_stops_the_feed_when_reached
+    big = (1..1100).collect { |i| "1:#{i}" }
+    g = gen('count' => 2, 'attributes' => { 'communities' => { 'cycle' => [['1:1'], big] } })
+    e = assert_raise(BGP::Gen::Unpackable) { g.updates.to_a }
+    assert_match(/leave no room/, e.message)
+  end
+
+  def test_a_seeded_spec_gives_the_same_octets_twice
+    spec = { 'count' => 50, 'seed' => 4, 'attributes' => { 'next_hop' => '192.0.2.1',
+             'med' => { 'random' => { 'min' => 0, 'max' => 3 } },
+             'as_path' => { 'length' => { 'count' => { 'random' => { 'min' => 1, 'max' => 4 } }, 'min' => 64512, 'max' => 64600 } } } }
+    a = gen(spec).updates.collect { |u| u.encode(BGP::Update::Info.new(true)) }
+    assert_equal(a, gen(spec).updates.collect { |u| u.encode(BGP::Update::Info.new(true)) })
+    assert_not_equal(a, gen(spec.merge('seed' => 5)).updates.collect { |u| u.encode(BGP::Update::Info.new(true)) })
+  end
 end

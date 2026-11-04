@@ -120,7 +120,9 @@ class LabGenGobgpTest < Test::Unit::TestCase
     wait_for("GoBGP to hold #{count} routes", :timeout => 60) { path_count(g.afi) == count }
     held = rib(g.afi)
     rows = g.expected.to_a
-    [0, rows.size / 2, rows.size - 1].uniq.each do |i|
+    # Ten rows spread across the feed, the first and the last among them,
+    # so a pattern's value is checked at more than one point of its cycle.
+    (0..9).collect { |k| (rows.size - 1) * k / 9 }.uniq.each do |i|
       want = rows[i]
       paths = held[want['prefix']]
       assert_not_nil(paths, "GoBGP holds #{want['prefix']}")
@@ -178,5 +180,29 @@ class LabGenGobgpTest < Test::Unit::TestCase
       crosses('start' => start, 'count' => 1000, 'path_id' => 77,
               'attributes' => { 'next_hop' => nh, 'as_path' => [OUR_AS] })
     end
+  end
+
+  # Phase 2: what GoBGP reads when the attributes change route to route.
+  # A wrong set on a route, or two sets packed into one message, shows
+  # as a sampled row that disagrees with its expected values.
+  def test_patterns_and_a_group
+    session
+    crosses('start' => '10.0.0.0/24', 'count' => 2000, 'group' => 3, 'seed' => 21,
+            'attributes' => {
+              'origin' => { 'every' => { 'n' => 5, 'values' => [0, 2] } },
+              'next_hop' => { 'step' => { 'start' => '192.0.2.1', 'by' => 1, 'wrap' => '192.0.2.200' } },
+              'as_path' => { 'prepend' => { 'as' => OUR_AS, 'count' => { 'cycle' => [1, 2, 4] }, 'path' => [65010] } },
+              'med' => { 'random' => { 'min' => 0, 'max' => 1000 } },
+              'communities' => { 'count' => { 'base' => '65000:1', 'n' => { 'cycle' => [1, 3] } } },
+              'large_communities' => { 'cycle' => [['65000:1:1'], ['65000:2:2', '65000:2:3']] } })
+  end
+
+  def test_ipv6_patterns
+    session
+    crosses('start' => '2001:db8::/64', 'count' => 1000, 'seed' => 22,
+            'attributes' => {
+              'next_hop' => { 'cycle' => %w[2001:db8::1 2001:db8::2 2001:db8::3] },
+              'as_path' => { 'length' => { 'count' => { 'cycle' => [1, 3] }, 'min' => 64512, 'max' => 64600 } },
+              'med' => { 'step' => { 'start' => 0, 'by' => 7 } } })
   end
 end

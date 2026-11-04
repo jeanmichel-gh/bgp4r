@@ -524,9 +524,10 @@ bgp/gen.rb bgp/gen/      `BGP::Gen`, UPDATEs and withdrawals in bulk from a
                          spec of plain JSON types, with `expected`, what
                          the spec meant, as data. docs/route-generation.md
                          is the design and the plan. spec.rb reads a spec
-                         and refuses only what it cannot read, packer.rb
-                         packs routes by arithmetic and unicast.rb is the
-                         one generator so far. **The first message of each
+                         and refuses only what it cannot read, vary.rb is
+                         the patterns, packer.rb packs routes by
+                         arithmetic and unicast.rb is the one generator
+                         so far. **The first message of each
                          feed is measured against the packer's arithmetic**,
                          so a slip raises `Gen::PackingError` before it
                          reaches a wire, and that check is what caught two
@@ -748,8 +749,9 @@ docs/                    protocol-testing.md: using bgp4r to test a router
                          attributes that vary per route, as one pure
                          module that bgp4r's tests, `bgp4r-sim` and
                          routescope's scenarios all drive with the same
-                         JSON spec. **Phase 1 is built**, IPv4 and IPv6
-                         unicast, and section 13 says what it measured;
+                         JSON spec. **Phases 1 and 2 are built**, IPv4
+                         and IPv6 unicast with patterns, and section 13
+                         says what they measured;
                          section 12 is the plan and its status table
                          is updated by each step's pull request
 examples/                runnable scripts
@@ -1532,7 +1534,7 @@ CI: `.github/workflows/test.yml` runs both suites on every push to master and ev
 
 `.github/workflows/capture.yml` is the one workflow that deploys a containerlab lab: it builds the `lab-node` and BIRD images, deploys `lab/routescope/bgp4r-lab`, and runs its `capture.sh`, on demand and on a push that changes that folder or the Dockerfile. Its log is what routescope's BGP fixtures are cut from.
 
-Baseline on 2026-11-03: 3249 tests, 33865 assertions, all passing. Line coverage of `bgp/` from the unit suite: 96.2%.
+Baseline on 2026-11-03: 3283 tests, 33101 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.2%.
 
 **That coverage figure is 98.5% for the library and the rest is the two
 programs, not a gap anywhere else.** Measured the same run: with
@@ -7441,7 +7443,7 @@ in place, with a dated block in the header naming them.
   own test confirms is the most expensive kind of wrong, because
   nothing fails until somebody runs the real thing.
 
-### Route generation, `bgp/gen`. Phases 0 and 1 Done
+### Route generation, `bgp/gen`. Phases 0, 1 and 2 Done
 
 `docs/route-generation.md` is the design and the plan. Read it before
 any work on generating traffic, on `RouteGenerator`, or on what
@@ -7486,7 +7488,22 @@ Phases, with status kept in the document's section 12 table:
      for where the identifiers sit and not for their value. The value is
      the functional test's, where the Adj-RIB-In is keyed on it.
 2. Attribute patterns: fixed, cycle, step, random, every, and `group`.
-   To do.
+   **Done**, in `bgp/gen/vary.rb`. A pattern is a function of the route
+   or group number and the seed and nothing else, so `every` needed no
+   state and withdrawals still regenerate what was announced. Random is
+   a fresh generator per value per route, seeded through FNV-1a 64, so
+   one random value never moves another. Three things worth knowing:
+   * **A message ends when the attribute set changes**, since RFC 4271
+     section 4.3 gives an UPDATE one set. Each set has its own packer
+     and its first message is measured. The attribute set object is
+     what `Packer.batches` is handed and yields back, because a lookup
+     from packer to set lost the set when the cache cleared, which the
+     cache test found.
+   * **Only the first set is checked for room at `new`**, so a pattern
+     that makes a later set too large stops the feed when reached.
+   * **The 200-seed property sweep's one failure was the test's own**:
+     it compared attributes without MP_REACH_NLRI, where an IPv6 next
+     hop lives. `GEN_SEEDS=500` passes.
 3. Injector wiring, `/api/plan`, `mp_reach`, `mp_unreach`, `specimen`.
    To do.
 4. One family per pull request, 4a to 4g, in any order after 3. To do.

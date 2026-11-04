@@ -3,7 +3,8 @@
 This is the design for generating BGP traffic in bulk, in every address
 family bgp4r can build, with path attributes that vary from route to
 route. It records the design and the plan, so the work can be picked
-up in any session. Phase 1 is built; section 13 says what it does.
+up in any session. Phases 1 and 2 are built; section 13 says what
+they do.
 The plan is at the end, with the status of each phase.
 
 Written on 2026-11-03.
@@ -82,7 +83,7 @@ One spec describes one stream of routes in one family.
     "as_path": [65010],
     "med": { "cycle": [10, 20, 30] },
     "local_pref": { "step": { "start": 100, "by": 10, "wrap": 200 } },
-    "communities": { "count": { "start": 1, "by": 1, "wrap": 16 }, "base": "65010:1" }
+    "communities": { "count": { "base": "65010:1", "n": { "step": { "start": 1, "by": 1, "wrap": 16 } } } }
   }
 }
 ```
@@ -109,7 +110,11 @@ It is a spec with `family: unicast` and fixed attributes.
 
 ## 5. Varying the attributes
 
-A pattern gives the value for route number i.
+A pattern gives the value for route number i, or for group number
+i / N when the spec has `group: N`. It is a function of that number
+and the seed and of nothing else, so withdrawals regenerate what was
+announced and a value never depends on how many came before it.
+`bgp/gen/vary.rb` is the code.
 
 | Pattern | Meaning |
 |---|---|
@@ -119,12 +124,34 @@ A pattern gives the value for route number i.
 | `random: {min, max}` | Pick from a range, using the spec's seed. |
 | `every: {n, values}` | Change the value every n routes. |
 
-Some attributes need a pattern on a property rather than on the value:
+`origin`, `med`, `local_pref` and `path_id` are integers and take all
+five. `next_hop` is an address and takes all five too: `step` and
+`random` work on the address as a number, and every address in one
+pattern has to be of one family. `as_path` and the three community
+lists are lists, so they take `fixed`, `cycle` and `every` over whole
+lists, and a pattern of their own on a property:
 
-* `as_path`: a prepend count, or a length with ASNs picked from a range.
-* `communities`, `extended_communities`, `large_communities`: how many a
-  route carries, built from a `base` value.
-* `next_hop`: a step over addresses.
+| Value | Pattern | Meaning |
+|---|---|---|
+| `as_path` | `prepend: {as, count, path}` | `as` repeated `count` times in front of `path`. |
+| `as_path` | `length: {count, min, max}` | `count` AS numbers picked from `min` to `max`, using the seed. |
+| a community list | `count: {base, n}` | `n` communities counting up from `base`: `65000:1`, `65000:2`, ... |
+
+`count` and `n` are themselves integer patterns, so a prepend can cycle
+and a community list can grow. A community count of 0 sends no
+attribute at all rather than an empty one, which `BGP::Fault` already
+sends.
+
+**Random is a fresh generator per value per route**, seeded from the
+spec's seed, the value's name and the route number through FNV-1a 64.
+So adding a random MED to a spec does not move its random LOCAL_PREF,
+and the same seed gives the same octets on every Ruby CI runs, which a
+test pins with the values themselves. A spec with a
+random pattern and no `seed` is refused.
+
+**The Path Identifier runs on the route number even with a group**,
+because it belongs to the route and not to its attribute set, so it
+never splits a message.
 
 **Variation decides how many messages go out.** Prefixes travel in one
 UPDATE only when their attributes are identical. A spec that changes the
@@ -229,10 +256,12 @@ expectations, which CLAUDE.md records being wrong many times.
 * **`RouteGenerator`'s future.** Either it stays as it is, or it becomes
   a thin wrapper over `BGP::Gen` for unicast. Its API and its tests must
   keep working either way.
-* **Where pattern state lives.** Each generator is an Enumerator, so a
-  pattern is a function of the route number and the seed, not of
-  anything mutable. That is the intent; phase 2 confirms it is enough
-  for `every`.
+* **Where pattern state lives. Decided in phase 2**: nowhere. A
+  pattern is a function of the route or group number and the seed, and
+  `every` is a division, so it needed no state either. Random draws use
+  a fresh generator per value per route rather than one stream, which
+  costs a `Random` per draw and is what keeps one value independent of
+  another.
 
 ## 12. The plan
 
@@ -245,7 +274,7 @@ can fail. Update this table in the pull request that moves a step.
 | 0a | `path_id` on a `generate` block reaches every prefix, announce and withdraw. | Done |
 | 0b | `as_path_literal: true` sends `as_path` as written over eBGP; the prepend stays the default (section 11). | Done |
 | 1 | `bgp/gen`: spec reader that refuses unknown keys, unicast generator for IPv4 and IPv6, the packer, `updates`, `withdrawals`, `expected`. | Done |
-| 2 | `Vary`: the five patterns, `group`, the property patterns for AS_PATH and communities. | To do |
+| 2 | `Vary`: the five patterns, `group`, the property patterns for AS_PATH and communities. | Done |
 | 3 | Injector wiring: `announce` and `withdraw` read a spec, `POST /api/plan`, the `mp_reach`, `mp_unreach` and `specimen` keys. | To do |
 | 4a | Multicast and labelled. | To do |
 | 4b | VPN, both SAFIs. | To do |
@@ -268,8 +297,8 @@ passes, CLAUDE.md's baseline is re-measured, and this table says Done.
 **Phase 1.** `require 'bgp/gen'`, then `BGP::Gen.new(spec)` for
 `family: unicast`, IPv4 or IPv6, with fixed attributes and a fixed
 `path_id`. Every other family name from `BGP::Specimen.families` is
-refused as having no generator yet, and `seed`, `group` and patterns
-are refused as later phases rather than ignored.
+refused as having no generator yet. Phase 1 refused `seed`, `group`
+and patterns by name rather than ignoring them; phase 2 reads all three.
 
 * `updates`, `withdrawals` and `expected` are Enumerators, so a million
   routes are built one message or one row at a time.
@@ -293,3 +322,28 @@ random specs (`GEN_SEEDS=500` for a longer sweep),
 `expected`, and `test/functional/lab/gen_gobgp_test.rb` does the same
 against gobgpd 3.23.0. GoBGP's JSON prints no Path Identifier, so that
 test vouches for where the identifiers sit and not for their value.
+
+**Phase 2.** Every attribute and the Path Identifier take the patterns
+of section 5, and `seed` and `group` are read.
+
+* **A message ends when the attribute set changes**, as well as when it
+  is full, since RFC 4271 section 4.3 gives one UPDATE one set of
+  attributes. Each distinct set has its own packer, and the first
+  message of each set is measured. Sets are cached, up to 1024, and the
+  cache is cleared when it fills, so a feed whose every route differs
+  costs that much memory and no more.
+* **Only the first set is checked for room at `new`.** A pattern can
+  make a later set too large for one route, a community count that
+  grows say, and finding the largest would mean building every set up
+  front. So such a spec can stop with `Gen::Unpackable` after messages
+  have gone. A test pins that.
+* **The property sweep found a bug in its own test and not in the
+  code.** At 200 seeds, the check that every message but the last is
+  full read two IPv6 messages with different next hops as one set,
+  because it compared the attributes without MP_REACH_NLRI and the next
+  hop lives there. `GEN_SEEDS=500` passes now.
+* GoBGP reads the patterns too: ten rows spread across each feed are
+  compared with `expected`, and a sabotage that let two sets share a
+  message failed both lab cases, where bgp4r's own first message check
+  could not see it.
+

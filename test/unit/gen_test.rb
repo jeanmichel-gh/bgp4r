@@ -43,7 +43,7 @@ class TestBgpGen < Test::Unit::TestCase
 
   # GEN_SEEDS=500 runs a longer sweep. The default keeps the unit suite
   # quick, since every message is parsed several times over.
-  SEEDS = Integer(ENV.fetch('GEN_SEEDS', 25))
+  SEEDS = Integer(ENV.fetch('GEN_SEEDS', 20))
 
   def test_unicast_is_the_one_generator
     assert_equal(%w[unicast], BGP::Gen::GENERATORS.keys)
@@ -89,16 +89,36 @@ class TestBgpGen < Test::Unit::TestCase
     start = v6 ? "2001:db8::/#{mlen}" : "10.0.0.0/#{mlen}"
     # How many prefixes fit before leaving 10.0.0.0/8 or 2001::/16.
     room = v6 ? 2**(mlen - 16) : 2**(mlen - 8)
-    a = { 'origin' => r.rand(3), 'next_hop' => v6 ? '2001:db8::1' : '192.0.2.1',
+    nh = v6 ? '2001:db8::1' : '192.0.2.1'
+    a = { 'origin' => r.rand(3), 'next_hop' => nh,
           'as_path' => Array.new(r.rand(0..6)) { r.rand(1..2**32 - 1) } }
     a['med'] = r.rand(2**32) if r.rand(2) == 1
     a['local_pref'] = r.rand(2**32) if r.rand(2) == 1
     a['communities'] = Array.new(r.rand(1..40)) { "#{r.rand(65536)}:#{r.rand(65536)}" } if r.rand(2) == 1
     a['large_communities'] = Array.new(r.rand(1..20)) { "#{r.rand(2**32)}:1:#{r.rand(9)}" } if r.rand(2) == 1
     a['extended_communities'] = ["route_target:#{r.rand(65536)}:#{r.rand(2**32)}"] if r.rand(2) == 1
-    s = { 'family' => 'unicast', 'start' => start, 'count' => r.rand(1..[room, 600].min), 'attributes' => a }
+    # Phase 2: about half the specs vary something, each kind of pattern
+    # on the value it suits.
+    patterns = {
+      'med' => { 'cycle' => [r.rand(100), r.rand(100), r.rand(100)] },
+      'local_pref' => { 'step' => { 'start' => 100, 'by' => r.rand(1..50), 'wrap' => 400 } },
+      'origin' => { 'every' => { 'n' => r.rand(1..5), 'values' => [0, 1, 2] } },
+      'next_hop' => { 'random' => v6 ? { 'min' => '2001:db8::1', 'max' => '2001:db8::ff' } :
+                                       { 'min' => '192.0.2.1', 'max' => '192.0.2.254' } },
+      'as_path' => (r.rand(2) == 1 ?
+        { 'prepend' => { 'as' => 65010, 'count' => { 'random' => { 'min' => 0, 'max' => 5 } }, 'path' => [65020] } } :
+        { 'length' => { 'count' => { 'cycle' => [1, 3] }, 'min' => 64512, 'max' => 65534 } }),
+      'communities' => { 'count' => { 'base' => '65000:1', 'n' => { 'cycle' => [0, 2, 30] } } },
+    }
+    patterns.each { |k, v| a[k] = v if r.rand(3) == 0 }
+    s = { 'family' => 'unicast', 'start' => start, 'count' => r.rand(1..[room, 300].min), 'attributes' => a }
     s['per_update'] = r.rand(1..300) if r.rand(2) == 1
-    s['path_id'] = r.rand(2**32) if r.rand(2) == 1
+    case r.rand(3)
+    when 1 then s['path_id'] = r.rand(2**32)
+    when 2 then s['path_id'] = { 'step' => { 'start' => r.rand(1000), 'by' => 1 } }
+    end
+    s['group'] = r.rand(1..20) if r.rand(2) == 1
+    s['seed'] = r.rand(2**31)
     s
   end
 
@@ -114,84 +134,127 @@ class TestBgpGen < Test::Unit::TestCase
     list.collect { |n| [n.to_s.sub(/\AID=\d+, /, ''), n.path_id] }
   end
 
-  def each_spec
-    SEEDS.times do |seed|
-      spec = random_spec(Random.new(seed))
-      yield spec, "seed #{seed}: #{spec.inspect}"
+  # A message's attributes without its prefixes, which is what two
+  # messages must share to have been one. The next hop of an IPv6 route
+  # lives inside MP_REACH_NLRI, so it is kept: a sweep of 200 seeds
+  # found that leaving the attribute out whole read two messages with
+  # different next hops as one set and reported every one as not full.
+  def attributes_of(m)
+    pa = m.path_attribute
+    return nil unless pa
+    pa.attributes.collect do |a|
+      case a
+      when BGP::Mp_reach then a.nexthops
+      when BGP::Mp_unreach then nil
+      else a.to_shex
+      end
     end
   end
 
+  # One generated feed: the spec, its messages encoded once on a 4-octet
+  # session, and each message parsed once. Built once for the whole file,
+  # since every property below reads the same feeds and parsing is where
+  # the time goes.
+  Sample = Struct.new(:spec, :why, :gen, :updates, :withdrawals)
+  Msg = Struct.new(:object, :octets, :parsed)
+
+  def self.corpus
+    @corpus ||= SEEDS.times.collect do |seed|
+      spec = new('corpus').random_spec(Random.new(seed))
+      g = BGP::Gen.new(spec)
+      info = spec['path_id'] ? AddPath.new : PLAIN
+      read = lambda do |m|
+        o = m.encode(AS4)
+        Msg.new(m, o, BGP::Update.new(o.dup.is_packed, info))
+      end
+      Sample.new(spec, "seed #{seed}: #{spec.inspect}", g,
+                 g.updates.collect(&read), g.withdrawals.collect(&read))
+    end
+  end
+
+  def each_sample(&block) ; self.class.corpus.each(&block) ; end
+
   # Every message is within RFC 4271 section 4's limit on either session,
   # holds no more than per_update routes, and each but the last is full:
-  # per_update reached, or one more route would not fit.
+  # per_update reached, the next message's attributes differ, or one
+  # more route would not fit. Problems are gathered and asserted once per
+  # feed, so a failure names every message at fault and the assertion
+  # count says how many feeds were checked.
   def test_every_message_fits_and_each_is_full
-    each_spec do |spec, why|
-      g = BGP::Gen.new(spec)
+    each_sample do |x|
+      spec = x.spec
       mlen = spec['start'].split('/').last.to_i
       route = 1 + (mlen + 7) / 8 + (spec['path_id'] ? 4 : 0)
-      [g.updates.to_a, g.withdrawals.to_a].each do |msgs|
+      problems = []
+      [x.updates, x.withdrawals].each do |msgs|
         msgs.each_with_index do |m, i|
-          size = m.encode(AS4).bytesize
-          assert_operator(size, :<=, 4096, why)
-          assert_operator(m.encode(AS2).bytesize, :<=, size, why)
-          routes = keys_of(BGP::Update.new(m.encode(AS4).is_packed, info_for(spec))).size
-          assert_operator(routes, :<=, spec['per_update'], why) if spec['per_update']
+          size = m.octets.bytesize
+          problems << "message #{i} is #{size} octets" if size > 4096
+          problems << "message #{i} is longer on a 2-octet session" if m.object.encode(AS2).bytesize > size
+          routes = keys_of(m.parsed).size
+          problems << "message #{i} has #{routes} routes" if spec['per_update'] && routes > spec['per_update']
           next if i == msgs.size - 1
-          full = routes == spec['per_update']
-          assert(full || size + route > 4096, "message #{i} has room left; #{why}")
+          full = routes == spec['per_update'] || attributes_of(m.object) != attributes_of(msgs[i + 1].object)
+          problems << "message #{i} has room left" unless full || size + route > 4096
         end
       end
+      assert_equal([], problems, x.why)
     end
   end
 
   def test_every_message_round_trips
-    each_spec do |spec, why|
-      g = BGP::Gen.new(spec)
-      (g.updates.to_a + g.withdrawals.to_a).each do |m|
-        o = m.encode(AS4)
-        assert_equal(o.unpack1('H*'), BGP::Update.new(o.dup.is_packed, info_for(spec)).encode(AS4).unpack1('H*'), why)
-      end
+    each_sample do |x|
+      bad = (x.updates + x.withdrawals).each_with_index.reject { |m, _| m.parsed.encode(AS4) == m.octets }
+      assert_equal([], bad.collect(&:last), x.why)
     end
   end
 
   # validation.rb reports nothing on valid generated traffic. The info is
-  # strict, so a finding raises; errors is asserted as well, so a lenient
-  # read would not pass for the wrong reason.
+  # strict, so a finding raises at parse; errors and undecoded are
+  # asserted as well, so a lenient read would not pass for the wrong
+  # reason.
   def test_validation_reports_nothing
-    each_spec do |spec, why|
-      BGP::Gen.new(spec).updates.each do |m|
-        u = BGP::Update.new(m.encode(AS4).is_packed, info_for(spec))
-        assert_equal([], u.path_attribute.errors, why)
-        assert_equal([], u.path_attribute.undecoded, why)
-      end
+    each_sample do |x|
+      found = x.updates.flat_map { |m| m.parsed.path_attribute.errors + m.parsed.path_attribute.undecoded }
+      assert_equal([], found, x.why)
     end
   end
 
   def test_withdrawals_cover_exactly_what_was_announced
-    each_spec do |spec, why|
-      g = BGP::Gen.new(spec)
-      sent = g.updates.flat_map { |m| keys_of(BGP::Update.new(m.encode(AS4).is_packed, info_for(spec))) }
-      gone = g.withdrawals.flat_map { |m| keys_of(BGP::Update.new(m.encode(AS4).is_packed, info_for(spec))) }
-      assert_equal(spec['count'], sent.size, why)
-      assert_equal(sent.uniq.size, sent.size, "a route announced twice; #{why}")
-      assert_equal(sent, gone, why)
+    each_sample do |x|
+      sent = x.updates.flat_map { |m| keys_of(m.parsed) }
+      gone = x.withdrawals.flat_map { |m| keys_of(m.parsed) }
+      assert_equal(x.spec['count'], sent.size, x.why)
+      assert_equal(sent.uniq.size, sent.size, "a route announced twice; #{x.why}")
+      assert_equal(sent, gone, x.why)
     end
   end
 
   # expected has count rows, in the order sent, and each says what the
   # UPDATE carrying it says.
   def test_expected_is_what_was_sent
-    each_spec do |spec, why|
-      g = BGP::Gen.new(spec)
-      rows = g.expected.to_a
-      assert_equal(spec['count'], rows.size, why)
-      assert_equal(spec['count'], g.expected.size, why)
-      read = g.updates.flat_map do |m|
-        u = BGP::Update.new(m.encode(AS4).is_packed, info_for(spec))
-        keys_of(u).collect { |prefix, path_id| row_of(prefix, path_id, u.path_attribute) }
+    each_sample do |x|
+      rows = x.gen.expected.to_a
+      assert_equal(x.spec['count'], rows.size, x.why)
+      assert_equal(x.spec['count'], x.gen.expected.size, x.why)
+      read = x.updates.flat_map do |m|
+        keys_of(m.parsed).collect { |prefix, path_id| row_of(prefix, path_id, m.parsed.path_attribute) }
       end
-      assert_equal(read, rows.collect { |r| r.reject { |k, _| k == 'extended_communities' } }, why)
+      assert_equal(read, rows.collect { |r| r.reject { |k, _| k == 'extended_communities' } }, x.why)
     end
+  end
+
+  # The corpus has to exercise what it claims to. Without this a change
+  # to random_spec could leave every feed unvaried and every property
+  # above passing on phase 1's traffic.
+  def test_the_corpus_varies_attributes_groups_and_path_ids
+    specs = self.class.corpus.collect(&:spec)
+    varied = specs.count { |sp| sp['attributes'].values.any? { |v| v.is_a?(Hash) } }
+    assert_operator(varied, :>=, SEEDS / 4, 'feeds with a pattern')
+    assert_operator(specs.count { |sp| sp['group'] }, :>=, 3, 'feeds with a group')
+    assert_operator(specs.count { |sp| sp['path_id'].is_a?(Hash) }, :>=, 2, 'feeds with a path_id pattern')
+    runs = self.class.corpus.collect { |x| x.updates.size }
+    assert_operator(runs.max, :>, 20, 'some feed split into many messages')
   end
 
   # A row as the octets say it, read back with the attribute classes
