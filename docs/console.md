@@ -90,6 +90,7 @@ irb with a `BGP::Sim::Console` as `self`. So a verb needs no receiver.
 
 ```ruby
 verbs                                       # what to type
+guide 6                                     # this document, section 6
 peers                                       # every peer and its state
 announce '10.1.0.0/24', med: 10, as_path: [90, 80]
 withdraw '10.1.0.0/24'
@@ -119,6 +120,10 @@ exit
 * **No verb is named after an irb command**, because irb's command wins
   over a method of the same name. That is why the list is `verbs` and
   not `help`. `ls` lists every method of the console.
+* **`guide` prints this document** at the prompt, and `guide 6` or
+  `guide 'router'` prints one section. On a terminal it is in colour
+  and goes through `$PAGER`, or `less`. It reads this file, so what
+  you see there is what is written here.
 
 ## 5. Leaving
 
