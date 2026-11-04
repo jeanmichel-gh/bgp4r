@@ -23,6 +23,7 @@
 require 'bgp/sim/injector'
 require 'bgp/sim/views'
 require 'bgp/sim/http'
+require 'bgp/sim/console'
 
 module BGP
   module Sim
@@ -63,6 +64,8 @@ Usage: bgp4r-sim FILE [options]       (or: bgp4r sim FILE [options])
   -f, --config FILE   the same, named
       --api HOST:PORT where the HTTP API listens (default: 127.0.0.1:8080)
   -l, --log FILE      log file, - for standard output
+      --interact      open an irb prompt on the injector; the API still
+                      serves, and exit stops the injector
   -d, --debug         log every message too
   -v, --version       print the bgp4r version
   -h, --help          this help
@@ -80,9 +83,15 @@ TEXT
 
       attr_reader :injector, :views, :http
 
-      def initialize(out = $stdout, err = $stderr)
+      # arg[:interact] is called with the Console in place of irb, and
+      # arg[:load_irb] false skips loading it. Both are the seams a test
+      # uses, since irb reads standard input and no unit test may reach
+      # it.
+      def initialize(out = $stdout, err = $stderr, arg = {})
         @out = out
         @err = err
+        @interact = arg[:interact] || ->(console) { console.interact }
+        @load_irb = arg.fetch(:load_irb, true)
       end
 
       # Parses argv, builds everything, and returns an exit status. With
@@ -93,13 +102,42 @@ TEXT
         return 0 if opts[:version]
         return help(0) if opts[:help]
         return help(1) if opts[:error]
+        # Before the node file is read, so a missing irb is said at once
+        # and nothing has dialled.
+        if opts[:interact] && @load_irb
+          begin
+            Console.load_irb
+          rescue LoadError => e
+            @err.puts "bgp4r-sim: #{e.message}"
+            return 1
+          end
+        end
         config = load_config(opts) or return 1
         setup_log(opts, config)
         build(config, opts) or return 1
+        return prompt if opts[:interact]
         return 0 unless wait
         wait_for_a_signal
         0
       end
+
+      # The prompt on the server's own Injector, in place of waiting for
+      # a signal. The HTTP API goes on serving from its own thread, so a
+      # scenario can drive the node while a person types. Leaving the
+      # prompt stops everything, as INT and TERM do. A session opened at
+      # the prompt with `connect` or `listen` is the console's and it
+      # stops it; the server's own Injector is stopped here.
+      def prompt
+        @console = Console.new(@injector, @out, Console::KEEP, :name => 'bgp4r-sim')
+        @interact.call(@console)
+        0
+      ensure
+        @console.stop if @console
+        log(:info, 'bgp4r-sim stopping')
+        stop
+      end
+
+      attr_reader :console
 
       # Builds the Injector, the Views and the HTTP server and starts
       # all three. Answers nil and prints the reason on anything a person
@@ -167,6 +205,7 @@ TEXT
           when '--api' then opts[:api] = argv[i += 1]
           when '-l', '--log' then opts[:log] = argv[i += 1]
           when '-d', '--debug' then opts[:debug] = true
+          when '--interact' then opts[:interact] = true
           when '-v', '--version'
             @out.puts BGP::VERSION
             opts[:version] = true
@@ -196,6 +235,15 @@ TEXT
       # new(s)`, so against a logger that already exists it keeps the old
       # one and `--log FILE` writes nowhere.
       def setup_log(opts, config)
+        # **At a prompt the log goes to a file unless -l names one**, as
+        # `bgp4r routegen --interact` does: sessions and the HTTP server
+        # log from their own threads, and every line would land in the
+        # middle of what the person is typing.
+        if opts[:interact] && opts[:log].nil?
+          require 'tmpdir'
+          opts[:log] = File.join(Dir.tmpdir, "bgp4r-sim-#{Process.pid}.log")
+          @out.puts "bgp4r-sim: logging to #{opts[:log]}"
+        end
         io = if opts[:log].nil? || opts[:log] == '-'
                $stdout
              else

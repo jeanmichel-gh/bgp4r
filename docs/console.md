@@ -346,8 +346,8 @@ last.nlri
 
 ## 10. Step 3, a prompt on the two programs
 
-Designed with the owner on 2026-11-04 and not built yet. CLAUDE.md
-tracks the status under "An irb console on a live session". Two
+Designed with the owner on 2026-11-04. `bgp4r sim --interact` is
+built and the `bgp4rd` half is not yet. CLAUDE.md tracks the status under "An irb console on a live session". Two
 commands gain `--interact`: `bgp4r sim`, the injector, and `bgp4rd`,
 the daemon. They differ in kind, because an injector holds no Loc-RIB
 and a daemon is a router.
@@ -360,6 +360,23 @@ verb of section 9 works, and a scenario can still drive the same node
 over HTTP while a person types. The log goes to a file, as `bgp4r
 console` does, so the prompt stays readable. `exit` stops the injector,
 the same as INT or TERM.
+
+Built. Three things to know when using it:
+
+* **The prompt opens before the session is up.** The server starts
+  dialling and opens the prompt at once, where `bgp4r routegen
+  --interact` waits for its session first. So `state` or `peers` before
+  sending: a verb with no session up is refused and says so.
+* **Leaving stops everything**: the injector, the API and any session
+  opened at the prompt with `connect` or `listen`. A Python or curl
+  client that was driving the API gets a refused connection after that.
+* `-l FILE` names the log; without it the log is
+  `bgp4r-sim-PID.log` in the temporary directory, and the path is
+  printed before the prompt opens.
+
+```
+bgp4r sim examples/sim.yml --interact
+```
 
 ### `bgp4rd --interact`, and why its verbs are the daemon's
 
@@ -756,7 +773,7 @@ Cease, go to `idle`, and keep trying to dial.
 
 ### The pull requests
 
-* **3a**: `bgp4r sim --interact`.
+* **3a**: `bgp4r sim --interact`. Done.
 * **3b-i**: the parts of the prompt both consoles share, moved into one
   module: loading irb, `verbs`, `guide`, `received`, `watch` and the tap
   on each Neighbor. No change in behavior.

@@ -29,6 +29,8 @@
 require 'test/unit'
 require 'stringio'
 require 'tmpdir'
+require 'net/http'
+require 'socket'
 require 'bgp/sim/server'
 require 'bgp/capture/cli'
 
@@ -253,6 +255,99 @@ class BGP_Sim_Server_Test < Test::Unit::TestCase
       server.start(quiet([path]), {}, :wait => false)
       assert_nil(server.injector.speaker.rib)
     end
+  end
+
+  # ---- --interact ----------------------------------------------------
+
+  # A server whose prompt is the block, so no irb is loaded or read.
+  def interacting(&prompt)
+    @server = BGP::Sim::Server.new(@out = StringIO.new, @err = StringIO.new,
+                                   :interact => prompt, :load_irb => false)
+  end
+
+  # The prompt opens on the server's own Injector, the HTTP API answers
+  # while it is open, and leaving it stops both. The request goes over a
+  # real socket, because that the API serves **while** the prompt runs
+  # is the claim.
+  def test_interact_opens_the_prompt_on_the_injector_and_the_api_still_serves
+    seen = {}
+    interacting do |console|
+      seen[:injector] = console.injector
+      seen[:port] = @server.http.port
+      seen[:status] = Net::HTTP.get_response(URI("#{@server.http.url}/api/status")).code
+    end
+    with_config do |path|
+      assert_equal(0, @server.start(quiet([path, '--interact']), {}))
+    end
+    assert_same(@server.injector, seen[:injector], 'the prompt is on the server\'s injector')
+    assert_equal('200', seen[:status])
+    assert(@server.http.instance_variable_get(:@server).closed?, 'leaving stopped the API')
+    assert(@server.injector.speaker.established_peers.empty?)
+    assert_raise(Errno::ECONNREFUSED) { TCPSocket.new(@server.http.bind, seen[:port]) }
+  end
+
+  # An exception out of the prompt still stops everything, since the
+  # ensure is what does it.
+  def test_leaving_the_prompt_by_an_exception_still_stops_the_api
+    interacting { |_console| raise 'out of the prompt' }
+    with_config do |path|
+      assert_raise(RuntimeError) { @server.start(quiet([path, '--interact']), {}) }
+    end
+    assert(@server.http.instance_variable_get(:@server).closed?)
+  end
+
+  # A session opened at the prompt is the console's, and it is stopped
+  # too: the console's own stop is called on the way out.
+  def test_leaving_the_prompt_stops_what_the_console_opened
+    stopped = []
+    interacting do |console|
+      console.define_singleton_method(:stop) { stopped << :console ; super() }
+    end
+    with_config do |path|
+      @server.start(quiet([path, '--interact']), {})
+    end
+    assert_equal([:console], stopped)
+  end
+
+  def test_at_a_prompt_the_log_goes_to_a_file_unless_one_is_named
+    interacting { |_console| }
+    with_config do |path|
+      @server.start([path, '--interact'], {})
+      logfile = File.join(Dir.tmpdir, "bgp4r-sim-#{Process.pid}.log")
+      assert_match(/logging to #{Regexp.escape(logfile)}/, @out.string)
+      assert(File.exist?(logfile))
+      File.delete(logfile)
+    end
+  end
+
+  def test_a_named_log_is_kept_at_a_prompt
+    interacting { |_console| }
+    with_config do |path|
+      @server.start(quiet([path, '--interact']), {})
+      assert_no_match(/logging to/, @out.string)
+      assert(File.exist?(@log))
+    end
+  end
+
+  # A missing irb is said before the node file is read, so nothing
+  # dials and nothing listens.
+  def test_a_missing_irb_is_said_before_anything_starts
+    @server = BGP::Sim::Server.new(@out = StringIO.new, @err = StringIO.new)
+    BGP::Sim::Console.singleton_class.send(:alias_method, :real_load_irb, :load_irb)
+    BGP::Sim::Console.define_singleton_method(:load_irb) { raise LoadError, BGP::Sim::Console::IRB_MISSING }
+    with_config do |path|
+      assert_equal(1, @server.start(quiet([path, '--interact']), {}))
+    end
+    assert_match(/irb cannot be loaded/, @err.string)
+    assert_nil(@server.injector)
+  ensure
+    BGP::Sim::Console.singleton_class.send(:alias_method, :load_irb, :real_load_irb)
+  end
+
+  def test_the_usage_names_interact
+    status, out, _err = run_server(['--help'])
+    assert_equal(0, status)
+    assert_match(/--interact/, out)
   end
 
   # ---- the umbrella --------------------------------------------------
