@@ -174,7 +174,7 @@ route key.
 | `vpn`, `vpn_multicast` (128, 129) | `rd` of type 0, 1 or 2 stepped per VRF, `label`, prefix, the range once per VRF (`vrfs`) | `route_target` stepped per VRF, so each VRF has its own attribute set | RD plus prefix, with the Compatibility field. |
 | `flow_spec`, `flow_spec_vpn` (133, 134) | destination prefix from `start`, `source`, `protocol` and `destination_port`, each one `eq` match, so a rule set N wide; for 134 `rd`, `vrfs` and `route_target` as VPN | `rate`, `redirect` and `marking`, the actions of RFC 8955 section 7; no next hop | The same rule in MP_UNREACH. |
 | `rt_constrain` (132) | origin AS, route target, the zero length default | none | GoBGP 3.23.0 panics on the default plus a second route. |
-| `evpn` (25, 70) | type 2: MAC, IP, ESI, label; type 3: originator; type 5: prefix and GW IP | MAC Mobility sequence number (a MAC move), ESI label, Router's MAC, PMSI tunnel for type 3 | The route key only; Flags and GW IP are not in it. |
+| `evpn` (25, 70) | `route_type`; type 2: MAC from `start`, `ip`, `esi`, `label`; type 3: originator from `start`; type 5: prefix from `start`, `gateway`, `esi`, `label`; `ethernet_tag`; `rd`, `vrfs` and `route_target` as VPN | `mac_mobility` (a MAC move), `router_mac`, `pmsi_label` for type 3; the ESI label goes with type 1 | The same NLRI; a receiver matches the route key, which leaves out the ESI, the labels and the gateway. |
 | `mcast_vpn` (5) | type 1 originator, type 5 (S,G), types 6 and 7 per Source AS | route targets | No lab router has the family. |
 | `bgp_ls`, `bgp_ls_vpn` (71, 72) | a **topology**: N nodes, links as a ring or a grid, prefixes per node | attribute 29 TLVs per link: IGP metric, bandwidths, SRLG, admin group, node name | By NLRI. The VPN next hop is 12, 24 or 40 octets. |
 
@@ -279,7 +279,8 @@ can fail. Update this table in the pull request that moves a step.
 | 4a | Multicast and labelled. | Done |
 | 4b | VPN, both SAFIs. | Done |
 | 4c | Flow spec, both SAFIs. | Done |
-| 4d | EVPN types 2, 3 and 5, then the rest. | To do |
+| 4d | EVPN types 2, 3 and 5. | Done |
+| 4d2 | EVPN types 1, 4 and 6 to 11, and the ESI label community. | To do |
 | 4e | RT-constrain. | To do |
 | 4f | MCAST-VPN. | To do |
 | 4g | BGP-LS topologies. | To do |
@@ -543,6 +544,52 @@ GoBGP and asserts the SAFI 129 refusal.
   from the first VRF, and SAFI 134 sent as 133 each pass a comparison
   with `expected`. The unit, functional and lab tests state each by
   hand.
+
+**Phase 4d.** EVPN route types 2, 3 and 5, AFI 25 SAFI 70.
+`Evpn_routes` is a subclass of `Unicast` that includes `PerVrf`, so
+one spec is one route type and `vrfs` copies of it, one per EVI.
+
+* **`route_type` is required, and `start` means what steps in it.**
+  Type 2's is a MAC, `00:11:22:00:00:00`, with an optional `ip` that
+  steps beside it. Type 3's is the Originating Router's IP Address, so
+  N routes are N PEs. Type 5's is a prefix, stepped as unicast steps it,
+  with a fixed `gateway`. A key that belongs to another route type is
+  refused by name, as a family key on another family is.
+* **`label` is required for types 2 and 5**, as for labelled. It is
+  MPLS Label1 of type 2 and the label of type 5, and runs on the route
+  number. `ethernet_tag` does too. `esi` is fixed, 10 octets of hex,
+  and defaults to zero, the single-homed ESI of RFC 7432 section 5.
+* **Two attributes are the family's own.** `mac_mobility` is the
+  sequence number of RFC 7432 section 7.7, with the sticky flag clear,
+  on the group number, so a MAC move is a new value. `router_mac` is
+  RFC 9135 section 8.1's community, for types 2 and 5. Both join the
+  spec's own extended communities and the EVI's route target in one
+  attribute.
+* **`pmsi_label` gives each type 3 route a PMSI Tunnel**, Ingress
+  Replication, with the route's own originator as the Tunnel
+  Identifier. RFC 7432 section 11.2 asks for "a routable address of the
+  PE", and each route is a PE here. So no two routes share an attribute
+  set and each is a message of its own.
+* **The next hop is the session's**, RFC 7432 section 14, a real
+  address read by its length. The Sender fills it in as for unicast.
+* **A withdrawal is the same NLRI in MP_UNREACH_NLRI.** The receiver
+  matches the route key, which leaves out the ESI, the labels and the
+  gateway, so sending them as announced costs nothing.
+* **The add-path gap of phase 4c holds for EVPN, measured.**
+  validation.rb reads the Path Identifier's four octets as a Route Type
+  and a Length. The property test gives EVPN feeds no Path Identifier,
+  and `evpn_routes_test.rb` pins the gap.
+* **A test this phase wrote sent a route RFC 9136 section 3.2 forbids**,
+  a non-zero ESI and a non-zero gateway on one type 5 route, and the
+  strict read refused it. The test sends them one at a time now, and
+  `test_nothing_validates` sends both on purpose.
+* **What `expected` cannot catch, a fourth time.** A route target from
+  the first EVI, a PMSI Tunnel naming the first PE, and a MAC that does
+  not restart in each EVI each pass a comparison with `expected`. The
+  unit, functional and lab tests state each by hand.
+* **GoBGP 3.23.0 reads all three types back**, labels as the whole
+  three-octet field, 16 as 257, and the PMSI Tunnel's label with no
+  bottom of stack bit, 10 as 160. FRR was not run here.
 
 Measured against gobgpd 3.23.0 on 2026-11-04:
 

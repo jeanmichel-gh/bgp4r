@@ -511,4 +511,134 @@ class GenFunctionalTest < Test::Unit::TestCase
     end
   end
 
+  # ---- phase 4d: EVPN ---------------------------------------------------
+
+  EVPN_KEYS = { :mac_ip_advertisement => 2, :inclusive_multicast => 3, :ip_prefix_route => 5 }
+
+  # Rows read off the routes the far side parsed, with nothing from
+  # bgp/gen: the route type's own hash, and the attributes beside it.
+  def evpn_rows(updates, key = :mp_reach)
+    updates.flat_map do |u|
+      pa = u.path_attribute
+      mp = pa && pa[key]
+      next [] unless mp
+      attrs = nil
+      if pa[:origin]
+        attrs = { 'origin' => pa[:origin].to_i, 'as_path' => pa[:as_path].segments.flat_map(&:as),
+                  'next_hop' => mp.nexthops }
+        if pa[:extended_communities]
+          attrs['extended_communities'] = pa[:extended_communities].to_hash[:extended_communities].collect do |e|
+            BGP::Daemon::CommunityKeys.extended_community_text(e)
+          end
+        end
+        if (t = pa[:pmsi_tunnel])
+          t = t.to_hash[:pmsi_tunnel]
+          id = t[:identifier]
+          id = IPAddr.new_ntoh([id].pack('H*')).to_s unless id.include?('.')
+          attrs['pmsi'] = { 'tunnel_type' => t[:tunnel_type].to_s, 'label' => t[:label], 'identifier' => id }
+        end
+      end
+      mp.nlris.collect do |n|
+        k, v = n.to_hash.first
+        r = { 'route_type' => EVPN_KEYS.fetch(k), 'rd' => v[:rd].join(':') }
+        case r['route_type']
+        when 2
+          r['mac'] = v[:mac]
+          r['ip'] = v[:ip] if v[:ip].is_a?(String)
+          r['esi'] = v[:esi]
+          r['label'] = v[:label1][:label]
+        when 3
+          r['originator'] = v[:ip]
+        when 5
+          r['prefix'] = v[:ip_prefix]
+          r['gateway'] = v[:gateway]
+          r['esi'] = v[:esi]
+          r['label'] = v[:label]
+        end
+        r['ethernet_tag'] = v[:ethernet_tag_id]
+        attrs ? r.merge(attrs) : r
+      end
+    end
+  end
+
+  def evpn_key(r) ; [r['rd'], r['mac'] || r['originator'] || r['prefix']] ; end
+
+  # Announce, compare, withdraw, compare. The SAFI is stated here and
+  # not read from the generator.
+  def evpn_crosses(spec)
+    c = catcher
+    g = BGP::Gen.new(spec)
+    sent = g.updates.count
+    g.updates.each { |u| @c.send_update u }
+    got = []
+    assert(wait_for { got.concat(c.drain) ; got.size >= sent }, "#{got.size} of #{sent} UPDATEs arrived")
+    assert_equal([], got.flat_map { |u| u.path_attribute.errors + u.path_attribute.undecoded }, 'no protocol error')
+    assert_equal([[25, 70]], got.collect { |u| mp = u.path_attribute[:mp_reach] ; [mp.afi, mp.safi] }.uniq)
+    @rows = evpn_rows(got)
+    want_rows, got_rows = g.expected.to_a.sort_by { |r| evpn_key(r) }, @rows.sort_by { |r| evpn_key(r) }
+    assert_equal(want_rows.size, got_rows.size)
+    want_rows.zip(got_rows).each { |w, r| assert_equal(w, r) unless w == r }
+    back = g.withdrawals.count
+    g.withdrawals.each { |u| @c.send_update u }
+    gone = []
+    assert(wait_for { gone.concat(c.drain) ; gone.size >= back }, "#{gone.size} of #{back} withdrawals arrived")
+    keys = %w[route_type rd mac ip originator prefix ethernet_tag]
+    assert_equal(g.expected.collect { |r| r.slice(*keys) }, evpn_rows(gone, :mp_unreach).collect { |r| r.slice(*keys) })
+    [sent, back]
+  end
+
+  # 2000 MACs with an IP each in two EVIs, a label stepped per route and
+  # a MAC Mobility sequence number that changes every 100 routes.
+  def test_evpn_mac_ip_routes
+    session
+    n = evpn_crosses('family' => 'evpn', 'route_type' => 2, 'start' => '00:11:22:00:00:00', 'count' => 1000,
+                     'ip' => '10.0.0.1', 'label' => { 'step' => { 'start' => 16, 'by' => 1 } },
+                     'rd' => '65000:1', 'vrfs' => 2, 'route_target' => '65000:100', 'group' => 100,
+                     'mac_mobility' => { 'step' => { 'start' => 1, 'by' => 1 } },
+                     'router_mac' => '00:00:5e:00:53:01',
+                     'attributes' => { 'as_path' => [CLIENT_AS], 'next_hop' => '192.0.2.1' })
+    assert_operator(n[0], :>=, 20)
+    # Stated by hand: a generator that put one EVI's route target on
+    # every route, or one group's sequence number on every group, would
+    # agree with its own expected. The group runs on the route number
+    # across both EVIs, as VPN's does, so the second EVI's MACs move
+    # from sequence number 11.
+    by_rd = @rows.group_by { |r| r['rd'] }
+    assert_equal(%w[65000:1 65000:2], by_rd.keys.sort)
+    by_rd.each do |rd, rows|
+      v = rd.split(':').last.to_i
+      rows.sort_by { |r| r['mac'] }.each_slice(100).with_index do |slice, k|
+        assert_equal([["route_target:65000:#{99 + v}", "mac_mobility:#{k + 1 + 10 * (v - 1)}:false",
+                       'router_mac:00:00:5e:00:53:01']], slice.collect { |r| r['extended_communities'] }.uniq)
+      end
+    end
+    last = @rows.find { |r| r['rd'] == '65000:2' && r['mac'] == '00:11:22:00:03:e7' }
+    assert_equal(['10.0.3.232', 16 + 1999], [last['ip'], last['label']])
+  end
+
+  # A PMSI Tunnel per PE, so one message per route, and an IPv6 next
+  # hop, 16 octets under AFI 25 (RFC 7432 section 14).
+  def test_evpn_inclusive_multicast_routes
+    session
+    n = evpn_crosses('family' => 'evpn', 'route_type' => 3, 'start' => '2001:db8::1', 'count' => 50,
+                     'rd' => '65000:1', 'ethernet_tag' => 100, 'pmsi_label' => 10,
+                     'attributes' => { 'as_path' => [CLIENT_AS], 'next_hop' => '2001:db8::ff' })
+    assert_equal([50, 1], n)
+    assert_equal({ 'tunnel_type' => 'ingress_replication', 'label' => 10, 'identifier' => '2001:db8::32' },
+                 @rows.find { |r| r['originator'] == '2001:db8::32' }['pmsi'])
+    assert_equal(['2001:db8::ff'], @rows.collect { |r| r['next_hop'] }.uniq)
+  end
+
+  def test_evpn_ip_prefix_routes
+    session
+    evpn_crosses('family' => 'evpn', 'route_type' => 5, 'start' => '10.1.0.0/24', 'count' => 1000,
+                 'rd' => '192.0.2.1:5', 'gateway' => '10.0.0.254', 'label' => 500,
+                 'attributes' => { 'as_path' => [CLIENT_AS], 'next_hop' => '192.0.2.1' })
+    evpn_crosses('family' => 'evpn', 'route_type' => 5, 'start' => '2001:db8::/64', 'count' => 500,
+                 'rd' => '65000:5', 'esi' => '00:00:00:00:00:00:00:00:00:07', 'label' => 500,
+                 'attributes' => { 'as_path' => [CLIENT_AS], 'next_hop' => '2001:db8::1' })
+    assert_equal(['00:00:00:00:00:00:00:00:00:07'], @rows.collect { |r| r['esi'] }.uniq)
+    assert_equal(['::'], @rows.collect { |r| r['gateway'] }.uniq)
+  end
+
 end

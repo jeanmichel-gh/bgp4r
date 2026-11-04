@@ -94,17 +94,21 @@ class TestBgpGenSpec < Test::Unit::TestCase
                  S.read(minimal.merge('label' => { 'step' => { 'start' => 16, 'by' => 1 } }))['label'])
     refused(minimal.merge('label' => 2**20), /label: 1048576 does not fit/)
     refused(minimal.merge('label' => '16'), /label/)
-    assert_equal(%w[labelled vpn vpn_multicast], S::FAMILY_KEYS['label'])
+    assert_equal(%w[labelled vpn vpn_multicast evpn], S::FAMILY_KEYS['label'])
   end
 
   # Which key belongs to which family, all of it, so a key added to KEYS
   # and not here, or the reverse, is seen.
   def test_the_family_keys
     flow = %w[flow_spec flow_spec_vpn]
-    vpn = %w[vpn vpn_multicast flow_spec_vpn]
-    assert_equal({ 'label' => %w[labelled vpn vpn_multicast], 'rd' => vpn, 'vrfs' => vpn, 'route_target' => vpn,
+    rd = %w[vpn vpn_multicast flow_spec_vpn evpn]
+    evpn = %w[evpn]
+    assert_equal({ 'label' => %w[labelled vpn vpn_multicast evpn], 'rd' => rd, 'vrfs' => rd, 'route_target' => rd,
                    'source' => flow, 'protocol' => flow, 'destination_port' => flow, 'rate' => flow,
-                   'redirect' => flow, 'marking' => flow }, S::FAMILY_KEYS)
+                   'redirect' => flow, 'marking' => flow,
+                   'route_type' => evpn, 'ip' => evpn, 'esi' => evpn, 'ethernet_tag' => evpn,
+                   'gateway' => evpn, 'mac_mobility' => evpn, 'router_mac' => evpn,
+                   'pmsi_label' => evpn }, S::FAMILY_KEYS)
     assert_equal([], S::FAMILY_KEYS.keys - S::KEYS)
   end
 
@@ -123,6 +127,28 @@ class TestBgpGenSpec < Test::Unit::TestCase
     refused(minimal.merge('source' => 'here'), /source "here" is not a prefix/)
     refused(minimal.merge('source' => 1), /source is a string/)
     refused(minimal.merge('redirect' => '65000'), /redirect "65000" is not ADMIN:N/)
+  end
+
+  # Phase 4d. The EVPN keys: route_type an octet, the three integers
+  # values or patterns up to what their fields hold, ip and gateway
+  # addresses, and the ESI and router MAC that many octets of hex.
+  def test_the_evpn_keys_read
+    s = S.read(minimal.merge('route_type' => 5, 'ethernet_tag' => { 'cycle' => [1, 2] }, 'mac_mobility' => 2**32 - 1,
+                             'pmsi_label' => 2**20 - 1, 'ip' => '2001:db8::1', 'gateway' => '10.0.0.1',
+                             'esi' => '0102030405060708090a', 'router_mac' => '00:00:5e:00:53:01'))
+    assert_equal([5, { 'cycle' => [1, 2] }, 2**32 - 1, 2**20 - 1, '2001:db8::1', '10.0.0.1',
+                   '0102030405060708090a', '00:00:5e:00:53:01'],
+                 s.values_at('route_type', 'ethernet_tag', 'mac_mobility', 'pmsi_label', 'ip', 'gateway',
+                             'esi', 'router_mac'))
+    refused(minimal.merge('route_type' => 256), /route_type 256 does not fit/)
+    refused(minimal.merge('route_type' => '2'), /route_type is an integer/)
+    { 'ethernet_tag' => 2**32, 'mac_mobility' => 2**32, 'pmsi_label' => 2**20 }.each do |k, v|
+      refused(minimal.merge(k => v), /#{k}: #{v} does not fit/)
+    end
+    refused(minimal.merge('gateway' => 'gw'), /gateway "gw" is not an address/)
+    refused(minimal.merge('esi' => '01' * 9), /esi "#{'01' * 9}" is 10 octets of hex/)
+    refused(minimal.merge('esi' => 'zz' * 10), /is 10 octets of hex/)
+    refused(minimal.merge('router_mac' => '00:00:5e:00:53'), /router_mac "00:00:5e:00:53" is 6 octets/)
   end
 
   # Phase 4b. An RD and a route target read as ADMIN:N, and the
