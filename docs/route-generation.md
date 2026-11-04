@@ -220,11 +220,12 @@ expectations, which CLAUDE.md records being wrong many times.
 
 ## 11. Decisions still open
 
-* **The eBGP `as_path` prepend.** `Speaker#path_attribute` always puts
-  our AS in front of an explicit `as_path` on an eBGP session. A
-  generator that wants an exact AS_PATH needs either a change to that
-  default, which changes what existing node files send, or a new key
-  that means "send it as written". Phase 0 decides.
+* **The eBGP `as_path` prepend. Decided in phase 0b**: a new key,
+  `as_path_literal: true`, sends `as_path` exactly as written, and the
+  prepend stays the default. Changing the default would have changed
+  what every existing node file sends, and
+  `lab/routescope/bgp4r-lab/scenarios/med-decides.yml` relies on it. A
+  generator that wants an exact AS_PATH sets the key.
 * **`RouteGenerator`'s future.** Either it stays as it is, or it becomes
   a thin wrapper over `BGP::Gen` for unicast. Its API and its tests must
   keep working either way.
@@ -242,7 +243,7 @@ can fail. Update this table in the pull request that moves a step.
 | Phase | Step | Status |
 |---|---|---|
 | 0a | `path_id` on a `generate` block reaches every prefix, announce and withdraw. | Done |
-| 0b | Decide the eBGP `as_path` prepend (section 11), then implement it. | To do |
+| 0b | `as_path_literal: true` sends `as_path` as written over eBGP; the prepend stays the default (section 11). | Done |
 | 1 | `bgp/gen`: spec reader that refuses unknown keys, unicast generator for IPv4 and IPv6, the packer, `updates`, `withdrawals`, `expected`. | To do |
 | 2 | `Vary`: the five patterns, `group`, the property patterns for AS_PATH and communities. | To do |
 | 3 | Injector wiring: `announce` and `withdraw` read a spec, `POST /api/plan`, the `mp_reach`, `mp_unreach` and `specimen` keys. | To do |

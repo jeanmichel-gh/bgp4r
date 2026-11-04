@@ -84,7 +84,7 @@ module BGP
       # `bgp/sim/http.rb`, so this half is the keys.
       #
       # **The keys are the node file's own keys** and that is a recorded
-      # decision: `prefixes`, `generate`, `med`, `as_path`,
+      # decision: `prefixes`, `generate`, `med`, `as_path`, `as_path_literal`,
       # `communities`, `next_hop`, `local_pref`, `path_id` and `origin`
       # are what `lab/README.md` documents for an announce block, so the
       # injector's runtime vocabulary is bgp4r's configuration
@@ -97,10 +97,10 @@ module BGP
       # says so. It also makes this table load bearing rather than
       # documentation.
       ACTIONS = {
-        'announce'      => %w[peer prefixes generate next_hop as_path med
+        'announce'      => %w[peer prefixes generate next_hop as_path as_path_literal med
                               local_pref communities extended_communities large_communities path_id origin],
         'withdraw'      => %w[peer prefixes generate path_id],
-        'attribute'     => %w[peer prefixes next_hop as_path med
+        'attribute'     => %w[peer prefixes next_hop as_path as_path_literal med
                               local_pref communities extended_communities large_communities path_id origin],
         'fault'         => %w[peer case prefixes next_hop],
         'replay'        => %w[peer hex],
@@ -766,7 +766,15 @@ module BGP
           raise Refused, "#{action}: unknown key(s) #{unknown.join(', ')}; " \
                          "it reads #{keys.join(', ')}"
         end
-        body.to_h { |k, v| [k.to_s, v] }
+        block = body.to_h { |k, v| [k.to_s, v] }
+        # A JSON boolean and nothing else. `Speaker#path_attribute` reads
+        # only `true`, so a string `"true"` would quietly prepend our AS
+        # and send a path the caller did not ask for.
+        v = block['as_path_literal']
+        unless v.nil? || v == true || v == false
+          raise Refused, "as_path_literal must be true or false, got #{v.inspect}"
+        end
+        block
       end
 
       def one_of(block, *names)

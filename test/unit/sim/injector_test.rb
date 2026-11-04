@@ -190,6 +190,45 @@ class BGP_Sim_Injector_Test < Test::Unit::TestCase
     assert_equal('10.0.0.1', u.path_attribute[:next_hop].next_hop)
   end
 
+  # The one way to send an AS_PATH whose leftmost AS is not ours on an
+  # external session, which RFC 4271 section 6.3 makes a receive check.
+  def test_as_path_literal_sends_the_path_as_written
+    inj = injector
+    inj.act('announce', 'prefixes' => ['10.1.0.0/24'], 'as_path' => [65_020, 65_030],
+                        'as_path_literal' => true)
+    assert_equal('65020 65030', peer.updates.last.path_attribute[:as_path].as_path)
+    # With nothing in as_path the AS_PATH goes out empty, which is not
+    # what an external peer expects either.
+    inj.act('announce', 'prefixes' => ['10.2.0.0/24'], 'as_path_literal' => true)
+    assert_equal('empty', peer.updates.last.path_attribute[:as_path].as_path)
+  end
+
+  def test_as_path_literal_false_is_the_default
+    inj = injector
+    inj.act('announce', 'prefixes' => ['10.1.0.0/24'], 'as_path' => [65_020], 'as_path_literal' => false)
+    assert_equal('65001 65020', peer.updates.last.path_attribute[:as_path].as_path)
+  end
+
+  def test_as_path_literal_that_is_not_a_boolean_is_refused
+    %w[true yes].push(1).each do |v|
+      e = assert_raise(BGP::Sim::Injector::Refused) {
+        injector.act('announce', 'prefixes' => ['10.1.0.0/24'], 'as_path_literal' => v)
+      }
+      assert_match(/as_path_literal must be true or false/, e.message)
+    end
+    assert_equal(0, peer.updates.size, 'nothing went out')
+  end
+
+  # attribute re-announces with the named keys changed, so it can turn
+  # the literal path on for a prefix already announced.
+  def test_attribute_can_turn_as_path_literal_on
+    inj = injector
+    inj.act('announce', 'prefixes' => ['10.1.0.0/24'], 'as_path' => [65_020])
+    assert_equal('65001 65020', peer.updates.last.path_attribute[:as_path].as_path)
+    inj.act('attribute', 'prefixes' => ['10.1.0.0/24'], 'as_path_literal' => true)
+    assert_equal('65020', peer.updates.last.path_attribute[:as_path].as_path)
+  end
+
   def test_an_announce_with_no_prefixes_and_no_generate_is_refused
     e = assert_raise(BGP::Sim::Injector::Refused) { injector.act('announce', 'med' => 1) }
     assert_match(/exactly one of prefixes, generate/, e.message)

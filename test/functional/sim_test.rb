@@ -191,6 +191,17 @@ class BGP_Sim_Functional_Test < Test::Unit::TestCase
                  'an ordinary announcement is not a protocol error')
   end
 
+  # The JSON boolean reaches the speaker and the other side reads the
+  # AS_PATH as written, with no AS of ours in front of it.
+  def test_a_literal_as_path_crosses_the_session_as_written
+    code, answer = post('/api/announce', 'prefixes' => ['10.1.0.0/24'],
+                                         'as_path' => [65_020, 65_030], 'as_path_literal' => true)
+    assert_equal(200, code, answer.inspect)
+    u = @catcher.shift
+    assert_not_nil(u, 'the peer never read an UPDATE')
+    assert_equal('65020 65030', u.path_attribute[:as_path].as_path)
+  end
+
   def test_an_attribute_change_crosses_and_keeps_the_rest
     post('/api/announce', 'prefixes' => ['10.1.0.0/24'], 'med' => 100,
                           'communities' => ['65001:7'])

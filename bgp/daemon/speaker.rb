@@ -1049,9 +1049,16 @@ module BGP
           'per_update' => Integer(per.empty? ? g.fetch('per_update', 1) : per) }
       end
 
+      # Over eBGP our own AS goes in front of `as_path`, which is RFC 4271
+      # section 5.1.2 and is what a node file saying "this route reached us
+      # from 65020" means. `as_path_literal: true` turns that off, so the
+      # AS_PATH goes out exactly as written: an AS_PATH whose leftmost AS
+      # is not the sender's is a receive check a test has to be able to
+      # make (RFC 4271 section 6.3). Only `true` turns it off, so a YAML
+      # `"false"` or a typo leaves the default alone.
       def path_attribute(a, ebgp, local_ip)
         path = Array(a['as_path'])
-        path = [@my_as] + path if ebgp
+        path = [@my_as] + path if ebgp && a['as_path_literal'] != true
         attrs = [BGP::Origin.new(a.fetch('origin', 0)),
                  BGP::Next_hop.new(a.fetch('next_hop', local_ip)),
                  BGP::As_path.new(*path)]

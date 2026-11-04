@@ -1394,7 +1394,7 @@ Actions, as `action => [path, body keys]`, which is the table
 
 | Action | Path | Body |
 |---|---|---|
-| `announce` | `/api/announce` | `prefixes` or `generate`, `next_hop`, `as_path`, `med`, `local_pref`, `communities`, `extended_communities`, `large_communities`, `path_id`, `peer` |
+| `announce` | `/api/announce` | `prefixes` or `generate`, `next_hop`, `as_path`, `as_path_literal`, `med`, `local_pref`, `communities`, `extended_communities`, `large_communities`, `path_id`, `peer` |
 | `withdraw` | `/api/withdraw` | the same selectors |
 | `attribute` | `/api/attribute` | a prefix set and the attributes to change |
 | `fault` | `/api/fault` | `case` from `BGP::Fault::CATALOG`, `prefixes` |
@@ -1410,6 +1410,15 @@ Actions, as `action => [path, body keys]`, which is the table
 `lab/README.md` already documents for an announce block. So the
 injector's runtime vocabulary is bgp4r's configuration vocabulary, there
 is one thing to learn, and `lab/README.md` is already its reference.
+
+**`as_path_literal: true` sends `as_path` exactly as written.** Over eBGP
+the speaker puts its own AS in front of `as_path` by default, which is
+right for a node file and leaves no way to send an AS_PATH whose leftmost
+AS is not the sender's, a receive check RFC 4271 section 6.3 asks a
+router to make. The key is a JSON boolean and anything else is refused,
+because a string `"true"` would prepend in silence. `attribute` takes it
+too, so a scenario can flip one announced prefix to a literal path. It
+changes nothing over iBGP, where nothing is prepended.
 
 **`fault` and `replay` are the point.** An injector that ships without
 them is a worse FRR, and the argument for building any of this is gone.
