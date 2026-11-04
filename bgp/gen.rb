@@ -31,6 +31,7 @@ require 'bgp/gen/vpn'
 require 'bgp/gen/flow_rules'
 require 'bgp/gen/evpn_routes'
 require 'bgp/gen/rt_constrain_routes'
+require 'bgp/gen/link_state_routes'
 
 module BGP
   # Generates UPDATEs and withdrawals in bulk from a spec of plain JSON
@@ -63,7 +64,8 @@ module BGP
                    'labelled' => Labelled, 'vpn' => Vpn,
                    'vpn_multicast' => Vpn_multicast,
                    'flow_spec' => Flow_rules, 'flow_spec_vpn' => Flow_rules_vpn,
-                   'evpn' => Evpn_routes, 'rt_constrain' => Rt_constrain_routes }.freeze
+                   'evpn' => Evpn_routes, 'rt_constrain' => Rt_constrain_routes,
+                   'bgp_ls' => Link_state_routes, 'bgp_ls_vpn' => Link_state_vpn_routes }.freeze
 
     attr_reader :spec, :family, :sender
 

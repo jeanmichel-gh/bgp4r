@@ -717,4 +717,129 @@ class GenFunctionalTest < Test::Unit::TestCase
                 'attributes' => { 'as_path' => [CLIENT_AS], 'next_hop' => '192.0.2.1' })
     assert_equal((10..510).to_a, @rows.collect { |r| r['path_id'] })
   end
+
+  # ---- phase 4g: BGP-LS topologies -------------------------------------
+
+  # The rows of a BGP-LS feed, read off each NLRI's own hash and the
+  # BGP-LS Attribute with the library's classes and nothing in bgp/gen.
+  def ls_rows(updates, key = :mp_reach)
+    updates.flat_map do |u|
+      pa = u.path_attribute
+      mp = pa && pa[key]
+      next [] unless mp
+      attrs = {}
+      if pa[:origin]
+        attrs = { 'origin' => pa[:origin].to_i, 'as_path' => pa[:as_path].segments.flat_map(&:as),
+                  'next_hop' => mp.nexthops }
+        (a = pa.find(BGP::Link_state_attribute)) && a.tlvs.each do |t|
+          x = t.to_hash.values.first
+          case t.type
+          when 1026 then attrs['node_name'] = x
+          when 1088 then attrs['admin_group'] = x
+          when 1089 then attrs['max_bandwidth'] = x.to_i
+          when 1095 then attrs['igp_metric'] = x[:metric]
+          when 1096 then attrs['srlg'] = x.first
+          when 1155 then attrs['prefix_metric'] = x
+          end
+        end
+        if pa[:extended_communities]
+          attrs['extended_communities'] = pa[:extended_communities].to_hash[:extended_communities].collect do |h|
+            BGP::Daemon::CommunityKeys.extended_community_text(h)
+          end
+        end
+      end
+      mp.nlris.collect do |n|
+        t = n.nlri
+        id = lambda do |klass|
+          d = t.tlvs.find { |x| x.is_a?(klass) }
+          hex = d.sub_tlvs.find { |x| x.is_a?(BGP::Link_state::Tlv::Igp_router_id) }.to_hash[:igp_router_id]
+          IPAddr.new_ntoh([hex[-8..]].pack('H*')).to_s
+        end
+        r = { 'nlri' => t.class.hash_key.to_s, 'node' => id.call(BGP::Link_state::Tlv::Local_node_descriptors) }
+        case t
+        when BGP::Link_state::Link
+          r['remote'] = id.call(BGP::Link_state::Tlv::Remote_node_descriptors)
+          r['link'] = t.tlv(258).to_hash[:link_local_remote_identifiers][:local]
+        when BGP::Link_state::Prefix_nlri
+          r['prefix'] = t.prefix
+        end
+        r['protocol_id'] = t.protocol_id
+        r['identifier'] = t.identifier
+        r['rd'] = n.rd.to_s(false).sub('RD=', '') if n.rd
+        r['path_id'] = n.path_id if n.path_id
+        r.merge(attrs)
+      end
+    end
+  end
+
+  # Announce, compare, withdraw, compare. The AFI and SAFI are stated
+  # here and not read from the generator.
+  def ls_crosses(spec, safi = 71)
+    c = catcher
+    g = BGP::Gen.new(spec)
+    sent = g.updates.count
+    g.updates.each { |u| @c.send_update u }
+    got = []
+    assert(wait_for { got.concat(c.drain) ; got.size >= sent }, "#{got.size} of #{sent} UPDATEs arrived")
+    assert_equal([], got.flat_map { |u| u.path_attribute.errors + u.path_attribute.undecoded }, 'no protocol error')
+    assert_equal([[16388, safi]], got.collect { |u| mp = u.path_attribute[:mp_reach] ; [mp.afi, mp.safi] }.uniq)
+    @rows = ls_rows(got)
+    assert_equal(g.expected.to_a, @rows)
+    back = g.withdrawals.count
+    g.withdrawals.each { |u| @c.send_update u }
+    gone = []
+    assert(wait_for { gone.concat(c.drain) ; gone.size >= back }, "#{gone.size} of #{back} withdrawals arrived")
+    keys = %w[nlri node remote link prefix protocol_id identifier rd path_id]
+    assert_equal(g.expected.collect { |r| r.slice(*keys) }, ls_rows(gone, :mp_unreach))
+    [sent, back]
+  end
+
+  # A ring of 200 nodes with two prefixes each and a metric per link:
+  # 200 + 400 + 400 routes. What a ring joins is stated by hand at both
+  # ends, the last link closing it, since a generator that joined the
+  # wrong nodes would agree with its own expected.
+  def test_a_bgp_ls_ring
+    session
+    n = ls_crosses('family' => 'bgp_ls', 'start' => '10.0.0.1', 'count' => 200, 'prefixes' => 2,
+                   'prefix_start' => '10.10.0.0/24', 'autonomous_system' => 65000,
+                   'igp_metric' => { 'step' => { 'start' => 10, 'by' => 10, 'wrap' => 1000 } },
+                   'attributes' => { 'as_path' => [CLIENT_AS], 'next_hop' => '192.0.2.1' })
+    assert_operator(n[0], :>=, 200)
+    assert_equal(1000, @rows.size)
+    links = @rows.select { |r| r['nlri'] == 'link' }
+    assert_equal([%w[10.0.0.1 10.0.0.2], %w[10.0.0.2 10.0.0.1]], links.first(2).collect { |r| [r['node'], r['remote']] })
+    assert_equal([%w[10.0.0.200 10.0.0.1], %w[10.0.0.1 10.0.0.200]], links.last(2).collect { |r| [r['node'], r['remote']] })
+    assert_equal([10, 10, 20, 20], links.first(4).collect { |r| r['igp_metric'] })
+    pre = @rows.select { |r| r['nlri'] == 'ipv4_prefix' }
+    # Prefix 399 is 10.10.0.0 + 399 * 256: 10.11.143.0, past one /16.
+    assert_equal(['10.0.0.200', '10.11.143.0/24'], pre.last.values_at('node', 'prefix'))
+  end
+
+  # A grid of 3 columns, IS-IS, a name per node and the other link
+  # values. Node 4 is joined to node 5 on its right and node 7 below it.
+  def test_a_bgp_ls_grid
+    session
+    ls_crosses('family' => 'bgp_ls', 'start' => '192.0.2.1', 'count' => 9, 'topology' => 'grid', 'columns' => 3,
+               'protocol_id' => 2, 'identifier' => 7, 'node_name' => 'r', 'admin_group' => 5,
+               'max_bandwidth' => 125000000, 'srlg' => { 'cycle' => [1, 2] },
+               'prefixes' => 1, 'prefix_start' => '2001:db8::/64', 'prefix_metric' => 10,
+               'attributes' => { 'as_path' => [CLIENT_AS], 'next_hop' => '2001:db8::1' })
+    assert_equal(9 + 2 * 12 + 9, @rows.size)
+    from4 = @rows.select { |r| r['nlri'] == 'link' && r['node'] == '192.0.2.4' }.collect { |r| r['remote'] }
+    assert_equal(%w[192.0.2.1 192.0.2.5 192.0.2.7].sort, from4.sort)
+    assert_equal(%w[r1 r9], @rows.select { |r| r['nlri'] == 'node' }.values_at(0, 8).collect { |r| r['node_name'] })
+    assert_equal('ipv6_prefix', @rows.last['nlri'])
+  end
+
+  # SAFI 72: the topology in two VRFs, an RD each.
+  def test_a_bgp_ls_vpn_topology
+    session
+    ls_crosses({ 'family' => 'bgp_ls_vpn', 'start' => '10.0.0.1', 'count' => 20, 'rd' => '65000:1', 'vrfs' => 2,
+                 'route_target' => '65000:100',
+                 'attributes' => { 'as_path' => [CLIENT_AS], 'next_hop' => '192.0.2.1' } }, 72)
+    assert_equal(%w[65000:1 65000:2], @rows.collect { |r| r['rd'] }.uniq)
+    assert_equal(%w[route_target:65000:100 route_target:65000:101],
+                 @rows.flat_map { |r| r['extended_communities'] }.uniq)
+  end
 end
+

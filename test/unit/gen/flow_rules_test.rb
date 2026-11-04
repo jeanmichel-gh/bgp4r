@@ -207,7 +207,7 @@ class TestBgpGenFlowRules < Test::Unit::TestCase
       { 'destination_port' => 65536 } => /destination_port/,
       { 'marking' => 64 } => /marking/,
       { 'redirect' => '65000' } => /not ADMIN:N/,
-      { 'rd' => '65000:1' } => /'rd' is for vpn, vpn_multicast, flow_spec_vpn, evpn and not for 'flow_spec'/,
+      { 'rd' => '65000:1' } => /'rd' is for vpn, vpn_multicast, flow_spec_vpn, evpn, bgp_ls_vpn and not for 'flow_spec'/,
     }.each do |bad, why|
       e = assert_raise(BGP::Gen::SpecError, bad.inspect) { gen(bad) }
       assert_match(why, e.message)

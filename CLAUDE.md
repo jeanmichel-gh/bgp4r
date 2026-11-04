@@ -530,8 +530,10 @@ bgp/gen.rb bgp/gen/      `BGP::Gen`, UPDATEs and withdrawals in bulk from a
                          others build on: multicast.rb is SAFI 2,
                          labelled.rb SAFI 4, vpn.rb SAFI 128 and 129,
                          flow_rules.rb SAFI 133 and 134,
-                         evpn_routes.rb EVPN route types 2, 3 and 5
-                         and rt_constrain_routes.rb SAFI 132,
+                         evpn_routes.rb EVPN route types 2, 3 and 5,
+                         rt_constrain_routes.rb SAFI 132 and
+                         link_state_routes.rb BGP-LS topologies, SAFI
+                         71 and 72,
                          each a subclass, with per_vrf.rb the RD, VRF
                          and route target logic VPN, VPN flow spec and
                          EVPN share. Only IPv4
@@ -760,11 +762,11 @@ docs/                    protocol-testing.md: using bgp4r to test a router
                          attributes that vary per route, as one pure
                          module that bgp4r's tests, `bgp4r-sim` and
                          routescope's scenarios all drive with the same
-                         JSON spec. **Phases 0 to 3 and 4a to 4e are
-                         built**: unicast, multicast, labelled, both
+                         JSON spec. **Phases 0 to 3, 4a to 4e and 4g
+                         are built**: unicast, multicast, labelled, both
                          VPN families and both flow spec families, both
-                         AFIs, EVPN route types 2, 3 and 5, and
-                         RT-constrain,
+                         AFIs, EVPN route types 2, 3 and 5,
+                         RT-constrain and BGP-LS topologies,
                          with patterns and the injector, and section 13
                          says what they measured;
                          section 12 is the plan and its status table
@@ -1549,7 +1551,7 @@ CI: `.github/workflows/test.yml` runs both suites on every push to master and ev
 
 `.github/workflows/capture.yml` is the one workflow that deploys a containerlab lab: it builds the `lab-node` and BIRD images, deploys `lab/routescope/bgp4r-lab`, and runs its `capture.sh`, on demand and on a push that changes that folder or the Dockerfile. Its log is what routescope's BGP fixtures are cut from.
 
-Baseline on 2026-11-04: 3420 tests, 34051 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
+Baseline on 2026-11-04: 3438 tests, 34265 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
 
 **That coverage figure is 98.5% for the library and the rest is the two
 programs, not a gap anywhere else.** Measured the same run: with
@@ -7458,7 +7460,7 @@ in place, with a dated block in the header naming them.
   own test confirms is the most expensive kind of wrong, because
   nothing fails until somebody runs the real thing.
 
-### Route generation, `bgp/gen`. Phases 0 to 3 and 4a to 4e Done
+### Route generation, `bgp/gen`. Phases 0 to 3, 4a to 4e and 4g Done
 
 `docs/route-generation.md` is the design and the plan. Read it before
 any work on generating traffic, on `RouteGenerator`, or on what
@@ -7599,7 +7601,7 @@ Phases, with status kept in the document's section 12 table:
 
    **4e Done**: RT-constrain, SAFI 132. `start` is a route target as
    `ADMIN:N`, stepped per route, with `origin_as`, `prefix_length` and
-   `default`. 4f and 4g are to do. Three things worth knowing:
+   `default`. Three things worth knowing:
    * **A Path Identifier works here**, since validation.rb walks no
      NLRI of this family, so the add-path gap of 4c and 4d does not
      apply and the property test sends one.
@@ -7607,7 +7609,24 @@ Phases, with status kept in the document's section 12 table:
      followed by a second route. It crosses over loopback only.
    * **The property test runs 45 seeds now**, five per family: with
      nine families, 27 and 36 left a flow spec key the corpus test
-     asks for undrawn.
+     asks for undrawn. It is 55 since 4g.
+
+   **4g Done**: BGP-LS topologies, SAFI 71 and 72. `count` nodes from
+   the router ID `start`, joined as a `ring` or a `grid` of `columns`,
+   with `prefixes` per node, and the BGP-LS Attribute's link, node and
+   prefix values as patterns. 4f and 4d2 are to do. Three things worth
+   knowing:
+   * **The routes are a graph**: a Node NLRI per node, a Link NLRI per
+     direction per link, then the prefixes. Link values run on the link
+     number so both directions agree, and **that was the sixth thing
+     `expected` could not catch**: values on the half link number passed
+     the property test. The unit, functional and lab tests state them.
+   * **GoBGP 3.23.0 reads every link value and drops the node name and
+     the prefix metric.** Its `-j` panics on a prefix wider than one
+     octet, so the lab sends /8 prefixes, and the NLRI strings inside
+     its JSON are garbled where the map keys are right.
+   * **The add-path gap holds for BGP-LS**, measured and pinned in
+     `test/unit/gen/link_state_routes_test.rb`.
 5. Churn. To do.
 6. `LabHelper` and the coverage matrix take specs. To do.
 7. routescope scenarios use specs. routescope's column.
@@ -7692,7 +7711,7 @@ Smaller things:
 
 * **validation.rb walks a flow spec rule without knowing add-path was negotiated**, so a rule carrying an RFC 7911 Path Identifier is reported as malformed with a session reset. `Attr::Check.attribute` is handed the octets and the AS width and nothing about the session, so the four octets in front of the rule are read as its length and components. The rule itself decodes, since `Flow_spec` is told. Measured on 2026-11-04 while building phase 4c of `bgp/gen`:
   `ruby -I. -e 'require "bgp/gen"; i = Class.new(BGP::Update::Info) { def initialize ; super(true, :lenient) ; end ; def path_id?(*) ; true ; end }.new; u = BGP::Gen.new("family" => "flow_spec", "start" => "10.0.0.0/24", "count" => 1, "path_id" => 7).updates.first; p BGP::Update.new(u.encode(BGP::Update::Info.new(true)).is_packed, i).path_attribute.errors.collect(&:reason)'`
-  prints one finding, "flow spec NLRI with no component". EVPN has the same gap, measured in phase 4d: the four octets are read as a Route Type and a Length, and `test_the_receive_checks_do_not_know_add_path_yet` in `test/unit/gen/evpn_routes_test.rb` pins it. MCAST-VPN and BGP-LS walk their NLRIs the same way and were not measured. The fix threads the add-path answer per AFI and SAFI into the check, which is a signature change on a method many callers use, so it wants a decision. `test_the_receive_checks_do_not_know_add_path_yet` in `test/unit/gen/flow_rules_test.rb` pins it, and the property test in `test/unit/gen_test.rb` excludes the case with a comment saying so.
+  prints one finding, "flow spec NLRI with no component". EVPN has the same gap, measured in phase 4d: the four octets are read as a Route Type and a Length, and `test_the_receive_checks_do_not_know_add_path_yet` in `test/unit/gen/evpn_routes_test.rb` pins it. BGP-LS has it too, measured in phase 4g: the four octets are read as a Type and a Total NLRI Length, and `test/unit/gen/link_state_routes_test.rb` pins it. MCAST-VPN walks its NLRIs the same way and was not measured. The fix threads the add-path answer per AFI and SAFI into the check, which is a signature change on a method many callers use, so it wants a decision. `test_the_receive_checks_do_not_know_add_path_yet` in `test/unit/gen/flow_rules_test.rb` pins it, and the property test in `test/unit/gen_test.rb` excludes the case with a comment saying so.
 * **An extended community whose hash value is a scalar cannot be written as text through `CommunityKeys`**, so `traffic_marking:10` in an `extended_communities` list raises. `extended_community_hash` always makes a list, `{:traffic_marking=>[10]}`, and `Traffic_marking.new` wants the Integer. `origin_validation_state` and the other kinds built with `new(v)` rather than `new(*v)` have the same shape. Unwrapping a one value list is not the fix, since `mac_mobility` reads `v[0]` and would read bit 0 of an Integer. `bgp/gen`'s flow spec actions build their hashes directly for this reason.
   `ruby -I. -e 'require "bgp4r"; require "bgp/daemon/community_keys"; BGP::Daemon::CommunityKeys.community_attributes("extended_communities" => ["traffic_marking:10"])'`
 

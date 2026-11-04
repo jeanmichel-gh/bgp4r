@@ -47,11 +47,14 @@ class TestBgpGen < Test::Unit::TestCase
   # added to FAMILIES needs five more. It was three until phase 4e: with
   # nine families, 27 and 36 seeds each left a flow spec key the corpus
   # test asks for undrawn, since the families moved to other seeds.
-  SEEDS = Integer(ENV.fetch('GEN_SEEDS', 45))
+  # Phase 4g's two families made it 55.
+  SEEDS = Integer(ENV.fetch('GEN_SEEDS', 55))
 
   def test_the_generators_are_the_ones_built
-    assert_equal(%w[unicast multicast labelled vpn vpn_multicast flow_spec flow_spec_vpn evpn rt_constrain],
-                 BGP::Gen::GENERATORS.keys)
+    assert_equal(%w[unicast multicast labelled vpn vpn_multicast flow_spec flow_spec_vpn evpn rt_constrain
+                    bgp_ls bgp_ls_vpn], BGP::Gen::GENERATORS.keys)
+    assert_equal(BGP::Gen::Link_state_routes, BGP::Gen::GENERATORS['bgp_ls'])
+    assert_equal(BGP::Gen::Link_state_vpn_routes, BGP::Gen::GENERATORS['bgp_ls_vpn'])
     assert_equal(BGP::Gen::Rt_constrain_routes, BGP::Gen::GENERATORS['rt_constrain'])
     assert_equal(BGP::Gen::Evpn_routes, BGP::Gen::GENERATORS['evpn'])
     assert_equal(BGP::Gen::Flow_rules, BGP::Gen::GENERATORS['flow_spec'])
@@ -174,6 +177,7 @@ class TestBgpGen < Test::Unit::TestCase
     end
     evpn(r, s, v6, n) if family == 'evpn'
     rt_constrain(r, s) if family == 'rt_constrain'
+    link_state(r, s, v6) if LS.include?(family)
     if RD.include?(family)
       admin = [r.rand(65536), "192.0.2.#{r.rand(1..254)}", r.rand(65536..2**32 - 1)][r.rand(3)]
       s['rd'] = "#{admin}:#{r.rand(1000)}"
@@ -223,24 +227,70 @@ class TestBgpGen < Test::Unit::TestCase
     s['prefix_length'] = 96 if r.rand(4) == 0
   end
 
-  FAMILIES = %w[unicast multicast labelled vpn vpn_multicast flow_spec flow_spec_vpn evpn rt_constrain]
+  # Phase 4g: a small topology, ring or grid, with prefixes sometimes and
+  # each BGP-LS Attribute value sometimes, a value or a pattern. Small,
+  # since a node is three routes and more with prefixes.
+  def link_state(r, s, v6)
+    s['start'] = "10.#{r.rand(256)}.#{r.rand(256)}.1"
+    s['count'] = r.rand(1..30)
+    if r.rand(2) == 1
+      s['topology'] = 'grid'
+      s['columns'] = r.rand(1..6)
+    end
+    s['protocol_id'] = [1, 2, 3, 6][r.rand(4)]
+    s['identifier'] = r.rand(2**64) if r.rand(2) == 1
+    s['autonomous_system'] = r.rand(2**32) if r.rand(2) == 1
+    if r.rand(2) == 1
+      s['prefixes'] = r.rand(1..3)
+      s['prefix_start'] = v6 ? '2001:db8:100::/64' : '10.10.0.0/24'
+    end
+    s['igp_metric'] = [r.rand(2**24), { 'step' => { 'start' => 1, 'by' => r.rand(1..9), 'wrap' => 2**24 - 1 } }][r.rand(2)] if r.rand(2) == 1
+    s['admin_group'] = r.rand(2**32) if r.rand(2) == 1
+    s['max_bandwidth'] = { 'cycle' => [125_000_000, 1_250_000_000] } if r.rand(2) == 1
+    s['srlg'] = r.rand(2**32) if r.rand(3) == 0
+    s['node_name'] = 'r' if r.rand(2) == 1
+    s['prefix_metric'] = { 'every' => { 'n' => r.rand(1..3), 'values' => [0, 10, 2**32 - 1] } } if r.rand(2) == 1
+  end
+
+  FAMILIES = %w[unicast multicast labelled vpn vpn_multicast flow_spec flow_spec_vpn evpn rt_constrain
+                bgp_ls bgp_ls_vpn]
+  LS = %w[bgp_ls bgp_ls_vpn]
   LABELLED = %w[labelled vpn vpn_multicast]
   FLOW = %w[flow_spec flow_spec_vpn]
   VPN = %w[vpn vpn_multicast flow_spec_vpn]
   # The families with a Route Distinguisher, and the ones whose routes
   # differ in length so the packing test measures each.
-  RD = VPN + %w[evpn]
-  MEASURED = FLOW + %w[evpn rt_constrain]
+  RD = VPN + %w[evpn bgp_ls_vpn]
+  MEASURED = FLOW + %w[evpn rt_constrain] + LS
   # The families whose NLRI validation.rb walks without knowing add-path,
   # which CLAUDE.md records under Known issues.
-  NO_PATH_ID = FLOW + %w[evpn]
+  NO_PATH_ID = FLOW + %w[evpn] + LS
   EVPN_TYPES = [2, 3, 5]
   SAFI = { 'unicast' => 1, 'multicast' => 2, 'labelled' => 4, 'vpn' => 128, 'vpn_multicast' => 129,
-           'flow_spec' => 133, 'flow_spec_vpn' => 134, 'evpn' => 70, 'rt_constrain' => 132 }
+           'flow_spec' => 133, 'flow_spec_vpn' => 134, 'evpn' => 70, 'rt_constrain' => 132,
+           'bgp_ls' => 71, 'bgp_ls_vpn' => 72 }
 
   # How many routes a spec makes: count, once per VRF, and the RT-constrain
   # default in front.
-  def self.total(spec) ; spec['count'] * (spec['vrfs'] || 1) + (spec['default'] ? 1 : 0) ; end
+  def self.total(spec)
+    return topology(spec) * (spec['vrfs'] || 1) if LS.include?(spec['family'])
+    spec['count'] * (spec['vrfs'] || 1) + (spec['default'] ? 1 : 0)
+  end
+
+  # A BGP-LS topology's routes, counted here rather than asked of
+  # bgp/gen: a node each, two per link, and the prefixes. A ring of n
+  # has n links from 3 on and one for 2; a grid joins each node to its
+  # right and to the one below.
+  def self.topology(spec)
+    n = spec['count']
+    links = if spec['topology'] == 'grid'
+              c = spec['columns']
+              (0...n).count { |i| (i + 1) % c != 0 && i + 1 < n } + (0...n).count { |i| i + c < n }
+            else
+              n < 2 ? 0 : (n == 2 ? 1 : n)
+            end
+    n + 2 * links + n * (spec['prefixes'] || 0)
+  end
 
 
   def info_for(spec)
@@ -258,6 +308,7 @@ class TestBgpGen < Test::Unit::TestCase
       # An EVPN route's whole hash, RD included, is its key here.
       next [n.to_hash, n.path_id, nil] if n.is_a?(BGP::Evpn)
       next [n.to_hash.reject { |k, _| k == :path_id }, n.path_id, nil] if n.is_a?(BGP::Rt_constrain)
+      next [n.to_hash.reject { |k, _| k == :path_id }, n.path_id, nil] if n.is_a?(BGP::Link_state)
       if n.is_a?(BGP::Flow_spec)
         # A rule's key is its components and its RD, RFC 8955 section 8.
         h = n.to_hash
@@ -444,6 +495,13 @@ class TestBgpGen < Test::Unit::TestCase
       assert_operator(specs.count { |sp| sp[k] }, :>=, 1, "flow spec feeds with #{k}")
     end
     assert_operator(specs.count { |sp| sp['default'] }, :>=, 1, 'RT-constrain feeds with the default')
+    assert_operator(specs.count { |sp| sp['topology'] == 'grid' }, :>=, 1, 'BGP-LS feeds of a grid')
+    assert_operator(specs.count { |sp| LS.include?(sp['family']) && sp['topology'].nil? }, :>=, 1,
+                    'BGP-LS feeds of a ring')
+    assert_operator(specs.count { |sp| sp['prefixes'] }, :>=, 1, 'BGP-LS feeds with prefixes')
+    %w[igp_metric node_name prefix_metric].each do |k|
+      assert_operator(specs.count { |sp| sp[k] }, :>=, 1, "BGP-LS feeds with #{k}")
+    end
     EVPN_TYPES.each do |t|
       assert_operator(specs.count { |sp| sp['route_type'] == t }, :>=, 1, "EVPN feeds of route type #{t}")
     end
@@ -458,6 +516,7 @@ class TestBgpGen < Test::Unit::TestCase
   def row_of(prefix, path_id, rd, pa)
     return evpn_row_of(prefix, path_id, pa) if prefix.is_a?(Hash) && pa[:mp_reach].safi == 70
     return rtc_row_of(prefix, path_id, pa) if prefix.is_a?(Hash) && pa[:mp_reach].safi == 132
+    return ls_row_of(prefix, path_id, pa) if prefix.is_a?(Hash) && [71, 72].include?(pa[:mp_reach].safi)
     return flow_row_of(prefix, path_id, rd, pa) if prefix.is_a?(Hash)
     r = { 'prefix' => prefix }
     r['path_id'] = path_id if path_id
@@ -495,6 +554,55 @@ class TestBgpGen < Test::Unit::TestCase
     r['local_pref'] = pa[:local_pref].to_i if pa[:local_pref]
     r['communities'] = pa[:communities].communities.split if pa[:communities]
     r['large_communities'] = pa[:large_communities].large_communities.split if pa[:large_communities]
+    r
+  end
+
+  # A BGP-LS row, read off the NLRI's own hash and the BGP-LS Attribute.
+  # A router ID is the IGP Router-ID, with an IS-IS system ID's two
+  # leading zero octets taken off.
+  def ls_row_of(h, path_id, pa)
+    rd = h[:rd]
+    key, v = h.reject { |k, _| k == :rd }.first
+    tlv = lambda { |k| v[:tlvs].find { |t| t.key?(k) } }
+    id = lambda do |k|
+      hex = tlv.call(k)[k].find { |t| t.key?(:igp_router_id) }[:igp_router_id]
+      IPAddr.new_ntoh([hex[-8..]].pack('H*')).to_s
+    end
+    r = { 'nlri' => key.to_s, 'node' => id.call(:local_node_descriptors) }
+    case key
+    when :link
+      r['remote'] = id.call(:remote_node_descriptors)
+      r['link'] = tlv.call(:link_local_remote_identifiers)[:link_local_remote_identifiers][:local]
+    when :ipv4_prefix, :ipv6_prefix
+      ip = tlv.call(:ip_reachability)[:ip_reachability]
+      width = key == :ipv4_prefix ? 4 : 16
+      octets = [ip[:octets]].pack('H*').ljust(width, "\0")
+      r['prefix'] = "#{IPAddr.new_ntoh(octets)}/#{ip[:bitlen]}"
+    end
+    r['protocol_id'] = v[:protocol_id]
+    r['identifier'] = v[:identifier]
+    r['rd'] = rd.join(':') if rd
+    r['path_id'] = path_id if path_id
+    r['origin'] = pa[:origin].to_i
+    r['as_path'] = pa[:as_path].segments.flat_map(&:as)
+    r['next_hop'] = pa[:mp_reach].nexthops
+    r['med'] = pa[:multi_exit_disc].to_i if pa[:multi_exit_disc]
+    r['local_pref'] = pa[:local_pref].to_i if pa[:local_pref]
+    r['communities'] = pa[:communities].communities.split if pa[:communities]
+    r['large_communities'] = pa[:large_communities].large_communities.split if pa[:large_communities]
+    if (a = pa.find(BGP::Link_state_attribute))
+      a.tlvs.each do |t|
+        x = t.to_hash.values.first
+        case t.type
+        when 1026 then r['node_name'] = x
+        when 1088 then r['admin_group'] = x
+        when 1089 then r['max_bandwidth'] = x.to_i
+        when 1095 then r['igp_metric'] = x[:metric]
+        when 1096 then r['srlg'] = x.first
+        when 1155 then r['prefix_metric'] = x
+        end
+      end
+    end
     r
   end
 
