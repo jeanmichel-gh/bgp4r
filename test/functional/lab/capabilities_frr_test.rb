@@ -97,8 +97,14 @@ class LabCapabilitiesFrrTest < Test::Unit::TestCase
       rescue IOError, SystemCallError
       end
     end
+    # No IPv6 family. Nothing here needs one, and FRR 10.5.1 refuses the
+    # OPEN when IPv6 unicast is activated over an IPv4 session with no
+    # zebra: it logs "No local IPv6 address, and zebra does not support
+    # V6 routing with v4 nexthops" and sends Cease 6/0. FRR 8.4.4 only
+    # warned. Measured on 2026-11-04.
     @router = F.new(:local => '127.0.0.2', :as => THEIR_AS, :router_id => '10.0.0.2',
-                    :peer => '127.0.0.1', :peer_as => OUR_AS, :port => @server.addr[1])
+                    :peer => '127.0.0.1', :peer_as => OUR_AS, :port => @server.addr[1],
+                    :ipv6 => false)
     @router.up
     wait_for('the session') { @peer.is_established? }
     catcher.opens.last
@@ -149,8 +155,9 @@ class LabCapabilitiesFrrTest < Test::Unit::TestCase
 
   LLGR = BGP::OPT_PARM::CAP::Long_lived_graceful_restart
 
-  # Graceful Restart listing IPv4 and IPv6 unicast, and the two families
-  # negotiated. FRR reads an LLGR tuple only for a family that is both
+  # Graceful Restart listing IPv4 and IPv6 unicast, and both offered
+  # through MBGP. FRR has only IPv4 activated, so IPv6 is the family it
+  # must ignore. FRR reads an LLGR tuple only for a family that is both
   # negotiated and in the peer's Graceful Restart capability, which is
   # bgp_capability_llgr in bgpd/bgp_open.c at stable/8.4.
   def gr_with_families
@@ -166,22 +173,25 @@ class LabCapabilitiesFrrTest < Test::Unit::TestCase
     @router.log.scan(/Addr-family (\S+)\(afi\/safi\) Long-lived Graceful Restart capability stale time (\d+) sec/)
   end
 
-  # FRR's OPEN carries code 71: IPv4 and IPv6 unicast, the F bit set and
-  # a stale time of 0, which is FRR's default llgr stale time. bgp4r reads
+  # FRR's OPEN carries code 71: one tuple per family it has activated,
+  # here IPv4 unicast alone, with the F bit set and a stale time of 0,
+  # which is FRR's default llgr stale time. bgp4r reads
   # it by name and writes it back octet for octet.
   def test_frr_sends_the_llgr_capability
     open = session
     caps = open.opt_parms.select { |c| c.is_a?(LLGR) }
     assert_equal 1, caps.size, 'one LLGR capability in FRR\'s OPEN'
-    assert_equal '0210470e0001018000000000020180000000', caps.first.to_shex
-    assert_equal [[1, 1, 0x80, 0], [2, 1, 0x80, 0]], caps.first.tuples
+    assert_equal '0209470700010180000000', caps.first.to_shex
+    assert_equal [[1, 1, 0x80, 0]], caps.first.tuples
     assert_equal open.to_shex, BGP::Message.factory(open.encode).to_shex
   end
 
   # FRR's reading of our tuples, which is the half no bgp4r test can
-  # give. The IPv6 stale time fills all 24 bits with three different
+  # give. The IPv4 stale time fills all 24 bits with three different
   # octets, 0xabcdef, so a field written short, long or in the wrong
-  # order reads back as a different number.
+  # order reads back as a different number. The IPv6 tuple is for a
+  # family FRR has not activated, so FRR ignores it, which is the rule
+  # bgp_capability_llgr applies per family.
   #
   # FRR's JSON says "advertisedAndReceived" and nothing per family:
   # longLivedGracefulRestartByPeer tests PEER_CAP_ENHE_AF_RCV, the
@@ -190,13 +200,14 @@ class LabCapabilitiesFrrTest < Test::Unit::TestCase
   # A display bug, recorded and not filed. The log is what reads the
   # values, so the log is what this asserts.
   def test_frr_reads_the_stale_times_we_send
-    llgr = LLGR.new(1, 1, 0x80, 3600).add(2, 1, 0, 0xabcdef)
+    llgr = LLGR.new(1, 1, 0x80, 0xabcdef).add(2, 1, 0, 3600)
     session(*gr_with_families, llgr)
     wait_for('FRR to report the capability') { frr_says('longLivedGracefulRestart') }
     assert_equal 'advertisedAndReceived', frr_says('longLivedGracefulRestart')
-    wait_for('FRR to log the stale times') { frr_read_stale_times.size == 2 }
-    assert_equal [['IPv4/unicast', '3600'], ['IPv6/unicast', '11259375']],
-                 frr_read_stale_times
+    wait_for('FRR to log the stale time') { frr_read_stale_times.size == 1 }
+    assert_equal [['IPv4/unicast', '11259375']], frr_read_stale_times
+    assert_match(%r{IPv6/unicast\(afi/safi\) not enabled\. Ignore the Long-lived Graceful Restart capability},
+                 @router.log)
     assert_equal({}, frr_says('longLivedGracefulRestartByPeer'),
                  'FRR fixed its LLGR JSON: re-measure and assert the families')
   end

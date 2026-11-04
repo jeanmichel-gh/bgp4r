@@ -7061,6 +7061,16 @@ the registry's.
   is section 4.1's rule. bgp4r still sends LLGR alone if asked, since
   nothing validates. So both capabilities this lab found unnamed with
   an RFC behind them are named; 73 and 76 are drafts.
+* **That file activates no IPv6 family, because FRR 10.5.1 refuses the
+  OPEN otherwise.** With IPv6 unicast activated over an IPv4 session and
+  no zebra it logs "No local IPv6 address, and zebra does not support V6
+  routing with v4 nexthops" and sends Cease 6/0, where 8.4.4 only
+  warned. Every other FRR lab file still activates IPv6, so on FRR 10
+  they all fail the same way. FRR 10's packages also carry an AppArmor
+  profile for `/usr/lib/frr/bgpd` that refuses the harness's pid file
+  under `/tmp`, as root too; `FRR_BGPD` pointing at a copy of the
+  binary elsewhere runs it unconfined. Both measured on 2026-11-04 on
+  the owner's VM, and neither is fixed in the harness yet.
 
 **The `### GoBGP` block of `capture.sh` ran next, and it settles the
 two things that node is on the topology for.** All three kinds of
