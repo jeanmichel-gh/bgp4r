@@ -53,7 +53,12 @@ module BGP
       module_function
 
       # The top level keys a spec takes.
-      KEYS = %w[family afi count per_update start path_id seed group attributes].freeze
+      KEYS = %w[family afi count per_update start path_id label seed group attributes].freeze
+
+      # The keys that belong to some families only, and which. A spec
+      # giving one to another family is refused by name in Gen.new, so
+      # a label on a unicast spec is not dropped in silence.
+      FAMILY_KEYS = { 'label' => %w[labelled] }.freeze
 
       # The announce block keys bgp4r already uses everywhere else, with
       # the kind of value each is, which says the patterns it takes, and
@@ -71,6 +76,9 @@ module BGP
       ATTRIBUTES = ATTRIBUTE_KINDS.keys.freeze
 
       U32 = 0xffffffff
+
+      # A label is 20 bits, RFC 3032 section 2.1.
+      LABEL_MAX = 0xfffff
 
       # The spec as plain data with String keys: a plain value in the
       # form it is sent in, a single community string as a list of one,
@@ -92,6 +100,7 @@ module BGP
         out['seed'] = integer(s, 'seed', false, 0)
         out['group'] = integer(s, 'group', false, 1)
         out['path_id'] = value(s['path_id'], 'path_id', :int, U32, out['seed']) if s.key?('path_id')
+        out['label'] = value(s['label'], 'label', :int, LABEL_MAX, out['seed']) if s.key?('label')
         out['attributes'] = attributes(s.fetch('attributes', {}), out['seed'])
         out.reject { |_, v| v.nil? }
       end

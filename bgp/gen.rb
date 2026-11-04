@@ -25,6 +25,8 @@ require 'bgp/gen/spec'
 require 'bgp/gen/packer'
 require 'bgp/gen/sender'
 require 'bgp/gen/unicast'
+require 'bgp/gen/multicast'
+require 'bgp/gen/labelled'
 
 module BGP
   # Generates UPDATEs and withdrawals in bulk from a spec of plain JSON
@@ -53,7 +55,8 @@ module BGP
   # bgp/gen/sender.rb. `bgp4r-sim` passes one; the library alone sends
   # what the spec says.
   class Gen
-    GENERATORS = { 'unicast' => Unicast }.freeze
+    GENERATORS = { 'unicast' => Unicast, 'multicast' => Multicast,
+                   'labelled' => Labelled }.freeze
 
     attr_reader :spec, :family, :sender
 
@@ -68,6 +71,10 @@ module BGP
           raise SpecError, "family '#{@family}' has no generator yet; bgp4r generates #{GENERATORS.keys.join(', ')}"
         end
         raise SpecError, "unknown family '#{@family}'; the families are #{known.join(', ')}"
+      end
+      Spec::FAMILY_KEYS.each do |k, families|
+        next if !@spec.key?(k) || families.include?(@family)
+        raise SpecError, "'#{k}' is for #{families.join(', ')} and not for '#{@family}'"
       end
       @generator = klass.new(@spec, @sender)
     end

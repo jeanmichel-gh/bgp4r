@@ -169,8 +169,8 @@ route key.
 | Family | NLRI keys that step | Attributes specific to it | Withdraw |
 |---|---|---|---|
 | `unicast` (AFI 1, 2) | `start` prefix and length, `path_id` | none | IPv4 in Withdrawn Routes, IPv6 in MP_UNREACH. |
-| `multicast` (SAFI 2) | as unicast | none | MP_UNREACH. |
-| `labelled` (SAFI 4) | prefix, `label` fixed or per route | none | The label field on withdraw: RFC 8277 section 2.4 says 0x800000, and bgp4r writes 800001, a known issue. |
+| `multicast` (SAFI 2) | as unicast | none | MP_UNREACH, IPv4 too. |
+| `labelled` (SAFI 4) | prefix, `label` fixed or per route, required | none | The 3-octet Compatibility field of RFC 8277 section 2.4, written as 0x800000. |
 | `vpn`, `vpn_multicast` (128, 129) | `rd` of type 0, 1 or 2 stepped per VRF, `label`, prefix | route targets per VRF, so each VRF has its own attribute set | RD plus prefix. |
 | `flow_spec`, `flow_spec_vpn` (133, 134) | destination prefix, port ranges, protocol, so a rule set N wide | traffic rate, redirect, marking; next hop length 0 | The same rule in MP_UNREACH. |
 | `rt_constrain` (132) | origin AS, route target, the zero length default | none | GoBGP 3.23.0 panics on the default plus a second route. |
@@ -276,7 +276,7 @@ can fail. Update this table in the pull request that moves a step.
 | 1 | `bgp/gen`: spec reader that refuses unknown keys, unicast generator for IPv4 and IPv6, the packer, `updates`, `withdrawals`, `expected`. | Done |
 | 2 | `Vary`: the five patterns, `group`, the property patterns for AS_PATH and communities. | Done |
 | 3 | Injector wiring: `announce` and `withdraw` read a spec, `POST /api/plan`, the `mp_reach`, `mp_unreach` and `specimen` keys. | Done |
-| 4a | Multicast and labelled. | To do |
+| 4a | Multicast and labelled. | Done |
 | 4b | VPN, both SAFIs. | To do |
 | 4c | Flow spec, both SAFIs. | To do |
 | 4d | EVPN types 2, 3 and 5, then the rest. | To do |
@@ -387,3 +387,49 @@ route; `test/functional/sim_test.rb` asks for the plan over HTTP, sends
 the spec over HTTP, and compares what a bgp4r peer read route by route;
 and `test/functional/lab/gen_gobgp_test.rb` does the same against
 gobgpd 3.23.0 through an in-process injector, IPv4 and IPv6.
+
+**Phase 4a.** Multicast, SAFI 2, and labelled unicast, SAFI 4, both
+AFIs. Each is a subclass of the unicast generator, so the packer, the
+patterns and the sender are shared.
+
+* **Only IPv4 unicast uses RFC 4271's own fields.** `classic?` asks
+  that, where phases 1 to 3 asked `ipv4?`. So IPv4 multicast goes in
+  MP_REACH_NLRI with its next hop inside it, and is withdrawn in
+  MP_UNREACH_NLRI.
+* **A label is required for `labelled` and refused anywhere else.**
+  `Spec::FAMILY_KEYS` holds which keys belong to which family, and
+  `Gen.new` refuses a key on the wrong one. It is 20 bits, RFC 3032
+  section 2.1, and a value or a pattern.
+* **The label runs on the route number, not the group.** A label is
+  part of the NLRI, like the Path Identifier, so grouping the
+  attributes does not hold it. One label per route; RFC 8277 section
+  2.2 allows a stack and nothing here asks for one.
+* **A withdrawal writes 0x800000 where the label was**, the
+  Compatibility field of RFC 8277 section 2.4. `Mp_unreach` already
+  took a `:compatibility` key, so this needed no library change.
+* **What `expected` cannot catch.** A label read off the group number
+  instead of the route number passes the property test, the functional
+  test and the lab, because `expected` comes from the same method that
+  sends. Only `labelled_test.rb`, which states the labels by hand,
+  fails. That is the caveat in section 2, met for real.
+
+Measured against gobgpd 3.23.0 on 2026-11-03:
+
+* **Labelled**: the config names are `ipv4-labelled-unicast` and
+  `ipv6-labelled-unicast`, the client names `ipv4-mpls` and
+  `ipv6-mpls`. `CLIENT_FAMILY` maps them. GoBGP reads every label back
+  and drops every route on withdrawal.
+* **Multicast is filed in GoBGP's unicast table.** The session
+  negotiates `ipv4-multicast` and `ipv6-multicast`, but the client
+  answers `unsupported address family` for both, and a multicast route
+  shows in the unicast table with next hop `fictitious` and no
+  attributes. It replaces a unicast route of the same prefix, and its
+  withdrawal removes that route. No reset. Asserted as measured, not
+  filed.
+
+Tests: `test/unit/gen/multicast_test.rb` and
+`test/unit/gen/labelled_test.rb`; `test/unit/gen_test.rb`'s property
+test draws all three families; `test/functional/gen_test.rb` sends both
+families over loopback and reads the SAFI off the octets, since a table
+cannot tell SAFI 2 from SAFI 1; `test/functional/lab/gen_gobgp_test.rb`
+reads the labels back from GoBGP and asserts the multicast fault.

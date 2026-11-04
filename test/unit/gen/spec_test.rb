@@ -86,6 +86,17 @@ class TestBgpGenSpec < Test::Unit::TestCase
     refused(minimal.merge('seed' => '7'), /seed is an integer/)
   end
 
+  # Phase 4a reads a label, as a value or a pattern, kept as given.
+  # Which family may have one is Gen's to say, since Spec reads no family.
+  def test_a_label_reads_and_is_20_bits
+    assert_equal(16, S.read(minimal.merge('label' => 16))['label'])
+    assert_equal({ 'step' => { 'start' => 16, 'by' => 1 } },
+                 S.read(minimal.merge('label' => { 'step' => { 'start' => 16, 'by' => 1 } }))['label'])
+    refused(minimal.merge('label' => 2**20), /label: 1048576 does not fit/)
+    refused(minimal.merge('label' => '16'), /label/)
+    assert_equal({ 'label' => %w[labelled] }, S::FAMILY_KEYS)
+  end
+
   def test_start_and_count_are_required
     refused({ 'count' => 1 }, /start is required/)
     refused({ 'start' => '10.0.0.0/8' }, /count is required/)
