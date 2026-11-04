@@ -43,6 +43,16 @@ class TestBgpNeighbor < Test::Unit::TestCase
   def teardown
     stop_server
   end
+  # The debug line is built whatever the log level, and a peer chooses
+  # the octets, so a to_s that raises must not take the event thread
+  # down. The exception is named in the line instead.
+  def test_a_message_whose_to_s_raises_is_named_and_not_raised
+    bad = Object.new
+    def bad.to_s ; raise TypeError, 'boom' ; end
+    n = BGP::Neighbor.new(4, 100, 180, '0.0.0.1', '127.0.0.1', '127.0.0.1')
+    assert_match(/Object \(to_s raised TypeError: boom\)/, n.send(:render, bad))
+  end
+
   def test_open_msg
     neighbor = Neighbor.new \
     :version=> 4, 
