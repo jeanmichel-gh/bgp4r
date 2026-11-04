@@ -99,7 +99,7 @@ module BGP
       # says so. It also makes this table load bearing rather than
       # documentation.
       ACTIONS = {
-        'announce'      => %w[peer prefixes generate spec mp_reach specimen next_hop as_path
+        'announce'      => %w[peer prefixes generate spec churn mp_reach specimen next_hop as_path
                               as_path_literal med local_pref communities extended_communities
                               large_communities path_id origin],
         'withdraw'      => %w[peer prefixes generate spec mp_unreach path_id],
@@ -123,7 +123,12 @@ module BGP
       # * **`spec`** is a `BGP::Gen` spec, docs/route-generation.md
       #   section 4, handed to the library unchanged. `as_path_literal`
       #   is the one announce key it reads, because the eBGP prepend is
-      #   the session's rule and not the spec's.
+      #   the session's rule and not the spec's. **`churn` beside it sends
+      #   that spec's churn rather than the spec**, section 8 of the same
+      #   document: changes to routes the spec already announced. It is
+      #   on `announce` rather than an eleventh action because the ten
+      #   are routescope's `Drivers::Sim::ACTIONS`, and a churn is
+      #   announcements and withdrawals of one spec's routes.
       # * **`mp_reach` and `mp_unreach`** take the Hash `Mp_reach.new`
       #   and `Mp_unreach.new` read, so one message in any family the
       #   library builds, with no generator.
@@ -132,14 +137,14 @@ module BGP
       #   with them; a family specimen carries its own NLRI and takes
       #   neither.
       SELECTORS = {
-        'announce' => { 'spec' => %w[as_path_literal], 'mp_reach' => [],
+        'announce' => { 'spec' => %w[as_path_literal churn], 'mp_reach' => [],
                         'specimen' => %w[prefixes next_hop] },
         'withdraw' => { 'spec' => [], 'mp_unreach' => [] }
       }.freeze
 
       # What `plan` reads: the spec and what decides how it is sent, and
       # one page of the answer. See `plan`.
-      PLAN_KEYS = %w[peer spec as_path_literal offset limit].freeze
+      PLAN_KEYS = %w[peer spec churn as_path_literal offset limit].freeze
 
       # What an event line says happened. `attribute` re-announces, so
       # its line says so rather than inventing a verb for it.
@@ -364,17 +369,25 @@ module BGP
           raise Refused, "plan: unknown key(s) #{unknown.join(', ')}; it reads #{PLAN_KEYS.join(', ')}"
         end
         raise Refused, 'plan: spec is required' if block['spec'].nil?
-        check(block.reject { |k, _| %w[offset limit].include?(k) }, 'announce')
+        check(block.reject { |k, _| %w[offset limit churn].include?(k) }, 'announce')
         offset = integer(block, 'offset', 0)
         offset = 0 if offset.negative?
         limit = integer(block, 'limit', Daemon::Views::PAGE_LIMIT).clamp(1, Daemon::Views::MAX_LIMIT)
         plans = targets(block).collect { |peer|
           gen = generator(block, peer)
-          total = gen.total
-          rows = gen.expected.lazy.drop(offset).first(limit)
+          if block['churn']
+            c = churner(gen, block)
+            summary = c.summary
+            total, source = summary['held'], c.expected
+          else
+            total, source = gen.total, gen.expected
+          end
+          rows = source.lazy.drop(offset).first(limit)
           nxt = offset + limit
-          { :peer => peer.address, :rows => rows, :total => total, :offset => offset,
-            :limit => limit, :next_offset => nxt < total ? nxt : nil }
+          page = { :peer => peer.address, :rows => rows, :total => total, :offset => offset,
+                :limit => limit, :next_offset => nxt < total ? nxt : nil }
+          page[:churn] = summary if summary
+          page
         }
         { :action => 'plan', :plans => plans }
       end
@@ -397,6 +410,10 @@ module BGP
         if action == 'announce'
           return specimen(block) if block['specimen']
           one_of(block, 'prefixes', 'generate', 'spec', 'mp_reach', 'specimen')
+          if block['spec'] && block['churn']
+            return churn(selector(block, 'announce', 'spec'), async)
+          end
+          raise Refused, 'announce: churn goes with a spec' if block['churn']
           return spec_feed(block, targets(selector(block, 'announce')), 'announce', async) if block['spec']
           return mp_reach(selector(block, 'announce', 'mp_reach')) if block['mp_reach']
         end
@@ -679,6 +696,63 @@ module BGP
                        "#{peers.collect(&:address).join(', ')}",
                 :action => action, :spec => s)
         { :action => action, :feeds => records.collect(&:to_h) }
+      end
+
+      # A churn of a spec the peer already holds, docs/route-generation.md
+      # section 8, as a feed: one UPDATE per event, paced at the churn's
+      # `rate` when it gives one and sent at once when it does not.
+      #
+      # **It acts on what the spec announced and does not check that the
+      # peer holds it**, which is `Gen::Churn`'s own rule: the caller
+      # announces the spec first, and `POST /api/plan` with the same
+      # `spec` and `churn` answers what the peer should hold afterwards.
+      #
+      # The feed's record counts every event, and the totals count each
+      # under what it is, a withdrawal or an announcement, so
+      # `withdrawn_sent` still means prefixes withdrawn. The pacing is
+      # against the feed's start rather than event to event, so a slow
+      # send does not stretch the whole churn.
+      def churn(block, async = true)
+        runs = targets(block).collect { |peer|
+          gen = generator(block, peer)
+          [peer, gen, churner(gen, block)]
+        }
+        records = runs.collect { |peer, gen, c|
+          record = @sent.start_feed('churn', "#{gen.family} churn of #{c.routes} route(s), " \
+                                             "#{c.count} event(s)", peer.address)
+          run = lambda do
+            begin
+              t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+              c.events.each do |e|
+                if c.interval
+                  wait = t0 + e.number * c.interval - Process.clock_gettime(Process::CLOCK_MONOTONIC)
+                  sleep wait if wait > 0
+                end
+                peer.send_message(e.update)
+                @sent.tick(record, 1, as: e.kind == 'withdraw' ? 'withdraw' : 'announce')
+              end
+              @sent.finish_feed(record)
+            rescue StandardError => e
+              @sent.finish_feed(record, "#{e.class}: #{e.message}")
+            end
+          end
+          async ? @lock.synchronize { @threads << Thread.new { run.call } } : run.call
+          record
+        }
+        c = runs.first[2]
+        publish(ROUTE, "churn of #{c.routes} route(s), #{c.count} event(s), to " \
+                       "#{runs.collect { |peer, _, _| peer.address }.join(', ')}",
+                :action => 'churn', :churn => c.spec)
+        { :action => 'announce', :churn => c.spec, :summary => c.summary,
+          :feeds => records.collect(&:to_h) }
+      end
+
+      # The churn for a generator. One the library cannot read is the
+      # caller's to fix, so a 400 like a spec.
+      def churner(gen, block)
+        gen.churn(block['churn'])
+      rescue BGP::Gen::SpecError => e
+        raise Refused, "churn: #{e.message}"
       end
 
       # The generator for one peer, with that session's rules. A spec

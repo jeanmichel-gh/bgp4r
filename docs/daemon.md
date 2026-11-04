@@ -1449,7 +1449,7 @@ Actions, as `action => [path, body keys]`, which is the table
 
 | Action | Path | Body |
 |---|---|---|
-| `announce` | `/api/announce` | `prefixes` or `generate`, `next_hop`, `as_path`, `as_path_literal`, `med`, `local_pref`, `communities`, `extended_communities`, `large_communities`, `path_id`, `peer`; or one of `spec`, `mp_reach`, `specimen` |
+| `announce` | `/api/announce` | `prefixes` or `generate`, `next_hop`, `as_path`, `as_path_literal`, `med`, `local_pref`, `communities`, `extended_communities`, `large_communities`, `path_id`, `peer`; or one of `spec` (with `churn`), `mp_reach`, `specimen` |
 | `withdraw` | `/api/withdraw` | the same selectors, or `spec` or `mp_unreach` |
 | `attribute` | `/api/attribute` | a prefix set and the attributes to change |
 | `fault` | `/api/fault` | `case` from `BGP::Fault::CATALOG`, `prefixes` |
@@ -1488,6 +1488,10 @@ added them:
   `Speaker#path_attribute`'s rules for an announce block, applied in
   `bgp/gen/sender.rb`. A spec is a feed, like `generate`: one record
   in `/api/sent`, counted and not listed, and not resent after a flap.
+  **`churn` beside it sends that spec's churn instead**, section 8 of
+  the same document: one UPDATE per event, paced at its `rate`, to
+  routes the spec already announced. The answer carries the churn's
+  `summary`.
 * **`mp_reach` and `mp_unreach`** take the Hash `Mp_reach.new` and
   `Mp_unreach.new` read, so one message in any family the library
   builds. JSON keys are Strings and the constructors read Symbols, at
@@ -1498,7 +1502,9 @@ added them:
   carries its own and takes none.
 
 **`POST /api/plan` is a dry run**: the same `spec`, `peer` and
-`as_path_literal`, and `offset` and `limit` for a page. It sends
+`as_path_literal`, and `offset` and `limit` for a page. With a `churn`
+the rows are what the peer holds after it, and each plan carries the
+churn's summary under `churn`. It sends
 nothing and answers `{"plans": [{"peer", "rows", "total", "offset",
 "limit", "next_offset"}]}`, one entry per target, where the rows are
 `BGP::Gen#expected` with that session's rules. **Per peer, because the

@@ -1015,5 +1015,61 @@ class GenFunctionalTest < Test::Unit::TestCase
     assert_equal(%w[route_target:65000:100 route_target:65000:101],
                  @rows.flat_map { |r| r['extended_communities'] }.uniq)
   end
+
+  # ---- phase 5: churn ----------------------------------------------------
+
+  # Announce the spec, send the churn's events, and the Adj-RIB-In must
+  # be the churn's `expected`: what the receiver holds afterwards. Then
+  # the spec's own withdrawals, which name routes the churn already
+  # withdrew as well, and the Adj-RIB-In must be empty. Answers the
+  # churn's summary.
+  def churns(spec, churn)
+    g = BGP::Gen.new(spec)
+    g.updates.each { |u| @c.send_update u }
+    assert(wait_for { @rib.drain && adj_rib_in.routes.size == g.total }, 'the spec arrived')
+    c = g.churn(churn)
+    c.events.each { |e| @c.send_update e.update }
+    want = by_key(c.expected.to_a)
+    got = nil
+    wait_for { @rib.drain && (got = by_key(adj_rib_in.routes.collect { |r| row_of(r) })) == want }
+    assert_equal(want.size, got.size, 'as many routes held as the churn left')
+    want.zip(got).each { |w, r| assert_equal(w, r) unless w == r }
+    g.withdrawals.each { |u| @c.send_update u }
+    assert(wait_for { @rib.drain && adj_rib_in.routes.empty? },
+           "#{adj_rib_in.routes.size} routes left after the withdrawals")
+    c.summary
+  end
+
+  def test_an_ipv4_churn
+    session
+    s = churns({ 'start' => '10.0.0.0/24', 'count' => 2000,
+                 'attributes' => { 'next_hop' => '192.0.2.1', 'as_path' => [CLIENT_AS] } },
+               'events' => 3000, 'routes' => 300, 'withdraw' => 0.3, 'seed' => 21,
+               'attributes' => { 'med' => { 'step' => { 'start' => 1, 'by' => 1 } },
+                                 'as_path' => { 'cycle' => [[CLIENT_AS], [CLIENT_AS, 65010]] } })
+    assert_operator(s['kinds']['withdraw'], :>, 0)
+    assert_operator(s['kinds']['announce'], :>, 0)
+    assert_operator(s['held'], :<, 2000, 'some routes are withdrawn at the end')
+  end
+
+  # One route changed a thousand times, which is the shape an MRAI test
+  # wants: the receiver must hold the last of them.
+  def test_one_route_churned_many_times
+    session
+    s = churns({ 'start' => '10.0.0.0/24', 'count' => 10,
+                 'attributes' => { 'next_hop' => '192.0.2.1', 'as_path' => [CLIENT_AS] } },
+               'events' => 1000, 'routes' => 1, 'withdraw' => 0,
+               'attributes' => { 'med' => { 'step' => { 'start' => 1, 'by' => 1 } } })
+    assert_equal({ 'withdraw' => 0, 'replace' => 1000, 'announce' => 0 }, s['kinds'])
+  end
+
+  def test_an_ipv6_churn_with_a_path_id
+    session(BGP::OPT_PARM::CAP::Add_path.new(:send_and_receive, 2, 1))
+    churns({ 'start' => '2001:db8::/48', 'count' => 500, 'path_id' => { 'cycle' => [1, 2] },
+             'attributes' => { 'next_hop' => '2001:db8::1', 'as_path' => [CLIENT_AS] } },
+           'events' => 800, 'withdraw' => 0.5, 'seed' => 4,
+           'attributes' => { 'communities' => { 'cycle' => [['65000:1'], ['65000:2', '65000:3']] } })
+  end
+
 end
 

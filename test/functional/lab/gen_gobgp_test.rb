@@ -281,6 +281,53 @@ class LabGenGobgpTest < Test::Unit::TestCase
   end
 
 
+  # ---- phase 5: churn ----------------------------------------------------
+
+  # **The interop claim of phase 5**: a churn sent through the injector,
+  # one UPDATE per event, leaves GoBGP holding exactly what the dry run
+  # with the same churn says, every row and not a sample, since a churn
+  # touches routes at random. A withdrawal GoBGP missed, or a
+  # replacement it read as a second path, shows as a prefix too many or
+  # a MED that is not the last one sent.
+  def churn_crosses(spec, churn)
+    afi = spec['start'].include?(':') ? 2 : 1
+    @injector.act('announce', { 'spec' => spec }, false)
+    wait_for("GoBGP to hold #{spec['count']} routes", :timeout => 60) { path_count(afi) == spec['count'] }
+    plan = @injector.plan('spec' => spec, 'churn' => churn, 'limit' => 10_000)[:plans].first
+    rows = plan[:rows]
+    assert_equal(plan[:total], rows.size)
+    answer = @injector.act('announce', { 'spec' => spec, 'churn' => churn }, false)
+    assert_equal(plan[:churn], answer[:summary], 'the plan and the send counted the same events')
+    held = nil
+    wait_for("GoBGP to hold the #{rows.size} routes the churn left", :timeout => 60) do
+      path_count(afi) == rows.size && (held = rib(afi)).size == rows.size
+    end
+    rows.each do |want|
+      paths = held[want['prefix']]
+      assert_not_nil(paths, "GoBGP holds #{want['prefix']}")
+      assert_equal(1, paths.size, "one path for #{want['prefix']}")
+      read(paths.first, want)
+    end
+    @injector.act('withdraw', { 'spec' => spec }, false)
+    wait_for('GoBGP to hold nothing', :timeout => 60) { path_count(afi) == 0 }
+    plan[:churn]
+  end
+
+  def test_the_router_holds_what_a_churn_leaves
+    sim_session
+    s = churn_crosses({ 'start' => '10.0.0.0/24', 'count' => 300,
+                        'attributes' => { 'as_path' => [65010], 'med' => 7 } },
+                      'events' => 1500, 'routes' => 100, 'withdraw' => 0.3, 'seed' => 9,
+                      'attributes' => { 'med' => { 'step' => { 'start' => 100, 'by' => 1 } },
+                                        'communities' => { 'cycle' => [['65000:1'], ['65000:2']] } })
+    assert_operator(s['kinds']['withdraw'], :>, 0)
+    assert_operator(s['kinds']['announce'], :>, 0)
+    s = churn_crosses({ 'start' => '2001:db8::/64', 'count' => 200 },
+                      'events' => 600, 'withdraw' => 0.5, 'seed' => 3, 'rate' => 2000,
+                      'attributes' => { 'med' => { 'random' => { 'min' => 1, 'max' => 9 } } })
+    assert_operator(s['withdrawn'], :>, 0)
+  end
+
   # ---- phase 4a: labelled and multicast --------------------------------
 
   def count_in(family)
