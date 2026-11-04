@@ -736,6 +736,7 @@ module ToHashCatalog
   # them back, so the recipe gives it some.
   { 'Dynamic' => '02044302aabb',
     'Enhanced_route_refresh' => '02044602aabb',
+    'Extended_message' => '02040602aabb',
     'Route_refresh' => '02048002aabb' }.each do |name, hex|
     ENTRIES["BGP::OPT_PARM::CAP::#{name}"] = entry(:ok, nil, nil) do
       BGP::OPT_PARM::CAP.const_get(name).new(wire(hex))

@@ -157,6 +157,7 @@ module CoverageMatrix
     'rib_router'   => 'our export side, which is per route and not per family',
     'add_path'     => 'RFC 7911, which cuts across families',
     'attr_set'     => 'attribute 128, which has no NLRI',
+    'capabilities' => 'OPEN capabilities, which are per session and not per family',
     'gen'          => 'bgp/gen, a generator; docs/route-generation.md phase 6 reports those',
   }.freeze
 

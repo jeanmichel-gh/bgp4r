@@ -205,6 +205,7 @@ module BGP
       :gr                     => OPT_PARM::CAP::Graceful_restart,
       :extended_nexthop       => OPT_PARM::CAP::Extended_nexthop,
       :extended_next_hop      => OPT_PARM::CAP::Extended_nexthop,
+      :extended_message       => OPT_PARM::CAP::Extended_message,
       :add_path               => OPT_PARM::CAP::Add_path,
       :role                   => OPT_PARM::CAP::Role,
       :orf                    => OPT_PARM::CAP::Orf,
