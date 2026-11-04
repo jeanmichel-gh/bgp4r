@@ -104,7 +104,9 @@ class LabGenGobgpTest < Test::Unit::TestCase
 
   G = LabHelper::Gobgpd
   AFI_SAFI = { G::LABELLED_IPV4 => [1, 4], G::LABELLED_IPV6 => [2, 4],
-               G::MULTICAST_IPV4 => [1, 2], G::MULTICAST_IPV6 => [2, 2] }
+               G::MULTICAST_IPV4 => [1, 2], G::MULTICAST_IPV6 => [2, 2],
+               G::VPN_IPV4 => [1, 128], G::VPN_IPV6 => [2, 128],
+               G::VPN_MULTICAST_IPV4 => [1, 129] }
 
   def rib(afi)
     @router.rib_family(FAMILY[afi])
@@ -373,6 +375,123 @@ class LabGenGobgpTest < Test::Unit::TestCase
     held = rib(1)
     assert_nil(held['10.0.0.0/24'], 'the unicast route of that prefix went with the multicast one')
     assert_equal('192.0.2.1', LabHelper::Gobgpd.attrs(held['10.0.1.0/24'].first)[3]['nexthop'])
+    assert_equal(0, downs, 'no session went down')
+    assert(@peer.is_established?)
+  end
+
+  # ---- phase 4b: VPN ---------------------------------------------------
+
+  # GoBGP's VPN table, by RD and prefix. Read from each path's NLRI and
+  # not from the table's keys, which print a 4-octet AS RD in asdot.
+  def vpn_held(family)
+    held = {}
+    (@router.rib_family(family) || {}).each_value do |paths|
+      paths.each do |p|
+        n = p['nlri']
+        held[["#{n['rd']['admin']}:#{n['rd']['assigned']}", n['prefix']]] = p
+      end
+    end
+    held
+  end
+
+  EXT_COMMUNITIES = 16
+
+  # A VPN feed into GoBGP's table for SAFI 128. What it reads per sampled
+  # row is the RD of RFC 4364 section 4.2 as type, administrator and
+  # assigned number, the label, the route target that VRF carries, and
+  # the attributes; and that the same prefix in every VRF is a route of
+  # its own, since the count it holds is VRFs times the range.
+  #
+  # check, when given, is called with each sampled row and GoBGP's path,
+  # for what a test states by hand rather than reads from expected.
+  def vpn_crosses(spec, family, check = nil)
+    g = BGP::Gen.new(spec)
+    total = g.expected.size
+    g.updates.each { |u| @peer.send_message u }
+    wait_for("GoBGP to hold #{total} VPN routes", :timeout => 60) { count_in(family) == total }
+    held = vpn_held(family)
+    rows = g.expected.to_a
+    (0..9).collect { |k| (rows.size - 1) * k / 9 }.uniq.each do |i|
+      want = rows[i]
+      path = held[[want['rd'], want['prefix']]]
+      assert_not_nil(path, "GoBGP holds #{want['rd']} #{want['prefix']}")
+      assert_equal([want['label']], path['nlri']['labels'], "the label of #{want['rd']} #{want['prefix']}")
+      assert_equal(rd_type(want['rd']), path['nlri']['rd']['type'], 'the RD type, RFC 4364 section 4.2')
+      if want['extended_communities']
+        got = LabHelper::Gobgpd.attrs(path)[EXT_COMMUNITIES]['value'].collect { |c| c['value'] }
+        assert_equal(want['extended_communities'].collect { |t| t.sub('route_target:', '') }, got,
+                     'the route target of the VRF')
+      end
+      read(path, want)
+      check.call(want, path) if check
+    end
+    g.withdrawals.each { |u| @peer.send_message u }
+    wait_for('GoBGP to hold nothing', :timeout => 60) { count_in(family) == 0 }
+  end
+
+  # The type an RD's text says, by RFC 4364 section 4.2's layouts: an
+  # IPv4 administrator is type 1, an AS past two octets type 2.
+  def rd_type(text)
+    admin = text[/\A[^:]+/]
+    return 1 if admin.include?('.')
+    admin.to_i > 0xffff ? 2 : 0
+  end
+
+  def test_ipv4_vpn
+    session(false, [G::VPN_IPV4])
+    vpn_crosses({ 'family' => 'vpn', 'start' => '10.0.0.0/24', 'count' => 600, 'vrfs' => 3,
+                  'rd' => '65000:1', 'route_target' => '65000:100', 'group' => 7,
+                  'label' => { 'step' => { 'start' => 16, 'by' => 1, 'wrap' => 2**20 - 1 } },
+                  'attributes' => { 'next_hop' => '192.0.2.1', 'as_path' => [OUR_AS],
+                                    'med' => { 'cycle' => [1, 2, 3] } } }, G::VPN_IPV4,
+                ->(want, path) {
+                  # VRF n carries 65000:n and route target 65000:99+n,
+                  # stated here, since a generator that gave every VRF
+                  # the first one's set would agree with its own expected.
+                  n = want['rd'].split(':').last.to_i
+                  rt = LabHelper::Gobgpd.attrs(path)[EXT_COMMUNITIES]['value'].collect { |c| c['value'] }
+                  assert_equal(["65000:#{99 + n}"], rt, "the route target GoBGP read for #{want['rd']}")
+                })
+  end
+
+  # The two other RD types, and RFC 4659's two next hops: an IPv6 one,
+  # and an IPv4 one written IPv4-mapped, which GoBGP prints back as the
+  # IPv4 address, so expected's own form is the one to compare.
+  def test_ipv6_vpn
+    session(false, [G::VPN_IPV6])
+    vpn_crosses({ 'family' => 'vpn', 'start' => '2001:db8::/64', 'count' => 300, 'vrfs' => 2,
+                  'rd' => '192.0.2.1:7', 'route_target' => '192.0.2.1:70', 'label' => 100,
+                  'attributes' => { 'next_hop' => '2001:db8::1', 'as_path' => [OUR_AS] } }, G::VPN_IPV6)
+    vpn_crosses({ 'family' => 'vpn', 'start' => '2001:db8::/64', 'count' => 300, 'vrfs' => 2,
+                  'rd' => '4200000000:1', 'label' => 100,
+                  'attributes' => { 'next_hop' => '192.0.2.1', 'as_path' => [OUR_AS] } }, G::VPN_IPV6)
+  end
+
+  # **GoBGP 3.23.0 negotiates SAFI 129 and then refuses its first
+  # UPDATE**, recorded and not filed. The session lists
+  # `l3vpn-ipv4-multicast` as advertised and received; the first
+  # vpn_multicast UPDATE is logged as "unknown route family. AFI: 1,
+  # SAFI: 129" and "Capability was disabled", and the session stays up.
+  # A SAFI 128 control feed on the same session afterwards installs, so
+  # the refusal is the family's and not our MP_REACH_NLRI's. This
+  # vouches for nothing about our SAFI 129 octets, which nothing read;
+  # test/functional/gen_test.rb is their only reader.
+  def test_gobgp_refuses_vpn_multicast_after_negotiating_it
+    session(false, [G::VPN_IPV4, G::VPN_MULTICAST_IPV4])
+    downs = 0
+    @peer.on_state_change { |_now, _was| downs += 1 }
+    out, = @router.client_run('neighbor', '127.0.0.1')
+    assert_match(/#{G::VPN_MULTICAST_IPV4}:\s+advertised and received/, out)
+    mc = BGP::Gen.new('family' => 'vpn_multicast', 'start' => '10.9.0.0/24', 'count' => 10, 'rd' => '65000:1',
+                      'label' => 100, 'attributes' => { 'next_hop' => '192.0.2.1', 'as_path' => [OUR_AS] })
+    mc.updates.each { |u| @peer.send_message u }
+    wait_for('GoBGP to refuse SAFI 129', :timeout => 30) do
+      @router.log =~ /unknown route family\. AFI: 1, SAFI: 129/
+    end
+    assert_match(/Capability was disabled/, @router.log)
+    vpn_crosses({ 'family' => 'vpn', 'start' => '10.0.0.0/24', 'count' => 50, 'rd' => '65000:1',
+                  'label' => 100, 'attributes' => { 'next_hop' => '192.0.2.1', 'as_path' => [OUR_AS] } },
+                G::VPN_IPV4)
     assert_equal(0, downs, 'no session went down')
     assert(@peer.is_established?)
   end

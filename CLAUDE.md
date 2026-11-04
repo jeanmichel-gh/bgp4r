@@ -527,8 +527,9 @@ bgp/gen.rb bgp/gen/      `BGP::Gen`, UPDATEs and withdrawals in bulk from a
                          and refuses only what it cannot read, vary.rb is
                          the patterns, packer.rb packs routes by
                          arithmetic and unicast.rb is the generator the
-                         others build on: multicast.rb is SAFI 2 and
-                         labelled.rb SAFI 4, each a subclass. Only IPv4
+                         others build on: multicast.rb is SAFI 2,
+                         labelled.rb SAFI 4 and vpn.rb SAFI 128 and 129,
+                         each a subclass. Only IPv4
                          unicast uses RFC 4271's own fields; `classic?`
                          asks that. sender.rb is the session a spec goes out
                          on, the eBGP and iBGP rules an announce block
@@ -754,8 +755,9 @@ docs/                    protocol-testing.md: using bgp4r to test a router
                          attributes that vary per route, as one pure
                          module that bgp4r's tests, `bgp4r-sim` and
                          routescope's scenarios all drive with the same
-                         JSON spec. **Phases 0 to 3 and 4a are built**:
-                         unicast, multicast and labelled, both AFIs,
+                         JSON spec. **Phases 0 to 3, 4a and 4b are
+                         built**: unicast, multicast, labelled and both
+                         VPN families, both AFIs,
                          with patterns and the injector, and section 13
                          says what they measured;
                          section 12 is the plan and its status table
@@ -1540,7 +1542,7 @@ CI: `.github/workflows/test.yml` runs both suites on every push to master and ev
 
 `.github/workflows/capture.yml` is the one workflow that deploys a containerlab lab: it builds the `lab-node` and BIRD images, deploys `lab/routescope/bgp4r-lab`, and runs its `capture.sh`, on demand and on a push that changes that folder or the Dockerfile. Its log is what routescope's BGP fixtures are cut from.
 
-Baseline on 2026-11-03: 3348 tests, 33403 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
+Baseline on 2026-11-04: 3370 tests, 33510 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
 
 **That coverage figure is 98.5% for the library and the rest is the two
 programs, not a gap anywhere else.** Measured the same run: with
@@ -7449,7 +7451,7 @@ in place, with a dated block in the header naming them.
   own test confirms is the most expensive kind of wrong, because
   nothing fails until somebody runs the real thing.
 
-### Route generation, `bgp/gen`. Phases 0 to 3 and 4a Done
+### Route generation, `bgp/gen`. Phases 0 to 3, 4a and 4b Done
 
 `docs/route-generation.md` is the design and the plan. Read it before
 any work on generating traffic, on `RouteGenerator`, or on what
@@ -7524,8 +7526,8 @@ Phases, with status kept in the document's section 12 table:
    * GoBGP 3.23.0 prints an IPv4-mapped IPv6 next hop as the IPv4
      address, so the lab compares the plan's own form.
 4. One family per pull request, 4a to 4g, in any order after 3. **4a
-   Done**: multicast, SAFI 2, and labelled, SAFI 4, both AFIs. The rest
-   to do. Three things worth knowing:
+   Done**: multicast, SAFI 2, and labelled, SAFI 4, both AFIs. 4c to
+   4g to do. Three things worth knowing:
    * **A family key is refused on another family.** `label` is
      required for `labelled` and refused elsewhere, through
      `Spec::FAMILY_KEYS`, which later families extend.
@@ -7538,6 +7540,25 @@ Phases, with status kept in the document's section 12 table:
      with next hop `fictitious` and no attributes, and replaces a
      unicast route of the same prefix with it. The client refuses both
      multicast families. Asserted in `gen_gobgp_test.rb`, not filed.
+
+   **4b Done**: VPN, SAFI 128 and 129, both AFIs, with `rd`, `vrfs` and
+   `route_target`. Every VRF carries the same `count` prefixes, so a
+   spec makes `count` times `vrfs` routes. Four things worth knowing:
+   * **`Mp_reach` read an IPv6 VPN next hop as two IPv4 ones.** Under
+     AFI 2 SAFI 128 or 129 a 24-octet next hop came back as two 12-octet
+     VPN-IPv4 addresses, 2001:db8::1 as "32.1.13.184, 0.0.0.1". The
+     octets replayed, so no round trip test saw it. Fixed, with RFC 4659
+     section 3.2.1 cited.
+   * **The plan total was one VRF.** The injector read `spec['count']`;
+     `Gen#total` is the whole count now.
+   * **The same caveat twice more**: a route target taken from the
+     first VRF for all, and SAFI 128 sent as 129, passed every
+     comparison with `expected`. The functional and lab tests state both
+     by hand now.
+   * **GoBGP 3.23.0 negotiates SAFI 129 and refuses its first UPDATE**,
+     "unknown route family", with the session left up. And it accepts
+     a 12-octet IPv4 next hop under AFI 2 as readily as RFC 4659's 24,
+     so the lab cannot check that mapping.
 5. Churn. To do.
 6. `LabHelper` and the coverage matrix take specs. To do.
 7. routescope scenarios use specs. routescope's column.

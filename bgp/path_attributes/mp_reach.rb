@@ -516,7 +516,18 @@ module BGP
       # the next hop type. 16 or 32 octets (SAFI 1, 2, 4), or 24 or 48
       # octets (SAFI 128, 129), is an IPv6 next hop: a global address,
       # then an optional link-local one.
-      ipv6_nh = @afi == 1 && ipv6_nexthop_length?(s.size)
+      #
+      # **Under AFI 2 a VPN next hop is IPv6 by RFC 4659 and not by RFC
+      # 8950.** RFC 4659 section 3.2.1.1 makes it a VPN-IPv6 address with
+      # an RD of zero, and section 3.2.1.2 writes an IPv4 next hop the
+      # same way as an IPv4-mapped IPv6 address, so both are 24 octets,
+      # or 48 with a link-local address. Before this only AFI 1 asked the
+      # length, and a 24-octet next hop under AFI 2 SAFI 128 was read as
+      # two VPN-IPv4 addresses, 2001:db8::1 coming back as "32.1.13.184,
+      # 0.0.0.1". The octets replayed either way, so only the meaning was
+      # wrong. A 12-octet field under AFI 2 is still read as one VPN-IPv4
+      # address, which is what bgp4r builds when handed an IPv4 address.
+      ipv6_nh = (@afi == 1 || [128, 129].include?(@safi)) && ipv6_nexthop_length?(s.size)
       while s.size>0
         case @safi
         # SAFI 133 and 134 are here because RFC 8955 section 4 says "the

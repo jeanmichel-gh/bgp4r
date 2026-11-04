@@ -104,7 +104,7 @@ class GenFunctionalTest < Test::Unit::TestCase
   end
 
   def by_key(rows)
-    rows.sort_by { |r| [r['prefix'], r['path_id'].to_i] }
+    rows.sort_by { |r| [r['prefix'], r['path_id'].to_i, r['rd'].to_s] }
   end
 
   # Announce, compare, withdraw, empty. Answers how many UPDATEs each way.
@@ -281,11 +281,18 @@ class GenFunctionalTest < Test::Unit::TestCase
       attrs = { 'origin' => pa[:origin].to_i, 'as_path' => pa[:as_path].segments.flat_map(&:as),
                 'next_hop' => mp.nexthops }
       attrs['med'] = pa[:multi_exit_disc].to_i if pa[:multi_exit_disc]
+      if pa[:extended_communities]
+        attrs['extended_communities'] = pa[:extended_communities].to_hash[:extended_communities].collect do |e|
+          BGP::Daemon::CommunityKeys.extended_community_text(e)
+        end
+      end
       mp.nlris.collect do |n|
         h = n.to_hash
         r = { 'prefix' => h[:prefix] }
         r['path_id'] = h[:path_id] if h[:path_id]
-        r.merge('label' => h[:label]).merge(attrs)
+        r['label'] = h[:label]
+        r['rd'] = h[:rd].join(':') if h[:rd]
+        r.merge(attrs)
       end
     end
   end
@@ -297,7 +304,12 @@ class GenFunctionalTest < Test::Unit::TestCase
     end
   end
 
-  def labelled_crosses(spec)
+  # want maps a row of expected to what the octets should say, which is
+  # the row itself except where the wire form differs on purpose.
+  #
+  # Positional and not a keyword, since a braceless spec with String
+  # keys beside a keyword is read as keywords.
+  def labelled_crosses(spec, want = ->(r) { r })
     c = catcher
     g = BGP::Gen.new(spec)
     sent = g.updates.count
@@ -305,13 +317,21 @@ class GenFunctionalTest < Test::Unit::TestCase
     got = []
     assert(wait_for { got.concat(c.drain) ; got.size >= sent }, "#{got.size} of #{sent} UPDATEs arrived")
     assert_equal([], got.flat_map { |u| u.path_attribute.errors }, 'no protocol error')
-    assert_equal(by_key(g.expected.to_a), by_key(labelled_rows(got)))
+    # The SAFI is stated here and not read from the generator, since a
+    # generator sending the wrong one would agree with its own expected.
+    safi = { 'labelled' => 4, 'vpn' => 128, 'vpn_multicast' => 129 }.fetch(spec['family'])
+    assert_equal([safi], got.collect { |u| u.path_attribute[:mp_reach].safi }.uniq, 'the SAFI on the wire')
+    @rows = labelled_rows(got)
+    want_rows, got_rows = by_key(g.expected.collect(&want)), by_key(labelled_rows(got))
+    assert_equal(want_rows.size, got_rows.size)
+    want_rows.zip(got_rows).each { |w, r| assert_equal(w, r) unless w == r }
     back = g.withdrawals.count
     g.withdrawals.each { |u| @c.send_update u }
     gone = []
     assert(wait_for { gone.concat(c.drain) ; gone.size >= back }, "#{gone.size} of #{back} withdrawals arrived")
     w = labelled_withdrawn(gone)
-    assert_equal(g.expected.collect { |r| r['prefix'] }, w.collect { |h| h[:prefix] })
+    assert_equal(g.expected.collect { |r| [r['rd'], r['prefix']] },
+                 w.collect { |h| [h[:rd] && h[:rd].join(':'), h[:prefix]] })
     assert_equal(['800000'], w.collect { |h| h[:compatibility] }.uniq, 'RFC 8277 section 2.4')
     [sent, back]
   end
@@ -335,6 +355,62 @@ class GenFunctionalTest < Test::Unit::TestCase
     session(BGP::OPT_PARM::CAP::Add_path.new(:send_and_receive, 1, 4))
     labelled_crosses('family' => 'labelled', 'start' => '10.0.0.0/24', 'count' => 500, 'label' => 100,
                      'path_id' => { 'step' => { 'start' => 1, 'by' => 1 } },
+                     'attributes' => { 'next_hop' => '192.0.2.1', 'as_path' => [CLIENT_AS] })
+  end
+
+  # ---- phase 4b: VPN, SAFI 128 and 129 -----------------------------------
+
+  # Three VRFs carrying the same 700 prefixes, so the receiver reads 2100
+  # routes whose prefixes repeat and whose RDs keep them apart, each VRF
+  # with its own route target and so its own messages.
+  def test_ipv4_vpn
+    session
+    n = labelled_crosses('family' => 'vpn', 'start' => '10.0.0.0/24', 'count' => 700, 'vrfs' => 3,
+                         'rd' => '65000:1', 'route_target' => '65000:100',
+                         'label' => { 'step' => { 'start' => 16, 'by' => 1, 'wrap' => 5000 } },
+                         'attributes' => { 'next_hop' => '192.0.2.1', 'as_path' => [CLIENT_AS],
+                                           'med' => { 'cycle' => [1, 2] } }, 'group' => 50)
+    assert_operator(n[0], :>, 3)
+    # Each VRF's route target, stated by hand rather than read from
+    # expected: a generator that gave every VRF the first one's set would
+    # agree with its own expected and pass the comparison above.
+    by_rd = @rows.group_by { |r| r['rd'] }
+    assert_equal(%w[65000:1 65000:2 65000:3], by_rd.keys.sort)
+    by_rd.each do |rd, rows|
+      v = rd.split(':').last.to_i
+      assert_equal([["route_target:65000:#{99 + v}"]], rows.collect { |r| r['extended_communities'] }.uniq, rd)
+    end
+  end
+
+  def test_ipv6_vpn
+    session
+    labelled_crosses('family' => 'vpn', 'start' => '2001:db8::/64', 'count' => 500, 'vrfs' => 2,
+                     'rd' => '192.0.2.1:7', 'label' => 3,
+                     'attributes' => { 'next_hop' => '2001:db8::1', 'as_path' => [CLIENT_AS] })
+  end
+
+  # RFC 4659 section 3.2.1.2: the IPv4 next hop of IPv6 VPN routes goes
+  # out IPv4-mapped, and the receiver reads the mapped form back, where
+  # expected keeps the address it was given.
+  def test_ipv6_vpn_with_an_ipv4_next_hop
+    session
+    labelled_crosses({ 'family' => 'vpn', 'start' => '2001:db8::/64', 'count' => 200,
+                       'rd' => '4200000000:1', 'label' => 100,
+                       'attributes' => { 'next_hop' => '192.0.2.1', 'as_path' => [CLIENT_AS] } },
+                     ->(r) { r.merge('next_hop' => '::ffff:192.0.2.1') })
+  end
+
+  def test_vpn_multicast
+    session
+    labelled_crosses('family' => 'vpn_multicast', 'start' => '10.0.0.0/24', 'count' => 300, 'vrfs' => 2,
+                     'rd' => '4200000000:1', 'route_target' => '4200000000:9', 'label' => 100,
+                     'attributes' => { 'next_hop' => '192.0.2.1', 'as_path' => [CLIENT_AS] })
+  end
+
+  def test_vpn_with_a_path_id
+    session(BGP::OPT_PARM::CAP::Add_path.new(:send_and_receive, 1, 128))
+    labelled_crosses('family' => 'vpn', 'start' => '10.0.0.0/24', 'count' => 300, 'vrfs' => 2, 'label' => 100,
+                     'rd' => '65000:1', 'path_id' => { 'step' => { 'start' => 1, 'by' => 1 } },
                      'attributes' => { 'next_hop' => '192.0.2.1', 'as_path' => [CLIENT_AS] })
   end
 

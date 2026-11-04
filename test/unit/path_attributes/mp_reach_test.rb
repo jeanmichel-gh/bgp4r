@@ -968,6 +968,28 @@ class Mp_reach_Test < Test::Unit::TestCase
     assert_equal([nil, 65000, 65000, 65001], back.nlris.collect(&:origin_as))
   end
 
+  # RFC 4659 sections 3.2.1.1 and 3.2.1.2: under AFI 2 SAFI 128 the next
+  # hop is a VPN-IPv6 address, 24 octets, or 48 with a link-local one,
+  # and an IPv4 next hop is written IPv4-mapped in the same 24. These
+  # were read as two 12-octet VPN-IPv4 addresses until route generation
+  # phase 4b read one back, so 2001:db8::1 came back as "32.1.13.184,
+  # 0.0.0.1". The octets replayed either way, which is why the round
+  # trip tests never saw it.
+  def test_an_ipv6_vpn_next_hop_is_read_as_one_address
+    [[['2001:db8::1'], 24, '2001:db8::1'],
+     [['::ffff:192.0.2.1'], 24, '::ffff:192.0.2.1'],
+     [['2001:db8::1', 'fe80::1'], 48, '2001:db8::1, fe80::1']].each do |nh, len, text|
+      [128, 129].each do |safi|
+        mpr = BGP::Mp_reach.new(:afi => 2, :safi => safi, :nexthop => nh,
+                                :nlris => [{ :rd => [65000, 1], :prefix => '2001:db8::/64', :label => 100 }])
+        assert_equal(len, mpr.encode[6, 1].unpack1('C'), "the next hop length for #{nh.inspect}")
+        back = BGP::Attr.factory(mpr.encode.is_packed)
+        assert_equal(text, back.nexthops, "SAFI #{safi}")
+        assert_equal(mpr.to_shex, back.to_shex)
+      end
+    end
+  end
+
   private
 
   def attr_len(attr)

@@ -131,6 +131,8 @@ class LabHelperTest < Test::Unit::TestCase
     assert_equal('evpn', G.client_family(G::EVPN))
     assert_equal('ipv4-mpls', G.client_family(G::LABELLED_IPV4))
     assert_equal('ipv6-mpls', G.client_family(G::LABELLED_IPV6))
+    assert_equal('vpnv4', G.client_family(G::VPN_IPV4))
+    assert_equal('vpnv6', G.client_family(G::VPN_IPV6))
   end
 
   # The generated gobgpd config. `peer2` was added so one daemon can sit

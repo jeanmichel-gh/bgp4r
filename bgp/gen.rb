@@ -27,6 +27,7 @@ require 'bgp/gen/sender'
 require 'bgp/gen/unicast'
 require 'bgp/gen/multicast'
 require 'bgp/gen/labelled'
+require 'bgp/gen/vpn'
 
 module BGP
   # Generates UPDATEs and withdrawals in bulk from a spec of plain JSON
@@ -56,7 +57,8 @@ module BGP
   # what the spec says.
   class Gen
     GENERATORS = { 'unicast' => Unicast, 'multicast' => Multicast,
-                   'labelled' => Labelled }.freeze
+                   'labelled' => Labelled, 'vpn' => Vpn,
+                   'vpn_multicast' => Vpn_multicast }.freeze
 
     attr_reader :spec, :family, :sender
 
@@ -89,5 +91,9 @@ module BGP
 
     # One Hash per route, of plain data, `count` of them.
     def expected ; @generator.expected ; end
+
+    # How many routes the spec makes: `count`, or `count` once per VRF
+    # for VPN. What a plan's total and a feed's description say.
+    def total ; @generator.total ; end
   end
 end
