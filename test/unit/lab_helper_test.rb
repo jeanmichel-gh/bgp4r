@@ -129,6 +129,8 @@ class LabHelperTest < Test::Unit::TestCase
   def test_the_families_the_client_and_the_config_spell_differently
     assert_equal('ipv4-l3vpn-flowspec', G.client_family(G::FS_VPN))
     assert_equal('evpn', G.client_family(G::EVPN))
+    assert_equal('ipv4-mpls', G.client_family(G::LABELLED_IPV4))
+    assert_equal('ipv6-mpls', G.client_family(G::LABELLED_IPV6))
   end
 
   # The generated gobgpd config. `peer2` was added so one daemon can sit

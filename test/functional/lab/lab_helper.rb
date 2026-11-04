@@ -256,10 +256,30 @@ module LabHelper
     # link_state_gobgp_test.rb.
     LS = 'ls'
 
+    # Labelled unicast, SAFI 4, and the disagreement a third time: the
+    # config file takes `ipv4-labelled-unicast` and the client refuses it
+    # with "unsupported address family", taking `ipv4-mpls` or
+    # `ipv4-labelled`. Measured on 2026-11-03 against 3.23.0, and the
+    # same for IPv6.
+    LABELLED_IPV4 = 'ipv4-labelled-unicast'
+    LABELLED_IPV6 = 'ipv6-labelled-unicast'
+
+    # Multicast, SAFI 2. The config file takes `ipv4-multicast` and
+    # `ipv6-multicast` and a session negotiates them, and **the client
+    # has no table for either**: `global rib` and `neighbor adj-in` both
+    # answer "unsupported address family: ipv4-multicast", under every
+    # spelling, and the log says nothing about the routes. So GoBGP
+    # 3.23.0 can say a multicast feed did not reset the session and
+    # cannot say what it read. Measured on 2026-11-03; gen_gobgp_test.rb
+    # asserts it, so a GoBGP that grows the table fails there.
+    MULTICAST_IPV4 = 'ipv4-multicast'
+    MULTICAST_IPV6 = 'ipv6-multicast'
+
     # Config-file name to client name, for the families where the two
     # disagree. Everything else is spelled alike on both sides, RTC and
     # LS included.
-    CLIENT_FAMILY = { FS_VPN => 'ipv4-l3vpn-flowspec', EVPN => 'evpn' }.freeze
+    CLIENT_FAMILY = { FS_VPN => 'ipv4-l3vpn-flowspec', EVPN => 'evpn',
+                      LABELLED_IPV4 => 'ipv4-mpls', LABELLED_IPV6 => 'ipv6-mpls' }.freeze
 
     # The name to pass the client's -a for a family, which is its own
     # name except where the two disagree.

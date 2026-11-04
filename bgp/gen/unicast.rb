@@ -116,6 +116,14 @@ module BGP
 
       def ipv4? ; @afi == IANA::AFI::IPv4 ; end
 
+      # True for IPv4 unicast, the one family RFC 4271 section 4.3's own
+      # NLRI and Withdrawn Routes fields carry. Every other one goes in
+      # MP_REACH_NLRI and MP_UNREACH_NLRI (RFC 4760 sections 3 and 4),
+      # IPv4 multicast included.
+      def classic? ; ipv4? && safi == IANA::SAFI::UNICAST ; end
+
+      def safi ; self.class::SAFI ; end
+
       # True when every route carries a Path Identifier (RFC 7911).
       def add_path? ; !@path_id.nil? ; end
 
@@ -126,6 +134,18 @@ module BGP
 
       # The i-th route's Path Identifier, or nil without add-path.
       def path_id(i) ; @path_id && @path_id.at(i) ; end
+
+      # What the i-th route is to a message: the prefix and its Path
+      # Identifier. A family whose NLRI carries more, a label say, adds
+      # it here, and its mp_nlris reads it.
+      def route(i) ; [prefix(i), path_id(i)] ; end
+
+      # The i-th route's key fields as an `expected` row starts them.
+      def route_row(i)
+        r = { 'prefix' => prefix(i) }
+        r['path_id'] = path_id(i) if add_path?
+        r
+      end
 
       # The octets one route takes: RFC 4271 section 4.3's Length octet
       # and enough octets for the prefix, and with add-path the 4 octet
@@ -151,7 +171,7 @@ module BGP
             g = i / @group
             set = set_for(row(g)) unless g == last_g
             last_g = g
-            y << [[prefix(i), path_id(i)], len, set]
+            y << [route(i), len, set]
           end
         end
         Enumerator.new do |out|
@@ -171,7 +191,7 @@ module BGP
       def withdrawals
         packer = withdraw_packer
         len = route_octets
-        items = Enumerator.new { |y| @count.times { |i| y << [[prefix(i), path_id(i)], len] } }
+        items = Enumerator.new { |y| @count.times { |i| y << [route(i), len] } }
         Enumerator.new do |out|
           first = true
           packer.each_batch(items) do |batch, octets|
@@ -193,9 +213,7 @@ module BGP
             g = i / @group
             attrs = set_for(row(g)).expected unless g == last_g
             last_g = g
-            r = { 'prefix' => prefix(i) }
-            r['path_id'] = path_id(i) if add_path?
-            y << r.merge(attrs)
+            y << route_row(i).merge(attrs)
           end
         end
       end
@@ -233,7 +251,7 @@ module BGP
 
       def build_attributes(a)
         attrs = [BGP::Origin.new(a['origin'])]
-        attrs << BGP::Next_hop.new(a['next_hop']) if a['next_hop'] && ipv4?
+        attrs << BGP::Next_hop.new(a['next_hop']) if a['next_hop'] && classic?
         attrs << BGP::As_path.new(*a['as_path'])
         attrs << BGP::Multi_exit_disc.new(a['med']) if a['med']
         attrs << BGP::Local_pref.new(a['local_pref']) if a['local_pref']
@@ -275,18 +293,22 @@ module BGP
         batch.collect { |p, id| id ? { :path_id => id, :prefix => p } : p }
       end
 
+      # What MP_UNREACH_NLRI carries for a batch, which is mp_nlris here
+      # and differs where a withdrawal's NLRI is not the announcement's.
+      def mp_withdrawn_nlris(batch) ; mp_nlris(batch) ; end
+
       def reach(set, batch)
-        h = { :afi => @afi, :safi => SAFI, :nlris => mp_nlris(batch) }
+        h = { :afi => @afi, :safi => safi, :nlris => mp_nlris(batch) }
         h[:nexthop] = [set.next_hop] if set.next_hop
         BGP::Mp_reach.new(h)
       end
 
       def unreach(batch)
-        BGP::Mp_unreach.new(:afi => @afi, :safi => SAFI, :nlris => mp_nlris(batch))
+        BGP::Mp_unreach.new(:afi => @afi, :safi => safi, :nlris => mp_withdrawn_nlris(batch))
       end
 
       def build_update(set, batch)
-        if ipv4?
+        if classic?
           BGP::Update.new(set.path_attribute, BGP::Nlri.new(*ipv4_nlris(batch)))
         else
           pa = BGP::Path_attribute.new(*set.path_attribute.attributes)
@@ -295,7 +317,7 @@ module BGP
       end
 
       def build_withdrawal(batch)
-        if ipv4?
+        if classic?
           BGP::Update.new(BGP::Withdrawn.new(*ipv4_nlris(batch)))
         else
           BGP::Update.new(BGP::Path_attribute.new(unreach(batch)))
@@ -304,13 +326,13 @@ module BGP
 
       def announce_packer(set)
         empty = build_update(set, []).encode(SIZING).bytesize
-        mp = ipv4? ? nil : reach(set, []).encode.bytesize - 3
+        mp = classic? ? nil : reach(set, []).encode.bytesize - 3
         Packer.new(empty, :mp_value => mp, :per_update => @per_update)
       end
 
       def withdraw_packer
         empty = build_withdrawal([]).encode(SIZING).bytesize
-        mp = ipv4? ? nil : unreach([]).encode.bytesize - 3
+        mp = classic? ? nil : unreach([]).encode.bytesize - 3
         Packer.new(empty, :mp_value => mp, :per_update => @per_update)
       end
 

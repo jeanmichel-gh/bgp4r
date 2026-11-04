@@ -380,6 +380,7 @@ module Features
       :about => 'bgp/gen: UPDATEs and withdrawals from a spec, and what they meant',
       :doc   => 'docs/route-generation.md',
       :unit  => %w[gen_test gen/spec_test gen/packer_test gen/unicast_test gen/vary_test gen/sender_test
+                   gen/multicast_test gen/labelled_test
                    daemon/community_keys_test sim/injector_test],
       :functional => %w[gen_test],
       :lab   => %w[gen_gobgp_test],

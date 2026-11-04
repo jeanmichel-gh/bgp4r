@@ -70,10 +70,10 @@ class LabGenGobgpTest < Test::Unit::TestCase
 
   # A gobgpd that dials us, and a bgp4r speaker with 4-octet AS numbers,
   # IPv4 and IPv6 unicast, and add-path when asked.
-  def session(add_path = false)
+  def session(add_path = false, families = [])
     @router = LabHelper::Gobgpd.new(:local => '127.0.0.2', :as => THEIR_AS,
                                     :router_id => '10.0.0.2',
-                                    :peer => '127.0.0.1', :peer_as => OUR_AS,
+                                    :peer => '127.0.0.1', :peer_as => OUR_AS, :families => families,
                                     :add_path => add_path ? { :receive => true, :send_max => 0 } : nil)
     @router.up
     @server = TCPServer.new('127.0.0.1', @router.port)
@@ -81,6 +81,7 @@ class LabGenGobgpTest < Test::Unit::TestCase
     @peer.capability :as4_byte
     @peer.capability :mbgp, :ipv4, :unicast
     @peer.capability :mbgp, :ipv6, :unicast
+    families.each { |f| @peer.capability :mbgp, *AFI_SAFI.fetch(f) }
     if add_path
       @peer.capability :add_path, :send, 1, 1
       @peer.capability :add_path, :send, 2, 1
@@ -100,6 +101,10 @@ class LabGenGobgpTest < Test::Unit::TestCase
   # the config file's name for the same family. Measured, the fourth
   # time the two have disagreed; see CLIENT_FAMILY in lab_helper.rb.
   FAMILY = { 1 => 'ipv4', 2 => 'ipv6' }
+
+  G = LabHelper::Gobgpd
+  AFI_SAFI = { G::LABELLED_IPV4 => [1, 4], G::LABELLED_IPV6 => [2, 4],
+               G::MULTICAST_IPV4 => [1, 2], G::MULTICAST_IPV6 => [2, 2] }
 
   def rib(afi)
     @router.rib_family(FAMILY[afi])
@@ -268,6 +273,108 @@ class LabGenGobgpTest < Test::Unit::TestCase
                                                                    'n' => { 'cycle' => [1, 2] } } } })
     plan_crosses('start' => '2001:db8::/64', 'count' => 1000,
                  'attributes' => { 'med' => { 'step' => { 'start' => 1, 'by' => 3 } } })
+  end
+
+
+  # ---- phase 4a: labelled and multicast --------------------------------
+
+  def count_in(family)
+    out, status = @router.client_run('global', 'rib', 'summary', '-a', G.client_family(family))
+    status.success? ? out[/Path: (\d+)/, 1].to_i : -1
+  end
+
+  # A labelled feed in GoBGP's own table for SAFI 4, which reads the
+  # label of each prefix back as a list: so the label of a sampled row is
+  # a second implementation's reading of the three octets RFC 8277
+  # section 2.2 puts in front of the prefix, and of which route got which
+  # label when a pattern steps them.
+  def labelled_crosses(spec, family)
+    g = BGP::Gen.new(spec)
+    count = spec['count']
+    g.updates.each { |u| @peer.send_message u }
+    wait_for("GoBGP to hold #{count} labelled routes", :timeout => 60) { count_in(family) == count }
+    held = @router.rib_family(family)
+    rows = g.expected.to_a
+    (0..9).collect { |k| (rows.size - 1) * k / 9 }.uniq.each do |i|
+      want = rows[i]
+      paths = held[want['prefix']]
+      assert_not_nil(paths, "GoBGP holds #{want['prefix']}")
+      assert_equal([want['label']], paths.first['nlri']['labels'], "the label of #{want['prefix']}")
+      read(paths.first, want)
+    end
+    # RFC 8277 section 2.4: the withdrawals carry the Compatibility
+    # field, 0x800000, where the label was, and GoBGP takes the route
+    # out by its prefix.
+    g.withdrawals.each { |u| @peer.send_message u }
+    wait_for('GoBGP to hold nothing', :timeout => 60) { count_in(family) == 0 }
+  end
+
+  def test_ipv4_labelled
+    session(false, [G::LABELLED_IPV4])
+    labelled_crosses({ 'family' => 'labelled', 'start' => '10.0.0.0/24', 'count' => 2000, 'group' => 10,
+                       'label' => { 'step' => { 'start' => 16, 'by' => 3, 'wrap' => 2**20 - 1 } },
+                       'attributes' => { 'next_hop' => '192.0.2.1', 'as_path' => [OUR_AS],
+                                         'med' => { 'cycle' => [1, 2, 3] } } }, G::LABELLED_IPV4)
+  end
+
+  def test_ipv6_labelled
+    session(false, [G::LABELLED_IPV6])
+    labelled_crosses({ 'family' => 'labelled', 'start' => '2001:db8::/64', 'count' => 1000, 'label' => 2**20 - 1,
+                       'attributes' => { 'next_hop' => '2001:db8::1', 'as_path' => [OUR_AS] } }, G::LABELLED_IPV6)
+  end
+
+  # **GoBGP 3.23.0 files a multicast route in its unicast table**, which
+  # is the finding of this case and recorded rather than filed, per the
+  # standing decision that the job here is bgp4r catching up. Measured
+  # on 2026-11-03:
+  #
+  # * the client has no multicast table at all, "unsupported address
+  #   family" for both, though the session negotiates both;
+  # * an IPv4 or IPv6 multicast route lands in that family's **unicast**
+  #   table, with next hop "fictitious" and no attributes;
+  # * one for a prefix the unicast table already holds **replaces** the
+  #   unicast route, and withdrawing the multicast route then takes the
+  #   prefix out of the unicast table altogether.
+  #
+  # RFC 4760 section 3 keys a route by AFI and SAFI, so SAFI 2 is not
+  # SAFI 1's. A unicast control route of a different prefix keeps its
+  # attributes throughout, which says the multicast UPDATE did not reset
+  # anything or upset the session; and no session went down. So this
+  # vouches for our framing, since GoBGP read the prefixes out of the
+  # MP_REACH_NLRI and MP_UNREACH_NLRI, and for nothing about the
+  # attributes, which it dropped. If a later GoBGP keeps a multicast
+  # table, the first assertion fails and says to compare routes instead.
+  def test_gobgp_files_multicast_routes_in_its_unicast_table
+    session(false, [G::MULTICAST_IPV4, G::MULTICAST_IPV6])
+    downs = 0
+    @peer.on_state_change { |_now, _was| downs += 1 }
+    [G::MULTICAST_IPV4, G::MULTICAST_IPV6].each do |f|
+      out, = @router.client_run('global', 'rib', '-a', f)
+      assert_match(/unsupported address family: #{f}/, out, 'GoBGP 3.23.0 has no table for it')
+    end
+    uni = BGP::Gen.new('start' => '10.0.0.0/24', 'count' => 2,
+                       'attributes' => { 'next_hop' => '192.0.2.1', 'as_path' => [OUR_AS] })
+    uni.updates.each { |u| @peer.send_message u }
+    wait_for('the two unicast routes', :timeout => 30) { path_count(1) == 2 }
+    [['10.0.0.0/24', '192.0.2.9', 1], ['2001:db8::/64', '2001:db8::9', 2]].each do |start, nh, afi|
+      mc = BGP::Gen.new('family' => 'multicast', 'start' => start, 'count' => 1,
+                        'attributes' => { 'next_hop' => nh, 'as_path' => [OUR_AS], 'med' => 5 })
+      mc.updates.each { |u| @peer.send_message u }
+      wait_for("the multicast #{start} in GoBGP's unicast table", :timeout => 30) do
+        (rib(afi) || {})[start]
+      end
+      path = rib(afi)[start].first
+      assert_nil(path['attrs'], "#{start}: no attributes, so no next hop and no MED")
+      mc.withdrawals.each { |u| @peer.send_message u }
+      wait_for("#{start} gone from the unicast table", :timeout => 30) { !(rib(afi) || {}).key?(start) }
+    end
+    # 10.0.0.0/24 was a unicast route and the multicast withdrawal took it
+    # out; 10.0.1.0/24 was not touched and kept every attribute.
+    held = rib(1)
+    assert_nil(held['10.0.0.0/24'], 'the unicast route of that prefix went with the multicast one')
+    assert_equal('192.0.2.1', LabHelper::Gobgpd.attrs(held['10.0.1.0/24'].first)[3]['nexthop'])
+    assert_equal(0, downs, 'no session went down')
+    assert(@peer.is_established?)
   end
 
 end

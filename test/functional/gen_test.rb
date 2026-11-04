@@ -47,6 +47,7 @@ class GenFunctionalTest < Test::Unit::TestCase
   CLIENT_AS = 200
 
   def teardown
+    @caught = nil
     @rib.feed.stop if @rib
     @c.close if @c
     stop_server
@@ -225,4 +226,116 @@ class GenFunctionalTest < Test::Unit::TestCase
             'path_id' => { 'random' => { 'min' => 1, 'max' => 2**32 - 1 } },
             'attributes' => { 'next_hop' => '192.0.2.1', 'as_path' => [CLIENT_AS] })
   end
+
+  # ---- phase 4a: multicast and labelled ----------------------------------
+
+  # Multicast goes in the table like unicast, since PeerAdapter reads
+  # SAFI 1 and 2. IPv4 travels in MP_REACH_NLRI here, so this is the
+  # test that says the receiver's MP path, and not the RFC 4271 fields,
+  # gets IPv4 multicast.
+  def test_ipv4_multicast
+    session
+    c = catcher
+    n = crosses('family' => 'multicast', 'start' => '10.0.0.0/24', 'count' => 3000, 'group' => 3,
+                'seed' => 21, 'attributes' => PATTERNS.reject { |k, _| k == 'local_pref' }
+                                                      .merge('next_hop' => '192.0.2.1'))
+    assert_operator(n[0], :>, 1)
+    # The table keys on the prefix and cannot tell SAFI 2 from SAFI 1, so
+    # the octets that crossed are what say this was multicast: every
+    # UPDATE carried its routes in MP_REACH_NLRI or MP_UNREACH_NLRI under
+    # SAFI 2 and none in RFC 4271's own fields.
+    got = c.drain
+    assert_operator(got.size, :>=, n.sum)
+    safis = got.collect { |u| pa = u.path_attribute ; mp = pa[:mp_reach] || pa[:mp_unreach] ; mp && [mp.afi, mp.safi] }
+    assert_equal([[1, 2]], safis.uniq)
+    assert(got.none? { |u| u.nlri || u.withdrawn }, 'nothing in the RFC 4271 fields')
+  end
+
+  def test_ipv6_multicast
+    session
+    crosses('family' => 'multicast', 'start' => '2001:db8::/64', 'count' => 1500,
+            'attributes' => { 'next_hop' => '2001:db8::1', 'as_path' => [CLIENT_AS], 'med' => 7 })
+  end
+
+  # Keeps every UPDATE the receiver parsed. A labelled route is not a
+  # table's (CLAUDE.md, RIB phase 2 part 3: a label is part of the key
+  # and a Route has nowhere to put one), so these are read off the wire.
+  class Catcher
+    attr_reader :updates
+    def initialize ; @updates = Queue.new ; end
+    def update(msg) ; @updates << msg if msg.is_a?(BGP::Update) ; end
+    def drain ; a = [] ; a << @updates.shift while @updates.size > 0 ; a ; end
+  end
+
+  def catcher
+    @caught ||= Catcher.new.tap { |c| @s.add_observer(c) }
+  end
+
+  # What a labelled UPDATE says, one row per route in `expected`'s shape,
+  # and what a labelled withdrawal names.
+  def labelled_rows(updates)
+    updates.flat_map do |u|
+      pa = u.path_attribute
+      mp = pa && pa[:mp_reach]
+      next [] unless mp
+      attrs = { 'origin' => pa[:origin].to_i, 'as_path' => pa[:as_path].segments.flat_map(&:as),
+                'next_hop' => mp.nexthops }
+      attrs['med'] = pa[:multi_exit_disc].to_i if pa[:multi_exit_disc]
+      mp.nlris.collect do |n|
+        h = n.to_hash
+        r = { 'prefix' => h[:prefix] }
+        r['path_id'] = h[:path_id] if h[:path_id]
+        r.merge('label' => h[:label]).merge(attrs)
+      end
+    end
+  end
+
+  def labelled_withdrawn(updates)
+    updates.flat_map do |u|
+      mp = u.path_attribute && u.path_attribute[:mp_unreach]
+      mp ? mp.nlris.collect { |n| n.to_hash } : []
+    end
+  end
+
+  def labelled_crosses(spec)
+    c = catcher
+    g = BGP::Gen.new(spec)
+    sent = g.updates.count
+    g.updates.each { |u| @c.send_update u }
+    got = []
+    assert(wait_for { got.concat(c.drain) ; got.size >= sent }, "#{got.size} of #{sent} UPDATEs arrived")
+    assert_equal([], got.flat_map { |u| u.path_attribute.errors }, 'no protocol error')
+    assert_equal(by_key(g.expected.to_a), by_key(labelled_rows(got)))
+    back = g.withdrawals.count
+    g.withdrawals.each { |u| @c.send_update u }
+    gone = []
+    assert(wait_for { gone.concat(c.drain) ; gone.size >= back }, "#{gone.size} of #{back} withdrawals arrived")
+    w = labelled_withdrawn(gone)
+    assert_equal(g.expected.collect { |r| r['prefix'] }, w.collect { |h| h[:prefix] })
+    assert_equal(['800000'], w.collect { |h| h[:compatibility] }.uniq, 'RFC 8277 section 2.4')
+    [sent, back]
+  end
+
+  def test_ipv4_labelled
+    session
+    n = labelled_crosses('family' => 'labelled', 'start' => '10.0.0.0/24', 'count' => 2000,
+                         'label' => { 'step' => { 'start' => 16, 'by' => 1, 'wrap' => 1000 } },
+                         'attributes' => { 'next_hop' => '192.0.2.1', 'as_path' => [CLIENT_AS],
+                                           'med' => { 'cycle' => [1, 2] } }, 'group' => 50)
+    assert_operator(n[0], :>, 1)
+  end
+
+  def test_ipv6_labelled
+    session
+    labelled_crosses('family' => 'labelled', 'start' => '2001:db8::/64', 'count' => 1000, 'label' => 3,
+                     'attributes' => { 'next_hop' => '2001:db8::1', 'as_path' => [CLIENT_AS] })
+  end
+
+  def test_labelled_with_a_path_id
+    session(BGP::OPT_PARM::CAP::Add_path.new(:send_and_receive, 1, 4))
+    labelled_crosses('family' => 'labelled', 'start' => '10.0.0.0/24', 'count' => 500, 'label' => 100,
+                     'path_id' => { 'step' => { 'start' => 1, 'by' => 1 } },
+                     'attributes' => { 'next_hop' => '192.0.2.1', 'as_path' => [CLIENT_AS] })
+  end
+
 end
