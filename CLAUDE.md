@@ -464,6 +464,21 @@ bgp/sim/                 `bgp4r-sim` the route injector, and `bgp4r
                          one, and it reads a **node file**;
                          `examples/routegen` keeps its own format and
                          its own script
+                         console.rb `bgp4r routegen --interact`: irb
+                         opened with a `Console` as self over the
+                         running Injector, so a person types
+                         `announce`, `specimen`, `fault`, `received`
+                         or `n` for the Neighbor. **Every verb that
+                         sends goes through `Injector#act`**, inline,
+                         so the prompt sends what a scenario sends;
+                         `ship` is the one way past it. **No verb is
+                         named after an irb command**, which wins over
+                         a method: hence `verbs` and not `help`. **irb
+                         is a bundled gem from Ruby 4.0**, so it is
+                         required only when asked for, the Gemfile
+                         names it, and a missing irb is said before any
+                         session starts. docs/daemon.md's console
+                         section is the guide
 bgp/capture/             reading BGP off a wire; require 'bgp/capture', which
                          bgp4r.rb does not, the same arrangement bgp/rib.rb has
                          pcap.rb reads the classic pcap format off an IO a
@@ -1440,6 +1455,18 @@ ruby -I. exe/bgp4r routegen --peer 10.0.0.2 --peer-as 65002 --count 200000 --per
 ```
 `examples/sim.yml` carries an `announce` block, which is the one waiver
 of the start-silent rule: take it out for a node a scenario drives.
+
+An irb prompt on a live session, which starts silent and logs to a file
+it names, so the prompt stays readable. `verbs` lists what to type:
+```
+ruby -I. exe/bgp4r routegen --peer 10.0.0.2 --peer-as 65002 --interact
+```
+Its test drives the same program with lines on standard input, against
+the test server on loopback. No privilege, no router, no Docker. About
+2 seconds:
+```
+ruby -I. test/functional/console_test.rb
+```
 
 The daemon and its client by hand, which is how the shapes in
 `docs/daemon.md` were measured. `--socket` and `$BGP4R_SOCKET` both work,
@@ -7700,6 +7727,34 @@ bgp4r session usable as a teaching and debugging tool rather than only
 as an encoder. And a lab or console that renders bgp4r's state beside a
 real router's output can put the two side by side, which is where this
 meets the routescope work: see `docs/routescope-labs.md`.
+
+### An irb console on a live session, three steps. Step 1 Done
+
+Asked for by the owner on 2026-11-04, who used to do this by hand: start
+irb, build a Neighbor, and drive an established session in Ruby. A 2011
+transcript of it sat in `test/functional/add_path_test.rb` until
+`5c79a7b`, and nothing in the tree ever packaged it. docs/daemon.md's
+console section is the guide.
+
+1. **Done.** `BGP::Sim::Console` in bgp/sim/console.rb and `bgp4r
+   routegen --interact`. The verbs go through `Injector#act`.
+2. **Not started.** `bgp4r console`, standalone: the library loaded and
+   a session built at the prompt, with no node file. Possibly two bgp4r
+   speakers back to back in one process, which the injected logger made
+   possible, so there is something to play with and no router.
+3. **Not started.** `bgp4r sim --interact`, which is the Console over
+   the same Injector with the HTTP API still serving, and `bgp4rd
+   --interact`, which needs a Console over a Speaker with a Loc-RIB:
+   `rib`, and `why PREFIX` from `Decision#best`. Foreground only. A
+   remote prompt over a socket is not planned, since it would be
+   arbitrary code execution reachable from a lab network.
+
+Two things found in step 1 and not changed by it. `exit` closes the
+session with no NOTIFICATION, because `Neighbor#stop` sends none, which
+is the open "Cease subcode per method" item under routescope labs;
+`notification 6, 2` sends one by hand. And a message that arrives
+between Established and the console's tap is not in `received`, since
+the tap goes on through `Speaker#on_established`, after the fact.
 
 ## Known issues to work on
 

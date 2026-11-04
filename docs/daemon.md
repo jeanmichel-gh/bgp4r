@@ -1283,6 +1283,58 @@ own, which is also what keeps a 200000 prefix range out of an HTTP
 request; `bgp4r routegen` runs the same action inline, which is the one
 difference between the two.
 
+## The console, `bgp4r routegen --interact`
+
+An irb prompt on a live session, for playing with the library by hand
+while developing and testing. The session comes up, then irb opens with
+a `BGP::Sim::Console` as `self`, so a verb needs no receiver:
+
+```sh
+# in the VM
+bgp4r routegen --peer 10.0.0.2 --peer-as 65002 --interact
+```
+
+```ruby
+verbs                                       # what to type
+announce '10.1.0.0/24', med: 10, as_path: [90, 80]
+withdraw '10.1.0.0/24'
+specimen :large_communities, '10.2.0.0/24'  # specimens lists the names
+fault :origin_value, '10.3.0.0/24'          # faults lists the names
+watch                                       # print what arrives
+received 20                                 # the last 20 messages in
+last.path_attribute                         # the last one, as an object
+n.send_message Update.new(Path_attribute.new(Origin.new(0)), Nlri.new('10.4.0.0/24'))
+ship(['ff' * 16].pack('H*') + "\x00\x13\x04")   # a KEEPALIVE by hand
+notification 6, 2                           # a Cease first, when wanted
+exit                                        # closes the session, no NOTIFICATION
+```
+
+**Every verb that sends goes through `Injector#act`**, inline, which is
+the path `POST /api/...` takes. So what a person types is what a
+scenario sends, with the same eBGP rules and the same refusals. `ship`
+and `n` are the way past that: any message or String goes out as it is.
+
+**It starts silent**, as the injector does, unless `--start` or
+`--count` asks for a range. A node file with no `announce` block is
+accepted with `--interact` and refused without it.
+
+**The log goes to a file** in the temporary directory unless `-l` names
+one, because a session logs from its own threads and every line would
+land in the middle of what the person is typing. The path is printed.
+
+**No verb is named after an irb command**, which wins over a method of
+the same name. That is why the list is `verbs` and not `help`, and
+`test/unit/sim/console_test.rb` asks irb for its command names.
+
+**Ruby 4.0 made irb a bundled gem**, so under Bundler it loads only
+because the `Gemfile` names it. A program run without the Gemfile's
+gems and without irb is told so before any session starts.
+
+`bgp4r sim --interact` and `bgp4rd --interact` are the next steps; the
+second would need a Console over a Speaker with a Loc-RIB rather than
+an Injector. A remote prompt over a socket is not planned: it would be
+arbitrary code execution reachable from a lab network.
+
 ## Configuration
 
 ```yaml
