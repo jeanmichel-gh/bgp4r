@@ -1380,6 +1380,12 @@ simply wrong about:
 ruby -I. test/functional/lab/rib_router_frr_test.rb
 ```
 
+The OPEN capabilities FRR sends that bgp4r names, and FRR's own report
+of the ones we send. 4 seconds against bgpd 8.4.4:
+```
+ruby -I. test/functional/lab/capabilities_frr_test.rb
+```
+
 A flow spec rule from bgp4r read back by each router, which is the only
 check on our components, operator octets, section 4.1 length, RFC 8956
 offset and section 8 RD that is not bgp4r's own opinion. 61 and 45
@@ -1607,7 +1613,7 @@ CI: `.github/workflows/test.yml` runs both suites on every push to master and ev
 
 `.github/workflows/capture.yml` is the one workflow that deploys a containerlab lab: it builds the `lab-node` and BIRD images, deploys `lab/routescope/bgp4r-lab`, and runs its `capture.sh`, on demand and on a push that changes that folder or the Dockerfile. Its log is what routescope's BGP fixtures are cut from.
 
-Baseline on 2026-11-04: 3579 tests, 36234 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
+Baseline on 2026-11-04: 3580 tests, 36269 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
 
 **That coverage figure is 98.5% for the library and the rest is the two
 programs, not a gap anywhere else.** Measured the same run: with
@@ -7031,6 +7037,16 @@ the registry's.
   nexthop_afi 2}`. Same shape as every hand-written count in this file
   that turned out wrong, one register up: a union of two lists is
   arithmetic, so compute it.
+* **Code 6 is named now**, as `CAP::Extended_message`, and
+  `test/functional/lab/capabilities_frr_test.rb` holds it against FRR
+  8.4.4 both ways: FRR's OPEN carries it and reads back by name, and
+  FRR reports `extendedMessage` as `advertisedAndReceived` when we send
+  it and `advertised` when we do not. **It names the capability and
+  nothing more**: packing and reading still stop at RFC 4271's 4096
+  octets whatever was negotiated, since raising that limit is a change
+  to every packer and the receive path. GoBGP 3.23.0 sends neither code
+  6 nor 71, measured on 2026-11-04, so that test has no GoBGP twin.
+  FRR 8.4.4 does send 71, which is next.
 
 **The `### GoBGP` block of `capture.sh` ran next, and it settles the
 two things that node is on the topology for.** All three kinds of
