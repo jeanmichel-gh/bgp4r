@@ -128,6 +128,7 @@ module LabGroups
     # twins in both cases; see docs/mcast-vpn.md section 9 and
     # docs/bgp-ls.md section 11.
     'frr' => %w[
+      capabilities_frr_test
       evpn_frr_test
       fault_matrix_frr_test
       flow_spec_frr_test
