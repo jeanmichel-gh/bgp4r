@@ -55,19 +55,31 @@ module BGP
       # The top level keys a spec takes.
       KEYS = %w[family afi count per_update start path_id label rd vrfs route_target
                 source protocol destination_port rate redirect marking
+                route_type ip esi ethernet_tag gateway mac_mobility router_mac pmsi_label
                 seed group attributes].freeze
 
       # The keys that belong to some families only, and which. A spec
       # giving one to another family is refused by name in Gen.new, so
       # a label on a unicast spec is not dropped in silence.
       FLOW = %w[flow_spec flow_spec_vpn].freeze
-      FAMILY_KEYS = { 'label' => %w[labelled vpn vpn_multicast],
-                      'rd' => %w[vpn vpn_multicast flow_spec_vpn],
-                      'vrfs' => %w[vpn vpn_multicast flow_spec_vpn],
-                      'route_target' => %w[vpn vpn_multicast flow_spec_vpn],
+      EVPN = %w[evpn].freeze
+      RD = %w[vpn vpn_multicast flow_spec_vpn evpn].freeze
+      FAMILY_KEYS = { 'label' => %w[labelled vpn vpn_multicast evpn],
+                      'rd' => RD, 'vrfs' => RD, 'route_target' => RD,
                       'source' => FLOW, 'protocol' => FLOW,
                       'destination_port' => FLOW, 'rate' => FLOW,
-                      'redirect' => FLOW, 'marking' => FLOW }.freeze
+                      'redirect' => FLOW, 'marking' => FLOW,
+                      'route_type' => EVPN, 'ip' => EVPN, 'esi' => EVPN,
+                      'ethernet_tag' => EVPN, 'gateway' => EVPN,
+                      'mac_mobility' => EVPN, 'router_mac' => EVPN,
+                      'pmsi_label' => EVPN }.freeze
+
+      # The EVPN keys that are integers, with the largest value each
+      # field holds: an Ethernet Tag ID and a MAC Mobility sequence
+      # number are 4 octets (RFC 7432 sections 7.2 and 7.7), and the
+      # PMSI Tunnel's label is a label (RFC 6514 section 5).
+      EVPN_MAX = { 'ethernet_tag' => 0xffffffff, 'mac_mobility' => 0xffffffff,
+                   'pmsi_label' => 0xfffff }.freeze
 
       # The largest value each flow spec key's field holds: an IP
       # protocol is one octet (RFC 8955 section 4.2.2.3), a port two
@@ -122,6 +134,21 @@ module BGP
         FLOW_MAX.each do |k, max|
           out[k] = value(s[k], k, :int, max, out['seed']) if s.key?(k)
         end
+        out['route_type'] = integer(s, 'route_type', false, 0, 0xff)
+        EVPN_MAX.each do |k, max|
+          out[k] = value(s[k], k, :int, max, out['seed']) if s.key?(k)
+        end
+        %w[ip gateway].each do |k|
+          out[k] = string(s, k, false)
+          next unless out[k]
+          begin
+            IPAddr.new(out[k])
+          rescue IPAddr::Error => e
+            raise SpecError, "#{k} #{out[k].inspect} is not an address: #{e.message}"
+          end
+        end
+        out['esi'] = octets(s, 'esi', 10, 'RFC 7432 section 5')
+        out['router_mac'] = octets(s, 'router_mac', 6, 'RFC 9135 section 8.1')
         out['source'] = string(s, 'source', false)
         if out['source']
           begin
@@ -204,6 +231,18 @@ module BGP
           raise SpecError, "#{name} #{text.inspect}: the administrator is an AS number or an IPv4 address"
         end
         Distinguisher.new(name, a, n.to_i, type, type == 0 ? U32 : 0xffff)
+      end
+
+      # A fixed width field written as hex octets, with or without
+      # colons, as the ESI's ten and a MAC's six. Refused when it is not
+      # that many octets, since the field could not hold anything else.
+      def octets(h, k, n, rfc)
+        v = string(h, k, false)
+        return nil unless v
+        unless v.delete(':') =~ /\A\h{#{2 * n}}\z/
+          raise SpecError, "#{k} #{v.inspect} is #{n} octets of hex, as #{(['00'] * n).join(':')} (#{rfc})"
+        end
+        v
       end
 
       def family(v)

@@ -366,10 +366,12 @@ class BGP_Sim_Functional_Test < Test::Unit::TestCase
     assert_equal(p['rows'], rows_of(@catcher.to_a))
   end
 
+  # The example was EVPN, a family with no generator, until phase 4d gave
+  # it one. A family name that is not one cannot expire that way.
   def test_a_spec_the_library_refuses_is_a_400_over_the_socket
-    code, answer = post('/api/announce', 'spec' => SPEC.merge('family' => 'evpn'))
+    code, answer = post('/api/announce', 'spec' => SPEC.merge('family' => 'ipv4'))
     assert_equal(400, code)
-    assert_match(/no generator yet/, answer['error'])
+    assert_match(/unknown family 'ipv4'/, answer['error'])
     assert_equal(1, exit_status(code))
     assert_equal(400, post('/api/plan', 'spec' => SPEC, 'med' => 1).first)
     assert_equal(403, post('/api/plan', { 'spec' => SPEC }, nil).first)

@@ -107,7 +107,8 @@ class LabGenGobgpTest < Test::Unit::TestCase
                G::MULTICAST_IPV4 => [1, 2], G::MULTICAST_IPV6 => [2, 2],
                G::VPN_IPV4 => [1, 128], G::VPN_IPV6 => [2, 128],
                G::VPN_MULTICAST_IPV4 => [1, 129],
-               G::FS_IPV4 => [1, 133], G::FS_IPV6 => [2, 133], G::FS_VPN => [1, 134] }
+               G::FS_IPV4 => [1, 133], G::FS_IPV6 => [2, 133], G::FS_VPN => [1, 134],
+               G::EVPN => [25, 70] }
 
   def rib(afi)
     @router.rib_family(FAMILY[afi])
@@ -593,4 +594,111 @@ class LabGenGobgpTest < Test::Unit::TestCase
     end
   end
 
+  # ---- phase 4d: EVPN ---------------------------------------------------
+
+  # GoBGP's EVPN table, by RD and by the field that steps: the MAC of
+  # route type 2, the originator of type 3, the prefix of type 5. Read
+  # from each path's NLRI and not from the table's keys.
+  def evpn_held
+    held = {}
+    (@router.rib_family(G::EVPN) || {}).each_value do |paths|
+      paths.each do |p|
+        v = p['nlri']['value']
+        step = p['nlri']['type'] == 3 ? v['ip'] : (v['mac'] || v['prefix'])
+        held[["#{v['rd']['admin']}:#{v['rd']['assigned']}", step]] = p
+      end
+    end
+    held
+  end
+
+  # A label as GoBGP prints it, the whole three-octet field: the label in
+  # the high 20 bits and the bottom of stack bit set, so 16 is 257. The
+  # EVPN lab test records two routers reading it that way.
+  def field(label) ; (label << 4) | 1 ; end
+
+  # An EVPN feed into GoBGP. Per sampled row it reads the route type, the
+  # RD, the Ethernet Tag ID and the fields of that type, the next hop of
+  # RFC 7432 section 14 and the AS_PATH, then hands the row and the path
+  # to a block, withdraws and waits for an empty table.
+  def evpn_crosses(spec)
+    g = BGP::Gen.new(spec)
+    total = g.total
+    g.updates.each { |u| @peer.send_message u }
+    wait_for("GoBGP to hold #{total} EVPN routes", :timeout => 60) { count_in(G::EVPN) == total }
+    held = evpn_held
+    rows = g.expected.to_a
+    (0..9).collect { |k| (rows.size - 1) * k / 9 }.uniq.each do |i|
+      want = rows[i]
+      path = held[[want['rd'], want['mac'] || want['originator'] || want['prefix']]]
+      assert_not_nil(path, "GoBGP holds #{want.inspect}")
+      v = path['nlri']['value']
+      assert_equal(want['route_type'], path['nlri']['type'])
+      assert_equal(want['ethernet_tag'], v['etag'])
+      case want['route_type']
+      when 2
+        assert_equal([want['ip'], [field(want['label'])]], [v['ip'], v['labels']], "route #{i}")
+      when 5
+        assert_equal([want['gateway'], field(want['label'])], [v['gateway'], v['label']], "route #{i}")
+      end
+      a = G.attrs(path)
+      assert_equal(want['next_hop'], a[14]['nexthop'], 'RFC 7432 section 14')
+      assert_equal(want['as_path'], G.as_path(path))
+      yield i, want, path, a if block_given?
+    end
+    g.withdrawals.each { |u| @peer.send_message u }
+    wait_for('GoBGP to hold no EVPN route', :timeout => 60) { count_in(G::EVPN) == 0 }
+    g
+  end
+
+  # 2000 MACs in two EVIs. The route target per EVI and the MAC Mobility
+  # sequence number per hundred routes are stated by hand from the
+  # route's number: a generator that put one EVI's or one group's value
+  # on every route would agree with its own expected.
+  def test_evpn_mac_ip_routes
+    session(false, [G::EVPN])
+    evpn_crosses('family' => 'evpn', 'route_type' => 2, 'start' => '00:11:22:00:00:00', 'count' => 1000,
+                 'ip' => '10.0.0.1', 'label' => { 'step' => { 'start' => 16, 'by' => 1 } },
+                 'ethernet_tag' => { 'cycle' => [10, 20] }, 'rd' => '65000:1', 'vrfs' => 2,
+                 'route_target' => '65000:100', 'group' => 100,
+                 'mac_mobility' => { 'step' => { 'start' => 1, 'by' => 1 } },
+                 'router_mac' => '00:00:5e:00:53:01',
+                 'attributes' => { 'as_path' => [OUR_AS], 'next_hop' => '192.0.2.1' }) do |i, want, path, a|
+      assert_equal("65000:#{1 + i / 1000}", want['rd'])
+      assert_equal('single-homed', path['nlri']['value']['esi'], 'RFC 7432 section 5: an ESI of zero')
+      assert_equal([{ 'type' => 0, 'subtype' => 2, 'value' => "65000:#{100 + i / 1000}" },
+                    { 'type' => 6, 'subtype' => 0, 'sequence' => 1 + i / 100, 'is_sticky' => false },
+                    { 'type' => 6, 'subtype' => 3, 'mac' => '00:00:5e:00:53:01' }],
+                   a[EXT_COMMUNITIES]['value'], "route #{i}")
+    end
+  end
+
+  # 200 PEs, each with its PMSI Tunnel naming itself (RFC 7432 section
+  # 11.2), so 200 messages. GoBGP prints the label field whole, and the
+  # PMSI Tunnel's label has no bottom of stack bit, so 10 is 160.
+  def test_evpn_inclusive_multicast_routes
+    session(false, [G::EVPN])
+    evpn_crosses('family' => 'evpn', 'route_type' => 3, 'start' => '10.9.0.1', 'count' => 200,
+                 'rd' => '192.0.2.1:7', 'ethernet_tag' => 100, 'pmsi_label' => 10,
+                 'attributes' => { 'as_path' => [OUR_AS], 'next_hop' => '192.0.2.1' }) do |i, want, path, a|
+      assert_equal(IPAddr.new(IPAddr.new('10.9.0.1').to_i + i, Socket::AF_INET).to_s, path['nlri']['value']['ip'])
+      assert_equal({ 'type' => 22, 'is-leaf-info-required' => false, 'tunnel-type' => 6, 'label' => 160,
+                     'tunnel-id' => want['originator'] }, a[22])
+    end
+  end
+
+  def test_evpn_ip_prefix_routes
+    session(false, [G::EVPN])
+    evpn_crosses('family' => 'evpn', 'route_type' => 5, 'start' => '10.1.0.0/24', 'count' => 1000,
+                 'rd' => '65000:5', 'gateway' => '10.0.0.254', 'label' => 500,
+                 'attributes' => { 'as_path' => [OUR_AS], 'next_hop' => '192.0.2.1' }) do |i, _want, path|
+      assert_equal("#{IPAddr.new(IPAddr.new('10.1.0.0').to_i + i * 256, Socket::AF_INET)}/24",
+                   path['nlri']['value']['prefix'], "route #{i}, stated by hand")
+    end
+    evpn_crosses('family' => 'evpn', 'route_type' => 5, 'start' => '2001:db8::/64', 'count' => 500,
+                 'rd' => '65000:6', 'router_mac' => '00:00:5e:00:53:01', 'label' => 500,
+                 'attributes' => { 'as_path' => [OUR_AS], 'next_hop' => '2001:db8::1' }) do |_i, _want, path, a|
+      assert_equal('::', path['nlri']['value']['gateway'], 'RFC 9136 section 3.1: no gateway is zero')
+      assert_equal([{ 'type' => 6, 'subtype' => 3, 'mac' => '00:00:5e:00:53:01' }], a[EXT_COMMUNITIES]['value'])
+    end
+  end
 end

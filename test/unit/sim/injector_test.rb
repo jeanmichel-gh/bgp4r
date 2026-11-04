@@ -853,7 +853,7 @@ class BGP_Sim_Injector_Test < Test::Unit::TestCase
   # Read before anything starts, so a 400 now and not a failed feed.
   def test_a_spec_the_library_refuses_is_a_refusal_before_the_feed
     inj = injector
-    [{ 'family' => 'evpn', 'start' => '11.0.0.0/24', 'count' => 1 },
+    [{ 'family' => 'ipv4', 'start' => '11.0.0.0/24', 'count' => 1 },
      { 'start' => '11.0.0.0/24', 'count' => 1, 'colour' => 1 },
      { 'start' => 'nowhere', 'count' => 1 }].each do |bad|
       e = assert_raise(BGP::Sim::Injector::Refused, bad.inspect) { inj.act('announce', 'spec' => bad) }
@@ -938,6 +938,21 @@ class BGP_Sim_Injector_Test < Test::Unit::TestCase
                    'extended_communities' => ['traffic_rate_bytes:0:0.0'] }, row)
     inj.act('withdraw', { 'spec' => spec }, false)
     assert_equal(3, inj.sent.summary[:prefixes_withdrawn])
+  end
+
+  # Phase 4d. An EVPN route's next hop is the session's own address,
+  # RFC 7432 section 14, which the Sender fills in as for unicast.
+  def test_an_evpn_route_goes_out_with_the_sessions_next_hop
+    inj = injector
+    spec = { 'family' => 'evpn', 'route_type' => 3, 'start' => '10.9.0.1', 'count' => 2, 'rd' => '65001:7' }
+    inj.act('announce', { 'spec' => spec }, false)
+    mp = peer.updates.first.path_attribute[:mp_reach]
+    assert_equal([25, 70, '10.0.0.1'], [mp.afi, mp.safi, mp.nexthops])
+    row = inj.plan('spec' => spec)[:plans].first[:rows].last
+    assert_equal({ 'route_type' => 3, 'rd' => '65001:7', 'originator' => '10.9.0.2', 'ethernet_tag' => 0,
+                   'origin' => 0, 'as_path' => [65_001], 'next_hop' => '10.0.0.1' }, row)
+    inj.act('withdraw', { 'spec' => spec }, false)
+    assert_equal(2, inj.sent.summary[:prefixes_withdrawn])
   end
 
   # One spec, two sessions, two answers: the prepend and LOCAL_PREF

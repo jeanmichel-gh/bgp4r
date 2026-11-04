@@ -45,10 +45,11 @@ class TestBgpGen < Test::Unit::TestCase
   # quick, since every message is parsed several times over. It is three
   # feeds per family, which the corpus deals out in turn, so a family
   # added to FAMILIES needs three more.
-  SEEDS = Integer(ENV.fetch('GEN_SEEDS', 21))
+  SEEDS = Integer(ENV.fetch('GEN_SEEDS', 24))
 
   def test_the_generators_are_the_ones_built
-    assert_equal(%w[unicast multicast labelled vpn vpn_multicast flow_spec flow_spec_vpn], BGP::Gen::GENERATORS.keys)
+    assert_equal(%w[unicast multicast labelled vpn vpn_multicast flow_spec flow_spec_vpn evpn], BGP::Gen::GENERATORS.keys)
+    assert_equal(BGP::Gen::Evpn_routes, BGP::Gen::GENERATORS['evpn'])
     assert_equal(BGP::Gen::Flow_rules, BGP::Gen::GENERATORS['flow_spec'])
     assert_equal(BGP::Gen::Flow_rules_vpn, BGP::Gen::GENERATORS['flow_spec_vpn'])
     assert_equal(BGP::Gen::Unicast, BGP::Gen::GENERATORS['unicast'])
@@ -65,7 +66,7 @@ class TestBgpGen < Test::Unit::TestCase
       e = assert_raise(BGP::Gen::SpecError) do
         BGP::Gen.new('family' => family, 'start' => '10.0.0.0/8', 'count' => 1, 'label' => 16)
       end
-      assert_match(/'label' is for labelled, vpn, vpn_multicast and not for '#{family}'/, e.message)
+      assert_match(/'label' is for labelled, vpn, vpn_multicast, evpn and not for '#{family}'/, e.message)
     end
   end
 
@@ -102,7 +103,10 @@ class TestBgpGen < Test::Unit::TestCase
   # A random spec of the kinds phase 1 reads. Always valid, since the
   # point is that valid input gives valid traffic; whether invalid input
   # reaches the wire is each class's own test_nothing_validates.
-  def random_spec(r, family = nil)
+  #
+  # `n` deals EVPN's route types out in turn, as the corpus deals the
+  # families, so each is in the corpus.
+  def random_spec(r, family = nil, n = nil)
     v6 = r.rand(2) == 1
     mlen = v6 ? r.rand(16..128) : r.rand(8..32)
     start = v6 ? "2001:db8::/#{mlen}" : "10.0.0.0/#{mlen}"
@@ -137,12 +141,13 @@ class TestBgpGen < Test::Unit::TestCase
     a.delete('next_hop') if FLOW.include?(family)
     s = { 'family' => family, 'start' => start, 'count' => r.rand(1..[room, 300].min), 'attributes' => a }
     s['per_update'] = r.rand(1..300) if r.rand(2) == 1
-    # No Path Identifier on a flow spec feed: validation.rb walks a rule
-    # without knowing add-path was negotiated, so it misreads the four
-    # octets in front and the strict read below raises. That is a gap in
-    # the receive checks and not in the generator; flow_rules_test.rb
-    # sends one and reads it back leniently.
-    case FLOW.include?(family) ? 0 : r.rand(3)
+    # No Path Identifier on a flow spec or an EVPN feed: validation.rb
+    # walks those NLRIs without knowing add-path was negotiated, so it
+    # misreads the four octets in front and the strict read below
+    # raises. That is a gap in the receive checks and not in the
+    # generator; flow_rules_test.rb and evpn_routes_test.rb each send
+    # one and read it back leniently.
+    case MEASURED.include?(family) ? 0 : r.rand(3)
     when 1 then s['path_id'] = r.rand(2**32)
     when 2 then s['path_id'] = { 'step' => { 'start' => r.rand(1000), 'by' => 1 } }
     end
@@ -163,7 +168,8 @@ class TestBgpGen < Test::Unit::TestCase
       s['marking'] = { 'every' => { 'n' => r.rand(1..5), 'values' => [0, 10, 46] } } if r.rand(2) == 1
       s['redirect'] = "65000:#{r.rand(100)}" if r.rand(3) == 0
     end
-    if VPN.include?(family)
+    evpn(r, s, v6, n) if family == 'evpn'
+    if RD.include?(family)
       admin = [r.rand(65536), "192.0.2.#{r.rand(1..254)}", r.rand(65536..2**32 - 1)][r.rand(3)]
       s['rd'] = "#{admin}:#{r.rand(1000)}"
       s['vrfs'] = r.rand(1..4) if r.rand(2) == 1
@@ -173,12 +179,44 @@ class TestBgpGen < Test::Unit::TestCase
     s
   end
 
-  FAMILIES = %w[unicast multicast labelled vpn vpn_multicast flow_spec flow_spec_vpn]
+  # Phase 4d: one of the three route types, each with the keys it takes,
+  # sometimes. An ESI and a gateway are never both given on route type
+  # 5, since RFC 9136 section 3.2 makes that a route to withdraw and the
+  # strict read below would refuse it.
+  def evpn(r, s, v6, n)
+    type = EVPN_TYPES[(n || r.rand(3)) % 3]
+    s['route_type'] = type
+    s['label'] = [r.rand(2**20), { 'cycle' => [16, 2**20 - 1] }][r.rand(2)] unless type == 3
+    s['ethernet_tag'] = [r.rand(2**32), { 'step' => { 'start' => 0, 'by' => 1 } }][r.rand(2)] if r.rand(2) == 1
+    case type
+    when 2
+      s['start'] = format('02:00:00:%02x:%02x:00', r.rand(256), r.rand(256))
+      s['ip'] = v6 ? '2001:db8::1' : '10.0.0.1' if r.rand(2) == 1
+      s['esi'] = '01:02:03:04:05:06:07:08:09:0a' if r.rand(2) == 1
+      s['mac_mobility'] = { 'every' => { 'n' => r.rand(1..5), 'values' => [0, 1, 2**32 - 1] } } if r.rand(2) == 1
+    when 3
+      s['start'] = v6 ? '2001:db8::1' : '10.0.0.1'
+      s['pmsi_label'] = r.rand(2**20) if r.rand(3) == 0
+    when 5
+      case r.rand(3)
+      when 1 then s['esi'] = '00:00:00:00:00:00:00:00:00:07'
+      when 2 then s['gateway'] = v6 ? '2001:db8::fe' : '192.0.2.254'
+      end
+    end
+    s['router_mac'] = '00:00:5e:00:53:01' if type != 3 && r.rand(2) == 1
+  end
+
+  FAMILIES = %w[unicast multicast labelled vpn vpn_multicast flow_spec flow_spec_vpn evpn]
   LABELLED = %w[labelled vpn vpn_multicast]
   FLOW = %w[flow_spec flow_spec_vpn]
   VPN = %w[vpn vpn_multicast flow_spec_vpn]
+  # The families with a Route Distinguisher, and the ones whose routes
+  # differ in length so the packing test measures each.
+  RD = VPN + %w[evpn]
+  MEASURED = FLOW + %w[evpn]
+  EVPN_TYPES = [2, 3, 5]
   SAFI = { 'unicast' => 1, 'multicast' => 2, 'labelled' => 4, 'vpn' => 128, 'vpn_multicast' => 129,
-           'flow_spec' => 133, 'flow_spec_vpn' => 134 }
+           'flow_spec' => 133, 'flow_spec_vpn' => 134, 'evpn' => 70 }
 
   # How many routes a spec makes: count, once per VRF.
   def self.total(spec) ; spec['count'] * (spec['vrfs'] || 1) ; end
@@ -195,6 +233,8 @@ class TestBgpGen < Test::Unit::TestCase
     # A VPN route's key has its RD too, since every VRF carries the same
     # prefixes (RFC 4364 section 4.1).
     list.collect do |n|
+      # An EVPN route's whole hash, RD included, is its key here.
+      next [n.to_hash, n.path_id, nil] if n.is_a?(BGP::Evpn)
       if n.is_a?(BGP::Flow_spec)
         # A rule's key is its components and its RD, RFC 8955 section 8.
         h = n.to_hash
@@ -247,7 +287,7 @@ class TestBgpGen < Test::Unit::TestCase
 
   def self.corpus
     @corpus ||= SEEDS.times.collect do |seed|
-      spec = new('corpus').random_spec(Random.new(seed), FAMILIES[seed % FAMILIES.size])
+      spec = new('corpus').random_spec(Random.new(seed), FAMILIES[seed % FAMILIES.size], seed / FAMILIES.size)
       g = BGP::Gen.new(spec)
       info = spec['path_id'] ? AddPath.new : PLAIN
       read = lambda do |m|
@@ -271,7 +311,7 @@ class TestBgpGen < Test::Unit::TestCase
     each_sample do |x|
       spec = x.spec
       mlen = spec['start'].split('/').last.to_i
-      flow = FLOW.include?(spec['family'])
+      flow = MEASURED.include?(spec['family'])
       route = 1 + (mlen + 7) / 8 + (spec['path_id'] ? 4 : 0) + (spec['label'] ? 3 : 0) + (spec['rd'] ? 8 : 0)
       problems = []
       [x.updates, x.withdrawals].each do |msgs|
@@ -380,6 +420,9 @@ class TestBgpGen < Test::Unit::TestCase
     %w[protocol destination_port source rate marking].each do |k|
       assert_operator(specs.count { |sp| sp[k] }, :>=, 1, "flow spec feeds with #{k}")
     end
+    EVPN_TYPES.each do |t|
+      assert_operator(specs.count { |sp| sp['route_type'] == t }, :>=, 1, "EVPN feeds of route type #{t}")
+    end
     runs = self.class.corpus.collect { |x| x.updates.size }
     assert_operator(runs.max, :>, 20, 'some feed split into many messages')
   end
@@ -389,6 +432,7 @@ class TestBgpGen < Test::Unit::TestCase
   # left out because Gen and this would both spell them through
   # CommunityKeys, which would compare it with itself.
   def row_of(prefix, path_id, rd, pa)
+    return evpn_row_of(prefix, path_id, pa) if prefix.is_a?(Hash) && pa[:mp_reach].safi == 70
     return flow_row_of(prefix, path_id, rd, pa) if prefix.is_a?(Hash)
     r = { 'prefix' => prefix }
     r['path_id'] = path_id if path_id
@@ -407,6 +451,43 @@ class TestBgpGen < Test::Unit::TestCase
     r['local_pref'] = pa[:local_pref].to_i if pa[:local_pref]
     r['communities'] = pa[:communities].communities.split if pa[:communities]
     r['large_communities'] = pa[:large_communities].large_communities.split if pa[:large_communities]
+    r
+  end
+
+  # An EVPN row, read off the route's own hash and the attributes.
+  def evpn_row_of(h, path_id, pa)
+    key, v = h.first
+    type = { :mac_ip_advertisement => 2, :inclusive_multicast => 3, :ip_prefix_route => 5 }.fetch(key)
+    r = { 'route_type' => type, 'rd' => v[:rd].join(':') }
+    case type
+    when 2
+      r['mac'] = v[:mac]
+      r['ip'] = v[:ip] if v[:ip].is_a?(String)
+      r['esi'] = v[:esi]
+      r['label'] = v[:label1][:label]
+    when 3
+      r['originator'] = v[:ip]
+    when 5
+      r['prefix'] = v[:ip_prefix]
+      r['gateway'] = v[:gateway]
+      r['esi'] = v[:esi]
+      r['label'] = v[:label]
+    end
+    r['ethernet_tag'] = v[:ethernet_tag_id]
+    r['path_id'] = path_id if path_id
+    r['origin'] = pa[:origin].to_i
+    r['as_path'] = pa[:as_path].segments.flat_map(&:as)
+    r['next_hop'] = pa[:mp_reach].nexthops
+    r['med'] = pa[:multi_exit_disc].to_i if pa[:multi_exit_disc]
+    r['local_pref'] = pa[:local_pref].to_i if pa[:local_pref]
+    r['communities'] = pa[:communities].communities.split if pa[:communities]
+    r['large_communities'] = pa[:large_communities].large_communities.split if pa[:large_communities]
+    if (t = pa[:pmsi_tunnel])
+      t = t.to_hash[:pmsi_tunnel]
+      id = t[:identifier]
+      id = IPAddr.new_ntoh([id].pack('H*')).to_s unless id.include?('.')
+      r['pmsi'] = { 'tunnel_type' => t[:tunnel_type].to_s, 'label' => t[:label], 'identifier' => id }
+    end
     r
   end
 
