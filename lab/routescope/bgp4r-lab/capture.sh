@@ -168,6 +168,7 @@ echo "### GoBGP"
 # before cobra sees the arguments and only as os.Args[1], so it has to
 # come first and gshow's own -u and -p would be in front of it.
 echo "===== g1 gobgp --version"; ex g1 gobgp --version 2>&1; echo
+gshow g1 'global -j'
 gshow g1 'neighbor'
 gshow g1 'neighbor 10.0.21.1'
 gshow g1 'neighbor -j'
