@@ -21,6 +21,7 @@
 #++
 
 require 'bgp/sim/injector'
+require 'bgp/sim/guide'
 
 module BGP
   module Sim
@@ -93,6 +94,9 @@ module BGP
           announced                     what is announced on command
         Catalogs
           specimens, faults             the names each takes
+        Help
+          verbs                         this list
+          guide [N or WORD]             docs/console.md, or one section of it
         exit stops the session and quits. ls lists every method here.
       TEXT
 
@@ -151,6 +155,20 @@ module BGP
 
       def verbs
         @out.print VERBS
+        nil
+      end
+
+      # docs/console.md, rendered: the whole guide, or the section whose
+      # number or heading matches key. Through a pager on a terminal.
+      # Named `guide` because `help` is an irb command and would win.
+      def guide(key = nil)
+        g = Guide.new(File.read(Guide::PATH, :encoding => 'UTF-8'), terminal?)
+        text = key.nil? ? g.to_s : g.section(key)
+        text ||= "No section #{key.inspect}. The sections are:\n#{g.contents}"
+        page(text)
+        nil
+      rescue Errno::ENOENT
+        @out.puts "#{Guide::PATH} is not there; the guide ships with a checkout or the gem."
         nil
       end
 
@@ -257,6 +275,26 @@ module BGP
       end
 
       private
+
+      # True when the output is a person's terminal, which is when the
+      # guide gets colour and a pager.
+      def terminal?
+        @out.respond_to?(:tty?) && @out.tty?
+      end
+
+      # Text through $PAGER, or less, on a terminal; printed otherwise, or
+      # when no pager runs. `::IO`, since `IO` here is BGP::IO. LESS gets
+      # F, R and X so a short section prints and returns, colour shows,
+      # and the screen is not cleared.
+      def page(text)
+        return @out.print(text) unless terminal?
+        env = { 'LESS' => ENV.fetch('LESS', 'FRX') }
+        ::IO.popen(env, ENV.fetch('PAGER', 'less'), 'w') { |io| io.print(text) }
+      rescue Errno::EPIPE
+        nil # the person quit the pager before the end
+      rescue Errno::ENOENT
+        @out.print(text)
+      end
 
       def peer(address = nil)
         if address
