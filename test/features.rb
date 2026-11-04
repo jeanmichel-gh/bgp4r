@@ -352,7 +352,8 @@ module Features
       :unit  => %w[daemon/api_test daemon/client_test daemon/cli_test
                    daemon/server_test daemon/views_test daemon/control_test
                    daemon/log_ring_test daemon/config_test
-                   daemon/candidate_test daemon/speaker_test],
+                   daemon/candidate_test daemon/speaker_test
+                   daemon/community_keys_test],
       :functional => %w[daemon_test],
     },
 
@@ -372,6 +373,16 @@ module Features
       :unit  => %w[misc/route_generator_test sim/routegen_test],
       :functional => %w[routegen_test],
       :lab   => %w[routegen_loopback_test routegen_test generate_test],
+    },
+
+    'gen' => {
+      :area  => 'programs',
+      :about => 'bgp/gen: UPDATEs and withdrawals from a spec, and what they meant',
+      :doc   => 'docs/route-generation.md',
+      :unit  => %w[gen_test gen/spec_test gen/packer_test gen/unicast_test
+                   daemon/community_keys_test],
+      :functional => %w[gen_test],
+      :lab   => %w[gen_gobgp_test],
     },
 
     'capture' => {

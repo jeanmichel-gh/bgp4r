@@ -520,6 +520,20 @@ bgp/capture/             reading BGP off a wire; require 'bgp/capture', which
                          and not at the top, as `bgp/sim` is for `sim`.
                          docs/daemon.md's `bgp4r lab new` section is the
                          guide
+bgp/gen.rb bgp/gen/      `BGP::Gen`, UPDATEs and withdrawals in bulk from a
+                         spec of plain JSON types, with `expected`, what
+                         the spec meant, as data. docs/route-generation.md
+                         is the design and the plan. spec.rb reads a spec
+                         and refuses only what it cannot read, packer.rb
+                         packs routes by arithmetic and unicast.rb is the
+                         one generator so far. **The first message of each
+                         feed is measured against the packer's arithmetic**,
+                         so a slip raises `Gen::PackingError` before it
+                         reaches a wire, and that check is what caught two
+                         of the phase 1 sabotages before any receiver did
+bgp/daemon/community_keys.rb the three community keys of an announce
+                         block. It moved out of speaker.rb so `bgp/gen`
+                         can read them without loading a session loop
 bgp/specimen.rb          `BGP::Specimen::CATALOG`, the valid counterpart
                          of `BGP::Fault`: one named, well formed object
                          per path attribute and per address family, so a
@@ -734,7 +748,8 @@ docs/                    protocol-testing.md: using bgp4r to test a router
                          attributes that vary per route, as one pure
                          module that bgp4r's tests, `bgp4r-sim` and
                          routescope's scenarios all drive with the same
-                         JSON spec. **Nothing in it is built yet**; its
+                         JSON spec. **Phase 1 is built**, IPv4 and IPv6
+                         unicast, and section 13 says what it measured;
                          section 12 is the plan and its status table
                          is updated by each step's pull request
 examples/                runnable scripts
@@ -1517,7 +1532,7 @@ CI: `.github/workflows/test.yml` runs both suites on every push to master and ev
 
 `.github/workflows/capture.yml` is the one workflow that deploys a containerlab lab: it builds the `lab-node` and BIRD images, deploys `lab/routescope/bgp4r-lab`, and runs its `capture.sh`, on demand and on a push that changes that folder or the Dockerfile. Its log is what routescope's BGP fixtures are cut from.
 
-Baseline on 2026-11-03: 3191 tests, 32614 assertions, all passing. Line coverage of `bgp/` from the unit suite: 96.2%.
+Baseline on 2026-11-03: 3249 tests, 33865 assertions, all passing. Line coverage of `bgp/` from the unit suite: 96.2%.
 
 **That coverage figure is 98.5% for the library and the rest is the two
 programs, not a gap anywhere else.** Measured the same run: with
@@ -7426,7 +7441,7 @@ in place, with a dated block in the header naming them.
   own test confirms is the most expensive kind of wrong, because
   nothing fails until somebody runs the real thing.
 
-### Route generation, `bgp/gen`. Designed, not started
+### Route generation, `bgp/gen`. Phases 0 and 1 Done
 
 `docs/route-generation.md` is the design and the plan. Read it before
 any work on generating traffic, on `RouteGenerator`, or on what
@@ -7458,7 +7473,18 @@ Phases, with status kept in the document's section 12 table:
    owner's choice, so every existing node file and scenario sends the
    same octets; `med-decides.yml` relies on it.
 1. The spec reader, the unicast generator, the packer and the three
-   answers. To do.
+   answers. **Done**: `BGP::Gen.new(spec)` for IPv4 and IPv6 unicast,
+   with fixed attributes and a `path_id`. Three things it measured:
+   * **`expected` holds for a session with 4-octet AS numbers.** On a
+     2-octet one the sender writes AS_TRANS and bgp4r adds no AS4_PATH,
+     so a 4-octet AS in `as_path` arrives as 23456.
+     `test/functional/gen_test.rb` asserts that difference.
+   * **The library sends attributes as written**: no AS prepended and no
+     next hop filled in, because it knows no session. `bgp4r-sim` adds
+     both in phase 3, the way `Speaker#path_attribute` does.
+   * **GoBGP's JSON prints no Path Identifier**, so the lab test vouches
+     for where the identifiers sit and not for their value. The value is
+     the functional test's, where the Adj-RIB-In is keyed on it.
 2. Attribute patterns: fixed, cycle, step, random, every, and `group`.
    To do.
 3. Injector wiring, `/api/plan`, `mp_reach`, `mp_unreach`, `specimen`.
@@ -7545,6 +7571,8 @@ Found while fixing other bugs, not fixed yet. Verified against master on
 `ruby -I. -e '...'`.
 
 Smaller things:
+
+* **`Table#import` re-encodes an IPv6 route's whole UPDATE to drop its LOCAL_PREF**, so an eBGP IPv6 feed that carries LOCAL_PREF costs about as much per route as per message. It drops the attribute (RFC 4271 section 5.1.5) by encoding and re-parsing `route.path_attribute`, and for IPv6 that holds the MP_REACH_NLRI with every prefix of the UPDATE. Measured on 2026-11-03 with `test/functional/gen_test.rb`: 3000 IPv6 routes, about 450 to a message, took 45 seconds to import against 2.4 without LOCAL_PREF. IPv4 is cheap because its NLRI is outside the attribute set. The fix is to copy the attribute list without LOCAL_PREF rather than round trip it, and to leave MP_REACH_NLRI out of the copy since the route already holds its prefix; it is the RIB's and not the generator's, so that test sends no LOCAL_PREF over IPv6 and says why.
 
 * **`peer.clear` and `peer.stop` still send no NOTIFICATION, and now nothing is in the way of one.** A router answers `clear bgp NEIGHBOR` with Cease and RFC 4486 section 4's Administrative Reset, subcode 4, or Administrative Shutdown, subcode 2. The prerequisite is done: `Neighbor#stop` drains the output queue before closing the socket, so a message queued just before it reaches the wire. What is left is choosing the subcode per method and sending it, which is `bgp/daemon/control.rb` and a line in `Peer#stop`, plus a lab measurement of what each router logs on receipt. Until then the two methods close the connection and **report no NOTIFICATION at all** rather than claiming one they cannot verify, which is honest and is not what a router does.
   * **The mechanism this entry used to give was half right and the half it got wrong is the interesting one.** It said `stop` was `@out.close` then `@socket.close`, so a queued message "may never" be written, and that the fix was for `stop` to drain the queue. `SizedQueue#close` already drains: `deq` keeps handing out what is queued and only then answers nil, so the writer loop in `BGP::IO::Output` empties the queue of its own accord. What was missing was **waiting for it**, and the entry had the right shape for the wrong reason, which is why it read as a bigger change than it was. Measured on 2026-11-02 rather than read this time: a NOTIFICATION sent and then followed by `stop` reached the peer in **0 of 20** loopback runs and 20 of 20 with a bounded join. Not "may never": never.
