@@ -206,11 +206,10 @@ ruby -I. exe/bgp4r routegen lab.yml --interact
 ## 9. `bgp4r console`
 
 The same prompt with the library loaded and no session until you ask
-for one. Steps 2a and 2b are built. Back to back, step 2c, is designed
-below and not built yet. CLAUDE.md tracks the status under "An irb
-console on a live session".
+for one. Steps 2a, 2b and 2c are built. CLAUDE.md tracks the status
+under "An irb console on a live session".
 
-### Two ways to start, and a third to come
+### Three ways to start
 
 * `bgp4r console` opens irb with no session. Open one with `connect`
   or `listen`, or just build and parse objects: `Update.new(hex)`,
@@ -223,7 +222,8 @@ console on a live session".
   none of the flags that generate routes. If the session is not up
   after `--timeout`, the prompt opens anyway and the session goes on
   trying.
-* `bgp4r console --back-to-back`, step 2c, is below.
+* `bgp4r console --back-to-back` is two bgp4r speakers in this one
+  process, with `remote` the other side. It is below.
 
 The log goes to a file in the temporary folder unless `-l` names one,
 for the reason section 2 gives. `routegen --interact` keeps working,
@@ -281,13 +281,25 @@ or the only one that is up, and otherwise asks for `peer:` and names the
 peers. No library code changed. `exit` stops every session the prompt
 opened.
 
-### Back to back, step 2c, not built yet
+### Back to back
 
-* **Both ends are on 127.0.0.1.** One side listens on a free port and
-  the other dials it. Each speaker has one peer, so neither needs a
-  second loopback address. That also works on macOS, which has no
-  127.0.0.2 by default. `test_listen_takes_a_session_a_second_console_dials`
-  already does this with two consoles.
+```
+bgp4r console --back-to-back
+bgp4r console --back-to-back --my-as 65010 --peer-as 65010
+bgp4r console --back-to-back --families ipv4
+```
+
+```ruby
+fault :origin_value, '10.3.0.0/24'
+remote.last.path_attribute.errors
+remote.announce '10.9.0.0/24', med: 5
+last.nlri
+```
+
+* **Both ends are on 127.0.0.1.** Our side listens on a free port and
+  the remote side dials it. Each speaker has one peer, so neither needs
+  a second loopback address. That also works on macOS, which has no
+  127.0.0.2 by default. `--port` picks the port instead.
 * **`self` is the near side, AS 65001. `remote` is a console on the
   other side, AS 65002.** Both are Injectors, so every verb works on
   both. `fault :origin_value, '10.3.0.0/24'` sends a malformed UPDATE,
@@ -296,13 +308,33 @@ opened.
 * **The remote side holds no RIB.** `remote.rib` waits for step 3,
   which brings a Console over `bgp4rd`.
 * **eBGP by default.** If `--my-as` equals `--peer-as`, the session is
-  iBGP.
+  iBGP. `--peer-as` is the remote side's AS here, 65002 by default, and
+  needs no `--peer`.
+* The remote side's router id is 10.0.0.2, or 10.0.0.1 when `--id`
+  gives ours as 10.0.0.2, so the two never match.
 * **Every family is offered on both sides**, so every specimen and
-  every fault crosses with no node file. `--families ipv4` narrows it.
-  This is the main reason to use it over a router: neither GoBGP nor
-  FRR has every family.
-* **Each side logs to its own file**, through the injected logger.
+  every fault crosses with no node file. That is every family the build
+  gate knows, with an IPv6 form beside the IPv4 one where the family
+  has one, plus a 4-octet AS and ROUTE-REFRESH. RT-constrain is IPv4
+  only, by RFC 4684 section 4. This is the main reason to use it over a
+  router: neither GoBGP nor FRR has every family. The functional test
+  sends every specimen and every fault across one session, and each
+  arrives: the specimens with no finding and the faults with one.
+* **A specimen crossing does not say its family was offered.** A bgp4r
+  receiver reads a family it did not negotiate. Measured: with no MBGP
+  capability at all, every specimen still crossed clean. So the test
+  reads the OPEN each side received and asserts every family is in it.
+* **`--families` narrows it**, with words separated by commas: `ipv4`,
+  `ipv6`, or a name from `BGP::Specimen.families`, which takes that
+  family on each AFI it has. `--families unicast,evpn` is three
+  families.
+* **Each side logs to its own file**, through the injected logger. The
+  remote side's file is ours with `-remote` before the extension, and
+  the console names it when it opens. With `-l -` both go to standard
+  output and the remote lines start with `remote`.
 * **`exit` stops both sides.**
+* `--peer` and `--local-address` are refused with `--back-to-back`, in
+  words, since both ends are 127.0.0.1.
 
 ### The pull requests
 
@@ -310,4 +342,4 @@ opened.
   every fault lands on a bgp4r receiver.
 * **2b, done**: `bgp4r console`, with `connect`, `listen`, `shutdown`,
   `no_shutdown` and `clear`.
-* **2c**: `--back-to-back` and `remote`.
+* **2c, done**: `--back-to-back` and `remote`.

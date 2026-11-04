@@ -471,7 +471,8 @@ bgp/sim/                 `bgp4r-sim` the route injector, and `bgp4r
                          console`, one per `connect` or `listen` typed
                          at the prompt, since a Speaker reads its peers
                          once; console_command.rb is that command's
-                         flags. A person types
+                         flags, with `--back-to-back`, a second bgp4r
+                         speaker in the same process behind `remote`. A person types
                          `announce`, `specimen`, `fault`, `received`
                          or `n` for the Neighbor. **Every verb that
                          sends goes through `Injector#act`**, inline,
@@ -1601,7 +1602,7 @@ CI: `.github/workflows/test.yml` runs both suites on every push to master and ev
 
 `.github/workflows/capture.yml` is the one workflow that deploys a containerlab lab: it builds the `lab-node` and BIRD images, deploys `lab/routescope/bgp4r-lab`, and runs its `capture.sh`, on demand and on a push that changes that folder or the Dockerfile. Its log is what routescope's BGP fixtures are cut from.
 
-Baseline on 2026-11-04: 3532 tests, 34945 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
+Baseline on 2026-11-04: 3541 tests, 35039 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
 
 **That coverage figure is 98.5% for the library and the rest is the two
 programs, not a gap anywhere else.** Measured the same run: with
@@ -7791,7 +7792,7 @@ the guide.
 
 1. **Done.** `BGP::Sim::Console` in bgp/sim/console.rb and `bgp4r
    routegen --interact`. The verbs go through `Injector#act`.
-2. **Designed, 2a and 2b done.** `bgp4r console`: the library loaded, and
+2. **Done, all three parts.** `bgp4r console`: the library loaded, and
    sessions opened at the prompt with `connect` and `listen`, or by flag.
    `--back-to-back` runs two bgp4r speakers in one process over
    loopback, with `remote` the console on the other side. The design was
@@ -7816,7 +7817,16 @@ the guide.
      fall through to the prompt hung the file rather than failing it,
      so `ConsoleCommand` takes the prompt as a lambda and the tests pass
      one that records.
-   * **2c.** `--back-to-back` and `remote`, with every family offered.
+   * **2c. Done.** `--back-to-back` and `remote`. Our side listens on a
+     free port on 127.0.0.1 and `remote`, a second Console, dials it.
+     Both offer every family the build gate knows, IPv6 forms included,
+     and `--families` narrows it. The functional test sends every
+     specimen and every fault across one session. **A specimen crossing
+     does not say its family was offered**: a bgp4r receiver reads a
+     family it did not negotiate, and with no MBGP capability at all
+     every specimen still crossed clean, measured by sabotage. So the
+     test reads the OPEN each side received. Each side logs to its own
+     file through the injected logger, and `exit` stops both.
    Two decisions to keep: **networking terms at the prompt**, so
    `remote_as`, `listen`, `shutdown` and `clear`; and **`remote` and not
    `far`** for the other side.
