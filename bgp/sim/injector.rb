@@ -948,7 +948,13 @@ module BGP
       # A withdrawn spec, forgotten by walking what it meant to send.
       # Skipped when nothing was announced by `prefixes`, which is the
       # usual case and saves walking a million rows for nothing.
+      #
+      # **Only a unicast spec forgets anything**, because `prefixes`
+      # announces unicast and nothing else. A multicast, labelled or VPN
+      # route of the same prefix text is another route in another table,
+      # so withdrawing it leaves the unicast one on the peer.
       def forget_expected(gen)
+        return unless gen.family == 'unicast'
         return if @lock.synchronize { @announced.empty? }
         gen.expected.each { |r| @lock.synchronize { @announced.delete(r['prefix']) } }
       end

@@ -837,6 +837,19 @@ class BGP_Sim_Injector_Test < Test::Unit::TestCase
     assert_equal([], inj.announced)
   end
 
+  # `prefixes` announces unicast, so a spec in another family withdraws
+  # another route and the unicast one stays listed and resent.
+  def test_a_spec_withdrawal_in_another_family_keeps_what_prefixes_announced
+    inj = injector
+    inj.act('announce', 'prefixes' => ['11.0.1.0/24'])
+    [SPEC.merge('family' => 'multicast'),
+     SPEC.merge('family' => 'labelled', 'label' => 100),
+     SPEC.merge('family' => 'vpn', 'label' => 100, 'rd' => '65000:1')].each do |s|
+      inj.act('withdraw', { 'spec' => s }, false)
+      assert_equal(['11.0.1.0/24'], inj.announced.collect { |r| r[:prefix] }, s['family'])
+    end
+  end
+
   # Read before anything starts, so a 400 now and not a failed feed.
   def test_a_spec_the_library_refuses_is_a_refusal_before_the_feed
     inj = injector
