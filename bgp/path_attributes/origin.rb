@@ -39,6 +39,18 @@ module BGP
         parse(arg)
       elsif arg.is_a?(self.class)
         parse(arg.encode)
+      elsif arg.is_a?(Hash) and (arg[:origin].is_a?(Hash) or not arg.key?(:origin))
+        # The unusual form to_hash answers for a value that is not one
+        # octet: :code is the first octet, absent when there was none,
+        # and :tail the octets after it. See to_hash. Path_attribute
+        # hands over what is under the :origin key, so the bare inner
+        # Hash comes here too.
+        h = arg.key?(:origin) ? arg[:origin] : arg
+        unless (h.keys - [:code, TAIL_KEY]).empty?
+          raise ArgumentError, "invalid argument, #{arg.class} (#{arg})"
+        end
+        @origin = h[:code]
+        take_tail_key(h)
       elsif arg.is_a?(Hash) and arg[:origin]
         # to_hash answers what to_sym says, so the value here is usually a
         # Symbol and has to go through the same translation the Symbol
@@ -63,8 +75,13 @@ module BGP
       end
     end
 
+    # The value as it arrived. RFC 4271 section 4.3 gives ORIGIN one
+    # octet, and RFC 7606 section 7.1 makes any other length malformed,
+    # which validation.rb reports. A value of no octets or of more than
+    # one is still kept and written back, so a capture replays: the
+    # first octet is the code and the rest is a tail.
     def encode
-      super([@origin].pack('C'))
+      super(value_octets)
     end
 
     def to_i
@@ -87,7 +104,17 @@ module BGP
     # answers :undefined for all of them alike, so a hash saying
     # :undefined cannot be read back. Same rule as a kept tail, nothing
     # unusual means nothing new in the hash.
+    #
+    # A value that was not one octet hashes as {:code, :tail}, with
+    # :code absent for an empty value and :tail absent when there is
+    # none. An ordinary ORIGIN has neither, so its hash is unchanged.
     def to_hash
+      unless @origin && tail.nil?
+        h = {}
+        h[:code] = @origin if @origin
+        h.merge!(tail_entry) if tail
+        return {:origin=>h}
+      end
       sym = to_sym
       {:origin=> sym == :undefined ? @origin : sym}
     end
@@ -108,8 +135,19 @@ module BGP
 
     private
 
+    def value_octets
+      v = @origin ? [@origin].pack('C') : String.new
+      tail ? v + tail : v
+    end
+
+    # Reads the whole value rather than one octet of it, so an ORIGIN of
+    # the wrong length is kept and not silently cut to fit. A zero length
+    # ORIGIN used to leave @origin nil, and encode then raised, which
+    # killed a Neighbor's event thread through its debug log line.
     def parse(s)
-      @flags, @type, _, @origin=super(s, 'C')
+      @flags, @type, _, value = super(s)
+      @origin = value.getbyte(0)
+      @tail = value.byteslice(1..-1) if value.bytesize > 1
     end
 
   end

@@ -423,14 +423,6 @@ class BGP_Sim_Functional_Test < Test::Unit::TestCase
   # one assertion no unit test can make: `validation.rb` runs on octets
   # that crossed a socket rather than on octets a test wrote.
   #
-  # `origin_value` and not `origin_length`, and the reason is a bug in
-  # the library this change found and did not fix: a received UPDATE
-  # carrying a zero length ORIGIN kills a bgp4r receiver's event
-  # dispatch thread, because `Neighbor#dispatch_event` builds
-  # `"Recv #{msg}"` before the log level is looked at and `Origin#encode`
-  # raises on a value `Origin.new` accepted. The pull request has the
-  # one liner. 17 of the 18 catalog cases render, so this test uses one
-  # that does and the injector's own side is unaffected either way.
   def test_a_fault_case_crosses_and_the_receiver_reports_it
     code, answer = post('/api/fault', 'case' => 'origin_value',
                                       'prefixes' => ['203.0.113.0/24'])
@@ -444,6 +436,26 @@ class BGP_Sim_Functional_Test < Test::Unit::TestCase
     finding = u.path_attribute.errors.first
     assert_equal(:treat_as_withdraw, finding.action)
     assert_equal(true, @s.is_established?, 'and the session survived, which is the point')
+  end
+
+  # **Every catalog case crosses, one after another on one session, and
+  # the bgp4r receiver reads each and keeps going.** A zero length ORIGIN
+  # used to kill the receiver's event thread: `Origin#encode` raised on
+  # the value and `Neighbor#dispatch_event` builds its debug line whatever
+  # the level, so the session went quiet with nothing said. One session
+  # for all of them is the point, since a dead thread shows only as the
+  # next case never arriving.
+  def test_every_catalog_case_crosses_and_the_receiver_keeps_going
+    BGP::Fault.names.each_with_index do |name, i|
+      prefix = "203.0.#{i}.0/24"
+      code, answer = post('/api/fault', 'case' => name.to_s, 'prefixes' => [prefix])
+      assert_equal(200, code, "#{name}: #{answer.inspect}")
+      u = @catcher.shift
+      assert_not_nil(u, "#{name}: nothing arrived, so the receiver stopped reading")
+      assert_operator(u.path_attribute.errors.size, :>=, 1,
+                      "#{name}: the receiver read it as a protocol error")
+    end
+    assert_equal(true, @s.is_established?, 'and the session survived all of them')
   end
 
   # ---- a replay ------------------------------------------------------
