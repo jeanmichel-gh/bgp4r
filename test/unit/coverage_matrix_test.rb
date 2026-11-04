@@ -280,4 +280,43 @@ class CoverageMatrixTest < Test::Unit::TestCase
            'the report has to paste into a terminal and into a document')
   end
 
+
+  # ---- the generators, docs/route-generation.md phase 6 ---------------
+
+  def test_every_generator_has_a_slug
+    BGP::Gen::GENERATORS.each_key do |n|
+      assert_not_nil(CM.gen_slug(n), "the bgp/gen family #{n} has no row in the family table")
+    end
+  end
+
+  # **The declared half here is GEN_FAMILIES**, one line per gen lab
+  # file, and it is held to the 'family' literals of the same file both
+  # ways: a family sent and not declared would not show in the report,
+  # and one declared and not sent would show as sent.
+  def test_each_gen_lab_file_declares_exactly_the_families_it_sends
+    files = Dir["#{CM::LAB}/gen_*_test.rb"].select { |f| f =~ /gen_(gobgp|frr)_test/ }
+    assert_equal(2, files.size, 'one gen lab file per router')
+    files.each do |f|
+      text = File.read(f)
+      declared = CM.declared_gen_families(text)
+      assert_not_equal([], declared, "#{f} has no GEN_FAMILIES line")
+      assert_equal(declared.sort, CM.gen_literals(text).sort,
+                   "#{f}: GEN_FAMILIES and the 'family' literals disagree")
+      declared.each { |n| assert(BGP::Gen::GENERATORS.key?(n), "#{f} declares #{n}, which has no generator") }
+    end
+  end
+
+  def test_the_declaration_is_read_across_lines
+    text = "  GEN_FAMILIES = %w[unicast flow_spec\n                    evpn]\n"
+    assert_equal(%w[unicast flow_spec evpn], CM.declared_gen_families(text))
+    assert_equal([], CM.declared_gen_families('# GEN_FAMILIES is not here'))
+  end
+
+  def test_the_gen_column
+    assert_match(/\Ayes\b.*\bgobgp\b.*\bfrr\b/, CM.gen_column('unicast'))
+    assert_equal('yes', CM.gen_column('bgp-ls-vpn'), 'a generator no router has had a feed from')
+    assert_equal('--', CM.gen_column('no-such-family'))
+    assert_match(/\sgen\n/, CM.family_table)
+  end
+
 end

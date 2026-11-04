@@ -22,6 +22,7 @@
 
 require 'bgp4r'
 require 'bgp/fault'
+require 'bgp/gen'
 
 # What is exercised and what is not, per path attribute and per address
 # family, printed from the library:
@@ -169,6 +170,13 @@ module CoverageMatrix
 
   LAB = 'test/functional/lab'
 
+  # The lab tests that send a bgp/gen feed to a router, one per router:
+  # gen_gobgp_test.rb and gen_frr_test.rb. Each declares the families it
+  # generates in a GEN_FAMILIES line, read here as text, since loading a
+  # test file would run it. test/unit/coverage_matrix_test.rb holds that
+  # line to the file's own 'family' literals, both ways.
+  GEN_LAB = "#{LAB}/gen_%s_test.rb"
+
   class << self
 
     # ---- derived: the attributes ------------------------------------
@@ -291,6 +299,39 @@ module CoverageMatrix
 
     def vouches(slug) ; VOUCHES[slug] ; end
 
+    # ---- derived: the generators ------------------------------------
+
+    # The slug of a bgp/gen family name, through BGP::Specimen, which is
+    # where the names come from.
+    def gen_slug(name)
+      f = BGP::Specimen.families.find { |n, _, _| n.to_s == name } or return nil
+      slug(f[2])
+    end
+
+    # The families BGP::Gen has a generator for, as slugs.
+    def generator_slugs
+      BGP::Gen::GENERATORS.keys.collect { |n| gen_slug(n) }
+    end
+
+    # The GEN_FAMILIES a gen lab file declares, or [] for no such line.
+    def declared_gen_families(text)
+      m = text.match(/^\s*GEN_FAMILIES\s*=\s*%w\[([^\]]*)\]/m) or return []
+      m[1].split
+    end
+
+    # Every 'family' => name literal in a gen lab file.
+    def gen_literals(text)
+      text.scan(/'family'\s*=>\s*'([a-z_]+)'/).flatten.uniq
+    end
+
+    # The routers a generated feed of one family has been sent to.
+    def gen_routers(slug)
+      %i[gobgp frr].select { |r|
+        f = format(GEN_LAB, r)
+        File.exist?(f) && declared_gen_families(File.read(f)).any? { |n| gen_slug(n) == slug }
+      }
+    end
+
     # ---- the report -------------------------------------------------
 
     def report
@@ -331,15 +372,16 @@ module CoverageMatrix
 
     def family_table
       out = +"Address families, as the build gate knows them\n\n"
-      out << format("%-15s %-8s %-26s %-13s %s\n",
-                    'family', 'safi', 'IANA name', 'gobgp', 'frr')
+      out << format("%-15s %-8s %-26s %-13s %-13s %s\n",
+                    'family', 'safi', 'IANA name', 'gobgp', 'frr', 'gen')
       out << ('-' * 78) << "\n"
       family_slugs.each do |s|
         safis = families.select { |_, sa| slug(sa) == s }.collect { |_, sa| sa }.uniq
         v = vouches(s) || {}
-        out << format("%-15s %-8s %-26s %-13s %s\n", s, safis.join(','),
+        out << format("%-15s %-8s %-26s %-13s %-13s %s\n", s, safis.join(','),
                       IANA.safi_name(safis.first).to_s,
-                      verdict(s, v[:gobgp], :gobgp), verdict(s, v[:frr], :frr))
+                      verdict(s, v[:gobgp], :gobgp), verdict(s, v[:frr], :frr),
+                      gen_column(s))
       end
       out << <<~LEGEND
 
@@ -348,12 +390,23 @@ module CoverageMatrix
         absence  the router has no such family, so the test vouches for NOTHING
                  about our octets, only for how the router says so
         --       no lab test against that router
+        gen      yes when bgp/gen has a generator, then the routers a
+                 generated feed was sent to, whatever they made of it
 
         The number is how many lab files carry it. Read the document each
         family cites before trusting any of these: what a measurement
         proves is not the same from one row to the next.
       LEGEND
       out
+    end
+
+    # Whether bgp/gen has a generator, and which routers a generated feed
+    # went to. The gobgp and frr columns say what a router vouches for;
+    # this one says only that a feed reached it, so an absence router is
+    # listed here too.
+    def gen_column(slug)
+      return '--' unless generator_slugs.include?(slug)
+      (['yes'] + gen_routers(slug).collect(&:to_s)).join(' ')
     end
 
     def verdict(slug, v, router)
@@ -383,6 +436,9 @@ module CoverageMatrix
              "#{measured} measured against a router, #{absence} where the " \
              "only\nmeasurement is the router's absence, " \
              "#{fams.size - measured - absence} not measured at all.\n"
+      gens = fams.count { |s| generator_slugs.include?(s) }
+      sent = fams.count { |s| !gen_routers(s).empty? }
+      out << "#{gens} of them have a bgp/gen generator, #{sent} sent to a router by one.\n"
       out << "\n#{never.size} attributes have never been sent to a router:\n"
       never.each_slice(3) { |g| out << "  #{g.join('  ')}\n" }
       out << "\n#{BGP::Fault.names.size} fault cases in BGP::Fault::CATALOG.\n"

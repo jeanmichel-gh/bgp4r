@@ -317,7 +317,7 @@ can fail. Update this table in the pull request that moves a step.
 | 4f | MCAST-VPN. | Done |
 | 4g | BGP-LS topologies. | Done |
 | 5 | Churn: `Gen#churn`, `churn` beside a `spec` on `announce`, and in `/api/plan`. | Done |
-| 6 | `LabHelper` takes a spec, and the coverage matrix reports generators. | To do |
+| 6 | `LabHelper` takes a spec, and the coverage matrix reports generators. | Done |
 | 7 | routescope scenarios send specs and read `/api/plan`. This is routescope's column. | To do |
 
 Phase 1 is the foundation and the rest depend on it. Phases 4a to 4g
@@ -676,6 +676,44 @@ the two communities of RFC 7432 that go with types 1 and 4.
   as the field less its low bit, so 300 is 4800. Types 6 to 11 it does
   not know, which the EVPN lab test already records, so the lab sends
   them nowhere. FRR was not run here.
+
+**Phase 6.** `LabHelper#spec_crosses` and the coverage matrix's `gen`
+column.
+
+* **One method serves both routers.** `spec_crosses(router, family,
+  spec, peer)` sends the spec, waits until the router counts exactly
+  `total` paths, yields a sample of `expected`, withdraws, and waits
+  for zero. `Gobgpd#path_count` reads `global rib summary` and
+  `Frr#path_count` reads `pfxRcd` from the family's summary, each in
+  the router's own family name. `LabHelper.sample` spreads the sample,
+  the first and last rows among it.
+* **FRR is the second reader now**, in `gen_frr_test.rb`: IPv4 and
+  IPv6 unicast, patterns and a group, a flow spec feed read back by
+  FRR's rule key, and the injector's plan. FRR names its attributes
+  where GoBGP numbers them, so one generated feed is read by two
+  unrelated parsers.
+* **`pfxSnt` is not a sabotage that bites.** Counting what FRR sent
+  rather than what it took passes, because FRR 8.4.4 sends an eBGP
+  route back to the peer it came from, so the two counts agree. A
+  count that ignores the family is what fails.
+* **The `gen` column is derived, with one declared line per file.**
+  "yes" comes from `BGP::Gen::GENERATORS`, and the routers from each
+  gen lab file's `GEN_FAMILIES`, read as text since loading a test
+  file runs it. `coverage_matrix_test.rb` holds that line to the
+  file's own `'family'` literals both ways, so every spec in those
+  files names its family now, unicast included.
+* **What the matrix still overstates.** Its list of attributes never
+  sent to a router comes from the fault catalog, and generated feeds
+  now put COMMUNITIES, LARGE_COMMUNITIES, EXTENDED_COMMUNITIES,
+  MP_UNREACH_NLRI and the BGP-LS Attribute in front of a router.
+  Counting those needs the attributes each lab spec builds, which is
+  not readable as text. Left for a later step.
+* **No functional tier.** This phase is test machinery; the unit test
+  runs `spec_crosses` against a fake router and the two lab files run
+  it against real ones.
+* **A repeat of what phase 4c found about `expected`**: a protocol read
+  off the next route agrees with its own `expected`. The FRR flow spec
+  case states the protocol per rule by hand and fails on it.
 
 **Phase 5.** Churn, section 8. `Gen#churn` answers a `Gen::Churn`
 over the routes the spec announces, and `bgp4r-sim` sends it.
