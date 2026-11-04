@@ -94,8 +94,35 @@ class TestBgpGenSpec < Test::Unit::TestCase
                  S.read(minimal.merge('label' => { 'step' => { 'start' => 16, 'by' => 1 } }))['label'])
     refused(minimal.merge('label' => 2**20), /label: 1048576 does not fit/)
     refused(minimal.merge('label' => '16'), /label/)
-    assert_equal({ 'label' => %w[labelled vpn vpn_multicast], 'rd' => %w[vpn vpn_multicast],
-                   'vrfs' => %w[vpn vpn_multicast], 'route_target' => %w[vpn vpn_multicast] }, S::FAMILY_KEYS)
+    assert_equal(%w[labelled vpn vpn_multicast], S::FAMILY_KEYS['label'])
+  end
+
+  # Which key belongs to which family, all of it, so a key added to KEYS
+  # and not here, or the reverse, is seen.
+  def test_the_family_keys
+    flow = %w[flow_spec flow_spec_vpn]
+    vpn = %w[vpn vpn_multicast flow_spec_vpn]
+    assert_equal({ 'label' => %w[labelled vpn vpn_multicast], 'rd' => vpn, 'vrfs' => vpn, 'route_target' => vpn,
+                   'source' => flow, 'protocol' => flow, 'destination_port' => flow, 'rate' => flow,
+                   'redirect' => flow, 'marking' => flow }, S::FAMILY_KEYS)
+    assert_equal([], S::FAMILY_KEYS.keys - S::KEYS)
+  end
+
+  # Phase 4c. Each flow spec key reads as a value or a pattern and is
+  # refused past what its field holds; source is a prefix and redirect is
+  # ADMIN:N, which does not step per VRF.
+  def test_the_flow_spec_keys_read
+    s = S.read(minimal.merge('protocol' => 6, 'destination_port' => { 'cycle' => [80, 443] },
+                             'source' => '192.0.2.0/24', 'rate' => 125_000, 'marking' => 46,
+                             'redirect' => '65000:4294967295', 'vrfs' => 2))
+    assert_equal([6, { 'cycle' => [80, 443] }, '192.0.2.0/24', 125_000, 46, '65000:4294967295'],
+                 s.values_at('protocol', 'destination_port', 'source', 'rate', 'marking', 'redirect'))
+    { 'protocol' => 256, 'destination_port' => 65_536, 'marking' => 64, 'rate' => 2**32 }.each do |k, v|
+      refused(minimal.merge(k => v), /#{k}: #{v} does not fit/)
+    end
+    refused(minimal.merge('source' => 'here'), /source "here" is not a prefix/)
+    refused(minimal.merge('source' => 1), /source is a string/)
+    refused(minimal.merge('redirect' => '65000'), /redirect "65000" is not ADMIN:N/)
   end
 
   # Phase 4b. An RD and a route target read as ADMIN:N, and the

@@ -106,7 +106,8 @@ class LabGenGobgpTest < Test::Unit::TestCase
   AFI_SAFI = { G::LABELLED_IPV4 => [1, 4], G::LABELLED_IPV6 => [2, 4],
                G::MULTICAST_IPV4 => [1, 2], G::MULTICAST_IPV6 => [2, 2],
                G::VPN_IPV4 => [1, 128], G::VPN_IPV6 => [2, 128],
-               G::VPN_MULTICAST_IPV4 => [1, 129] }
+               G::VPN_MULTICAST_IPV4 => [1, 129],
+               G::FS_IPV4 => [1, 133], G::FS_IPV6 => [2, 133], G::FS_VPN => [1, 134] }
 
   def rib(afi)
     @router.rib_family(FAMILY[afi])
@@ -494,6 +495,102 @@ class LabGenGobgpTest < Test::Unit::TestCase
                 G::VPN_IPV4)
     assert_equal(0, downs, 'no session went down')
     assert(@peer.is_established?)
+  end
+
+
+  # ---- phase 4c: flow spec ---------------------------------------------
+
+  # GoBGP's flow spec table, by RD and destination, read from each path's
+  # components rather than from the table's keys, which are GoBGP's text.
+  def flow_held(family)
+    held = {}
+    (@router.rib_family(family) || {}).each_value do |paths|
+      paths.each do |p|
+        comps = G.components(p)
+        dest = comps.find { |c| c['type'] == 1 }
+        rd = p['nlri']['rd']
+        held[[rd && "#{rd['admin']}:#{rd['assigned']}", dest['value']['prefix']]] = p
+      end
+    end
+    held
+  end
+
+  # A flow spec feed into GoBGP. Per sampled row it reads the components
+  # by their RFC 8955 section 4.2 type numbers with the operator octet
+  # whole, the RD of section 8, and the actions of section 7 among the
+  # extended communities, then withdraws and waits for an empty table.
+  def flow_crosses(spec, family)
+    g = BGP::Gen.new(spec)
+    total = g.total
+    g.updates.each { |u| @peer.send_message u }
+    wait_for("GoBGP to hold #{total} flow spec rules", :timeout => 60) { count_in(family) == total }
+    held = flow_held(family)
+    rows = g.expected.to_a
+    (0..9).collect { |k| (rows.size - 1) * k / 9 }.uniq.each do |i|
+      want = rows[i]
+      path = held[[want['rd'], want['destination']]]
+      assert_not_nil(path, "GoBGP holds #{want['rd']} #{want['destination']}")
+      comps = G.components(path).to_h { |c| [c['type'], c] }
+      assert_equal(want['source'], comps[2] && comps[2]['value']['prefix'], 'the source, type 2')
+      # 129 is 0x81: the end-of-list bit of section 4.2.1.1 and eq.
+      assert_equal(want['protocol'] && [{ 'op' => 129, 'value' => want['protocol'] }],
+                   comps[3] && comps[3]['value'], 'the protocol, type 3')
+      # A two octet value sets the len bits as well, 0x91.
+      op = want['destination_port'].to_i > 255 ? 145 : 129
+      assert_equal(want['destination_port'] && [{ 'op' => op, 'value' => want['destination_port'] }],
+                   comps[5] && comps[5]['value'], 'the destination port, type 5')
+      a = G.attrs(path)
+      # GoBGP prints a next hop of length 0 as its family's unspecified
+      # address. Measured: '::' under AFI 2.
+      assert_equal(g.afi == 2 ? '::' : '0.0.0.0', a[14]['nexthop'], 'RFC 8955 section 4: no next hop')
+      assert_equal(want['as_path'], G.as_path(path))
+      yield want, (a[EXT_COMMUNITIES] || {})['value'] if block_given?
+    end
+    g.withdrawals.each { |u| @peer.send_message u }
+    wait_for('GoBGP to hold no rule', :timeout => 60) { count_in(family) == 0 }
+    g
+  end
+
+  # The actions are stated by hand per group rather than read from
+  # expected: a rate taken from the wrong group would agree with its own
+  # expected.
+  def test_ipv4_flow_spec
+    session(false, [G::FS_IPV4])
+    rates = [0, 125_000, 1_000_000]
+    g = flow_crosses({ 'family' => 'flow_spec', 'start' => '10.0.0.0/24', 'count' => 900, 'group' => 100,
+                       'protocol' => { 'cycle' => [6, 17] }, 'source' => '192.0.2.0/24',
+                       'destination_port' => { 'step' => { 'start' => 80, 'by' => 50, 'wrap' => 65535 } },
+                       'rate' => { 'cycle' => rates }, 'marking' => 46, 'redirect' => '65000:100',
+                       'attributes' => { 'as_path' => [OUR_AS] } }, G::FS_IPV4) do |want, ext|
+      n = want['destination'].split('.')[1].to_i * 256 + want['destination'].split('.')[2].to_i
+      assert_include(ext, { 'type' => 128, 'subtype' => 6, 'as' => 0, 'rate' => rates[(n / 100) % 3] },
+                     "the rate of rule #{n}")
+      assert_equal(3, ext.size, 'rate, redirect and marking')
+      # GoBGP's text for the other two. Its own words, so a reworded
+      # release is a test to update and not a bgp4r bug.
+      kinds = ext.collect { |e| [e['type'], e['subtype']] }
+      assert_equal([[128, 6], [128, 8], [128, 9]], kinds.sort)
+    end
+    assert_equal(900, g.total)
+  end
+
+  def test_ipv6_flow_spec
+    session(false, [G::FS_IPV6])
+    flow_crosses({ 'family' => 'flow_spec', 'start' => '2001:db8::/48', 'count' => 300, 'protocol' => 58,
+                   'source' => '2001:db8:ffff::/48', 'attributes' => { 'as_path' => [OUR_AS] } }, G::FS_IPV6)
+  end
+
+  # RFC 8955 section 8: one RD per VRF, which GoBGP reads back as its
+  # type, administrator and assigned number; the route target per VRF is
+  # stated by hand.
+  def test_vpn_flow_spec
+    session(false, [G::FS_VPN])
+    flow_crosses({ 'family' => 'flow_spec_vpn', 'start' => '10.0.0.0/24', 'count' => 200, 'vrfs' => 3,
+                   'rd' => '65000:1', 'route_target' => '65000:100', 'destination_port' => 443,
+                   'attributes' => { 'as_path' => [OUR_AS] } }, G::FS_VPN) do |want, ext|
+      n = want['rd'].split(':').last.to_i
+      assert_equal(["65000:#{99 + n}"], ext.collect { |c| c['value'] }, "the route target of #{want['rd']}")
+    end
   end
 
 end

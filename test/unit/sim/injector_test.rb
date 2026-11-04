@@ -923,6 +923,23 @@ class BGP_Sim_Injector_Test < Test::Unit::TestCase
     assert_equal([], peer.sent)
   end
 
+  # Phase 4c. A flow spec rule over eBGP gets the prepend and no next
+  # hop: RFC 8955 section 4 makes its length 0, so the session's address
+  # is not filled in, and the plan says the same.
+  def test_a_flow_spec_rule_goes_out_with_no_next_hop
+    inj = injector
+    spec = { 'family' => 'flow_spec', 'start' => '11.0.0.0/24', 'count' => 3, 'protocol' => 6, 'rate' => 0 }
+    inj.act('announce', { 'spec' => spec }, false)
+    mp = peer.updates.first.path_attribute[:mp_reach]
+    assert_equal([1, 133, ''], [mp.afi, mp.safi, mp.nexthops])
+    assert_equal('65001', peer.updates.first.path_attribute[:as_path].as_path)
+    row = inj.plan('spec' => spec)[:plans].first[:rows].first
+    assert_equal({ 'destination' => '11.0.0.0/24', 'protocol' => 6, 'origin' => 0, 'as_path' => [65_001],
+                   'extended_communities' => ['traffic_rate_bytes:0:0.0'] }, row)
+    inj.act('withdraw', { 'spec' => spec }, false)
+    assert_equal(3, inj.sent.summary[:prefixes_withdrawn])
+  end
+
   # One spec, two sessions, two answers: the prepend and LOCAL_PREF
   # differ between an external and an internal peer.
   def test_a_plan_answers_per_peer

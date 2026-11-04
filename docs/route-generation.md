@@ -172,7 +172,7 @@ route key.
 | `multicast` (SAFI 2) | as unicast | none | MP_UNREACH, IPv4 too. |
 | `labelled` (SAFI 4) | prefix, `label` fixed or per route, required | none | The 3-octet Compatibility field of RFC 8277 section 2.4, written as 0x800000. |
 | `vpn`, `vpn_multicast` (128, 129) | `rd` of type 0, 1 or 2 stepped per VRF, `label`, prefix, the range once per VRF (`vrfs`) | `route_target` stepped per VRF, so each VRF has its own attribute set | RD plus prefix, with the Compatibility field. |
-| `flow_spec`, `flow_spec_vpn` (133, 134) | destination prefix, port ranges, protocol, so a rule set N wide | traffic rate, redirect, marking; next hop length 0 | The same rule in MP_UNREACH. |
+| `flow_spec`, `flow_spec_vpn` (133, 134) | destination prefix from `start`, `source`, `protocol` and `destination_port`, each one `eq` match, so a rule set N wide; for 134 `rd`, `vrfs` and `route_target` as VPN | `rate`, `redirect` and `marking`, the actions of RFC 8955 section 7; no next hop | The same rule in MP_UNREACH. |
 | `rt_constrain` (132) | origin AS, route target, the zero length default | none | GoBGP 3.23.0 panics on the default plus a second route. |
 | `evpn` (25, 70) | type 2: MAC, IP, ESI, label; type 3: originator; type 5: prefix and GW IP | MAC Mobility sequence number (a MAC move), ESI label, Router's MAC, PMSI tunnel for type 3 | The route key only; Flags and GW IP are not in it. |
 | `mcast_vpn` (5) | type 1 originator, type 5 (S,G), types 6 and 7 per Source AS | route targets | No lab router has the family. |
@@ -278,7 +278,7 @@ can fail. Update this table in the pull request that moves a step.
 | 3 | Injector wiring: `announce` and `withdraw` read a spec, `POST /api/plan`, the `mp_reach`, `mp_unreach` and `specimen` keys. | Done |
 | 4a | Multicast and labelled. | Done |
 | 4b | VPN, both SAFIs. | Done |
-| 4c | Flow spec, both SAFIs. | To do |
+| 4c | Flow spec, both SAFIs. | Done |
 | 4d | EVPN types 2, 3 and 5, then the rest. | To do |
 | 4e | RT-constrain. | To do |
 | 4f | MCAST-VPN. | To do |
@@ -502,3 +502,63 @@ test draws both families, with up to four VRFs and all three RD types;
 `test/unit/sim/injector_test.rb` pins the plan total;
 `test/functional/lab/gen_gobgp_test.rb` reads the VPN routes back from
 GoBGP and asserts the SAFI 129 refusal.
+
+**Phase 4c.** Flow specification rules, SAFI 133 and 134, both AFIs.
+`Flow_rules` is a subclass of `Unicast` and `Flow_rules_vpn` of
+`Flow_rules`, so the packer, the patterns and the sender are shared.
+
+* **One rule per destination prefix.** `start` and `count` give the
+  destination, so a rule set N wide is one spec. `source`, one prefix,
+  `protocol` and `destination_port` are optional, each one `eq` match,
+  and the last two are values or patterns. A port range, and the other
+  components of RFC 8955 section 4.2.2, are not read yet; `mp_reach`
+  sends any rule by hand.
+* **Components run on the route number and actions on the group.** A
+  component is part of the NLRI, as a label or a Path Identifier is. An
+  action is an extended community and so an attribute: `rate`
+  (section 7.1, AS field 0), `redirect` as `ADMIN:N` in the layout its
+  administrator picks (section 7.4), and `marking`, a DSCP (section
+  7.5). They join the spec's own extended communities in one attribute.
+* **No next hop.** RFC 8955 section 4: "the Length of the Next-Hop
+  Network Address MUST be set to 0". The Sender's address is dropped
+  for these families. A `next_hop` the spec gives itself is sent.
+* **A rule is as long as its components.** Port 80 is one octet and
+  8080 two, so each rule is measured on its own. `Unicast` grew
+  `route_len` for this, the octets of one route, which is the same
+  number for every route in the other families.
+* **`PerVrf` holds what VPN and VPN flow spec share**: `rd`, `vrfs`,
+  `route_target`, one VRF per copy of the range. It came out of
+  `Vpn`, whose tests pass unchanged.
+* **A gap in the receive checks this found.** validation.rb walks a
+  flow spec rule without knowing add-path was negotiated, so a rule
+  with a Path Identifier is reported as a rule with no component, or
+  an RD of 0 octets for SAFI 134. The rule decodes, and the generator
+  writes the identifier where RFC 7911 section 3 puts it. The property
+  test gives flow spec feeds no Path Identifier for that reason, and
+  `test_the_receive_checks_do_not_know_add_path_yet` pins the gap. The
+  other NLRI walks in validation.rb, EVPN, MCAST-VPN and BGP-LS, have
+  the same shape and were not measured here.
+* **What `expected` cannot catch, a third time.** A component read off
+  the group number, a rate taken from the next group, a route target
+  from the first VRF, and SAFI 134 sent as 133 each pass a comparison
+  with `expected`. The unit, functional and lab tests state each by
+  hand.
+
+Measured against gobgpd 3.23.0 on 2026-11-04:
+
+* **Both SAFIs and both AFIs install.** GoBGP reads every component by
+  its type number with the operator octet whole, 0x81 for a one octet
+  value and 0x91 for a two octet port, the RD of section 8, and all
+  three actions with the rate per group.
+* **GoBGP prints a next hop of length 0 as its family's unspecified
+  address**, 0.0.0.0 under AFI 1 and :: under AFI 2.
+* FRR is not installed in the sandbox this was written in, so there is
+  no FRR case. FRR 8.4.4 has SAFI 133 and not SAFI 134
+  (docs/flow-spec.md section 12).
+
+Tests: `test/unit/gen/flow_rules_test.rb`; `test/unit/gen_test.rb`'s
+property test draws both families, dealt out in turn so every family
+gets three feeds; `test/functional/gen_test.rb` sends three feeds over
+loopback; `test/unit/sim/injector_test.rb` sends one through the
+injector over eBGP; `test/functional/lab/gen_gobgp_test.rb` reads all
+three back from GoBGP.

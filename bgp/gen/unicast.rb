@@ -111,7 +111,7 @@ module BGP
         @sets = {}
         # A spec whose first attribute set leaves no room for one route
         # is refused here, and not halfway through a feed.
-        Packer.batches([[nil, route_octets, set_for(row_at(set_key(0)))]]) { }
+        Packer.batches([[nil, route_len(route(0)), set_for(row_at(set_key(0)))]]) { }
       end
 
       def ipv4? ; @afi == IANA::AFI::IPv4 ; end
@@ -167,6 +167,11 @@ module BGP
         1 + (@mlen + 7) / 8 + (add_path? ? 4 : 0)
       end
 
+      # The octets route `r`, what #route answered, takes in a message.
+      # The same for every route here; a family whose routes differ in
+      # size, as a flow spec rule's components do, measures each.
+      def route_len(_r) ; route_octets ; end
+
       # The attribute values of group g, plain data, defaults filled in,
       # and the sender's rules applied when there is a sender.
       def row(g)
@@ -179,12 +184,13 @@ module BGP
       # large count is built one message at a time.
       def updates
         items = Enumerator.new do |y|
-          len, last_k, set = route_octets, nil, nil
+          last_k, set = nil, nil
           total.times do |i|
             k = set_key(i)
             set = set_for(row_at(k)) unless k == last_k
             last_k = k
-            y << [route(i), len, set]
+            r = route(i)
+            y << [r, route_len(r), set]
           end
         end
         Enumerator.new do |out|
@@ -203,8 +209,7 @@ module BGP
       # A withdrawal carries no attributes, so one packer does for all.
       def withdrawals
         packer = withdraw_packer
-        len = route_octets
-        items = Enumerator.new { |y| total.times { |i| y << [route(i), len] } }
+        items = Enumerator.new { |y| total.times { |i| r = route(i) ; y << [r, route_len(r)] } }
         Enumerator.new do |out|
           first = true
           packer.each_batch(items) do |batch, octets|

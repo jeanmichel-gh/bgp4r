@@ -53,15 +53,29 @@ module BGP
       module_function
 
       # The top level keys a spec takes.
-      KEYS = %w[family afi count per_update start path_id label rd vrfs route_target seed group attributes].freeze
+      KEYS = %w[family afi count per_update start path_id label rd vrfs route_target
+                source protocol destination_port rate redirect marking
+                seed group attributes].freeze
 
       # The keys that belong to some families only, and which. A spec
       # giving one to another family is refused by name in Gen.new, so
       # a label on a unicast spec is not dropped in silence.
+      FLOW = %w[flow_spec flow_spec_vpn].freeze
       FAMILY_KEYS = { 'label' => %w[labelled vpn vpn_multicast],
-                      'rd' => %w[vpn vpn_multicast],
-                      'vrfs' => %w[vpn vpn_multicast],
-                      'route_target' => %w[vpn vpn_multicast] }.freeze
+                      'rd' => %w[vpn vpn_multicast flow_spec_vpn],
+                      'vrfs' => %w[vpn vpn_multicast flow_spec_vpn],
+                      'route_target' => %w[vpn vpn_multicast flow_spec_vpn],
+                      'source' => FLOW, 'protocol' => FLOW,
+                      'destination_port' => FLOW, 'rate' => FLOW,
+                      'redirect' => FLOW, 'marking' => FLOW }.freeze
+
+      # The largest value each flow spec key's field holds: an IP
+      # protocol is one octet (RFC 8955 section 4.2.2.3), a port two
+      # (section 4.2.2.4), a DSCP six bits (section 7.5), and a rate is
+      # written as a float, so any 32 bit number is accepted (section
+      # 7.1).
+      FLOW_MAX = { 'protocol' => 0xff, 'destination_port' => 0xffff,
+                   'rate' => 0xffffffff, 'marking' => 63 }.freeze
 
       # The announce block keys bgp4r already uses everywhere else, with
       # the kind of value each is, which says the patterns it takes, and
@@ -105,6 +119,22 @@ module BGP
         out['path_id'] = value(s['path_id'], 'path_id', :int, U32, out['seed']) if s.key?('path_id')
         out['label'] = value(s['label'], 'label', :int, LABEL_MAX, out['seed']) if s.key?('label')
         out['vrfs'] = integer(s, 'vrfs', false, 1)
+        FLOW_MAX.each do |k, max|
+          out[k] = value(s[k], k, :int, max, out['seed']) if s.key?(k)
+        end
+        out['source'] = string(s, 'source', false)
+        if out['source']
+          begin
+            IPAddr.new(out['source'])
+          rescue IPAddr::Error => e
+            raise SpecError, "source #{out['source'].inspect} is not a prefix: #{e.message}"
+          end
+        end
+        # A redirect target does not step per VRF, so it is only read.
+        if s.key?('redirect')
+          distinguisher(s['redirect'], 'redirect')
+          out['redirect'] = s['redirect']
+        end
         %w[rd route_target].each do |k|
           next unless s.key?(k)
           d = distinguisher(s[k], k)
