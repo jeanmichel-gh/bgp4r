@@ -148,6 +148,7 @@ class TestConsole < Test::Unit::TestCase
     out = ::IO.popen(argv, 'r+', :err => [:child, :out]) do |io|
       io.puts "announce '10.6.0.0/24', med: 3"
       io.puts 'state'
+      io.puts 'guide 5'
       io.puts 'exit'
       io.close_write
       io.read
@@ -155,6 +156,7 @@ class TestConsole < Test::Unit::TestCase
     assert_equal(0, $?.exitstatus, out)
     assert_match(/session to 127\.0\.0\.1 up/, out)
     assert_match(/"Established"/, out, 'the prompt answered a verb')
+    assert_match(/^5\. Leaving$/, out, 'guide printed its section')
     u = @catcher.shift
     assert_kind_of(BGP::Update, u, 'nothing crossed: ' + out)
     assert_equal(['10.6.0.0/24'], nlri_of(u))

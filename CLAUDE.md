@@ -473,7 +473,10 @@ bgp/sim/                 `bgp4r-sim` the route injector, and `bgp4r
                          so the prompt sends what a scenario sends;
                          `ship` is the one way past it. **No verb is
                          named after an irb command**, which wins over
-                         a method: hence `verbs` and not `help`. **irb
+                         a method: hence `verbs` and not `help`, and
+                         `guide` for docs/console.md at the prompt,
+                         rendered by guide.rb with no gem and paged on
+                         a terminal. **irb
                          is a bundled gem from Ruby 4.0**, so it is
                          required only when asked for, the Gemfile
                          names it, and a missing irb is said before any
@@ -1592,7 +1595,7 @@ CI: `.github/workflows/test.yml` runs both suites on every push to master and ev
 
 `.github/workflows/capture.yml` is the one workflow that deploys a containerlab lab: it builds the `lab-node` and BIRD images, deploys `lab/routescope/bgp4r-lab`, and runs its `capture.sh`, on demand and on a push that changes that folder or the Dockerfile. Its log is what routescope's BGP fixtures are cut from.
 
-Baseline on 2026-11-04: 3462 tests, 34351 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
+Baseline on 2026-11-04: 3472 tests, 34395 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
 
 **That coverage figure is 98.5% for the library and the rest is the two
 programs, not a gap anywhere else.** Measured the same run: with

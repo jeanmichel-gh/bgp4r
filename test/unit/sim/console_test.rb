@@ -226,9 +226,108 @@ class BGP_Sim_Console_Test < Test::Unit::TestCase
   def test_verbs_lists_every_sending_verb
     @c.verbs
     %w[announce withdraw specimen fault replay notification refresh flap act ship
-       received last watch quiet sent announced specimens faults peers state].each do |v|
+       received last watch quiet sent announced specimens faults peers state guide].each do |v|
       assert_match(/^\s+#{v}\b|\b#{v}\b/, @out.string, v)
     end
+  end
+
+  # ---- guide: docs/console.md at the prompt ---------------------------
+
+  def guide_text(color = false)
+    BGP::Sim::Guide.new(File.read(BGP::Sim::Guide::PATH, :encoding => 'UTF-8'), color)
+  end
+
+  # Every section of the document is reachable by its number, so a
+  # section added to docs/console.md is reachable with no edit here.
+  def test_every_section_of_the_document_is_reachable_by_number
+    titles = File.read(BGP::Sim::Guide::PATH, :encoding => 'UTF-8').scan(/^## (\d+)\. /).flatten
+    assert_operator(titles.size, :>=, 8)
+    titles.each do |n|
+      text = guide_text.section(n.to_i)
+      assert_match(/\A#{n}\. /, text, n)
+      assert_no_match(/^#{n.to_i + 1}\. [A-Z]/, text, "section #{n} stops at the next one")
+    end
+  end
+
+  def test_guide_prints_the_whole_document_on_a_pipe
+    @c.guide
+    out = @out.string
+    assert_match(/\AThe console: bgp4r routegen --interact$/, out)
+    assert_match(/^8\. How it is tested/, out)
+    assert_no_match(/^```/, out, 'fence lines go')
+    assert_no_match(/^\|/, out, 'a table is laid out, not printed raw')
+    assert_no_match(/\e\[/, out, 'no colour on a pipe')
+  end
+
+  def test_guide_takes_a_number_or_a_word
+    @c.guide 6
+    assert_match(/\A6\. What the router at the far end needs/, @out.string)
+    @out.truncate(0) ; @out.rewind
+    @c.guide 'Leaving'
+    assert_match(/\A5\. Leaving/, @out.string)
+  end
+
+  # A number means the section numbered so, not the first heading that
+  # happens to hold the digit.
+  def test_a_number_is_a_section_number_and_not_a_substring
+    g = BGP::Sim::Guide.new("# T\n\n## 1. Read RFC 4271 first\n\nx\n\n## 4. Four\n\ny\n")
+    assert_match(/\A4\. Four/, g.section(4))
+    assert_match(/\A1\. Read/, g.section('rfc'))
+  end
+
+  # Fenced code is indented, so it stands apart without the fences.
+  def test_fenced_code_is_indented
+    text = guide_text.section(4)
+    assert_match(/^    verbs  +# what to type$/, text)
+    assert_match(/^\* \*\*Every verb/, text, 'prose is not indented')
+  end
+
+  def test_an_unknown_section_lists_the_ones_there_are
+    @c.guide 'no such thing'
+    assert_match(/No section "no such thing"/, @out.string)
+    assert_match(/^  4\. The prompt opens on the live session/, @out.string)
+  end
+
+  # The defaults table lines up, measured at the header's own offsets.
+  def test_a_table_is_laid_out_in_columns
+    rows = guide_text.section(1).lines.grep(/^  (Setting|Our AS|Hold time|Wait for)/)
+    assert_equal(4, rows.size)
+    col = rows.first.index('Default')
+    rows.drop(1).each { |r| assert_match(/\A\S/, r[col..], r) ; assert_equal(' ', r[col - 1], r) }
+  end
+
+  def test_colour_only_when_asked
+    plain, colour = guide_text.section(5), guide_text(true).section(5)
+    assert_no_match(/\e\[/, plain)
+    assert_match(/\e\[1mNo NOTIFICATION is sent\e\[22m/, colour)
+    assert_match(/\e\[36mnotification 6, 2\e\[39m/, colour)
+  end
+
+  # A StringIO that says it is a terminal, so guide colours and pages.
+  class Tty < StringIO
+    def tty? ; true ; end
+  end
+
+  def test_on_a_terminal_it_goes_through_the_pager_in_colour
+    Dir.mktmpdir do |dir|
+      file = File.join(dir, 'paged')
+      pager, ENV['PAGER'] = ENV['PAGER'], "cat > #{file}"
+      out = Tty.new
+      BGP::Sim::Console.new(@injector, out, 3).guide 5
+      assert_equal('', out.string, 'the pager had it, not the console')
+      assert_match(/\A\e\[1m5\. Leaving/, File.read(file))
+    ensure
+      ENV['PAGER'] = pager
+    end
+  end
+
+  def test_with_no_pager_a_terminal_still_gets_the_text
+    pager, ENV['PAGER'] = ENV['PAGER'], 'no-such-pager-bgp4r'
+    out = Tty.new
+    BGP::Sim::Console.new(@injector, out, 3).guide 5
+    assert_match(/5\. Leaving/, out.string)
+  ensure
+    ENV['PAGER'] = pager
   end
 
   # ---- bgp4r routegen --interact ---------------------------------------
