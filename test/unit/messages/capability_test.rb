@@ -224,6 +224,8 @@ class TestBgpMessagesCapabilityBrief < Test::Unit::TestCase
     'BGP::OPT_PARM::CAP::Extended_message'      => '02020600',
     'BGP::OPT_PARM::CAP::Extended_nexthop'      => '02080506000100010002',
     'BGP::OPT_PARM::CAP::Graceful_restart'      => '020440020078',
+    # RFC 9494 section 3.1: code 71, one 7-octet tuple.
+    'BGP::OPT_PARM::CAP::Long_lived_graceful_restart' => '0209470700010180000e10',
     'BGP::OPT_PARM::CAP::Mbgp'                  => '0206010400010001',
     'BGP::OPT_PARM::CAP::Orf'                   => '0209030700010001014001',
     # RFC 9234 section 4.1: capability code 9, one octet, the Role.
@@ -238,6 +240,7 @@ class TestBgpMessagesCapabilityBrief < Test::Unit::TestCase
     'BGP::OPT_PARM::DYN_CAP::Extended_message'  => '060000',
     'BGP::OPT_PARM::DYN_CAP::Extended_nexthop'  => '050006000100010002',
     'BGP::OPT_PARM::DYN_CAP::Graceful_restart'  => '4000020078',
+    'BGP::OPT_PARM::DYN_CAP::Long_lived_graceful_restart' => '47000700010180000e10',
     'BGP::OPT_PARM::DYN_CAP::Mbgp'              => '01000400010001',
     'BGP::OPT_PARM::DYN_CAP::Orf'               => '03000700010001014001',
     'BGP::OPT_PARM::DYN_CAP::Role'              => '09000103',
@@ -268,6 +271,7 @@ class TestBgpMessagesCapabilityBrief < Test::Unit::TestCase
     when 'Enhanced_route_refresh' then kl.new
     when 'Extended_message' then kl.new
     when 'Graceful_restart' then kl.new(0, 120)
+    when 'Long_lived_graceful_restart' then kl.new(1, 1, :preserved, 3600)
     when 'Add_path'         then kl.new(:send, 1, 1)
     when 'Role'             then kl.new(:customer)
     when 'Extended_nexthop' then kl.new(1, 1, 2)

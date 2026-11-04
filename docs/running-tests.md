@@ -98,7 +98,7 @@ Getting a session up and keeping it.
 
 | Feature | unit | func | lab | What |
 |---|---:|---:|---:|---|
-| `open` | 11 | 0 | 1 | OPEN, the optional parameters, and every capability |
+| `open` | 12 | 0 | 1 | OPEN, the optional parameters, and every capability |
 | `messages` | 5 | 0 | 0 | The common header, KEEPALIVE, UPDATE and NOTIFICATION |
 | `route-refresh` | 6 | 0 | 0 | ROUTE-REFRESH and outbound route filtering |
 | `fsm` | 3 | 0 | 0 | The finite state machine, the TCP session and the two IO threads |
@@ -440,7 +440,7 @@ ruby test/run_feature.rb mp-reach
 OPEN, the optional parameters, and every capability.
 
 - RFC 4271 section 4.2, RFC 5492, RFC 9072
-- 11 unit files
+- 12 unit files
 - lab:
   - `capabilities_frr_test`, needs frr
 
