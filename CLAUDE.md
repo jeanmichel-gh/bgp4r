@@ -564,7 +564,7 @@ bgp/gen.rb bgp/gen/      `BGP::Gen`, UPDATEs and withdrawals in bulk from a
                          evpn_routes.rb all eleven EVPN route types,
                          rt_constrain_routes.rb SAFI 132 and
                          link_state_routes.rb BGP-LS topologies, SAFI
-                         71 and 72,
+                         71 and 72, mcast_vpn_routes.rb SAFI 5,
                          each a subclass, with per_vrf.rb the RD, VRF
                          and route target logic VPN, VPN flow spec and
                          EVPN share. Only IPv4
@@ -799,11 +799,12 @@ docs/                    protocol-testing.md: using bgp4r to test a router
                          attributes that vary per route, as one pure
                          module that bgp4r's tests, `bgp4r-sim` and
                          routescope's scenarios all drive with the same
-                         JSON spec. **Phases 0 to 3, 4a to 4e, 4d2 and
-                         4g are built**: unicast, multicast, labelled,
-                         both VPN families and both flow spec families,
-                         both AFIs, all eleven EVPN route types,
-                         RT-constrain and BGP-LS topologies,
+                         JSON spec. **Phases 0 to 4 are built**, so
+                         every family the build gate knows: unicast,
+                         multicast, labelled, both VPN families and
+                         both flow spec families, both AFIs, all eleven
+                         EVPN route types, RT-constrain, all seven
+                         MCAST-VPN route types and BGP-LS topologies,
                          with patterns and the injector, and section 13
                          says what they measured;
                          section 12 is the plan and its status table
@@ -7509,7 +7510,7 @@ in place, with a dated block in the header naming them.
   own test confirms is the most expensive kind of wrong, because
   nothing fails until somebody runs the real thing.
 
-### Route generation, `bgp/gen`. Phases 0 to 3, 4a to 4e, 4d2 and 4g Done
+### Route generation, `bgp/gen`. Phases 0 to 4 Done
 
 `docs/route-generation.md` is the design and the plan. Read it before
 any work on generating traffic, on `RouteGenerator`, or on what
@@ -7679,8 +7680,8 @@ Phases, with status kept in the document's section 12 table:
    **4d2 Done**: the other eight EVPN route types, so all eleven, with
    RFC 7432's ESI Label community on type 1 and ES-Import Route Target
    on type 4. `start` steps the ESI for types 1 and 4, the Multicast
-   Group for 6, 7, 8, 10 and 11, and the Region ID for 9. 4f is to do.
-   Three things worth knowing:
+   Group for 6, 7, 8, 10 and 11, and the Region ID for 9. Three things
+   worth knowing:
    * **The ES-Import Route Target is octets 1 to 6 of the ESI**, the
      high six of the value after its Type octet, RFC 7432 section 7.6.
      Octets 0 to 5 passed the property test, the seventh thing
@@ -7691,6 +7692,21 @@ Phases, with status kept in the document's section 12 table:
      `ESI_ARBITRARY` and its nine value octets, and the ESI label as
      the field less its low bit, so 300 is 4800. It knows no type above
      5, so the lab sends none.
+
+   **4f Done**: MCAST-VPN, SAFI 5, all seven route types of RFC 6514
+   section 4, with `rd`, `vrfs` and `route_target` per VPN. `start`
+   steps the originator for type 1, the Source AS for type 2 and the
+   Multicast Group for 3 to 7. So phase 4 is done. Three things worth
+   knowing:
+   * **The AFI is the customer family**, RFC 6515 section 1.1: a type
+     with a group takes it from the group, and types 1 and 2 take
+     `afi` from the spec, never from a PE address.
+   * **The add-path gap holds for MCAST-VPN**, measured and pinned in
+     `test/unit/gen/mcast_vpn_routes_test.rb`.
+   * **GoBGP 3.23.0 has no SAFI 5**, so the lab measures the absence:
+     a generated feed is counted message by message as discarded, the
+     session stays up and a unicast route still installs. It vouches
+     for nothing about our octets.
 5. Churn. To do.
 6. `LabHelper` and the coverage matrix take specs. To do.
 7. routescope scenarios use specs. routescope's column.
@@ -7775,15 +7791,16 @@ the guide.
 
 1. **Done.** `BGP::Sim::Console` in bgp/sim/console.rb and `bgp4r
    routegen --interact`. The verbs go through `Injector#act`.
-2. **Designed, not started.** `bgp4r console`: the library loaded, and
+2. **Designed, 2a done.** `bgp4r console`: the library loaded, and
    sessions opened at the prompt with `connect` and `listen`, or by flag.
    `--back-to-back` runs two bgp4r speakers in one process over
    loopback, with `remote` the console on the other side. The design was
    agreed with the owner on 2026-11-04 and is docs/console.md section 9.
    Three pull requests, each to be marked here as it lands:
-   * **2a.** Fix the zero-length ORIGIN crash on receive, under "Known
-     issues to work on". Back to back, every fault lands on a bgp4r
-     receiver.
+   * **2a. Done**, in #270. An ORIGIN of any length is kept and replays,
+     and `Neighbor#render` names a `to_s` that raises rather than
+     letting it kill the event thread. All 18 fault cases now cross to a
+     bgp4r receiver on one session, which `sim_test.rb` asserts.
    * **2b. Done.** `bgp4r console`, in bgp/sim/console_command.rb,
      with `connect`, `listen`, `shutdown`, `no_shutdown` and `clear`.
      Each `connect` or `listen` builds an Injector of its own, because a
@@ -7827,7 +7844,7 @@ Smaller things:
 
 * **validation.rb walks a flow spec rule without knowing add-path was negotiated**, so a rule carrying an RFC 7911 Path Identifier is reported as malformed with a session reset. `Attr::Check.attribute` is handed the octets and the AS width and nothing about the session, so the four octets in front of the rule are read as its length and components. The rule itself decodes, since `Flow_spec` is told. Measured on 2026-11-04 while building phase 4c of `bgp/gen`:
   `ruby -I. -e 'require "bgp/gen"; i = Class.new(BGP::Update::Info) { def initialize ; super(true, :lenient) ; end ; def path_id?(*) ; true ; end }.new; u = BGP::Gen.new("family" => "flow_spec", "start" => "10.0.0.0/24", "count" => 1, "path_id" => 7).updates.first; p BGP::Update.new(u.encode(BGP::Update::Info.new(true)).is_packed, i).path_attribute.errors.collect(&:reason)'`
-  prints one finding, "flow spec NLRI with no component". EVPN has the same gap, measured in phase 4d: the four octets are read as a Route Type and a Length, and `test_the_receive_checks_do_not_know_add_path_yet` in `test/unit/gen/evpn_routes_test.rb` pins it. BGP-LS has it too, measured in phase 4g: the four octets are read as a Type and a Total NLRI Length, and `test/unit/gen/link_state_routes_test.rb` pins it. MCAST-VPN walks its NLRIs the same way and was not measured. The fix threads the add-path answer per AFI and SAFI into the check, which is a signature change on a method many callers use, so it wants a decision. `test_the_receive_checks_do_not_know_add_path_yet` in `test/unit/gen/flow_rules_test.rb` pins it, and the property test in `test/unit/gen_test.rb` excludes the case with a comment saying so.
+  prints one finding, "flow spec NLRI with no component". EVPN has the same gap, measured in phase 4d: the four octets are read as a Route Type and a Length, and `test_the_receive_checks_do_not_know_add_path_yet` in `test/unit/gen/evpn_routes_test.rb` pins it. BGP-LS has it too, measured in phase 4g: the four octets are read as a Type and a Total NLRI Length, and `test/unit/gen/link_state_routes_test.rb` pins it. MCAST-VPN has it too, measured in phase 4f: the four octets are read as a Route Type and a Length, and `test/unit/gen/mcast_vpn_routes_test.rb` pins it. The fix threads the add-path answer per AFI and SAFI into the check, which is a signature change on a method many callers use, so it wants a decision. `test_the_receive_checks_do_not_know_add_path_yet` in `test/unit/gen/flow_rules_test.rb` pins it, and the property test in `test/unit/gen_test.rb` excludes the case with a comment saying so.
 * **An extended community whose hash value is a scalar cannot be written as text through `CommunityKeys`**, so `traffic_marking:10` in an `extended_communities` list raises. `extended_community_hash` always makes a list, `{:traffic_marking=>[10]}`, and `Traffic_marking.new` wants the Integer. `origin_validation_state` and the other kinds built with `new(v)` rather than `new(*v)` have the same shape. Unwrapping a one value list is not the fix, since `mac_mobility` reads `v[0]` and would read bit 0 of an Integer. `bgp/gen`'s flow spec actions build their hashes directly for this reason.
   `ruby -I. -e 'require "bgp4r"; require "bgp/daemon/community_keys"; BGP::Daemon::CommunityKeys.community_attributes("extended_communities" => ["traffic_marking:10"])'`
 
@@ -7840,9 +7857,9 @@ Smaller things:
   `ruby -I. -e 'require "bgp/capture/cli"; require "tmpdir"; Dir.mktmpdir { |t| s = File.join(t, "s"); Dir.mkdir(s); File.write(File.join(s, ".gitignore"), "*.log\n!keep.log\n"); File.write(File.join(s, "a.log"), "x\n"); File.write(File.join(s, "keep.log"), "x\n"); d = File.join(t, "d"); BGP::Capture::CLI.copy_lab(s, d); p Dir.children(d).sort }'`
   prints `[".gitignore"]` where git would have kept `keep.log`. (`Dir.children` and not `Dir.glob`, which hides a dotfile without `FNM_DOTMATCH` and so prints `[]` for both the broken and the fixed case: measured, after the first draft of this line said `Dir.glob`.) **Nothing is wrong today**: no `.gitignore` in the tree uses `!`, and the one that exists, `bgp4r-lab`'s, is read correctly, which `test_the_real_gitignore_of_bgp4r_lab_keeps_its_directories_out` asserts against the real file. The fix is a decision rather than a patch, because doing negation properly means doing ordering with it: either shell out to `git check-ignore`, which makes the copier need git where today it does not, or walk the patterns in order with a last-match-wins rule and accept that the rest of gitignore is still missing.
   * **The basename-only version of this was the bug and it is fixed.** It was ospfv2's `copy_lab` inherited whole, filed here as latent because no topology had a `.gitignore` to expose it, and `bgp4r-lab` arrived with one carrying `recordings/` and `clab-*/` the same day. So the window between filing it and it mattering was hours, which is the argument for fixing a latent defect in the code you are already writing rather than filing it.
-* **A received UPDATE carrying a zero-length ORIGIN kills a bgp4r receiver's event dispatch thread**, and the trigger is a log line that is built whatever the log level is. `Neighbor#dispatch_event` does `log_debug "Recv #{msg}\n"`, so `Update#to_s` runs before the level is looked at; `Origin.new` accepts a zero-length value and `Origin#encode` then raises `TypeError: no implicit conversion of nil into Integer` on `pack`. `dispatch_event` rescues only `SessionClosed`, so the thread dies and the session stops handling events, silently. Measured on 2026-11-02:
-  `ruby -I. -e 'require "bgp4r"; u = BGP::Fault.update(:origin_length, :my_as => 1, :next_hop => "10.0.0.1", :prefixes => ["10.0.0.0/8"]); o = u.encode(BGP::Update::Info.new(true, :lenient)); p BGP::Update.new(o.is_packed, BGP::Update::Info.new(true, :lenient)).to_s' `
-  **1 of the 18 catalog cases does it**, measured case by case: the other 17 render and each reports exactly one finding, which is why `test/functional/sim_test.rb` injects `origin_value` and says so. No existing test met it, because the matrix sends the catalog to GoBGP and FRR and never to a bgp4r receiver. Two faults in one and the fix is a decision rather than a patch: the interpolation should be behind the level check, which is `Log`'s business and every `log_debug` in the file; and `Origin#to_s` should not raise on a value its own constructor took, which is the keep-what-you-cannot-read rule one layer further in than `Attr::Gap` reaches.
+* **Three fault cases do not replay on receive: MED, AS_PATH and ATOMIC_AGGREGATE keep only the octets they read.** A bgp4r receiver reads each and reports the fault, but `encode` writes back a different attribute: a 5-octet MED as 4 octets, an AS_PATH segment that overruns its value as a shorter one, and an ATOMIC_AGGREGATE of length 1 as length 0. The other 15 of the 18 catalog cases replay octet for octet. Measured on 2026-11-04:
+  `ruby -I. -e 'require "bgp4r"; i = BGP::Update::Info.new(true, :lenient); %i[med_length as_path_segment atomic_length].each { |n| o = BGP::Fault.update(n, :my_as => 1, :next_hop => "10.0.0.1", :prefixes => ["10.0.0.0/8"]).encode(i); p [n, BGP::Update.new(o.dup.is_packed, i).encode(i) == o] }'`
+  It is the shape `Origin` had until step 2a of the console plan fixed it: read the whole value, keep what is past the field as a tail, and hash the unusual case under its own keys. Each of the three is its own small change. The ORIGIN one was found because a zero-length value also made `to_s` raise, which killed a receiver's event thread through its debug line; `Neighbor#render` now names such an exception rather than raising it, so the other three never reached that far.
 * **`BGP::IO::Output` transcodes a String message when `Encoding.default_internal` is set**, so `send_message` with octets is not the pass-through Conventions says it is. The writer does `obj.respond_to?(:encode) ? obj.encode : obj`, and a String answers `encode`: with no `default_internal`, which is the default, `String#encode` returns the same bytes and everything is fine, and under `ruby -E UTF-8:UTF-8` it transcodes. Measured on 2026-11-02:
   `ruby -E UTF-8:UTF-8 -e 'p [255,0,1].pack("C*").encode.unpack1("H*")'` prints `efbfbd0001`, so `ff` became the three octets of the replacement character. **It is every send, not only a replayed capture**: `send_update` enqueues `u.encode(@session_info)`, which is a String too. Nothing is wrong today and nothing in CI sets the flag; the fix is `obj.is_a?(String) ? obj : obj.encode` in `bgp/io.rb`, which is one line and its own topic, since it is on every session's write path.
 * **`GET /api/sent` reports the `as_path` an announce asked for, not the one that went out**, when the eBGP prepend applied. `Injector#announced` joins `body['as_path']` and never sees `Speaker#path_attribute`, so a `bgp4r-sim` in AS 65010 announcing `"as_path":[65020]` reports `65020` where the wire carries `65010 65020`, and a scenario asserting against the injector and one asserting against the router disagree by one AS. With `as_path_literal: true` the two agree, since nothing is prepended. The fix is not one line, because a row is per prefix and the prepend is per session: an announce to one eBGP and one iBGP peer sent two paths. The prepend itself is no longer an issue: phase 0b of `docs/route-generation.md` added `as_path_literal`, and `replay` remains the octet-level route.

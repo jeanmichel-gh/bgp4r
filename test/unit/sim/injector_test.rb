@@ -973,6 +973,24 @@ class BGP_Sim_Injector_Test < Test::Unit::TestCase
     assert_equal(2, inj.sent.summary[:prefixes_withdrawn])
   end
 
+  # Phase 4f. An MCAST-VPN route goes out in SAFI 5 with the session's
+  # next hop, 4 octets under AFI 2 too (RFC 6515 section 1.1), and the
+  # AFI is the group's family.
+  def test_an_mcast_vpn_route_goes_out
+    inj = injector
+    spec = { 'family' => 'mcast_vpn', 'route_type' => 7, 'start' => 'ff3e::1', 'count' => 2, 'rd' => '65001:7',
+             'source_as' => 65_001, 'source' => '2001:db8::9' }
+    inj.act('announce', { 'spec' => spec }, false)
+    mp = peer.updates.first.path_attribute[:mp_reach]
+    assert_equal([2, 5, '10.0.0.1'], [mp.afi, mp.safi, mp.nexthops])
+    assert_equal([7, 7], mp.nlris.collect(&:type))
+    assert_equal({ 'route_type' => 7, 'rd' => '65001:7', 'source_as' => 65_001, 'source' => '2001:db8::9',
+                   'group' => 'ff3e::2', 'origin' => 0, 'as_path' => [65_001], 'next_hop' => '10.0.0.1' },
+                 inj.plan('spec' => spec)[:plans].first[:rows].last)
+    inj.act('withdraw', { 'spec' => spec }, false)
+    assert_equal(2, inj.sent.summary[:prefixes_withdrawn])
+  end
+
   # Phase 4e. A membership route goes out in SAFI 132 with the session's
   # next hop, and the plan names its route target as ADMIN:N.
   def test_a_route_target_membership_route_goes_out

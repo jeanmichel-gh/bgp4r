@@ -207,7 +207,7 @@ class TestBgpGenFlowRules < Test::Unit::TestCase
       { 'destination_port' => 65536 } => /destination_port/,
       { 'marking' => 64 } => /marking/,
       { 'redirect' => '65000' } => /not ADMIN:N/,
-      { 'rd' => '65000:1' } => /'rd' is for vpn, vpn_multicast, flow_spec_vpn, evpn, bgp_ls_vpn and not for 'flow_spec'/,
+      { 'rd' => '65000:1' } => /'rd' is for vpn, vpn_multicast, flow_spec_vpn, evpn, bgp_ls_vpn, mcast_vpn and not for 'flow_spec'/,
     }.each do |bad, why|
       e = assert_raise(BGP::Gen::SpecError, bad.inspect) { gen(bad) }
       assert_match(why, e.message)
@@ -218,7 +218,7 @@ class TestBgpGenFlowRules < Test::Unit::TestCase
       v = { 'source' => '10.0.0.0/8', 'redirect' => '65000:1' }.fetch(k, 1)
       e = assert_raise(BGP::Gen::SpecError, k) { BGP::Gen.new('start' => '10.0.0.0/8', 'count' => 1, k => v) }
       # source is EVPN's too since phase 4d2, as a route type 6's Multicast Source.
-      families = k == 'source' ? 'flow_spec, flow_spec_vpn, evpn' : 'flow_spec, flow_spec_vpn'
+      families = k == 'source' ? 'flow_spec, flow_spec_vpn, evpn, mcast_vpn' : 'flow_spec, flow_spec_vpn'
       assert_match(/'#{k}' is for #{families} and not for 'unicast'/, e.message)
     end
   end

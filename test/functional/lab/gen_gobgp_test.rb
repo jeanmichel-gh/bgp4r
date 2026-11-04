@@ -794,6 +794,46 @@ class LabGenGobgpTest < Test::Unit::TestCase
     rtc_crosses(4200000000, 5, 1000, 4200000001)
   end
 
+  # ---- phase 4f: MCAST-VPN ---------------------------------------------
+
+  # One row of `gobgp neighbor`'s message statistics, received side.
+  def received(kind)
+    @router.neighbor('127.0.0.1').to_s[/^\s*#{kind}:\s+\d+\s+(\d+)/, 1].to_i
+  end
+
+  # GoBGP 3.23.0 has no SAFI 5, so this measures an absence and vouches
+  # for nothing about the octets, which is what mcast_vpn_gobgp_test.rb
+  # records for one hand built route. What a generated feed adds is the
+  # count: every message is read far enough to find its AFI and SAFI and
+  # counted as discarded, none as an UPDATE, and the session stays up,
+  # so a feed of many messages is no different from one. A unicast
+  # control route before and after says the session still carries
+  # routes.
+  def test_an_mcast_vpn_feed_is_discarded_message_by_message
+    session(false)
+    drops = []
+    @peer.on_state_change { |now, was| drops << [was, now] }
+    control = lambda do |p|
+      BGP::Gen.new('start' => p, 'count' => 1,
+                   'attributes' => { 'as_path' => [OUR_AS], 'next_hop' => '192.0.2.1' }).updates.each { |u| @peer.send_message u }
+    end
+    control.call('198.51.100.0/24')
+    wait_for('GoBGP to install the control route') { @router.path('198.51.100.0/24') }
+    updates, discarded = received('Updates'), received('Discarded')
+    g = BGP::Gen.new('family' => 'mcast_vpn', 'route_type' => 3, 'start' => '239.1.0.0', 'count' => 2000,
+                     'rd' => '65000:1', 'source' => '10.0.0.9', 'originator' => '192.0.2.7',
+                     'attributes' => { 'as_path' => [OUR_AS], 'next_hop' => '192.0.2.1' })
+    sent = g.updates.to_a
+    assert_operator(sent.size, :>, 5, 'a feed of many messages')
+    sent.each { |u| @peer.send_message u }
+    wait_for("GoBGP to discard #{sent.size} MCAST-VPN UPDATEs") { received('Discarded') - discarded == sent.size }
+    assert_equal(updates, received('Updates'), 'none counted as an UPDATE')
+    assert_match(/unknown route family. AFI: 1, SAFI: 5/, @router.log)
+    control.call('198.51.101.0/24')
+    wait_for('GoBGP to install a control route after the feed') { @router.path('198.51.101.0/24') }
+    assert_equal([], drops, 'the session never left Established')
+  end
+
   # ---- phase 4g: BGP-LS topologies -------------------------------------
 
   # GoBGP's key for a route, which is its own reading of the descriptors.

@@ -103,17 +103,18 @@ class TestBgpGenSpec < Test::Unit::TestCase
   # and not here, or the reverse, is seen.
   def test_the_family_keys
     flow = %w[flow_spec flow_spec_vpn]
-    rd = %w[vpn vpn_multicast flow_spec_vpn evpn bgp_ls_vpn]
+    rd = %w[vpn vpn_multicast flow_spec_vpn evpn bgp_ls_vpn mcast_vpn]
     evpn = %w[evpn]
+    mvpn = %w[mcast_vpn]
     ls = %w[bgp_ls bgp_ls_vpn]
     assert_equal({ 'label' => %w[labelled vpn vpn_multicast evpn], 'rd' => rd, 'vrfs' => rd, 'route_target' => rd,
-                   'source' => flow + evpn, 'protocol' => flow, 'destination_port' => flow, 'rate' => flow,
+                   'source' => flow + evpn + mvpn, 'protocol' => flow, 'destination_port' => flow, 'rate' => flow,
                    'redirect' => flow, 'marking' => flow,
-                   'route_type' => evpn, 'ip' => evpn, 'esi' => evpn, 'ethernet_tag' => evpn,
+                   'route_type' => evpn + mvpn, 'ip' => evpn, 'esi' => evpn, 'ethernet_tag' => evpn,
                    'gateway' => evpn, 'mac_mobility' => evpn, 'router_mac' => evpn,
-                   'pmsi_label' => evpn, 'originator' => evpn, 'igmp_flags' => evpn,
-                   'max_response_time' => evpn, 'leaf' => evpn, 'es_import' => evpn, 'esi_label' => evpn,
-                   'origin_as' => %w[rt_constrain], 'prefix_length' => %w[rt_constrain],
+                   'pmsi_label' => evpn, 'originator' => evpn + mvpn, 'igmp_flags' => evpn,
+                   'max_response_time' => evpn, 'leaf' => evpn + mvpn, 'es_import' => evpn, 'esi_label' => evpn,
+                   'source_as' => mvpn, 'origin_as' => %w[rt_constrain], 'prefix_length' => %w[rt_constrain],
                    'default' => %w[rt_constrain],
                    'topology' => ls, 'columns' => ls, 'protocol_id' => ls, 'identifier' => ls,
                    'autonomous_system' => ls, 'prefixes' => ls, 'prefix_start' => ls,

@@ -57,7 +57,7 @@ module BGP
                 source protocol destination_port rate redirect marking
                 route_type ip esi ethernet_tag gateway mac_mobility router_mac pmsi_label
                 originator igmp_flags max_response_time leaf es_import esi_label
-                origin_as prefix_length default
+                origin_as prefix_length default source_as
                 topology columns protocol_id identifier autonomous_system prefixes prefix_start
                 node_name igp_metric admin_group max_bandwidth srlg prefix_metric
                 seed group attributes].freeze
@@ -67,21 +67,22 @@ module BGP
       # a label on a unicast spec is not dropped in silence.
       FLOW = %w[flow_spec flow_spec_vpn].freeze
       EVPN = %w[evpn].freeze
+      MVPN = %w[mcast_vpn].freeze
       RTC = %w[rt_constrain].freeze
       LS = %w[bgp_ls bgp_ls_vpn].freeze
-      RD = %w[vpn vpn_multicast flow_spec_vpn evpn bgp_ls_vpn].freeze
+      RD = %w[vpn vpn_multicast flow_spec_vpn evpn bgp_ls_vpn mcast_vpn].freeze
       FAMILY_KEYS = { 'label' => %w[labelled vpn vpn_multicast evpn],
                       'rd' => RD, 'vrfs' => RD, 'route_target' => RD,
-                      'source' => FLOW + EVPN, 'protocol' => FLOW,
+                      'source' => FLOW + EVPN + MVPN, 'protocol' => FLOW,
                       'destination_port' => FLOW, 'rate' => FLOW,
                       'redirect' => FLOW, 'marking' => FLOW,
-                      'route_type' => EVPN, 'ip' => EVPN, 'esi' => EVPN,
+                      'route_type' => EVPN + MVPN, 'ip' => EVPN, 'esi' => EVPN,
                       'ethernet_tag' => EVPN, 'gateway' => EVPN,
                       'mac_mobility' => EVPN, 'router_mac' => EVPN,
-                      'pmsi_label' => EVPN, 'originator' => EVPN,
+                      'pmsi_label' => EVPN, 'originator' => EVPN + MVPN,
                       'igmp_flags' => EVPN, 'max_response_time' => EVPN,
-                      'leaf' => EVPN, 'es_import' => EVPN, 'esi_label' => EVPN,
-                      'origin_as' => RTC, 'prefix_length' => RTC, 'default' => RTC,
+                      'leaf' => EVPN + MVPN, 'es_import' => EVPN, 'esi_label' => EVPN,
+                      'source_as' => MVPN, 'origin_as' => RTC, 'prefix_length' => RTC, 'default' => RTC,
                       'topology' => LS, 'columns' => LS, 'protocol_id' => LS,
                       'identifier' => LS, 'autonomous_system' => LS,
                       'prefixes' => LS, 'prefix_start' => LS, 'node_name' => LS,
@@ -189,6 +190,8 @@ module BGP
         out['protocol_id'] = integer(s, 'protocol_id', false, 0, 0xff)
         out['identifier'] = integer(s, 'identifier', false, 0, 2**64 - 1)
         out['autonomous_system'] = integer(s, 'autonomous_system', false, 0, U32)
+        # RFC 6514 section 4.6: a 4-octet Source AS.
+        out['source_as'] = integer(s, 'source_as', false, 0, U32)
         out['prefixes'] = integer(s, 'prefixes', false, 0)
         out['prefix_start'] = string(s, 'prefix_start', false)
         out['node_name'] = string(s, 'node_name', false)
