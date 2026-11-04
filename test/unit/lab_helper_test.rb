@@ -189,4 +189,74 @@ class LabHelperTest < Test::Unit::TestCase
                    "#{name} is spelled alike on both sides")
     end
   end
+
+  # ---- phase 6: a bgp/gen spec against a router -----------------------
+
+  # A router that holds whatever the peer sent it, counted by prefix, so
+  # LabHelper#spec_crosses can be run with no daemon at all.
+  class FakeRouter
+    attr_reader :asked
+    def initialize ; @held = {} ; @asked = [] ; end
+    def take(update)
+      info = BGP::Update::Info.new(true)
+      u = BGP::Update.new(update.encode(info).is_packed, info)
+      Array(u.nlri && u.nlri.to_ary).each { |p| @held[p] = true }
+      Array(u.withdrawn && u.withdrawn.to_ary).each { |p| @held.delete(p) }
+    end
+    def path_count(family) ; @asked << family ; @held.size ; end
+  end
+
+  class FakePeer
+    attr_reader :sent
+    def initialize(router) ; @router = router ; @sent = 0 ; end
+    def send_message(u) ; @sent += 1 ; @router.take(u) ; end
+  end
+
+  # Runs spec_crosses with wait_for answering at once, so a router that
+  # never reaches the count fails rather than waiting 60 seconds.
+  class Driver
+    include LabHelper
+    def wait_for(message, **) ; yield or raise "never: #{message}" ; end
+  end
+
+  SPEC = { 'family' => 'unicast', 'start' => '10.0.0.0/24', 'count' => 300,
+           'attributes' => { 'next_hop' => '192.0.2.1', 'med' => { 'step' => { 'start' => 0, 'by' => 1 } } } }
+
+  def test_spec_crosses_sends_the_feed_and_withdraws_it
+    require 'bgp/gen'
+    r = FakeRouter.new
+    peer = FakePeer.new(r)
+    seen = nil
+    g = Driver.new.spec_crosses(r, 'ipv4', SPEC, peer) { |rows| seen = rows }
+    assert_equal(300, g.total)
+    assert_equal(10, seen.size, 'ten rows spread across the feed')
+    assert_equal('10.0.0.0/24', seen.first['prefix'])
+    assert_equal('10.1.43.0/24', seen.last['prefix'], 'the last route of the feed')
+    assert_equal(0, r.path_count('ipv4'), 'withdrawn')
+    assert_equal(g.updates.count + g.withdrawals.count, peer.sent)
+    assert_equal(['ipv4'], r.asked.uniq, 'the family is asked in the router\'s own name')
+  end
+
+  # The count is the assertion, so a router that drops one route fails.
+  def test_a_route_the_router_dropped_fails_the_count
+    require 'bgp/gen'
+    r = FakeRouter.new
+    def r.take(u) ; super ; @held.delete('10.0.5.0/24') ; end
+    e = assert_raise(RuntimeError) { Driver.new.spec_crosses(r, 'ipv4', SPEC, FakePeer.new(r)) }
+    assert_match(/hold 300 ipv4 paths/, e.message)
+  end
+
+  def test_spec_crosses_takes_a_gen_already_built
+    require 'bgp/gen'
+    r = FakeRouter.new
+    g = BGP::Gen.new(SPEC)
+    assert_same(g, Driver.new.spec_crosses(r, 'ipv4', g, FakePeer.new(r)))
+  end
+
+  def test_the_sample_spreads_across_the_rows
+    assert_equal([0, 33, 66, 99, 132, 166, 199, 232, 265, 299], LabHelper.sample(300))
+    assert_equal([0, 1, 2], LabHelper.sample(3), 'every row when there are fewer')
+    assert_equal([], LabHelper.sample(0))
+    assert_equal([0, 99], LabHelper.sample(100, 2))
+  end
 end

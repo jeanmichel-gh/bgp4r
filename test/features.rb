@@ -392,7 +392,7 @@ module Features
                    gen/rt_constrain_routes_test gen/link_state_routes_test gen/mcast_vpn_routes_test gen/churn_test
                    daemon/community_keys_test sim/injector_test],
       :functional => %w[gen_test],
-      :lab   => %w[gen_gobgp_test],
+      :lab   => %w[gen_gobgp_test gen_frr_test],
     },
 
     'capture' => {

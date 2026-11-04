@@ -617,6 +617,19 @@ module LabHelper
       nil
     end
 
+    # How many paths the router holds in one family, from `global rib
+    # summary`, or nil while it is not answering. The JSON RIB is no use
+    # for counting a large feed: GoBGP prints each path's MP_REACH_NLRI
+    # with every prefix of the UPDATE it came in, so 2000 IPv6 routes are
+    # tens of megabytes per poll. LabHelper#spec_crosses reads this.
+    def path_count(family = 'ipv4')
+      out, status = client_run('global', 'rib', 'summary',
+                               '-a', self.class.client_family(family))
+      status.success? ? out[/Path: (\d+)/, 1].to_i : nil
+    rescue SystemCallError
+      nil
+    end
+
     # The one rule in that family, or nil when it holds none. Every flow
     # spec case here sends exactly one, so this saves each test naming a
     # key it would have to spell the router's way.
@@ -947,6 +960,16 @@ module LabHelper
       answer['routes'] || {}
     end
 
+    # How many prefixes the router took from our peer in one family,
+    # from its own summary, or nil while it is not answering. FRR's own
+    # count rather than this reader's, so a large feed is not read back
+    # as JSON to be counted. LabHelper#spec_crosses reads this.
+    def path_count(family = 'ipv4 unicast')
+      s = vty_json("show bgp #{family} summary json") or return nil
+      p = (s['peers'] || {})[@peer] or return nil
+      p['pfxRcd'].to_i
+    end
+
     # One path for a prefix, best first, or nil.
     def path(prefix)
       paths = (rib || {})[prefix] or return nil
@@ -1045,6 +1068,51 @@ module LabHelper
     rescue Errno::ENOENT
       ''
     end
+  end
+
+  # ---- a bgp/gen spec against a router ---------------------------------
+  #
+  # Phase 6 of docs/route-generation.md: a lab test hands the router a
+  # spec rather than hand built UPDATEs. Both routers answer
+  # `path_count(family)` in their own family name, so this one method
+  # serves either.
+  #
+  # It sends every UPDATE of the spec, waits until the router counts
+  # exactly `total` paths, yields a sample of the `expected` rows for the
+  # caller to compare with what the router printed, then withdraws and
+  # waits for zero. **The count is the assertion that cannot pass by
+  # luck**: a route the router dropped never reaches it.
+  #
+  # spec:   a spec Hash, or a BGP::Gen already built
+  # peer:   anything with send_message, usually a BGP::Neighbor
+  # sender: the session rules, as BGP::Gen.new takes them
+  # sample: how many expected rows to yield, spread across the feed
+  def spec_crosses(router, family, spec, peer, sender: nil, sample: 10, timeout: 60)
+    require 'bgp/gen'
+    g = spec.is_a?(BGP::Gen) ? spec : BGP::Gen.new(spec, sender)
+    total = g.total
+    g.updates.each { |u| peer.send_message u }
+    wait_for("the router to hold #{total} #{family} paths", timeout: timeout) {
+      router.path_count(family) == total
+    }
+    if block_given?
+      rows = g.expected.to_a
+      yield LabHelper.sample(rows.size, sample).collect { |i| rows[i] }
+    end
+    g.withdrawals.each { |u| peer.send_message u }
+    wait_for("the router to hold no #{family} paths", timeout: timeout) {
+      router.path_count(family) == 0
+    }
+    g
+  end
+
+  # n indexes spread across size rows, the first and the last among
+  # them, so a pattern's value is checked at more than one point of its
+  # cycle. Fewer when there are fewer rows.
+  def self.sample(size, n = 10)
+    return [] if size < 1
+    return (0...size).to_a if size <= n
+    (0...n).collect { |k| (size - 1) * k / (n - 1) }.uniq
   end
 
   # Wait until the block returns a truthy value, or fail with message.
