@@ -130,6 +130,7 @@ neighbors:
     capabilities: [as4_byte, route_refresh]   # optional, default [as4_byte]
                             # any name Neighbor#capability takes: route_refresh,
                             # enhanced_route_refresh, as4_byte, graceful_restart,
+                            # llgr,
                             # extended_nexthop, extended_message, add_path,
                             # role, orf, dynamic,
                             # mbgp, and mbgp_<afi>_<safi> such as mbgp_ipv6_unicast.

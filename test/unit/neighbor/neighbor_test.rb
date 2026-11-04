@@ -636,6 +636,7 @@ class TestBgpNeighbor < Test::Unit::TestCase
       [:graceful_restart, 0, 180] => ['Graceful_restart', '0204400200b4'],
       [:extended_nexthop]        => ['Extended_nexthop', '02080506000100010002'],
       [:extended_message]        => ['Extended_message', '02020600'],
+      [:llgr, 1, 1, 0x80, 3600]  => ['Long_lived_graceful_restart', '0209470700010180000e10'],
       [:add_path, 1, 1, 3]       => ['Add_path', '0206450400010301'],
       [:role, :customer]         => ['Role', '0203090103'],
       [:orf]                     => ['Orf', '02020300'],

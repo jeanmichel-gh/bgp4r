@@ -1380,8 +1380,8 @@ simply wrong about:
 ruby -I. test/functional/lab/rib_router_frr_test.rb
 ```
 
-The OPEN capabilities FRR sends that bgp4r names, and FRR's own report
-of the ones we send. 4 seconds against bgpd 8.4.4:
+The OPEN capabilities FRR sends that bgp4r names, codes 6 and 71, and
+FRR's own report of the ones we send. 9 seconds against bgpd 8.4.4:
 ```
 ruby -I. test/functional/lab/capabilities_frr_test.rb
 ```
@@ -1613,7 +1613,7 @@ CI: `.github/workflows/test.yml` runs both suites on every push to master and ev
 
 `.github/workflows/capture.yml` is the one workflow that deploys a containerlab lab: it builds the `lab-node` and BIRD images, deploys `lab/routescope/bgp4r-lab`, and runs its `capture.sh`, on demand and on a push that changes that folder or the Dockerfile. Its log is what routescope's BGP fixtures are cut from.
 
-Baseline on 2026-11-04: 3580 tests, 36269 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
+Baseline on 2026-11-04: 3593 tests, 36338 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
 
 **That coverage figure is 98.5% for the library and the rest is the two
 programs, not a gap anywhere else.** Measured the same run: with
@@ -7046,7 +7046,31 @@ the registry's.
   octets whatever was negotiated, since raising that limit is a change
   to every packer and the receive path. GoBGP 3.23.0 sends neither code
   6 nor 71, measured on 2026-11-04, so that test has no GoBGP twin.
-  FRR 8.4.4 does send 71, which is next.
+* **Code 71 is named now too**, as `CAP::Long_lived_graceful_restart`,
+  RFC 9494 section 3.1: 7-octet tuples of AFI, SAFI, Flags and a 24-bit
+  Long-Lived Stale Time. The reserved flag bits and a short last tuple
+  are kept and echoed. The same FRR file holds it both ways, and **FRR's
+  log is the only outside reader of the stale time**: debug
+  neighbor-events prints the value it read, 11259375 for our 0xabcdef,
+  where its JSON says only `advertisedAndReceived`. Its
+  `longLivedGracefulRestartByPeer` tests the extended next hop flag
+  where it means the LLGR one, so it is empty; a display bug in
+  bgp_vty.c at stable/8.4, recorded and not filed. FRR reads a tuple
+  only for a family that is negotiated and in our Graceful Restart
+  capability, and ignores every family when we send LLGR alone, which
+  is section 4.1's rule. bgp4r still sends LLGR alone if asked, since
+  nothing validates. So both capabilities this lab found unnamed with
+  an RFC behind them are named; 73 and 76 are drafts.
+* **That file activates no IPv6 family, because FRR 10.5.1 refuses the
+  OPEN otherwise.** With IPv6 unicast activated over an IPv4 session and
+  no zebra it logs "No local IPv6 address, and zebra does not support V6
+  routing with v4 nexthops" and sends Cease 6/0, where 8.4.4 only
+  warned. Every other FRR lab file still activates IPv6, so on FRR 10
+  they all fail the same way. FRR 10's packages also carry an AppArmor
+  profile for `/usr/lib/frr/bgpd` that refuses the harness's pid file
+  under `/tmp`, as root too; `FRR_BGPD` pointing at a copy of the
+  binary elsewhere runs it unconfined. Both measured on 2026-11-04 on
+  the owner's VM, and neither is fixed in the harness yet.
 
 **The `### GoBGP` block of `capture.sh` ran next, and it settles the
 two things that node is on the topology for.** All three kinds of

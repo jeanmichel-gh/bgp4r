@@ -791,6 +791,14 @@ module ToHashCatalog
     gr
   end
 
+  # Every field RFC 9494 section 3.1 gives a tuple: the F bit, a
+  # reserved flag bit set, a stale time that fills all 24 bits, and a
+  # short last tuple kept as a tail.
+  ENTRIES['BGP::OPT_PARM::CAP::Long_lived_graceful_restart'] = entry(:ok, nil, nil) do
+    BGP::OPT_PARM::CAP::Long_lived_graceful_restart.new(
+      wire('0212471000010180000e1000020141ffffffaabb'))
+  end
+
   ENTRIES['BGP::OPT_PARM::CAP::Orf'] = entry(:ok, nil, nil) do
     orf = BGP::OPT_PARM::CAP::Orf.new
     orf.add(BGP::OPT_PARM::CAP::Orf::Entry.new(1, 1, [1, 1], [2, 1], [3, 1]))

@@ -230,6 +230,10 @@ module BGP::OPT_PARM
       # RFC 8654 section 3: code 6, length 0. Wire bytes, so a value no
       # RFC gives it is kept rather than dropped.
       CAP::Extended_message.new(s)
+    when CAP_LLGR
+      # RFC 9494 section 3.1: code 71, seven octets per family. Wire
+      # bytes, so a short last tuple is kept rather than dropped.
+      CAP::Long_lived_graceful_restart.new(s)
     when CAP_ROLE
       # RFC 9234 section 4.1: code 9, one octet, the speaker's BGP Role.
       CAP::Role.new(s)
@@ -273,6 +277,7 @@ module BGP::OPT_PARM
     when CAP_GR                              then CAP::Graceful_restart.new(h)
     when CAP_EXTENDED_NEXTHOP                then CAP::Extended_nexthop.new(h)
     when CAP_EXTENDED_MESSAGE                then CAP::Extended_message.new(h)
+    when CAP_LLGR                            then CAP::Long_lived_graceful_restart.new(h)
     when CAP_ROLE                            then CAP::Role.new(h)
     when CAP_DYNAMIC                         then CAP::Dynamic.new(h)
     when CAP_ENHANCED_ROUTE_REFRESH          then CAP::Enhanced_route_refresh.new(h)
@@ -297,6 +302,8 @@ module BGP::OPT_PARM
         DYN_CAP::Add_path.new(s)
       when CAP_EXTENDED_MESSAGE
         DYN_CAP::Extended_message.new(s)
+      when CAP_LLGR
+        DYN_CAP::Long_lived_graceful_restart.new(s)
       when CAP_ROLE
         DYN_CAP::Role.new(s)
       when CAP_GR
