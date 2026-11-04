@@ -375,6 +375,14 @@ module Features
       :lab   => %w[routegen_loopback_test routegen_test generate_test],
     },
 
+    'console' => {
+      :area  => 'programs',
+      :about => 'An irb prompt on a live session: bgp4r routegen --interact',
+      :doc   => 'docs/console.md',
+      :unit  => %w[sim/console_test],
+      :functional => %w[console_test],
+    },
+
     'gen' => {
       :area  => 'programs',
       :about => 'bgp/gen: UPDATEs and withdrawals from a spec, and what they meant',

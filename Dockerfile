@@ -45,7 +45,10 @@ FROM ruby:${RUBY_VERSION}-slim AS base
 WORKDIR /app
 
 # Dev and test gems only. The library itself has no runtime gems.
+# Not the console group: irb needs erb, which compiles a native
+# extension, and this image has no compiler. See the Gemfile.
 COPY Gemfile ./
+ENV BUNDLE_WITHOUT=console
 RUN bundle install --jobs 4
 
 COPY . .

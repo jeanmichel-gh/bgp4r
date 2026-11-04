@@ -80,6 +80,9 @@ jobs:
       - name: Functional test (bgp4r-sim over its HTTP API and a session)
         run: bundle exec ruby -I. test/functional/sim_test.rb
         timeout-minutes: 3
+      - name: Functional test (the console, bgp4r routegen --interact)
+        run: bundle exec ruby -I. test/functional/console_test.rb
+        timeout-minutes: 2
       - name: Functional test (bgp/gen, a generated feed into a table)
         run: bundle exec ruby -I. test/functional/gen_test.rb
         timeout-minutes: 2

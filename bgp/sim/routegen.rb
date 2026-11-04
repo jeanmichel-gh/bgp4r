@@ -22,6 +22,7 @@
 
 require 'bgp/sim/injector'
 require 'bgp/sim/views'
+require 'bgp/sim/console'
 
 module BGP
   module Sim
@@ -88,6 +89,9 @@ flags below build one in memory.
       --communities "X" communities, as "100:1 200:1"
       --timeout SECS    how long to wait for the session (default 30)
       --keep            keep the session up until Ctrl-C
+      --interact        open an irb prompt on the session instead of
+                        exiting: see bgp/sim/console.rb. Sends nothing
+                        first unless --start or --count asks for a range
   -l, --log FILE        log file, - for standard output
   -d, --debug           log every message too
   -h, --help            this help
@@ -107,10 +111,13 @@ TEXT
         opts = parse(argv)
         return 0 if opts[:help]
         return 1 if opts[:error]
+        # Before any session, so a missing irb is said at once rather
+        # than after a feed has gone out.
+        Console.load_irb if opts[:interact]
         config, blocks = plan(opts, env)
         return 1 if config.nil?
         run(config, blocks, opts)
-      rescue Injector::Refused, ArgumentError, KeyError, SystemCallError => e
+      rescue Injector::Refused, ArgumentError, KeyError, SystemCallError, LoadError => e
         @err.puts "routegen: #{e.message}"
         1
       end
@@ -126,14 +133,19 @@ TEXT
             return [nil, nil]
           end
           blocks = Array(config['announce'])
-          if blocks.empty?
+          if blocks.empty? && !opts[:interact]
             @err.puts "routegen: #{opts[:config]} has no announce block, so there is " \
                       'nothing to send. Add one, or use the flags.'
             return [nil, nil]
           end
           [config.reject { |k, _v| k == 'announce' }, blocks]
         else
-          [from_flags(opts, env), [generate_block(opts)]]
+          # **An interactive session starts silent**, which is the
+          # injector's own rule: a person at a prompt asked for a
+          # session, not for the default one prefix. A range asked for
+          # by --start or --count still goes first.
+          silent = opts[:interact] && !opts[:start] && !opts[:count]
+          [from_flags(opts, env), silent ? [] : [generate_block(opts)]]
         end
       rescue Errno::ENOENT
         @err.puts "routegen: #{opts[:config]}: no such file"
@@ -183,8 +195,12 @@ TEXT
         # see `Injector#drain`, which this found by losing the last
         # UPDATE of every range.
         @err.puts 'routegen: the session did not take everything' unless @injector.drain
-        report
-        keep(opts) if opts[:keep]
+        report unless blocks.empty?
+        if opts[:interact]
+          Console.new(@injector, @out).interact
+        elsif opts[:keep]
+          keep(opts)
+        end
         0
       ensure
         @injector.stop if @injector
@@ -235,6 +251,14 @@ TEXT
       end
 
       def setup_log(opts, config)
+        # **At a prompt the log goes to a file unless -l names one**,
+        # because a session logs from its own threads and every line
+        # would land in the middle of what the person is typing.
+        if opts[:interact] && opts[:log].nil?
+          require 'tmpdir'
+          opts[:log] = File.join(Dir.tmpdir, "bgp4r-routegen-#{Process.pid}.log")
+          @out.puts "routegen: logging to #{opts[:log]}"
+        end
         io = if opts[:log].nil? || opts[:log] == '-'
                $stdout
              else
@@ -268,6 +292,7 @@ TEXT
           o.on('--communities LIST') { |v| opts[:communities] = v }
           o.on('--timeout SECS') { |v| opts[:timeout] = v }
           o.on('--keep') { opts[:keep] = true }
+          o.on('--interact') { opts[:interact] = true }
           o.on('-l', '--log FILE') { |v| opts[:log] = v }
           o.on('-d', '--debug') { opts[:debug] = true }
           o.on('-h', '--help') { opts[:help] = true }
