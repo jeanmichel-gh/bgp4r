@@ -1073,6 +1073,76 @@ class BGP_Sim_Injector_Test < Test::Unit::TestCase
     assert_raise(BGP::Daemon::NoSession) { inj.plan('spec' => SPEC) }
   end
 
+  # ---- churn, phase 5 ---------------------------------------------------
+
+  CHURN = { 'events' => 40, 'routes' => 4, 'withdraw' => 0.3, 'seed' => 5,
+            'attributes' => { 'med' => { 'step' => { 'start' => 1, 'by' => 1 } } } }.freeze
+
+  # A churn rides on announce beside a spec, and sends one UPDATE per
+  # event, each a withdrawal or an announcement of one of the spec's
+  # routes, with our AS in front over eBGP.
+  def test_a_churn_sends_one_update_per_event
+    inj = injector
+    answer = inj.act('announce', { 'spec' => SPEC, 'churn' => CHURN }, false)
+    assert_equal('announce', answer[:action])
+    assert_equal(40, peer.updates.size)
+    kinds = answer[:summary]['kinds']
+    assert_equal(40, kinds.values.sum)
+    withdrawals = peer.updates.count { |u| u.withdrawn && !u.withdrawn.to_ary.empty? }
+    assert_equal(kinds['withdraw'], withdrawals)
+    peer.updates.reject(&:withdrawn).each do |u|
+      assert_equal(1, u.nlri.to_ary.size)
+      assert_match(/\A11\.0\.[0-3]\.0\/24\z/, u.nlri.to_ary.first)
+      assert_equal('65001 65020', u.path_attribute[:as_path].as_path)
+    end
+    feed = inj.sent.feeds.first
+    assert_equal(['churn', 40, 40], [feed[:action], feed[:updates_sent], feed[:prefixes_sent]])
+    s = inj.sent.summary
+    assert_equal(kinds['withdraw'], s[:prefixes_withdrawn])
+    assert_equal(40 - kinds['withdraw'], s[:prefixes_sent])
+  end
+
+  # The plan with the same churn answers what the peer holds afterwards,
+  # which is the state the events leave and not the spec's.
+  def test_a_plan_with_a_churn_answers_the_state_after_it
+    inj = injector
+    plan = inj.plan('spec' => SPEC, 'churn' => CHURN)[:plans].first
+    inj.act('announce', { 'spec' => SPEC, 'churn' => CHURN }, false)
+    held = inj.plan('spec' => SPEC)[:plans].first[:rows].to_h { |r| [r['prefix'], r['med']] }
+    peer.updates.each do |u|
+      u.withdrawn.to_ary.each { |p| held.delete(p) } if u.withdrawn
+      u.nlri.to_ary.each { |p| held[p] = u.path_attribute[:multi_exit_disc].to_i } if u.nlri
+    end
+    assert_equal(held.size, plan[:total])
+    assert_equal(held.keys.sort, plan[:rows].collect { |r| r['prefix'] }.sort)
+    plan[:rows].each { |r| assert_equal(held[r['prefix']], r['med'], r['prefix']) }
+    assert_equal(held.size, plan[:churn]['held'])
+  end
+
+  def test_a_churn_is_paced_at_its_rate
+    inj = injector
+    t = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    inj.act('announce', { 'spec' => SPEC, 'churn' => { 'events' => 6, 'rate' => 20 } }, false)
+    took = Process.clock_gettime(Process::CLOCK_MONOTONIC) - t
+    assert_equal(6, peer.updates.size)
+    # Five gaps of 50 ms: at least the gaps, and not much past them.
+    assert_operator(took, :>=, 0.25)
+    assert_operator(took, :<, 2)
+  end
+
+  def test_a_churn_is_refused_where_it_cannot_go
+    inj = injector
+    e = assert_raise(BGP::Sim::Injector::Refused) { inj.act('announce', 'prefixes' => ['10.0.0.0/8'], 'churn' => CHURN) }
+    assert_match(/churn goes with a spec/, e.message)
+    e = assert_raise(BGP::Sim::Injector::Refused) { inj.act('announce', 'spec' => SPEC, 'churn' => { 'events' => 0 }) }
+    assert_match(/churn: churn.events is at least 1/, e.message)
+    e = assert_raise(BGP::Sim::Injector::Refused) { inj.act('announce', 'spec' => SPEC, 'churn' => CHURN, 'med' => 1) }
+    assert_match(/med/, e.message)
+    assert_raise(BGP::Sim::Injector::Refused) { inj.act('withdraw', 'spec' => SPEC, 'churn' => CHURN) }
+    assert_raise(BGP::Sim::Injector::Refused) { inj.plan('spec' => SPEC, 'churn' => { 'bogus' => 1 }) }
+    assert_equal([], peer.sent)
+  end
+
   # ---- mp_reach, mp_unreach and specimen ------------------------------
 
   MP = { 'afi' => 2, 'safi' => 1, 'nexthop' => ['2001:db8::1'],

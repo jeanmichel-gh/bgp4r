@@ -131,6 +131,7 @@ module LabGroups
       evpn_frr_test
       fault_matrix_frr_test
       flow_spec_frr_test
+      gen_frr_test
       link_state_frr_test
       mcast_vpn_frr_test
       rib_router_frr_test

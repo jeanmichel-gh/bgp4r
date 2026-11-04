@@ -573,6 +573,9 @@ bgp/gen.rb bgp/gen/      `BGP::Gen`, UPDATEs and withdrawals in bulk from a
                          asks that. sender.rb is the session a spec goes out
                          on, the eBGP and iBGP rules an announce block
                          gets, so `bgp4r-sim` and `expected` agree.
+                         churn.rb is phase 5, `Gen#churn`: changes to
+                         routes a spec announced, one UPDATE an event,
+                         and `expected` after them.
                          **The first message of each
                          feed is measured against the packer's arithmetic**,
                          so a slip raises `Gen::PackingError` before it
@@ -800,13 +803,15 @@ docs/                    protocol-testing.md: using bgp4r to test a router
                          attributes that vary per route, as one pure
                          module that bgp4r's tests, `bgp4r-sim` and
                          routescope's scenarios all drive with the same
-                         JSON spec. **Phases 0 to 4 are built**, so
+                         JSON spec. **Phases 0 to 6 are built**, so
                          every family the build gate knows: unicast,
                          multicast, labelled, both VPN families and
                          both flow spec families, both AFIs, all eleven
                          EVPN route types, RT-constrain, all seven
                          MCAST-VPN route types and BGP-LS topologies,
-                         with patterns and the injector, and section 13
+                         with patterns, churn, the injector and both
+                         lab routers through `LabHelper#spec_crosses`,
+                         and section 13
                          says what they measured;
                          section 12 is the plan and its status table
                          is updated by each step's pull request
@@ -1602,7 +1607,7 @@ CI: `.github/workflows/test.yml` runs both suites on every push to master and ev
 
 `.github/workflows/capture.yml` is the one workflow that deploys a containerlab lab: it builds the `lab-node` and BIRD images, deploys `lab/routescope/bgp4r-lab`, and runs its `capture.sh`, on demand and on a push that changes that folder or the Dockerfile. Its log is what routescope's BGP fixtures are cut from.
 
-Baseline on 2026-11-04: 3541 tests, 35041 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
+Baseline on 2026-11-04: 3572 tests, 36214 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
 
 **That coverage figure is 98.5% for the library and the rest is the two
 programs, not a gap anywhere else.** Measured the same run: with
@@ -7511,7 +7516,7 @@ in place, with a dated block in the header naming them.
   own test confirms is the most expensive kind of wrong, because
   nothing fails until somebody runs the real thing.
 
-### Route generation, `bgp/gen`. Phases 0 to 4 Done
+### Route generation, `bgp/gen`. Phases 0 to 6 Done
 
 `docs/route-generation.md` is the design and the plan. Read it before
 any work on generating traffic, on `RouteGenerator`, or on what
@@ -7708,8 +7713,40 @@ Phases, with status kept in the document's section 12 table:
      a generated feed is counted message by message as discarded, the
      session stays up and a unicast route still installs. It vouches
      for nothing about our octets.
-5. Churn. To do.
-6. `LabHelper` and the coverage matrix take specs. To do.
+5. Churn. **Done**: `Gen#churn(c)` answers a `Gen::Churn` over the
+   routes the spec announces, with `events`, `summary` and `expected`,
+   the state after every event. `bgp4r-sim` takes `churn` beside a
+   `spec` on `announce`, paced at its `rate`, and `/api/plan` takes it
+   too. Three things worth knowing:
+   * **The churn's attributes go in before the Sender's rules**, in
+     `Unicast#row` through `with_overlay`, so a churned AS_PATH still
+     gets our AS over eBGP. Every family takes a churn with no code of
+     its own.
+   * **It is on `announce` and not an eleventh action**, because
+     `test_the_action_table_is_the_documented_ten` holds the ten to
+     routescope's `Drivers::Sim::ACTIONS`. Adding one failed it and
+     its HTTP twin, which is what they are for.
+   * **The ninth thing `expected` could not catch**: churn attributes
+     read one event late pass the functional and lab tests. Only
+     `churn_test.rb`'s hand-stated MED per replacement fails.
+6. `LabHelper` and the coverage matrix take specs. **Done**:
+   `LabHelper#spec_crosses(router, family, spec, peer)` sends a spec,
+   waits for the router's own count, yields a sample of `expected`, and
+   withdraws. `Gobgpd#path_count` and `Frr#path_count` answer the count,
+   and `gen_frr_test.rb` is the FRR twin of `gen_gobgp_test.rb`. The
+   coverage matrix has a `gen` column. Three things worth knowing:
+   * **The routers in that column come from a `GEN_FAMILIES` line** in
+     each gen lab file, read as text, and `coverage_matrix_test.rb`
+     holds it to the file's `'family'` literals both ways. So every
+     spec in those two files names its family, unicast included.
+   * **FRR 8.4.4 sends an eBGP route back to the peer it came from**,
+     so `pfxSnt` equals `pfxRcd` and counting the wrong one passes.
+     The count reads `pfxRcd` all the same.
+   * **The matrix's never-sent attribute list now overstates**: it
+     comes from the fault catalog, and generated feeds have put
+     COMMUNITIES, LARGE_COMMUNITIES, EXTENDED_COMMUNITIES,
+     MP_UNREACH_NLRI and the BGP-LS Attribute in front of a router.
+     Counting them needs what each lab spec builds. Not done.
 7. routescope scenarios use specs. routescope's column.
 
 ### Vendor style `to_s`, a phase with no pull request yet

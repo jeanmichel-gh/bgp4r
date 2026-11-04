@@ -46,6 +46,14 @@ require_relative 'lab_helper'
 class LabGenGobgpTest < Test::Unit::TestCase
   include LabHelper
 
+  # The families a feed here is generated in. coverage_matrix.rb reads
+  # this line as text, and test/unit/coverage_matrix_test.rb holds it to
+  # the 'family' literals below, so neither can drift from the other.
+  # mcast_vpn is here and is an absence: GoBGP has no SAFI 5, so that
+  # case vouches only for the router discarding the feed.
+  GEN_FAMILIES = %w[unicast multicast labelled vpn vpn_multicast flow_spec flow_spec_vpn
+                    evpn rt_constrain mcast_vpn bgp_ls]
+
   OUR_AS = 65001
   THEIR_AS = 65002
   MED, LOCAL_PREF, COMMUNITIES, LARGE = 4, 5, 8, 32   # attribute type codes
@@ -120,30 +128,23 @@ class LabGenGobgpTest < Test::Unit::TestCase
   # MP_REACH_NLRI with every prefix of the UPDATE it came in, so 2000
   # IPv6 routes are tens of megabytes of JSON per poll.
   def path_count(afi)
-    out, status = @router.client_run('global', 'rib', 'summary', '-a', FAMILY[afi])
-    status.success? ? out[/Path: (\d+)/, 1].to_i : -1
+    @router.path_count(FAMILY[afi])
   end
 
-  # Announce, compare a sample with expected, withdraw, empty.
+  # Announce, compare a sample with expected, withdraw, empty, through
+  # LabHelper#spec_crosses, which is phase 6's shared half: the count,
+  # the sample and the withdrawal are the same for every router.
   def crosses(spec)
     g = BGP::Gen.new(spec)
-    count = spec['count']
-    g.updates.each { |u| @peer.send_message u }
-    wait_for("GoBGP to hold #{count} routes", :timeout => 60) { path_count(g.afi) == count }
-    held = rib(g.afi)
-    rows = g.expected.to_a
-    # Ten rows spread across the feed, the first and the last among them,
-    # so a pattern's value is checked at more than one point of its cycle.
-    (0..9).collect { |k| (rows.size - 1) * k / 9 }.uniq.each do |i|
-      want = rows[i]
-      paths = held[want['prefix']]
-      assert_not_nil(paths, "GoBGP holds #{want['prefix']}")
-      assert_equal(1, paths.size, 'one path per prefix')
-      read(paths.first, want)
+    spec_crosses(@router, FAMILY[g.afi], g, @peer) do |rows|
+      held = rib(g.afi)
+      rows.each do |want|
+        paths = held[want['prefix']]
+        assert_not_nil(paths, "GoBGP holds #{want['prefix']}")
+        assert_equal(1, paths.size, 'one path per prefix')
+        read(paths.first, want)
+      end
     end
-    g.withdrawals.each { |u| @peer.send_message u }
-    wait_for('GoBGP to hold nothing', :timeout => 60) { path_count(g.afi) == 0 }
-    g
   end
 
   # What GoBGP read, against the row. Each attribute GoBGP prints is
@@ -170,13 +171,13 @@ class LabGenGobgpTest < Test::Unit::TestCase
 
   def test_ipv4_unicast
     session
-    crosses('start' => '10.0.0.0/24', 'count' => 3000,
+    crosses('family' => 'unicast', 'start' => '10.0.0.0/24', 'count' => 3000,
             'attributes' => ATTRIBUTES.merge('next_hop' => '192.0.2.1'))
   end
 
   def test_ipv6_unicast
     session
-    crosses('start' => '2001:db8::/64', 'count' => 1500,
+    crosses('family' => 'unicast', 'start' => '2001:db8::/64', 'count' => 1500,
             'attributes' => ATTRIBUTES.merge('next_hop' => '2001:db8::1'))
   end
 
@@ -189,7 +190,7 @@ class LabGenGobgpTest < Test::Unit::TestCase
   def test_a_path_id_on_every_prefix
     session(true)
     [['10.0.0.0/24', '192.0.2.1'], ['2001:db8::/64', '2001:db8::1']].each do |start, nh|
-      crosses('start' => start, 'count' => 1000, 'path_id' => 77,
+      crosses('family' => 'unicast', 'start' => start, 'count' => 1000, 'path_id' => 77,
               'attributes' => { 'next_hop' => nh, 'as_path' => [OUR_AS] })
     end
   end
@@ -199,7 +200,7 @@ class LabGenGobgpTest < Test::Unit::TestCase
   # as a sampled row that disagrees with its expected values.
   def test_patterns_and_a_group
     session
-    crosses('start' => '10.0.0.0/24', 'count' => 2000, 'group' => 3, 'seed' => 21,
+    crosses('family' => 'unicast', 'start' => '10.0.0.0/24', 'count' => 2000, 'group' => 3, 'seed' => 21,
             'attributes' => {
               'origin' => { 'every' => { 'n' => 5, 'values' => [0, 2] } },
               'next_hop' => { 'step' => { 'start' => '192.0.2.1', 'by' => 1, 'wrap' => '192.0.2.200' } },
@@ -211,7 +212,7 @@ class LabGenGobgpTest < Test::Unit::TestCase
 
   def test_ipv6_patterns
     session
-    crosses('start' => '2001:db8::/64', 'count' => 1000, 'seed' => 22,
+    crosses('family' => 'unicast', 'start' => '2001:db8::/64', 'count' => 1000, 'seed' => 22,
             'attributes' => {
               'next_hop' => { 'cycle' => %w[2001:db8::1 2001:db8::2 2001:db8::3] },
               'as_path' => { 'length' => { 'count' => { 'cycle' => [1, 3] }, 'min' => 64512, 'max' => 64600 } },
@@ -272,14 +273,61 @@ class LabGenGobgpTest < Test::Unit::TestCase
 
   def test_the_router_holds_what_the_injector_planned
     sim_session
-    plan_crosses('start' => '10.0.0.0/24', 'count' => 2000, 'group' => 4,
+    plan_crosses('family' => 'unicast', 'start' => '10.0.0.0/24', 'count' => 2000, 'group' => 4,
                  'attributes' => { 'as_path' => [65010], 'med' => { 'cycle' => [5, 50, 500] },
                                    'communities' => { 'count' => { 'base' => '65000:1',
                                                                    'n' => { 'cycle' => [1, 2] } } } })
-    plan_crosses('start' => '2001:db8::/64', 'count' => 1000,
+    plan_crosses('family' => 'unicast', 'start' => '2001:db8::/64', 'count' => 1000,
                  'attributes' => { 'med' => { 'step' => { 'start' => 1, 'by' => 3 } } })
   end
 
+
+  # ---- phase 5: churn ----------------------------------------------------
+
+  # **The interop claim of phase 5**: a churn sent through the injector,
+  # one UPDATE per event, leaves GoBGP holding exactly what the dry run
+  # with the same churn says, every row and not a sample, since a churn
+  # touches routes at random. A withdrawal GoBGP missed, or a
+  # replacement it read as a second path, shows as a prefix too many or
+  # a MED that is not the last one sent.
+  def churn_crosses(spec, churn)
+    afi = spec['start'].include?(':') ? 2 : 1
+    @injector.act('announce', { 'spec' => spec }, false)
+    wait_for("GoBGP to hold #{spec['count']} routes", :timeout => 60) { path_count(afi) == spec['count'] }
+    plan = @injector.plan('spec' => spec, 'churn' => churn, 'limit' => 10_000)[:plans].first
+    rows = plan[:rows]
+    assert_equal(plan[:total], rows.size)
+    answer = @injector.act('announce', { 'spec' => spec, 'churn' => churn }, false)
+    assert_equal(plan[:churn], answer[:summary], 'the plan and the send counted the same events')
+    held = nil
+    wait_for("GoBGP to hold the #{rows.size} routes the churn left", :timeout => 60) do
+      path_count(afi) == rows.size && (held = rib(afi)).size == rows.size
+    end
+    rows.each do |want|
+      paths = held[want['prefix']]
+      assert_not_nil(paths, "GoBGP holds #{want['prefix']}")
+      assert_equal(1, paths.size, "one path for #{want['prefix']}")
+      read(paths.first, want)
+    end
+    @injector.act('withdraw', { 'spec' => spec }, false)
+    wait_for('GoBGP to hold nothing', :timeout => 60) { path_count(afi) == 0 }
+    plan[:churn]
+  end
+
+  def test_the_router_holds_what_a_churn_leaves
+    sim_session
+    s = churn_crosses({ 'family' => 'unicast', 'start' => '10.0.0.0/24', 'count' => 300,
+                        'attributes' => { 'as_path' => [65010], 'med' => 7 } },
+                      'events' => 1500, 'routes' => 100, 'withdraw' => 0.3, 'seed' => 9,
+                      'attributes' => { 'med' => { 'step' => { 'start' => 100, 'by' => 1 } },
+                                        'communities' => { 'cycle' => [['65000:1'], ['65000:2']] } })
+    assert_operator(s['kinds']['withdraw'], :>, 0)
+    assert_operator(s['kinds']['announce'], :>, 0)
+    s = churn_crosses({ 'family' => 'unicast', 'start' => '2001:db8::/64', 'count' => 200 },
+                      'events' => 600, 'withdraw' => 0.5, 'seed' => 3, 'rate' => 2000,
+                      'attributes' => { 'med' => { 'random' => { 'min' => 1, 'max' => 9 } } })
+    assert_operator(s['withdrawn'], :>, 0)
+  end
 
   # ---- phase 4a: labelled and multicast --------------------------------
 

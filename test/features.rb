@@ -389,10 +389,10 @@ module Features
       :doc   => 'docs/route-generation.md',
       :unit  => %w[gen_test gen/spec_test gen/packer_test gen/unicast_test gen/vary_test gen/sender_test
                    gen/multicast_test gen/labelled_test gen/vpn_test gen/flow_rules_test gen/evpn_routes_test
-                   gen/rt_constrain_routes_test gen/link_state_routes_test gen/mcast_vpn_routes_test
+                   gen/rt_constrain_routes_test gen/link_state_routes_test gen/mcast_vpn_routes_test gen/churn_test
                    daemon/community_keys_test sim/injector_test],
       :functional => %w[gen_test],
-      :lab   => %w[gen_gobgp_test],
+      :lab   => %w[gen_gobgp_test gen_frr_test],
     },
 
     'capture' => {
