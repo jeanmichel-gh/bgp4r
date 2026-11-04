@@ -53,6 +53,16 @@ module BGP
       log(:debug, "#{self.class} #{txt}")
     end
 
+    # A received message as text for the debug line. The line is built
+    # whatever the log level, so a to_s that raises on odd octets would
+    # kill the event thread and the session with it, silently. A peer
+    # chooses those octets, so the exception is named instead.
+    private def render(msg)
+      msg.to_s
+    rescue StandardError => e
+      "#{msg.class} (to_s raised #{e.class}: #{e.message})"
+    end
+
     def initialize(*args)
       @opt_parms = []
       @events = BGP::Events.new
@@ -354,7 +364,7 @@ module BGP
           return
         end
         log_info "Recv#{msg.class.to_s.split('::').last}"
-        log_debug "Recv #{msg}\n"
+        log_debug "Recv #{render(msg)}\n"
         if msg.is_a?(Update)
           rcv_update(msg)
         elsif msg.is_a?(Notification)

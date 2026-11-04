@@ -88,4 +88,39 @@ class Origin_Test < Test::Unit::TestCase
     assert_equal('400101ff', BGP::Origin.new(255).to_shex)
     assert_raise(ArgumentError) { BGP::Origin.new(256) }
   end
+  # RFC 4271 section 4.3 gives ORIGIN one octet and RFC 7606 section
+  # 7.1 makes any other length malformed. A value of another length is
+  # still kept whole and written back, so a capture replays, and the
+  # fault is validation.rb's to report. A zero length one left @origin
+  # nil and made encode and to_s raise, which killed a Neighbor's event
+  # thread through its debug line.
+  def test_a_zero_length_origin_is_kept_and_replays
+    o = BGP::Origin.new(['400100'].pack('H*').is_packed)
+    assert_nil(o.to_i)
+    assert_equal('400100', o.to_shex)
+    assert_match(/bogus/, o.to_s)
+    assert_equal({:origin=>{}}, o.to_hash)
+    assert_equal('400100', BGP::Origin.new(o.to_hash).to_shex)
+    assert_equal('400100', BGP::Path_attribute.new(o.to_hash).to_shex)
+  end
+
+  def test_a_long_origin_keeps_its_tail
+    o = BGP::Origin.new(['400103010203'].pack('H*').is_packed)
+    assert_equal(1, o.to_i)
+    assert_equal('400103010203', o.to_shex)
+    assert_equal({:origin=>{:code=>1, :tail=>'0203'}}, o.to_hash)
+    assert_equal('400103010203', BGP::Origin.new(o.to_hash).to_shex)
+    assert_equal('400103010203', BGP::Path_attribute.new(o.to_hash).to_shex)
+  end
+
+  # Inside an UPDATE, where it was met: the attribute set reads and
+  # renders, replays octet for octet, and still reports the fault.
+  def test_a_zero_length_origin_in_an_update_reads_renders_and_replays
+    i = BGP::Update::Info.new(true, :lenient)
+    hex = 'ffffffffffffffffffffffffffffffff002c02000000134001004002060201000000014003040a000001080a'
+    u = BGP::Update.new([hex].pack('H*').is_packed, i)
+    assert_nothing_raised { u.to_s }
+    assert_equal(hex, u.encode(i).unpack1('H*'))
+    assert_equal(1, u.path_attribute.errors.size)
+  end
 end
