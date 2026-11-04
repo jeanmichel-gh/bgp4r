@@ -728,6 +728,15 @@ docs/                    protocol-testing.md: using bgp4r to test a router
                          named commit, which this suite cannot assert,
                          and its section 12 says which claims become
                          assertable here and when
+                         route-generation.md: the design and the phased
+                         plan for `bgp/gen`, generating UPDATEs and
+                         withdrawals in every family with path
+                         attributes that vary per route, as one pure
+                         module that bgp4r's tests, `bgp4r-sim` and
+                         routescope's scenarios all drive with the same
+                         JSON spec. **Nothing in it is built yet**; its
+                         section 12 is the plan and its status table
+                         is updated by each step's pull request
 examples/                runnable scripts
 test/coverage_matrix.rb  what is exercised and what is not, per path
                          attribute and per address family, **computed from
@@ -7416,6 +7425,44 @@ in place, with a dated block in the header naming them.
   designing against it rather than after. An invented schema that your
   own test confirms is the most expensive kind of wrong, because
   nothing fails until somebody runs the real thing.
+
+### Route generation, `bgp/gen`. Designed, not started
+
+`docs/route-generation.md` is the design and the plan. Read it before
+any work on generating traffic, on `RouteGenerator`, or on what
+`bgp4r-sim`'s `announce` and `withdraw` accept. Recorded on 2026-11-03.
+
+The short version:
+
+* **One pure module, `require 'bgp/gen'`**, that reads a spec and
+  answers `updates`, `withdrawals` and `expected`. No socket, no thread,
+  seeded so every run is repeatable.
+* **One spec in plain JSON types**, read the same as an HTTP body, a
+  node file block, a Hash in a test and a routescope scenario step.
+  `family` names come from `BGP::Specimen.families`, so there is one
+  vocabulary.
+* **routescope does not require the gem.** It sends specs to an
+  injector and gets `expected` back from a dry run, `POST /api/plan`.
+* **Each step ships fully tested**: unit, functional over loopback, and
+  interop where a router has the family, each sabotaged once.
+* **The caveat to keep**: `expected` comes from the same code that
+  sends, so it proves consistency and not correctness. RFC vectors and
+  real routers still check the encoding.
+
+Phases, with status kept in the document's section 12 table:
+
+0. The two gaps first: `path_id` dropped on a `generate` block, and the
+   eBGP `as_path` prepend. To do.
+1. The spec reader, the unicast generator, the packer and the three
+   answers. To do.
+2. Attribute patterns: fixed, cycle, step, random, every, and `group`.
+   To do.
+3. Injector wiring, `/api/plan`, `mp_reach`, `mp_unreach`, `specimen`.
+   To do.
+4. One family per pull request, 4a to 4g, in any order after 3. To do.
+5. Churn. To do.
+6. `LabHelper` and the coverage matrix take specs. To do.
+7. routescope scenarios use specs. routescope's column.
 
 ### Vendor style `to_s`, a phase with no pull request yet
 
