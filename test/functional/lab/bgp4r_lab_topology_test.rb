@@ -174,6 +174,35 @@ class LabBgp4rLabTopologyTest < Test::Unit::TestCase
     end
   end
 
+  # routescope builds a lab's images when it starts the lab, from the
+  # `routescope.build` label: a Dockerfile in this folder, which is the
+  # build context. So every image with no registry in its name has one,
+  # the file is there, and nodes sharing an image share the recipe. An
+  # image from a registry, FRR's, is pulled and names none. A copy of
+  # this folder carries no bgp4r checkout, which is why the bgp4r nodes
+  # use Dockerfile.node and not the root Dockerfile's `lab-node` stage.
+  def test_every_local_image_names_a_dockerfile_in_this_folder
+    by_image = Hash.new { |h, k| h[k] = [] }
+    nodes.each do |name, n|
+      image = n['image'].to_s
+      build = (n['labels'] || {})['routescope.build']
+      if image.include?('/') && image.split('/').first.match?(/[.:]/)
+        assert_nil build, "#{name}: #{image} is pulled from a registry and needs no build"
+        next
+      end
+      assert build, "#{name}: #{image} is local and has no routescope.build label"
+      assert_not_include build, '/', "#{name}: the Dockerfile is in this folder"
+      assert File.file?(File.join(DIR, build)), "#{name}: #{build} is not in #{DIR}"
+      by_image[image] << build
+    end
+    by_image.each { |image, builds| assert_equal 1, builds.uniq.size, "#{image} has two recipes: #{builds.uniq}" }
+    assert_equal %w[bgp4r-bird:latest bgp4r-gobgp:latest bgp4r-lab:latest], by_image.keys.sort
+    df = read('Dockerfile.node')
+    assert_match(/\A# syntax=docker\/dockerfile:1\n/, df, 'ADD of a git URL needs the BuildKit frontend line first')
+    assert_match(%r{^ADD https://github\.com/jeanmichel-gh/bgp4r\.git#\$\{BGP4R_REF\} /app$}, df)
+    assert_match(/^ENTRYPOINT \["ruby", "-I\/app"\]$/, df, 'the cmd lines are paths under /app')
+  end
+
   # The links of the README's diagram, as ends rather than as a drawing.
   def test_the_links_are_the_seven_sessions_the_readme_draws
     want = [%w[inj1:eth1 rtr:eth1], %w[inj2:eth1 rtr:eth2], %w[rtr:eth3 r1:eth1],

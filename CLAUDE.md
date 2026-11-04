@@ -919,6 +919,15 @@ lab/                     speakers in containers: lab/speaker.rb and lab/topologi
                          `/run/bgp4r`, and `speaker` has neither
                          iproute2 nor root. The four Compose topologies
                          stay on `speaker` and are untouched.
+                         **routescope builds its local images when it
+                         starts the lab**, from a `routescope.build`
+                         label on each node naming a Dockerfile in the
+                         folder, which is the build context; so a copy
+                         made by `bgp4r lab new` builds too.
+                         `Dockerfile.node` is `lab-node` fetched from
+                         GitHub master with BuildKit's `ADD` of a git
+                         URL, which rebuilds only when master moves; CI
+                         keeps the root stage, since it tests the branch.
                          Dockerfile.gobgp is a wrapper over
                          `${GOBGP_IMAGE}` for the same one reason
                          Dockerfile.bird exists, iproute2 for the
