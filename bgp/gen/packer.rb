@@ -72,20 +72,37 @@ module BGP
       # for an item too large for a message on its own.
       def each_batch(items)
         return enum_for(:each_batch, items) unless block_given?
-        batch, octets = [], 0
-        items.each do |item, len|
-          unless fits?(len)
-            raise Unpackable, "a route of #{len} octets makes a #{size(len)} octet message on its own, " \
+        tagged = Enumerator.new { |y| items.each { |item, len| y << [item, len, self] } }
+        Packer.batches(tagged) { |batch, octets, _| yield batch, octets }
+      end
+
+      # The same rule over items that do not share one packer: each item
+      # comes as [item, octets, packer], and a change of packer ends the
+      # message too, since routes travel together only when their
+      # attributes are identical and each attribute set has a packer of
+      # its own. Yields [items, octets, packer]. A packer here is anything
+      # answering fits?, size and per_update, and two are told apart by
+      # identity, so a caller hands the same object for the same set;
+      # Gen::Unicast hands its attribute sets.
+      def self.batches(items)
+        return enum_for(:batches, items) unless block_given?
+        batch, octets, current = [], 0, nil
+        items.each do |item, len, packer|
+          unless packer.fits?(len)
+            raise Unpackable, "a route of #{len} octets makes a #{packer.size(len)} octet message on its own, " \
                               "where BGP allows #{MAX} (RFC 4271 section 4); the attributes leave no room"
           end
-          if batch.size == @per_update || !fits?(octets + len)
-            yield batch, octets
-            batch, octets = [], 0
+          unless batch.empty?
+            if !packer.equal?(current) || batch.size == current.per_update || !current.fits?(octets + len)
+              yield batch, octets, current
+              batch, octets = [], 0
+            end
           end
+          current = packer
           batch << item
           octets += len
         end
-        yield batch, octets unless batch.empty?
+        yield batch, octets, current unless batch.empty?
       end
     end
   end

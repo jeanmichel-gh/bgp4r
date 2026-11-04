@@ -25,11 +25,13 @@ require 'socket'
 require 'bgp/daemon/community_keys'
 require 'bgp/gen/spec'
 require 'bgp/gen/packer'
+require 'bgp/gen/vary'
 
 module BGP
   class Gen
     # IPv4 and IPv6 unicast, SAFI 1: `count` consecutive prefixes of one
-    # length from `start`, every one carrying the same attributes.
+    # length from `start`, with attributes that may vary from route to
+    # route through the patterns of bgp/gen/vary.rb.
     #
     # IPv4 goes in the NLRI and Withdrawn Routes fields of RFC 4271
     # section 4.3, IPv6 in MP_REACH_NLRI and MP_UNREACH_NLRI (RFC 4760
@@ -45,6 +47,28 @@ module BGP
     # them. So a spec with no `next_hop` sends an IPv4 UPDATE with no
     # NEXT_HOP, or an IPv6 one whose MP_REACH_NLRI next hop is empty. No
     # RFC allows either, and nothing here refuses them.
+    #
+    # **Attribute patterns run on the group number and the Path
+    # Identifier on the route number.** `group: N` makes route i's
+    # attributes those of i / N, so N routes share a set and can share a
+    # message; the Path Identifier is part of the route and not of its
+    # attributes, so grouping does not hold it.
+    #
+    # **Routes travel together only when their attributes are identical**
+    # (RFC 4271 section 4.3: one UPDATE, one set of path attributes), so
+    # a message ends when the set changes as well as when it is full.
+    # Each distinct set has a packer of its own, and the first message
+    # of each set is measured against it. Sets are kept in a cache of
+    # SETS, cleared when it fills, so a feed whose every route differs
+    # costs memory for SETS sets and no more; a set seen again after a
+    # clear is measured again, which costs one encode.
+    #
+    # **A set too large for one route is refused when it is reached.**
+    # The first is checked at `new`. A pattern can make a later one
+    # larger, a community count that grows say, and finding the largest
+    # would mean building every set up front, which for a million
+    # routes that each differ is the cost this is built to avoid. So a
+    # spec like that can stop with Unpackable after messages have gone.
     class Unicast
       SAFI = IANA::SAFI::UNICAST
 
@@ -53,44 +77,107 @@ module BGP
       # fits here fits on any session.
       SIZING = BGP::Update::Info.new(true)
 
-      attr_reader :afi, :count, :per_update, :path_id, :attributes
+      # How many distinct attribute sets are kept before the cache is
+      # cleared. Big enough that a cycle or an `every` of any reasonable
+      # length is built once.
+      SETS = 1024
+
+      # One distinct attribute set: what it sends, how its messages pack,
+      # what `expected` says of it, and whether a message of it has been
+      # measured. It answers the packer's three questions itself, so it
+      # is what Packer.batches is handed and what it yields back: a set
+      # stays reachable from its own batch after the cache has let go of
+      # it, which a lookup from packer to set did not, and that is the
+      # bug the cache test found.
+      Set = Struct.new(:path_attribute, :next_hop, :packer, :expected, :measured) do
+        def fits?(octets) ; packer.fits?(octets) ; end
+        def size(octets) ; packer.size(octets) ; end
+        def per_update ; packer.per_update ; end
+      end
+
+      attr_reader :afi, :count, :per_update, :group
 
       def initialize(spec)
-        @count, @per_update, @path_id = spec['count'], spec['per_update'], spec['path_id']
-        @attributes = spec['attributes']
+        @count, @per_update = spec['count'], spec['per_update']
+        @group = spec['group'] || 1
+        @patterns = Spec.patterns(spec)
+        @path_id = @patterns.delete('path_id')
         read_start(spec['start'])
         if spec['afi'] && spec['afi'] != @afi
           raise SpecError, "afi #{spec['afi']} disagrees with start #{spec['start']}, which is AFI #{@afi}"
         end
-        @path_attribute = build_attributes
-        # A spec whose attributes leave no room for one route is refused
-        # here, and not halfway through a feed that has started sending.
-        announce_packer.each_batch([[nil, route_octets]]) { }
+        @sets = {}
+        # A spec whose first attribute set leaves no room for one route
+        # is refused here, and not halfway through a feed.
+        Packer.batches([[nil, route_octets, set_for(row(0))]]) { }
       end
 
       def ipv4? ; @afi == IANA::AFI::IPv4 ; end
+
+      # True when every route carries a Path Identifier (RFC 7911).
+      def add_path? ; !@path_id.nil? ; end
 
       # The i-th prefix, from 0, as "a.b.c.d/len" or "x:x::/len".
       def prefix(i)
         "#{IPAddr.new(@first + i * @step, @family)}/#{@mlen}"
       end
 
+      # The i-th route's Path Identifier, or nil without add-path.
+      def path_id(i) ; @path_id && @path_id.at(i) ; end
+
       # The octets one route takes: RFC 4271 section 4.3's Length octet
       # and enough octets for the prefix, and with add-path the 4 octet
       # Path Identifier in front (RFC 7911 section 3).
       def route_octets
-        1 + (@mlen + 7) / 8 + (@path_id ? 4 : 0)
+        1 + (@mlen + 7) / 8 + (add_path? ? 4 : 0)
+      end
+
+      # The attribute values of group g, plain data, defaults filled in.
+      def row(g)
+        r = { 'origin' => 0, 'as_path' => [] }
+        @patterns.each { |k, p| r[k] = p.at(g) }
+        r
       end
 
       # The UPDATEs that announce every route, as an Enumerator, so a
       # large count is built one message at a time.
       def updates
-        messages(announce_packer) { |batch| build_update(batch) }
+        items = Enumerator.new do |y|
+          len, last_g, set = route_octets, nil, nil
+          @count.times do |i|
+            g = i / @group
+            set = set_for(row(g)) unless g == last_g
+            last_g = g
+            y << [[prefix(i), path_id(i)], len, set]
+          end
+        end
+        Enumerator.new do |out|
+          Packer.batches(items) do |batch, octets, set|
+            m = build_update(set, batch)
+            unless set.measured
+              measure(m, set.size(octets))
+              set.measured = true
+            end
+            out << m
+          end
+        end
       end
 
       # The UPDATEs that withdraw exactly the routes #updates announced.
+      # A withdrawal carries no attributes, so one packer does for all.
       def withdrawals
-        messages(withdraw_packer) { |batch| build_withdrawal(batch) }
+        packer = withdraw_packer
+        len = route_octets
+        items = Enumerator.new { |y| @count.times { |i| y << [[prefix(i), path_id(i)], len] } }
+        Enumerator.new do |out|
+          first = true
+          packer.each_batch(items) do |batch, octets|
+            m = build_withdrawal(batch)
+            measure(m, packer.size(octets)) if first
+            first = false
+            out << m
+          end
+        end
       end
 
       # One row per route, as plain data: what the spec meant to send.
@@ -98,11 +185,14 @@ module BGP
       # so `no_export` is 65535:65281, which is what a RIB will show.
       def expected
         Enumerator.new(@count) do |y|
-          row = expected_attributes
+          last_g, attrs = nil, nil
           @count.times do |i|
+            g = i / @group
+            attrs = set_for(row(g)).expected unless g == last_g
+            last_g = g
             r = { 'prefix' => prefix(i) }
-            r['path_id'] = @path_id if @path_id
-            y << r.merge(row)
+            r['path_id'] = path_id(i) if add_path?
+            y << r.merge(attrs)
           end
         end
       end
@@ -127,24 +217,38 @@ module BGP
         end
       end
 
-      def build_attributes
-        a = @attributes
-        attrs = [BGP::Origin.new(a.fetch('origin', 0))]
+      def set_for(r)
+        set = @sets[r]
+        return set if set
+        @sets.clear if @sets.size >= SETS
+        set = Set.new(build_attributes(r), r['next_hop'])
+        set.expected = expected_attributes(r, set.path_attribute)
+        set.packer = announce_packer(set)
+        set.measured = false
+        @sets[r] = set
+      end
+
+      def build_attributes(a)
+        attrs = [BGP::Origin.new(a['origin'])]
         attrs << BGP::Next_hop.new(a['next_hop']) if a['next_hop'] && ipv4?
-        attrs << BGP::As_path.new(*a.fetch('as_path', []))
+        attrs << BGP::As_path.new(*a['as_path'])
         attrs << BGP::Multi_exit_disc.new(a['med']) if a['med']
         attrs << BGP::Local_pref.new(a['local_pref']) if a['local_pref']
-        attrs.concat(Daemon::CommunityKeys.community_attributes(a))
+        # An empty community list, which a `count` pattern gives at 0,
+        # sends no attribute rather than an empty one: `Communities`
+        # cannot be built from an empty string, and an attribute of
+        # length 0 is a fault case, which BGP::Fault already sends.
+        lists = a.reject { |k, v| v.is_a?(Array) && v.empty? && k != 'as_path' }
+        attrs.concat(Daemon::CommunityKeys.community_attributes(lists))
         BGP::Path_attribute.new(*attrs)
       end
 
-      def expected_attributes
-        a = @attributes
-        row = { 'origin' => a.fetch('origin', 0), 'as_path' => a.fetch('as_path', []) }
+      def expected_attributes(a, pa)
+        row = { 'origin' => a['origin'], 'as_path' => a['as_path'] }
         row['next_hop'] = a['next_hop'] if a['next_hop']
         row['med'] = a['med'] if a['med']
         row['local_pref'] = a['local_pref'] if a['local_pref']
-        @path_attribute.attributes.each do |attr|
+        pa.attributes.each do |attr|
           case attr
           when BGP::Communities then row['communities'] = attr.communities.split
           when BGP::Large_communities then row['large_communities'] = attr.large_communities.split
@@ -157,43 +261,47 @@ module BGP
         row
       end
 
-      def nlris(prefixes)
-        @path_id ? prefixes.collect { |p| [@path_id, p] } : prefixes
+      # A batch is [prefix, path_id] pairs. The RFC 4271 fields take the
+      # [id, prefix] form and the MP attributes a Hash per prefix, which
+      # is how each carries a Path Identifier that can differ per route.
+      def ipv4_nlris(batch)
+        batch.collect { |p, id| id ? [id, p] : p }
       end
 
-      def reach(prefixes)
-        h = { :afi => @afi, :safi => SAFI, :nlris => prefixes }
-        h[:nexthop] = [@attributes['next_hop']] if @attributes['next_hop']
-        h[:path_id] = @path_id if @path_id
+      def mp_nlris(batch)
+        batch.collect { |p, id| id ? { :path_id => id, :prefix => p } : p }
+      end
+
+      def reach(set, batch)
+        h = { :afi => @afi, :safi => SAFI, :nlris => mp_nlris(batch) }
+        h[:nexthop] = [set.next_hop] if set.next_hop
         BGP::Mp_reach.new(h)
       end
 
-      def unreach(prefixes)
-        h = { :afi => @afi, :safi => SAFI, :nlris => prefixes }
-        h[:path_id] = @path_id if @path_id
-        BGP::Mp_unreach.new(h)
+      def unreach(batch)
+        BGP::Mp_unreach.new(:afi => @afi, :safi => SAFI, :nlris => mp_nlris(batch))
       end
 
-      def build_update(prefixes)
+      def build_update(set, batch)
         if ipv4?
-          BGP::Update.new(@path_attribute, BGP::Nlri.new(*nlris(prefixes)))
+          BGP::Update.new(set.path_attribute, BGP::Nlri.new(*ipv4_nlris(batch)))
         else
-          pa = BGP::Path_attribute.new(*@path_attribute.attributes)
-          BGP::Update.new(pa.add(reach(prefixes)))
+          pa = BGP::Path_attribute.new(*set.path_attribute.attributes)
+          BGP::Update.new(pa.add(reach(set, batch)))
         end
       end
 
-      def build_withdrawal(prefixes)
+      def build_withdrawal(batch)
         if ipv4?
-          BGP::Update.new(BGP::Withdrawn.new(*nlris(prefixes)))
+          BGP::Update.new(BGP::Withdrawn.new(*ipv4_nlris(batch)))
         else
-          BGP::Update.new(BGP::Path_attribute.new(unreach(prefixes)))
+          BGP::Update.new(BGP::Path_attribute.new(unreach(batch)))
         end
       end
 
-      def announce_packer
-        empty = build_update([]).encode(SIZING).bytesize
-        mp = ipv4? ? nil : reach([]).encode.bytesize - 3
+      def announce_packer(set)
+        empty = build_update(set, []).encode(SIZING).bytesize
+        mp = ipv4? ? nil : reach(set, []).encode.bytesize - 3
         Packer.new(empty, :mp_value => mp, :per_update => @per_update)
       end
 
@@ -201,26 +309,6 @@ module BGP
         empty = build_withdrawal([]).encode(SIZING).bytesize
         mp = ipv4? ? nil : unreach([]).encode.bytesize - 3
         Packer.new(empty, :mp_value => mp, :per_update => @per_update)
-      end
-
-      # The routes are numbered rather than listed, so the batches cost
-      # nothing until one is asked for. The first message is measured
-      # against the packer's arithmetic, once, and a difference raises.
-      # Every prefix has one length, so the first message is the largest.
-      def messages(packer, &build)
-        len = route_octets
-        items = Enumerator.new { |y| @count.times { |i| y << [prefix(i), len] } }
-        Enumerator.new do |out|
-          first = true
-          packer.each_batch(items) do |batch, octets|
-            m = build.call(batch)
-            if first
-              measure(m, packer.size(octets))
-              first = false
-            end
-            out << m
-          end
-        end
       end
 
       def measure(message, size)

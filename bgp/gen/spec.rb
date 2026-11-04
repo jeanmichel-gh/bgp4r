@@ -52,27 +52,35 @@ module BGP
     module Spec
       module_function
 
-      # The top level keys this phase reads.
-      KEYS = %w[family afi count per_update start path_id attributes].freeze
+      # The top level keys a spec takes.
+      KEYS = %w[family afi count per_update start path_id seed group attributes].freeze
 
-      # Keys the spec format has that bgp4r does not read yet, with the
-      # step of docs/route-generation.md section 12 that adds each. They
-      # are refused by name rather than ignored: an ignored `seed` would
-      # answer the same octets as a different seed, which is a wrong
-      # answer and not a missing one.
-      LATER = { 'seed' => 'phase 2', 'group' => 'phase 2' }.freeze
-
-      # The announce block keys bgp4r already uses everywhere else.
-      ATTRIBUTES = %w[origin next_hop as_path med local_pref
-                      communities extended_communities large_communities].freeze
+      # The announce block keys bgp4r already uses everywhere else, with
+      # the kind of value each is, which says the patterns it takes, and
+      # the largest value a field of it can hold. See bgp/gen/vary.rb.
+      ATTRIBUTE_KINDS = {
+        'origin'               => [:int, 0xff],
+        'next_hop'             => [:addr, nil],
+        'as_path'              => [:list, nil],
+        'med'                  => [:int, 0xffffffff],
+        'local_pref'           => [:int, 0xffffffff],
+        'communities'          => [:strings, nil],
+        'extended_communities' => [:strings, nil],
+        'large_communities'    => [:strings, nil],
+      }.freeze
+      ATTRIBUTES = ATTRIBUTE_KINDS.keys.freeze
 
       U32 = 0xffffffff
 
+      # The spec as plain data with String keys: a plain value in the
+      # form it is sent in, a single community string as a list of one,
+      # and a pattern as its Hash. Every value goes through Vary.compile
+      # here, so a pattern bgp4r cannot read is refused when the spec is,
+      # and `patterns` compiles the same values again for a generator.
       def read(spec)
         raise SpecError, "a spec is a Hash, not #{spec.class}" unless spec.is_a?(Hash)
         s = stringify(spec, 'spec')
         s.each_key do |k|
-          raise SpecError, "'#{k}' is in the spec format and bgp4r does not read it yet (#{LATER[k]})" if LATER[k]
           raise SpecError, "unknown key '#{k}'; a spec takes #{KEYS.join(', ')}" unless KEYS.include?(k)
         end
         out = {}
@@ -81,9 +89,23 @@ module BGP
         out['count'] = integer(s, 'count', true, 1)
         out['per_update'] = integer(s, 'per_update', false, 1)
         out['afi'] = integer(s, 'afi', false, 0, 0xffff)
-        out['path_id'] = integer(s, 'path_id', false, 0, U32)
-        out['attributes'] = attributes(s.fetch('attributes', {}))
+        out['seed'] = integer(s, 'seed', false, 0)
+        out['group'] = integer(s, 'group', false, 1)
+        out['path_id'] = value(s['path_id'], 'path_id', :int, U32, out['seed']) if s.key?('path_id')
+        out['attributes'] = attributes(s.fetch('attributes', {}), out['seed'])
         out.reject { |_, v| v.nil? }
+      end
+
+      # The compiled patterns of a spec `read` answered: 'path_id' and
+      # one per attribute given, each answering `at(i)`.
+      def patterns(spec)
+        out = {}
+        out['path_id'] = Vary.compile(spec['path_id'], 'path_id', :int, max: U32, seed: spec['seed']) if spec['path_id']
+        spec['attributes'].each do |k, v|
+          kind, max = ATTRIBUTE_KINDS[k]
+          out[k] = Vary.compile(v, "attributes.#{k}", kind, max: max, seed: spec['seed'])
+        end
+        out
       end
 
       def family(v)
@@ -92,43 +114,31 @@ module BGP
         v
       end
 
-      def attributes(a)
+      def attributes(a, seed)
         raise SpecError, "attributes is a Hash, not #{a.class}" unless a.is_a?(Hash)
         a = stringify(a, 'attributes')
-        a.each_key do |k|
-          raise SpecError, "unknown attribute '#{k}'; attributes take #{ATTRIBUTES.join(', ')}" unless ATTRIBUTES.include?(k)
-          if a[k].is_a?(Hash)
-            raise SpecError, "attributes.#{k} is a pattern, and bgp4r does not read patterns yet (phase 2)"
-          end
-        end
         out = {}
-        out['origin'] = integer(a, 'origin', false, 0, 0xff, 'attributes.')
-        out['next_hop'] = string(a, 'next_hop', false, 'attributes.')
-        out['as_path'] = as_path(a['as_path']) if a.key?('as_path')
-        out['med'] = integer(a, 'med', false, 0, U32, 'attributes.')
-        out['local_pref'] = integer(a, 'local_pref', false, 0, U32, 'attributes.')
-        %w[communities extended_communities large_communities].each do |k|
-          out[k] = strings(a[k], k) if a.key?(k)
+        a.each do |k, v|
+          raise SpecError, "unknown attribute '#{k}'; attributes take #{ATTRIBUTES.join(', ')}" unless ATTRIBUTES.include?(k)
+          kind, max = ATTRIBUTE_KINDS[k]
+          out[k] = value(v, "attributes.#{k}", kind, max, seed)
         end
-        out.reject { |_, v| v.nil? }
+        out
       end
 
-      def as_path(v)
-        raise SpecError, "attributes.as_path is a list of AS numbers, not #{v.inspect}" unless v.is_a?(Array)
-        v.each do |as|
-          unless as.is_a?(Integer) && (0..U32) === as
-            raise SpecError, "attributes.as_path holds #{as.inspect}, which is not an AS number of 4 octets or fewer"
-          end
-        end
-        v.dup
+      # One value, compiled to check it and kept as plain data: what a
+      # fixed value is sent as, or the pattern's Hash with String keys.
+      def value(v, name, kind, max, seed)
+        p = Vary.compile(v, name, kind, max: max, seed: seed)
+        p.is_a?(Vary::Fixed) ? p.value : deep_stringify(v, name)
       end
 
-      def strings(v, k)
-        v = [v] if v.is_a?(String)
-        unless v.is_a?(Array) && v.all? { |e| e.is_a?(String) }
-          raise SpecError, "attributes.#{k} is a list of strings, not #{v.inspect}"
+      def deep_stringify(v, name)
+        case v
+        when Hash then stringify(v, name).transform_values { |e| deep_stringify(e, name) }
+        when Array then v.collect { |e| deep_stringify(e, name) }
+        else v
         end
-        v.dup
       end
 
       def string(h, k, required, path = '')
@@ -162,3 +172,5 @@ module BGP
     end
   end
 end
+
+require 'bgp/gen/vary'

@@ -78,11 +78,12 @@ class TestBgpGenSpec < Test::Unit::TestCase
     refused(minimal.merge('prefixes' => []), /unknown key 'prefixes'/)
   end
 
-  # docs/route-generation.md section 4 has these keys and phase 2 reads
-  # them. Ignoring a seed would answer one seed's octets for another.
-  def test_a_key_of_a_later_phase_is_refused_as_such
-    refused(minimal.merge('seed' => 7), /'seed' is in the spec format.*phase 2/)
-    refused(minimal.merge('group' => 10), /'group'.*phase 2/)
+  # Phase 2 reads seed and group, which phase 1 refused by name.
+  def test_seed_and_group_read
+    s = S.read(minimal.merge('seed' => 7, 'group' => 10))
+    assert_equal([7, 10], [s['seed'], s['group']])
+    refused(minimal.merge('group' => 0), /group is at least 1/)
+    refused(minimal.merge('seed' => '7'), /seed is an integer/)
   end
 
   def test_start_and_count_are_required
@@ -95,10 +96,11 @@ class TestBgpGenSpec < Test::Unit::TestCase
     refused(minimal.merge('start' => 10), /start is a string/)
     refused(minimal.merge('family' => 1), /family is a name/)
     refused(minimal.merge('attributes' => []), /attributes is a Hash/)
-    refused(minimal.merge('attributes' => { 'med' => 1.5 }), /attributes.med is an integer/)
-    refused(minimal.merge('attributes' => { 'as_path' => 65010 }), /as_path is a list/)
-    refused(minimal.merge('attributes' => { 'as_path' => ['65010'] }), /as_path holds "65010"/)
-    refused(minimal.merge('attributes' => { 'communities' => [1] }), /communities is a list of strings/)
+    refused(minimal.merge('attributes' => { 'med' => 1.5 }), /attributes.med: 1.5 is not an integer/)
+    refused(minimal.merge('attributes' => { 'as_path' => 65010 }), /attributes.as_path: an AS_PATH is a list/)
+    refused(minimal.merge('attributes' => { 'as_path' => ['65010'] }), /"65010" is not an AS number/)
+    refused(minimal.merge('attributes' => { 'communities' => [1] }), /attributes.communities: a list of strings/)
+    refused(minimal.merge('attributes' => { 'next_hop' => 'gw' }), /attributes.next_hop: "gw" is not an address/)
   end
 
   def test_a_count_or_per_update_below_one_is_refused
@@ -109,18 +111,32 @@ class TestBgpGenSpec < Test::Unit::TestCase
   # Conventions: a constructor may refuse what a field cannot hold, since
   # packing it would send a different value.
   def test_a_number_too_large_for_its_field_is_refused
-    refused(minimal.merge('path_id' => 2**32), /path_id 4294967296 does not fit/)
-    refused(minimal.merge('attributes' => { 'origin' => 256 }), /origin 256 does not fit/)
-    refused(minimal.merge('attributes' => { 'med' => 2**32 }), /med .* does not fit/)
-    refused(minimal.merge('attributes' => { 'as_path' => [2**32] }), /as_path holds 4294967296/)
+    refused(minimal.merge('path_id' => 2**32), /path_id: 4294967296 does not fit/)
+    refused(minimal.merge('attributes' => { 'origin' => 256 }), /origin: 256 does not fit/)
+    refused(minimal.merge('attributes' => { 'med' => 2**32 }), /med: .* does not fit/)
+    refused(minimal.merge('attributes' => { 'as_path' => [2**32] }), /4294967296 is not an AS number/)
+    refused(minimal.merge('seed' => 1, 'attributes' => { 'med' => { 'cycle' => [1, 2**32] } }),
+            /med: 4294967296 does not fit/)
   end
 
   def test_an_unknown_attribute_is_refused_and_named
     refused(minimal.merge('attributes' => { 'weight' => 1 }), /unknown attribute 'weight'/)
   end
 
-  def test_a_pattern_is_refused_until_phase_2
-    refused(minimal.merge('attributes' => { 'med' => { 'cycle' => [1, 2] } }), /attributes.med is a pattern.*phase 2/)
+  # A pattern stays a Hash with String keys in what read answers, so a
+  # spec that went through read reads again as itself.
+  def test_a_pattern_is_kept_as_its_hash
+    s = S.read(minimal.merge(:seed => 1, :attributes => { :med => { :step => { :start => 1, :by => 2 } } }))
+    assert_equal({ 'step' => { 'start' => 1, 'by' => 2 } }, s['attributes']['med'])
+    assert_equal(s, S.read(s))
+  end
+
+  # A pattern bgp4r cannot read is refused when the spec is, and not
+  # when a generator first asks for a value.
+  def test_a_bad_pattern_is_refused_with_the_spec
+    refused(minimal.merge('attributes' => { 'med' => { 'zigzag' => [1] } }), /unknown pattern 'zigzag'/)
+    refused(minimal.merge('attributes' => { 'med' => { 'random' => { 'min' => 1, 'max' => 2 } } }),
+            /needs the spec's seed/)
   end
 
   # Nothing validates: these are no RFC's idea of a route and all read.
