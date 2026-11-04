@@ -193,3 +193,89 @@ ruby -I. exe/bgp4r routegen lab.yml --interact
 * `test/functional/console_test.rb` runs the verbs over a loopback
   session, then runs `bgp4r routegen --interact` as a program with
   lines on its standard input, the way a person types them.
+
+## 9. Next: `bgp4r console`, planned and not built
+
+This section is the agreed design for step 2. None of it runs yet.
+CLAUDE.md tracks its status under "An irb console on a live session".
+
+### Three ways to start
+
+* `bgp4r console` opens irb with no session. You open one with
+  `connect`, or just build and parse objects: `Update.new(hex)`,
+  `Specimen.build(:evpn)`, `Fault.wire(:origin_value)`. A verb that
+  needs a session says so and names the verb or flag that opens one.
+* `bgp4r console --peer ADDR --peer-as AS` is a `connect` done before
+  the prompt opens. It takes routegen's session flags: `--my-as`,
+  `--id`, `--port`, `--local-address`, `--timeout` and `-l`. It does
+  not take the flags that generate routes.
+* `bgp4r console --back-to-back` runs two bgp4r speakers in one
+  process, cabled straight to each other over loopback. No router, no
+  root and no Docker.
+
+`routegen --interact` keeps working, through the same code.
+
+### Networking terms at the prompt
+
+New verbs use router words, and their keyword arguments use the names
+routers use.
+
+```ruby
+connect '10.0.0.2', remote_as: 65002   # active: we dial
+listen  '10.0.0.2', remote_as: 65002   # passive: the peer dials in
+shutdown '10.0.0.2'                    # down, and stays down
+clear '10.0.0.2'                       # reset, and comes back
+peers                                  # like show bgp summary
+```
+
+* `connect` and `listen` take `local_as:`, `router_id:`, `port:`,
+  `local_address:`, `hold_time:` and `capabilities:`. With nothing
+  given they use the defaults in section 1.
+* `remote_as` and `local_as` are prompt names only. They become the
+  node file's `as` keys, so the node file vocabulary does not change.
+* `shutdown` and `clear` send a Cease before they close, with the RFC
+  4486 subcode a router uses: 2, Administrative Shutdown, and 4,
+  Administrative Reset. That closes the gap in section 5, at the prompt
+  at least.
+* `flap` stays as an alias of `clear`, so what step 1 typed still
+  works.
+
+### How `connect` works underneath
+
+A Speaker reads its peer list once, at start. Taking a new peer at
+runtime would change code that every session thread reads without a
+lock. So each `connect` or `listen` builds its own Injector with one
+peer, and the console keeps a list of them. A verb with `peer:` goes to
+the matching one. A verb without it goes to the only session that is
+up. No library code changes.
+
+### Back to back
+
+* **Both ends are on 127.0.0.1.** One side listens on a free port and
+  the other dials it. Each speaker has one peer, so neither needs a
+  second loopback address. That also works on macOS, which has no
+  127.0.0.2 by default.
+* **`self` is the near side, AS 65001. `remote` is a console on the
+  other side, AS 65002.** Both are Injectors, so every verb works on
+  both. `fault :origin_value, '10.3.0.0/24'` sends a malformed UPDATE,
+  and `remote.last.path_attribute.errors` shows what `validation.rb`
+  made of it. `remote.announce` sends the other way.
+* **The remote side holds no RIB.** `remote.rib` waits for step 3,
+  which brings a Console over `bgp4rd`.
+* **eBGP by default.** If `--my-as` equals `--peer-as`, the session is
+  iBGP.
+* **Every family is offered on both sides**, so every specimen and
+  every fault crosses with no node file. `--families ipv4` narrows it.
+  This is the main reason to use it over a router: neither GoBGP nor
+  FRR has every family.
+* **Each side logs to its own file**, through the injected logger.
+* **`exit` stops both sides.**
+
+### The pull requests
+
+* **2a**: fix the zero-length ORIGIN crash on receive. Back to back,
+  every fault lands on a bgp4r receiver, and today that one kills the
+  receiver's event thread. See "Known issues to work on" in CLAUDE.md.
+* **2b**: `bgp4r console`, with `connect`, `listen`, `shutdown` and
+  `clear`.
+* **2c**: `--back-to-back` and `remote`.
