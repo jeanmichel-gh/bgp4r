@@ -31,6 +31,7 @@ require 'test/unit'
 require 'stringio'
 require 'bgp4r'
 require 'bgp/sim/console'
+require 'bgp/sim/console_command'
 require 'test/helpers/server'
 require 'rbconfig'
 
@@ -314,6 +315,136 @@ class TestConsole < Test::Unit::TestCase
     assert_equal(['10.6.0.0/24'], nlri_of(u))
     assert_nil(@catcher.shift(0.5), 'it started silent: one UPDATE, the one typed')
     assert(wait { !@s.is_established? }, 'exit left the session up')
+  end
+
+end
+
+# `bgp4r console --back-to-back`: two bgp4r speakers in this process, on
+# 127.0.0.1, with no test server. The claim it exists for is that every
+# specimen and every fault crosses with no node file, which no router
+# here can say, so that is asserted catalog by catalog.
+class TestConsoleBackToBack < Test::Unit::TestCase
+
+  def setup
+    Log.set_filename(StringIO.new)
+    Log.level = Logger::WARN
+    @out = StringIO.new
+    @err = StringIO.new
+  end
+
+  def teardown
+    Log.set_filename(STDERR)
+  end
+
+  # Runs the command with the prompt replaced by the block, so no irb.
+  # The remote side logs nowhere.
+  def back_to_back(*argv, &prompt)
+    @cmd = BGP::Sim::ConsoleCommand.new(@out, @err, :interact => prompt, :load_irb => false,
+                                        :remote_logger => ->(_level, _message) {})
+    status = @cmd.start(['--back-to-back', '--timeout', '10', '-l', File::NULL, *argv])
+    assert_equal(0, status, @err.string)
+  end
+
+  # The next message a console receives after count, or nil.
+  def next_in(console, count, timeout = 5)
+    deadline = Time.now + timeout
+    sleep 0.02 until console.instance_variable_get(:@received).size > count || Time.now > deadline
+    r = console.instance_variable_get(:@received)
+    r.size > count ? r.last.message : nil
+  end
+
+  def count_in(console) ; console.instance_variable_get(:@received).size ; end
+
+  def test_a_fault_is_reported_on_the_remote_side_and_remote_sends_back
+    back_to_back do |c|
+      assert_equal('Established', c.peers.first[:state])
+      assert_equal('Established', c.remote.peers.first[:state])
+      n = count_in(c.remote)
+      c.fault :origin_value, '10.3.0.0/24'
+      u = next_in(c.remote, n)
+      assert_kind_of(BGP::Update, u)
+      assert_match(/undefined ORIGIN value/, u.path_attribute.errors.first.reason)
+      n = count_in(c)
+      c.remote.announce '10.9.0.0/24', med: 5
+      u = next_in(c, n)
+      assert_equal(['10.9.0.0/24'], u.nlri.to_ary)
+      assert_equal([65_002], u.path_attribute[:as_path].as_path.split.collect(&:to_i),
+                   'eBGP: the remote side put its AS in front')
+    end
+    assert_match(/AS 65001 to AS 65002, eBGP, session established/, @out.string)
+    assert_equal('Idle', @cmd.remote.peers.first[:state].to_s, 'exit stopped the remote side')
+    assert_equal('Idle', @cmd.console.peers.first[:state].to_s, 'and ours')
+  end
+
+  def test_every_specimen_crosses_clean_and_every_fault_is_reported
+    back_to_back do |c|
+      BGP::Specimen.names.each do |name|
+        n = count_in(c.remote)
+        c.specimen name
+        u = next_in(c.remote, n)
+        assert_kind_of(BGP::Update, u, "specimen #{name} did not arrive")
+        assert_empty(u.path_attribute.errors.collect(&:reason), "specimen #{name}")
+        assert_empty(u.path_attribute.undecoded, "specimen #{name} was not decoded")
+      end
+      BGP::Fault.names.each do |name|
+        n = count_in(c.remote)
+        c.fault name
+        u = next_in(c.remote, n)
+        assert_kind_of(BGP::Update, u, "fault #{name} did not arrive")
+        assert_not_empty(u.path_attribute.errors, "fault #{name} was not reported")
+      end
+      assert_equal('Established', c.peers.first[:state], 'no fault took the session down')
+    end
+  end
+
+  def test_equal_as_numbers_make_it_ibgp
+    back_to_back('--my-as', '65010', '--peer-as', '65010') do |c|
+      n = count_in(c)
+      c.remote.announce '10.8.0.0/24'
+      u = next_in(c, n)
+      assert_equal('empty', u.path_attribute[:as_path].as_path, 'iBGP: no AS put in front')
+      assert(u.path_attribute.has?(BGP::Local_pref), 'iBGP carries LOCAL_PREF')
+    end
+    assert_match(/iBGP/, @out.string)
+  end
+
+  # Only the families asked for: a session offering IPv4 unicast alone
+  # still comes up, and the remote reads what it was offered.
+  def test_families_narrows_what_both_sides_offer
+    back_to_back('--families', 'unicast') do |c|
+      n = c.neighbor
+      assert_equal('Established', c.peers.first[:state])
+      assert(n.instance_variable_get(:@opt_parms).none? { |o| o.is_a?(BGP::OPT_PARM::CAP::Mbgp) && o.to_hash[:capability][:afi] == 25 },
+             'EVPN was not offered')
+    end
+  end
+
+  # The whole program, typed into: a fault from our side is reported on
+  # the remote one, and exit stops both and succeeds.
+  def test_bgp4r_console_back_to_back_as_a_program
+    begin
+      BGP::Sim::Console.load_irb
+    rescue LoadError => e
+      omit(e.message)
+    end
+    root = File.expand_path('../..', __dir__)
+    require 'tmpdir'
+    Dir.mktmpdir do |d|
+      argv = [RbConfig.ruby, '-I', root, File.join(root, 'exe', 'bgp4r'), 'console',
+              '--back-to-back', '-l', File.join(d, 'c.log')]
+      out = ::IO.popen(argv, 'r+', :err => [:child, :out]) do |io|
+        io.puts "fault :origin_value, '10.3.0.0/24'"
+        io.puts 'sleep 1'
+        io.puts 'puts "REASON " + remote.last.path_attribute.errors.first.reason'
+        io.puts 'exit'
+        io.close_write
+        io.read
+      end
+      assert_equal(0, $?.exitstatus, out)
+      assert_match(/back to back on 127\.0\.0\.1 port \d+, AS 65001 to AS 65002, eBGP, session established/, out)
+      assert_match(/^REASON undefined ORIGIN value/, out)
+      assert(File.size?(File.join(d, 'c-remote.log')), 'the remote side wrote its own log')
+    end
   end
 
 end

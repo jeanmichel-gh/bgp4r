@@ -84,6 +84,8 @@ module BGP
       ADMIN_SHUTDOWN = 2
       ADMIN_RESET = 4
 
+      NO_REMOTE = 'no remote side. Start with bgp4r console --back-to-back.'
+
       NO_SESSION = 'no session. Open one with connect ADDR, remote_as: AS, ' \
                    'or listen ADDR, remote_as: AS, or start with --peer.'
 
@@ -100,6 +102,8 @@ module BGP
           peers                         every peer and its state
           state [ADDR]                  one peer's FSM state
           n, neighbor [ADDR]            the BGP::Neighbor, the whole API
+          remote                        the console on the other side, with
+                                        --back-to-back: remote.announce ...
         Sending, through the injector's actions
           announce PFX..., med: 10      also next_hop, as_path, local_pref,
                                         communities, origin, path_id, peer
@@ -155,6 +159,7 @@ module BGP
       def initialize(injector = nil, out = $stdout, keep = KEEP, arg = {})
         @out, @keep = out, keep
         @factory = arg[:factory] || ->(config) { Injector.new(config) }
+        @name = arg[:name]
         @received = []
         @lock = Mutex.new
         @watch = false
@@ -201,7 +206,18 @@ module BGP
 
       # irb's prompt prints self, so this is what a person sees there.
       def to_s ; 'bgp4r' ; end
-      def inspect ; "#<BGP::Sim::Console #{addresses.size} peer(s)>" ; end
+      def inspect
+        "#<BGP::Sim::Console#{@name ? " #{@name}" : ''} #{addresses.size} peer(s)>"
+      end
+
+      # The console on the other side of a back to back session. Every
+      # verb works on it: remote.announce, remote.last, remote.received.
+      # Nil until --back-to-back sets it, and asking then says so.
+      attr_writer :remote
+
+      def remote
+        @remote or raise ArgumentError, NO_REMOTE
+      end
 
       # Opens irb on this object and returns when the person exits.
       def interact

@@ -256,6 +256,15 @@ class BGP_Sim_Console_Test < Test::Unit::TestCase
     BGP::Sim::Console.new(nil, @out, 3, :factory => factory)
   end
 
+  def test_remote_says_how_to_get_one_until_there_is_one
+    c = BGP::Sim::Console.new(nil, StringIO.new)
+    assert_raise_message(/no remote side\. Start with bgp4r console --back-to-back/) { c.remote }
+    other = BGP::Sim::Console.new(nil, StringIO.new, 10, :name => 'remote')
+    c.remote = other
+    assert_same(other, c.remote)
+    assert_match(/Console remote 0 peer/, other.inspect)
+  end
+
   def test_with_no_session_a_verb_says_how_to_open_one
     c = empty_console
     assert_equal([], c.peers)
