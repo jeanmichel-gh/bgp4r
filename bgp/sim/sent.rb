@@ -171,11 +171,14 @@ module BGP
         end
       end
 
-      # A feed's UPDATE, counted in the feed and in the totals.
-      def tick(feed, prefixes, messages = 1, now = Time.now)
+      # A feed's UPDATE, counted in the feed and in the totals. `as` is
+      # the action the totals count it under when that is not the
+      # feed's own, which is a churn's: its feed mixes withdrawals and
+      # announcements, and each goes to its own total.
+      def tick(feed, prefixes, messages = 1, now = Time.now, as: nil)
         @lock.synchronize do
           feed.add(prefixes, messages)
-          tally(feed.action, prefixes, messages, now)
+          tally(as || feed.action, prefixes, messages, now)
         end
         self
       end

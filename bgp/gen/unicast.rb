@@ -177,7 +177,45 @@ module BGP
       def row(g)
         r = { 'origin' => 0, 'as_path' => [] }
         @patterns.each { |k, p| r[k] = p.at(g) }
+        @overlay.each { |k, p| r[k] = p.at(@overlay_at) } if @overlay
         @sender ? @sender.apply(r) : r
+      end
+
+      # Runs the block with `patterns` overriding the spec's own, each
+      # read at `n` rather than at the group number. It is churn's hook,
+      # bgp/gen/churn.rb: a route re-announced at churn event n takes the
+      # churn's attributes at n. **It sits before the sender's rules**,
+      # so a churned AS_PATH still gets our AS in front over eBGP and a
+      # churned LOCAL_PREF is still dropped, as the spec's own would be.
+      def with_overlay(patterns, n)
+        @overlay, @overlay_at = patterns, n
+        yield
+      ensure
+        @overlay, @overlay_at = nil, nil
+      end
+
+      # The one UPDATE that announces route i alone, with whatever
+      # attributes its row has now. Churn sends these.
+      def update_for(i)
+        r = route(i)
+        set = set_for(row_at(set_key(i)))
+        msg = nil
+        Packer.batches([[r, route_len(r), set]]) do |batch, octets, s|
+          msg = build_update(s, batch)
+          unless s.measured
+            measure(msg, s.size(octets))
+            s.measured = true
+          end
+        end
+        msg
+      end
+
+      # The one UPDATE that withdraws route i alone.
+      def withdrawal_for(i) ; build_withdrawal([route(i)]) ; end
+
+      # Route i's `expected` row, with whatever attributes its row has now.
+      def expected_for(i)
+        route_row(i).merge(set_for(row_at(set_key(i))).expected)
       end
 
       # The UPDATEs that announce every route, as an Enumerator, so a

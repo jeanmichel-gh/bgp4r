@@ -33,6 +33,7 @@ require 'bgp/gen/evpn_routes'
 require 'bgp/gen/rt_constrain_routes'
 require 'bgp/gen/link_state_routes'
 require 'bgp/gen/mcast_vpn_routes'
+require 'bgp/gen/churn'
 
 module BGP
   # Generates UPDATEs and withdrawals in bulk from a spec of plain JSON

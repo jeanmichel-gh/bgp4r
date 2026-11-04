@@ -573,6 +573,9 @@ bgp/gen.rb bgp/gen/      `BGP::Gen`, UPDATEs and withdrawals in bulk from a
                          asks that. sender.rb is the session a spec goes out
                          on, the eBGP and iBGP rules an announce block
                          gets, so `bgp4r-sim` and `expected` agree.
+                         churn.rb is phase 5, `Gen#churn`: changes to
+                         routes a spec announced, one UPDATE an event,
+                         and `expected` after them.
                          **The first message of each
                          feed is measured against the packer's arithmetic**,
                          so a slip raises `Gen::PackingError` before it
@@ -800,13 +803,13 @@ docs/                    protocol-testing.md: using bgp4r to test a router
                          attributes that vary per route, as one pure
                          module that bgp4r's tests, `bgp4r-sim` and
                          routescope's scenarios all drive with the same
-                         JSON spec. **Phases 0 to 4 are built**, so
+                         JSON spec. **Phases 0 to 5 are built**, so
                          every family the build gate knows: unicast,
                          multicast, labelled, both VPN families and
                          both flow spec families, both AFIs, all eleven
                          EVPN route types, RT-constrain, all seven
                          MCAST-VPN route types and BGP-LS topologies,
-                         with patterns and the injector, and section 13
+                         with patterns, churn and the injector, and section 13
                          says what they measured;
                          section 12 is the plan and its status table
                          is updated by each step's pull request
@@ -1602,7 +1605,7 @@ CI: `.github/workflows/test.yml` runs both suites on every push to master and ev
 
 `.github/workflows/capture.yml` is the one workflow that deploys a containerlab lab: it builds the `lab-node` and BIRD images, deploys `lab/routescope/bgp4r-lab`, and runs its `capture.sh`, on demand and on a push that changes that folder or the Dockerfile. Its log is what routescope's BGP fixtures are cut from.
 
-Baseline on 2026-11-04: 3541 tests, 35039 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
+Baseline on 2026-11-04: 3564 tests, 36159 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
 
 **That coverage figure is 98.5% for the library and the rest is the two
 programs, not a gap anywhere else.** Measured the same run: with
@@ -7511,7 +7514,7 @@ in place, with a dated block in the header naming them.
   own test confirms is the most expensive kind of wrong, because
   nothing fails until somebody runs the real thing.
 
-### Route generation, `bgp/gen`. Phases 0 to 4 Done
+### Route generation, `bgp/gen`. Phases 0 to 5 Done
 
 `docs/route-generation.md` is the design and the plan. Read it before
 any work on generating traffic, on `RouteGenerator`, or on what
@@ -7708,7 +7711,22 @@ Phases, with status kept in the document's section 12 table:
      a generated feed is counted message by message as discarded, the
      session stays up and a unicast route still installs. It vouches
      for nothing about our octets.
-5. Churn. To do.
+5. Churn. **Done**: `Gen#churn(c)` answers a `Gen::Churn` over the
+   routes the spec announces, with `events`, `summary` and `expected`,
+   the state after every event. `bgp4r-sim` takes `churn` beside a
+   `spec` on `announce`, paced at its `rate`, and `/api/plan` takes it
+   too. Three things worth knowing:
+   * **The churn's attributes go in before the Sender's rules**, in
+     `Unicast#row` through `with_overlay`, so a churned AS_PATH still
+     gets our AS over eBGP. Every family takes a churn with no code of
+     its own.
+   * **It is on `announce` and not an eleventh action**, because
+     `test_the_action_table_is_the_documented_ten` holds the ten to
+     routescope's `Drivers::Sim::ACTIONS`. Adding one failed it and
+     its HTTP twin, which is what they are for.
+   * **The ninth thing `expected` could not catch**: churn attributes
+     read one event late pass the functional and lab tests. Only
+     `churn_test.rb`'s hand-stated MED per replacement fails.
 6. `LabHelper` and the coverage matrix take specs. To do.
 7. routescope scenarios use specs. routescope's column.
 
