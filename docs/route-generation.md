@@ -171,7 +171,7 @@ route key.
 | `unicast` (AFI 1, 2) | `start` prefix and length, `path_id` | none | IPv4 in Withdrawn Routes, IPv6 in MP_UNREACH. |
 | `multicast` (SAFI 2) | as unicast | none | MP_UNREACH, IPv4 too. |
 | `labelled` (SAFI 4) | prefix, `label` fixed or per route, required | none | The 3-octet Compatibility field of RFC 8277 section 2.4, written as 0x800000. |
-| `vpn`, `vpn_multicast` (128, 129) | `rd` of type 0, 1 or 2 stepped per VRF, `label`, prefix | route targets per VRF, so each VRF has its own attribute set | RD plus prefix. |
+| `vpn`, `vpn_multicast` (128, 129) | `rd` of type 0, 1 or 2 stepped per VRF, `label`, prefix, the range once per VRF (`vrfs`) | `route_target` stepped per VRF, so each VRF has its own attribute set | RD plus prefix, with the Compatibility field. |
 | `flow_spec`, `flow_spec_vpn` (133, 134) | destination prefix, port ranges, protocol, so a rule set N wide | traffic rate, redirect, marking; next hop length 0 | The same rule in MP_UNREACH. |
 | `rt_constrain` (132) | origin AS, route target, the zero length default | none | GoBGP 3.23.0 panics on the default plus a second route. |
 | `evpn` (25, 70) | type 2: MAC, IP, ESI, label; type 3: originator; type 5: prefix and GW IP | MAC Mobility sequence number (a MAC move), ESI label, Router's MAC, PMSI tunnel for type 3 | The route key only; Flags and GW IP are not in it. |
@@ -277,7 +277,7 @@ can fail. Update this table in the pull request that moves a step.
 | 2 | `Vary`: the five patterns, `group`, the property patterns for AS_PATH and communities. | Done |
 | 3 | Injector wiring: `announce` and `withdraw` read a spec, `POST /api/plan`, the `mp_reach`, `mp_unreach` and `specimen` keys. | Done |
 | 4a | Multicast and labelled. | Done |
-| 4b | VPN, both SAFIs. | To do |
+| 4b | VPN, both SAFIs. | Done |
 | 4c | Flow spec, both SAFIs. | To do |
 | 4d | EVPN types 2, 3 and 5, then the rest. | To do |
 | 4e | RT-constrain. | To do |
@@ -433,3 +433,72 @@ test draws all three families; `test/functional/gen_test.rb` sends both
 families over loopback and reads the SAFI off the octets, since a table
 cannot tell SAFI 2 from SAFI 1; `test/functional/lab/gen_gobgp_test.rb`
 reads the labels back from GoBGP and asserts the multicast fault.
+
+**Phase 4b.** Labeled VPN, SAFI 128, and Labeled VPN Multicast, SAFI
+129, both AFIs. `Vpn` is a subclass of `Labelled` and `Vpn_multicast`
+of `Vpn`, so the label rules carry over whole.
+
+* **Three keys, for these two families only**: `rd`, `vrfs` and
+  `route_target`. `rd` is required, as `ADMIN:N`, and the administrator
+  picks RFC 4364 section 4.2's type: an AS that fits two octets is type
+  0, an IPv4 address type 1, a larger AS type 2. A route target reads
+  the same way. A 4-octet AS below 65536 cannot be asked for, since it
+  reads as type 0.
+* **Every VRF carries the same `count` prefixes**, because overlapping
+  address space is what an RD is for (RFC 4364 section 4.1). So
+  `vrfs: N` makes N times `count` routes, VRF by VRF, and VRF n's RD is
+  `rd` with n added to its assigned number. A number stepped past its
+  field is refused, since it would be written as a different one.
+* **A route target makes each VRF an attribute set of its own.** VRF
+  n's target steps like its RD and joins the extended communities, so
+  a message never mixes two VRFs. Without one, the VRFs share a set and
+  pack together. `Unicast` grew `set_key` and `row_at` for this: a set
+  is keyed by the group and, for VPN, the VRF.
+* **The label runs across the VRFs**, on the route number, as for
+  `labelled`. A withdrawal names the RD and the prefix and carries
+  0x800000, which RFC 8277 section 2.4 asks of any "SAFI-x UPDATE".
+* **An IPv4 next hop for IPv6 VPN routes goes out IPv4-mapped**, 24
+  octets, RFC 4659 section 3.2.1.2. `Mp_reach` maps it for SAFI 1, 2
+  and 4 and not for SAFI 128, so the generator does. `expected` keeps
+  the address as given.
+* **A library bug this found**: under AFI 2 SAFI 128 or 129,
+  `Mp_reach` read a 24-octet next hop as two 12-octet VPN-IPv4
+  addresses, so 2001:db8::1 came back as "32.1.13.184, 0.0.0.1". The
+  octets replayed, so no round trip test saw it. It reads one VPN-IPv6
+  address now, and `mp_reach_test.rb` pins all three lengths.
+* **The injector's plan total read `spec['count']`**, which is one VRF
+  of a VPN spec, so paging would have stopped a VRF early. `Gen#total`
+  answers the whole count now.
+* **What `expected` cannot catch, again.** A route target taken from
+  the first VRF for all of them, and SAFI 128 sent as 129, both passed
+  every comparison with `expected`. The functional and lab tests now
+  state the route target per VRF and the SAFI by hand.
+
+Measured against gobgpd 3.23.0 on 2026-11-04:
+
+* **SAFI 128 works in both AFIs.** The config names are
+  `l3vpn-ipv4-unicast` and `l3vpn-ipv6-unicast`; the client names are
+  `vpnv4` and `vpnv6`. GoBGP reads the RD type, administrator and
+  assigned number, the label, the route target and the attributes, and
+  holds the same prefix once per RD. Its table key prints a type 2 RD in
+  asdot, so the test reads the NLRI's own `rd` object.
+* **GoBGP cannot check the RFC 4659 mapping.** It accepts the 12-octet
+  VPN-IPv4 next hop under AFI 2 as well, and prints 192.0.2.1 for both
+  forms. Measured by sabotage. The unit and functional tests are what
+  check the 24 octets.
+* **SAFI 129 is negotiated and then refused.** The session lists
+  `l3vpn-ipv4-multicast` as advertised and received, and the first
+  UPDATE in it is logged as "unknown route family. AFI: 1, SAFI: 129"
+  with "Capability was disabled". The session stays up and a SAFI 128
+  feed after it installs. The client has no name for the family.
+  Asserted, not filed. So nothing outside bgp4r reads our SAFI 129
+  octets.
+* FRR is not installed in the sandbox this was written in, so there is
+  no FRR case, as in phase 4a.
+
+Tests: `test/unit/gen/vpn_test.rb`; `test/unit/gen_test.rb`'s property
+test draws both families, with up to four VRFs and all three RD types;
+`test/functional/gen_test.rb` sends both families over loopback;
+`test/unit/sim/injector_test.rb` pins the plan total;
+`test/functional/lab/gen_gobgp_test.rb` reads the VPN routes back from
+GoBGP and asserts the SAFI 129 refusal.

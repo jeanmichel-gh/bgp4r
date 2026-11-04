@@ -46,10 +46,12 @@ class TestBgpGen < Test::Unit::TestCase
   SEEDS = Integer(ENV.fetch('GEN_SEEDS', 20))
 
   def test_the_generators_are_the_ones_built
-    assert_equal(%w[unicast multicast labelled], BGP::Gen::GENERATORS.keys)
+    assert_equal(%w[unicast multicast labelled vpn vpn_multicast], BGP::Gen::GENERATORS.keys)
     assert_equal(BGP::Gen::Unicast, BGP::Gen::GENERATORS['unicast'])
     assert_equal(BGP::Gen::Multicast, BGP::Gen::GENERATORS['multicast'])
     assert_equal(BGP::Gen::Labelled, BGP::Gen::GENERATORS['labelled'])
+    assert_equal(BGP::Gen::Vpn, BGP::Gen::GENERATORS['vpn'])
+    assert_equal(BGP::Gen::Vpn_multicast, BGP::Gen::GENERATORS['vpn_multicast'])
   end
 
   # A family key given to a family that has no such field is refused by
@@ -59,7 +61,7 @@ class TestBgpGen < Test::Unit::TestCase
       e = assert_raise(BGP::Gen::SpecError) do
         BGP::Gen.new('family' => family, 'start' => '10.0.0.0/8', 'count' => 1, 'label' => 16)
       end
-      assert_match(/'label' is for labelled and not for '#{family}'/, e.message)
+      assert_match(/'label' is for labelled, vpn, vpn_multicast and not for '#{family}'/, e.message)
     end
   end
 
@@ -124,7 +126,7 @@ class TestBgpGen < Test::Unit::TestCase
       'communities' => { 'count' => { 'base' => '65000:1', 'n' => { 'cycle' => [0, 2, 30] } } },
     }
     patterns.each { |k, v| a[k] = v if r.rand(3) == 0 }
-    family = %w[unicast multicast labelled][r.rand(3)]
+    family = FAMILIES[r.rand(FAMILIES.size)]
     s = { 'family' => family, 'start' => start, 'count' => r.rand(1..[room, 300].min), 'attributes' => a }
     s['per_update'] = r.rand(1..300) if r.rand(2) == 1
     case r.rand(3)
@@ -132,13 +134,29 @@ class TestBgpGen < Test::Unit::TestCase
     when 2 then s['path_id'] = { 'step' => { 'start' => r.rand(1000), 'by' => 1 } }
     end
     s['group'] = r.rand(1..20) if r.rand(2) == 1
-    if family == 'labelled'
+    if LABELLED.include?(family)
       s['label'] = r.rand(2) == 1 ? r.rand(2**20) :
         { 'step' => { 'start' => r.rand(16..1000), 'by' => r.rand(1..9), 'wrap' => 2**20 - 1 } }
+    end
+    # Phase 4b: the same range in up to four VRFs, under an RD of each of
+    # RFC 4364 section 4.2's three types, and sometimes a route target.
+    if VPN.include?(family)
+      admin = [r.rand(65536), "192.0.2.#{r.rand(1..254)}", r.rand(65536..2**32 - 1)][r.rand(3)]
+      s['rd'] = "#{admin}:#{r.rand(1000)}"
+      s['vrfs'] = r.rand(1..4) if r.rand(2) == 1
+      s['route_target'] = "#{admin}:#{r.rand(1000)}" if r.rand(2) == 1
     end
     s['seed'] = r.rand(2**31)
     s
   end
+
+  FAMILIES = %w[unicast multicast labelled vpn vpn_multicast]
+  LABELLED = %w[labelled vpn vpn_multicast]
+  VPN = %w[vpn vpn_multicast]
+  SAFI = { 'unicast' => 1, 'multicast' => 2, 'labelled' => 4, 'vpn' => 128, 'vpn_multicast' => 129 }
+
+  # How many routes a spec makes: count, once per VRF.
+  def self.total(spec) ; spec['count'] * (spec['vrfs'] || 1) ; end
 
   def info_for(spec)
     spec['path_id'] ? AddPath.new : PLAIN
@@ -149,8 +167,12 @@ class TestBgpGen < Test::Unit::TestCase
     list = list.nlris if list.respond_to?(:nlris)
     mp = u.path_attribute && (u.path_attribute[:mp_reach] || u.path_attribute[:mp_unreach])
     list = mp.nlris if mp && (list.nil? || list.empty?)
+    # A VPN route's key has its RD too, since every VRF carries the same
+    # prefixes (RFC 4364 section 4.1).
     list.collect do |n|
-      n.is_a?(BGP::Labeled) ? [n.to_hash[:prefix], n.path_id] : [n.to_s.sub(/\AID=\d+, /, ''), n.path_id]
+      next [n.to_s.sub(/\AID=\d+, /, ''), n.path_id, nil] unless n.is_a?(BGP::Labeled)
+      h = n.to_hash
+      [h[:prefix], n.path_id, h[:rd] && h[:rd].join(':')]
     end
   end
 
@@ -213,7 +235,7 @@ class TestBgpGen < Test::Unit::TestCase
     each_sample do |x|
       spec = x.spec
       mlen = spec['start'].split('/').last.to_i
-      route = 1 + (mlen + 7) / 8 + (spec['path_id'] ? 4 : 0) + (spec['label'] ? 3 : 0)
+      route = 1 + (mlen + 7) / 8 + (spec['path_id'] ? 4 : 0) + (spec['label'] ? 3 : 0) + (spec['rd'] ? 8 : 0)
       problems = []
       [x.updates, x.withdrawals].each do |msgs|
         msgs.each_with_index do |m, i|
@@ -253,7 +275,7 @@ class TestBgpGen < Test::Unit::TestCase
     each_sample do |x|
       sent = x.updates.flat_map { |m| keys_of(m.parsed) }
       gone = x.withdrawals.flat_map { |m| keys_of(m.parsed) }
-      assert_equal(x.spec['count'], sent.size, x.why)
+      assert_equal(self.class.total(x.spec), sent.size, x.why)
       assert_equal(sent.uniq.size, sent.size, "a route announced twice; #{x.why}")
       assert_equal(sent, gone, x.why)
     end
@@ -264,7 +286,6 @@ class TestBgpGen < Test::Unit::TestCase
   # under its own SAFI (RFC 4760). A labelled withdrawal carries the RFC
   # 8277 section 2.4 Compatibility field, 0x800000, and never the label.
   def test_each_family_goes_in_its_own_place
-    safi = { 'unicast' => 1, 'multicast' => 2, 'labelled' => 4 }
     each_sample do |x|
       family = x.spec['family']
       classic = family == 'unicast' && x.gen.afi == 1
@@ -274,11 +295,11 @@ class TestBgpGen < Test::Unit::TestCase
         mp = pa && (pa[:mp_reach] || pa[:mp_unreach])
         if classic
           problems << "message #{i} uses an MP attribute" if mp
-        elsif mp.nil? || [mp.afi, mp.safi] != [x.gen.afi, safi[family]] || m.parsed.nlri
+        elsif mp.nil? || [mp.afi, mp.safi] != [x.gen.afi, SAFI[family]] || m.parsed.nlri
           problems << "message #{i} is not in MP_REACH or MP_UNREACH for its family"
         end
       end
-      if family == 'labelled'
+      if LABELLED.include?(family)
         compat = x.withdrawals.flat_map { |m| labels_of(m.parsed) }.uniq
         problems << "withdrawals carry #{compat.inspect}" unless compat == ['800000']
         problems << 'an announcement has no label' if x.updates.flat_map { |m| labels_of(m.parsed) }.include?(nil)
@@ -292,10 +313,10 @@ class TestBgpGen < Test::Unit::TestCase
   def test_expected_is_what_was_sent
     each_sample do |x|
       rows = x.gen.expected.to_a
-      assert_equal(x.spec['count'], rows.size, x.why)
-      assert_equal(x.spec['count'], x.gen.expected.size, x.why)
+      assert_equal(self.class.total(x.spec), rows.size, x.why)
+      assert_equal(self.class.total(x.spec), x.gen.expected.size, x.why)
       read = x.updates.flat_map do |m|
-        keys_of(m.parsed).collect { |prefix, path_id| row_of(prefix, path_id, m.parsed.path_attribute) }
+        keys_of(m.parsed).collect { |key| row_of(*key, m.parsed.path_attribute) }
       end
       assert_equal(read, rows.collect { |r| r.reject { |k, _| k == 'extended_communities' } }, x.why)
     end
@@ -310,9 +331,11 @@ class TestBgpGen < Test::Unit::TestCase
     assert_operator(varied, :>=, SEEDS / 4, 'feeds with a pattern')
     assert_operator(specs.count { |sp| sp['group'] }, :>=, 3, 'feeds with a group')
     assert_operator(specs.count { |sp| sp['path_id'].is_a?(Hash) }, :>=, 2, 'feeds with a path_id pattern')
-    %w[unicast multicast labelled].each do |f|
+    FAMILIES.each do |f|
       assert_operator(specs.count { |sp| sp['family'] == f }, :>=, 3, "feeds of #{f}")
     end
+    assert_operator(specs.count { |sp| sp['vrfs'].to_i > 1 }, :>=, 1, 'feeds in more than one VRF')
+    assert_operator(specs.count { |sp| sp['route_target'] }, :>=, 1, 'feeds with a route target')
     assert_operator(specs.count { |sp| sp['label'].is_a?(Hash) }, :>=, 1, 'feeds with a label pattern')
     runs = self.class.corpus.collect { |x| x.updates.size }
     assert_operator(runs.max, :>, 20, 'some feed split into many messages')
@@ -322,11 +345,15 @@ class TestBgpGen < Test::Unit::TestCase
   # rather than with anything in bgp/gen. The extended communities are
   # left out because Gen and this would both spell them through
   # CommunityKeys, which would compare it with itself.
-  def row_of(prefix, path_id, pa)
+  def row_of(prefix, path_id, rd, pa)
     r = { 'prefix' => prefix }
     r['path_id'] = path_id if path_id
-    if pa[:mp_reach] && pa[:mp_reach].safi == 4
-      r['label'] = pa[:mp_reach].nlris.find { |n| [n.to_hash[:prefix], n.path_id] == [prefix, path_id] }.to_hash[:label]
+    if pa[:mp_reach] && [4, 128, 129].include?(pa[:mp_reach].safi)
+      h = pa[:mp_reach].nlris.collect(&:to_hash).find do |n|
+        [n[:prefix], n[:path_id], n[:rd] && n[:rd].join(':')] == [prefix, path_id, rd]
+      end
+      r['label'] = h[:label]
+      r['rd'] = rd if rd
     end
     r['origin'] = pa[:origin].to_i
     r['as_path'] = pa[:as_path].segments.flat_map(&:as)

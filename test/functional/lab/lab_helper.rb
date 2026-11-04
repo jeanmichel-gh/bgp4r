@@ -275,11 +275,30 @@ module LabHelper
     MULTICAST_IPV4 = 'ipv4-multicast'
     MULTICAST_IPV6 = 'ipv6-multicast'
 
+    # Labeled VPN, SAFI 128, and the disagreement a fourth time: the
+    # config file takes `l3vpn-ipv4-unicast` and the client refuses it,
+    # taking `vpnv4` or `ipv4-l3vpn`. The table is keyed by RD and
+    # prefix, and prints a 4-octet AS RD in asdot, `64086.59904:4`,
+    # where the NLRI's own `rd` object says 4200000000. Measured on
+    # 2026-11-04 against 3.23.0, and the same for IPv6.
+    VPN_IPV4 = 'l3vpn-ipv4-unicast'
+    VPN_IPV6 = 'l3vpn-ipv6-unicast'
+
+    # Labeled VPN Multicast, SAFI 129. **Negotiated and then refused**:
+    # the session lists `l3vpn-ipv4-multicast` as advertised and
+    # received, and the first UPDATE in it is logged as "unknown route
+    # family. AFI: 1, SAFI: 129" with "Capability was disabled", the
+    # session staying up. The client has no name for the family under
+    # any spelling tried. Measured on 2026-11-04; gen_gobgp_test.rb
+    # asserts it.
+    VPN_MULTICAST_IPV4 = 'l3vpn-ipv4-multicast'
+
     # Config-file name to client name, for the families where the two
     # disagree. Everything else is spelled alike on both sides, RTC and
     # LS included.
     CLIENT_FAMILY = { FS_VPN => 'ipv4-l3vpn-flowspec', EVPN => 'evpn',
-                      LABELLED_IPV4 => 'ipv4-mpls', LABELLED_IPV6 => 'ipv6-mpls' }.freeze
+                      LABELLED_IPV4 => 'ipv4-mpls', LABELLED_IPV6 => 'ipv6-mpls',
+                      VPN_IPV4 => 'vpnv4', VPN_IPV6 => 'vpnv6' }.freeze
 
     # The name to pass the client's -a for a family, which is its own
     # name except where the two disagree.

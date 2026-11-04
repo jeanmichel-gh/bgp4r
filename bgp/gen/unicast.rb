@@ -111,7 +111,7 @@ module BGP
         @sets = {}
         # A spec whose first attribute set leaves no room for one route
         # is refused here, and not halfway through a feed.
-        Packer.batches([[nil, route_octets, set_for(row(0))]]) { }
+        Packer.batches([[nil, route_octets, set_for(row_at(set_key(0)))]]) { }
       end
 
       def ipv4? ; @afi == IANA::AFI::IPv4 ; end
@@ -140,6 +140,19 @@ module BGP
       # it here, and its mp_nlris reads it.
       def route(i) ; [prefix(i), path_id(i)] ; end
 
+      # How many routes the spec makes. `count` for unicast; a family
+      # that repeats the range, as VPN does once per VRF, answers more.
+      def total ; @count ; end
+
+      # Which attribute set route i takes, as a key: the group number
+      # here, and anything else a family varies its attributes on beside
+      # it. A new key is a new set looked up, which ends a message only
+      # when the set differs.
+      def set_key(i) ; i / @group ; end
+
+      # The attribute row for a key `set_key` gave.
+      def row_at(key) ; row(key) ; end
+
       # The i-th route's key fields as an `expected` row starts them.
       def route_row(i)
         r = { 'prefix' => prefix(i) }
@@ -166,11 +179,11 @@ module BGP
       # large count is built one message at a time.
       def updates
         items = Enumerator.new do |y|
-          len, last_g, set = route_octets, nil, nil
-          @count.times do |i|
-            g = i / @group
-            set = set_for(row(g)) unless g == last_g
-            last_g = g
+          len, last_k, set = route_octets, nil, nil
+          total.times do |i|
+            k = set_key(i)
+            set = set_for(row_at(k)) unless k == last_k
+            last_k = k
             y << [route(i), len, set]
           end
         end
@@ -191,7 +204,7 @@ module BGP
       def withdrawals
         packer = withdraw_packer
         len = route_octets
-        items = Enumerator.new { |y| @count.times { |i| y << [route(i), len] } }
+        items = Enumerator.new { |y| total.times { |i| y << [route(i), len] } }
         Enumerator.new do |out|
           first = true
           packer.each_batch(items) do |batch, octets|
@@ -207,12 +220,12 @@ module BGP
       # The communities are spelled the way the attribute reads them back,
       # so `no_export` is 65535:65281, which is what a RIB will show.
       def expected
-        Enumerator.new(@count) do |y|
-          last_g, attrs = nil, nil
-          @count.times do |i|
-            g = i / @group
-            attrs = set_for(row(g)).expected unless g == last_g
-            last_g = g
+        Enumerator.new(total) do |y|
+          last_k, attrs = nil, nil
+          total.times do |i|
+            k = set_key(i)
+            attrs = set_for(row_at(k)).expected unless k == last_k
+            last_k = k
             y << route_row(i).merge(attrs)
           end
         end
@@ -297,9 +310,14 @@ module BGP
       # and differs where a withdrawal's NLRI is not the announcement's.
       def mp_withdrawn_nlris(batch) ; mp_nlris(batch) ; end
 
+      # The next hop as it goes in MP_REACH_NLRI. As given here: for
+      # SAFI 1, 2 and 4 `Mp_reach` maps an IPv4 one under AFI 2 itself.
+      # VPN does not get that from `Mp_reach` and overrides this.
+      def wire_next_hop(nh) ; nh ; end
+
       def reach(set, batch)
         h = { :afi => @afi, :safi => safi, :nlris => mp_nlris(batch) }
-        h[:nexthop] = [set.next_hop] if set.next_hop
+        h[:nexthop] = [wire_next_hop(set.next_hop)] if set.next_hop
         BGP::Mp_reach.new(h)
       end
 

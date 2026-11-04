@@ -370,7 +370,7 @@ module BGP
         limit = integer(block, 'limit', Daemon::Views::PAGE_LIMIT).clamp(1, Daemon::Views::MAX_LIMIT)
         plans = targets(block).collect { |peer|
           gen = generator(block, peer)
-          total = gen.spec['count']
+          total = gen.total
           rows = gen.expected.lazy.drop(offset).first(limit)
           nxt = offset + limit
           { :peer => peer.address, :rows => rows, :total => total, :offset => offset,
@@ -657,7 +657,7 @@ module BGP
         gens = peers.collect { |peer| [peer, generator(block, peer)] }
         records = gens.collect { |peer, gen|
           s = gen.spec
-          record = @sent.start_feed(action, "#{gen.family} #{s['start']} x #{s['count']}", peer.address)
+          record = @sent.start_feed(action, "#{gen.family} #{s['start']} x #{gen.total}", peer.address)
           run = lambda do
             begin
               messages = action == 'withdraw' ? gen.withdrawals : gen.updates

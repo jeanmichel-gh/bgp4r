@@ -94,7 +94,24 @@ class TestBgpGenSpec < Test::Unit::TestCase
                  S.read(minimal.merge('label' => { 'step' => { 'start' => 16, 'by' => 1 } }))['label'])
     refused(minimal.merge('label' => 2**20), /label: 1048576 does not fit/)
     refused(minimal.merge('label' => '16'), /label/)
-    assert_equal({ 'label' => %w[labelled] }, S::FAMILY_KEYS)
+    assert_equal({ 'label' => %w[labelled vpn vpn_multicast], 'rd' => %w[vpn vpn_multicast],
+                   'vrfs' => %w[vpn vpn_multicast], 'route_target' => %w[vpn vpn_multicast] }, S::FAMILY_KEYS)
+  end
+
+  # Phase 4b. An RD and a route target read as ADMIN:N, and the
+  # administrator says the type, RFC 4364 section 4.2. The check that a
+  # stepped number fits runs here, once vrfs is known.
+  def test_an_rd_a_route_target_and_vrfs_read
+    s = S.read(minimal.merge('rd' => '65000:1', 'route_target' => '192.0.2.1:9', 'vrfs' => 3))
+    assert_equal(['65000:1', '192.0.2.1:9', 3], s.values_at('rd', 'route_target', 'vrfs'))
+    assert_equal([0, 1, 2], %w[65000:1 192.0.2.1:1 4200000000:1].collect { |t| S.distinguisher(t, 'rd').type })
+    assert_equal([65000, 3], S.distinguisher('65000:1', 'rd').at(2))
+    assert_equal('192.0.2.1:3', S.distinguisher('192.0.2.1:1', 'rd').text(2))
+    refused(minimal.merge('vrfs' => 0), /vrfs is at least 1/)
+    refused(minimal.merge('rd' => '192.0.2.1:65535', 'vrfs' => 2), /steps to 65536 by VRF 2/)
+    refused(minimal.merge('route_target' => '65000'), /not ADMIN:N/)
+    assert_nothing_raised { S.read(minimal.merge('rd' => '65000:4294967294', 'vrfs' => 2)) }
+    refused(minimal.merge('rd' => '65000:4294967295', 'vrfs' => 2), /past the 4294967295/)
   end
 
   def test_start_and_count_are_required

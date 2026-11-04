@@ -53,12 +53,15 @@ module BGP
       module_function
 
       # The top level keys a spec takes.
-      KEYS = %w[family afi count per_update start path_id label seed group attributes].freeze
+      KEYS = %w[family afi count per_update start path_id label rd vrfs route_target seed group attributes].freeze
 
       # The keys that belong to some families only, and which. A spec
       # giving one to another family is refused by name in Gen.new, so
       # a label on a unicast spec is not dropped in silence.
-      FAMILY_KEYS = { 'label' => %w[labelled] }.freeze
+      FAMILY_KEYS = { 'label' => %w[labelled vpn vpn_multicast],
+                      'rd' => %w[vpn vpn_multicast],
+                      'vrfs' => %w[vpn vpn_multicast],
+                      'route_target' => %w[vpn vpn_multicast] }.freeze
 
       # The announce block keys bgp4r already uses everywhere else, with
       # the kind of value each is, which says the patterns it takes, and
@@ -101,6 +104,13 @@ module BGP
         out['group'] = integer(s, 'group', false, 1)
         out['path_id'] = value(s['path_id'], 'path_id', :int, U32, out['seed']) if s.key?('path_id')
         out['label'] = value(s['label'], 'label', :int, LABEL_MAX, out['seed']) if s.key?('label')
+        out['vrfs'] = integer(s, 'vrfs', false, 1)
+        %w[rd route_target].each do |k|
+          next unless s.key?(k)
+          d = distinguisher(s[k], k)
+          d.at((out['vrfs'] || 1) - 1)
+          out[k] = s[k]
+        end
         out['attributes'] = attributes(s.fetch('attributes', {}), out['seed'])
         out.reject { |_, v| v.nil? }
       end
@@ -115,6 +125,55 @@ module BGP
           out[k] = Vary.compile(v, "attributes.#{k}", kind, max: max, seed: spec['seed'])
         end
         out
+      end
+
+      # An RD or a route target as text, `ADMIN:N`, which steps once per
+      # VRF by adding to N. The administrator says which of the three
+      # layouts it is, and RFC 4364 section 4.2 gives them: an AS that
+      # fits two octets is type 0 with a 4-octet N, an IPv4 address is
+      # type 1 and a 4-octet AS is type 2, both with a 2-octet N. RFC
+      # 4360 sections 3.1 and 3.2 and RFC 5668 section 2 give a route
+      # target the same three, so one reader serves both.
+      #
+      # **A 4-octet AS below 65536 cannot be asked for**: 65000 reads as
+      # type 0. Nothing here needed it, and `mp_reach` sends any RD.
+      Distinguisher = Struct.new(:name, :admin, :first, :type, :max) do
+        # The one for VRF v, as the [admin, assigned] pair `Rd.new` and
+        # `Route_target` both take. Refused when N runs past its field,
+        # since the alternative is writing a different number.
+        def at(v)
+          n = first + v
+          if n > max
+            raise SpecError, "#{name} #{admin}:#{first} steps to #{n} by VRF #{v + 1}, " \
+                             "past the #{max} a type #{type} field holds (RFC 4364 section 4.2)"
+          end
+          [admin, n]
+        end
+
+        def text(v) ; at(v).join(':') ; end
+      end
+
+      def distinguisher(text, name)
+        raise SpecError, "#{name} is ADMIN:N as a string, not #{text.inspect}" unless text.is_a?(String)
+        admin, n = text.split(/:(?=[^:]*\z)/)
+        unless n =~ /\A\d+\z/
+          raise SpecError, "#{name} #{text.inspect} is not ADMIN:N, as 65000:1, 192.0.2.1:1 or 4200000000:1"
+        end
+        if admin =~ /\A\d+\.\d+\.\d+\.\d+\z/
+          type, a = 1, admin
+          begin
+            IPAddr.new(a)
+          rescue IPAddr::Error
+            raise SpecError, "#{name} #{text.inspect}: #{a} is not an IPv4 address"
+          end
+        elsif admin =~ /\A\d+\z/
+          a = admin.to_i
+          type = a <= 0xffff ? 0 : 2
+          raise SpecError, "#{name} #{text.inspect}: #{a} does not fit 4 octets" if a > U32
+        else
+          raise SpecError, "#{name} #{text.inspect}: the administrator is an AS number or an IPv4 address"
+        end
+        Distinguisher.new(name, a, n.to_i, type, type == 0 ? U32 : 0xffff)
       end
 
       def family(v)

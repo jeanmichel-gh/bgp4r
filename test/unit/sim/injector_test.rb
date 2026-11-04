@@ -896,6 +896,20 @@ class BGP_Sim_Injector_Test < Test::Unit::TestCase
     assert_nil(plan[:next_offset])
   end
 
+  # A VPN spec makes `count` routes once per VRF, so the plan's total
+  # and its pages count all of them and not the range. It read
+  # spec['count'] until phase 4b, which would have ended the paging a
+  # VRF early.
+  def test_a_vpn_plan_counts_every_vrf
+    inj = injector
+    spec = SPEC.merge('family' => 'vpn', 'rd' => '65000:1', 'vrfs' => 3, 'label' => 100)
+    plan = inj.plan('spec' => spec, 'offset' => 25, 'limit' => 4)[:plans].first
+    assert_equal(30, plan[:total])
+    assert_equal(29, plan[:next_offset])
+    assert_equal(%w[65000:3 65000:3 65000:3 65000:3], plan[:rows].collect { |r| r['rd'] })
+    assert_equal([], peer.sent)
+  end
+
   # One spec, two sessions, two answers: the prepend and LOCAL_PREF
   # differ between an external and an internal peer.
   def test_a_plan_answers_per_peer
