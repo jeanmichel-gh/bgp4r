@@ -22,12 +22,13 @@
 require 'test/unit'
 require 'bgp/gen'
 
-# EVPN routes, AFI 25 SAFI 70: route types 2, 3 and 5 from a spec.
+# EVPN routes, AFI 25 SAFI 70: all eleven route types from a spec.
 #
 #   ruby -I. test/unit/gen/evpn_routes_test.rb
 #
 # The NLRI octets below are this reader's arithmetic from RFC 7432
-# section 7.2 and RFC 9136 section 3.1, checked against what the library
+# sections 7.1 to 7.4, RFC 9136 section 3.1, RFC 9251 sections 9.1 to
+# 9.3 and RFC 9572 sections 3.1 to 3.3, checked against what the library
 # encodes. The route type classes have their own tests in
 # test/unit/nlris/; what is tested here is which fields step, which stay
 # and where each lands.
@@ -42,9 +43,19 @@ class TestBgpGenEvpnRoutes < Test::Unit::TestCase
     def path_id?(*) ; true ; end
   end
 
-  BASE = { 2 => { 'start' => '00:11:22:00:00:00', 'label' => 100 },
+  ESI1 = '00:00:00:00:00:00:00:00:00:01'
+
+  BASE = { 1 => { 'start' => ESI1, 'label' => 100 },
+           2 => { 'start' => '00:11:22:00:00:00', 'label' => 100 },
            3 => { 'start' => '10.0.0.1' },
-           5 => { 'start' => '10.1.0.0/24', 'label' => 100 } }
+           4 => { 'start' => ESI1, 'originator' => '192.0.2.1' },
+           5 => { 'start' => '10.1.0.0/24', 'label' => 100 },
+           6 => { 'start' => '239.1.1.1', 'originator' => '192.0.2.1' },
+           7 => { 'start' => '239.1.1.1', 'originator' => '192.0.2.1' },
+           8 => { 'start' => '239.1.1.1', 'originator' => '192.0.2.1' },
+           9 => { 'start' => '0000000000000001' },
+           10 => { 'start' => '239.1.1.1', 'originator' => '192.0.2.1' },
+           11 => { 'start' => '239.1.1.1', 'originator' => '192.0.2.1', 'leaf' => '192.0.2.9' } }
 
   def gen(type, spec = {}, sender = nil)
     BGP::Gen.new({ 'family' => 'evpn', 'route_type' => type, 'count' => 3, 'rd' => '65000:1',
@@ -218,10 +229,31 @@ class TestBgpGenEvpnRoutes < Test::Unit::TestCase
 
   def test_refusals
     {
-      [nil, {}] => /needs a route_type, 2, 3, 5/,
-      [1, {}] => /needs a route_type/,
+      [nil, {}] => /needs a route_type, 1 to 11, not nil/,
+      [12, {}] => /needs a route_type, 1 to 11, not 12/,
       [5, { 'ip' => '10.0.0.1' }] => /'ip' is for route type 2 and not for 5/,
-      [3, { 'label' => 5 }] => /'label' is for route type 2 and 5 and not for 3/,
+      [3, { 'label' => 5 }] => /'label' is for route type 1, 2, 5 and not for 3/,
+      [4, { 'ethernet_tag' => 1 }] => /'ethernet_tag' is for route type 1, 2, 3, 5, 6, 7, 8, 9, 10 and not for 4/,
+      [1, { 'label' => nil }] => /type 1 spec needs a label/,
+      [4, { 'originator' => nil }] => /type 4 spec needs an originator/,
+      [11, { 'leaf' => nil }] => /type 11 spec needs a leaf/,
+      [6, { 'esi' => ESI1 }] => /'esi' is for route type 2, 5, 7, 8 and not for 6/,
+      [7, { 'max_response_time' => 1 }] => /'max_response_time' is for route type 8/,
+      [2, { 'esi_label' => 1 }] => /'esi_label' is for route type 1 and not for 2/,
+      [1, { 'es_import' => true }] => /'es_import' is for route type 4 and not for 1/,
+      [1, { 'start' => '00:11:22:33:44:55' }] => /type 1 start is an ESI, ten octets/,
+      [4, { 'start' => 'ff:ff:ff:ff:ff:ff:ff:ff:ff:ff', 'count' => 2 }] => /run past ff:ff:ff:ff:ff:ff:ff:ff:ff:ff/,
+      [6, { 'start' => '239.0.0.0/8' }] => /Multicast Group address, not a prefix/,
+      [6, { 'start' => 'x' }] => /type 6 start is a Multicast Group/,
+      [10, { 'source' => '2001:db8::1' }] => /not of one family/,
+      [6, { 'start' => '255.255.255.255', 'count' => 2 }] => /run past the end/,
+      [6, { 'igmp_flags' => ['v4'] }] => /igmp_flags is a list of v1, v2, v3, ie/,
+      [8, { 'max_response_time' => 256 }] => /max_response_time 256 does not fit/,
+      [4, { 'es_import' => 'yes' }] => /es_import is true or false/,
+      [9, { 'start' => '01' }] => /Region ID, 8 octets of hex/,
+      [9, { 'start' => 'ffffffffffffffff', 'count' => 2 }] => /run past ffffffffffffffff/,
+      [4, { 'originator' => 'x' }] => /originator "x" is not an address/,
+      [1, { 'esi_label' => 2**20 }] => /esi_label/,
       [2, { 'pmsi_label' => 5 }] => /'pmsi_label' is for route type 3/,
       [2, { 'gateway' => '10.0.0.1' }] => /'gateway' is for route type 5/,
       [2, { 'label' => nil }] => /needs a label/,
@@ -277,4 +309,130 @@ class TestBgpGenEvpnRoutes < Test::Unit::TestCase
     assert_equal(%w[00:11:22:00:00:00 00:11:22:00:00:01 00:11:22:00:00:02],
                  pa[:mp_reach].nlris.collect { |n| n.to_hash.values.first[:mac] })
   end
+
+  # ---- phase 4d2: route types 1, 4 and 6 to 11 -------------------------
+
+  def nlri_hex(u) ; mp(u).nlris.collect(&:to_shex) ; end
+
+  # Route type 1, RFC 7432 section 7.1: RD, ESI, Ethernet Tag ID and the
+  # MPLS Label, 25 octets. The ESI steps as one 80-bit number.
+  def test_ethernet_auto_discovery
+    g = gen(1, 'ethernet_tag' => 7)
+    assert_equal(['01' + '19' + '0000fde800000001' + '00' * 9 + '01' + '00000007' + '000641',
+                  '01' + '19' + '0000fde800000001' + '00' * 9 + '02' + '00000007' + '000641'],
+                 nlri_hex(g.updates.first).first(2))
+    assert_equal(%w[00:00:00:00:00:00:00:00:00:01 00:00:00:00:00:00:00:00:00:02 00:00:00:00:00:00:00:00:00:03],
+                 g.expected.collect { |r| r['esi'] })
+  end
+
+  # The ESI Label extended community of section 7.5, single-active flag
+  # clear: type 0x06, sub-type 0x01, the flags octet, two reserved
+  # octets, then the label in the high 20 bits of the last three. It runs
+  # on the group number like any attribute.
+  def test_the_esi_label_community
+    g = gen(1, 'esi_label' => { 'cycle' => [100, 200] }, 'group' => 2, 'count' => 4)
+    u = g.updates.to_a
+    assert_equal(2, u.size)
+    assert_match('0601' + '00' + '0000' + '000640', u[0].to_shex)
+    assert_match('0601' + '00' + '0000' + '000c80', u[1].to_shex)
+    assert_equal(%w[esi_label:100:false esi_label:100:false esi_label:200:false esi_label:200:false],
+                 g.expected.collect { |r| r['extended_communities'] }.flatten)
+  end
+
+  # Route type 4, section 7.4: RD, ESI, then the Originating Router's IP
+  # Address with its length in bits, 23 octets for IPv4.
+  def test_ethernet_segment
+    u = gen(4).updates.first
+    assert_equal('04' + '17' + '0000fde800000001' + '00' * 9 + '01' + '20' + 'c0000201', nlri_hex(u).first)
+    assert_equal(3, mp(u).nlris.size)
+  end
+
+  # Section 7.6: the ES-Import Route Target is "the high-order six bytes
+  # of the 9-byte ESI Value", which follow the ESI's Type octet. So ESIs
+  # that differ only in their low three octets share one, and one that
+  # carries into the sixth gets its own message.
+  def test_the_es_import_route_target
+    g = gen(4, 'start' => '00:11:22:33:44:55:66:ff:ff:ff', 'count' => 2, 'es_import' => true)
+    u = g.updates.to_a
+    assert_equal(2, u.size)
+    assert_match('0602' + '112233445566', u[0].to_shex)
+    assert_match('0602' + '112233445567', u[1].to_shex)
+    assert_equal(%w[es_import:11:22:33:44:55:66 es_import:11:22:33:44:55:67],
+                 g.expected.collect { |r| r['extended_communities'] }.flatten)
+    assert_equal(1, gen(4, 'es_import' => true).updates.count, 'three ESIs, one ES-Import')
+  end
+
+  # Route type 6, RFC 9251 section 9.1: RD, Ethernet Tag ID, the
+  # Multicast Source with its length in bits, 0 for (*,G), the Group,
+  # the Originator Router, then the Flags octet, v2 being 0x02. 24
+  # octets: 8 + 4 + 1 + 0 + 1 + 4 + 1 + 4 + 1.
+  def test_selective_multicast
+    g = gen(6)
+    assert_equal('06' + '18' + '0000fde800000001' + '00000000' + '00' + '20' + 'ef010101' +
+                 '20' + 'c0000201' + '02', nlri_hex(g.updates.first).first)
+    assert_equal(%w[239.1.1.1 239.1.1.2 239.1.1.3], g.expected.collect { |r| r['group'] })
+    assert_equal(['v2'], g.expected.first['igmp_flags'])
+    f = gen(6, 'igmp_flags' => %w[v3 ie], 'source' => '10.0.0.9', 'count' => 1).updates.first
+    assert_equal('0c', nlri_hex(f).first[-2, 2], 'v3 and the Include/Exclude bit, the low nibble')
+    assert_match('20' + '0a000009' + '20' + 'ef010101', nlri_hex(f).first)
+  end
+
+  # Route types 7 and 8 add the ESI, and 8 the Reserved field and the
+  # Maximum Response Time before the Flags.
+  def test_membership_report_and_leave_synch
+    seven = gen(7, 'esi' => ESI1, 'count' => 1).updates.first
+    assert_match('07' + '22' + '0000fde800000001' + '00' * 9 + '01', nlri_hex(seven).first)
+    eight = gen(8, 'max_response_time' => 7, 'count' => 1).updates.first
+    assert_equal('00000000' + '07' + '02', nlri_hex(eight).first[-12, 12], 'Reserved, then 7, then v2')
+    assert_equal(7, gen(8, 'max_response_time' => 7).expected.first['max_response_time'])
+  end
+
+  # Route type 9, RFC 9572 section 3.1: RD, Ethernet Tag ID and the
+  # 8-octet Region ID, stepped as one number.
+  def test_per_region_i_pmsi
+    g = gen(9, 'start' => '00090000fde800ff')
+    assert_equal('09' + '14' + '0000fde800000001' + '00000000' + '00090000fde800ff', nlri_hex(g.updates.first).first)
+    assert_equal(%w[00090000fde800ff 00090000fde80100 00090000fde80101], g.expected.collect { |r| r['region_id'] })
+  end
+
+  # Route type 10, section 3.2: route type 6 without its Flags octet.
+  def test_s_pmsi
+    u = gen(10, 'source' => '10.0.0.9', 'count' => 1).updates.first
+    assert_equal('0a' + '1b' + '0000fde800000001' + '00000000' + '20' + '0a000009' + '20' + 'ef010101' +
+                 '20' + 'c0000201', nlri_hex(u).first)
+  end
+
+  # Route type 11, section 3.3: the Route Key is a whole route type 10
+  # NLRI, Type and Length included, then the leaf's own address. 34
+  # octets: 2 + 27 of the key and 1 + 4 of the address.
+  def test_leaf_a_d
+    g = gen(11, 'source' => '10.0.0.9', 'vrfs' => 2)
+    key = '0a' + '1b' + '0000fde800000001' + '00000000' + '20' + '0a000009' + '20' + 'ef010101' + '20' + 'c0000201'
+    assert_equal('0b' + '22' + key + '20' + 'c0000209', nlri_hex(g.updates.first).first)
+    assert_equal(%w[65000:1 65000:1 65000:1 65000:2 65000:2 65000:2], g.expected.collect { |r| r['rd'] },
+                 'the route key carries the EVI\'s RD')
+    assert_nil(g.expected.first['ethernet_tag'], 'a leaf has no Ethernet Tag ID')
+  end
+
+  # IPv6 groups and sources, and an IPv6 originator under an IPv4 group,
+  # which nothing ties together.
+  def test_ipv6_groups
+    u = gen(10, 'start' => 'ff0e::1', 'source' => '2001:db8::9', 'originator' => '2001:db8::1',
+                'count' => 1).updates.first
+    assert_match('80' + '20010db8' + '00' * 11 + '09' + '80' + 'ff0e' + '00' * 13 + '01', nlri_hex(u).first)
+  end
+
+  # Every one of the eleven goes out, reads back strictly and is
+  # withdrawn by the same NLRI.
+  def test_every_route_type_round_trips
+    (1..11).each do |t|
+      g = gen(t)
+      sent = g.updates.flat_map { |u| mp(u).nlris.collect(&:to_shex) }
+      gone = g.withdrawals.flat_map { |u| mp(u, :mp_unreach).nlris.collect(&:to_shex) }
+      assert_equal(3, sent.size, "route type #{t}")
+      assert_equal(sent, gone, "route type #{t}")
+      assert_equal([t], g.expected.collect { |r| r['route_type'] }.uniq)
+    end
+  end
 end
+

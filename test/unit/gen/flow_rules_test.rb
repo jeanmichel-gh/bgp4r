@@ -217,7 +217,9 @@ class TestBgpGenFlowRules < Test::Unit::TestCase
     %w[protocol destination_port source rate redirect marking].each do |k|
       v = { 'source' => '10.0.0.0/8', 'redirect' => '65000:1' }.fetch(k, 1)
       e = assert_raise(BGP::Gen::SpecError, k) { BGP::Gen.new('start' => '10.0.0.0/8', 'count' => 1, k => v) }
-      assert_match(/'#{k}' is for flow_spec, flow_spec_vpn and not for 'unicast'/, e.message)
+      # source is EVPN's too since phase 4d2, as a route type 6's Multicast Source.
+      families = k == 'source' ? 'flow_spec, flow_spec_vpn, evpn' : 'flow_spec, flow_spec_vpn'
+      assert_match(/'#{k}' is for #{families} and not for 'unicast'/, e.message)
     end
   end
 

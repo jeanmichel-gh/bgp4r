@@ -513,7 +513,10 @@ class GenFunctionalTest < Test::Unit::TestCase
 
   # ---- phase 4d: EVPN ---------------------------------------------------
 
-  EVPN_KEYS = { :mac_ip_advertisement => 2, :inclusive_multicast => 3, :ip_prefix_route => 5 }
+  EVPN_KEYS = { :ethernet_ad => 1, :mac_ip_advertisement => 2, :inclusive_multicast => 3,
+                :ethernet_segment => 4, :ip_prefix_route => 5, :selective_multicast => 6,
+                :membership_report_synch => 7, :leave_synch => 8, :per_region_i_pmsi => 9,
+                :s_pmsi => 10, :leaf_a_d => 11 }
 
   # Rows read off the routes the far side parsed, with nothing from
   # bgp/gen: the route type's own hash, and the attributes beside it.
@@ -540,8 +543,27 @@ class GenFunctionalTest < Test::Unit::TestCase
       end
       mp.nlris.collect do |n|
         k, v = n.to_hash.first
-        r = { 'route_type' => EVPN_KEYS.fetch(k), 'rd' => v[:rd].join(':') }
-        case r['route_type']
+        type = EVPN_KEYS.fetch(k)
+        leaf = v
+        v = v[:route_key].values.first if type == 11
+        r = { 'route_type' => type, 'rd' => v[:rd].join(':') }
+        case type
+        when 1
+          r['esi'] = v[:esi]
+          r['label'] = v[:label]
+        when 4
+          r['esi'] = v[:esi]
+          r['originator'] = v[:ip]
+        when 6, 7, 8, 10, 11
+          r['esi'] = v[:esi] if [7, 8].include?(type)
+          r['source'] = v[:source] if v[:source].is_a?(String)
+          r['group'] = v[:group]
+          r['originator'] = v[:originator]
+          r['igmp_flags'] = v[:flags].collect(&:to_s).sort if v[:flags]
+          r['max_response_time'] = v[:max_response_time] if type == 8
+          r['leaf'] = leaf[:originator] if type == 11
+        when 9
+          r['region_id'] = v[:region_id]
         when 2
           r['mac'] = v[:mac]
           r['ip'] = v[:ip] if v[:ip].is_a?(String)
@@ -555,13 +577,16 @@ class GenFunctionalTest < Test::Unit::TestCase
           r['esi'] = v[:esi]
           r['label'] = v[:label]
         end
-        r['ethernet_tag'] = v[:ethernet_tag_id]
+        r['ethernet_tag'] = v[:ethernet_tag_id] unless [4, 11].include?(type)
         attrs ? r.merge(attrs) : r
       end
     end
   end
 
-  def evpn_key(r) ; [r['rd'], r['mac'] || r['originator'] || r['prefix']] ; end
+  def evpn_key(r)
+    [r['rd'], r['mac'] || r['esi'] && r['route_type'] <= 4 && r['esi'] || r['group'] || r['region_id'] ||
+              r['originator'] || r['prefix']]
+  end
 
   # Announce, compare, withdraw, compare. The SAFI is stated here and
   # not read from the generator.
@@ -582,7 +607,7 @@ class GenFunctionalTest < Test::Unit::TestCase
     g.withdrawals.each { |u| @c.send_update u }
     gone = []
     assert(wait_for { gone.concat(c.drain) ; gone.size >= back }, "#{gone.size} of #{back} withdrawals arrived")
-    keys = %w[route_type rd mac ip originator prefix ethernet_tag]
+    keys = %w[route_type rd mac ip originator prefix ethernet_tag esi group source region_id leaf]
     assert_equal(g.expected.collect { |r| r.slice(*keys) }, evpn_rows(gone, :mp_unreach).collect { |r| r.slice(*keys) })
     [sent, back]
   end
@@ -639,6 +664,49 @@ class GenFunctionalTest < Test::Unit::TestCase
                  'attributes' => { 'as_path' => [CLIENT_AS], 'next_hop' => '2001:db8::1' })
     assert_equal(['00:00:00:00:00:00:00:00:00:07'], @rows.collect { |r| r['esi'] }.uniq)
     assert_equal(['::'], @rows.collect { |r| r['gateway'] }.uniq)
+  end
+
+  # ---- phase 4d2: route types 1, 4 and 6 to 11 ---------------------------
+
+  # 500 Ethernet segments, each an Ethernet A-D route with the ESI label
+  # community, then an Ethernet Segment route with its ES-Import Route
+  # Target. The ESIs at both ends are stated by hand, and so is the
+  # ES-Import of one that carries into the sixth octet of its value.
+  def test_evpn_ethernet_segments
+    session
+    evpn_crosses('family' => 'evpn', 'route_type' => 1, 'start' => '00:00:00:00:00:00:00:00:00:01',
+                 'count' => 500, 'rd' => '65000:1', 'label' => 16, 'ethernet_tag' => 2**32 - 1,
+                 'esi_label' => 300, 'attributes' => { 'as_path' => [CLIENT_AS], 'next_hop' => '192.0.2.1' })
+    assert_equal(%w[00:00:00:00:00:00:00:00:00:01 00:00:00:00:00:00:00:00:01:f4],
+                 @rows.collect { |r| r['esi'] }.minmax)
+    assert_equal([['esi_label:300:false']], @rows.collect { |r| r['extended_communities'] }.uniq)
+    evpn_crosses('family' => 'evpn', 'route_type' => 4, 'start' => '00:00:00:00:00:00:00:ff:ff:ff',
+                 'count' => 3, 'rd' => '65000:1', 'originator' => '192.0.2.1', 'es_import' => true,
+                 'attributes' => { 'as_path' => [CLIENT_AS], 'next_hop' => '192.0.2.1' })
+    assert_equal({ '00:00:00:00:00:00:00:ff:ff:ff' => ['es_import:00:00:00:00:00:00'],
+                   '00:00:00:00:00:00:01:00:00:00' => ['es_import:00:00:00:00:00:01'] },
+                 @rows.collect { |r| [r['esi'], r['extended_communities']] }.to_h.first(2).to_h)
+  end
+
+  # The four multicast route types of RFC 9251 and RFC 9572, 300 groups
+  # each, and the Per-Region I-PMSI. The groups at both ends are stated
+  # by hand.
+  def test_evpn_multicast_routes
+    session
+    base = { 'family' => 'evpn', 'start' => '239.1.0.0', 'count' => 300, 'rd' => '65000:1',
+             'originator' => '192.0.2.1', 'attributes' => { 'as_path' => [CLIENT_AS], 'next_hop' => '192.0.2.1' } }
+    evpn_crosses(base.merge('route_type' => 6, 'igmp_flags' => %w[v3 ie], 'source' => '10.0.0.9'))
+    assert_equal(%w[239.1.0.0 239.1.1.43], @rows.collect { |r| r['group'] }.values_at(0, -1))
+    assert_equal([%w[ie v3]], @rows.collect { |r| r['igmp_flags'] }.uniq)
+    evpn_crosses(base.merge('route_type' => 7, 'esi' => '00:00:00:00:00:00:00:00:00:07'))
+    evpn_crosses(base.merge('route_type' => 8, 'max_response_time' => 10))
+    assert_equal([10], @rows.collect { |r| r['max_response_time'] }.uniq)
+    evpn_crosses(base.merge('route_type' => 10, 'start' => 'ff0e::1', 'source' => '2001:db8::9'))
+    evpn_crosses(base.merge('route_type' => 11, 'leaf' => '192.0.2.99', 'vrfs' => 2))
+    assert_equal([['192.0.2.99'], %w[65000:1 65000:2]],
+                 [@rows.collect { |r| r['leaf'] }.uniq, @rows.collect { |r| r['rd'] }.uniq.sort])
+    evpn_crosses(base.merge('route_type' => 9, 'start' => '00090000fde80000').reject { |k, _| k == 'originator' })
+    assert_equal('00090000fde8012b', @rows.collect { |r| r['region_id'] }.max)
   end
 
   # ---- phase 4e: RT-constrain -------------------------------------------

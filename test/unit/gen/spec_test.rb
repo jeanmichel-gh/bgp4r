@@ -107,11 +107,12 @@ class TestBgpGenSpec < Test::Unit::TestCase
     evpn = %w[evpn]
     ls = %w[bgp_ls bgp_ls_vpn]
     assert_equal({ 'label' => %w[labelled vpn vpn_multicast evpn], 'rd' => rd, 'vrfs' => rd, 'route_target' => rd,
-                   'source' => flow, 'protocol' => flow, 'destination_port' => flow, 'rate' => flow,
+                   'source' => flow + evpn, 'protocol' => flow, 'destination_port' => flow, 'rate' => flow,
                    'redirect' => flow, 'marking' => flow,
                    'route_type' => evpn, 'ip' => evpn, 'esi' => evpn, 'ethernet_tag' => evpn,
                    'gateway' => evpn, 'mac_mobility' => evpn, 'router_mac' => evpn,
-                   'pmsi_label' => evpn,
+                   'pmsi_label' => evpn, 'originator' => evpn, 'igmp_flags' => evpn,
+                   'max_response_time' => evpn, 'leaf' => evpn, 'es_import' => evpn, 'esi_label' => evpn,
                    'origin_as' => %w[rt_constrain], 'prefix_length' => %w[rt_constrain],
                    'default' => %w[rt_constrain],
                    'topology' => ls, 'columns' => ls, 'protocol_id' => ls, 'identifier' => ls,
@@ -158,6 +159,16 @@ class TestBgpGenSpec < Test::Unit::TestCase
     refused(minimal.merge('esi' => '01' * 9), /esi "#{'01' * 9}" is 10 octets of hex/)
     refused(minimal.merge('esi' => 'zz' * 10), /is 10 octets of hex/)
     refused(minimal.merge('router_mac' => '00:00:5e:00:53'), /router_mac "00:00:5e:00:53" is 6 octets/)
+    # Phase 4d2's keys.
+    s = S.read(minimal.merge('originator' => '192.0.2.1', 'leaf' => '2001:db8::9', 'igmp_flags' => %w[v1 ie],
+                             'max_response_time' => 255, 'es_import' => true, 'esi_label' => { 'cycle' => [1, 2] }))
+    assert_equal(['192.0.2.1', '2001:db8::9', %w[v1 ie], 255, true, { 'cycle' => [1, 2] }],
+                 s.values_at('originator', 'leaf', 'igmp_flags', 'max_response_time', 'es_import', 'esi_label'))
+    assert_equal(%w[v2], S.read(minimal.merge('igmp_flags' => [:v2]))['igmp_flags'], 'a Symbol reads as its name')
+    refused(minimal.merge('leaf' => 'x'), /leaf "x" is not an address/)
+    refused(minimal.merge('igmp_flags' => 'v2'), /igmp_flags is a list/)
+    refused(minimal.merge('max_response_time' => -1), /max_response_time is at least 0/)
+    refused(minimal.merge('esi_label' => 2**20), /esi_label: 1048576 does not fit/)
   end
 
   # Phase 4e. The RT-constrain keys: an origin AS of 4 octets, a prefix
