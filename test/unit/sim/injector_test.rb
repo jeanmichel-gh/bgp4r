@@ -955,6 +955,24 @@ class BGP_Sim_Injector_Test < Test::Unit::TestCase
     assert_equal(2, inj.sent.summary[:prefixes_withdrawn])
   end
 
+  # Phase 4d2. A Leaf A-D route goes out with its Route Key inside it,
+  # and the plan names the group, the triggering originator and the
+  # leaf's own address.
+  def test_an_evpn_leaf_a_d_route_goes_out
+    inj = injector
+    spec = { 'family' => 'evpn', 'route_type' => 11, 'start' => '239.1.1.1', 'count' => 2, 'rd' => '65001:7',
+             'originator' => '10.9.0.1', 'leaf' => '10.9.0.99' }
+    inj.act('announce', { 'spec' => spec }, false)
+    n = peer.updates.first.path_attribute[:mp_reach].nlris
+    assert_equal([11, 11], n.collect { |x| x.type })
+    assert_equal(10, n.first.route.route_key.type, 'the Route Key is an S-PMSI A-D route')
+    assert_equal({ 'route_type' => 11, 'rd' => '65001:7', 'group' => '239.1.1.2', 'originator' => '10.9.0.1',
+                   'leaf' => '10.9.0.99', 'origin' => 0, 'as_path' => [65_001], 'next_hop' => '10.0.0.1' },
+                 inj.plan('spec' => spec)[:plans].first[:rows].last)
+    inj.act('withdraw', { 'spec' => spec }, false)
+    assert_equal(2, inj.sent.summary[:prefixes_withdrawn])
+  end
+
   # Phase 4e. A membership route goes out in SAFI 132 with the session's
   # next hop, and the plan names its route target as ADMIN:N.
   def test_a_route_target_membership_route_goes_out

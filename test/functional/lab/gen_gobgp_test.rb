@@ -605,11 +605,24 @@ class LabGenGobgpTest < Test::Unit::TestCase
     (@router.rib_family(G::EVPN) || {}).each_value do |paths|
       paths.each do |p|
         v = p['nlri']['value']
-        step = p['nlri']['type'] == 3 ? v['ip'] : (v['mac'] || v['prefix'])
+        step = case p['nlri']['type']
+               when 1, 4 then v['esi']
+               when 3 then v['ip']
+               else v['mac'] || v['prefix']
+               end
         held[["#{v['rd']['admin']}:#{v['rd']['assigned']}", step]] = p
       end
     end
     held
+  end
+
+  # What GoBGP keys a route on. An ESI of type 0, the first of RFC 7432
+  # section 5's ten octets, prints as ESI_ARBITRARY and the other nine.
+  def evpn_step(want)
+    case want['route_type']
+    when 1, 4 then "ESI_ARBITRARY | #{want['esi'].split(':')[1..].join(':')}"
+    else want['mac'] || want['originator'] || want['prefix']
+    end
   end
 
   # A label as GoBGP prints it, the whole three-octet field: the label in
@@ -630,7 +643,7 @@ class LabGenGobgpTest < Test::Unit::TestCase
     rows = g.expected.to_a
     (0..9).collect { |k| (rows.size - 1) * k / 9 }.uniq.each do |i|
       want = rows[i]
-      path = held[[want['rd'], want['mac'] || want['originator'] || want['prefix']]]
+      path = held[[want['rd'], evpn_step(want)]]
       assert_not_nil(path, "GoBGP holds #{want.inspect}")
       v = path['nlri']['value']
       assert_equal(want['route_type'], path['nlri']['type'])
@@ -640,6 +653,10 @@ class LabGenGobgpTest < Test::Unit::TestCase
         assert_equal([want['ip'], [field(want['label'])]], [v['ip'], v['labels']], "route #{i}")
       when 5
         assert_equal([want['gateway'], field(want['label'])], [v['gateway'], v['label']], "route #{i}")
+      when 1
+        assert_equal(field(want['label']), v['label'], "route #{i}")
+      when 4
+        assert_equal(want['originator'], v['ip'], "route #{i}")
       end
       a = G.attrs(path)
       assert_equal(want['next_hop'], a[14]['nexthop'], 'RFC 7432 section 14')
@@ -700,6 +717,38 @@ class LabGenGobgpTest < Test::Unit::TestCase
                  'attributes' => { 'as_path' => [OUR_AS], 'next_hop' => '2001:db8::1' }) do |_i, _want, path, a|
       assert_equal('::', path['nlri']['value']['gateway'], 'RFC 9136 section 3.1: no gateway is zero')
       assert_equal([{ 'type' => 6, 'subtype' => 3, 'mac' => '00:00:5e:00:53:01' }], a[EXT_COMMUNITIES]['value'])
+    end
+  end
+
+  # 1000 Ethernet A-D routes per ES, RFC 7432 section 7.1, each ESI one
+  # above the last, with the ESI Label community of section 7.5 on every
+  # hundred. GoBGP prints that community's label as the field less its
+  # low bit, so 300 is 4800. The ESI and the label are stated by hand
+  # from the route's number.
+  def test_evpn_ethernet_auto_discovery_routes
+    session(false, [G::EVPN])
+    evpn_crosses('family' => 'evpn', 'route_type' => 1, 'start' => '00:01:02:03:04:05:06:07:00:00',
+                 'count' => 1000, 'rd' => '65000:11', 'ethernet_tag' => 5,
+                 'label' => 100, 'group' => 100, 'esi_label' => { 'step' => { 'start' => 300, 'by' => 1 } },
+                 'attributes' => { 'as_path' => [OUR_AS], 'next_hop' => '192.0.2.1' }) do |i, _want, path, a|
+      assert_equal(format('ESI_ARBITRARY | 01:02:03:04:05:06:07:%02x:%02x', i >> 8, i & 0xff),
+                   path['nlri']['value']['esi'], "route #{i}, stated by hand")
+      assert_equal([{ 'type' => 6, 'subtype' => 1, 'label' => (300 + i / 100) << 4, 'is_single_active' => false }],
+                   a[EXT_COMMUNITIES]['value'], "route #{i}")
+    end
+  end
+
+  # Ethernet Segment routes, RFC 7432 section 7.4, with the ES-Import
+  # Route Target of section 7.6: the high six octets of the ESI value,
+  # so octets 1 to 6 of the ten, stated by hand.
+  def test_evpn_ethernet_segment_routes
+    session(false, [G::EVPN])
+    evpn_crosses('family' => 'evpn', 'route_type' => 4, 'start' => '00:0a:0b:0c:0d:0e:0f:00:00:00',
+                 'count' => 300, 'rd' => '65000:12', 'originator' => '10.0.0.9', 'es_import' => true,
+                 'attributes' => { 'as_path' => [OUR_AS], 'next_hop' => '192.0.2.1' }) do |i, _want, path, a|
+      assert_equal(format('ESI_ARBITRARY | 0a:0b:0c:0d:0e:0f:00:%02x:%02x', i >> 8, i & 0xff),
+                   path['nlri']['value']['esi'], "route #{i}, stated by hand")
+      assert_equal([{ 'type' => 6, 'subtype' => 2, 'value' => '0a:0b:0c:0d:0e:0f' }], a[EXT_COMMUNITIES]['value'])
     end
   end
 

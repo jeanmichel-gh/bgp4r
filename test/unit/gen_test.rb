@@ -193,10 +193,26 @@ class TestBgpGen < Test::Unit::TestCase
   # 5, since RFC 9136 section 3.2 makes that a route to withdraw and the
   # strict read below would refuse it.
   def evpn(r, s, v6, n)
-    type = EVPN_TYPES[(n || r.rand(3)) % 3]
+    type = EVPN_TYPES[(n || r.rand(EVPN_TYPES.size)) % EVPN_TYPES.size]
     s['route_type'] = type
-    s['label'] = [r.rand(2**20), { 'cycle' => [16, 2**20 - 1] }][r.rand(2)] unless type == 3
-    s['ethernet_tag'] = [r.rand(2**32), { 'step' => { 'start' => 0, 'by' => 1 } }][r.rand(2)] if r.rand(2) == 1
+    s['label'] = [r.rand(2**20), { 'cycle' => [16, 2**20 - 1] }][r.rand(2)] if [1, 2, 5].include?(type)
+    s['ethernet_tag'] = [r.rand(2**32), { 'step' => { 'start' => 0, 'by' => 1 } }][r.rand(2)] if r.rand(2) == 1 && ![4, 11].include?(type)
+    s['originator'] = v6 ? '2001:db8::7' : '192.0.2.7' if [4, 6, 7, 8, 10, 11].include?(type)
+    case type
+    when 1, 4
+      s['start'] = format('00:00:00:00:00:%02x:%02x:%02x:00:00', r.rand(256), r.rand(256), r.rand(256))
+      s['esi_label'] = [r.rand(2**20), { 'cycle' => [16, 17] }][r.rand(2)] if type == 1 && r.rand(2) == 1
+      s['es_import'] = true if type == 4 && r.rand(2) == 1
+    when 6, 7, 8, 10, 11
+      s['start'] = v6 ? format('ff0e::%x:0', r.rand(65536)) : "239.#{r.rand(256)}.#{r.rand(256)}.0"
+      s['source'] = v6 ? '2001:db8::9' : '10.0.0.9' if r.rand(2) == 1
+      s['igmp_flags'] = [%w[v2], %w[v3 ie], %w[v1 v2 v3]][r.rand(3)] if type <= 8 && r.rand(2) == 1
+      s['esi'] = '00:00:00:00:00:00:00:00:00:07' if [7, 8].include?(type) && r.rand(2) == 1
+      s['max_response_time'] = r.rand(256) if type == 8 && r.rand(2) == 1
+      s['leaf'] = '192.0.2.99' if type == 11
+    when 9
+      s['start'] = format('%012x0000', r.rand(2**48))
+    end
     case type
     when 2
       s['start'] = format('02:00:00:%02x:%02x:00', r.rand(256), r.rand(256))
@@ -212,7 +228,7 @@ class TestBgpGen < Test::Unit::TestCase
       when 2 then s['gateway'] = v6 ? '2001:db8::fe' : '192.0.2.254'
       end
     end
-    s['router_mac'] = '00:00:5e:00:53:01' if type != 3 && r.rand(2) == 1
+    s['router_mac'] = '00:00:5e:00:53:01' if [2, 5].include?(type) && r.rand(2) == 1
   end
 
   # Phase 4e: a range of route targets in one of the three layouts, an
@@ -265,7 +281,7 @@ class TestBgpGen < Test::Unit::TestCase
   # The families whose NLRI validation.rb walks without knowing add-path,
   # which CLAUDE.md records under Known issues.
   NO_PATH_ID = FLOW + %w[evpn] + LS
-  EVPN_TYPES = [2, 3, 5]
+  EVPN_TYPES = (1..11).to_a
   SAFI = { 'unicast' => 1, 'multicast' => 2, 'labelled' => 4, 'vpn' => 128, 'vpn_multicast' => 129,
            'flow_spec' => 133, 'flow_spec_vpn' => 134, 'evpn' => 70, 'rt_constrain' => 132,
            'bgp_ls' => 71, 'bgp_ls_vpn' => 72 }
@@ -359,9 +375,14 @@ class TestBgpGen < Test::Unit::TestCase
   Sample = Struct.new(:spec, :why, :gen, :updates, :withdrawals)
   Msg = Struct.new(:object, :octets, :parsed)
 
+  # The SEEDS feeds deal the families out in turn, so EVPN gets a fifth
+  # of a feed per route type at 55 seeds. One more EVPN feed per route
+  # type follows them, so all eleven are always in the corpus.
   def self.corpus
-    @corpus ||= SEEDS.times.collect do |seed|
-      spec = new('corpus').random_spec(Random.new(seed), FAMILIES[seed % FAMILIES.size], seed / FAMILIES.size)
+    extra = EVPN_TYPES.collect { |t| [1000 + t, 'evpn', t - 1] }
+    @corpus ||= (SEEDS.times.collect { |seed| [seed, FAMILIES[seed % FAMILIES.size], seed / FAMILIES.size] } + extra)
+                .collect do |seed, family, n|
+      spec = new('corpus').random_spec(Random.new(seed), family, n)
       g = BGP::Gen.new(spec)
       info = spec['path_id'] ? AddPath.new : PLAIN
       read = lambda do |m|
@@ -609,9 +630,27 @@ class TestBgpGen < Test::Unit::TestCase
   # An EVPN row, read off the route's own hash and the attributes.
   def evpn_row_of(h, path_id, pa)
     key, v = h.first
-    type = { :mac_ip_advertisement => 2, :inclusive_multicast => 3, :ip_prefix_route => 5 }.fetch(key)
+    type = BGP::Evpn::ROUTES.find { |_, k| k::HASH_KEY == key }.first
+    leaf = v
+    v = v[:route_key].values.first if type == 11
     r = { 'route_type' => type, 'rd' => v[:rd].join(':') }
     case type
+    when 1
+      r['esi'] = v[:esi]
+      r['label'] = v[:label]
+    when 4
+      r['esi'] = v[:esi]
+      r['originator'] = v[:ip]
+    when 6, 7, 8, 10, 11
+      r['esi'] = v[:esi] if [7, 8].include?(type)
+      r['source'] = v[:source] if v[:source].is_a?(String)
+      r['group'] = v[:group]
+      r['originator'] = v[:originator]
+      r['igmp_flags'] = v[:flags].collect(&:to_s).sort if v[:flags]
+      r['max_response_time'] = v[:max_response_time] if type == 8
+      r['leaf'] = leaf[:originator] if type == 11
+    when 9
+      r['region_id'] = v[:region_id]
     when 2
       r['mac'] = v[:mac]
       r['ip'] = v[:ip] if v[:ip].is_a?(String)
@@ -625,7 +664,7 @@ class TestBgpGen < Test::Unit::TestCase
       r['esi'] = v[:esi]
       r['label'] = v[:label]
     end
-    r['ethernet_tag'] = v[:ethernet_tag_id]
+    r['ethernet_tag'] = v[:ethernet_tag_id] unless [4, 11].include?(type)
     r['path_id'] = path_id if path_id
     r['origin'] = pa[:origin].to_i
     r['as_path'] = pa[:as_path].segments.flat_map(&:as)

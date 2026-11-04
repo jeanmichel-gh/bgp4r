@@ -56,6 +56,7 @@ module BGP
       KEYS = %w[family afi count per_update start path_id label rd vrfs route_target
                 source protocol destination_port rate redirect marking
                 route_type ip esi ethernet_tag gateway mac_mobility router_mac pmsi_label
+                originator igmp_flags max_response_time leaf es_import esi_label
                 origin_as prefix_length default
                 topology columns protocol_id identifier autonomous_system prefixes prefix_start
                 node_name igp_metric admin_group max_bandwidth srlg prefix_metric
@@ -71,13 +72,15 @@ module BGP
       RD = %w[vpn vpn_multicast flow_spec_vpn evpn bgp_ls_vpn].freeze
       FAMILY_KEYS = { 'label' => %w[labelled vpn vpn_multicast evpn],
                       'rd' => RD, 'vrfs' => RD, 'route_target' => RD,
-                      'source' => FLOW, 'protocol' => FLOW,
+                      'source' => FLOW + EVPN, 'protocol' => FLOW,
                       'destination_port' => FLOW, 'rate' => FLOW,
                       'redirect' => FLOW, 'marking' => FLOW,
                       'route_type' => EVPN, 'ip' => EVPN, 'esi' => EVPN,
                       'ethernet_tag' => EVPN, 'gateway' => EVPN,
                       'mac_mobility' => EVPN, 'router_mac' => EVPN,
-                      'pmsi_label' => EVPN,
+                      'pmsi_label' => EVPN, 'originator' => EVPN,
+                      'igmp_flags' => EVPN, 'max_response_time' => EVPN,
+                      'leaf' => EVPN, 'es_import' => EVPN, 'esi_label' => EVPN,
                       'origin_as' => RTC, 'prefix_length' => RTC, 'default' => RTC,
                       'topology' => LS, 'columns' => LS, 'protocol_id' => LS,
                       'identifier' => LS, 'autonomous_system' => LS,
@@ -101,7 +104,10 @@ module BGP
       # number are 4 octets (RFC 7432 sections 7.2 and 7.7), and the
       # PMSI Tunnel's label is a label (RFC 6514 section 5).
       EVPN_MAX = { 'ethernet_tag' => 0xffffffff, 'mac_mobility' => 0xffffffff,
-                   'pmsi_label' => 0xfffff }.freeze
+                   'pmsi_label' => 0xfffff, 'esi_label' => 0xfffff }.freeze
+
+      # RFC 9251 section 9.1's IGMP flags, by the names bgp4r gives them.
+      IGMP_FLAGS = %w[v1 v2 v3 ie].freeze
 
       # The largest value each flow spec key's field holds: an IP
       # protocol is one octet (RFC 8955 section 4.2.2.3), a port two
@@ -186,7 +192,7 @@ module BGP
         out['prefixes'] = integer(s, 'prefixes', false, 0)
         out['prefix_start'] = string(s, 'prefix_start', false)
         out['node_name'] = string(s, 'node_name', false)
-        %w[ip gateway].each do |k|
+        %w[ip gateway originator leaf].each do |k|
           out[k] = string(s, k, false)
           next unless out[k]
           begin
@@ -196,6 +202,21 @@ module BGP
           end
         end
         out['esi'] = octets(s, 'esi', 10, 'RFC 7432 section 5')
+        # RFC 9251 section 9.3: the Maximum Response Time is one octet.
+        out['max_response_time'] = integer(s, 'max_response_time', false, 0, 0xff)
+        if s.key?('es_import')
+          unless s['es_import'] == true || s['es_import'] == false
+            raise SpecError, "es_import is true or false, not #{s['es_import'].inspect}"
+          end
+          out['es_import'] = s['es_import']
+        end
+        if s.key?('igmp_flags')
+          f = s['igmp_flags']
+          unless f.is_a?(Array) && f.all? { |x| IGMP_FLAGS.include?(x.to_s) }
+            raise SpecError, "igmp_flags is a list of #{IGMP_FLAGS.join(', ')}, not #{f.inspect}"
+          end
+          out['igmp_flags'] = f.collect(&:to_s)
+        end
         out['router_mac'] = octets(s, 'router_mac', 6, 'RFC 9135 section 8.1')
         out['source'] = string(s, 'source', false)
         if out['source']

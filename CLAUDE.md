@@ -553,7 +553,7 @@ bgp/gen.rb bgp/gen/      `BGP::Gen`, UPDATEs and withdrawals in bulk from a
                          others build on: multicast.rb is SAFI 2,
                          labelled.rb SAFI 4, vpn.rb SAFI 128 and 129,
                          flow_rules.rb SAFI 133 and 134,
-                         evpn_routes.rb EVPN route types 2, 3 and 5,
+                         evpn_routes.rb all eleven EVPN route types,
                          rt_constrain_routes.rb SAFI 132 and
                          link_state_routes.rb BGP-LS topologies, SAFI
                          71 and 72,
@@ -791,10 +791,10 @@ docs/                    protocol-testing.md: using bgp4r to test a router
                          attributes that vary per route, as one pure
                          module that bgp4r's tests, `bgp4r-sim` and
                          routescope's scenarios all drive with the same
-                         JSON spec. **Phases 0 to 3, 4a to 4e and 4g
-                         are built**: unicast, multicast, labelled, both
-                         VPN families and both flow spec families, both
-                         AFIs, EVPN route types 2, 3 and 5,
+                         JSON spec. **Phases 0 to 3, 4a to 4e, 4d2 and
+                         4g are built**: unicast, multicast, labelled,
+                         both VPN families and both flow spec families,
+                         both AFIs, all eleven EVPN route types,
                          RT-constrain and BGP-LS topologies,
                          with patterns and the injector, and section 13
                          says what they measured;
@@ -7501,7 +7501,7 @@ in place, with a dated block in the header naming them.
   own test confirms is the most expensive kind of wrong, because
   nothing fails until somebody runs the real thing.
 
-### Route generation, `bgp/gen`. Phases 0 to 3, 4a to 4e and 4g Done
+### Route generation, `bgp/gen`. Phases 0 to 3, 4a to 4e, 4d2 and 4g Done
 
 `docs/route-generation.md` is the design and the plan. Read it before
 any work on generating traffic, on `RouteGenerator`, or on what
@@ -7627,9 +7627,8 @@ Phases, with status kept in the document's section 12 table:
 
    **4d Done**: EVPN route types 2, 3 and 5, with `rd`, `vrfs` and
    `route_target` per EVI. `route_type` is required and `start` is what
-   steps in it: a MAC, an originator or a prefix. 4d2, the other eight
-   route types and the ESI label community, is to do. Three things
-   worth knowing:
+   steps in it: a MAC, an originator or a prefix. Three things worth
+   knowing:
    * **The add-path gap holds for EVPN, measured**: validation.rb reads
      the Path Identifier as a Route Type and a Length. The property test
      sends EVPN without one, and `evpn_routes_test.rb` pins it.
@@ -7655,7 +7654,7 @@ Phases, with status kept in the document's section 12 table:
    **4g Done**: BGP-LS topologies, SAFI 71 and 72. `count` nodes from
    the router ID `start`, joined as a `ring` or a `grid` of `columns`,
    with `prefixes` per node, and the BGP-LS Attribute's link, node and
-   prefix values as patterns. 4f and 4d2 are to do. Three things worth
+   prefix values as patterns. Three things worth
    knowing:
    * **The routes are a graph**: a Node NLRI per node, a Link NLRI per
      direction per link, then the prefixes. Link values run on the link
@@ -7668,6 +7667,22 @@ Phases, with status kept in the document's section 12 table:
      its JSON are garbled where the map keys are right.
    * **The add-path gap holds for BGP-LS**, measured and pinned in
      `test/unit/gen/link_state_routes_test.rb`.
+
+   **4d2 Done**: the other eight EVPN route types, so all eleven, with
+   RFC 7432's ESI Label community on type 1 and ES-Import Route Target
+   on type 4. `start` steps the ESI for types 1 and 4, the Multicast
+   Group for 6, 7, 8, 10 and 11, and the Region ID for 9. 4f is to do.
+   Three things worth knowing:
+   * **The ES-Import Route Target is octets 1 to 6 of the ESI**, the
+     high six of the value after its Type octet, RFC 7432 section 7.6.
+     Octets 0 to 5 passed the property test, the seventh thing
+     `expected` could not catch; the other three tiers state it.
+   * **`igmp_flags` defaults to v2**, because validation.rb treats a
+     type 6, 7 or 8 route with no version flag as treat-as-withdraw.
+   * **GoBGP 3.23.0 reads types 1 and 4**, printing a type 0 ESI as
+     `ESI_ARBITRARY` and its nine value octets, and the ESI label as
+     the field less its low bit, so 300 is 4800. It knows no type above
+     5, so the lab sends none.
 5. Churn. To do.
 6. `LabHelper` and the coverage matrix take specs. To do.
 7. routescope scenarios use specs. routescope's column.

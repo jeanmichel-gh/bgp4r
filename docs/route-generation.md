@@ -174,7 +174,7 @@ route key.
 | `vpn`, `vpn_multicast` (128, 129) | `rd` of type 0, 1 or 2 stepped per VRF, `label`, prefix, the range once per VRF (`vrfs`) | `route_target` stepped per VRF, so each VRF has its own attribute set | RD plus prefix, with the Compatibility field. |
 | `flow_spec`, `flow_spec_vpn` (133, 134) | destination prefix from `start`, `source`, `protocol` and `destination_port`, each one `eq` match, so a rule set N wide; for 134 `rd`, `vrfs` and `route_target` as VPN | `rate`, `redirect` and `marking`, the actions of RFC 8955 section 7; no next hop | The same rule in MP_UNREACH. |
 | `rt_constrain` (132) | route target from `start` as `ADMIN:N`, `origin_as`, `prefix_length`, `default` for the zero length default in front | none | The same NLRI. GoBGP 3.23.0 panics on the default plus a second route. |
-| `evpn` (25, 70) | `route_type`; type 2: MAC from `start`, `ip`, `esi`, `label`; type 3: originator from `start`; type 5: prefix from `start`, `gateway`, `esi`, `label`; `ethernet_tag`; `rd`, `vrfs` and `route_target` as VPN | `mac_mobility` (a MAC move), `router_mac`, `pmsi_label` for type 3; the ESI label goes with type 1 | The same NLRI; a receiver matches the route key, which leaves out the ESI, the labels and the gateway. |
+| `evpn` (25, 70) | `route_type`, 1 to 11; types 1 and 4: ESI from `start`; type 2: MAC from `start`, `ip`, `esi`, `label`; type 3: originator from `start`; type 5: prefix from `start`, `gateway`, `esi`, `label`; types 6, 7, 8, 10 and 11: the Multicast Group from `start`, `source`, `originator`, `igmp_flags`, `max_response_time` for 8, `leaf` for 11; type 9: Region ID from `start`; `ethernet_tag`; `rd`, `vrfs` and `route_target` as VPN | `mac_mobility` (a MAC move), `router_mac`, `pmsi_label` for type 3, `esi_label` for type 1, `es_import` for type 4 | The same NLRI; a receiver matches the route key, which leaves out the ESI, the labels and the gateway. |
 | `mcast_vpn` (5) | type 1 originator, type 5 (S,G), types 6 and 7 per Source AS | route targets | No lab router has the family. |
 | `bgp_ls`, `bgp_ls_vpn` (71, 72) | a **topology**: `count` nodes from the router ID `start`, a `topology` of `ring` or `grid` with `columns`, `prefixes` per node from `prefix_start`, `protocol_id`, `identifier`, `autonomous_system`; for 72 `rd`, `vrfs` and `route_target` as VPN | attribute 29: `igp_metric`, `admin_group`, `max_bandwidth` and `srlg` per link, `node_name` per node, `prefix_metric` per prefix | By NLRI. The VPN next hop is 12, 24 or 40 octets. |
 
@@ -280,7 +280,7 @@ can fail. Update this table in the pull request that moves a step.
 | 4b | VPN, both SAFIs. | Done |
 | 4c | Flow spec, both SAFIs. | Done |
 | 4d | EVPN types 2, 3 and 5. | Done |
-| 4d2 | EVPN types 1, 4 and 6 to 11, and the ESI label community. | To do |
+| 4d2 | EVPN types 1, 4 and 6 to 11, and the ESI label community. | Done |
 | 4e | RT-constrain. | Done |
 | 4f | MCAST-VPN. | To do |
 | 4g | BGP-LS topologies. | Done |
@@ -610,6 +610,40 @@ one spec is one route type and `vrfs` copies of it, one per EVI.
 * **GoBGP 3.23.0 reads all three types back**, labels as the whole
   three-octet field, 16 as 257, and the PMSI Tunnel's label with no
   bottom of stack bit, 10 as 160. FRR was not run here.
+
+**Phase 4d2.** The other eight EVPN route types, so all eleven, and
+the two communities of RFC 7432 that go with types 1 and 4.
+
+* **`start` is what steps, as in 4d.** Types 1 and 4 step the ESI, ten
+  octets of hex. Types 6, 7, 8, 10 and 11 step the Multicast Group, with
+  a fixed `source` or none, which is (*,G). Type 9 steps the Region ID,
+  16 hex digits. A start that would overflow its field is refused at
+  `new`.
+* **`originator` is required for types 4, 6, 7, 8, 10 and 11**, `leaf`
+  for type 11 and `label` for type 1. Type 11's Route Key is an S-PMSI
+  A-D route, type 10, of the same RD, group and originator, which is
+  the whole NLRI RFC 9572 section 3.3 asks for.
+* **`igmp_flags` defaults to v2**, because validation.rb treats a type
+  6, 7 or 8 route with no IGMP version flag as treat-as-withdraw, RFC
+  9251 section 9.1.
+* **`esi_label` is RFC 7432 section 7.5's community on type 1**, a
+  pattern on the group, with the Single-Active bit clear. **`es_import:
+  true` is section 7.6's Route Target on type 4**, the high six octets
+  of the ESI value, which are octets 1 to 6 of the ten, so each route
+  carries its own and is a message of its own.
+* **What `expected` cannot catch, a seventh time.** The ES-Import Route
+  Target read from octets 0 to 5 passed the property test. The unit,
+  functional and lab tests state it by hand. A Leaf A-D Route Key with
+  the next route's group, and an ESI that does not step, are caught by
+  the property test too.
+* **The property test draws all eleven types**, with one extra EVPN
+  feed per type in the corpus, since more seeds were not enough to
+  reach every type.
+* **GoBGP 3.23.0 reads types 1 and 4 back** and prints an ESI of type 0
+  as `ESI_ARBITRARY` and its other nine octets. It prints the ESI label
+  as the field less its low bit, so 300 is 4800. Types 6 to 11 it does
+  not know, which the EVPN lab test already records, so the lab sends
+  them nowhere. FRR was not run here.
 
 **Phase 4e.** Route target membership, AFI 1 SAFI 132 (RFC 4684).
 `Rt_constrain_routes` is a subclass of `Unicast`.
