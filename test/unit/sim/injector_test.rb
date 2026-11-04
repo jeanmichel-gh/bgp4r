@@ -972,6 +972,25 @@ class BGP_Sim_Injector_Test < Test::Unit::TestCase
     assert_equal(3, inj.sent.summary[:prefixes_withdrawn])
   end
 
+  # Phase 4g: a BGP-LS topology through the injector, the session's own
+  # address as the section 5.5 next hop, and a plan row per NLRI.
+  def test_a_link_state_topology_goes_out
+    inj = injector
+    spec = { 'family' => 'bgp_ls', 'start' => '10.0.0.1', 'count' => 3, 'igp_metric' => 10 }
+    inj.act('announce', { 'spec' => spec }, false)
+    nlris = peer.updates.flat_map { |u| u.path_attribute[:mp_reach].nlris }
+    mp = peer.updates.first.path_attribute[:mp_reach]
+    assert_equal([16388, 71, '10.0.0.1'], [mp.afi, mp.safi, mp.nexthops])
+    assert_equal([1, 1, 1, 2, 2, 2, 2, 2, 2], nlris.collect(&:type))
+    rows = inj.plan('spec' => spec)[:plans].first[:rows]
+    assert_equal(%w[node node node link link link link link link], rows.collect { |r| r['nlri'] })
+    assert_equal({ 'nlri' => 'link', 'node' => '10.0.0.1', 'remote' => '10.0.0.2', 'link' => 1,
+                   'protocol_id' => 3, 'identifier' => 0, 'origin' => 0, 'as_path' => [65_001],
+                   'next_hop' => '10.0.0.1', 'igp_metric' => 10 }, rows[3])
+    inj.act('withdraw', { 'spec' => spec }, false)
+    assert_equal(9, inj.sent.summary[:prefixes_withdrawn])
+  end
+
   # One spec, two sessions, two answers: the prepend and LOCAL_PREF
   # differ between an external and an internal peer.
   def test_a_plan_answers_per_peer

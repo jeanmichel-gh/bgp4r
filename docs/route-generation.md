@@ -176,7 +176,7 @@ route key.
 | `rt_constrain` (132) | route target from `start` as `ADMIN:N`, `origin_as`, `prefix_length`, `default` for the zero length default in front | none | The same NLRI. GoBGP 3.23.0 panics on the default plus a second route. |
 | `evpn` (25, 70) | `route_type`; type 2: MAC from `start`, `ip`, `esi`, `label`; type 3: originator from `start`; type 5: prefix from `start`, `gateway`, `esi`, `label`; `ethernet_tag`; `rd`, `vrfs` and `route_target` as VPN | `mac_mobility` (a MAC move), `router_mac`, `pmsi_label` for type 3; the ESI label goes with type 1 | The same NLRI; a receiver matches the route key, which leaves out the ESI, the labels and the gateway. |
 | `mcast_vpn` (5) | type 1 originator, type 5 (S,G), types 6 and 7 per Source AS | route targets | No lab router has the family. |
-| `bgp_ls`, `bgp_ls_vpn` (71, 72) | a **topology**: N nodes, links as a ring or a grid, prefixes per node | attribute 29 TLVs per link: IGP metric, bandwidths, SRLG, admin group, node name | By NLRI. The VPN next hop is 12, 24 or 40 octets. |
+| `bgp_ls`, `bgp_ls_vpn` (71, 72) | a **topology**: `count` nodes from the router ID `start`, a `topology` of `ring` or `grid` with `columns`, `prefixes` per node from `prefix_start`, `protocol_id`, `identifier`, `autonomous_system`; for 72 `rd`, `vrfs` and `route_target` as VPN | attribute 29: `igp_metric`, `admin_group`, `max_bandwidth` and `srlg` per link, `node_name` per node, `prefix_metric` per prefix | By NLRI. The VPN next hop is 12, 24 or 40 octets. |
 
 BGP-LS is the one family where a generator means a graph rather than a
 range. It is also where generation is most useful: a router can be fed
@@ -283,7 +283,7 @@ can fail. Update this table in the pull request that moves a step.
 | 4d2 | EVPN types 1, 4 and 6 to 11, and the ESI label community. | To do |
 | 4e | RT-constrain. | Done |
 | 4f | MCAST-VPN. | To do |
-| 4g | BGP-LS topologies. | To do |
+| 4g | BGP-LS topologies. | Done |
 | 5 | Churn. | To do |
 | 6 | `LabHelper` takes a spec, and the coverage matrix reports generators. | To do |
 | 7 | routescope scenarios send specs and read `/api/plan`. This is routescope's column. | To do |
@@ -538,12 +538,32 @@ GoBGP and asserts the SAFI 129 refusal.
   test gives flow spec feeds no Path Identifier for that reason, and
   `test_the_receive_checks_do_not_know_add_path_yet` pins the gap. The
   other NLRI walks in validation.rb, EVPN, MCAST-VPN and BGP-LS, have
-  the same shape and were not measured here.
+  the same shape and were not measured here. Phases 4d and 4g measured
+  EVPN and BGP-LS.
 * **What `expected` cannot catch, a third time.** A component read off
   the group number, a rate taken from the next group, a route target
   from the first VRF, and SAFI 134 sent as 133 each pass a comparison
   with `expected`. The unit, functional and lab tests state each by
   hand.
+
+Measured against gobgpd 3.23.0 on 2026-11-04:
+
+* **Both SAFIs and both AFIs install.** GoBGP reads every component by
+  its type number with the operator octet whole, 0x81 for a one octet
+  value and 0x91 for a two octet port, the RD of section 8, and all
+  three actions with the rate per group.
+* **GoBGP prints a next hop of length 0 as its family's unspecified
+  address**, 0.0.0.0 under AFI 1 and :: under AFI 2.
+* FRR is not installed in the sandbox this was written in, so there is
+  no FRR case. FRR 8.4.4 has SAFI 133 and not SAFI 134
+  (docs/flow-spec.md section 12).
+
+Tests: `test/unit/gen/flow_rules_test.rb`; `test/unit/gen_test.rb`'s
+property test draws both families, dealt out in turn so every family
+gets three feeds; `test/functional/gen_test.rb` sends three feeds over
+loopback; `test/unit/sim/injector_test.rb` sends one through the
+injector over eBGP; `test/functional/lab/gen_gobgp_test.rb` reads all
+three back from GoBGP.
 
 **Phase 4d.** EVPN route types 2, 3 and 5, AFI 25 SAFI 70.
 `Evpn_routes` is a subclass of `Unicast` that includes `PerVrf`, so
@@ -621,21 +641,59 @@ one spec is one route type and `vrfs` copies of it, one per EVI.
 * GoBGP 3.23.0 reads all three layouts back, keyed by origin AS and
   route target, with a 4-octet AS in asdot.
 
+**Phase 4g.** BGP-LS topologies, AFI 16388 SAFI 71 and 72 (RFC 9552).
+`Link_state_routes` is a subclass of `Unicast` and
+`Link_state_vpn_routes` of it.
+
+* **A spec is a graph and not a range.** `count` is the number of
+  nodes, and node n's router ID is `start` plus n, which goes in the
+  IGP Router-ID sub-TLV of section 5.2.1.4: 6 octets for IS-IS, two
+  zero octets then the router ID, and 4 for every other Protocol-ID.
+* **The routes come in a fixed order**: a Node NLRI per node, two Link
+  NLRIs per link, one per direction, then `prefixes` Prefix NLRIs per
+  node, IPv4 or IPv6 by `prefix_start`. A ring of n has n links from 3
+  nodes on; a grid joins each node to its right and to the one below.
+* **A link carries TLV 258 and no addresses.** Its number plus 1 is both
+  identifiers, so two links between one pair stay apart. RFC 9552 makes
+  no link descriptor mandatory.
+* **The BGP-LS Attribute is per route.** The link values run on the
+  link number so both directions agree, the prefix metric on the prefix
+  number, and a node name is one per node. So a node name puts each
+  Node NLRI in a message by itself, and a link metric that steps puts
+  each link in one.
+* **`bgp_ls_vpn` repeats the topology once per VRF** with that VRF's RD
+  in front of each NLRI, as VPN repeats a range. `Mp_reach` writes the
+  one zero RD of section 5.5 in front of the next hop.
+* **The add-path gap holds for BGP-LS, measured**: validation.rb reads
+  the Path Identifier as a Type and a Total NLRI Length.
+  `test_the_receive_checks_do_not_know_add_path_yet` pins it, and the
+  property test sends BGP-LS without one.
+* **What `expected` cannot catch, a sixth time.** BGP-LS Attribute
+  values taken from the half link number rather than the link passed
+  the property test. The unit, functional and lab tests state them by
+  hand, as they state which nodes a ring and a grid join.
+* The property test runs 55 seeds now, five per family.
+
 Measured against gobgpd 3.23.0 on 2026-11-04:
 
-* **Both SAFIs and both AFIs install.** GoBGP reads every component by
-  its type number with the operator octet whole, 0x81 for a one octet
-  value and 0x91 for a two octet port, the RD of section 8, and all
-  three actions with the rate per group.
-* **GoBGP prints a next hop of length 0 as its family's unspecified
-  address**, 0.0.0.0 under AFI 1 and :: under AFI 2.
-* FRR is not installed in the sandbox this was written in, so there is
-  no FRR case. FRR 8.4.4 has SAFI 133 and not SAFI 134
-  (docs/flow-spec.md section 12).
+* **Every Node, Link and Prefix NLRI installs**, read back by GoBGP's
+  own key, with the IS-IS system ID in its dotted form. GoBGP reads the
+  IGP metric, the admin group, the bandwidth and the SRLG of every link.
+* **GoBGP reads no node name and no prefix metric.** Its answer has an
+  empty node and prefix part of attribute 29 where the octets carry TLV
+  1026 and TLV 1155. The lab test asserts it.
+* **A prefix wider than one octet panics the client**, in `-j` as well
+  as the text form that link_state_gobgp_test.rb records. The daemon
+  holds the routes. So the lab sends /8 prefixes.
+* **Its JSON renders the NLRI strings inside an answer wrongly**: a
+  router ID comes out as the ASCII of its dotted text and a length as
+  65532. The map keys are right, so the lab reads those.
+* GoBGP has no SAFI 72, so the VPN family crosses over loopback only.
+  FRR 8.4.4 has neither SAFI.
 
-Tests: `test/unit/gen/flow_rules_test.rb`; `test/unit/gen_test.rb`'s
-property test draws both families, dealt out in turn so every family
-gets three feeds; `test/functional/gen_test.rb` sends three feeds over
-loopback; `test/unit/sim/injector_test.rb` sends one through the
-injector over eBGP; `test/functional/lab/gen_gobgp_test.rb` reads all
-three back from GoBGP.
+Tests: `test/unit/gen/link_state_routes_test.rb`; `test/unit/gen_test.rb`'s
+property test draws both families; `test/functional/gen_test.rb` sends a
+ring, a grid and a VPN topology over loopback;
+`test/unit/sim/injector_test.rb` sends one through the injector over
+eBGP; `test/functional/lab/gen_gobgp_test.rb` reads a ring and a grid
+back from GoBGP.

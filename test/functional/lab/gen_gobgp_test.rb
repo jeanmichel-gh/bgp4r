@@ -108,7 +108,8 @@ class LabGenGobgpTest < Test::Unit::TestCase
                G::VPN_IPV4 => [1, 128], G::VPN_IPV6 => [2, 128],
                G::VPN_MULTICAST_IPV4 => [1, 129],
                G::FS_IPV4 => [1, 133], G::FS_IPV6 => [2, 133], G::FS_VPN => [1, 134],
-               G::EVPN => [25, 70], G::RTC => [1, 132] }
+               G::EVPN => [25, 70], G::RTC => [1, 132],
+               G::LS => [16388, 71] }
 
   def rib(afi)
     @router.rib_family(FAMILY[afi])
@@ -743,4 +744,104 @@ class LabGenGobgpTest < Test::Unit::TestCase
     rtc_crosses('192.0.2.1', 1, 1000, 65001)
     rtc_crosses(4200000000, 5, 1000, 4200000001)
   end
+
+  # ---- phase 4g: BGP-LS topologies -------------------------------------
+
+  # GoBGP's key for a route, which is its own reading of the descriptors.
+  # Every key below was read off its JSON, `gobgp global rib -a ls -j`,
+  # whose map keys render the router IDs right where the "nlri" strings
+  # inside the same answer do not: 3.23.0 prints those as the ASCII of
+  # the dotted text, 10.0.0.1 as 49.48.46.48:46.48.46.49, and a length of
+  # 65532. Recorded and not filed.
+  def ls_key(r, isis = false)
+    id = lambda { |a| isis ? format('0000.%04x.%04x', IPAddr.new(a).to_i >> 16, IPAddr.new(a).to_i & 0xffff) : a }
+    case r['nlri']
+    when 'link'
+      "NLRI { LINK { LOCAL_NODE: #{id.call(r['node'])} REMOTE_NODE: #{id.call(r['remote'])} " \
+        "LINK: #{r['link']}->#{r['link']}} }"
+    when 'ipv4_prefix'
+      "NLRI { PREFIXv4 { LOCAL_NODE: #{id.call(r['node'])} PREFIX: [#{r['prefix']}] } }"
+    end
+  end
+
+  # GoBGP's reading of attribute 29 on one route.
+  def ls_attr(held, key)
+    paths = held[key]
+    assert_not_nil(paths, "GoBGP holds #{key}")
+    paths.first['attrs'].find { |a| a['type'] == 29 }
+  end
+
+  # Announce a topology, read every link and prefix back by GoBGP's own
+  # key, then withdraw it.
+  #
+  # **Every prefix is a /8, and that is GoBGP's doing**: its 3.23.0
+  # client panics rendering an IP Reachability TLV wider than one octet,
+  # in the JSON form too, which link_state_gobgp_test.rb records for the
+  # text form. Measured here first with /24s, where the daemon held all
+  # of them and `-j` panicked in ToIPNet.
+  def ls_crosses(spec, isis = false)
+    g = BGP::Gen.new(spec)
+    g.updates.each { |u| @peer.send_message u }
+    total = g.total
+    wait_for("GoBGP to hold #{total} BGP-LS routes", :timeout => 60) { count_in(G::LS) == total }
+    held = @router.rib_family(G::LS)
+    rows = g.expected.to_a
+    rows.reject { |r| r['nlri'] == 'node' }.each do |r|
+      key = ls_key(r, isis)
+      attr = ls_attr(held, key)
+      if r['nlri'] == 'link'
+        link = attr['link']
+        assert_equal(r['igp_metric'], link['igp_metric'], "the IGP metric of #{key}") if r['igp_metric']
+        assert_equal(r['admin_group'], link['admin_group'], "the admin group of #{key}") if r['admin_group']
+        assert_equal(r['max_bandwidth'], link['bandwidth'], "the bandwidth of #{key}") if r['max_bandwidth']
+        assert_equal([r['srlg']], link['srlgs'], "the SRLG of #{key}") if r['srlg']
+      end
+    end
+    yield held, rows if block_given?
+    g.withdrawals.each { |u| @peer.send_message u }
+    wait_for('GoBGP to hold no BGP-LS route', :timeout => 60) { count_in(G::LS) == 0 }
+  end
+
+  # A ring of 30 OSPF nodes, two prefixes each. Both ends of the ring
+  # are stated by hand, since GoBGP holding what `expected` says would
+  # also pass for a generator that joined the wrong nodes.
+  def test_a_bgp_ls_ring
+    session(false, [G::LS])
+    ls_crosses('family' => 'bgp_ls', 'start' => '10.0.0.1', 'count' => 30, 'autonomous_system' => 65000,
+               'prefixes' => 2, 'prefix_start' => '20.0.0.0/8',
+               'igp_metric' => { 'step' => { 'start' => 10, 'by' => 10 } },
+               'attributes' => { 'as_path' => [OUR_AS], 'next_hop' => '192.0.2.1' }) do |held, _rows|
+      assert_equal(30 + 60 + 60, held.size)
+      assert_equal(300, ls_attr(held, 'NLRI { LINK { LOCAL_NODE: 10.0.0.30 REMOTE_NODE: 10.0.0.1 LINK: 30->30} }')['link']['igp_metric'],
+                   'the link that closes the ring, the 30th')
+      assert_not_nil(held['NLRI { NODE { AS:65000 BGP-LS ID:0 10.0.0.30 OSPFv2:0 } }'],
+                     'a node, read with its AS and the OSPF Router-ID')
+      assert_not_nil(held['NLRI { PREFIXv4 { LOCAL_NODE: 10.0.0.30 PREFIX: [79.0.0.0/8] } }'],
+                     'the last prefix, 20 + 59')
+    end
+  end
+
+  # A grid of IS-IS nodes with every link value the generator writes.
+  # **GoBGP 3.23.0 reads none of the node name and the prefix metric**:
+  # its answer has an empty node and prefix part of attribute 29 where
+  # the octets carry TLV 1026 and TLV 1155. Asserted, so a GoBGP that
+  # reads them fails here and says to re-measure.
+  def test_a_bgp_ls_grid
+    session(false, [G::LS])
+    ls_crosses({ 'family' => 'bgp_ls', 'start' => '10.0.0.1', 'count' => 12, 'topology' => 'grid', 'columns' => 4,
+                 'protocol_id' => 2, 'node_name' => 'r', 'admin_group' => 5, 'max_bandwidth' => 125000000,
+                 'srlg' => { 'cycle' => [7, 8] }, 'igp_metric' => 10,
+                 'prefixes' => 1, 'prefix_start' => '20.0.0.0/8', 'prefix_metric' => 100,
+                 'attributes' => { 'as_path' => [OUR_AS], 'next_hop' => '192.0.2.1' } }, true) do |held, _rows|
+      # 3 rows of 4: 9 links across and 8 down.
+      assert_equal(12 + 2 * 17 + 12, held.size)
+      assert_not_nil(held['NLRI { LINK { LOCAL_NODE: 0000.0a00.0006 REMOTE_NODE: 0000.0a00.000a LINK: 11->11} }'],
+                     'node 6 joined to node 10 below it, link 11: nodes 1 to 5 have 9 links before it, then 6 to 7')
+      node = held.find { |k, _| k.start_with?('NLRI { NODE') }
+      assert_equal({}, node[1].first['attrs'].find { |a| a['type'] == 29 }['node'], 'no node name read')
+      pre = held.find { |k, _| k.start_with?('NLRI { PREFIXv4') }
+      assert_equal({}, pre[1].first['attrs'].find { |a| a['type'] == 29 }['prefix'], 'no prefix metric read')
+    end
+  end
 end
+

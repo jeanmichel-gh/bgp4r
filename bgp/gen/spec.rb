@@ -57,6 +57,8 @@ module BGP
                 source protocol destination_port rate redirect marking
                 route_type ip esi ethernet_tag gateway mac_mobility router_mac pmsi_label
                 origin_as prefix_length default
+                topology columns protocol_id identifier autonomous_system prefixes prefix_start
+                node_name igp_metric admin_group max_bandwidth srlg prefix_metric
                 seed group attributes].freeze
 
       # The keys that belong to some families only, and which. A spec
@@ -65,7 +67,8 @@ module BGP
       FLOW = %w[flow_spec flow_spec_vpn].freeze
       EVPN = %w[evpn].freeze
       RTC = %w[rt_constrain].freeze
-      RD = %w[vpn vpn_multicast flow_spec_vpn evpn].freeze
+      LS = %w[bgp_ls bgp_ls_vpn].freeze
+      RD = %w[vpn vpn_multicast flow_spec_vpn evpn bgp_ls_vpn].freeze
       FAMILY_KEYS = { 'label' => %w[labelled vpn vpn_multicast evpn],
                       'rd' => RD, 'vrfs' => RD, 'route_target' => RD,
                       'source' => FLOW, 'protocol' => FLOW,
@@ -75,7 +78,23 @@ module BGP
                       'ethernet_tag' => EVPN, 'gateway' => EVPN,
                       'mac_mobility' => EVPN, 'router_mac' => EVPN,
                       'pmsi_label' => EVPN,
-                      'origin_as' => RTC, 'prefix_length' => RTC, 'default' => RTC }.freeze
+                      'origin_as' => RTC, 'prefix_length' => RTC, 'default' => RTC,
+                      'topology' => LS, 'columns' => LS, 'protocol_id' => LS,
+                      'identifier' => LS, 'autonomous_system' => LS,
+                      'prefixes' => LS, 'prefix_start' => LS, 'node_name' => LS,
+                      'igp_metric' => LS, 'admin_group' => LS, 'max_bandwidth' => LS,
+                      'srlg' => LS, 'prefix_metric' => LS }.freeze
+
+      # The BGP-LS keys that are patterns, with the largest value each
+      # field holds. RFC 9552 section 5.3.2.4 gives the IGP metric 3
+      # octets at its widest, which is the width bgp4r writes; the
+      # administrative group (RFC 5305 section 3.1), an SRLG (RFC 5307
+      # section 1.3) and a prefix metric (RFC 9552 section 5.3.3.4) are
+      # 4, and a bandwidth is a 4-octet float, so any 32 bit number of
+      # bytes per second is accepted (RFC 5305 section 3.4).
+      LS_MAX = { 'igp_metric' => 0xffffff, 'admin_group' => 0xffffffff,
+                 'max_bandwidth' => 0xffffffff, 'srlg' => 0xffffffff,
+                 'prefix_metric' => 0xffffffff }.freeze
 
       # The EVPN keys that are integers, with the largest value each
       # field holds: an Ethernet Tag ID and a MAC Mobility sequence
@@ -151,6 +170,22 @@ module BGP
         EVPN_MAX.each do |k, max|
           out[k] = value(s[k], k, :int, max, out['seed']) if s.key?(k)
         end
+        LS_MAX.each do |k, max|
+          out[k] = value(s[k], k, :int, max, out['seed']) if s.key?(k)
+        end
+        out['topology'] = string(s, 'topology', false)
+        if out['topology'] && !%w[ring grid].include?(out['topology'])
+          raise SpecError, "topology is ring or grid, not #{out['topology'].inspect}"
+        end
+        out['columns'] = integer(s, 'columns', false, 1)
+        # RFC 9552 section 5.2: a 1-octet Protocol-ID, an 8-octet
+        # Identifier, and a 4-octet AS in sub-TLV 512 (section 5.2.1.4).
+        out['protocol_id'] = integer(s, 'protocol_id', false, 0, 0xff)
+        out['identifier'] = integer(s, 'identifier', false, 0, 2**64 - 1)
+        out['autonomous_system'] = integer(s, 'autonomous_system', false, 0, U32)
+        out['prefixes'] = integer(s, 'prefixes', false, 0)
+        out['prefix_start'] = string(s, 'prefix_start', false)
+        out['node_name'] = string(s, 'node_name', false)
         %w[ip gateway].each do |k|
           out[k] = string(s, k, false)
           next unless out[k]

@@ -74,8 +74,10 @@ class TestBgpGenSpec < Test::Unit::TestCase
     refused([], /a spec is a Hash/)
   end
 
+  # The example was 'prefixes' until phase 4g made that a BGP-LS key, so
+  # it is a name no phase plans to read.
   def test_an_unknown_key_is_refused_and_named
-    refused(minimal.merge('prefixes' => []), /unknown key 'prefixes'/)
+    refused(minimal.merge('prefix_list' => []), /unknown key 'prefix_list'/)
   end
 
   # Phase 2 reads seed and group, which phase 1 refused by name.
@@ -101,8 +103,9 @@ class TestBgpGenSpec < Test::Unit::TestCase
   # and not here, or the reverse, is seen.
   def test_the_family_keys
     flow = %w[flow_spec flow_spec_vpn]
-    rd = %w[vpn vpn_multicast flow_spec_vpn evpn]
+    rd = %w[vpn vpn_multicast flow_spec_vpn evpn bgp_ls_vpn]
     evpn = %w[evpn]
+    ls = %w[bgp_ls bgp_ls_vpn]
     assert_equal({ 'label' => %w[labelled vpn vpn_multicast evpn], 'rd' => rd, 'vrfs' => rd, 'route_target' => rd,
                    'source' => flow, 'protocol' => flow, 'destination_port' => flow, 'rate' => flow,
                    'redirect' => flow, 'marking' => flow,
@@ -110,7 +113,11 @@ class TestBgpGenSpec < Test::Unit::TestCase
                    'gateway' => evpn, 'mac_mobility' => evpn, 'router_mac' => evpn,
                    'pmsi_label' => evpn,
                    'origin_as' => %w[rt_constrain], 'prefix_length' => %w[rt_constrain],
-                   'default' => %w[rt_constrain] }, S::FAMILY_KEYS)
+                   'default' => %w[rt_constrain],
+                   'topology' => ls, 'columns' => ls, 'protocol_id' => ls, 'identifier' => ls,
+                   'autonomous_system' => ls, 'prefixes' => ls, 'prefix_start' => ls,
+                   'node_name' => ls, 'igp_metric' => ls, 'admin_group' => ls,
+                   'max_bandwidth' => ls, 'srlg' => ls, 'prefix_metric' => ls }, S::FAMILY_KEYS)
     assert_equal([], S::FAMILY_KEYS.keys - S::KEYS)
   end
 
@@ -163,6 +170,29 @@ class TestBgpGenSpec < Test::Unit::TestCase
     refused(minimal.merge('origin_as' => 2**32), /origin_as: 4294967296 does not fit/)
     refused(minimal.merge('prefix_length' => -1), /prefix_length is at least 0/)
     refused(minimal.merge('default' => 1), /default is true or false, not 1/)
+  end
+
+  # Phase 4g. The BGP-LS keys: the BGP-LS Attribute values are patterns,
+  # each refused past its field (RFC 9552 sections 5.3.2.4 and 5.3.3.4,
+  # RFC 5305 section 3.1), and the topology keys are plain values.
+  def test_the_bgp_ls_keys_read
+    s = S.read(minimal.merge('topology' => 'grid', 'columns' => 4, 'protocol_id' => 2,
+                             'identifier' => 2**64 - 1, 'autonomous_system' => 2**32 - 1,
+                             'prefixes' => 2, 'prefix_start' => '10.0.0.0/24', 'node_name' => 'r',
+                             'igp_metric' => { 'cycle' => [1, 2**24 - 1] }, 'admin_group' => 1,
+                             'max_bandwidth' => 2**32 - 1, 'srlg' => 7, 'prefix_metric' => 0))
+    assert_equal(['grid', 4, 2, 2**64 - 1, 2**32 - 1, 2, '10.0.0.0/24', 'r', { 'cycle' => [1, 2**24 - 1] }],
+                 s.values_at('topology', 'columns', 'protocol_id', 'identifier', 'autonomous_system',
+                             'prefixes', 'prefix_start', 'node_name', 'igp_metric'))
+    { 'igp_metric' => 2**24, 'admin_group' => 2**32, 'max_bandwidth' => 2**32, 'srlg' => 2**32,
+      'prefix_metric' => 2**32 }.each do |k, v|
+      refused(minimal.merge(k => v), /#{k}: #{v} does not fit/)
+    end
+    refused(minimal.merge('topology' => 'star'), /topology is ring or grid, not "star"/)
+    refused(minimal.merge('columns' => 0), /columns is at least 1/)
+    refused(minimal.merge('protocol_id' => 256), /protocol_id 256 does not fit/)
+    refused(minimal.merge('prefixes' => -1), /prefixes is at least 0/)
+    refused(minimal.merge('node_name' => 1), /node_name is a string/)
   end
 
     # Phase 4b. An RD and a route target read as ADMIN:N, and the
