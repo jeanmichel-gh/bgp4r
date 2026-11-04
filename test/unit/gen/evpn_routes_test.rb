@@ -279,7 +279,7 @@ class TestBgpGenEvpnRoutes < Test::Unit::TestCase
     e = assert_raise(BGP::Gen::SpecError) do
       BGP::Gen.new('start' => '10.0.0.0/24', 'count' => 1, 'route_type' => 2)
     end
-    assert_match(/'route_type' is for evpn and not for 'unicast'/, e.message)
+    assert_match(/'route_type' is for evpn, mcast_vpn and not for 'unicast'/, e.message)
   end
 
   # Building never validates: RFC 9136 section 3.2 says a route type 5

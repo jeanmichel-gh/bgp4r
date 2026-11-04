@@ -786,6 +786,112 @@ class GenFunctionalTest < Test::Unit::TestCase
     assert_equal((10..510).to_a, @rows.collect { |r| r['path_id'] })
   end
 
+  # ---- phase 4f: MCAST-VPN ---------------------------------------------
+
+  MVPN_KEYS = { :intra_as_i_pmsi => 1, :inter_as_i_pmsi => 2, :s_pmsi => 3, :leaf_a_d => 4,
+                :source_active => 5, :shared_tree_join => 6, :source_tree_join => 7 }.freeze
+
+  # Rows read off the routes the far side parsed, with nothing from
+  # bgp/gen: each route's own hash, and a Leaf A-D route's fields from
+  # its Route Key.
+  def mvpn_rows(updates, key = :mp_reach)
+    updates.flat_map do |u|
+      pa = u.path_attribute
+      mp = pa && pa[key]
+      next [] unless mp
+      attrs = pa[:origin] && { 'origin' => pa[:origin].to_i, 'as_path' => pa[:as_path].segments.flat_map(&:as),
+                               'next_hop' => mp.nexthops }
+      mp.nlris.collect do |n|
+        k, v = n.to_hash.reject { |x, _| x == :path_id }.first
+        type = MVPN_KEYS.fetch(k)
+        leaf = v
+        v = v[:route_key].values.first if type == 4
+        r = { 'route_type' => type, 'rd' => v[:rd].join(':') }
+        case type
+        when 1 then r['originator'] = v[:originator]
+        when 2 then r['source_as'] = v[:source_as]
+        else
+          r['source_as'] = v[:source_as] if [6, 7].include?(type)
+          r['source'] = v[:source] if v[:source].is_a?(String)
+          r['group'] = v[:group]
+          r['originator'] = v[:originator] if [3, 4].include?(type)
+          r['leaf'] = leaf[:originator] if type == 4
+        end
+        r['path_id'] = n.path_id if n.path_id
+        attrs ? r.merge(attrs) : r
+      end
+    end
+  end
+
+  # Announce, compare, withdraw, compare. The SAFI is stated here and
+  # the AFI passed in, not read from the generator.
+  def mvpn_crosses(spec, afi = 1)
+    c = catcher
+    g = BGP::Gen.new(spec)
+    sent = g.updates.count
+    g.updates.each { |u| @c.send_update u }
+    got = []
+    assert(wait_for { got.concat(c.drain) ; got.size >= sent }, "#{got.size} of #{sent} UPDATEs arrived")
+    assert_equal([], got.flat_map { |u| u.path_attribute.errors + u.path_attribute.undecoded }, 'no protocol error')
+    assert_equal([[afi, 5]], got.collect { |u| mp = u.path_attribute[:mp_reach] ; [mp.afi, mp.safi] }.uniq)
+    @rows = mvpn_rows(got)
+    assert_equal(g.expected.to_a.collect { |r| r.reject { |k, _| k == 'extended_communities' } }, @rows)
+    back = g.withdrawals.count
+    g.withdrawals.each { |u| @c.send_update u }
+    gone = []
+    assert(wait_for { gone.concat(c.drain) ; gone.size >= back }, "#{gone.size} of #{back} withdrawals arrived")
+    keys = %w[route_type rd originator source_as source group leaf]
+    assert_equal(g.expected.collect { |r| r.slice(*keys) }, mvpn_rows(gone, :mp_unreach))
+    [sent, back]
+  end
+
+  # All seven route types of RFC 6514 section 4. What steps is stated by
+  # hand at the ends of each range, since a generator that stepped the
+  # wrong field would agree with its own expected.
+  def test_mcast_vpn_route_types
+    session
+    base = { 'family' => 'mcast_vpn', 'count' => 1000, 'rd' => '65000:1',
+             'attributes' => { 'as_path' => [CLIENT_AS], 'next_hop' => '192.0.2.1' } }
+    mvpn_crosses(base.merge('route_type' => 1, 'start' => '10.0.0.1'))
+    assert_equal(%w[10.0.0.1 10.0.3.232], @rows.collect { |r| r['originator'] }.values_at(0, -1))
+    mvpn_crosses(base.merge('route_type' => 2, 'start' => '65001', 'afi' => 2), 2)
+    assert_equal([65001, 66000], @rows.collect { |r| r['source_as'] }.values_at(0, -1))
+    grp = base.merge('start' => '239.1.0.0', 'source' => '10.0.0.9')
+    mvpn_crosses(grp.merge('route_type' => 3, 'originator' => '192.0.2.7'))
+    assert_equal(%w[239.1.0.0 239.1.3.231], @rows.collect { |r| r['group'] }.values_at(0, -1))
+    mvpn_crosses(grp.merge('route_type' => 4, 'originator' => '192.0.2.7', 'leaf' => '192.0.2.99'))
+    assert_equal([['192.0.2.99'], ['192.0.2.7']], [@rows.collect { |r| r['leaf'] }.uniq,
+                                                   @rows.collect { |r| r['originator'] }.uniq])
+    mvpn_crosses(grp.merge('route_type' => 5).reject { |k, _| k == 'source' })
+    assert_equal([nil], @rows.collect { |r| r['source'] }.uniq, 'no source, a length of 0')
+    mvpn_crosses(grp.merge('route_type' => 6, 'source_as' => 65000))
+    mvpn_crosses(grp.merge('route_type' => 7, 'source_as' => 65000))
+    assert_equal([[65000], ['10.0.0.9']], [@rows.collect { |r| r['source_as'] }.uniq,
+                                           @rows.collect { |r| r['source'] }.uniq])
+  end
+
+  # IPv6 customer addresses are AFI 2 (RFC 6515 section 1.1), in two
+  # VPNs, each with its own RD and route target, stated by hand.
+  def test_mcast_vpn_ipv6_in_two_vpns
+    session
+    c = catcher
+    spec = { 'family' => 'mcast_vpn', 'route_type' => 5, 'start' => 'ff3e::1', 'count' => 500,
+             'source' => '2001:db8::9', 'rd' => '65000:1', 'vrfs' => 2, 'route_target' => '65000:100',
+             'attributes' => { 'as_path' => [CLIENT_AS], 'next_hop' => '192.0.2.1' } }
+    mvpn_crosses(spec, 2)
+    assert_equal([%w[65000:1 ff3e::1], %w[65000:1 ff3e::1f4], %w[65000:2 ff3e::1], %w[65000:2 ff3e::1f4]],
+                 @rows.values_at(0, 499, 500, -1).collect { |r| r.values_at('rd', 'group') })
+    g = BGP::Gen.new(spec)
+    g.updates.each { |u| @c.send_update u }
+    got = []
+    wait_for { got.concat(c.drain) ; got.size >= g.updates.count }
+    rts = got.collect do |u|
+      [u.path_attribute[:mp_reach].nlris.first.to_hash.values.first[:rd].join(':'),
+       u.path_attribute[:extended_communities].to_hash[:extended_communities].first[:route_target].join(':')]
+    end.uniq
+    assert_equal([%w[65000:1 65000:100], %w[65000:2 65000:101]], rts)
+  end
+
   # ---- phase 4g: BGP-LS topologies -------------------------------------
 
   # The rows of a BGP-LS feed, read off each NLRI's own hash and the

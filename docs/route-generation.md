@@ -175,7 +175,7 @@ route key.
 | `flow_spec`, `flow_spec_vpn` (133, 134) | destination prefix from `start`, `source`, `protocol` and `destination_port`, each one `eq` match, so a rule set N wide; for 134 `rd`, `vrfs` and `route_target` as VPN | `rate`, `redirect` and `marking`, the actions of RFC 8955 section 7; no next hop | The same rule in MP_UNREACH. |
 | `rt_constrain` (132) | route target from `start` as `ADMIN:N`, `origin_as`, `prefix_length`, `default` for the zero length default in front | none | The same NLRI. GoBGP 3.23.0 panics on the default plus a second route. |
 | `evpn` (25, 70) | `route_type`, 1 to 11; types 1 and 4: ESI from `start`; type 2: MAC from `start`, `ip`, `esi`, `label`; type 3: originator from `start`; type 5: prefix from `start`, `gateway`, `esi`, `label`; types 6, 7, 8, 10 and 11: the Multicast Group from `start`, `source`, `originator`, `igmp_flags`, `max_response_time` for 8, `leaf` for 11; type 9: Region ID from `start`; `ethernet_tag`; `rd`, `vrfs` and `route_target` as VPN | `mac_mobility` (a MAC move), `router_mac`, `pmsi_label` for type 3, `esi_label` for type 1, `es_import` for type 4 | The same NLRI; a receiver matches the route key, which leaves out the ESI, the labels and the gateway. |
-| `mcast_vpn` (5) | type 1 originator, type 5 (S,G), types 6 and 7 per Source AS | route targets | No lab router has the family. |
+| `mcast_vpn` (5) | `route_type`, 1 to 7; type 1: originator from `start`; type 2: Source AS from `start`; types 3 to 7: the Multicast Group from `start`, `source`, `originator` for 3 and 4, `leaf` for 4, `source_as` for 6 and 7; `rd`, `vrfs` and `route_target` as VPN; the AFI is the group's family, or `afi` for types 1 and 2 | route targets | The same NLRI. No lab router has the family, so the lab measures a discard. |
 | `bgp_ls`, `bgp_ls_vpn` (71, 72) | a **topology**: `count` nodes from the router ID `start`, a `topology` of `ring` or `grid` with `columns`, `prefixes` per node from `prefix_start`, `protocol_id`, `identifier`, `autonomous_system`; for 72 `rd`, `vrfs` and `route_target` as VPN | attribute 29: `igp_metric`, `admin_group`, `max_bandwidth` and `srlg` per link, `node_name` per node, `prefix_metric` per prefix | By NLRI. The VPN next hop is 12, 24 or 40 octets. |
 
 BGP-LS is the one family where a generator means a graph rather than a
@@ -282,7 +282,7 @@ can fail. Update this table in the pull request that moves a step.
 | 4d | EVPN types 2, 3 and 5. | Done |
 | 4d2 | EVPN types 1, 4 and 6 to 11, and the ESI label community. | Done |
 | 4e | RT-constrain. | Done |
-| 4f | MCAST-VPN. | To do |
+| 4f | MCAST-VPN. | Done |
 | 4g | BGP-LS topologies. | Done |
 | 5 | Churn. | To do |
 | 6 | `LabHelper` takes a spec, and the coverage matrix reports generators. | To do |
@@ -644,6 +644,45 @@ the two communities of RFC 7432 that go with types 1 and 4.
   as the field less its low bit, so 300 is 4800. Types 6 to 11 it does
   not know, which the EVPN lab test already records, so the lab sends
   them nowhere. FRR was not run here.
+
+**Phase 4f.** MCAST-VPN, SAFI 5, all seven route types of RFC 6514
+section 4. `Mcast_vpn_routes` is a subclass of `Unicast` that includes
+`PerVrf`, as EVPN's is.
+
+* **`start` is what steps.** Type 1 steps the Originating Router's IP
+  Address, so N routes are N PEs. Type 2 steps the Source AS, given as
+  a decimal string. Types 3 to 7 step the Multicast Group, with a fixed
+  `source` or none, which writes a length of 0.
+* **Type 4's Route Key is the type 3 route** of the same RD, group,
+  source and originator, and `leaf` is its own Originating Router.
+  RFC 6515 section 2 item 4 says the Route Key has its own length.
+* **The AFI is the customer family.** RFC 6515 section 1.1 says AFI 1
+  means the Multicast Source and Group are IPv4 and AFI 2 means IPv6,
+  and that a PE address's family "MUST NOT be inferred from the AFI
+  field". So a type with a group takes the AFI from it, and types 1
+  and 2 take `afi` from the spec, 1 by default.
+* **The next hop is the session's**, read by length, and stays 4
+  octets under AFI 2 rather than becoming an IPv4-mapped address.
+* **The add-path gap holds here too, measured.** validation.rb reads
+  the Path Identifier as a Route Type and a Length.
+  `mcast_vpn_routes_test.rb` pins it and the property test sends no
+  Path Identifier for this family.
+* **What `expected` cannot catch, an eighth time.** A Source AS that
+  does not step agrees with its own `expected`. The property test
+  caught it only because copies of one route broke its withdrawal
+  count. The unit and functional tests state the Source AS by hand.
+* **Two hand counted lengths were wrong and the library was right**:
+  11 zero octets in 2001:db8::1, not 12, and a Route Key with no
+  source, 18 octets and not 22. RFC 6514 has no worked example.
+* **GoBGP 3.23.0 has no SAFI 5**, so the lab measures the absence. A
+  feed of 2000 type 3 routes in 12 messages is counted as 12
+  discarded messages and no UPDATE, the session stays Established, and
+  a unicast route still installs afterwards. That vouches for nothing
+  about our octets past the AFI and SAFI. FRR was not run here; FRR
+  8.4.4 resets the session on a single MCAST-VPN UPDATE, which
+  `mcast_vpn_frr_test.rb` records.
+* **The property test runs 60 seeds**, five per family, plus one
+  MCAST-VPN feed per route type.
 
 **Phase 4e.** Route target membership, AFI 1 SAFI 132 (RFC 4684).
 `Rt_constrain_routes` is a subclass of `Unicast`.
