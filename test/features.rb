@@ -378,7 +378,7 @@ module Features
     'console' => {
       :area  => 'programs',
       :about => 'An irb prompt on a live session: bgp4r routegen --interact',
-      :doc   => 'docs/daemon.md',
+      :doc   => 'docs/console.md',
       :unit  => %w[sim/console_test],
       :functional => %w[console_test],
     },

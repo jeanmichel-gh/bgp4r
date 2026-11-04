@@ -221,7 +221,7 @@ ruby test/run_feature.rb communities
 
 An irb prompt on a live session: bgp4r routegen --interact.
 
-- Read first: `docs/daemon.md`
+- Read first: `docs/console.md`
 - 1 unit file, 1 functional
 
 ```

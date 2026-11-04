@@ -477,8 +477,16 @@ bgp/sim/                 `bgp4r-sim` the route injector, and `bgp4r
                          is a bundled gem from Ruby 4.0**, so it is
                          required only when asked for, the Gemfile
                          names it, and a missing irb is said before any
-                         session starts. docs/daemon.md's console
-                         section is the guide
+                         session starts. docs/console.md is the
+                         guide: what the flags become, every default
+                         the Speaker fills in, and what the far router
+                         must match. Its defaults table is held against
+                         the code by test/unit/sim/console_test.rb.
+                         **irb is in the Gemfile's `console` group and
+                         the Dockerfile skips it**, because irb needs
+                         erb, which compiles a native extension, and
+                         the slim image has no compiler: adding it
+                         plain turned every docker job red in #265
 bgp/capture/             reading BGP off a wire; require 'bgp/capture', which
                          bgp4r.rb does not, the same arrangement bgp/rib.rb has
                          pcap.rb reads the classic pcap format off an IO a
@@ -750,6 +758,12 @@ docs/                    protocol-testing.md: using bgp4r to test a router
                          `bgp4r routegen` reads a node file rather than
                          `examples/routegen.yml`, which is the old
                          script's own format
+                         console.md: `bgp4r routegen --interact` from
+                         the flags to the prompt, the defaults the
+                         flags leave to the Speaker, and the far
+                         router's half. Its defaults table and its
+                         node file are asserted by
+                         test/unit/sim/console_test.rb
                          routescope-labs.md: how those two programs
                          become nodes the routescope console can drive,
                          and the eight labs worth building once they are.
@@ -1578,7 +1592,7 @@ CI: `.github/workflows/test.yml` runs both suites on every push to master and ev
 
 `.github/workflows/capture.yml` is the one workflow that deploys a containerlab lab: it builds the `lab-node` and BIRD images, deploys `lab/routescope/bgp4r-lab`, and runs its `capture.sh`, on demand and on a push that changes that folder or the Dockerfile. Its log is what routescope's BGP fixtures are cut from.
 
-Baseline on 2026-11-04: 3438 tests, 34265 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
+Baseline on 2026-11-04: 3462 tests, 34351 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
 
 **That coverage figure is 98.5% for the library and the rest is the two
 programs, not a gap anywhere else.** Measured the same run: with
@@ -7733,8 +7747,8 @@ meets the routescope work: see `docs/routescope-labs.md`.
 Asked for by the owner on 2026-11-04, who used to do this by hand: start
 irb, build a Neighbor, and drive an established session in Ruby. A 2011
 transcript of it sat in `test/functional/add_path_test.rb` until
-`5c79a7b`, and nothing in the tree ever packaged it. docs/daemon.md's
-console section is the guide.
+`5c79a7b`, and nothing in the tree ever packaged it. docs/console.md is
+the guide.
 
 1. **Done.** `BGP::Sim::Console` in bgp/sim/console.rb and `bgp4r
    routegen --interact`. The verbs go through `Injector#act`.

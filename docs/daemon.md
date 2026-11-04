@@ -1287,7 +1287,10 @@ difference between the two.
 
 An irb prompt on a live session, for playing with the library by hand
 while developing and testing. The session comes up, then irb opens with
-a `BGP::Sim::Console` as `self`, so a verb needs no receiver:
+a `BGP::Sim::Console` as `self`, so a verb needs no receiver.
+**`docs/console.md` is the full guide**: what the flags become, every
+default they leave to the Speaker, and what the router at the far end
+needs to match them.
 
 ```sh
 # in the VM

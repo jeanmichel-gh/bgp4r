@@ -262,6 +262,68 @@ class BGP_Sim_Console_Test < Test::Unit::TestCase
     end
   end
 
+  # ---- docs/console.md ------------------------------------------------
+
+  ROOT = File.expand_path('../../..', __dir__)
+
+  def console_doc
+    File.read(File.join(ROOT, 'docs', 'console.md'), :encoding => 'UTF-8')
+  end
+
+  # The defaults table, as { setting => default } read out of the
+  # document. Its row count is asserted first, so a parse that finds
+  # nothing fails rather than passing every row it did not read.
+  def documented_defaults
+    rows = console_doc.scan(/^\| ([A-Z][^|]*?) \| ([^|]+?) \| [^|]+\|$/)
+    rows.reject { |setting, _| setting == 'Setting' }.to_h
+  end
+
+  # What the command line in the document really builds: a Neighbor from
+  # the node file routegen plans, with nothing else given.
+  def default_neighbor
+    config, = plan(%w[--peer 10.0.0.2 --peer-as 65002 --interact])
+    BGP::Daemon::Speaker.new(config).peers.first.send(:new_neighbor)
+  end
+
+  def source(path)
+    File.read(File.join(ROOT, path), :encoding => 'UTF-8')
+  end
+
+  def test_the_documented_defaults_are_the_ones_the_command_uses
+    doc = documented_defaults
+    assert_equal(8, doc.size, 'the defaults table has eight rows')
+    n = default_neighbor
+    open = n.open
+    assert_equal(n.instance_variable_get(:@my_as).to_s, doc['Our AS'])
+    assert_equal(BGP::Sim::Routegen::DEFAULT_AS.to_s, doc['Our AS'])
+    assert_equal(BGP::Sim::Routegen::DEFAULT_ID, doc['Our router ID'])
+    assert_equal(BGP::Sim::Routegen::DEFAULT_ID, open.bgp_id)
+    assert_equal(n.holdtime.to_s, doc['Hold time'])
+    caps = open.opt_parms.flat_map { |p| Array(p.respond_to?(:capabilities) ? p.capabilities : p) }
+    assert_equal([BGP::OPT_PARM::CAP::As4], caps.collect(&:class))
+    assert_equal('as4_byte', doc['Capabilities'])
+  end
+
+  # Three defaults are a `fetch` inside a method that dials or waits, so
+  # they are held by the line of code that applies them. Anchored at the
+  # start of a line, so a comment naming the value cannot match.
+  def test_the_documented_port_retry_and_wait_are_in_the_code
+    doc = documented_defaults
+    speaker = source('bgp/daemon/speaker.rb')
+    routegen = source('bgp/sim/routegen.rb')
+    assert_match(/^\s+sock = Socket\.tcp\(@address, @config\.fetch\('port', #{doc['Peer TCP port']}\),/, speaker)
+    assert_match(/^\s+@resume\.wait\(@admin, @config\.fetch\('retry', #{doc['Retry after a failed dial']}\)\)/, speaker)
+    assert_match(/^\s+deadline = Time\.now \+ Float\(opts\[:timeout\] \|\| #{doc['Wait for Established']}\)/, routegen)
+  end
+
+  def test_the_documented_node_file_is_what_routegen_builds
+    config, = plan(%w[--peer 10.0.0.2 --peer-as 65002 --interact])
+    yaml = console_doc[/^## 1\..*?```yaml\n(.*?)```/m, 1]
+    assert_not_nil(yaml, 'section 1 carries the node file')
+    require 'yaml'
+    assert_equal(config, YAML.safe_load(yaml))
+  end
+
   def test_the_usage_names_interact
     out = StringIO.new
     BGP::Sim::Routegen.new(out, StringIO.new).start(['--help'])
