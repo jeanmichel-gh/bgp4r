@@ -1024,10 +1024,17 @@ module BGP
       # Yields the UPDATEs of one announce block, one at a time. A prefixes
       # block makes one. A generate block makes many with BGP::RouteGenerator,
       # all with the same path attributes as build_update.
+      #
+      # A path_id on the block goes in front of every generated prefix, as
+      # nlri_for does for a prefixes block (RFC 7911 section 3). It used to
+      # be dropped here in silence, which is phase 0 of
+      # docs/route-generation.md. RouteGenerator refuses one that is not
+      # an integer or does not fit in 4 octets.
       def each_update(a, ebgp, local_ip, session_info=nil, env=ENV)
         return yield(build_update(a, ebgp, local_ip)) unless a['generate']
         g = Speaker.generate_options(a['generate'], env)
-        BGP::RouteGenerator.new(g['start'], g['count'], g['per_update'], path_attribute(a, ebgp, local_ip))
+        BGP::RouteGenerator.new(g['start'], g['count'], g['per_update'], path_attribute(a, ebgp, local_ip),
+                                path_id: a['path_id'])
                            .each_update(session_info) { |u| yield u }
       end
 

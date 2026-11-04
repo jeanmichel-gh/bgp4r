@@ -1199,11 +1199,13 @@ unknown key is refused rather than ignored for the reason
 `Speaker#export_options` already refuses one in a node file: a typo that
 silently changes nothing is worse than both an error and a wrong value.
 
-**The one place the injector refuses something it could have done**
-is `path_id` on a `generate` block, and it is a gap and not a rule:
-`Speaker#each_update` hands `RouteGenerator` no Path Identifier, so the
-key would be dropped in silence. Refusing it names the gap. An add-path
-test uses `prefixes`, which does carry one.
+**`path_id` on a `generate` block goes in front of every prefix of the
+range**, for an announce and a withdrawal alike (RFC 7911 section 3).
+It used to be refused, because `Speaker#each_update` handed
+`RouteGenerator` no Path Identifier and the key would have been dropped
+in silence; phase 0 of `docs/route-generation.md` carried it through. A
+value that is not an integer or does not fit in 4 octets is refused
+before the feed starts.
 
 ## routegen
 
