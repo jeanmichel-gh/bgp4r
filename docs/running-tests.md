@@ -19,7 +19,7 @@ amounts. Measured 2026-11-03:
 
 | Tier | What it needs | Files | Time | Command |
 |---|---|---:|---|---|
-| unit | Ruby | 155 | 21s | `ruby test/run_unit.rb` |
+| unit | Ruby | 156 | 21s | `ruby test/run_unit.rb` |
 | functional | a loopback socket | 14 | 18s | one file at a time, below |
 | lab | gobgpd, FRR, Docker or root | 29 | 10s to 400s per group | `ruby test/run_lab.rb GROUP` |
 
@@ -841,5 +841,5 @@ test file has to be tagged before the suite is green again, which is
 the same arrangement `test/unit/lab_groups_test.rb` has with the CI
 matrix.
 
-198 of 198 test files are tagged. The
+199 of 199 test files are tagged. The
 remainder, if any, is what the guard names.
