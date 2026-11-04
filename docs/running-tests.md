@@ -19,7 +19,7 @@ amounts. Measured 2026-11-03:
 
 | Tier | What it needs | Files | Time | Command |
 |---|---|---:|---|---|
-| unit | Ruby | 154 | 21s | `ruby test/run_unit.rb` |
+| unit | Ruby | 155 | 21s | `ruby test/run_unit.rb` |
 | functional | a loopback socket | 14 | 18s | one file at a time, below |
 | lab | gobgpd, FRR, Docker or root | 29 | 10s to 400s per group | `ruby test/run_lab.rb GROUP` |
 
@@ -98,7 +98,7 @@ Getting a session up and keeping it.
 
 | Feature | unit | func | lab | What |
 |---|---:|---:|---:|---|
-| `open` | 11 | 0 | 1 | OPEN, the optional parameters, and every capability |
+| `open` | 12 | 0 | 1 | OPEN, the optional parameters, and every capability |
 | `messages` | 5 | 0 | 0 | The common header, KEEPALIVE, UPDATE and NOTIFICATION |
 | `route-refresh` | 6 | 0 | 0 | ROUTE-REFRESH and outbound route filtering |
 | `fsm` | 3 | 0 | 0 | The finite state machine, the TCP session and the two IO threads |
@@ -440,7 +440,7 @@ ruby test/run_feature.rb mp-reach
 OPEN, the optional parameters, and every capability.
 
 - RFC 4271 section 4.2, RFC 5492, RFC 9072
-- 11 unit files
+- 12 unit files
 - lab:
   - `capabilities_frr_test`, needs frr
 
@@ -841,5 +841,5 @@ test file has to be tagged before the suite is green again, which is
 the same arrangement `test/unit/lab_groups_test.rb` has with the CI
 matrix.
 
-197 of 197 test files are tagged. The
+198 of 198 test files are tagged. The
 remainder, if any, is what the guard names.

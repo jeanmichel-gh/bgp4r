@@ -203,6 +203,8 @@ module BGP
       :four_octet_as          => OPT_PARM::CAP::As4,
       :graceful_restart       => OPT_PARM::CAP::Graceful_restart,
       :gr                     => OPT_PARM::CAP::Graceful_restart,
+      :long_lived_graceful_restart => OPT_PARM::CAP::Long_lived_graceful_restart,
+      :llgr                   => OPT_PARM::CAP::Long_lived_graceful_restart,
       :extended_nexthop       => OPT_PARM::CAP::Extended_nexthop,
       :extended_next_hop      => OPT_PARM::CAP::Extended_nexthop,
       :extended_message       => OPT_PARM::CAP::Extended_message,

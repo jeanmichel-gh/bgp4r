@@ -255,7 +255,8 @@ module Features
                    optional_parameters/graceful_restart_test
                    optional_parameters/dynamic_test
                    optional_parameters/role_test
-                   optional_parameters/extended_message_test],
+                   optional_parameters/extended_message_test
+                   optional_parameters/long_lived_graceful_restart_test],
       :lab   => %w[capabilities_frr_test],
     },
 
