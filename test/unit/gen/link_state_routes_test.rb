@@ -240,7 +240,7 @@ class TestBgpGenLinkStateRoutes < Test::Unit::TestCase
     e = assert_raise(BGP::Gen::SpecError) { BGP::Gen.new('family' => 'bgp_ls_vpn', 'start' => '10.0.0.1', 'count' => 1) }
     assert_match(/needs an rd/, e.message)
     e = assert_raise(BGP::Gen::SpecError) { gen('rd' => '65000:1') }
-    assert_match(/'rd' is for .*bgp_ls_vpn and not for 'bgp_ls'/, e.message)
+    assert_match(/'rd' is for .*bgp_ls_vpn, mcast_vpn and not for 'bgp_ls'/, e.message)
     e = assert_raise(BGP::Gen::SpecError) { BGP::Gen.new('start' => '10.0.0.0/24', 'count' => 1, 'node_name' => 'r') }
     assert_match(/'node_name' is for bgp_ls, bgp_ls_vpn and not for 'unicast'/, e.message)
   end

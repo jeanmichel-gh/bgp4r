@@ -47,12 +47,13 @@ class TestBgpGen < Test::Unit::TestCase
   # added to FAMILIES needs five more. It was three until phase 4e: with
   # nine families, 27 and 36 seeds each left a flow spec key the corpus
   # test asks for undrawn, since the families moved to other seeds.
-  # Phase 4g's two families made it 55.
-  SEEDS = Integer(ENV.fetch('GEN_SEEDS', 55))
+  # Phase 4g's two families made it 55, and 4f's one 60.
+  SEEDS = Integer(ENV.fetch('GEN_SEEDS', 60))
 
   def test_the_generators_are_the_ones_built
     assert_equal(%w[unicast multicast labelled vpn vpn_multicast flow_spec flow_spec_vpn evpn rt_constrain
-                    bgp_ls bgp_ls_vpn], BGP::Gen::GENERATORS.keys)
+                    mcast_vpn bgp_ls bgp_ls_vpn], BGP::Gen::GENERATORS.keys)
+    assert_equal(BGP::Gen::Mcast_vpn_routes, BGP::Gen::GENERATORS['mcast_vpn'])
     assert_equal(BGP::Gen::Link_state_routes, BGP::Gen::GENERATORS['bgp_ls'])
     assert_equal(BGP::Gen::Link_state_vpn_routes, BGP::Gen::GENERATORS['bgp_ls_vpn'])
     assert_equal(BGP::Gen::Rt_constrain_routes, BGP::Gen::GENERATORS['rt_constrain'])
@@ -176,6 +177,7 @@ class TestBgpGen < Test::Unit::TestCase
       s['redirect'] = "65000:#{r.rand(100)}" if r.rand(3) == 0
     end
     evpn(r, s, v6, n) if family == 'evpn'
+    mcast_vpn(r, s, v6, n) if family == 'mcast_vpn'
     rt_constrain(r, s) if family == 'rt_constrain'
     link_state(r, s, v6) if LS.include?(family)
     if RD.include?(family)
@@ -231,6 +233,28 @@ class TestBgpGen < Test::Unit::TestCase
     s['router_mac'] = '00:00:5e:00:53:01' if [2, 5].include?(type) && r.rand(2) == 1
   end
 
+  # Phase 4f: one of the seven route types, dealt in turn as EVPN's are,
+  # each with the keys it cannot do without and a source sometimes. The
+  # AFI of a type with a group is the group's.
+  def mcast_vpn(r, s, v6, n)
+    type = MVPN_TYPES[(n || r.rand(MVPN_TYPES.size)) % MVPN_TYPES.size]
+    s['route_type'] = type
+    case type
+    when 1
+      s['start'] = v6 ? '2001:db8::1' : "10.#{r.rand(256)}.0.1"
+      s['afi'] = 2 if r.rand(2) == 1
+    when 2
+      s['start'] = r.rand(2**31).to_s
+      s['afi'] = 2 if r.rand(2) == 1
+    else
+      s['start'] = v6 ? format('ff0e::%x:0', r.rand(65536)) : "239.#{r.rand(256)}.#{r.rand(256)}.0"
+      s['source'] = v6 ? '2001:db8::9' : '10.0.0.9' if r.rand(2) == 1
+      s['originator'] = '192.0.2.7' if [3, 4].include?(type)
+      s['leaf'] = '192.0.2.99' if type == 4
+      s['source_as'] = r.rand(2**32) if [6, 7].include?(type)
+    end
+  end
+
   # Phase 4e: a range of route targets in one of the three layouts, an
   # origin AS, and sometimes the default in front. The prefix length is
   # left at 96, since a shorter one sends one route several times over,
@@ -269,22 +293,23 @@ class TestBgpGen < Test::Unit::TestCase
   end
 
   FAMILIES = %w[unicast multicast labelled vpn vpn_multicast flow_spec flow_spec_vpn evpn rt_constrain
-                bgp_ls bgp_ls_vpn]
+                mcast_vpn bgp_ls bgp_ls_vpn]
   LS = %w[bgp_ls bgp_ls_vpn]
   LABELLED = %w[labelled vpn vpn_multicast]
   FLOW = %w[flow_spec flow_spec_vpn]
   VPN = %w[vpn vpn_multicast flow_spec_vpn]
   # The families with a Route Distinguisher, and the ones whose routes
   # differ in length so the packing test measures each.
-  RD = VPN + %w[evpn bgp_ls_vpn]
-  MEASURED = FLOW + %w[evpn rt_constrain] + LS
+  RD = VPN + %w[evpn bgp_ls_vpn mcast_vpn]
+  MEASURED = FLOW + %w[evpn rt_constrain mcast_vpn] + LS
   # The families whose NLRI validation.rb walks without knowing add-path,
   # which CLAUDE.md records under Known issues.
-  NO_PATH_ID = FLOW + %w[evpn] + LS
+  NO_PATH_ID = FLOW + %w[evpn mcast_vpn] + LS
   EVPN_TYPES = (1..11).to_a
+  MVPN_TYPES = (1..7).to_a
   SAFI = { 'unicast' => 1, 'multicast' => 2, 'labelled' => 4, 'vpn' => 128, 'vpn_multicast' => 129,
            'flow_spec' => 133, 'flow_spec_vpn' => 134, 'evpn' => 70, 'rt_constrain' => 132,
-           'bgp_ls' => 71, 'bgp_ls_vpn' => 72 }
+           'mcast_vpn' => 5, 'bgp_ls' => 71, 'bgp_ls_vpn' => 72 }
 
   # How many routes a spec makes: count, once per VRF, and the RT-constrain
   # default in front.
@@ -323,6 +348,7 @@ class TestBgpGen < Test::Unit::TestCase
     list.collect do |n|
       # An EVPN route's whole hash, RD included, is its key here.
       next [n.to_hash, n.path_id, nil] if n.is_a?(BGP::Evpn)
+      next [n.to_hash.reject { |k, _| k == :path_id }, n.path_id, nil] if n.is_a?(BGP::Mcast_vpn)
       next [n.to_hash.reject { |k, _| k == :path_id }, n.path_id, nil] if n.is_a?(BGP::Rt_constrain)
       next [n.to_hash.reject { |k, _| k == :path_id }, n.path_id, nil] if n.is_a?(BGP::Link_state)
       if n.is_a?(BGP::Flow_spec)
@@ -377,9 +403,11 @@ class TestBgpGen < Test::Unit::TestCase
 
   # The SEEDS feeds deal the families out in turn, so EVPN gets a fifth
   # of a feed per route type at 55 seeds. One more EVPN feed per route
-  # type follows them, so all eleven are always in the corpus.
+  # type follows them, so all eleven are always in the corpus, and one
+  # MCAST-VPN feed per route type for its seven.
   def self.corpus
-    extra = EVPN_TYPES.collect { |t| [1000 + t, 'evpn', t - 1] }
+    extra = EVPN_TYPES.collect { |t| [1000 + t, 'evpn', t - 1] } +
+            MVPN_TYPES.collect { |t| [2000 + t, 'mcast_vpn', t - 1] }
     @corpus ||= (SEEDS.times.collect { |seed| [seed, FAMILIES[seed % FAMILIES.size], seed / FAMILIES.size] } + extra)
                 .collect do |seed, family, n|
       spec = new('corpus').random_spec(Random.new(seed), family, n)
@@ -524,7 +552,12 @@ class TestBgpGen < Test::Unit::TestCase
       assert_operator(specs.count { |sp| sp[k] }, :>=, 1, "BGP-LS feeds with #{k}")
     end
     EVPN_TYPES.each do |t|
-      assert_operator(specs.count { |sp| sp['route_type'] == t }, :>=, 1, "EVPN feeds of route type #{t}")
+      assert_operator(specs.count { |sp| sp['family'] == 'evpn' && sp['route_type'] == t }, :>=, 1,
+                      "EVPN feeds of route type #{t}")
+    end
+    MVPN_TYPES.each do |t|
+      assert_operator(specs.count { |sp| sp['family'] == 'mcast_vpn' && sp['route_type'] == t }, :>=, 1,
+                      "MCAST-VPN feeds of route type #{t}")
     end
     runs = self.class.corpus.collect { |x| x.updates.size }
     assert_operator(runs.max, :>, 20, 'some feed split into many messages')
@@ -536,6 +569,7 @@ class TestBgpGen < Test::Unit::TestCase
   # CommunityKeys, which would compare it with itself.
   def row_of(prefix, path_id, rd, pa)
     return evpn_row_of(prefix, path_id, pa) if prefix.is_a?(Hash) && pa[:mp_reach].safi == 70
+    return mvpn_row_of(prefix, path_id, pa) if prefix.is_a?(Hash) && pa[:mp_reach].safi == 5
     return rtc_row_of(prefix, path_id, pa) if prefix.is_a?(Hash) && pa[:mp_reach].safi == 132
     return ls_row_of(prefix, path_id, pa) if prefix.is_a?(Hash) && [71, 72].include?(pa[:mp_reach].safi)
     return flow_row_of(prefix, path_id, rd, pa) if prefix.is_a?(Hash)
@@ -624,6 +658,36 @@ class TestBgpGen < Test::Unit::TestCase
         end
       end
     end
+    r
+  end
+
+  # An MCAST-VPN row, read off the route's own hash. A type 4 route's
+  # group, source and originator are its Route Key's, and its leaf is
+  # its own Originating Router.
+  def mvpn_row_of(h, path_id, pa)
+    key, v = h.first
+    type = BGP::Mcast_vpn::ROUTES.find { |_, k| k::HASH_KEY == key }.first
+    leaf = v
+    v = v[:route_key].values.first if type == 4
+    r = { 'route_type' => type, 'rd' => v[:rd].join(':') }
+    case type
+    when 1 then r['originator'] = v[:originator]
+    when 2 then r['source_as'] = v[:source_as]
+    else
+      r['source_as'] = v[:source_as] if [6, 7].include?(type)
+      r['source'] = v[:source] if v[:source].is_a?(String)
+      r['group'] = v[:group]
+      r['originator'] = v[:originator] if [3, 4].include?(type)
+      r['leaf'] = leaf[:originator] if type == 4
+    end
+    r['path_id'] = path_id if path_id
+    r['origin'] = pa[:origin].to_i
+    r['as_path'] = pa[:as_path].segments.flat_map(&:as)
+    r['next_hop'] = pa[:mp_reach].nexthops
+    r['med'] = pa[:multi_exit_disc].to_i if pa[:multi_exit_disc]
+    r['local_pref'] = pa[:local_pref].to_i if pa[:local_pref]
+    r['communities'] = pa[:communities].communities.split if pa[:communities]
+    r['large_communities'] = pa[:large_communities].large_communities.split if pa[:large_communities]
     r
   end
 
