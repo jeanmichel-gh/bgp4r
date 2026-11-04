@@ -7770,10 +7770,22 @@ the guide.
 
 1. **Done.** `BGP::Sim::Console` in bgp/sim/console.rb and `bgp4r
    routegen --interact`. The verbs go through `Injector#act`.
-2. **Not started.** `bgp4r console`, standalone: the library loaded and
-   a session built at the prompt, with no node file. Possibly two bgp4r
-   speakers back to back in one process, which the injected logger made
-   possible, so there is something to play with and no router.
+2. **Designed, not started.** `bgp4r console`: the library loaded, and
+   sessions opened at the prompt with `connect` and `listen`, or by flag.
+   `--back-to-back` runs two bgp4r speakers in one process over
+   loopback, with `remote` the console on the other side. The design was
+   agreed with the owner on 2026-11-04 and is docs/console.md section 9.
+   Three pull requests, each to be marked here as it lands:
+   * **2a.** Fix the zero-length ORIGIN crash on receive, under "Known
+     issues to work on". Back to back, every fault lands on a bgp4r
+     receiver.
+   * **2b.** `bgp4r console`, with `connect`, `listen`, `shutdown` and
+     `clear`. Each `connect` or `listen` builds an Injector of its own,
+     because a Speaker reads its peer list once.
+   * **2c.** `--back-to-back` and `remote`, with every family offered.
+   Two decisions to keep: **networking terms at the prompt**, so
+   `remote_as`, `listen`, `shutdown` and `clear`; and **`remote` and not
+   `far`** for the other side.
 3. **Not started.** `bgp4r sim --interact`, which is the Console over
    the same Injector with the HTTP API still serving, and `bgp4rd
    --interact`, which needs a Console over a Speaker with a Loc-RIB:
