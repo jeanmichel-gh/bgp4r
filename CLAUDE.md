@@ -1601,7 +1601,7 @@ CI: `.github/workflows/test.yml` runs both suites on every push to master and ev
 
 `.github/workflows/capture.yml` is the one workflow that deploys a containerlab lab: it builds the `lab-node` and BIRD images, deploys `lab/routescope/bgp4r-lab`, and runs its `capture.sh`, on demand and on a push that changes that folder or the Dockerfile. Its log is what routescope's BGP fixtures are cut from.
 
-Baseline on 2026-11-04: 3511 tests, 34733 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
+Baseline on 2026-11-04: 3532 tests, 34945 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
 
 **That coverage figure is 98.5% for the library and the rest is the two
 programs, not a gap anywhere else.** Measured the same run: with
@@ -7791,7 +7791,7 @@ the guide.
 
 1. **Done.** `BGP::Sim::Console` in bgp/sim/console.rb and `bgp4r
    routegen --interact`. The verbs go through `Injector#act`.
-2. **Designed, 2a done.** `bgp4r console`: the library loaded, and
+2. **Designed, 2a and 2b done.** `bgp4r console`: the library loaded, and
    sessions opened at the prompt with `connect` and `listen`, or by flag.
    `--back-to-back` runs two bgp4r speakers in one process over
    loopback, with `remote` the console on the other side. The design was
