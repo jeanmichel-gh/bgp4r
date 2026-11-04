@@ -414,4 +414,101 @@ class GenFunctionalTest < Test::Unit::TestCase
                      'attributes' => { 'next_hop' => '192.0.2.1', 'as_path' => [CLIENT_AS] })
   end
 
+
+  # ---- phase 4c: flow spec, SAFI 133 and 134 ------------------------------
+
+  # What a flow spec UPDATE says, one row per rule in `expected`'s shape,
+  # read with the component classes and not with anything in bgp/gen.
+  def flow_rows(updates, key = :mp_reach)
+    updates.flat_map do |u|
+      pa = u.path_attribute
+      mp = pa && pa[key]
+      next [] unless mp
+      attrs = { 'origin' => pa[:origin].to_i, 'as_path' => pa[:as_path].segments.flat_map(&:as) } if pa[:origin]
+      if pa[:extended_communities]
+        attrs['extended_communities'] = pa[:extended_communities].to_hash[:extended_communities].collect do |e|
+          BGP::Daemon::CommunityKeys.extended_community_text(e)
+        end
+      end
+      mp.nlris.collect do |n|
+        h = n.to_hash
+        d = h[:destination_prefix] || h[:destination_ipv6_prefix]
+        r = { 'destination' => d.is_a?(Hash) ? d[:prefix] : d }
+        src = h[:source_prefix] || h[:source_ipv6_prefix]
+        r['source'] = src.is_a?(Hash) ? src[:prefix] : src if src
+        proto = h[:ip_protocol] || h[:upper_layer_protocol]
+        r['protocol'] = proto[0][1] if proto
+        r['destination_port'] = h[:destination_port][0][1] if h[:destination_port]
+        r['rd'] = h[:rd].join(':') if h[:rd]
+        attrs ? r.merge(attrs) : r
+      end
+    end
+  end
+
+  def flow_key(r) ; [r['rd'].to_s, r['destination']] ; end
+
+  # Announce, compare, withdraw, compare. The SAFI and the next hop
+  # length are stated here and not read from the generator.
+  def flow_crosses(spec)
+    c = catcher
+    g = BGP::Gen.new(spec)
+    sent = g.updates.count
+    g.updates.each { |u| @c.send_update u }
+    got = []
+    assert(wait_for { got.concat(c.drain) ; got.size >= sent }, "#{got.size} of #{sent} UPDATEs arrived")
+    assert_equal([], got.flat_map { |u| u.path_attribute.errors + u.path_attribute.undecoded }, 'no protocol error')
+    safi = { 'flow_spec' => 133, 'flow_spec_vpn' => 134 }.fetch(spec['family'])
+    assert_equal([[safi, '']], got.collect { |u| mp = u.path_attribute[:mp_reach] ; [mp.safi, mp.nexthops] }.uniq,
+                 'the SAFI, and RFC 8955 section 4\'s empty next hop')
+    @rows = flow_rows(got)
+    want_rows, got_rows = g.expected.to_a.sort_by { |r| flow_key(r) }, @rows.sort_by { |r| flow_key(r) }
+    assert_equal(want_rows.size, got_rows.size)
+    want_rows.zip(got_rows).each { |w, r| assert_equal(w, r) unless w == r }
+    back = g.withdrawals.count
+    g.withdrawals.each { |u| @c.send_update u }
+    gone = []
+    assert(wait_for { gone.concat(c.drain) ; gone.size >= back }, "#{gone.size} of #{back} withdrawals arrived")
+    assert_equal(g.expected.collect { |r| r.slice('destination', 'source', 'protocol', 'destination_port', 'rd') },
+                 flow_rows(gone, :mp_unreach))
+    [sent, back]
+  end
+
+  # 1500 rules, so a feed of several messages, each matching a port
+  # stepped per rule, with a rate that changes every 100 rules.
+  def test_ipv4_flow_spec
+    session
+    n = flow_crosses('family' => 'flow_spec', 'start' => '10.0.0.0/24', 'count' => 1500,
+                     'protocol' => { 'cycle' => [6, 17] }, 'source' => '192.0.2.0/24',
+                     'destination_port' => { 'step' => { 'start' => 1, 'by' => 7, 'wrap' => 65535 } },
+                     'rate' => { 'cycle' => [0, 125_000] }, 'marking' => 46, 'redirect' => '65000:100',
+                     'group' => 100, 'attributes' => { 'as_path' => [CLIENT_AS] })
+    assert_operator(n[0], :>=, 15)
+    # The actions, stated by hand: a generator that put one group's rate
+    # on every rule would agree with its own expected.
+    rates = @rows.each_slice(100).collect { |s| s.collect { |r| r['extended_communities'] }.uniq }
+    assert_equal(15, rates.size)
+    rates.each_with_index do |r, i|
+      assert_equal([["traffic_rate_bytes:0:#{[0, 125_000][i % 2]}.0", 'redirect:65000:100', 'traffic_marking:46']], r)
+    end
+  end
+
+  def test_ipv6_flow_spec
+    session
+    flow_crosses('family' => 'flow_spec', 'start' => '2001:db8::/48', 'count' => 400, 'protocol' => 58,
+                 'attributes' => { 'as_path' => [CLIENT_AS] })
+  end
+
+  def test_vpn_flow_spec
+    session
+    flow_crosses('family' => 'flow_spec_vpn', 'start' => '10.0.0.0/24', 'count' => 300, 'vrfs' => 3,
+                 'rd' => '65000:1', 'route_target' => '65000:100', 'destination_port' => 443,
+                 'attributes' => { 'as_path' => [CLIENT_AS] })
+    by_rd = @rows.group_by { |r| r['rd'] }
+    assert_equal(%w[65000:1 65000:2 65000:3], by_rd.keys.sort)
+    by_rd.each do |rd, rows|
+      v = rd.split(':').last.to_i
+      assert_equal([["route_target:65000:#{99 + v}"]], rows.collect { |r| r['extended_communities'] }.uniq, rd)
+    end
+  end
+
 end

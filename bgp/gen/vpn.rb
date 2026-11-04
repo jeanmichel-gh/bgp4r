@@ -21,6 +21,7 @@
 #++
 
 require 'bgp/gen/labelled'
+require 'bgp/gen/per_vrf'
 
 module BGP
   class Gen
@@ -28,13 +29,10 @@ module BGP
     # IPv6): labelled unicast with a Route Distinguisher in front of each
     # prefix, RFC 4364 section 4.3.4 and RFC 8277 section 2.
     #
-    # **Every VRF carries the same prefixes**, `count` of them, because
-    # overlapping address space is what an RD is for (RFC 4364 section
-    # 4.1). So `vrfs: N` sends N times `count` routes, VRF by VRF, and
-    # the i-th VRF's RD is `rd` with i added to its assigned number. A
-    # route target, when given, steps the same way and joins that VRF's
-    # extended communities, so **each VRF is an attribute set of its
-    # own** and a message never mixes two VRFs that have one.
+    # **Every VRF carries the same prefixes**, `count` of them, so
+    # `vrfs: N` sends N times `count` routes, VRF by VRF. The RD, the
+    # route target and how they step are bgp/gen/per_vrf.rb, which VPN
+    # flow spec shares.
     #
     # The label runs on the route number across all the VRFs, as
     # `path_id` does, since it is part of the NLRI. A withdrawal names
@@ -49,48 +47,19 @@ module BGP
     # handed an IPv4 address, so the mapping is done here. `expected`
     # keeps the address as given, as phase 3's plan does for unicast.
     class Vpn < Labelled
+      include PerVrf
+
       SAFI = IANA::SAFI::MPLS_VPN_UNICAST
 
       def initialize(spec, sender = nil)
-        unless spec['rd']
-          raise SpecError, "a #{family_name} spec needs an rd, ADMIN:N, stepped once per VRF (RFC 4364 section 4.2)"
-        end
-        @vrfs = spec['vrfs'] || 1
-        @rd = Spec.distinguisher(spec['rd'], 'rd')
-        @rt = spec['route_target'] && Spec.distinguisher(spec['route_target'], 'route_target')
+        read_vrfs(spec, family_name)
         super
       end
 
-      attr_reader :vrfs
-
-      def total ; @count * @vrfs ; end
-
-      # Which VRF route i is in, from 0.
-      def vrf(i) ; i / @count ; end
-
-      # The same range in every VRF.
-      def prefix(i) ; super(i % @count) ; end
-
-      # VRF v's RD, as the [admin, assigned] pair Rd.new takes.
-      def rd(v) ; @rd.at(v) ; end
-
       def route(i) ; [prefix(i), path_id(i), label(i), rd(vrf(i))] ; end
-
-      def route_row(i) ; super.merge('rd' => @rd.text(vrf(i))) ; end
 
       # Eight more octets than labelled, the RD, RFC 4364 section 4.3.4.
       def route_octets ; super + 8 ; end
-
-      def set_key(i) ; [i / @group, vrf(i)] ; end
-
-      def row_at(key)
-        g, v = key
-        r = row(g)
-        return r unless @rt
-        r = r.dup
-        r['extended_communities'] = Array(r['extended_communities']) + ["route_target:#{@rt.text(v)}"]
-        r
-      end
 
       private
 

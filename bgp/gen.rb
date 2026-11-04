@@ -28,6 +28,7 @@ require 'bgp/gen/unicast'
 require 'bgp/gen/multicast'
 require 'bgp/gen/labelled'
 require 'bgp/gen/vpn'
+require 'bgp/gen/flow_rules'
 
 module BGP
   # Generates UPDATEs and withdrawals in bulk from a spec of plain JSON
@@ -58,7 +59,8 @@ module BGP
   class Gen
     GENERATORS = { 'unicast' => Unicast, 'multicast' => Multicast,
                    'labelled' => Labelled, 'vpn' => Vpn,
-                   'vpn_multicast' => Vpn_multicast }.freeze
+                   'vpn_multicast' => Vpn_multicast,
+                   'flow_spec' => Flow_rules, 'flow_spec_vpn' => Flow_rules_vpn }.freeze
 
     attr_reader :spec, :family, :sender
 
