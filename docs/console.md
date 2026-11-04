@@ -320,6 +320,10 @@ last.nlri
   router: neither GoBGP nor FRR has every family. The functional test
   sends every specimen and every fault across one session, and each
   arrives: the specimens with no finding and the faults with one.
+* **A specimen crossing does not say its family was offered.** A bgp4r
+  receiver reads a family it did not negotiate. Measured: with no MBGP
+  capability at all, every specimen still crossed clean. So the test
+  reads the OPEN each side received and asserts every family is in it.
 * **`--families` narrows it**, with words separated by commas: `ipv4`,
   `ipv6`, or a name from `BGP::Specimen.families`, which takes that
   family on each AFI it has. `--families unicast,evpn` is three

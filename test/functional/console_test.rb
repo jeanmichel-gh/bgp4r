@@ -353,6 +353,15 @@ class TestConsoleBackToBack < Test::Unit::TestCase
     r.size > count ? r.last.message : nil
   end
 
+  # The [afi, safi] pairs of the MBGP capabilities in the OPEN a
+  # console's session received, which is what the other side offered.
+  def families_heard(console)
+    console.neighbor.session_info.peer.opt_parms
+           .flat_map { |o| o.respond_to?(:capabilities) ? Array(o.capabilities) : [o] }
+           .select { |c| c.is_a?(BGP::OPT_PARM::CAP::Mbgp) }
+           .collect { |c| h = c.to_hash[:capability] ; [h[:afi], h[:safi]] }.sort
+  end
+
   def count_in(console) ; console.instance_variable_get(:@received).size ; end
 
   def test_a_fault_is_reported_on_the_remote_side_and_remote_sends_back
@@ -378,6 +387,11 @@ class TestConsoleBackToBack < Test::Unit::TestCase
 
   def test_every_specimen_crosses_clean_and_every_fault_is_reported
     back_to_back do |c|
+      # A bgp4r receiver reads a family it did not negotiate, so a
+      # specimen crossing does not say it was offered. The OPEN does.
+      every = BGP::Sim::ConsoleCommand.families.collect { |_, afi, safi| [afi, safi] }.sort
+      assert_equal(every, families_heard(c.remote), 'the remote side heard every family')
+      assert_equal(every, families_heard(c), 'and so did ours')
       BGP::Specimen.names.each do |name|
         n = count_in(c.remote)
         c.specimen name
@@ -412,10 +426,9 @@ class TestConsoleBackToBack < Test::Unit::TestCase
   # still comes up, and the remote reads what it was offered.
   def test_families_narrows_what_both_sides_offer
     back_to_back('--families', 'unicast') do |c|
-      n = c.neighbor
       assert_equal('Established', c.peers.first[:state])
-      assert(n.instance_variable_get(:@opt_parms).none? { |o| o.is_a?(BGP::OPT_PARM::CAP::Mbgp) && o.to_hash[:capability][:afi] == 25 },
-             'EVPN was not offered')
+      assert_equal([[1, 1], [2, 1]], families_heard(c.remote))
+      assert_equal([[1, 1], [2, 1]], families_heard(c))
     end
   end
 
