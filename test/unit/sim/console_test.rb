@@ -46,6 +46,8 @@ class BGP_Sim_Console_Test < Test::Unit::TestCase
     end
     def established? ; @state == 'Established' ; end
     def send_message(m) ; @sent << m ; end
+    def clear ; @cleared = true ; self ; end
+    def cleared? ; @cleared ; end
   end
 
   class FakeSpeaker
@@ -57,9 +59,14 @@ class BGP_Sim_Console_Test < Test::Unit::TestCase
   end
 
   class FakeInjector
-    attr_reader :speaker, :acts
-    def initialize(speaker) ; @speaker, @acts = speaker, [] ; end
+    attr_reader :speaker, :acts, :config
+    attr_accessor :fail_with
+    def initialize(speaker, config = nil) ; @speaker, @acts, @config = speaker, [], config ; end
     def act(name, body, async) ; @acts << [name, body, async] ; { :action => name } ; end
+    def start ; raise @fail_with if @fail_with ; @started = true ; self ; end
+    def stop ; @stopped = true ; self ; end
+    def started? ; @started ; end
+    def stopped? ; @stopped ; end
   end
 
   # An Observable is all a tap needs from a Neighbor.
@@ -226,9 +233,154 @@ class BGP_Sim_Console_Test < Test::Unit::TestCase
   def test_verbs_lists_every_sending_verb
     @c.verbs
     %w[announce withdraw specimen fault replay notification refresh flap act ship
-       received last watch quiet sent announced specimens faults peers state guide].each do |v|
+       received last watch quiet sent announced specimens faults peers state guide
+       connect listen shutdown no_shutdown clear].each do |v|
       assert_match(/^\s+#{v}\b|\b#{v}\b/, @out.string, v)
     end
+  end
+
+  # ---- sessions opened at the prompt: connect and listen ---------------
+
+  # A console whose connect and listen build fake injectors, each with
+  # one peer that is up at once, and record the node file they were given.
+  def empty_console(up = true, fail_with = nil)
+    @built = []
+    factory = lambda do |config|
+      n = config['neighbors'].first
+      p = FakePeer.new(n['address'], up ? FakeNeighbor.new : nil)
+      i = FakeInjector.new(FakeSpeaker.new([p]), config)
+      i.fail_with = fail_with
+      @built << i
+      i
+    end
+    BGP::Sim::Console.new(nil, @out, 3, :factory => factory)
+  end
+
+  def test_with_no_session_a_verb_says_how_to_open_one
+    c = empty_console
+    assert_equal([], c.peers)
+    e = assert_raise(ArgumentError) { c.announce('10.1.0.0/24') }
+    assert_match(/connect ADDR, remote_as: AS/, e.message)
+    assert_match(/--peer/, e.message)
+    assert_raise(ArgumentError) { c.n }
+  end
+
+  def test_connect_builds_a_node_file_with_router_names_turned_into_its_keys
+    c = empty_console
+    row = c.connect('10.0.0.9', remote_as: 65_009, port: 1179, hold_time: 30,
+                    capabilities: [:as4_byte, { 'add_path' => [3, 1, 1] }], local_address: '10.0.0.1')
+    cfg = @built.last.config
+    assert_equal(65_001, cfg['as'])
+    assert_equal('10.0.0.1', cfg['router_id'])
+    assert_equal('10.0.0.1', cfg['local_address'])
+    assert_equal([{ 'address' => '10.0.0.9', 'as' => 65_009, 'connect' => true, 'port' => 1179,
+                    'hold_time' => 30, 'capabilities' => ['as4_byte', { 'add_path' => [3, 1, 1] }] }],
+                 cfg['neighbors'])
+    assert(@built.last.started?)
+    assert_equal({ :address => '10.0.0.9', :as => 65_002, :state => 'Established' }, row)
+    assert_equal(['10.0.0.9'], c.peers.collect { |p| p[:address] })
+  end
+
+  def test_listen_is_the_passive_side_and_port_and_local_address_are_ours
+    c = empty_console
+    c.listen('10.0.0.9', remote_as: 65_009, local_as: 65_100, port: 1179, local_address: '127.0.0.1')
+    cfg = @built.last.config
+    assert_equal(false, cfg['neighbors'].first['connect'])
+    assert_nil(cfg['neighbors'].first['port'])
+    assert_equal(1179, cfg['port'])
+    assert_equal('127.0.0.1', cfg['listen_address'])
+    assert_equal(65_100, cfg['as'])
+  end
+
+  def test_listen_defaults_to_port_179
+    c = empty_console
+    c.listen('10.0.0.9', remote_as: 65_009)
+    assert_equal(179, @built.last.config['port'])
+  end
+
+  def test_one_session_per_address
+    c = empty_console
+    c.connect('10.0.0.9', remote_as: 65_009)
+    e = assert_raise(ArgumentError) { c.connect('10.0.0.9', remote_as: 65_009) }
+    assert_match(/already has a session/, e.message)
+    assert_equal(1, @built.size)
+  end
+
+  def test_a_taken_port_and_a_privileged_one_are_said_in_words
+    c = empty_console(true, Errno::EADDRINUSE)
+    assert_raise_message(/port 179 is taken/) { c.listen('10.0.0.9', remote_as: 1) }
+    c = empty_console(true, Errno::EACCES)
+    assert_raise_message(/port 179 needs root/) { c.listen('10.0.0.9', remote_as: 1) }
+    assert_equal([], c.peers, 'a session that did not start is not kept')
+  end
+
+  def test_connect_answers_after_wait_when_the_session_is_not_up
+    c = empty_console(false)
+    t = Time.now
+    row = c.connect('10.0.0.9', remote_as: 65_009, wait: 0.2)
+    assert_operator(Time.now - t, :>=, 0.2)
+    assert_equal('Idle', row[:state])
+  end
+
+  def test_with_two_sessions_a_verb_names_its_peer
+    c = empty_console
+    c.connect('10.0.0.9', remote_as: 65_009)
+    c.connect('10.0.0.10', remote_as: 65_010)
+    e = assert_raise(ArgumentError) { c.announce('10.1.0.0/24') }
+    assert_match(/2 sessions; name one with peer: ADDR/, e.message)
+    assert_match(/10\.0\.0\.9, 10\.0\.0\.10/, e.message)
+    c.announce('10.1.0.0/24', peer: '10.0.0.10')
+    assert_empty(@built[0].acts)
+    assert_equal('announce', @built[1].acts.last[0])
+    assert_equal(@built[1].speaker.peers.first, c.send(:peer, '10.0.0.10'))
+  end
+
+  def test_with_two_sessions_and_one_up_the_verb_goes_to_that_one
+    c = empty_console
+    c.connect('10.0.0.9', remote_as: 65_009)
+    c.connect('10.0.0.10', remote_as: 65_010)
+    @built[0].speaker.peers.first.state = 'Active'
+    c.announce('10.1.0.0/24')
+    assert_equal('announce', @built[1].acts.last[0])
+  end
+
+  def test_shutdown_sends_cease_administrative_shutdown_then_stops
+    c = empty_console
+    c.connect('10.0.0.9', remote_as: 65_009)
+    c.shutdown
+    acts = @built.last.acts.collect { |a| [a[0], a[1]] }
+    assert_equal([['notification', { 'peer' => '10.0.0.9', 'code' => 6, 'subcode' => 2 }],
+                  ['session.stop', { 'peer' => '10.0.0.9' }]], acts)
+    c.no_shutdown('10.0.0.9')
+    assert_equal(['session.start', { 'peer' => '10.0.0.9' }], @built.last.acts.last[0, 2])
+  end
+
+  def test_clear_sends_cease_administrative_reset_and_lets_it_return
+    c = empty_console
+    c.connect('10.0.0.9', remote_as: 65_009)
+    c.clear('10.0.0.9')
+    assert_equal([['notification', { 'peer' => '10.0.0.9', 'code' => 6, 'subcode' => 4 }]],
+                 @built.last.acts.collect { |a| [a[0], a[1]] })
+    assert(@built.last.speaker.peers.first.cleared?)
+  end
+
+  def test_no_cease_on_a_session_that_is_not_up
+    c = empty_console(false)
+    c.connect('10.0.0.9', remote_as: 65_009, wait: 0)
+    c.clear
+    c.shutdown
+    assert_equal(['session.stop'], @built.last.acts.collect(&:first))
+  end
+
+  def test_stop_stops_the_sessions_it_opened_and_not_the_one_it_was_handed
+    c = BGP::Sim::Console.new(@injector, @out, 3, :factory => lambda { |cfg|
+      (@built ||= []) << FakeInjector.new(FakeSpeaker.new([FakePeer.new('10.0.0.9', FakeNeighbor.new)]), cfg)
+      @built.last
+    })
+    c.connect('10.0.0.9', remote_as: 65_009)
+    c.stop
+    assert(@built.last.stopped?)
+    assert_nil(@injector.instance_variable_get(:@stopped))
   end
 
   # ---- guide: docs/console.md at the prompt ---------------------------

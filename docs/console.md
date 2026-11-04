@@ -130,8 +130,8 @@ exit
 `exit` returns from irb. routegen then stops the Injector and the TCP
 connection closes. **No NOTIFICATION is sent**, because
 `Neighbor#stop` sends none; that is an open item in CLAUDE.md. Type
-`notification 6, 2` first if the router should see a Cease with
-Administrative Shutdown.
+`shutdown` first if the router should see a Cease with Administrative
+Shutdown, or `notification 6, 2`, which is the same message.
 
 ## 6. What the router at the far end needs
 
@@ -195,55 +195,80 @@ ruby -I. exe/bgp4r routegen lab.yml --interact
 * `test/unit/sim/console_test.rb` checks each verb's body against a fake
   injector, the received ring, the irb name clash, the routegen plan,
   and the defaults table above.
+* `test/unit/sim/console_command_test.rb` checks `bgp4r console`'s
+  flags and that its defaults are routegen's.
 * `test/functional/console_test.rb` runs the verbs over a loopback
-  session, then runs `bgp4r routegen --interact` as a program with
-  lines on its standard input, the way a person types them.
+  session, then `connect`, `listen`, `shutdown` and `clear` against a
+  real peer, with the Cease each sends read off the wire. Then it runs
+  `bgp4r console` and `bgp4r routegen --interact` as programs with
+  lines on their standard input, the way a person types them.
 
-## 9. Next: `bgp4r console`, planned and not built
+## 9. `bgp4r console`
 
-This section is the agreed design for step 2. None of it runs yet.
-CLAUDE.md tracks its status under "An irb console on a live session".
+The same prompt with the library loaded and no session until you ask
+for one. Steps 2a and 2b are built. Back to back, step 2c, is designed
+below and not built yet. CLAUDE.md tracks the status under "An irb
+console on a live session".
 
-### Three ways to start
+### Two ways to start, and a third to come
 
-* `bgp4r console` opens irb with no session. You open one with
-  `connect`, or just build and parse objects: `Update.new(hex)`,
+* `bgp4r console` opens irb with no session. Open one with `connect`
+  or `listen`, or just build and parse objects: `Update.new(hex)`,
   `Specimen.build(:evpn)`, `Fault.wire(:origin_value)`. A verb that
-  needs a session says so and names the verb or flag that opens one.
+  needs a session says so and names what opens one.
 * `bgp4r console --peer ADDR --peer-as AS` is a `connect` done before
-  the prompt opens. It takes routegen's session flags: `--my-as`,
-  `--id`, `--port`, `--local-address`, `--timeout` and `-l`. It does
-  not take the flags that generate routes.
-* `bgp4r console --back-to-back` runs two bgp4r speakers in one
-  process, cabled straight to each other over loopback. No router, no
-  root and no Docker.
+  the prompt opens. It goes through `Console#connect`, so the two cannot
+  differ. It takes routegen's session flags: `--my-as`, `--id`,
+  `--port`, `--local-address`, `--timeout`, `-l` and `-d`. It takes
+  none of the flags that generate routes. If the session is not up
+  after `--timeout`, the prompt opens anyway and the session goes on
+  trying.
+* `bgp4r console --back-to-back`, step 2c, is below.
 
-`routegen --interact` keeps working, through the same code.
+The log goes to a file in the temporary folder unless `-l` names one,
+for the reason section 2 gives. `routegen --interact` keeps working,
+through the same Console.
 
 ### Networking terms at the prompt
 
-New verbs use router words, and their keyword arguments use the names
-routers use.
+The session verbs use router words, and their keyword arguments use
+the names routers use.
 
 ```ruby
 connect '10.0.0.2', remote_as: 65002   # active: we dial
 listen  '10.0.0.2', remote_as: 65002   # passive: the peer dials in
-shutdown '10.0.0.2'                    # down, and stays down
-clear '10.0.0.2'                       # reset, and comes back
-peers                                  # like show bgp summary
+shutdown '10.0.0.2'                    # Cease 6/2, down, stays down
+no_shutdown '10.0.0.2'                 # let it come back
+clear '10.0.0.2'                       # Cease 6/4, reset, comes back
+peers                                  # every peer and its state
 ```
 
 * `connect` and `listen` take `local_as:`, `router_id:`, `port:`,
-  `local_address:`, `hold_time:` and `capabilities:`. With nothing
-  given they use the defaults in section 1.
+  `local_address:`, `hold_time:`, `capabilities:` and `wait:`. With
+  nothing given they use the defaults in section 1.
+* **`port:` and `local_address:` mean the far end for `connect` and
+  our end for `listen`**, the way a router reads them. `connect`'s
+  `port:` is the port we dial. `listen`'s is the port we listen on, 179
+  by default, which needs root: pass `port: 1179` without it. Its
+  `local_address:` is the address we listen on.
 * `remote_as` and `local_as` are prompt names only. They become the
-  node file's `as` keys, so the node file vocabulary does not change.
+  node file's two `as` keys, so the node file vocabulary does not
+  change.
+* `connect` and `listen` answer the peer's row once the session is up,
+  or after `wait:` seconds, 10 by default. The session goes on trying
+  either way. `wait: 0` answers at once.
 * `shutdown` and `clear` send a Cease before they close, with the RFC
-  4486 subcode a router uses: 2, Administrative Shutdown, and 4,
-  Administrative Reset. That closes the gap in section 5, at the prompt
-  at least.
-* `flap` stays as an alias of `clear`, so what step 1 typed still
-  works.
+  4486 section 4 subcode a router sends: 2, Administrative Shutdown,
+  and 4, Administrative Reset. No Cease goes out when the session is not
+  up, since there is nothing to send it on.
+* `no_shutdown` is the one verb the design did not name. Without it a
+  `shutdown` could not be undone at the prompt. It is `no neighbor ADDR
+  shutdown`.
+* `flap` stays as it was: the `session.flap` action, with `count:` and
+  `interval:`. The design said it would become an alias of `clear`, and
+  that would have taken `count:` away from what step 1 typed.
+* One session per address, and one `listen` per port. A second one is
+  refused in words, and so is a port that needs root.
 
 ### How `connect` works underneath
 
@@ -251,15 +276,18 @@ A Speaker reads its peer list once, at start. Taking a new peer at
 runtime would change code that every session thread reads without a
 lock. So each `connect` or `listen` builds its own Injector with one
 peer, and the console keeps a list of them. A verb with `peer:` goes to
-the matching one. A verb without it goes to the only session that is
-up. No library code changes.
+the matching one. A verb without it goes to the only session there is,
+or the only one that is up, and otherwise asks for `peer:` and names the
+peers. No library code changed. `exit` stops every session the prompt
+opened.
 
-### Back to back
+### Back to back, step 2c, not built yet
 
 * **Both ends are on 127.0.0.1.** One side listens on a free port and
   the other dials it. Each speaker has one peer, so neither needs a
   second loopback address. That also works on macOS, which has no
-  127.0.0.2 by default.
+  127.0.0.2 by default. `test_listen_takes_a_session_a_second_console_dials`
+  already does this with two consoles.
 * **`self` is the near side, AS 65001. `remote` is a console on the
   other side, AS 65002.** Both are Injectors, so every verb works on
   both. `fault :origin_value, '10.3.0.0/24'` sends a malformed UPDATE,
@@ -278,9 +306,8 @@ up. No library code changes.
 
 ### The pull requests
 
-* **2a**: fix the zero-length ORIGIN crash on receive. Back to back,
-  every fault lands on a bgp4r receiver, and today that one kills the
-  receiver's event thread. See "Known issues to work on" in CLAUDE.md.
-* **2b**: `bgp4r console`, with `connect`, `listen`, `shutdown` and
-  `clear`.
+* **2a, done in #270**: an ORIGIN of any length is kept on receive, so
+  every fault lands on a bgp4r receiver.
+* **2b, done**: `bgp4r console`, with `connect`, `listen`, `shutdown`,
+  `no_shutdown` and `clear`.
 * **2c**: `--back-to-back` and `remote`.

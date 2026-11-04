@@ -156,10 +156,17 @@ class Capture_CLI_Test < Test::Unit::TestCase
 
   # Three of docs/daemon.md's four commands reach something here:
   # `capture`, `sim` and `routegen`, with `lab` and `version` beside
-  # them. **`lab` is the last of the umbrella's own subcommands**, so
-  # this list is the whole of what that document's table names.
-  def test_the_subcommands_are_the_five_that_exist
-    assert_equal(%w{capture sim routegen lab version}, BGP::Capture::CLI::SUBCOMMANDS)
+  # them. `console` is the sixth, from docs/console.md section 9 rather
+  # than from docs/daemon.md, which is about the two programs.
+  def test_the_subcommands_are_the_six_that_exist
+    assert_equal(%w{capture sim routegen console lab version}, BGP::Capture::CLI::SUBCOMMANDS)
+  end
+
+  def test_console_is_reached_through_the_dispatch
+    assert_equal(0, @cli.start(['console', '--help']))
+    assert_match(/^Usage: bgp4r console/, @out.string)
+    assert_equal(1, @cli.start(['console', '--peer-as', '100']))
+    assert_match(/--peer-as needs --peer/, @out.string)
   end
 
   # ---- the envelope
