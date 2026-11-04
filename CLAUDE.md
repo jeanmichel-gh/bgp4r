@@ -7835,7 +7835,7 @@ as an encoder. And a lab or console that renders bgp4r's state beside a
 real router's output can put the two side by side, which is where this
 meets the routescope work: see `docs/routescope-labs.md`.
 
-### An irb console on a live session, three steps. Steps 1 and 2 Done, step 3 designed
+### An irb console on a live session, three steps. Steps 1 and 2 Done, step 3 in progress
 
 Asked for by the owner on 2026-11-04, who used to do this by hand: start
 irb, build a Neighbor, and drive an established session in Ruby. A 2011
@@ -7883,11 +7883,16 @@ the guide.
    Two decisions to keep: **networking terms at the prompt**, so
    `remote_as`, `listen`, `shutdown` and `clear`; and **`remote` and not
    `far`** for the other side.
-3. **Designed, not built.** docs/console.md section 10 is the design,
+3. **In progress, 3a Done.** docs/console.md section 10 is the design,
    agreed with the owner on 2026-11-04, with a walkthrough from start to
    `exit`. Four pull requests, each to be marked here as it lands:
-   * **3a.** `bgp4r sim --interact`: the Console over the server's own
-     Injector, with the HTTP API still serving.
+   * **3a. Done.** `bgp4r sim --interact`: the Console over the server's
+     own Injector, with the HTTP API still serving. `Server.new` takes
+     the same two seams as `ConsoleCommand`, `:interact` and
+     `:load_irb`. **The functional test cannot see the stop**: with the
+     server's `stop` removed it still passes, because the process exits
+     and the kernel closes the sockets. The unit tests are what hold
+     `stop` and the console's own `stop` on the way out.
    * **3b-i.** The parts both consoles share moved into one module. No
      change in behavior.
    * **3b-ii.** `bgp4rd --interact`. Its verbs are the daemon's own and

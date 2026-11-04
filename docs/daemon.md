@@ -1364,8 +1364,9 @@ command line wins over the key.
 
 `examples/sim.yml` is this file with an `announce` block in it, which is
 the waiver above, and the command line is
-`bgp4r-sim FILE [--api HOST:PORT] [--log FILE] [-d] [-v] [-h]`, with
-`-f FILE` accepted too.
+`bgp4r-sim FILE [--api HOST:PORT] [--log FILE] [--interact] [-d] [-v] [-h]`,
+with `-f FILE` accepted too. `--interact` opens an irb prompt on the
+injector while the API serves; docs/console.md section 10 has it.
 
 **The keys are the Speaker's, which is the node file `lab/README.md`
 documents, plus `api`, and the four that would build a Loc-RIB are

@@ -21,8 +21,8 @@
 #++
 
 # The console over a real session, against the test BGP server on
-# loopback: the verbs in process, then `bgp4r routegen --interact` as a
-# program, driven by lines on its standard input the way a person types
+# loopback: the verbs in process, then `bgp4r routegen --interact`,
+# `bgp4r console` and `bgp4r sim --interact` as programs, driven by lines on its standard input the way a person types
 # them. No privilege, no router, no Docker.
 #
 #   ruby -I. test/functional/console_test.rb
@@ -32,8 +32,12 @@ require 'stringio'
 require 'bgp4r'
 require 'bgp/sim/console'
 require 'bgp/sim/console_command'
+require 'bgp/sim/http'
 require 'test/helpers/server'
 require 'rbconfig'
+require 'tmpdir'
+require 'net/http'
+require 'socket'
 
 class TestConsole < Test::Unit::TestCase
   include BGP
@@ -315,6 +319,58 @@ class TestConsole < Test::Unit::TestCase
     assert_equal(['10.6.0.0/24'], nlri_of(u))
     assert_nil(@catcher.shift(0.5), 'it started silent: one UPDATE, the one typed')
     assert(wait { !@s.is_established? }, 'exit left the session up')
+  end
+
+
+  # ---- bgp4r sim --interact ---------------------------------------------
+
+  # The injector with its prompt on, fed from a pipe, while the test
+  # drives the same node over its HTTP API: what is typed goes out, what
+  # is posted goes out, and `exit` stops the session and the API.
+  def test_sim_interact_takes_typed_lines_while_the_api_serves
+    begin
+      BGP::Sim::Console.load_irb
+    rescue LoadError => e
+      omit(e.message)
+    end
+    probe = TCPServer.new('127.0.0.1', 0)
+    api = probe.addr[1]
+    probe.close
+    Dir.mktmpdir do |dir|
+      path = File.join(dir, 'sim.yml')
+      File.write(path, <<~YAML)
+        router_id: 10.255.10.1
+        as: 65001
+        api: 127.0.0.1:#{api}
+        neighbors:
+          - address: 127.0.0.1
+            port: #{@port}
+            as: #{PEER_AS}
+            connect: true
+            retry: 0.2
+      YAML
+      argv = [RbConfig.ruby, '-I', ROOT, File.join(ROOT, 'exe', 'bgp4r'), 'sim', path,
+              '--interact', '-l', File::NULL]
+      out = ::IO.popen(argv, 'r+', :err => [:child, :out]) do |io|
+        assert(wait { @s.is_established? }, 'the session did not come up')
+        io.puts "announce '10.6.0.0/24', med: 3"
+        u = @catcher.shift
+        assert_kind_of(BGP::Update, u, 'the typed line did not cross')
+        assert_equal(['10.6.0.0/24'], nlri_of(u))
+        http = Net::HTTP.new('127.0.0.1', api)
+        r = http.post('/api/announce', '{"prefixes":["10.5.0.0/24"]}',
+                      BGP::Sim::Http::HEADER => BGP::Sim::Http::HEADER_VALUE)
+        assert_equal('200', r.code, r.body)
+        assert_equal(['10.5.0.0/24'], nlri_of(@catcher.shift), 'the API did not serve')
+        io.puts 'exit'
+        io.close_write
+        io.read
+      end
+      assert_equal(0, $?.exitstatus, out)
+      assert_match(/self is the console/, out)
+      assert(wait { !@s.is_established? }, 'exit left the session up')
+      assert_raise(Errno::ECONNREFUSED) { TCPSocket.new('127.0.0.1', api) }
+    end
   end
 
 end
