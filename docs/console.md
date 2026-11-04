@@ -343,3 +343,425 @@ last.nlri
 * **2b, done**: `bgp4r console`, with `connect`, `listen`, `shutdown`,
   `no_shutdown` and `clear`.
 * **2c, done**: `--back-to-back` and `remote`.
+
+## 10. Step 3, a prompt on the two programs
+
+Designed with the owner on 2026-11-04 and not built yet. CLAUDE.md
+tracks the status under "An irb console on a live session". Two
+commands gain `--interact`: `bgp4r sim`, the injector, and `bgp4rd`,
+the daemon. They differ in kind, because an injector holds no Loc-RIB
+and a daemon is a router.
+
+### `bgp4r sim --interact`
+
+The server builds its Injector and its HTTP API as it does today, then
+opens the prompt on that Injector instead of waiting for a signal. Every
+verb of section 9 works, and a scenario can still drive the same node
+over HTTP while a person types. The log goes to a file, as `bgp4r
+console` does, so the prompt stays readable. `exit` stops the injector,
+the same as INT or TERM.
+
+### `bgp4rd --interact`, and why its verbs are the daemon's
+
+A daemon keeps records: the Loc-RIB holds the routes it chose, and an
+Adj-RIB-Out per peer holds what it sent. `show.rib`, `show.adj_out` and
+`bgp4r-cli` read them. The injector verbs skip those records and put
+octets on the wire, so on a daemon they would make its own answers
+wrong. So the prompt's verbs are the daemon's own, and go through the
+same methods the control socket answers, so the prompt and `bgp4r-cli`
+cannot disagree:
+
+* **Reading**: `peers`, `rib [STYLE]`, `why PREFIX`, `adj_in PEER`,
+  `adj_out PEER`, `fib`. `rib` takes the three styles `show bgp`
+  already has. `why` prints each path to one prefix, the one that won
+  and each one that lost, with the step that decided it and the words
+  `show.rib` already answers.
+* **Acting**: `originate` and `withdraw`, which are `route.originate`
+  and `route.withdraw`; `announce` is `originate` under another name.
+  `clear`, `shutdown`, `no_shutdown` and `refresh` are the peer methods.
+* **Watching**: `received`, `last`, `watch`, `quiet` and `n`, as in
+  section 9.
+
+### Sending by hand on a daemon
+
+`specimen`, `fault`, `replay` and `ship` are there too, because a
+router carrying a full table that sends one bad UPDATE in the middle of
+a session is a test a separate injector cannot run. **The Adj-RIB-Out
+is never patched for them**, because after a fault the daemon cannot
+know what the peer holds. A peer that treats the UPDATE as withdrawn,
+as RFC 7606 asks for most fault cases, holds nothing for the prefix; a
+peer that resets holds nothing from us at all; a peer that discards the
+attribute holds a route we never chose. Instead:
+
+* **Every prefix sent by hand is listed beside the Adj-RIB-Out rows**,
+  as "sent by hand, state at peer unknown", per peer, with the verb and
+  the time. In JSON it is a `hand` key beside `rows` in `show.adj_out`,
+  the way `skipped` already is, and present only when there is
+  something in it. A peer row in `show.peers` gains a count of them.
+  So every answer looks as it does today until something is sent by
+  hand.
+* `replay` and `ship` flag the prefixes their octets touch, read back
+  as an UPDATE. Octets that are not a readable UPDATE flag the whole
+  peer, since the daemon cannot say what changed.
+* **A flag clears three ways**: the daemon sends that prefix to that
+  peer again the normal way, the session restarts and the Adj-RIB-Out
+  is rebuilt, or `resend PEER`, which sends the daemon's own entry for
+  each flagged prefix, the route if it has one and a withdrawal if it
+  does not.
+
+### The marker community
+
+A route made by hand can carry a community, so a router that receives
+it can act on it, by logging it, matching it or refusing it. It is set
+once, with the three keys an announce block already takes, and it is
+off unless set:
+
+```yaml
+mark:
+  large_communities: ['65000:1:1']
+```
+
+* It is added to routes originated at the prompt **and** through
+  `bgp4r-cli route.originate`, since both are a person adding a route.
+  An `originate:` block in the node file does not carry it.
+* It is added to `specimen`, which is a valid UPDATE bgp4r builds.
+* **It is never added to `fault`, `replay` or `ship`.** Those send a
+  message exactly as given, and a community would change the message
+  under test. For a fault the receiver would mostly never see it
+  anyway, since a route treated as withdrawn never reaches its RIB.
+* Nothing in the IANA registries means "made by hand", so the value is
+  a convention. A large community (RFC 8092) in our own AS holds a
+  4-octet AS, which a standard community cannot, and is ours to define.
+
+The marker tells the receiver. The `hand` list tells the daemon and the
+person at the prompt. They do different jobs, so both are needed.
+
+### Leaving
+
+`exit` stops the daemon: its sessions close and its socket is removed,
+so one prompt is one process. Each peer is sent Cease 6/2,
+Administrative Shutdown, on the way out, which closes the open "Cease
+subcode per method" item for this path. Leaving the daemon running
+after the prompt ends was the other choice, and it leaves a terminal
+holding a process nobody can type into.
+
+### The whole of it, by example
+
+Every step below is what the design says happens. The `rib` and `why`
+data were produced by today's library from the same table, measured on
+2026-11-04. Everything about the prompt itself is proposed: the
+`--interact` flag, the `mark` key, the verbs and their printed form.
+
+**The lab.** One Linux machine, three terminals and no router binary.
+All of 127/8 is loopback on Linux, so each speaker has an address of its
+own; macOS needs `sudo ifconfig lo0 alias 127.0.0.2` and `127.0.0.3`
+first.
+
+| Name | Address | AS | What it is |
+|------|---------|----|------------|
+| `rtr` | 127.0.0.1 | 65000 | `bgp4rd --interact`, the router being driven |
+| `up1` | 127.0.0.2 | 65010 | `bgp4r console`, an upstream that sends a route |
+| `dn1` | 127.0.0.3 | 65020 | `bgp4r console`, the peer watching what `rtr` sends |
+
+`rtr.yml`:
+
+```yaml
+router_id: 10.255.0.1
+as: 65000
+listen_address: 127.0.0.1
+port: 1179                  # above 1023, so no root
+
+neighbors:
+  - address: 127.0.0.2
+    as: 65010
+    connect: false          # up1 dials us
+    description: up1
+  - address: 127.0.0.3
+    as: 65020
+    connect: false
+    description: dn1
+
+export: {}                  # advertise; the next hop is the session's own address
+
+mark:                       # new: what a route made by hand carries
+  large_communities: ['65000:1:1']
+```
+
+Each prompt is written `rtr>`, `up1>` or `dn1>` so the terminals can be
+told apart; the real one is irb's. Verbs that print answer nil, and
+irb's `=> nil` lines are left out.
+
+#### Step 1: start the router
+
+Terminal A:
+
+```
+$ bgp4rd -f rtr.yml -s /tmp/rtr.sock --interact
+bgp4rd: logging to /tmp/bgp4rd-31337.log
+bgp4rd: up, AS 65000, router id 10.255.0.1, listening on 127.0.0.1:1179
+bgp4rd: socket /tmp/rtr.sock, so bgp4r-cli works beside this prompt
+bgp4rd console: self is the daemon. 'verbs' lists what to type, exit stops the daemon.
+rtr> peers
+peer        as     state   uptime    rcvd  sent  best  hand
+127.0.0.2   65010  active  -            0     0     0     0
+127.0.0.3   65020  active  -            0     0     0     0
+```
+
+Both peers are listed though neither is up, because the daemon's peer
+list is every configured neighbor.
+
+#### Step 2: the upstream sends a route
+
+Terminal B:
+
+```
+$ bgp4r console --peer 127.0.0.1 --peer-as 65000 --port 1179 \
+                --local-address 127.0.0.2 --my-as 65010 --id 10.255.10.1
+console: logging to /tmp/bgp4r-console-31400.log
+console: session to 127.0.0.1 is established
+up1> announce '10.10.0.0/24', med: 100
+```
+
+#### Step 3: the downstream joins, watches, and sends two routes
+
+Terminal C:
+
+```
+$ bgp4r console --peer 127.0.0.1 --peer-as 65000 --port 1179 \
+                --local-address 127.0.0.3 --my-as 65020 --id 10.255.20.1
+console: session to 127.0.0.1 is established
+dn1> watch
+14:10:02.114 127.0.0.1 Update, 1 prefixes, 0 withdrawn
+dn1> last.nlri.to_ary
+=> ["10.10.0.0/24"]
+dn1> last.path_attribute[:as_path].as_path
+=> "65000 65010"
+dn1> announce '10.10.0.0/24', as_path: [65021]
+dn1> announce '10.20.0.0/24'
+```
+
+`rtr` passed up1's route on with its own AS in front, which is RFC 4271
+section 5.1.2. dn1 now offers a second path to 10.10.0.0/24, whose
+AS_PATH is `65020 65021` since dn1 puts its own AS in front, and a
+route of its own to 10.20.0.0/24.
+
+#### Step 4: ask the router what it has, and why
+
+Terminal A:
+
+```
+rtr> peers
+peer        as     state        uptime    rcvd  sent  best  hand
+127.0.0.2   65010  established  00:01:12     1     1     1     0
+127.0.0.3   65020  established  00:00:40     2     1     1     0
+
+rtr> rib
+BGP table version is 3, local router ID is 10.255.0.1
+Status codes: s suppressed, d damped, h history, * valid, > best, i - internal,
+              r RIB-failure, S Stale
+Origin codes: i - IGP, e - EGP, ? - incomplete
+
+   Network          Next Hop            Metric LocPrf Weight Path
+*> 10.10.0.0/24     127.0.0.2              100             0 65010 i
+*                   127.0.0.3                0             0 65020 65021 i
+*> 10.20.0.0/24     127.0.0.3                0             0 65020 i
+
+rtr> why '10.10.0.0/24'
+10.10.0.0/24, 2 paths, decided at the as_path_length step
+  best  from 127.0.0.2  as path 65010        best path, decided at the as_path_length step
+  lost  from 127.0.0.3  as path 65020 65021  longer AS_PATH (as_path_length)
+```
+
+The counts follow from the export rules. up1 sent 1 route and was sent
+10.20.0.0/24 only, since its own route does not go back to it. dn1 sent
+2 and was sent 10.10.0.0/24 only, since its 10.20.0.0/24 does not go
+back to it and its losing path is not advertised. The MED of 100 played
+no part, because the two paths come from different neighboring ASes.
+
+#### Step 5: originate a route by hand, with the marker
+
+```
+rtr> originate '10.255.1.0/24', communities: ['65000:100']
+=> {"originated"=>["10.255.1.0/24"], "total"=>1, "changes"=>1, "rib"=>3}
+
+rtr> adj_out '127.0.0.3'
+prefix          next hop    as path      communities  large communities
+10.10.0.0/24    127.0.0.1   65000 65010
+10.255.1.0/24   127.0.0.1   65000        65000:100    65000:1:1
+```
+
+The answer is `route.originate`'s. The route went into the Loc-RIB,
+through the export rules and into both Adj-RIB-Outs, with the community
+given and the marker beside it. There is no `hand` entry, because the
+records are true. Terminal C sees it arrive:
+
+```
+14:12:40.551 127.0.0.1 Update, 1 prefixes, 0 withdrawn
+dn1> last.path_attribute[:large_communities].to_hash
+=> {:large_communities=>["65000:1:1"]}
+```
+
+A router in dn1's place can act on the marker. In FRR a route map
+refuses routes carrying it; these lines were checked against bgpd
+8.4.4's own config parser, which refuses a misspelled copy of them:
+
+```
+bgp large-community-list standard HAND permit 65000:1:1
+route-map FROM-RTR deny 10
+ match large-community HAND
+exit
+route-map FROM-RTR permit 20
+exit
+router bgp 65020
+ neighbor 127.0.0.1 remote-as 65000
+ address-family ipv4 unicast
+  neighbor 127.0.0.1 route-map FROM-RTR in
+ exit-address-family
+exit
+```
+
+#### Step 6: a specimen to one peer
+
+```
+rtr> specimen :large_communities, '10.30.0.0/24', peer: '127.0.0.3'
+rtr> adj_out '127.0.0.3'
+prefix          next hop    as path      communities  large communities
+10.10.0.0/24    127.0.0.1   65000 65010
+10.255.1.0/24   127.0.0.1   65000        65000:100    65000:1:1
+
+sent by hand, state at peer unknown:
+10.30.0.0/24    specimen large_communities at 14:13:05
+```
+
+`BGP::Specimen` built a valid UPDATE, the marker was added, and it went
+to dn1 only. It never entered the Loc-RIB, so the rows are unchanged
+and the list beside them says what went out. In JSON:
+
+```json
+"hand": { "total": 1,
+          "rows": [ { "prefix": "10.30.0.0/24",
+                      "verb": "specimen large_communities",
+                      "at": "2026-11-04T14:13:05-08:00" } ] }
+```
+
+#### Step 7: a fault
+
+```
+rtr> fault :origin_value, '10.10.0.0/24', peer: '127.0.0.3'
+```
+
+The malformed UPDATE goes out exactly as the catalog builds it, with no
+marker. dn1 is a bgp4r console, so it reports what it read:
+
+```
+14:14:21.007 127.0.0.1 Update, 1 prefixes, 0 withdrawn
+dn1> last.path_attribute.errors.collect(&:reason)
+=> ["undefined ORIGIN value 3 (RFC 7606 section 7.1)"]
+```
+
+A router would treat it as a withdrawal and drop 10.10.0.0/24. `rtr`
+cannot know that:
+
+```
+rtr> adj_out '127.0.0.3'
+prefix          next hop    as path      communities  large communities
+10.10.0.0/24    127.0.0.1   65000 65010
+10.255.1.0/24   127.0.0.1   65000        65000:100    65000:1:1
+
+sent by hand, state at peer unknown:
+10.30.0.0/24    specimen large_communities at 14:13:05
+10.10.0.0/24    fault origin_value at 14:14:21
+
+rtr> peers
+peer        as     state        uptime    rcvd  sent  best  hand
+127.0.0.2   65010  established  00:05:31     1     2     1     0
+127.0.0.3   65020  established  00:04:59     2     2     1     2
+```
+
+The row for 10.10.0.0/24 still says what `rtr` last sent properly, and
+the list says that may not be what dn1 holds. `rtr` does not repair
+this by itself, because from its point of view nothing changed.
+
+#### Step 8: put the peer back in line
+
+```
+rtr> resend '127.0.0.3'
+=> {"peer"=>"127.0.0.3", "resent"=>["10.10.0.0/24"], "withdrawn"=>["10.30.0.0/24"], "hand"=>0}
+```
+
+10.10.0.0/24 has a row, so it goes out again with the real attributes.
+10.30.0.0/24 has none, so it is withdrawn. Terminal C:
+
+```
+14:15:02.330 127.0.0.1 Update, 1 prefixes, 0 withdrawn
+14:15:02.331 127.0.0.1 Update, 0 prefixes, 1 withdrawn
+```
+
+#### Step 9: ship a message by hand, then clear the session
+
+```
+rtr> ship Update.new(Path_attribute.new(Origin.new(0), As_path.new(65000), Next_hop.new('127.0.0.1')),
+                     Nlri.new('10.40.0.0/24')), peer: '127.0.0.3'
+rtr> adj_out '127.0.0.3'
+...
+sent by hand, state at peer unknown:
+10.40.0.0/24    ship at 14:16:10
+
+rtr> clear '127.0.0.3'
+=> {"peer"=>"127.0.0.3", "cleared"=>true, "was"=>"established", "state"=>"idle"}
+```
+
+`ship` sent the message unchanged and the daemon read it back to find
+10.40.0.0/24. `clear` sends Cease 6/4, Administrative Reset, and dn1
+dials again by itself, being the active side. When the session is back,
+`rtr` sends dn1 its Adj-RIB-Out rebuilt from the Loc-RIB. 10.40.0.0/24
+is not in the Loc-RIB, so it is not sent, and the list is empty.
+
+#### Step 10: withdraw
+
+```
+rtr> withdraw '10.255.1.0/24'
+=> {"withdrawn"=>["10.255.1.0/24"], "not_held"=>[], "total"=>1, "changes"=>1, "rib"=>2}
+rtr> withdraw '10.10.0.0/24'
+=> {"withdrawn"=>[], "not_held"=>["10.10.0.0/24"], "total"=>1, "changes"=>0, "rib"=>2}
+```
+
+The second is `route.withdraw` saying the route is not ours. It came
+from up1, and only up1 can take it back.
+
+#### Step 11: exit
+
+```
+rtr> exit
+bgp4rd: stopping, Cease 6/2 to 2 peers
+$
+```
+
+The sessions close and the socket is removed. up1 and dn1 see the
+Cease, go to `idle`, and keep trying to dial.
+
+### What the example settles
+
+* `announce` at the daemon prompt is `originate` under another name,
+  and `withdraw` answers as `route.withdraw` does, `not_held` included.
+* The marker comes from `mark`. It goes on routes originated at the
+  prompt or through `route.originate`, and on specimens, and never on
+  `fault`, `replay` or `ship`.
+* Sending by hand is listed beside the Adj-RIB-Out rows and never
+  written into them, and a listed prefix clears when the daemon sends
+  it normally, when the session restarts, or on `resend`.
+* `exit` sends Cease 6/2 and stops the daemon.
+* The reading verbs are `peers`, `rib`, `why`, `adj_in`, `adj_out` and
+  `fib`. None of them is an irb command.
+
+### The pull requests
+
+* **3a**: `bgp4r sim --interact`.
+* **3b-i**: the parts of the prompt both consoles share, moved into one
+  module: loading irb, `verbs`, `guide`, `received`, `watch` and the tap
+  on each Neighbor. No change in behavior.
+* **3b-ii**: `bgp4rd --interact` with the reading and acting verbs, the
+  `mark` key, and Cease 6/2 on `exit`.
+* **3b-iii**: sending by hand on the daemon: an Injector over the
+  daemon's own Speaker, the `hand` list in `show.adj_out` and
+  `show.peers`, and `resend`.

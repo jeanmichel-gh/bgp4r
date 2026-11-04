@@ -1602,7 +1602,7 @@ CI: `.github/workflows/test.yml` runs both suites on every push to master and ev
 
 `.github/workflows/capture.yml` is the one workflow that deploys a containerlab lab: it builds the `lab-node` and BIRD images, deploys `lab/routescope/bgp4r-lab`, and runs its `capture.sh`, on demand and on a push that changes that folder or the Dockerfile. Its log is what routescope's BGP fixtures are cut from.
 
-Baseline on 2026-11-04: 3541 tests, 35039 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
+Baseline on 2026-11-04: 3541 tests, 35041 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
 
 **That coverage figure is 98.5% for the library and the rest is the two
 programs, not a gap anywhere else.** Measured the same run: with
@@ -7782,7 +7782,7 @@ as an encoder. And a lab or console that renders bgp4r's state beside a
 real router's output can put the two side by side, which is where this
 meets the routescope work: see `docs/routescope-labs.md`.
 
-### An irb console on a live session, three steps. Step 1 Done
+### An irb console on a live session, three steps. Steps 1 and 2 Done, step 3 designed
 
 Asked for by the owner on 2026-11-04, who used to do this by hand: start
 irb, build a Neighbor, and drive an established session in Ruby. A 2011
@@ -7830,12 +7830,30 @@ the guide.
    Two decisions to keep: **networking terms at the prompt**, so
    `remote_as`, `listen`, `shutdown` and `clear`; and **`remote` and not
    `far`** for the other side.
-3. **Not started.** `bgp4r sim --interact`, which is the Console over
-   the same Injector with the HTTP API still serving, and `bgp4rd
-   --interact`, which needs a Console over a Speaker with a Loc-RIB:
-   `rib`, and `why PREFIX` from `Decision#best`. Foreground only. A
-   remote prompt over a socket is not planned, since it would be
-   arbitrary code execution reachable from a lab network.
+3. **Designed, not built.** docs/console.md section 10 is the design,
+   agreed with the owner on 2026-11-04, with a walkthrough from start to
+   `exit`. Four pull requests, each to be marked here as it lands:
+   * **3a.** `bgp4r sim --interact`: the Console over the server's own
+     Injector, with the HTTP API still serving.
+   * **3b-i.** The parts both consoles share moved into one module. No
+     change in behavior.
+   * **3b-ii.** `bgp4rd --interact`. Its verbs are the daemon's own and
+     go through the control socket's methods: `peers`, `rib`, `why`,
+     `adj_in`, `adj_out`, `fib`, `originate`, `withdraw`, `clear`,
+     `shutdown`, `no_shutdown`, `refresh`. A `mark` key names a
+     community added to routes made by hand, at the prompt or through
+     `route.originate`, so a receiving router can act on them. `exit`
+     sends Cease 6/2 and stops the daemon.
+   * **3b-iii.** `specimen`, `fault`, `replay` and `ship` on the daemon.
+     **The Adj-RIB-Out is never patched for them**, because after a
+     fault the daemon cannot know what the peer holds. Each prefix sent
+     by hand is listed beside the rows instead, as a `hand` key in
+     `show.adj_out` and a count in `show.peers`, and it clears when the
+     daemon sends the prefix normally, when the session restarts, or on
+     `resend PEER`. The marker is never added to `fault`, `replay` or
+     `ship`, since it would change the message under test.
+   Foreground only. A remote prompt over a socket is not planned, since
+   it would be arbitrary code execution reachable from a lab network.
 
 Two things found in step 1 and not changed by it. `exit` closes the
 session with no NOTIFICATION, because `Neighbor#stop` sends none, which
