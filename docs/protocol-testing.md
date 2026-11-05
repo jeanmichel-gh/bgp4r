@@ -150,8 +150,11 @@ docker create --name gtmp jauderho/gobgp:v$v
 docker export gtmp | tar -tv | grep -E '/gobgpd?$'
 ```
 
-The last line prints where the two binaries sit in the image. The lines
-below assume `/usr/local/bin`; use the path it printed:
+The last line prints where the two binaries sit in the image. Paths in an
+export have no leading slash, so expect `usr/local/bin/gobgpd` and
+`usr/local/bin/gobgp`. The lines below assume `usr/local/bin`, with the
+slash `docker cp` wants in front. If the listing printed another folder,
+use that one, with a slash in front:
 
 ```
 mkdir -p ~/gobgp/$v
