@@ -313,11 +313,12 @@ class EvpnFrrTest < Test::Unit::TestCase
     assert(n.is_established?, 'and the session is still up')
     # The UPDATEs did arrive, so this is a discard and not a drop on our
     # side: without this the test would pass against a bgp4r that sent
-    # nothing at all.
-    assert_match(/rcvd UPDATE w\/ attr/, router.log.to_s,
-                 'FRR logged the UPDATEs arriving')
-    # And said nothing about any of the six, where it names every route
-    # type it does accept with a `rcvd RD ... l2vpn evpn` line.
+    # nothing at all. Read from FRR's own counter and not its debug log,
+    # which on 10.5.1 has no `rcvd UPDATE` line for these six at all.
+    assert_equal(routes.size, router.updates_received,
+                 'FRR counted every one of the UPDATEs arriving')
+    # And said nothing about any of the six, where 8.4.4 names every
+    # route type it does accept with a `rcvd RD ... l2vpn evpn` line.
     refute_match(/rcvd RD .* l2vpn evpn/, router.log.to_s,
                  'FRR named no route, which is the silent part')
 
