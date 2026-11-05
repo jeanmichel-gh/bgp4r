@@ -2583,13 +2583,14 @@ Neighbor ◀──UPDATE── Adj-RIB-Out (per peer) ◀───────�
           route and there is no change to plan. The branch stays because
           `plan` is public and pure, and `fib_test.rb` asserts the real
           behaviour rather than the unreachable one.
-        * **IPv6 has five cases now, written where they cannot run.** The
-          sandbox has IPv6 compiled out: `/proc/sys/net/ipv6` is absent
-          and `ip -6 route add` answers "Operation not supported" on the
-          host as much as in a namespace. So `fib_test.rb` gained the IPv6
-          twins on 2026-11-05 and they omit themselves on such a kernel;
-          their first run is on CI's sudo step or the owner's VM, and that
-          run is their first measurement. **The link is a veth pair and
+        * **IPv6 has five cases now, written where they could not run.**
+          The sandbox has IPv6 compiled out: `/proc/sys/net/ipv6` is
+          absent and `ip -6 route add` answers "Operation not supported"
+          on the host as much as in a namespace. So `fib_test.rb` gained
+          the IPv6 twins on 2026-11-05 and they omit themselves on such a
+          kernel. **They first ran the same day on the owner's arm64
+          Ubuntu VM as root and passed**: 15 tests, 110 assertions, no
+          omission. **The link is a veth pair and
           not lo**, because Linux refuses an IPv6 route whose egress
           device is the loopback, which is a recollection and not yet
           measured here. One of them, uninstall with both families
