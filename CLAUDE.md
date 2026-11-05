@@ -1381,7 +1381,9 @@ ruby -I. test/functional/lab/rib_router_frr_test.rb
 ```
 
 The OPEN capabilities FRR sends that bgp4r names, codes 6 and 71, and
-FRR's own report of the ones we send. 9 seconds against bgpd 8.4.4:
+FRR's own report of the ones we send. 9 seconds against bgpd 8.4.4,
+and passing against 10.5.1 too, under `FRR_BGPD` with a copy of the
+binary because of FRR 10's AppArmor profile:
 ```
 ruby -I. test/functional/lab/capabilities_frr_test.rb
 ```
@@ -1613,7 +1615,7 @@ CI: `.github/workflows/test.yml` runs both suites on every push to master and ev
 
 `.github/workflows/capture.yml` is the one workflow that deploys a containerlab lab: it builds the `lab-node` and BIRD images, deploys `lab/routescope/bgp4r-lab`, and runs its `capture.sh`, on demand and on a push that changes that folder or the Dockerfile. Its log is what routescope's BGP fixtures are cut from.
 
-Baseline on 2026-11-04: 3593 tests, 36338 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
+Baseline on 2026-11-04: 3600 tests, 36356 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
 
 **That coverage figure is 98.5% for the library and the rest is the two
 programs, not a gap anywhere else.** Measured the same run: with
