@@ -208,7 +208,8 @@ class BGP_Daemon_Api_Test < Test::Unit::TestCase
 
   def test_the_write_side_is_separate_names_and_not_a_flag
     writes = BGP::Daemon::Api::METHODS.keys.select { |m| m.start_with?('peer.', 'route.') }
-    assert_equal(%w[peer.clear peer.refresh peer.start peer.stop
+    assert_equal(%w[peer.clear peer.fault peer.refresh peer.replay peer.resend
+                    peer.specimen peer.start peer.stop
                     route.originate route.withdraw].sort, writes.sort)
     reads = BGP::Daemon::Api::METHODS.keys - writes - CONFIG_WRITES
     reads.each do |m|

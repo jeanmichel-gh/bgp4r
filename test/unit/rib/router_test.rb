@@ -989,4 +989,74 @@ class TestBgpRibRouter < Test::Unit::TestCase
            "a flush per group of deadlines, not per loop: #{r.flush_requests} asked for")
     assert(@rib.drain, 'and the worker is not buried under queued flushes')
   end
+
+  # ---- what bgp4rd's hand list needs from the Router -------------------
+
+  # on_sent reports every prefix a batch carried to one peer, announced
+  # and withdrawn alike, which is what clears a prefix sent by hand.
+  def test_on_sent_reports_each_prefix_sent_and_to_whom
+    n = neighbor
+    @rib.attach(n)
+    seen = Queue.new
+    @rib.advertise.on_sent { |peer, prefixes| seen << [peer.address, prefixes] }
+    assert(@rib.drain)
+    @rib.announce(route('10.1.0.0/16'))
+    assert(@rib.drain)
+    assert_equal(['10.0.0.2', ['10.1.0.0/16']], seen.pop(:timeout => 2))
+    @rib.withdraw(source, '10.1.0.0/16')
+    assert(@rib.drain)
+    assert_equal(['10.0.0.2', ['10.1.0.0/16']], seen.pop(:timeout => 2), 'a withdrawal counts too')
+  end
+
+  # A listener that raises is logged and the worker carries on, since it
+  # serves every peer.
+  def test_an_on_sent_listener_that_raises_does_not_stop_the_send
+    n = neighbor
+    @rib.attach(n)
+    @rib.advertise.on_sent { |_p, _x| raise 'no' }
+    assert(@rib.drain)
+    @rib.announce(route('10.1.0.0/16'))
+    assert(@rib.drain)
+    assert_equal(1, n.sent.size)
+    @rib.announce(route('10.2.0.0/16'))
+    assert(@rib.drain)
+    assert_equal(2, n.sent.size)
+  end
+
+  # resend sends what export says for each prefix, whatever the
+  # Adj-RIB-Out says the peer already has: the route where there is one
+  # and a withdrawal where there is none. That is the one send that does
+  # not diff, and it is what puts a peer back in line after a send by hand.
+  def test_resend_sends_the_route_or_a_withdrawal_whatever_the_adj_rib_out_says
+    n = neighbor
+    @rib.attach(n)
+    @rib.advertise
+    @rib.announce(route('10.1.0.0/16'))
+    assert(@rib.drain)
+    assert_equal(1, n.sent.size)
+    r = @rib.resend('10.0.0.2', ['10.1.0.0/16', '10.30.0.0/24'])
+    assert_equal({ :resent => ['10.1.0.0/16'], :withdrawn => ['10.30.0.0/24'] }, r)
+    resent = n.sent[1..]
+    nlri = resent.flat_map { |m| m.nlri ? m.nlri.to_ary : [] }
+    withdrawn = resent.flat_map { |m| m.withdrawn ? m.withdrawn.to_ary : [] }
+    assert_equal(['10.1.0.0/16'], nlri, 'sent again although the peer has it')
+    assert_equal(['10.30.0.0/24'], withdrawn)
+    u = resent.find { |m| m.nlri && !m.nlri.to_ary.empty? }
+    assert_equal('65001', u.path_attribute[BGP::As_path].as_path, 'with the export rules applied')
+    assert_not_nil(@rib.router.adj_rib_out(@rib.router.peers.first)['10.1.0.0/16'])
+  end
+
+  def test_resend_answers_nil_with_no_session_to_send_on
+    n = neighbor(2, 65002, established: false)
+    @rib.attach(n)
+    @rib.advertise
+    assert_nil(@rib.resend('10.0.0.2', ['10.1.0.0/16']))
+    assert_nil(@rib.resend('10.0.0.9', ['10.1.0.0/16']), 'nobody at that address')
+    assert_equal([], n.sent)
+  end
+
+  def test_resend_with_no_router_answers_nil
+    assert_nil(@rib.resend('10.0.0.2', ['10.1.0.0/16']))
+  end
+
 end

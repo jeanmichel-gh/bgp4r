@@ -323,6 +323,18 @@ module BGP
       # The Router, or nil when router mode was never turned on.
       def router ; sync { @router } ; end
 
+      # `Router#resend`, run on the feed's worker thread so it cannot race
+      # a Loc-RIB change being advertised, and waited for. Answers what it
+      # sent, or nil when there is no Router or no session to address.
+      def resend(address, prefixes, timeout = PeerFeed::DEFAULT_TIMEOUT)
+        return nil unless router
+        reply = Queue.new
+        feed << [:resend, address.to_s, prefixes, reply]
+        answer = reply.pop(:timeout => timeout)
+        raise answer if answer.is_a?(Exception)
+        answer || nil
+      end
+
       # Put the Loc-RIB in a forwarding table and keep it there. Off until
       # asked for, like router mode, and for the same reason: a table that
       # only decides is the normal use.

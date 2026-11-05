@@ -347,9 +347,9 @@ last.nlri
 ## 10. Step 3, a prompt on the two programs
 
 Designed with the owner on 2026-11-04. `bgp4r sim --interact` is
-built, and so is `bgp4rd --interact` with its reading and acting verbs,
-the `mark` key and Cease 6/2 on `exit`. Sending by hand on the daemon is
-not built yet. CLAUDE.md tracks the status under "An irb console on a live session". Two
+built, and so is `bgp4rd --interact` with its reading, acting and
+sending verbs, the `mark` key, the `hand` list and Cease 6/2 on `exit`.
+CLAUDE.md tracks the status under "An irb console on a live session". Two
 commands gain `--interact`: `bgp4r sim`, the injector, and `bgp4rd`,
 the daemon. They differ in kind, because an injector holds no Loc-RIB
 and a daemon is a router.
@@ -398,6 +398,8 @@ cannot disagree:
 * **Acting**: `originate` and `withdraw`, which are `route.originate`
   and `route.withdraw`; `announce` is `originate` under another name.
   `clear`, `shutdown`, `no_shutdown` and `refresh` are the peer methods.
+* **Sending by hand**: `specimen`, `fault`, `replay`, `ship` and
+  `resend`, which the next section describes.
 * **Watching**: `received`, `last`, `watch`, `quiet` and `n`, as in
   section 9.
 
@@ -413,8 +415,8 @@ Built, in bgp/daemon/console.rb. Four things to know when using it:
   methods still send none; that open item is theirs.
 * **A verb with no peer** goes to the only one configured or the only
   one up, and otherwise names the peers rather than picking one.
-* **`peers` has no `hand` column yet**, and `specimen`, `fault`,
-  `replay`, `ship` and `resend` are not there. Those are 3b-iii.
+* **`adj_in` and `adj_out` take the peer as the others do**: it may be
+  left out when there is one peer, or one up.
 
 ```
 bgp4rd -f rtr.yml -s /tmp/rtr.sock --interact
@@ -446,6 +448,34 @@ attribute holds a route we never chose. Instead:
   is rebuilt, or `resend PEER`, which sends the daemon's own entry for
   each flagged prefix, the route if it has one and a withdrawal if it
   does not.
+
+Built, in bgp/daemon/hand.rb for the list and `Control` for the sends.
+What to know when using it:
+
+* **The four sends are control socket methods**, `peer.specimen`,
+  `peer.fault`, `peer.replay` and `peer.resend`, so `bgp4r-cli` sends by
+  hand too. `ship` is the one that is not, since it takes an object;
+  it goes through the same `Control#ship` the other three end in. With
+  no `peer` they go to every session that is up, as `bgp4r-sim` does,
+  and a named peer that is down is refused.
+* **`resend` does not diff.** It sends the daemon's own answer for each
+  listed prefix whatever the Adj-RIB-Out says the peer has, which is
+  `Rib::Router#resend`, run on the table's worker thread. A daemon with
+  no `export:` advertises nothing, so its answer is a withdrawal for
+  every one.
+* **Two kinds of row `resend` cannot answer**, so it keeps them and
+  names them under `kept`: an NLRI of a family the daemon holds no
+  table for, listed with a `family` key such as `16388/71`, and a whole
+  peer row, a `null` prefix, from octets that do not read as a message.
+  Both clear when the session ends, so `clear PEER` settles them.
+* **A message that reads as something other than an UPDATE lists
+  nothing.** A KEEPALIVE or a ROUTE-REFRESH changes no route, and a
+  NOTIFICATION ends the session, which clears the list anyway.
+* **The list clears when the session ends**, not when the next one
+  comes up, since from that moment the peer holds nothing from us.
+* **The time is UTC**, in the daemon's own format, so `at` reads like
+  every other time `bgp4rd` answers: `2026-11-04T22:13:05.000Z`. The
+  prompt prints the time of day from it.
 
 ### The marker community
 
@@ -487,10 +517,9 @@ holding a process nobody can type into.
 
 Every step below is what the design says happens. The `rib` and `why`
 data were produced by the library from the same table, measured on
-2026-11-04. The `--interact` flag, the `mark` key and the reading and
-acting verbs are built; steps 6 to 8 and the `hand` column are not yet.
-The printed forms are close to what is built, not exact: `originate`
-also answers `marked`.
+2026-11-04. Every step is built. The printed forms are close to what is
+built, not exact: `originate` also answers `marked`, a send answers the
+peers it reached, and the times are UTC.
 
 **The lab.** One Linux machine, three terminals and no router binary.
 All of 127/8 is loopback on Linux, so each speaker has an address of its
@@ -681,7 +710,7 @@ and the list beside them says what went out. In JSON:
 "hand": { "total": 1,
           "rows": [ { "prefix": "10.30.0.0/24",
                       "verb": "specimen large_communities",
-                      "at": "2026-11-04T14:13:05-08:00" } ] }
+                      "at": "2026-11-04T22:13:05.000Z" } ] }
 ```
 
 #### Step 7: a fault
@@ -804,6 +833,11 @@ Cease, go to `idle`, and keep trying to dial.
 * **3b-ii**: `bgp4rd --interact` with the reading and acting verbs, the
   `mark` key, and Cease 6/2 on `exit`. Done, in bgp/daemon/console.rb,
   with the mark read in `Control#route_originate`.
-* **3b-iii**: sending by hand on the daemon: an Injector over the
-  daemon's own Speaker, the `hand` list in `show.adj_out` and
-  `show.peers`, and `resend`.
+* **3b-iii**: sending by hand on the daemon: the four sends, the
+  `hand` list in `show.adj_out` and `show.peers`, and `resend`. Done.
+  **The design said an Injector over the daemon's own Speaker, and it
+  is not one**: `Injector.new` builds a Speaker of its own and refuses
+  the router keys, and what the daemon needs of it is two calls,
+  `Specimen.update` and `Fault.update`. So `Control` makes those calls
+  in the injector's envelope, and the daemon does not load the
+  injector, which `console_test.rb` holds.

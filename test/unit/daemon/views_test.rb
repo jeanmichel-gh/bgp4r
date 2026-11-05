@@ -326,6 +326,38 @@ class BGP_Daemon_Views_Test < Test::Unit::TestCase
     assert_equal({ :total => 0, :rows => [] }, out[:skipped])
   end
 
+  # **hand rides beside the page only when there is something in it**,
+  # so every answer reads as it did until something is sent by hand. It
+  # is never written into the rows: those still say what the daemon last
+  # sent the normal way.
+  def test_adj_out_lists_what_was_sent_by_hand_beside_the_rows
+    s = loaded
+    v = views(s)
+    rows = v.adj_out('peer' => '10.0.0.2')[:rows]
+    u = BGP::Update.new(BGP::Path_attribute.new(BGP::Origin.new(0)), BGP::Nlri.new('10.30.0.0/24'))
+    s.hand.record('10.0.0.2', u, 'specimen large_communities', nil, Time.utc(2026, 11, 4, 14, 13, 5))
+    out = v.adj_out('peer' => '10.0.0.2')
+    assert_equal({ :total => 1, :rows => [{ :prefix => '10.30.0.0/24', :verb => 'specimen large_communities',
+                                           :at => '2026-11-04T14:13:05.000Z' }] }, out[:hand])
+    assert_equal(rows, out[:rows], 'the rows are not patched')
+    assert_equal(false, v.adj_out('peer' => '10.0.0.3').key?(:hand), 'per peer')
+    s.hand.record('10.0.0.2', BGP::Update.new(BGP::Path_attribute.new(BGP::Origin.new(0)),
+                                              BGP::Nlri.new('10.31.0.0/24')), 'ship')
+    capped = v.adj_out('peer' => '10.0.0.2', 'limit' => 1)[:hand]
+    assert_equal([2, 1], [capped[:total], capped[:rows].size], 'capped like skipped, with its own total')
+  end
+
+  # A peer row gains a count, again only when there is one.
+  def test_a_peer_row_counts_what_was_sent_by_hand
+    s = loaded
+    v = views(s)
+    assert(v.peers.none? { |r| r.key?(:hand) })
+    s.hand.record('10.0.0.3', BGP::Update.new(BGP::Path_attribute.new(BGP::Origin.new(0)),
+                                              BGP::Nlri.new('10.1.0.0/24', '10.2.0.0/24')), 'ship')
+    assert_equal({ '10.0.0.2' => nil, '10.0.0.3' => 2 }, v.peers.to_h { |r| [r[:address], r[:hand]] })
+    assert_equal(2, v.status[:peers].find { |r| r[:address] == '10.0.0.3' }[:hand])
+  end
+
   # **fib.configured is what tells a daemon with no fib: in its
   # configuration from one whose table happens to be empty.** Both
   # answer no rows, so without that key the two are the same answer.

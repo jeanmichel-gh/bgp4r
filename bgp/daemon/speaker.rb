@@ -65,6 +65,7 @@ require 'bgp4r'
 require 'bgp/misc/route_generator'
 require 'bgp/rib'
 require 'bgp/daemon/community_keys'
+require 'bgp/daemon/hand'
 require 'socket'
 require 'thread'
 
@@ -558,6 +559,9 @@ module BGP
           end
           @recorder.session_down!
         ensure
+          # The peer holds nothing from us once the session is over, so
+          # nothing it was sent by hand is in doubt any more.
+          @speaker.hand.reset(@address)
           if n
             # **Hygiene, and not what removes the peer's routes.** That is
             # PeerAdapter#state_change, which queues :peer_down the moment a
@@ -646,7 +650,7 @@ module BGP
       include BGP::Logging
 
       attr_reader :my_as, :router_id, :local_address, :announcements, :peers, :rib, :router,
-                  :events, :started_at
+                  :events, :started_at, :hand
 
       # The configuration this speaker was built from, which
       # `BGP::Daemon::Candidate` reads as the running one and `reconfigure`
@@ -687,6 +691,9 @@ module BGP
         # apart. Nothing in the lab reads them; `api.info` answers its
         # sequence and `events.subscribe` is a later pull request.
         @events = BGP::Events.new(:logger => @logger)
+        # What was sent to a peer by hand, which `bgp4rd` lists beside the
+        # Adj-RIB-Out. See bgp/daemon/hand.rb.
+        @hand = Hand.new
         @started_at = Time.now
         @peers = Array(config.fetch('neighbors')).map { |c| Peer.new(self, c) }
         @on_established = []
@@ -846,6 +853,9 @@ module BGP
       def start_rib
         return unless @rib
         @router = @rib.advertise(**export_options) if @export
+        # A prefix the daemon sends the normal way is no longer one only
+        # sent by hand.
+        @router&.on_sent { |peer, prefixes| @hand.sent(peer.address, prefixes) }
         install_fib if @fib
         originate_routes
       end

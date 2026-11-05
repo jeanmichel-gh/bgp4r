@@ -443,6 +443,107 @@ class TestConsole < Test::Unit::TestCase
     end
   end
 
+
+  # docs/console.md section 10 steps 6 to 9 over a real session: a
+  # specimen and a fault go out behind the Adj-RIB-Out's back, the socket
+  # lists both beside the rows it leaves alone, `resend` puts the peer
+  # back with the daemon's own answers, and a session that restarts
+  # clears the list. **The only test where `resend` goes through a real
+  # Router**, which is the one that diffs nothing.
+  def test_bgp4rd_interact_sends_by_hand_lists_it_and_resends
+    begin
+      BGP::Daemon::Console.load_irb
+    rescue LoadError => e
+      omit(e.message)
+    end
+    Dir.mktmpdir do |dir|
+      path = File.join(dir, 'rtr.yml')
+      sock = File.join(dir, 'rtr.sock')
+      File.write(path, <<~YAML)
+        router_id: 10.255.0.1
+        as: 65001
+        neighbors:
+          - address: 127.0.0.1
+            port: #{@port}
+            as: #{PEER_AS}
+            connect: true
+            retry: 0.2
+        export:
+          next_hops: { 1: 192.0.2.1 }
+        mark:
+          large_communities: ['65001:1:1']
+      YAML
+      argv = [RbConfig.ruby, '-I', ROOT, File.join(ROOT, 'exe', 'bgp4rd'), '-f', path,
+              '-s', sock, '--interact', '-l', File::NULL]
+      out = ::IO.popen(argv, 'r+', :err => [:child, :out]) do |io|
+        assert(wait { @s.is_established? }, 'the session did not come up')
+        client = BGP::Daemon::Client.new(sock)
+        io.puts "originate '10.7.0.0/24'"
+        assert_equal(['10.7.0.0/24'], nlri_of(@catcher.shift))
+        rows = client.call('show.adj_out', 'peer' => '127.0.0.1')['rows']
+
+        io.puts "specimen :large_communities, '10.30.0.0/24'"
+        u = @catcher.shift
+        assert_equal(['10.30.0.0/24'], nlri_of(u))
+        assert_include(u.path_attribute[:large_communities].communities.collect(&:to_s), '65001:1:1',
+                       'the mark went with the specimen')
+        io.puts "fault :origin_value, '10.7.0.0/24'"
+        u = @catcher.shift
+        assert_equal(['10.7.0.0/24'], nlri_of(u))
+        assert(!u.path_attribute.has?(BGP::Large_communities), 'a fault is never marked')
+
+        out = client.call('show.adj_out', 'peer' => '127.0.0.1')
+        assert_equal(rows, out['rows'], 'the Adj-RIB-Out rows are never patched')
+        assert_equal(%w[10.30.0.0/24 10.7.0.0/24], out['hand']['rows'].collect { |r| r['prefix'] })
+        assert_equal(['specimen large_communities', 'fault origin_value'],
+                     out['hand']['rows'].collect { |r| r['verb'] })
+        assert_equal(2, client.call('show.peers').first['hand'])
+
+        r = client.call('peer.resend', 'peer' => '127.0.0.1')
+        assert_equal({ 'peer' => '127.0.0.1', 'resent' => ['10.7.0.0/24'],
+                       'withdrawn' => ['10.30.0.0/24'], 'hand' => 0 }, r)
+        got = [@catcher.shift, @catcher.shift]
+        assert_equal(['10.7.0.0/24'], got.flat_map { |m| m.nlri ? m.nlri.to_ary : [] },
+                     'the real route went out again although the Adj-RIB-Out had it')
+        assert_equal(['10.30.0.0/24'], got.flat_map { |m| m.withdrawn ? m.withdrawn.to_ary : [] })
+        again = got.find { |m| m.nlri && !m.nlri.to_ary.empty? }
+        assert_equal('65001', again.path_attribute[:as_path].as_path, 'with the export rules applied')
+        assert_equal(false, client.call('show.adj_out', 'peer' => '127.0.0.1').key?('hand'))
+
+        # A prefix the daemon sends again the normal way clears too.
+        io.puts "fault :origin_value, '10.7.0.0/24'"
+        @catcher.shift
+        assert(wait { client.call('show.peers').first['hand'] == 1 })
+        client.call('route.withdraw', 'prefix' => '10.7.0.0/24')
+        assert_equal(['10.7.0.0/24'], @catcher.shift.withdrawn.to_ary)
+        assert(wait { client.call('show.peers').first['hand'].nil? },
+               'a prefix sent the normal way is no longer one sent by hand')
+
+        # And a session that restarts clears what is left.
+        io.puts "specimen :large_communities, '10.31.0.0/24'"
+        @catcher.shift
+        assert(wait { client.call('show.peers').first['hand'] == 1 })
+        io.puts 'clear'
+        assert(wait { client.call('show.peers').first['flaps'] == 1 }, 'the session did not restart')
+        assert(wait { client.call('show.peers').first['state'] == 'established' })
+        assert_nil(client.call('show.peers').first['hand'], 'the restart cleared the list')
+
+        io.puts "ship Update.new(Path_attribute.new(Origin.new(0), As_path.new(65001), " \
+                "Next_hop.new('192.0.2.1')), Nlri.new('10.40.0.0/24'))"
+        assert_equal(['10.40.0.0/24'], nlri_of(@catcher.shift))
+        assert(wait { client.call('show.peers').first['hand'] == 1 })
+        io.puts 'adj_out'
+        io.puts 'peers'
+        io.puts 'exit'
+        io.close_write
+        io.read
+      end
+      assert_equal(0, $?.exitstatus, out)
+      assert_match(%r{^sent by hand, state at peer unknown:\n10\.40\.0\.0/24\s+ship at }, out)
+      assert_match(/\bbest\s+hand\n/, out)
+    end
+  end
+
 end
 
 # `bgp4r console --back-to-back`: two bgp4r speakers in this process, on

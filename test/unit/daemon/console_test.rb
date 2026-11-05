@@ -97,6 +97,90 @@ class BGP_Daemon_Console_Test < Test::Unit::TestCase
                     peer.stop peer.start peer.refresh], called)
   end
 
+  # The sending verbs are socket methods too, all but `ship`, which takes
+  # an object and so goes to the same `Control#ship` they end in.
+  def test_every_sending_verb_but_ship_is_a_socket_method
+    up('10.0.0.2')
+    called = []
+    api = @c.api_server
+    api.define_singleton_method(:handle) { |req| called << req['method'] ; super(req) }
+    @c.specimen(:large_communities, '10.30.0.0/24', peer: '10.0.0.2')
+    @c.fault(:origin_value, '10.10.0.0/24', peer: '10.0.0.2')
+    @c.replay('00', peer: '10.0.0.2')
+    @c.resend('10.0.0.2')
+    @c.ship(BGP::Keepalive.new, peer: '10.0.0.2')
+    assert_equal(%w[peer.specimen peer.fault peer.replay peer.resend], called)
+  end
+
+  # ---- sending by hand ------------------------------------------------
+
+  # A Peer whose session says it is up and keeps what it is sent.
+  def up(address)
+    p = @speaker.peer(address)
+    sent = []
+    p.define_singleton_method(:established?) { true }
+    p.define_singleton_method(:send_message) { |m| sent << m }
+    p.define_singleton_method(:local_ip) { '10.0.0.1' }
+    sent
+  end
+
+  # docs/console.md section 10 step 6 and 7, as the prompt prints them:
+  # the rows unchanged, and the list beside them.
+  def test_adj_out_prints_what_was_sent_by_hand_after_the_rows
+    up('10.0.0.3')
+    @c.specimen(:large_communities, '10.30.0.0/24', peer: '10.0.0.3')
+    @c.fault(:origin_value, '10.10.0.0/24', peer: '10.0.0.3')
+    @out.truncate(0) ; @out.rewind
+    @c.adj_out('10.0.0.3')
+    text = @out.string
+    assert_match(/^sent by hand, state at peer unknown:$/, text)
+    assert_match(/^10\.30\.0\.0\/24\s+specimen large_communities at \d\d:\d\d:\d\d$/, text)
+    assert_match(/^10\.10\.0\.0\/24\s+fault origin_value at \d\d:\d\d:\d\d$/, text)
+    assert_operator(text.index('specimen'), :<, text.index('fault origin_value'), 'oldest first')
+  end
+
+  def test_adj_out_prints_nothing_about_hand_until_something_is_sent
+    @c.adj_out('10.0.0.3')
+    assert_no_match(/sent by hand/, @out.string)
+  end
+
+  def test_peers_has_a_hand_column
+    up('10.0.0.3')
+    @c.fault(:origin_value, '10.10.0.0/24', '10.11.0.0/24', peer: '10.0.0.3')
+    @c.peers
+    lines = @out.string.lines
+    assert_match(/\bbest\s+hand$/, lines[0])
+    assert_match(/\s0$/, lines[1])
+    assert_match(/\s2$/, lines[2])
+  end
+
+  # `ship` sends the object as it is and reads it back for the list.
+  def test_ship_sends_the_object_and_lists_what_it_carries
+    sent = up('10.0.0.3')
+    u = BGP::Update.new(BGP::Path_attribute.new(BGP::Origin.new(0), BGP::As_path.new(65_000),
+                                                BGP::Next_hop.new('127.0.0.1')),
+                        BGP::Nlri.new('10.40.0.0/24'))
+    r = @c.ship(u, peer: '10.0.0.3')
+    assert_same(u, sent.first)
+    assert_equal({ 'peer' => '10.0.0.3', 'prefixes' => ['10.40.0.0/24'] }, r)
+    assert_equal('ship', @speaker.hand.rows('10.0.0.3').first[:verb])
+  end
+
+  def test_a_whole_peer_row_prints_as_the_whole_peer
+    up('10.0.0.3')
+    @c.replay('ff', peer: '10.0.0.3')
+    @out.truncate(0) ; @out.rewind
+    @c.adj_out('10.0.0.3')
+    assert_match(/^\(the whole peer\)\s+replay at /, @out.string)
+  end
+
+  def test_resend_answers_as_peer_resend
+    up('10.0.0.3')
+    @c.fault(:origin_value, '10.10.0.0/24', peer: '10.0.0.3')
+    r = @c.resend('10.0.0.3')
+    assert_equal({ 'peer' => '10.0.0.3', 'resent' => [], 'withdrawn' => ['10.10.0.0/24'], 'hand' => 0 }, r)
+  end
+
   # ---- reading --------------------------------------------------------
 
   # Every configured peer is listed, the ones that are down included.
@@ -233,7 +317,8 @@ class BGP_Daemon_Console_Test < Test::Unit::TestCase
   def test_verbs_lists_every_verb
     @c.verbs
     %w[peers rib why adj_in adj_out fib originate announce withdraw clear shutdown
-       no_shutdown refresh api received last watch quiet state neighbor verbs guide].each do |v|
+       no_shutdown refresh specimen fault replay ship resend api received last watch quiet
+       state neighbor verbs guide].each do |v|
       assert_match(%r{^\s+(\S+(, | / ))?#{v}\b}, @out.string, v)
     end
   end
@@ -255,7 +340,7 @@ class BGP_Daemon_Console_Test < Test::Unit::TestCase
   # has no use for one.
   def test_it_loads_without_the_injector
     out = IO.popen([RbConfig.ruby, '-I.', '-e',
-                    'require "bgp/daemon/console"; p defined?(BGP::Sim::Injector).nil?'], &:read)
+                    'require "bgp/daemon"; require "bgp/daemon/console"; p defined?(BGP::Sim::Injector).nil?'], &:read)
     assert_equal("true\n", out)
   end
 
