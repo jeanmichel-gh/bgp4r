@@ -110,10 +110,18 @@ module BGP
           flap count: 1                 drop the session and let it return
           act 'name', {...}             any action by name, as the HTTP API
           ship MSG                      any message or String, unchanged
+        Generated routes, docs/route-generation.md
+          announce spec: {...}          a BGP::Gen spec, all families
+          announce spec: S, churn: {...}  changes to routes S announced
+          withdraw spec: {...}          the same routes, regenerated
+          plan spec: {...}              what a spec would send, and nothing
+                                        sent: total, rows, also churn:,
+                                        offset:, limit:, peer:
         Watching
           received [N] [, KIND]         the last N messages in, as a list;
                                         keepalives left out, :all for them,
-                                        :update etc for one kind, peer: P
+                                        :update etc for one kind, peer: P;
+                                        .prefixes and .withdrawn count them
           last [KIND]                   the last message in, as an object,
                                         keepalives left out unless asked
           watch / quiet                 print messages as they arrive, or not
@@ -302,6 +310,64 @@ module BGP
       def act(name, b = {})
         b = stringify(b)
         injector(b['peer']).act(name.to_s, b, false)
+      end
+
+      # What a spec would send, and nothing sent: `Injector#plan`, which
+      # is `POST /api/plan`, so the prompt and a scenario read the same
+      # answer. The rows are `BGP::Gen#expected` with this session's
+      # rules applied, our AS in front over eBGP and our address as the
+      # next hop when the spec gives none. With `churn:` they are the
+      # state after the churn. One page, of LIMIT rows unless `limit:`
+      # says otherwise; `total` is the whole count.
+      #
+      #   pl = plan spec: { family: 'unicast', start: '10.1.0.0/24', count: 1000 }
+      #   pl.total                     1000
+      #   pl.first['as_path']          [65001]
+      #   plan spec: s, offset: 999, limit: 1
+      def plan(peer: nil, **opts)
+        opts = { :limit => PLAN_LIMIT }.merge(opts)
+        pages = injector(peer).plan(body([], opts.merge(peer ? { :peer => peer } : {})))[:plans]
+        if pages.size > 1
+          raise ArgumentError, "#{pages.size} sessions are up; name one with peer: ADDR. " \
+                               "They are #{pages.collect { |pg| pg[:peer] }.join(', ')}"
+        end
+        Plan.new(pages.first)
+      end
+
+      # How many rows `plan` answers unless asked for more. A screen, and
+      # not the API's page, since irb prints every one.
+      PLAN_LIMIT = 20
+
+      # What `plan` answers: the rows of one page, as an Array of Hashes,
+      # with the page around them. irb prints a line saying how many
+      # routes there are in all, then one line per row.
+      class Plan < Array
+        attr_reader :peer, :total, :offset, :next_offset, :churn
+
+        def initialize(page)
+          super(page[:rows])
+          @peer, @total, @offset = page[:peer], page[:total], page[:offset]
+          @next_offset, @churn = page[:next_offset], page[:churn]
+        end
+
+        def inspect
+          head = "#{total} route(s) to #{peer}"
+          head += ", rows #{offset + 1} to #{offset + size}" if size < total
+          head += ", after #{churn['events']} churn event(s)" if churn
+          ([head] + collect { |r| Plan.line(r) }).join("\n")
+        end
+        alias_method :to_s, :inspect
+
+        def pretty_print(q) ; q.text(inspect) ; end
+
+        # One row as `key value` pairs, a list as its items, an empty one
+        # as a dash.
+        def self.line(row)
+          row.collect { |k, v|
+            v = v.empty? ? '-' : v.join(' ') if v.is_a?(Array)
+            "#{k} #{v}"
+          }.join(', ')
+        end
       end
 
       # Any message object, or a String of octets, onto the session as it

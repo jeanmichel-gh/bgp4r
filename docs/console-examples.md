@@ -1,6 +1,7 @@
 # Console examples
 
-Six sessions to type in the VM, from the smallest to a whole lab.
+Seven sessions to type in the VM, from the smallest to a whole lab,
+and then generated routes.
 Each one says what to start, what to type, and what comes back.
 `docs/console.md` explains the commands and the defaults behind them;
 this document is the practice.
@@ -9,8 +10,8 @@ Run everything from a checkout, so `ruby -I.` finds the library.
 Every example uses loopback addresses and port 1179, so nothing needs
 root. Logs go to files under `/tmp`, so each prompt stays readable.
 
-The lines after `# =>` are what the prompt answers. Two of the six,
-1 and 2, are run from this document by
+The lines after `# =>` are what the prompt answers. Three of the
+seven, 1, 2 and 7, are run from this document by
 `test/functional/console_examples_test.rb`, which types each block
 into the program and compares every `# =>` with what came back. The
 other four need several terminals, so
@@ -311,3 +312,83 @@ ruby -I. exe/bgp4r-cli -s /tmp/rtr.sock peer.resend '{"peer":"127.0.0.3"}'
 ```
 
 `exit` in A sends Cease 6/2 to each peer and stops the daemon.
+
+## 7. Generated routes
+
+A `BGP::Gen` spec at the prompt, back to back, from the first route to
+the last withdrawal. `docs/route-generation.md` is the spec language.
+`plan` says what a spec would send and sends nothing. `announce spec:`
+sends it, and `remote.received` is what arrived.
+
+```sh
+ruby -I. exe/bgp4r console --back-to-back -l /tmp/gen.log
+```
+
+<!-- example: generated -->
+```ruby
+s = { family: 'unicast', start: '10.100.0.0/24', count: 1000, per_update: 100, group: 100, attributes: { med: { cycle: [10, 20] } } }
+pl = plan spec: s, limit: 3
+pl.total                                          # => 1000
+pl.first['as_path']                               # => [65001]
+pl.first['next_hop']                              # => "127.0.0.1"
+plan(spec: s, offset: 999, limit: 1).first['med'] # => 20
+announce spec: s
+remote.received(100, :update).size                # => 10
+remote.received(100, :update).prefixes            # => 1000
+remote.last.path_attribute[:med].to_i             # => 20
+c = { events: 20, withdraw: 0.25, seed: 3, attributes: { med: { step: { start: 100, by: 1 } } } }
+plan(spec: s, churn: c).total                     # => 992
+announce spec: s, churn: c
+remote.received(100, :update).size                # => 30
+remote.received(20, :update).withdrawn            # => 8
+withdraw spec: s
+remote.received(10, :update).withdrawn            # => 1000
+v = { family: 'vpn', start: '10.200.0.0/24', count: 4, vrfs: 2, rd: '65001:1', label: 100, route_target: '65001:1' }
+plan spec: v
+announce spec: v
+remote.received(2, :update).prefixes              # => 8
+remote.last.path_attribute[:mp_reach].nlris.size  # => 4
+sent
+exit
+```
+
+What each step shows:
+
+* **The spec.** 1000 routes, 100 to a message. `group: 100` keeps 100
+  routes on one attribute set, and the MED cycles per group: 10, 20, 10,
+  and so on. A MED that changed on every route would send 1000
+  messages, since an UPDATE holds one attribute set.
+* **`plan`.** It prints the total and then one line per row. It shows
+  20 rows unless `limit:` says otherwise, and `offset:` pages through
+  the rest. The rows have this session's rules in them: our AS in front
+  of the AS_PATH, since the session is eBGP, and our address as the next
+  hop, since the spec gives none. Route 1000 is in the tenth group, so
+  its MED is 20.
+* **`announce spec:`.** It answers once the feed has gone out. The far
+  side got 10 UPDATEs carrying 1000 prefixes, and the last one carries
+  MED 20, as the plan said.
+* **The churn.** 20 changes to routes the spec announced, one UPDATE
+  each. A quarter are withdrawals, and the rest announce a route again
+  with the MED counting up from 100. With `churn:`, `plan` answers the
+  routes held afterwards, 992. With seed 3, 8 of the 20 events are
+  withdrawals. Change the seed and the picks change. Keep it and they
+  do not.
+* **`withdraw spec:`.** It regenerates the 1000 prefixes and withdraws
+  them all, 100 to a message. That includes the 8 the churn already
+  withdrew, which is harmless.
+* **A second family.** A VPN spec of 4 prefixes in each of 2 VRFs. Each
+  VRF has its own Route Distinguisher and route target, so its own
+  attribute set, so its own message. `plan` lists all 8 rows.
+* **`sent`.** The injector's count of everything that went out.
+
+`received` keeps the last 200 messages, so check a large feed with
+`sent` or with the router's own count, and use a small one at the
+prompt. `plan` answers what `POST /api/plan` answers on `bgp4r sim`,
+with the same spec in JSON:
+
+```sh
+curl -X POST -H 'X-BGP4R: routescope' -d '{"spec":{"family":"unicast","start":"10.100.0.0/24","count":1000}}' 127.0.0.1:8080/api/plan
+```
+
+Any family in `docs/route-generation.md` section 6 works the same way.
+Both sides of `--back-to-back` offer every family the library has.

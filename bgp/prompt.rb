@@ -89,6 +89,12 @@ module BGP
     class List < Array
       def messages ; collect(&:message) ; end
 
+      # How many prefixes the UPDATEs in the list announce, and how many
+      # they withdraw, in either field. What a generated feed is checked
+      # against, since one UPDATE carries many.
+      def prefixes ; sum { |r| Prompt.prefix_count(r.message) } ; end
+      def withdrawn ; sum { |r| Prompt.withdrawn_count(r.message) } ; end
+
       def inspect
         empty? ? '(none)' : collect(&:to_s).join("\n")
       end

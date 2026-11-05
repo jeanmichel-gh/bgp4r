@@ -249,6 +249,23 @@ class BGP_Prompt_Test < Test::Unit::TestCase
     assert_equal('Update, 0 prefixes, 2 withdrawn', BGP::Prompt.describe(w))
   end
 
+  # What a generated feed is checked against: the prefixes a list of
+  # UPDATEs carries in all, in both fields, and what it withdraws.
+  def test_a_list_counts_the_prefixes_it_announces_and_withdraws
+    h = Host.new(StringIO.new)
+    a = BGP::Update.new(
+      BGP::Path_attribute.new(
+        BGP::Origin.new(0), BGP::As_path.new(1),
+        BGP::Mp_reach.new(:afi => 2, :safi => 1, :nexthop => ['2001:db8::1'],
+                          :nlris => ['2001:db8:1::/48', '2001:db8:2::/48'])),
+      BGP::Nlri.new('10.0.0.0/8'))
+    w = BGP::Update.new(BGP::Withdrawn.new('10.0.0.0/8', '10.1.0.0/16'))
+    [a, w, BGP::Keepalive.new].each { |m| h.received_from('10.0.0.1', m) }
+    assert_equal(3, h.received(:all).prefixes)
+    assert_equal(2, h.received(:all).withdrawn)
+    assert_equal(0, h.received(:notification).prefixes)
+  end
+
   def test_describe_a_message_an_exception_and_a_string
     assert_equal('Keepalive', BGP::Prompt.describe(BGP::Keepalive.new))
     assert_equal('malformed: bad', BGP::Prompt.describe(RuntimeError.new('bad')))
