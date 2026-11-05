@@ -75,6 +75,9 @@ class FlowSpecFrrTest < Test::Unit::TestCase
 
   def teardown
     @routers.each { |r| r.down }
+    # On a failure the answer is in the router's own log: an OPEN it
+    # refused, or what it made of an UPDATE.
+    puts "\n== bgpd\n#{@routers.collect(&:log).join}" unless passed?
     @listeners.each do |server, neighbor, thread|
       thread.kill if thread
       neighbor.close
