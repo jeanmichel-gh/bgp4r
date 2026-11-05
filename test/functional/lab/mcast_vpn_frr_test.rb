@@ -95,7 +95,7 @@ class McastVpnFrrTest < Test::Unit::TestCase
       omit('FRR bgpd is not installed')
     end
     major = F.major
-    unless major && MEASURED.cover?(major)
+    unless F.measured?(MEASURED, major)
       omit("measured against FRR #{MEASURED}, found #{major.inspect}: " \
            're-measure before asserting')
     end
