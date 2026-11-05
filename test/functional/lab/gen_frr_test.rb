@@ -72,7 +72,7 @@ class LabGenFrrTest < Test::Unit::TestCase
       omit('FRR bgpd is not installed')
     end
     major = F.major
-    unless major && MEASURED.cover?(major)
+    unless F.measured?(MEASURED, major)
       omit("measured against FRR #{MEASURED}, found #{major.inspect}: re-measure before asserting")
     end
   end
@@ -90,7 +90,9 @@ class LabGenFrrTest < Test::Unit::TestCase
 
   # A bgpd that dials us, and a bgp4r speaker with 4-octet AS numbers
   # and IPv4 and IPv6 unicast, plus any extra families as [afi, safi].
-  def session(extra = [], families = [])
+  # ipv6: activate IPv6 unicast on FRR's side, which only the IPv6 case
+  # needs. The harness leaves it off by default; see LabHelper::Frr.
+  def session(extra = [], families = [], ipv6: false)
     @server = TCPServer.new('127.0.0.1', 0)
     @peer = BGP::Neighbor.new(4, OUR_AS, 180, '10.0.0.1', '127.0.0.2', '127.0.0.1')
     @peer.capability :as4_byte
@@ -107,7 +109,7 @@ class LabGenFrrTest < Test::Unit::TestCase
     end
     @router = F.new(:local => '127.0.0.2', :as => THEIR_AS, :router_id => '10.0.0.2',
                     :peer => '127.0.0.1', :peer_as => OUR_AS, :port => @server.addr[1],
-                    :families => families)
+                    :families => families, :ipv6 => ipv6)
     @router.up
     wait_for('the session', :timeout => 40) { @peer.is_established? }
   end
@@ -145,8 +147,13 @@ class LabGenFrrTest < Test::Unit::TestCase
             'attributes' => ATTRIBUTES.merge('next_hop' => F::NEXT_HOP))
   end
 
+  # FRR 10 refuses IPv6 unicast over an IPv4 session with no zebra, Cease
+  # 6/0, measured against 10.5.1 on 2026-11-04. So this case needs 8.x
+  # or a zebra, whatever LAB_FRR_ANY says.
   def test_ipv6_unicast
-    session
+    major = F.major
+    omit("FRR #{major} refuses IPv6 unicast here without zebra") if major && major >= 10
+    session([], [], :ipv6 => true)
     crosses('family' => 'unicast', 'start' => '2001:db8::/64', 'count' => 1500,
             'attributes' => ATTRIBUTES.merge('next_hop' => '2001:db8::1'))
   end

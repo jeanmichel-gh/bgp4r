@@ -7086,16 +7086,25 @@ the registry's.
   is section 4.1's rule. bgp4r still sends LLGR alone if asked, since
   nothing validates. So both capabilities this lab found unnamed with
   an RFC behind them are named; 73 and 76 are drafts.
-* **That file activates no IPv6 family, because FRR 10.5.1 refuses the
-  OPEN otherwise.** With IPv6 unicast activated over an IPv4 session and
-  no zebra it logs "No local IPv6 address, and zebra does not support V6
-  routing with v4 nexthops" and sends Cease 6/0, where 8.4.4 only
-  warned. Every other FRR lab file still activates IPv6, so on FRR 10
-  they all fail the same way. FRR 10's packages also carry an AppArmor
-  profile for `/usr/lib/frr/bgpd` that refuses the harness's pid file
-  under `/tmp`, as root too; `FRR_BGPD` pointing at a copy of the
-  binary elsewhere runs it unconfined. Both measured on 2026-11-04 on
-  the owner's VM, and neither is fixed in the harness yet.
+* **`LabHelper::Frr` activates IPv6 unicast only when asked, because
+  FRR 10.5.1 refuses the OPEN otherwise.** With IPv6 unicast activated
+  over an IPv4 session and no zebra it logs "No local IPv6 address, and
+  zebra does not support V6 routing with v4 nexthops" and sends Cease
+  6/0, where 8.4.4 only warned. This file said every other FRR lab file
+  activated it; two did, `flow_spec_frr_test.rb` and
+  `gen_frr_test.rb`, and only `gen_frr_test.rb`'s IPv6 case needs it,
+  so that one case asks and runs on 8.x only. FRR 10's packages also
+  carry an AppArmor profile for `/usr/lib/frr/bgpd` that refuses the
+  harness's pid file under `/tmp`, as root too; `FRR_BGPD` pointing at
+  a copy of the binary elsewhere runs it unconfined. `Frr#up` now stops
+  waiting when bgpd dies and names that workaround, through
+  `Frr.startup_hint`. Both measured on 2026-11-04 on the owner's VM.
+  **The other FRR lab files have not been run against 10.5.1**, and
+  their `MEASURED` ranges still say 8, so they omit themselves there.
+  `LAB_FRR_ANY=1` runs them anyway against 8.x's expectations, through
+  `Frr.measured?`, so a run on a new version says what differs before
+  any range is widened. A range is widened only from such a run. The
+  IPv6 case of `gen_frr_test.rb` omits on 10 and later regardless.
 
 **The `### GoBGP` block of `capture.sh` ran next, and it settles the
 two things that node is on the topology for.** All three kinds of

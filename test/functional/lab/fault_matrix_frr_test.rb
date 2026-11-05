@@ -73,7 +73,7 @@ class LabFaultMatrixFrrTest < Test::Unit::TestCase
     @@results, @@status, @@output, @@error = nil, nil, '', nil
     return unless LabHelper::Frr.available?
     @@major = LabHelper::Frr.major
-    return unless @@major && MEASURED.cover?(@@major)
+    return unless LabHelper::Frr.measured?(MEASURED, @@major)
     @@router = LabHelper::Frr.new(:ipv6 => false)
     @@dir = Dir.mktmpdir('bgp4r-fault-matrix-frr')
     json = File.join(@@dir, 'fault-matrix.json')
@@ -133,7 +133,7 @@ class LabFaultMatrixFrrTest < Test::Unit::TestCase
       flunk('FRR bgpd is not installed') if ENV['LAB_REQUIRE_FRR'] == '1'
       omit('FRR bgpd is not installed')
     end
-    unless defined?(@@major) && @@major && MEASURED.cover?(@@major)
+    unless defined?(@@major) && LabHelper::Frr.measured?(MEASURED, @@major)
       omit("#{LabHelper::Frr.version} has not been measured, so there is " \
            'nothing here to assert against it')
     end
