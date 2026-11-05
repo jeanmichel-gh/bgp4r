@@ -1638,7 +1638,7 @@ CI: `.github/workflows/test.yml` runs both suites on every push to master and ev
 
 `.github/workflows/capture.yml` is the one workflow that deploys a containerlab lab: it builds the `lab-node` and BIRD images, deploys `lab/routescope/bgp4r-lab`, and runs its `capture.sh`, on demand and on a push that changes that folder or the Dockerfile. Its log is what routescope's BGP fixtures are cut from.
 
-Baseline on 2026-11-04: 3662 tests, 36540 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
+Baseline on 2026-11-04: 3663 tests, 36544 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
 
 **That coverage figure is 98.5% for the library and the rest is the two
 programs, not a gap anywhere else.** Measured the same run: with
@@ -7105,6 +7105,14 @@ the registry's.
   `Frr.measured?`, so a run on a new version says what differs before
   any range is widened. A range is widened only from such a run. The
   IPv6 case of `gen_frr_test.rb` omits on 10 and later regardless.
+  **The first such run failed nearly everything, and the cause was the
+  machine's own zebra.** bgpd dials the default zebra socket, and FRR's
+  service answers there on the VM. FRR 10 then holds every eBGP peer at
+  "Waiting for NHT, no path to neighbor present" and never connects,
+  since bgp_fsm.c waits on nexthop tracking only when a zebra is
+  connected. `Frr#command` passes `-z` with a socket path in bgpd's own
+  folder, which nothing creates, so bgpd runs as it does in CI. Not
+  `-Z`, which changes how bgpd judges a next hop.
 
 **The `### GoBGP` block of `capture.sh` ran next, and it settles the
 two things that node is on the topology for.** All three kinds of
