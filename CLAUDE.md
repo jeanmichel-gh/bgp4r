@@ -2583,11 +2583,18 @@ Neighbor ◀──UPDATE── Adj-RIB-Out (per peer) ◀───────�
           route and there is no change to plan. The branch stays because
           `plan` is public and pure, and `fib_test.rb` asserts the real
           behaviour rather than the unreachable one.
-        * **IPv6 is not exercised against a kernel.** The sandbox this was
-          written in has IPv6 compiled out: `/proc/sys/net/ipv6` is absent
-          and `ip -6 route add` answers "Operation not supported" on the
-          host as much as in a namespace. The v6 command building is unit
-          tested; the v6 data path is not, and that is the one gap here.
+        * **IPv6 has five cases now, written where they could not run.**
+          The sandbox has IPv6 compiled out: `/proc/sys/net/ipv6` is
+          absent and `ip -6 route add` answers "Operation not supported"
+          on the host as much as in a namespace. So `fib_test.rb` gained
+          the IPv6 twins on 2026-11-05 and they omit themselves on such a
+          kernel. **They first ran the same day on the owner's arm64
+          Ubuntu VM as root and passed**: 15 tests, 110 assertions, no
+          omission. **The link is a veth pair and
+          not lo**, because Linux refuses an IPv6 route whose egress
+          device is the loopback, which is a recollection and not yet
+          measured here. One of them, uninstall with both families
+          installed, is the only check that both flushes run.
         * CI runs it. The lab job is unprivileged, so the test omits
           itself there, and a second step runs that one file under `sudo`
           with `LAB_REQUIRE_NETNS=1` so it fails rather than omits. A
