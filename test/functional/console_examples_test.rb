@@ -21,7 +21,7 @@
 #++
 
 
-# Examples 1 and 2 of docs/console-examples.md, typed into the program
+# Examples 1, 2 and 7 of docs/console-examples.md, typed into the program
 # straight from the document: every `# =>` in a block is compared with
 # what the prompt answered. The other four need several terminals and
 # are held by test/unit/console_examples_doc_test.rb instead. No
@@ -94,6 +94,10 @@ class TestConsoleExamples < Test::Unit::TestCase
 
   def test_example_2_back_to_back
     run_example('back-to-back', '--back-to-back', '--timeout', '10')
+  end
+
+  def test_example_7_generated_routes
+    run_example('generated', '--back-to-back', '--timeout', '10')
   end
 
   # The marker split, on its own, so a broken split does not read as a

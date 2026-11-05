@@ -143,6 +143,25 @@ exit
   `route_refresh`, `malformed` and `other`, and `:all` is every kind.
   A count and a kind go in either order. An unknown kind is refused
   with the list, rather than matching nothing.
+* **Generated routes go through a spec**, the language of
+  `docs/route-generation.md`, in any family:
+
+  ```ruby
+  s = { family: 'unicast', start: '10.100.0.0/24', count: 1000, per_update: 100 }
+  plan spec: s                     # what it would send, and nothing sent
+  announce spec: s                 # sends it, and answers when it is out
+  announce spec: s, churn: { events: 20, seed: 3 }
+  withdraw spec: s                 # the same routes, regenerated
+  received(100, :update).prefixes  # how many prefixes arrived
+  ```
+
+  `plan` is `POST /api/plan`, with this session's rules applied, so a
+  row has our AS in front over eBGP and our address as the next hop
+  when the spec gives none. It shows 20 rows unless `limit:` says
+  otherwise, `offset:` pages, and `total` is the whole count. With
+  `churn:` it answers the routes held afterwards. Example 7 of
+  `docs/console-examples.md` goes from the first route to the last
+  withdrawal.
 * **No verb is named after an irb command**, because irb's command wins
   over a method of the same name. That is why the list is `verbs` and
   not `help`. `ls` lists every method of the console.

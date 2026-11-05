@@ -21,8 +21,8 @@
 #++
 
 
-# docs/console-examples.md, held to the programs it drives. Examples 1
-# and 2 are typed into the program by
+# docs/console-examples.md, held to the programs it drives. Examples 1,
+# 2 and 7 are typed into the program by
 # test/functional/console_examples_test.rb. The other four need several
 # terminals, so this file checks what can be checked with none: every
 # command line parses with the program's own option parser, both node
@@ -60,6 +60,7 @@ class TestConsoleExamplesDoc < Test::Unit::TestCase
     'daemon-dn1'      => BGP::Sim::Console,
     'daemon-rtr'      => BGP::Daemon::Console,
     'daemon-rtr2'     => BGP::Daemon::Console,
+    'generated'       => BGP::Sim::Console,
   }
 
   # What irb itself answers rather than the console.
@@ -126,7 +127,7 @@ class TestConsoleExamplesDoc < Test::Unit::TestCase
     end
     assert_equal('', err.string)
     assert_equal(%w[exe/bgp4r exe/bgp4r-cli exe/bgp4rd], parsed.uniq.sort)
-    assert_equal(14, parsed.size, 'every command line was read')
+    assert_equal(15, parsed.size, 'every command line was read')
   end
 
   def node(name)

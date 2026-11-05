@@ -63,6 +63,8 @@ class BGP_Sim_Console_Test < Test::Unit::TestCase
     attr_accessor :fail_with
     def initialize(speaker, config = nil) ; @speaker, @acts, @config = speaker, [], config ; end
     def act(name, body, async) ; @acts << [name, body, async] ; { :action => name } ; end
+    attr_accessor :pages
+    def plan(body) ; @acts << ['plan', body] ; { :action => 'plan', :plans => @pages } ; end
     def start ; raise @fail_with if @fail_with ; @started = true ; self ; end
     def stop ; @stopped = true ; self ; end
     def started? ; @started ; end
@@ -234,9 +236,61 @@ class BGP_Sim_Console_Test < Test::Unit::TestCase
     @c.verbs
     %w[announce withdraw specimen fault replay notification refresh flap act ship
        received last watch quiet sent announced specimens faults peers state guide
-       connect listen shutdown no_shutdown clear].each do |v|
+       connect listen shutdown no_shutdown clear plan].each do |v|
       assert_match(/^\s+#{v}\b|\b#{v}\b/, @out.string, v)
     end
+  end
+
+  # ---- plan: what a spec would send, and nothing sent -----------------
+
+  ROWS = [{ 'prefix' => '10.1.0.0/24', 'as_path' => [65001], 'med' => 10 },
+          { 'prefix' => '10.1.1.0/24', 'as_path' => [], 'med' => 20 }].freeze
+
+  def page(peer = '10.0.0.2', rows = ROWS, total = 2, offset = 0, churn = nil)
+    pg = { :peer => peer, :rows => rows, :total => total, :offset => offset,
+           :limit => 20, :next_offset => nil }
+    pg[:churn] = churn if churn
+    pg
+  end
+
+  def test_plan_hands_the_spec_to_the_injectors_plan_with_a_screen_of_rows
+    @injector.pages = [page]
+    spec = { :family => 'unicast', :start => '10.1.0.0/24', :count => 2 }
+    pl = @c.plan(spec: spec)
+    assert_equal(['plan', { 'limit' => 20, 'spec' => spec }], last_act)
+    assert_kind_of(Array, pl)
+    assert_equal(ROWS, pl.to_a)
+    assert_equal([2, '10.0.0.2', 0, nil], [pl.total, pl.peer, pl.offset, pl.next_offset])
+  end
+
+  def test_plan_passes_churn_offset_limit_and_peer_through
+    @injector.pages = [page]
+    @c.plan(spec: {}, churn: { :events => 3 }, offset: 5, limit: 1, peer: '10.0.0.2')
+    assert_equal(['plan', { 'limit' => 1, 'spec' => {}, 'churn' => { :events => 3 },
+                            'offset' => 5, 'peer' => '10.0.0.2' }], last_act)
+  end
+
+  def test_plan_with_several_sessions_up_asks_for_one
+    @injector.pages = [page('10.0.0.2'), page('10.0.0.3')]
+    e = assert_raise(ArgumentError) { @c.plan(spec: {}) }
+    assert_match(/2 sessions are up; name one with peer: ADDR. They are 10\.0\.0\.2, 10\.0\.0\.3/, e.message)
+  end
+
+  def test_a_plan_reads_a_head_line_then_one_line_per_row
+    require 'pp'
+    pl = BGP::Sim::Console::Plan.new(page)
+    assert_equal(['2 route(s) to 10.0.0.2',
+                  'prefix 10.1.0.0/24, as_path 65001, med 10',
+                  'prefix 10.1.1.0/24, as_path -, med 20'], pl.inspect.lines.collect(&:chomp))
+    assert_equal(pl.inspect + "\n", pl.pretty_inspect)
+    assert_equal(pl.inspect, pl.to_s)
+  end
+
+  def test_a_plan_says_which_rows_it_shows_and_the_churn
+    pl = BGP::Sim::Console::Plan.new(page('10.0.0.2', ROWS[0, 1], 1000, 9, { 'events' => 20 }))
+    assert_equal('1000 route(s) to 10.0.0.2, rows 10 to 10, after 20 churn event(s)',
+                 pl.inspect.lines.first.chomp)
+    assert_equal({ 'events' => 20 }, pl.churn)
   end
 
   # ---- sessions opened at the prompt: connect and listen ---------------
