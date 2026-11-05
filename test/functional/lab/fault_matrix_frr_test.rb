@@ -67,7 +67,10 @@ class LabFaultMatrixFrrTest < Test::Unit::TestCase
   # not asserted against, because choosing its expectations would mean
   # guessing which of its answers are bugs. Same rule as the GoBGP test's
   # MEASURED, and the same reason.
-  MEASURED = (8..8).freeze
+  #
+  # 8.4.4, and 10.5.1 on the owner's VM on 2026-11-04. The two answer very
+  # differently, so the expectations below are per major version.
+  MEASURED = (8..10).freeze
 
   def self.startup
     @@results, @@status, @@output, @@error = nil, nil, '', nil
@@ -146,13 +149,32 @@ class LabFaultMatrixFrrTest < Test::Unit::TestCase
   def output ; @@output ; end
   def exit_status ; @@status ; end
 
-  def installed_divergences ; FaultMatrixScenario::FRR_8_INSTALLED ; end
-  def reset_divergences ; FaultMatrixScenario::FRR_8_RESETS ; end
-  def reset_subcode_overrides ; FaultMatrixScenario::FRR_8_SUBCODES ; end
+  # FRR 10 is measured on 10.5.1 only, and 9 not at all, so 9 is held to
+  # 8's answers. See FRR_10_KEPT in fault_matrix_scenario.rb.
+  def frr10? ; @@major >= 10 ; end
+
+  def installed_divergences
+    frr10? ? [] : FaultMatrixScenario::FRR_8_INSTALLED
+  end
+
+  def reset_divergences
+    frr10? ? {} : FaultMatrixScenario::FRR_8_RESETS
+  end
+
+  def reset_subcode_overrides
+    frr10? ? {} : FaultMatrixScenario::FRR_8_SUBCODES
+  end
+
+  def kept_divergences
+    frr10? ? FaultMatrixScenario::FRR_10_KEPT : {}
+  end
 
   # FRR 8.4.4 gets every treat_as_withdraw case wrong, so the derived test
   # for that category has nothing left to check and says so rather than
-  # passing while asserting nothing. See wholesale_divergences.
-  def wholesale_divergences ; [:treat_as_withdraw] ; end
+  # passing while asserting nothing. See wholesale_divergences. FRR 10
+  # gets all of them right.
+  def wholesale_divergences
+    frr10? ? [] : [:treat_as_withdraw]
+  end
 
 end

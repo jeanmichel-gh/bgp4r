@@ -487,21 +487,31 @@ BIRD gives no usable RIB answer over a loopback session. Its rows below
 are the blanket ones, so a case named on its own row has no separate
 measurement for it.
 
-| | GoBGP 4.10.0 | GoBGP 3.23.0 | FRR 8.4.4 | BIRD 2.14 |
-|---|---|---|---|---|
-| treat as withdraw cases | agrees | agrees but one, below | reset 3/10, 8 of 11 | keeps the session |
-| attribute discard cases | agrees | agrees | agrees but one, below | keeps the session |
-| unrecognized well known | reset 3/2 | reset 3/2 | reset 3/10 | keeps the session |
-| attribute overruns the list | agrees | reset 3/5 | reset 3/5 | - |
-| duplicate MP_REACH | reset 3/1 | reset 3/1 | reset 3/1 | reset 3/1 |
-| duplicate of any other attribute | agrees | agrees | reset 3/1 | - |
-| Prefix-SID TLV overruns | agrees | agrees | agrees | keeps the session |
-| Label-Index length not 7 | no check | no check | agrees | keeps the session |
-| PMSI_TUNNEL too short | agrees | agrees | reset 3/10 | keeps the session |
-| tunnel TLV overruns | installs the route | installs the route | installs the route | keeps the session |
-| sub-TLV overruns its TLV | discards the attribute | discards the attribute | installs the route | keeps the session |
+| | GoBGP 4.10.0 | GoBGP 3.23.0 | FRR 10.5.1 | FRR 8.4.4 | BIRD 2.14 |
+|---|---|---|---|---|---|
+| treat as withdraw cases | agrees | agrees but one, below | agrees | reset 3/10, 8 of 11 | keeps the session |
+| attribute discard cases | agrees | agrees | agrees | agrees but one, below | keeps the session |
+| unrecognized well known | reset 3/2 | reset 3/2 | keeps the session, drops the route | reset 3/10 | keeps the session |
+| attribute overruns the list | agrees | reset 3/5 | agrees | reset 3/5 | - |
+| duplicate MP_REACH | reset 3/1 | reset 3/1 | reset 3/1 | reset 3/1 | reset 3/1 |
+| duplicate of any other attribute | agrees | agrees | agrees | reset 3/1 | - |
+| Prefix-SID TLV overruns | agrees | agrees | agrees | agrees | keeps the session |
+| Label-Index length not 7 | no check | no check | agrees | agrees | keeps the session |
+| PMSI_TUNNEL too short | agrees | agrees | agrees | reset 3/10 | keeps the session |
+| tunnel TLV overruns | installs the route | installs the route | agrees | installs the route | keeps the session |
+| sub-TLV overruns its TLV | discards the attribute | discards the attribute | agrees | installs the route | keeps the session |
 
-GoBGP 4.10.0 agrees on 16 of the 18, 3.23.0 on 15, and FRR 8.4.4 on 6.
+GoBGP 4.10.0 agrees on 16 of the 18, 3.23.0 on 15, FRR 10.5.1 on 17
+and FRR 8.4.4 on 6.
+
+FRR 10.5.1 was measured on the owner's VM on 2026-11-04, and it fixed
+every FRR 8.4.4 row below but one. The one left moved the other way: an
+unrecognized well known attribute no longer resets the session. FRR logs
+that it does not know how to handle attribute 240 and is "treating as
+withdraw", and drops the route. RFC 4271 section 6.3 asks for a reset
+with subcode 2, and RFC 7606 section 3 does not revisit that case, so
+this is still a divergence. It may be deliberate. BIRD keeps the session
+here too.
 
 Two rows in the FRR column changed when the hand measurement was replaced
 by the asserted one, and both were the hand measurement's fault rather
@@ -552,8 +562,8 @@ FRR identifies each malformed attribute and says "treating as
 withdrawal" in its log, then its withdraw path fails to parse the NLRI
 and it resets with Invalid Network Field. The two attribute discard
 cases keep both session and route, so it parses our NLRI correctly on
-the normal path. This is the Ubuntu 24.04 build; current FRR is 10.x, so
-check a current build before reporting it anywhere.
+the normal path. This is the Ubuntu 24.04 build. FRR 10.5.1 fixed it:
+every treat as withdraw case keeps the session there.
 
 ### The TLV carrying attributes
 
@@ -567,7 +577,8 @@ TLV that breaks that is malformed, treat as withdraw. GoBGP logs "Not
 all TunnelEncapSubTLV bytes available" and discards the attribute. FRR
 logs `bgp_attr_encap: tlv_length(4) != length(12)` and keeps the route.
 Neither withdraws. Two independent stacks landing in the same place is
-worth knowing before reading it as a bug in either.
+worth knowing before reading it as a bug in either. That is FRR 8.4.4:
+FRR 10.5.1 drops the route in both cases, as the section asks.
 
 On the Prefix-SID Label-Index length they split. FRR logs "Prefix SID
 label index length is 6 instead of 7". GoBGP logs nothing and installs

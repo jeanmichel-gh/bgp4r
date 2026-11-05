@@ -44,6 +44,7 @@
 #   exit_status           the matrix process exit status
 #   installed_divergences treat-as-withdraw cases this router installs anyway
 #   reset_divergences     name => subcode, cases this router resets on
+#   kept_divergences      name => installed, reset cases it keeps instead
 #
 # The last two are where a router's own behaviour lives, because the
 # answers are not the same on every version: see GOBGP_3 below.
@@ -190,17 +191,45 @@ module FaultMatrixScenario
   # divergence count where the matrix also does not count it.
   FRR_8_SUBCODES = { 'unknown_wellknown' => 10 }.freeze
 
+  # FRR 10.5.1, measured on the owner's VM on 2026-11-04. **It agrees on
+  # 17 of the 18 rows**, where 8.4.4 agreed on 6. Every treat-as-withdraw
+  # case now keeps the session and drops the route, the duplicated ORIGIN
+  # keeps both, attr_overrun is a withdraw, and both tunnel encapsulation
+  # cases drop the route as RFC 9012 section 13 asks. So TUNNEL_ENCAP is
+  # not an FRR divergence any more and FRR 10 lists nothing installed.
+  #
+  # **The one row left is unknown_wellknown, and it moved the other
+  # way.** 8.4.4 reset with the wrong subcode; 10.5.1 does not reset at
+  # all. Its log: "(240) attribute received, while it is not known how to
+  # handle it, treating as withdraw". RFC 4271 section 6.3 asks for a
+  # NOTIFICATION with subcode 2, Unrecognized Well-known Attribute, and
+  # RFC 7606 section 3 does not revisit that case, so the catalog keeps
+  # session_reset and this is a divergence. It may be deliberate, since
+  # treat-as-withdraw is the gentler answer, and BIRD keeps the session
+  # here too. The route is dropped, which the value records.
+  FRR_10_KEPT = { 'unknown_wellknown' => false }.freeze
+
   # Every name this router is expected to answer differently from the
   # catalog, whether by installing the route or by resetting.
   def expected_divergences
-    (installed_divergences + reset_divergences.keys).sort
+    (installed_divergences + reset_divergences.keys + kept_divergences.keys).sort
   end
 
   # The catalog's own session resets, plus any this router adds, plus any
   # whose subcode it reports differently.
   def expected_resets
     CATALOG_RESETS.merge(reset_divergences).merge(reset_subcode_overrides)
+                  .reject { |name, _| kept_divergences.key?(name) }
   end
+
+  # A case the catalog expects to reset, which this router answers by
+  # keeping the session. name => whether the route was installed.
+  #
+  # The mirror of reset_divergences, and every name in it is a
+  # divergence. It is taken out of expected_resets, so no test asks for a
+  # reset the router does not send. FRR 10's unknown_wellknown is the
+  # first instance: see FRR_10_KEPT.
+  def kept_divergences ; {} ; end
 
   # A case the catalog already expects to reset, which this router does
   # reset, but with another subcode. name => subcode.
@@ -323,6 +352,13 @@ module FaultMatrixScenario
                    "router does, not what the RFC asks. See TUNNEL_ENCAP in\n" \
                    "fault_matrix_scenario.rb, which says what to do if the router\n" \
                    "improved.\n#{output}"
+    end
+    kept_divergences.each do |name, installed|
+      r = result(name)
+      assert_equal 'kept', r['outcome'],
+                   "#{name} is a reset case this router was measured keeping the\n" \
+                   "session on. A reset now means it changed: see FRR_10_KEPT.\n#{output}"
+      assert_equal installed, r['installed'], "#{name} installed\n#{output}"
     end
   end
 

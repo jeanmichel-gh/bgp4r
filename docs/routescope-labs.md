@@ -855,7 +855,8 @@ What a console adds is three things. The catalog's entry shape is
 `[name, description, expected action, subcode, RFC section, block]`,
 which renders as a table with a verdict per row and needs no new data.
 The per-version split becomes visible rather than living in a test
-file: GoBGP 4.10.0 agrees on 16 of 18, 3.23.0 on 15, FRR 8.4.4 on 6.
+file: GoBGP 4.10.0 agrees on 16 of 18, 3.23.0 on 15, FRR 10.5.1 on 17
+and FRR 8.4.4 on 6.
 And **a fault case can be run while a link is degraded**, which no
 current test can do.
 
