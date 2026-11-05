@@ -347,7 +347,9 @@ last.nlri
 ## 10. Step 3, a prompt on the two programs
 
 Designed with the owner on 2026-11-04. `bgp4r sim --interact` is
-built and the `bgp4rd` half is not yet. CLAUDE.md tracks the status under "An irb console on a live session". Two
+built, and so is `bgp4rd --interact` with its reading and acting verbs,
+the `mark` key and Cease 6/2 on `exit`. Sending by hand on the daemon is
+not built yet. CLAUDE.md tracks the status under "An irb console on a live session". Two
 commands gain `--interact`: `bgp4r sim`, the injector, and `bgp4rd`,
 the daemon. They differ in kind, because an injector holds no Loc-RIB
 and a daemon is a router.
@@ -398,6 +400,25 @@ cannot disagree:
   `clear`, `shutdown`, `no_shutdown` and `refresh` are the peer methods.
 * **Watching**: `received`, `last`, `watch`, `quiet` and `n`, as in
   section 9.
+
+Built, in bgp/daemon/console.rb. Four things to know when using it:
+
+* **Each verb calls `Api#handle`**, the entry point the socket uses,
+  and the answer goes through a JSON round trip. So a verb that returns
+  data returns what `bgp4r-cli` would print, with String keys, and a
+  refusal is the daemon's own message. `api 'show.fib'` reaches any
+  method by name.
+* **`clear` and `shutdown` send a Cease first**, 6/4 and 6/2, when the
+  session is up, then call `peer.clear` and `peer.stop`. The socket
+  methods still send none; that open item is theirs.
+* **A verb with no peer** goes to the only one configured or the only
+  one up, and otherwise names the peers rather than picking one.
+* **`peers` has no `hand` column yet**, and `specimen`, `fault`,
+  `replay`, `ship` and `resend` are not there. Those are 3b-iii.
+
+```
+bgp4rd -f rtr.yml -s /tmp/rtr.sock --interact
+```
 
 ### Sending by hand on a daemon
 
@@ -465,9 +486,11 @@ holding a process nobody can type into.
 ### The whole of it, by example
 
 Every step below is what the design says happens. The `rib` and `why`
-data were produced by today's library from the same table, measured on
-2026-11-04. Everything about the prompt itself is proposed: the
-`--interact` flag, the `mark` key, the verbs and their printed form.
+data were produced by the library from the same table, measured on
+2026-11-04. The `--interact` flag, the `mark` key and the reading and
+acting verbs are built; steps 6 to 8 and the `hand` column are not yet.
+The printed forms are close to what is built, not exact: `originate`
+also answers `marked`.
 
 **The lab.** One Linux machine, three terminals and no router binary.
 All of 127/8 is loopback on Linux, so each speaker has an address of its
@@ -779,7 +802,8 @@ Cease, go to `idle`, and keep trying to dial.
   on each Neighbor. No change in behavior. Done, as `BGP::Prompt` in
   bgp/prompt.rb, which loads without the injector.
 * **3b-ii**: `bgp4rd --interact` with the reading and acting verbs, the
-  `mark` key, and Cease 6/2 on `exit`.
+  `mark` key, and Cease 6/2 on `exit`. Done, in bgp/daemon/console.rb,
+  with the mark read in `Control#route_originate`.
 * **3b-iii**: sending by hand on the daemon: an Injector over the
   daemon's own Speaker, the `hand` list in `show.adj_out` and
   `show.peers`, and `resend`.

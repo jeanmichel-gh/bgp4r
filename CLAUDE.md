@@ -413,6 +413,14 @@ bgp/daemon/              `bgp4rd` the daemon and `bgp4r-cli` its client;
                          configuration that disagrees with the running
                          speaker is the claim docs/daemon.md says a commit
                          must not make. See "Known issues to work on"
+                         console.rb `bgp4rd --interact`: irb opened on a
+                         `Console` over the daemon's own `Api`, whose
+                         verbs call `Api#handle` and so answer what
+                         `bgp4r-cli` prints. It includes `BGP::Prompt`
+                         and loads no injector. The `mark` key, the
+                         communities a route made by hand carries, is
+                         read in `Control.mark` and added in
+                         `route.originate`. docs/console.md section 10
 bgp/sim/                 `bgp4r-sim` the route injector, and `bgp4r
                          routegen`; require 'bgp/sim', which bgp4r.rb
                          does not, the same arrangement bgp/daemon.rb and
@@ -1514,6 +1522,11 @@ the test server on loopback. No privilege, no router, no Docker. About
 ```
 ruby -I. test/functional/console_test.rb
 ```
+The same file drives `bgp4r sim --interact` and `bgp4rd --interact`
+that way too. The daemon's prompt, with `bgp4r-cli` working beside it:
+```
+ruby -I. exe/bgp4rd -f rtr.yml -s /tmp/rtr.sock --interact
+```
 
 The daemon and its client by hand, which is how the shapes in
 `docs/daemon.md` were measured. `--socket` and `$BGP4R_SOCKET` both work,
@@ -1625,7 +1638,7 @@ CI: `.github/workflows/test.yml` runs both suites on every push to master and ev
 
 `.github/workflows/capture.yml` is the one workflow that deploys a containerlab lab: it builds the `lab-node` and BIRD images, deploys `lab/routescope/bgp4r-lab`, and runs its `capture.sh`, on demand and on a push that changes that folder or the Dockerfile. Its log is what routescope's BGP fixtures are cut from.
 
-Baseline on 2026-11-04: 3621 tests, 36409 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
+Baseline on 2026-11-04: 3656 tests, 36525 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
 
 **That coverage figure is 98.5% for the library and the rest is the two
 programs, not a gap anywhere else.** Measured the same run: with
@@ -7928,7 +7941,7 @@ the guide.
    Two decisions to keep: **networking terms at the prompt**, so
    `remote_as`, `listen`, `shutdown` and `clear`; and **`remote` and not
    `far`** for the other side.
-3. **In progress, 3a and 3b-i Done.** docs/console.md section 10 is the design,
+3. **In progress, 3a, 3b-i and 3b-ii Done.** docs/console.md section 10 is the design,
    agreed with the owner on 2026-11-04, with a walkthrough from start to
    `exit`. Four pull requests, each to be marked here as it lands:
    * **3a. Done.** `bgp4r sim --interact`: the Console over the server's
@@ -7945,13 +7958,23 @@ the guide.
      delegate, so there is one definition. **The one claim only the new
      test can see is that the module loads without the injector**: a
      sabotage adding that require failed nothing else.
-   * **3b-ii.** `bgp4rd --interact`. Its verbs are the daemon's own and
-     go through the control socket's methods: `peers`, `rib`, `why`,
-     `adj_in`, `adj_out`, `fib`, `originate`, `withdraw`, `clear`,
-     `shutdown`, `no_shutdown`, `refresh`. A `mark` key names a
-     community added to routes made by hand, at the prompt or through
-     `route.originate`, so a receiving router can act on them. `exit`
-     sends Cease 6/2 and stops the daemon.
+   * **3b-ii. Done.** `bgp4rd --interact`, in bgp/daemon/console.rb. Its
+     verbs are the daemon's own and go through the control socket's
+     methods: `peers`, `rib`, `why`, `adj_in`, `adj_out`, `fib`,
+     `originate`, `withdraw`, `clear`, `shutdown`, `no_shutdown`,
+     `refresh`, and `api` for any method by name. **Each calls
+     `Api#handle` and the answer goes through a JSON round trip**, so
+     the prompt answers what `bgp4r-cli` prints and the two cannot
+     disagree. A `mark` key names communities added to routes made by
+     hand, at the prompt or through `route.originate`; it is read in
+     `Control#route_originate` on each call, so it is live in a commit,
+     and checked at start-up and by a commit. `exit` sends Cease 6/2 to
+     each peer that is up and stops the daemon.
+     * **A prompt test that starts with the default `wait: true` hangs
+       when the prompt is missing**, and `timeout` does not end it,
+       because the daemon traps TERM to stop itself and the run moves on
+       to the next test's wait. Measured by sabotage. The tests start
+       with `:wait => false`, so the same sabotage fails.
    * **3b-iii.** `specimen`, `fault`, `replay` and `ship` on the daemon.
      **The Adj-RIB-Out is never patched for them**, because after a
      fault the daemon cannot know what the peer holds. Each prefix sent

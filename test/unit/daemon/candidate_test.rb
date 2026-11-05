@@ -200,6 +200,29 @@ class BGP_Daemon_Candidate_Test < Test::Unit::TestCase
     assert_equal(['10.255.9.0/24'], @speaker.rib.view.routes.map { |x| x[:prefix] })
   end
 
+  # The mark is live: `route.originate` reads it from the running
+  # configuration on each call, so a commit needs to do nothing else and
+  # the next route made by hand carries it.
+  def test_a_mark_change_is_live_and_reaches_the_next_route
+    @candidate.load('lines' => ['set mark large_communities 65000:1:1'])
+    r = @candidate.commit
+    assert_equal(true, r[:ok], r[:errors].inspect)
+    BGP::Daemon::Control.new(@speaker).route_originate('prefix' => '10.255.7.0/24')
+    @speaker.rib.drain
+    row = @speaker.rib.view.routes('10.255.7.0/24').first
+    assert_equal(['65000:1:1'], row[:large_communities])
+  end
+
+  # The same check bgp4rd makes when it reads the file, so a commit
+  # cannot put a mark in place that the next route.originate refuses.
+  def test_a_mark_that_does_not_read_is_refused_by_the_commit
+    @candidate.load('lines' => ['set mark large 65000:1:1'])
+    r = @candidate.commit
+    assert_equal(false, r[:ok])
+    assert_match(/mark: unknown key\(s\) large/, r[:errors].join)
+    assert_nil(@speaker.config['mark'], 'the running configuration changed')
+  end
+
   # ---- what a commit refuses ----
 
   # **The commit is refused and the running configuration stays true**,

@@ -275,4 +275,66 @@ class BGP_Daemon_Control_Test < Test::Unit::TestCase
     assert_equal(200, c.send(:subtype, 200))
   end
 
+  # ====================================================================
+  # mark: the communities a route made by hand carries
+
+  MARK = { 'large_communities' => ['65000:1:1'] }.freeze
+
+  # The mark goes on beside the route's own communities, in each of the
+  # three lists, and the answer says it did.
+  def test_the_mark_is_added_to_a_route_originated_by_hand
+    c = control('mark' => MARK.merge('communities' => ['65000:9']))
+    r = c.route_originate('prefix' => '10.255.0.0/24', 'communities' => ['65000:100'])
+    assert_equal(true, r[:marked])
+    row = c.speaker.rib.view.routes('10.255.0.0/24').first
+    assert_equal(%w[65000:9 65000:100].sort, row[:communities].sort)
+    assert_equal(['65000:1:1'], row[:large_communities])
+  end
+
+  def test_with_no_mark_nothing_is_added
+    c = control
+    r = c.route_originate('prefix' => '10.255.0.0/24')
+    assert_equal(false, r[:marked])
+    assert_equal([], c.speaker.rib.view.routes('10.255.0.0/24').first[:large_communities])
+  end
+
+  # An originate: block in the file is not made by hand, so it carries
+  # no mark.
+  def test_an_originate_block_in_the_file_is_not_marked
+    s = speaker('mark' => MARK, 'originate' => [{ 'prefixes' => ['10.254.0.0/24'] }])
+    assert_equal([], s.rib.view.routes('10.254.0.0/24').first[:large_communities])
+  end
+
+  # Read on each call, so a commit that changes the mark applies to the
+  # next route.
+  def test_the_mark_is_read_from_the_running_configuration_on_each_call
+    c = control
+    c.speaker.reconfigure(c.speaker.config.merge('mark' => MARK))
+    c.route_originate('prefix' => '10.255.0.0/24')
+    assert_equal(['65000:1:1'], c.speaker.rib.view.routes('10.255.0.0/24').first[:large_communities])
+  end
+
+  def test_a_mark_key_it_does_not_read_is_refused_by_name
+    e = assert_raise(ArgumentError) { BGP::Daemon::Control.mark('mark' => { 'large' => ['1:1:1'] }) }
+    assert_match(/mark: unknown key\(s\) large: it takes communities, extended_communities, large_communities/,
+                 e.message)
+  end
+
+  def test_a_mark_that_is_not_a_mapping_is_refused
+    e = assert_raise(ArgumentError) { BGP::Daemon::Control.mark('mark' => ['65000:1:1']) }
+    assert_match(/\Amark takes/, e.message)
+  end
+
+  def test_a_mark_community_that_does_not_parse_is_refused_and_says_mark
+    e = assert_raise(ArgumentError) do
+      BGP::Daemon::Control.mark('mark' => { 'extended_communities' => ['route_target'] })
+    end
+    assert_match(/\Amark: an extended community is KIND:VALUE/, e.message)
+  end
+
+  def test_no_mark_is_an_empty_mark
+    assert_equal({}, BGP::Daemon::Control.mark({}))
+    assert_equal({}, BGP::Daemon::Control.mark(nil))
+  end
+
 end
