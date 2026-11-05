@@ -26,6 +26,8 @@ require 'bgp/daemon/log_ring'
 require 'bgp/daemon/candidate'
 require 'bgp/daemon/api'
 require 'bgp/daemon/client'
+require 'bgp/daemon/control'
+require 'bgp/daemon/console'
 
 module BGP
   module Daemon
@@ -68,17 +70,26 @@ Usage: bgp4rd -f FILE [options]
       --state FILE    write the state file here as well
   -l, --log FILE      log file, - for standard output
   -d, --debug         log every message too
+      --interact      open an irb prompt on the daemon; the socket still
+                      answers, and exit stops the daemon
   -v, --version       print the bgp4r version
   -h, --help          this help
 
-Talk to it with bgp4r-cli. See docs/daemon.md.
+Talk to it with bgp4r-cli. See docs/daemon.md, and docs/console.md for
+--interact.
 TEXT
 
-      attr_reader :speaker, :api, :views, :log_ring, :candidate
+      attr_reader :speaker, :api, :views, :log_ring, :candidate, :console
 
-      def initialize(out = $stdout, err = $stderr)
+      # arg[:interact] is called with the Console in place of irb, and
+      # arg[:load_irb] false skips loading it. Both are the seams a test
+      # uses, since irb reads standard input and no unit test may reach
+      # it. `bgp4r sim` takes the same two.
+      def initialize(out = $stdout, err = $stderr, arg = {})
         @out = out
         @err = err
+        @interact = arg[:interact] || ->(console) { console.interact }
+        @load_irb = arg.fetch(:load_irb, true)
       end
 
       # Parses argv, builds everything, and returns an exit status. With
@@ -89,9 +100,20 @@ TEXT
         return 0 if opts[:version]
         return help(0) if opts[:help]
         return help(1) if opts[:error]
+        # Before the file is read, so a missing irb is said at once and
+        # nothing has started.
+        if opts[:interact] && @load_irb
+          begin
+            Console.load_irb
+          rescue LoadError => e
+            @err.puts "bgp4rd: #{e.message}"
+            return 1
+          end
+        end
         config = load_config(opts) or return 1
         setup_log(opts, config)
         build(Server.with_defaults(config), opts) or return 1
+        return prompt if opts[:interact]
         return 0 unless wait
         wait_for_a_signal
         0
@@ -110,9 +132,32 @@ TEXT
         { 'rib' => true }.merge(config)
       end
 
+      # The prompt on the daemon, in place of waiting for a signal. The
+      # control socket goes on answering from its own thread, so
+      # `bgp4r-cli` works beside the prompt. Leaving it sends Cease 6/2
+      # to every peer that is up and stops the daemon, as INT and TERM
+      # stop it, so one prompt is one process.
+      def prompt
+        @console = Console.new(@api, @out)
+        @out.puts "bgp4rd: up, AS #{@speaker.my_as}, router id #{@speaker.router_id}"
+        @out.puts "bgp4rd: socket #{@api.path}, so bgp4r-cli works beside this prompt"
+        @interact.call(@console)
+        0
+      ensure
+        if @console
+          n = @console.stop
+          @out.puts "bgp4rd: stopping, Cease 6/2 to #{n} peer#{n == 1 ? '' : 's'}"
+        end
+        log(:info, 'bgp4rd stopping')
+        stop
+      end
+
       # Builds the Speaker, the Views and the Api and starts all three.
       # Answers nil and prints the reason on anything a person can fix.
       def build(config, opts = {})
+        # The mark is checked here so a typo in it is said at start-up,
+        # and not on the first route somebody makes by hand.
+        Control.mark(config)
         # The same logger the Api and the Candidate get, so every line
         # this process writes goes through one callable: the sessions'
         # and the table's as much as the daemon's own.
@@ -224,6 +269,7 @@ TEXT
           when '--state' then opts[:state] = argv[i += 1]
           when '-l', '--log' then opts[:log] = argv[i += 1]
           when '-d', '--debug' then opts[:debug] = true
+          when '--interact' then opts[:interact] = true
           when '-v', '--version'
             @out.puts BGP::VERSION
             opts[:version] = true
@@ -256,6 +302,15 @@ TEXT
       # long as it has; a daemon told where to log must not depend on
       # being the first thing to ask.
       def setup_log(opts, config)
+        # **At a prompt the log goes to a file unless -l names one**, as
+        # `bgp4r sim --interact` does: sessions and the socket log from
+        # their own threads, and every line would land in the middle of
+        # what the person is typing.
+        if opts[:interact] && opts[:log].nil?
+          require 'tmpdir'
+          opts[:log] = File.join(Dir.tmpdir, "bgp4rd-#{Process.pid}.log")
+          @out.puts "bgp4rd: logging to #{opts[:log]}"
+        end
         io = if opts[:log].nil? || opts[:log] == '-'
                $stdout
              else

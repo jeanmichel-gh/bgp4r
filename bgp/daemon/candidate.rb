@@ -21,6 +21,7 @@
 #++
 
 require 'bgp/daemon/config'
+require 'bgp/daemon/control'
 
 module BGP
   module Daemon
@@ -438,6 +439,10 @@ module BGP
         def self.effect(path)
           return LIVE if path == %w[log_level]
           return LIVE if path.first == 'originate'
+          # Read by `Control#route_originate` on each call, from the
+          # configuration `Speaker#reconfigure` swaps in, so nothing else
+          # has to change.
+          return LIVE if path.first == 'mark'
           return BOUNCE_ALL if path.first == 'announce'
           if path.first == 'neighbors' && path.size >= 3
             return LIVE   if NEIGHBOR_LIVE_KEYS.include?(path[2])
@@ -508,6 +513,17 @@ module BGP
           end
           bounced_or_live_neighbors.each { |c| refuse_unbuildable_neighbor(c) }
           refuse_originate_with_no_table
+          refuse_unreadable_mark
+        end
+
+        # The same check `bgp4rd` makes when it reads the file, so a
+        # commit cannot put a mark in place that the next
+        # `route.originate` would refuse.
+        def refuse_unreadable_mark
+          return if @paths.none? { |p| p.first == 'mark' }
+          Control.mark(@candidate)
+        rescue ArgumentError => e
+          @errors << e.message
         end
 
         # **A dry run of the real code path rather than a list of rules**,

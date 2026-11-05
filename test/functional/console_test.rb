@@ -33,6 +33,7 @@ require 'bgp4r'
 require 'bgp/sim/console'
 require 'bgp/sim/console_command'
 require 'bgp/sim/http'
+require 'bgp/daemon'
 require 'test/helpers/server'
 require 'rbconfig'
 require 'tmpdir'
@@ -370,6 +371,75 @@ class TestConsole < Test::Unit::TestCase
       assert_match(/self is the console/, out)
       assert(wait { !@s.is_established? }, 'exit left the session up')
       assert_raise(Errno::ECONNREFUSED) { TCPSocket.new('127.0.0.1', api) }
+    end
+  end
+
+  # ---- bgp4rd --interact ------------------------------------------------
+
+  # The daemon with its prompt on, fed from a pipe, while bgp4r-cli reads
+  # the same daemon over its socket. A route typed at the prompt goes
+  # into the Loc-RIB, out through the export rules with the configured
+  # mark, and the peer reads it; `exit` sends Cease 6/2 and the socket
+  # goes away.
+  def test_bgp4rd_interact_originates_with_the_mark_and_ceases_on_exit
+    begin
+      BGP::Daemon::Console.load_irb
+    rescue LoadError => e
+      omit(e.message)
+    end
+    notes = Queue.new
+    @s.add_observer(Class.new do
+      define_method(:initialize) { |q| @q = q }
+      define_method(:update) { |m| @q << m if m.is_a?(BGP::Notification) }
+    end.new(notes))
+    Dir.mktmpdir do |dir|
+      path = File.join(dir, 'rtr.yml')
+      sock = File.join(dir, 'rtr.sock')
+      File.write(path, <<~YAML)
+        router_id: 10.255.0.1
+        as: 65001
+        neighbors:
+          - address: 127.0.0.1
+            port: #{@port}
+            as: #{PEER_AS}
+            connect: true
+            retry: 0.2
+        # Both ends are 127.0.0.1, and RFC 4271 section 5.1.3 forbids
+        # sending our own route with the peer's address as its next hop,
+        # so the next hop is named.
+        export:
+          next_hops: { 1: 192.0.2.1 }
+        mark:
+          large_communities: ['65001:1:1']
+      YAML
+      argv = [RbConfig.ruby, '-I', ROOT, File.join(ROOT, 'exe', 'bgp4rd'), '-f', path,
+              '-s', sock, '--interact', '-l', File::NULL]
+      out = ::IO.popen(argv, 'r+', :err => [:child, :out]) do |io|
+        assert(wait { @s.is_established? }, 'the session did not come up')
+        io.puts "originate '10.7.0.0/24', communities: ['65001:100']"
+        u = @catcher.shift
+        assert_kind_of(BGP::Update, u, 'the typed route did not cross')
+        assert_equal(['10.7.0.0/24'], nlri_of(u))
+        assert_equal('65001:100', u.path_attribute[:communities].communities)
+        assert_equal(['65001:1:1'], u.path_attribute[:large_communities].communities.collect(&:to_s),
+                     'the mark did not go out with the route')
+        # The prompt and the socket are one daemon: the route typed at one
+        # is in the table the other reads.
+        rows = BGP::Daemon::Client.new(sock).call('show.routes', 'prefix' => '10.7.0.0/24')['rows']
+        assert_equal(['65001:1:1'], rows.first['large_communities'])
+        io.puts "why '10.7.0.0/24'"
+        io.puts 'exit'
+        io.close_write
+        io.read
+      end
+      assert_equal(0, $?.exitstatus, out)
+      assert_match(/self is the daemon/, out)
+      assert_match(%r{10\.7\.0\.0/24, 1 path, decided at}, out)
+      assert_match(%r{bgp4rd: stopping, Cease 6/2 to 1 peer\b}, out)
+      n = notes.pop(:timeout => 5)
+      assert_not_nil(n, 'no NOTIFICATION reached the peer')
+      assert_equal([6, 2], [n.to_hash[:code], n.to_hash[:subcode]])
+      assert_equal(false, File.exist?(sock), 'exit left the socket')
     end
   end
 

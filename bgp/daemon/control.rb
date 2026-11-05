@@ -71,6 +71,38 @@ module BGP
 
       PEER_KEYS = %w[peer].freeze
 
+      # The keys of the configuration's `mark`, which are the three
+      # community keys an announce block takes, so the text is the same.
+      MARK_KEYS = %w[communities extended_communities large_communities].freeze
+
+      # The `mark` of a configuration, as a Hash with String keys, empty
+      # when there is none. A key it does not read, or a community it
+      # cannot parse, raises ArgumentError naming it, so a typo is caught
+      # when the file is read and not on the first route made by hand.
+      #
+      # **What it is for**: a route made by hand, at the prompt or
+      # through `route.originate`, carries these communities beside its
+      # own, so a router that receives it can act on it. Nothing in the
+      # IANA registries means "made by hand", so the value is the
+      # operator's convention. An `originate:` block in the file does not
+      # carry it, because nobody typed that route. docs/console.md
+      # section 10 has the decision.
+      def self.mark(config)
+        m = config && config['mark']
+        return {} if m.nil?
+        raise ArgumentError, "mark takes #{MARK_KEYS.join(', ')}, got #{m.inspect}" unless m.is_a?(Hash)
+        m = m.each_with_object({}) { |(k, v), h| h[k.to_s] = v }
+        unknown = m.keys - MARK_KEYS
+        unless unknown.empty?
+          raise ArgumentError, "mark: unknown key(s) #{unknown.join(', ')}: it takes #{MARK_KEYS.join(', ')}"
+        end
+        CommunityKeys.community_attributes(m)
+        m
+      rescue ArgumentError => e
+        raise if e.message.start_with?('mark')
+        raise ArgumentError, "mark: #{e.message}"
+      end
+
       attr_reader :speaker
 
       def initialize(speaker)
@@ -138,17 +170,25 @@ module BGP
       # because RFC 4271 section 5.1.2 wants it empty toward an internal
       # peer and our AS alone toward an external one, and NEXT_HOP is a
       # placeholder because section 5.1.3 makes it ours on each session.
+      #
+      # **The configuration's `mark` is added here**, to each of the three
+      # community lists, so a route made through `bgp4r-cli` and one made
+      # at the prompt carry it alike. `marked` in the answer says whether
+      # it was. The mark is read from the running configuration on each
+      # call, so a commit that changes it applies to the next route.
       def route_originate(params = {})
         p = strings(params, ORIGINATE_KEYS)
         rib = table!
         prefixes = prefixes_of(p)
         id = p['path_id'] && Integer(p['path_id'])
+        mark = Control.mark(@speaker.config)
+        mark.each { |k, v| p[k] = Array(p[k]) + Array(v) }
         pa = @speaker.originate_attribute(p)
         changes = rib.synchronize do
           prefixes.flat_map { |prefix| rib.originate(prefix, :path_attribute => pa, :path_id => id) }
         end
         { :originated => prefixes, :total => prefixes.size,
-          :changes => changes.size, :rib => rib.loc_rib.size }
+          :changes => changes.size, :rib => rib.loc_rib.size, :marked => !mark.empty? }
       end
 
       # Takes prefixes of ours back, through `Table#withdraw(rib

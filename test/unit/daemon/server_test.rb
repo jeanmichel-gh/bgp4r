@@ -224,6 +224,124 @@ class BGP_Daemon_Server_Test < Test::Unit::TestCase
     end
   end
 
+  # ---- --interact -----------------------------------------------------
+
+  # A peer we dial at 127.0.0.1:1, which refuses at once, so nothing
+  # listens and the dialling thread notices the stop within its retry.
+  INTERACT_CONFIG = <<~YAML
+    as: 65000
+    router_id: 10.0.0.1
+    neighbors:
+      - address: 127.0.0.1
+        port: 1
+        as: 65001
+        connect: true
+        retry: 1
+  YAML
+
+  # Starts with --interact and a prompt that runs the block in place of
+  # irb. Every start logs to its own file and the logger is put back,
+  # since `Log` is the process's one logger.
+  #
+  # **The directory outlives the start and goes in teardown**, so a test
+  # can ask whether leaving removed the socket. A first draft removed it
+  # with the start, and the socket's absence was then true of every run.
+  def interacting(config = INTERACT_CONFIG, log: true, irb: false, &prompt)
+    require 'tmpdir'
+    @dir = Dir.mktmpdir
+    path = File.join(@dir, 'bgp4rd.yml')
+    write(path, config)
+    @sock = File.join(@dir, 'd.sock')
+    @logfile = File.join(@dir, 'd.log')
+    @out, @err = StringIO.new, StringIO.new
+    @server = BGP::Daemon::Server.new(@out, @err, :interact => prompt || ->(_c) {},
+                                                  :load_irb => irb)
+    argv = ['-f', path, '-s', @sock, '--interact']
+    argv += ['-l', @logfile] if log
+    @server.start(argv, {})
+  ensure
+    @server.stop if @server
+    Log.set_filename(STDERR)
+  end
+
+  def teardown
+    FileUtils.remove_entry(@dir) if @dir && File.exist?(@dir)
+  end
+
+  # The prompt opens on the daemon's own Api, the socket answers while it
+  # is open, and leaving stops the daemon and removes the socket. The
+  # request goes over the real socket, because that it answers **while**
+  # the prompt runs is the claim.
+  def test_interact_opens_the_prompt_and_the_socket_still_answers
+    seen = {}
+    status = interacting do |console|
+      seen[:api] = console.api_server
+      seen[:info] = BGP::Daemon::Client.new(@sock).call('api.info')
+      seen[:socket] = File.socket?(@sock)
+    end
+    assert_equal(0, status)
+    assert_same(@server.api, seen[:api], 'the prompt is on the daemon\'s own Api')
+    assert_equal(BGP::VERSION, seen[:info]['version'])
+    assert(seen[:socket])
+    assert_equal(false, File.exist?(@sock), 'leaving removed the socket')
+    assert(@server.speaker.stopping?, 'leaving stopped the speaker')
+    assert_match(/bgp4rd: socket #{Regexp.escape(@sock)}, so bgp4r-cli works/, @out.string)
+    assert_match(/bgp4rd: stopping, Cease 6\/2 to 0 peers/, @out.string)
+  end
+
+  # Leaving goes through the console's stop, which is what sends the
+  # Cease, and an exception out of the prompt still leaves that way.
+  def test_leaving_by_an_exception_still_ceases_and_stops
+    stopped = []
+    assert_raise(RuntimeError) do
+      interacting do |console|
+        console.define_singleton_method(:stop) { stopped << :console ; super() }
+        raise 'out of the prompt'
+      end
+    end
+    assert_equal([:console], stopped)
+    assert(@server.speaker.stopping?)
+  end
+
+  def test_at_a_prompt_the_log_goes_to_a_file_unless_one_is_named
+    interacting(log: false)
+    logfile = File.join(Dir.tmpdir, "bgp4rd-#{Process.pid}.log")
+    assert_match(/logging to #{Regexp.escape(logfile)}/, @out.string)
+    assert(File.exist?(logfile))
+  ensure
+    File.delete(logfile) if logfile && File.exist?(logfile)
+  end
+
+  def test_a_named_log_is_kept_at_a_prompt
+    interacting
+    assert_no_match(/logging to/, @out.string)
+  end
+
+  # A missing irb is said before the file is read, so nothing starts.
+  def test_a_missing_irb_is_said_before_anything_starts
+    BGP::Daemon::Console.singleton_class.send(:alias_method, :real_load_irb, :load_irb)
+    BGP::Daemon::Console.define_singleton_method(:load_irb) { raise LoadError, BGP::Prompt::IRB_MISSING }
+    assert_equal(1, interacting(irb: true))
+    assert_match(/irb cannot be loaded/, @err.string)
+    assert_nil(@server.speaker)
+  ensure
+    BGP::Daemon::Console.singleton_class.send(:alias_method, :load_irb, :real_load_irb)
+  end
+
+  def test_the_usage_names_interact
+    _status, out, _err = run_server(['--help'])
+    assert_match(/--interact/, out)
+  end
+
+  # A mark that does not read is said at start-up, and not on the first
+  # route somebody makes by hand.
+  def test_a_mark_that_does_not_read_is_refused_at_start
+    status = interacting(INTERACT_CONFIG + "mark:\n  large: ['65000:1:1']\n")
+    assert_equal(1, status)
+    assert_match(/bgp4rd: mark: unknown key\(s\) large/, @err.string)
+    assert_nil(@server.speaker)
+  end
+
   private
 
   def config_text
