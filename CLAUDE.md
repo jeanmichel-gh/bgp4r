@@ -614,6 +614,16 @@ bgp/specimen.rb          `BGP::Specimen::CATALOG`, the valid counterpart
                          `Attr.registrations` and from the build gate, so
                          an attribute registered or a SAFI wired in fails
                          the suite until it has a specimen
+bgp/prompt.rb            `BGP::Prompt`, the parts of an irb prompt that do
+                         not depend on what is behind it: loading irb,
+                         `verbs`, `guide`, `received`, `last`, `watch` and
+                         the tap, plus `Prompt.describe` and the two prefix
+                         counters `Injector` delegates to. `Sim::Console`
+                         includes it and the daemon's prompt will. **It is
+                         outside bgp/sim/ so the daemon gets a prompt
+                         without loading the injector**, and
+                         test/unit/prompt_test.rb loads it alone in a child
+                         to hold that
 bgp/misc/                extras: route_generator.rb (many prefixes packed in UPDATEs), live_feed.rb (a client for an old public BGP feed)
 exe/bgp4r                the umbrella command, with `capture`, `sim`,
                          `routegen`, `console`, `lab new` and `version`.
@@ -1613,7 +1623,7 @@ CI: `.github/workflows/test.yml` runs both suites on every push to master and ev
 
 `.github/workflows/capture.yml` is the one workflow that deploys a containerlab lab: it builds the `lab-node` and BIRD images, deploys `lab/routescope/bgp4r-lab`, and runs its `capture.sh`, on demand and on a push that changes that folder or the Dockerfile. Its log is what routescope's BGP fixtures are cut from.
 
-Baseline on 2026-11-04: 3593 tests, 36338 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
+Baseline on 2026-11-04: 3615 tests, 36394 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
 
 **That coverage figure is 98.5% for the library and the rest is the two
 programs, not a gap anywhere else.** Measured the same run: with
@@ -7907,7 +7917,7 @@ the guide.
    Two decisions to keep: **networking terms at the prompt**, so
    `remote_as`, `listen`, `shutdown` and `clear`; and **`remote` and not
    `far`** for the other side.
-3. **In progress, 3a Done.** docs/console.md section 10 is the design,
+3. **In progress, 3a and 3b-i Done.** docs/console.md section 10 is the design,
    agreed with the owner on 2026-11-04, with a walkthrough from start to
    `exit`. Four pull requests, each to be marked here as it lands:
    * **3a. Done.** `bgp4r sim --interact`: the Console over the server's
@@ -7917,8 +7927,13 @@ the guide.
      server's `stop` removed it still passes, because the process exits
      and the kernel closes the sockets. The unit tests are what hold
      `stop` and the console's own `stop` on the way out.
-   * **3b-i.** The parts both consoles share moved into one module. No
-     change in behavior.
+   * **3b-i. Done.** The parts both consoles share moved into
+     `BGP::Prompt`, in bgp/prompt.rb, with no change in behavior: every
+     existing console test passed unchanged. The prefix counters moved
+     with `describe`, and `Injector.prefix_count` and `withdrawn_count`
+     delegate, so there is one definition. **The one claim only the new
+     test can see is that the module loads without the injector**: a
+     sabotage adding that require failed nothing else.
    * **3b-ii.** `bgp4rd --interact`. Its verbs are the daemon's own and
      go through the control socket's methods: `peers`, `rib`, `why`,
      `adj_in`, `adj_out`, `fib`, `originate`, `withdraw`, `clear`,
