@@ -1024,6 +1024,21 @@ class TestBgpNeighbor < Test::Unit::TestCase
     n.close
   end
 
+  # An observer sees each message once, after the rcv_ hook. A received
+  # NOTIFICATION was told twice, once from rcv_notification and once
+  # from the dispatch, so a console listed every Cease twice.
+  def test_an_observer_sees_a_received_notification_once
+    n = a_neighbor
+    seen = []
+    watcher = Object.new
+    watcher.define_singleton_method(:update) { |*a| seen << a.first }
+    n.add_observer(watcher)
+    n.send(:dispatch_event, :ev_msg, nil, BGP::Notification.new(6, 4).encode)
+    assert_equal [BGP::Notification], seen.collect(&:class)
+  ensure
+    n.close
+  end
+
   def test_a_notification_with_no_data_carries_no_octets
     n = a_neighbor
     n.send(:publish_notification, BGP::Notification.new(4, 0), :send)
