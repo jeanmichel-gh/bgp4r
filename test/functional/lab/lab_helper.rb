@@ -1019,6 +1019,16 @@ module LabHelper
 
     def neighbor(address) ; (neighbors || {})[address] ; end
 
+    # How many UPDATEs bgpd counts from our peer, or nil while it is not
+    # answering. From the neighbor's own messageStats, which 8.4.4 has,
+    # rather than from the debug log: FRR 10.5.1 writes no `rcvd UPDATE
+    # w/ attr` line for an UPDATE whose NLRI it discards, so a test that
+    # read the log to prove an UPDATE arrived failed there.
+    def updates_received(address = @peer)
+      n = neighbor(address) or return nil
+      (n['messageStats'] || {})['updatesRecv']
+    end
+
     # True when the session to our peer is up. FRR spells the state
     # "Established" in its JSON, the same word RFC 4271 section 8.2.2 uses.
     def established?(address = @peer)
