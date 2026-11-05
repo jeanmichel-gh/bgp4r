@@ -1297,7 +1297,8 @@ class BgpLsDocTest < Test::Unit::TestCase
 
     # The versions, out of the tests' own constants and the document.
     assert_match(/^\s+MEASURED_MAJOR = 3$/, gobgp)
-    assert_match(/^\s+MEASURED = \(8\.\.8\)/, frr)
+    assert_match(/^\s+MEASURED = \(8\.\.10\)/, frr)
+    assert_match(/FRR 10\.5\.1 gives the same answers/, doc)
     assert_match(/GoBGP 3\.23\.0/, doc)
     assert_match(/FRR 8\.4\.4/, doc)
 

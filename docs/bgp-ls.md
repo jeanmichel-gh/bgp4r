@@ -1464,6 +1464,10 @@ and not the other is how this table would go quietly wrong.
 | A SAFI 71 UPDATE | parsed, installed, read back | fails the UPDATE, resets with no NOTIFICATION |
 | A SAFI 72 UPDATE | discarded, session kept | the same reset |
 
+FRR 10.5.1 gives the same answers. The owner ran `link_state_frr_test.rb`
+on it on 2026-11-04 and every assertion passed unchanged, so the FRR
+file asserts majors 8 to 10.
+
 **This is the first family here where the router encodes the family
 under test, so its own octets feed bgp4r's decoder.** Every lab test
 since flow spec sends only: it asserts a router's reading of what bgp4r

@@ -624,6 +624,10 @@ router's vocabulary, so there is nothing to negotiate.
 | the capability we offer | records it as `UnknownFamily(65541): received`, which is afi << 16 \| safi | logs `MultiProtocol Extensions capability for afi/safi: IPv4/unknown`, and negotiates nothing: one key in its capability list, not two |
 | an MCAST-VPN UPDATE sent anyway | **discards the message, keeps the session** | **tears the session down, with no NOTIFICATION** |
 
+FRR 10.5.1 gives the same three readings. The owner ran
+`mcast_vpn_frr_test.rb` on it on 2026-11-04 and every assertion passed
+unchanged, so the FRR file asserts majors 8 to 10.
+
 **The last row is the finding.** Two routers with the same gap answer
 differently, so neither behaviour is bgp4r's to copy, which is the
 flow spec section 4.2 situation again. GoBGP counts the message under

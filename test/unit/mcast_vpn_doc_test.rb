@@ -570,7 +570,8 @@ class McastVpnDocTest < Test::Unit::TestCase
 
     # The versions, out of the tests' own constants and the document.
     assert_match(/MEASURED_MAJOR = 3/, gobgp)
-    assert_match(/MEASURED = \(8\.\.8\)/, frr)
+    assert_match(/MEASURED = \(8\.\.10\)/, frr)
+    assert_match(/FRR 10\.5\.1 gives the same three readings/, doc)
     assert_match(/GoBGP 3\.23\.0/, doc)
     assert_match(/FRR 8\.4\.4/, doc)
   end

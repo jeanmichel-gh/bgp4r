@@ -7111,12 +7111,19 @@ the registry's.
   a copy of the binary elsewhere runs it unconfined. `Frr#up` now stops
   waiting when bgpd dies and names that workaround, through
   `Frr.startup_hint`. Both measured on 2026-11-04 on the owner's VM.
-  **The other FRR lab files have not been run against 10.5.1**, and
-  their `MEASURED` ranges still say 8, so they omit themselves there.
-  `LAB_FRR_ANY=1` runs them anyway against 8.x's expectations, through
-  `Frr.measured?`, so a run on a new version says what differs before
-  any range is widened. A range is widened only from such a run. The
-  IPv6 case of `gen_frr_test.rb` omits on 10 and later regardless.
+  `LAB_FRR_ANY=1` runs an FRR file on a major outside its `MEASURED`
+  range anyway, against 8.x's expectations, through `Frr.measured?`,
+  so a run on a new version says what differs before any range is
+  widened. A range is widened only from such a run. The IPv6 case of
+  `gen_frr_test.rb` omits on 10 and later regardless.
+  **Six FRR files pass on 10.5.1 now and assert majors 8 to 10**:
+  capabilities, flow spec, gen, link state, MCAST-VPN and rib_router,
+  which has no gate. Measured on the owner's VM on 2026-11-04 with no
+  expectation changed. **Two still fail there and stay at 8**:
+  `evpn_frr_test.rb`, on the case that sends route types 6 to 11, and
+  `fault_matrix_frr_test.rb`, on three of its RFC 7606 cases. Neither
+  failure has been read yet, so each is a measurement still to make
+  and not a verdict.
   **The first such run failed nearly everything, and the cause was the
   machine's own zebra.** bgpd dials the default zebra socket, and FRR's
   service answers there on the VM. FRR 10 then holds every eBGP peer at

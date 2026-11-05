@@ -57,7 +57,9 @@ class FlowSpecFrrTest < Test::Unit::TestCase
 
   # The major versions these expectations were measured against, the same
   # shape and the same reason as fault_matrix_frr_test.rb's MEASURED.
-  MEASURED = (8..8).freeze
+  # 8.4.4, and 10.5.1 on the owner's VM on 2026-11-04 with no change to
+  # an expectation: 9 tests, 45 assertions, all passing.
+  MEASURED = (8..10).freeze
 
   def setup
     unless F.available?

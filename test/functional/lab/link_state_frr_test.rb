@@ -84,7 +84,9 @@ class LinkStateFrrTest < Test::Unit::TestCase
   # docs/bgp-ls.md section 11, so bumping one without the other fails
   # the unit suite and the table cannot keep claiming a measurement
   # nothing ran.
-  MEASURED = (8..8).freeze
+  # 8.4.4, and 10.5.1 on the owner's VM on 2026-11-04 with no change to
+  # an expectation: 3 tests, 24 assertions, all passing.
+  MEASURED = (8..10).freeze
 
   def setup
     unless F.available?
