@@ -258,7 +258,12 @@ class BGP_Daemon_Server_Test < Test::Unit::TestCase
                                                   :load_irb => irb)
     argv = ['-f', path, '-s', @sock, '--interact']
     argv += ['-l', @logfile] if log
-    @server.start(argv, {})
+    # **`:wait => false`, so a start that never opens the prompt fails
+    # rather than hangs.** Measured: with `return prompt` taken out and
+    # the default `wait: true`, the start waited for a signal, and since
+    # the daemon traps TERM to stop itself, a `timeout` on the run only
+    # moved it on to the next test's wait.
+    @server.start(argv, {}, :wait => false)
   ensure
     @server.stop if @server
     Log.set_filename(STDERR)
