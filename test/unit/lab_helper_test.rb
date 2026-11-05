@@ -259,4 +259,47 @@ class LabHelperTest < Test::Unit::TestCase
     assert_equal([], LabHelper.sample(0))
     assert_equal([0, 99], LabHelper.sample(100, 2))
   end
+
+  # ---- FRR ------------------------------------------------------------
+
+  F = LabHelper::Frr
+
+  # FRR's words when it cannot write its pid file, from lib/pid_output.c.
+  # Under FRR 10's AppArmor profile the cause is Permission denied.
+  PID_DENIED = "Can't create pid lock file /tmp/bgp4r-frr1/bgpd.pid " \
+               "(Permission denied), exiting\n"
+
+  def test_a_refused_pid_file_names_apparmor_and_the_way_round_it
+    hint = F.startup_hint(PID_DENIED, :bin => '/elsewhere/bgpd', :apparmor => false)
+    assert_match(/AppArmor/, hint)
+    assert_match(/FRR_BGPD/, hint, 'the hint names the workaround')
+  end
+
+  # bgpd may die before its log goes anywhere this harness reads, so an
+  # exit of the packaged binary with AppArmor on is enough.
+  def test_the_packaged_binary_dying_under_apparmor_gets_the_hint
+    assert_not_nil(F.startup_hint('', :bin => F::PACKAGED, :apparmor => true))
+  end
+
+  def test_no_hint_where_apparmor_cannot_be_the_cause
+    assert_nil(F.startup_hint('', :bin => F::PACKAGED, :apparmor => false),
+               'AppArmor off')
+    assert_nil(F.startup_hint('', :bin => '/elsewhere/bgpd', :apparmor => true),
+               'a copy is not confined')
+    assert_nil(F.startup_hint('', :bin => F::PACKAGED, :apparmor => true, :exited => false),
+               'a slow start is not a confined one')
+    assert_nil(F.startup_hint("% Unknown command: neighbor\n", :bin => '/x', :apparmor => false),
+               'a config bgpd rejected')
+  end
+
+  # FRR 10 refuses IPv6 unicast over an IPv4 session with no zebra, so a
+  # config only carries it when a test asks.
+  def test_ipv6_unicast_is_off_unless_asked_for
+    plain = F.new
+    asked = F.new(:ipv6 => true)
+    assert_no_match(/ipv6 unicast/, plain.config)
+    assert_match(/address-family ipv6 unicast/, asked.config)
+  ensure
+    [plain, asked].compact.each { |r| FileUtils.rm_rf(r.dir) }
+  end
 end
