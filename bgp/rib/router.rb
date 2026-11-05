@@ -118,6 +118,59 @@ module BGP
         # off @lock means neither thread can nest the two.
         @mrai_lock = Mutex.new
         @wake = ConditionVariable.new
+        @on_sent = []
+      end
+
+      # Runs block with the Peer and the prefixes of every batch of UPDATEs
+      # this Router puts on a session, announced and withdrawn alike, after
+      # they were handed to the session.
+      #
+      # **What it is for is bgp4rd's list of prefixes sent by hand**, which
+      # clears a prefix the moment the daemon sends it again the normal way:
+      # from then on the peer holds what the Adj-RIB-Out says. See
+      # bgp/daemon/hand.rb. The block runs on the feed's worker thread, so it
+      # must be quick, and an exception from it is logged rather than raised,
+      # since that thread serves every peer.
+      def on_sent(&block)
+        @lock.synchronize { @on_sent << block }
+        self
+      end
+
+      # Sends one peer this Router's own answer for each of prefixes, now,
+      # whatever its Adj-RIB-Out says the peer already has: the route when
+      # export advertises one, and a withdrawal when it does not. Answers
+      # `{ :resent => [...], :withdrawn => [...] }`, or nil when the peer has
+      # no session this Router can send on.
+      #
+      # **This is the one send that does not diff against the Adj-RIB-Out**,
+      # and that is its whole job: it is what `peer.resend` asks for after a
+      # message sent by hand, when the Adj-RIB-Out may no longer say what
+      # the peer holds. A withdrawal of a prefix the peer was never sent is
+      # harmless, RFC 4271 section 3.1 makes it nothing to do, and it is the
+      # answer for a prefix that only ever went out by hand.
+      #
+      # Runs on the feed's worker thread through `PeerFeed`'s `:resend`, so
+      # it cannot race a Loc-RIB change being advertised.
+      def resend(address, prefixes)
+        return nil unless started?
+        adapter = @feed.adapters.find do |a|
+          a.peer && a.peer.address == address.to_s && a.neighbor.is_established?
+        end
+        return nil unless adapter
+        peer = adapter.peer
+        items = prefixes.collect do |prefix|
+          route = @table.synchronize { @table.best(prefix) }
+          result = route && export_for(route, peer, adapter)
+          if result && result.advertise?
+            UpdateBuilder::Announce.new(prefix, result.path_attribute, result.next_hop)
+          else
+            note_skip(prefix, peer, result && result.reason)
+            UpdateBuilder::Withdraw.new(prefix)
+          end
+        end
+        announce, withdraw = commit(adj_rib_out(peer), peer, items)
+        send_messages(adapter, announce, withdraw) unless items.empty?
+        { :resent => announce.collect(&:prefix), :withdrawn => withdraw.collect(&:prefix) }
       end
 
       # Starts advertising to every peer the table is attached to, and to any
@@ -448,12 +501,23 @@ module BGP
         msgs = builder.build(:announce => announce, :withdraw => withdraw)
         msgs.each { |m| adapter.neighbor.send_update(m) }
         @lock.synchronize { @sent += msgs.size }
+        sent_to(adapter.peer, (announce + withdraw).collect(&:prefix))
       rescue StandardError => e
         # A session that went away between the check and the send, or a
         # message that cannot be built. Neither is worth losing the worker
         # thread, which serves every other peer.
         log(:error, "#{self.class}: #{e.class}: #{e.message}")
         @lock.synchronize { @skipped[[nil, adapter.peer]] = e.class.name.to_sym }
+      end
+
+      def sent_to(peer, prefixes)
+        @lock.synchronize { @on_sent.dup }.each do |block|
+          begin
+            block.call(peer, prefixes)
+          rescue StandardError => e
+            log(:error, "#{self.class}: on_sent: #{e.class}: #{e.message}")
+          end
+        end
       end
 
       def note_skip(prefix, peer, reason)

@@ -135,7 +135,7 @@ module BGP
         @count_lock.synchronize { SENDING.sum { |k| @kinds[k] } }
       end
 
-      SENDING = %i[advertise session_up session_down mrai].freeze
+      SENDING = %i[advertise session_up session_down mrai resend].freeze
 
       # Waits until everything queued before this call has been applied.
       # Returns true, or false if timeout seconds passed first. Tests need
@@ -221,6 +221,15 @@ module BGP
           @table.router&.session_down(work[1])
         when :mrai
           @table.router&.flush_mrai
+        when :resend
+          # The caller is waiting on work[3], so it gets an answer whatever
+          # happens: the result, false for no session, or what was raised.
+          begin
+            work[3] << (@table.router&.resend(work[1], work[2]) || false)
+          rescue StandardError => e
+            work[3] << e
+            raise
+          end
         when :fib
           @table.fib_installer&.run_changes(work[1])
         when :sync

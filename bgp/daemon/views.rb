@@ -135,6 +135,12 @@ module BGP
       # there is more than it got. `Router#skipped` builds its whole list
       # either way, which is the library's own shape and is bounded by
       # the number of refusals rather than by the table.
+      #
+      # **`hand` rides beside it the same way and only when there is
+      # something in it**: the prefixes sent to this peer by hand, whose
+      # state at the peer the daemon does not know, with the verb and the
+      # time. The rows above it are never patched for those; see
+      # bgp/daemon/hand.rb.
       def adj_out(params = {})
         address = peer_param(params)
         snapshot do
@@ -142,8 +148,11 @@ module BGP
             rib_view.adj_out(address, prefix)
           end
           skipped = rib_view ? rib_view.skipped(address) : []
-          page.merge(:skipped => { :total => skipped.size,
-                                   :rows => skipped.first(page[:limit]) })
+          page = page.merge(:skipped => { :total => skipped.size,
+                                          :rows => skipped.first(page[:limit]) })
+          hand = @speaker.hand.rows(address)
+          next page if hand.empty?
+          page.merge(:hand => { :total => hand.size, :rows => hand.first(page[:limit]) })
         end
       end
 
@@ -236,7 +245,12 @@ module BGP
         @speaker.peers.map do |peer|
           defaults = { :received => 0, :best => 0 }
           defaults[:sent] = 0 if @speaker.router
-          defaults.merge(from_table[peer.address] || {}).merge(session_row(peer))
+          row = defaults.merge(from_table[peer.address] || {}).merge(session_row(peer))
+          # How many prefixes were sent to this peer by hand, present only
+          # when there are some, so a row reads as it always has until
+          # something is. See bgp/daemon/hand.rb.
+          hand = @speaker.hand.count(peer.address)
+          hand.zero? ? row : row.merge(:hand => hand)
         end
       end
 

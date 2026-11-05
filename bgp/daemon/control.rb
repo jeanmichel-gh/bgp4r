@@ -71,6 +71,12 @@ module BGP
 
       PEER_KEYS = %w[peer].freeze
 
+      # The three sends by hand. `peer` picks one session; with none they
+      # go to every session that is up, which is what `bgp4r-sim` does.
+      SPECIMEN_KEYS = %w[peer name prefix prefixes next_hop].freeze
+      FAULT_KEYS    = %w[peer case prefix prefixes next_hop].freeze
+      REPLAY_KEYS   = %w[peer hex].freeze
+
       # The keys of the configuration's `mark`, which are the three
       # community keys an announce block takes, so the text is the same.
       MARK_KEYS = %w[communities extended_communities large_communities].freeze
@@ -225,7 +231,173 @@ module BGP
           :changes => changes, :rib => rib.loc_rib.size }
       end
 
+      # ---- sending by hand ----------------------------------------------
+      #
+      # Four methods that put a message on a session behind the
+      # Adj-RIB-Out's back, and one that puts the peer back in line.
+      # **None of them writes the Adj-RIB-Out**; each records what it
+      # touched in `Speaker#hand`, which `show.adj_out` answers under
+      # `hand` and `show.peers` counts. bgp/daemon/hand.rb has why, and
+      # docs/console.md section 10 the decision.
+
+      # A `BGP::Specimen` by name, a valid UPDATE, in the envelope
+      # `bgp4r-sim`'s `specimen` key builds: our AS toward an external
+      # peer and an empty AS_PATH toward an internal one, and a NEXT_HOP
+      # with `prefixes` only. **The configuration's `mark` is added**,
+      # into the specimen's own community attribute when it has one,
+      # because this is a valid route made by hand.
+      def peer_specimen(params = {})
+        p = strings(params, SPECIMEN_KEYS)
+        name = p['name'].to_s
+        unless BGP::Specimen.names.include?(name.to_sym)
+          raise ArgumentError, "name: #{name.empty? ? 'is required' : "unknown specimen #{name.inspect}"}; " \
+                               "the catalog has #{BGP::Specimen.names.join(', ')}"
+        end
+        prefixes = optional_prefixes(p)
+        mark = Control.mark(@speaker.config)
+        sent = targets(p).collect do |peer|
+          msg = BGP::Specimen.update(name.to_sym,
+                                     :my_as    => (peer.ebgp? ? @speaker.my_as : nil),
+                                     :next_hop => (prefixes.empty? ? nil : p.fetch('next_hop', peer.local_ip)),
+                                     :prefixes => prefixes)
+          add_mark(msg, mark)
+          ship(peer, msg, "specimen #{name}")
+        end
+        { :specimen => name, :prefixes => prefixes, :marked => !mark.empty?, :sent => sent }
+      end
+
+      # One `BGP::Fault::CATALOG` case, the octets `bgp4r-sim` and
+      # `lab/fault_matrix.rb` send for the same name. **Never marked**: the
+      # message is the thing under test.
+      def peer_fault(params = {})
+        p = strings(params, FAULT_KEYS)
+        name = p['case'].to_s
+        unless BGP::Fault.names.include?(name.to_sym)
+          raise ArgumentError, "case: #{name.empty? ? 'is required' : "unknown case #{name.inspect}"}; " \
+                               "the catalog has #{BGP::Fault.names.join(', ')}"
+        end
+        prefixes = optional_prefixes(p)
+        sent = targets(p).collect do |peer|
+          msg = BGP::Fault.update(name.to_sym,
+                                  :my_as    => (peer.ebgp? ? @speaker.my_as : nil),
+                                  :next_hop => p.fetch('next_hop', peer.local_ip),
+                                  :prefixes => prefixes)
+          ship(peer, msg, "fault #{name}")
+        end
+        { :case => name, :prefixes => prefixes, :sent => sent }
+      end
+
+      # Octets on the wire, unchanged: nothing parsed, nothing checked.
+      # What they touch is read back as a message, so a prefix an UPDATE
+      # carries is listed; octets that do not read as a message list the
+      # whole peer.
+      def peer_replay(params = {})
+        p = strings(params, REPLAY_KEYS)
+        hex = p['hex'].to_s.gsub(/\s+/, '')
+        unless hex =~ /\A(\h\h)+\z/
+          raise ArgumentError, "hex: #{p['hex'].inspect} is not a non-empty, even number of hex digits"
+        end
+        octets = [hex].pack('H*')
+        sent = targets(p).collect { |peer| ship(peer, octets, 'replay') }
+        { :octets => octets.bytesize, :sent => sent }
+      end
+
+      # Puts one peer back in line after sending by hand: for each unicast
+      # prefix on its list, the daemon's own answer, which is the route
+      # when export advertises one and a withdrawal when it does not.
+      # `Rib::Router#resend` does it on the feed's worker thread. With no
+      # Router, which is a configuration with no `export:`, every one is a
+      # withdrawal, since such a daemon advertises nothing.
+      #
+      # **A row it cannot answer is kept and named**, under `kept`: an
+      # NLRI of a family the daemon holds no table for, and a whole peer
+      # row from octets that did not read as a message. Both clear when the
+      # session ends, so `clear PEER` is the way to settle them.
+      def peer_resend(params = {})
+        peer = peer_of(params, PEER_KEYS)
+        live!(peer)
+        prefixes = @speaker.hand.prefixes(peer.address)
+        done = if prefixes.empty?
+                 { :resent => [], :withdrawn => [] }
+               elsif @speaker.router
+                 @speaker.rib.resend(peer.address, prefixes) or
+                   raise ArgumentError, "#{peer.address} has no session to resend on"
+               else
+                 withdraw_by_hand(peer, prefixes)
+               end
+        @speaker.hand.sent(peer.address, prefixes)
+        out = { :peer => peer.address, :resent => done[:resent], :withdrawn => done[:withdrawn],
+                :hand => @speaker.hand.count(peer.address) }
+        kept = @speaker.hand.rows(peer.address)
+        out[:kept] = kept unless kept.empty?
+        out
+      end
+
+      # One message to one peer, recorded in the hand list, which is the
+      # whole of what the three sends share. msg is an object or octets.
+      # `bgp4rd --interact`'s `ship` calls this with whatever was typed.
+      def ship(peer, msg, verb = 'ship')
+        live!(peer)
+        peer.send_message(msg)
+        rows = @speaker.hand.record(peer.address, msg, verb, peer.session_info)
+        { :peer => peer.address, :prefixes => rows.collect { |r| r[:prefix] } }
+      rescue NoSession => e
+        raise ArgumentError, e.message
+      end
+
       private
+
+      # The sessions a send by hand reaches: the one named, or every one
+      # that is up. Refused when there is none, because an answer that
+      # sent nothing is the silent wrong answer. A named one that is down
+      # is refused by `ship`, which every send ends in.
+      def targets(p)
+        return [@speaker.peer!(p['peer'])] if p['peer']
+        list = @speaker.established_peers
+        if list.empty?
+          raise ArgumentError, 'no established session: ' \
+                               "#{@speaker.peers.collect { |x| "#{x.address} #{x.state.to_s.downcase}" }.join(', ')}"
+        end
+        list
+      end
+
+      def live!(peer)
+        return peer if peer.established?
+        raise ArgumentError, "#{peer.address} has no established session (state #{peer.state.to_s.downcase})"
+      end
+
+      # `prefix` or `prefixes`, as a list, which may be empty: a fault
+      # case or a specimen goes without NLRI when none is given.
+      def optional_prefixes(p)
+        (Array(p['prefixes']) + (p['prefix'] ? [p['prefix']] : [])).collect(&:to_s)
+      end
+
+      # The mark's communities, added to the attribute of the same type
+      # when the UPDATE has one and appended when it does not, so the
+      # UPDATE never carries two of a type.
+      def add_mark(msg, mark)
+        CommunityKeys.community_attributes(mark).each do |m|
+          have = msg.path_attribute[m.type]
+          if have
+            have.add(*Array(m.communities))
+          else
+            msg.path_attribute.append(m)
+          end
+        end
+        msg
+      end
+
+      # Withdrawals of these prefixes on one session, for a daemon with no
+      # Router. `UpdateBuilder` packs them, Withdrawn Routes for IPv4 and
+      # MP_UNREACH_NLRI for IPv6, which is how the Router itself sends one.
+      def withdraw_by_hand(peer, prefixes)
+        items = prefixes.collect { |x| BGP::Rib::UpdateBuilder::Withdraw.new(x) }
+        builder = BGP::Rib::UpdateBuilder.new(:session_info => peer.session_info)
+        builder.build(:withdraw => items).each { |m| peer.send_message(m) }
+        { :resent => [], :withdrawn => prefixes }
+      rescue NoSession => e
+        raise ArgumentError, e.message
+      end
 
       # The Peer one of these methods acts on, refused by name when
       # nobody configured it. `Speaker#peer!` does the refusal, so a view

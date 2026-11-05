@@ -329,7 +329,9 @@ bgp/daemon/              `bgp4rd` the daemon and `bgp4r-cli` its client;
                          control.rb what the daemon can be **told** to do:
                          `peer.clear`, `peer.stop`, `peer.start`,
                          `peer.refresh`, `route.originate` and
-                         `route.withdraw`. A file of its own and not more
+                         `route.withdraw`, and the four sends by hand,
+                         `peer.specimen`, `peer.fault`, `peer.replay` and
+                         `peer.resend`. A file of its own and not more
                          methods on views.rb, because that file's own
                          header says nothing in it validates or decides.
                          Nothing here validates what goes on the wire
@@ -421,6 +423,16 @@ bgp/daemon/              `bgp4rd` the daemon and `bgp4r-cli` its client;
                          communities a route made by hand carries, is
                          read in `Control.mark` and added in
                          `route.originate`. docs/console.md section 10
+                         hand.rb what was sent to a peer by hand, per
+                         prefix, which `show.adj_out` answers under `hand`
+                         and `show.peers` counts. **The Adj-RIB-Out is
+                         never patched for a send by hand**, because after
+                         one the daemon cannot know what the peer holds. A
+                         row clears when `Rib::Router#on_sent` reports the
+                         prefix sent the normal way, when the session ends,
+                         or on `peer.resend`, which is `Router#resend`: the
+                         one send that does not diff against the
+                         Adj-RIB-Out
 bgp/sim/                 `bgp4r-sim` the route injector, and `bgp4r
                          routegen`; require 'bgp/sim', which bgp4r.rb
                          does not, the same arrangement bgp/daemon.rb and
@@ -1638,7 +1650,7 @@ CI: `.github/workflows/test.yml` runs both suites on every push to master and ev
 
 `.github/workflows/capture.yml` is the one workflow that deploys a containerlab lab: it builds the `lab-node` and BIRD images, deploys `lab/routescope/bgp4r-lab`, and runs its `capture.sh`, on demand and on a push that changes that folder or the Dockerfile. Its log is what routescope's BGP fixtures are cut from.
 
-Baseline on 2026-11-04: 3656 tests, 36525 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
+Baseline on 2026-11-04: 3700 tests, 36668 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
 
 **That coverage figure is 98.5% for the library and the rest is the two
 programs, not a gap anywhere else.** Measured the same run: with
@@ -7893,7 +7905,7 @@ as an encoder. And a lab or console that renders bgp4r's state beside a
 real router's output can put the two side by side, which is where this
 meets the routescope work: see `docs/routescope-labs.md`.
 
-### An irb console on a live session, three steps. Steps 1 and 2 Done, step 3 in progress
+### An irb console on a live session, three steps. Done
 
 Asked for by the owner on 2026-11-04, who used to do this by hand: start
 irb, build a Neighbor, and drive an established session in Ruby. A 2011
@@ -7941,7 +7953,7 @@ the guide.
    Two decisions to keep: **networking terms at the prompt**, so
    `remote_as`, `listen`, `shutdown` and `clear`; and **`remote` and not
    `far`** for the other side.
-3. **In progress, 3a, 3b-i and 3b-ii Done.** docs/console.md section 10 is the design,
+3. **Done, all four parts.** docs/console.md section 10 is the design,
    agreed with the owner on 2026-11-04, with a walkthrough from start to
    `exit`. Four pull requests, each to be marked here as it lands:
    * **3a. Done.** `bgp4r sim --interact`: the Console over the server's
@@ -7975,14 +7987,30 @@ the guide.
        because the daemon traps TERM to stop itself and the run moves on
        to the next test's wait. Measured by sabotage. The tests start
        with `:wait => false`, so the same sabotage fails.
-   * **3b-iii.** `specimen`, `fault`, `replay` and `ship` on the daemon.
-     **The Adj-RIB-Out is never patched for them**, because after a
-     fault the daemon cannot know what the peer holds. Each prefix sent
-     by hand is listed beside the rows instead, as a `hand` key in
-     `show.adj_out` and a count in `show.peers`, and it clears when the
-     daemon sends the prefix normally, when the session restarts, or on
-     `resend PEER`. The marker is never added to `fault`, `replay` or
-     `ship`, since it would change the message under test.
+   * **3b-iii. Done.** `specimen`, `fault`, `replay`, `ship` and
+     `resend` on the daemon, the first three and `resend` as control
+     socket methods, `peer.specimen`, `peer.fault`, `peer.replay` and
+     `peer.resend`, so `bgp4r-cli` sends by hand too. **The
+     Adj-RIB-Out is never patched for them**, because after a fault the
+     daemon cannot know what the peer holds. Each prefix sent by hand is
+     listed in bgp/daemon/hand.rb instead, as a `hand` key in
+     `show.adj_out` and a count in `show.peers`, both only when the list
+     is not empty. It clears when the daemon sends the prefix normally,
+     which `Rib::Router#on_sent` reports, when the session ends, or on
+     `resend PEER`, which is `Router#resend` on the table's worker. The
+     marker goes on `specimen` and never on `fault`, `replay` or `ship`.
+     * **The design said an Injector over the daemon's own Speaker and
+       it is not one.** `Injector.new` builds a Speaker of its own and
+       refuses the router keys, and what the daemon needs of it is two
+       calls, `Specimen.update` and `Fault.update`, in its envelope.
+     * **A row `resend` cannot answer is kept and named**: an NLRI of a
+       family the daemon holds no table for, and octets that do not
+       read as a message, which list the whole peer. Both clear when
+       the session ends.
+     * **One guard turned out redundant and went**: a named peer that is
+       down was refused twice, in the target list and in `ship`, and a
+       sabotage of the first passed. `ship` is the one every send ends
+       in, so it keeps the check.
    Foreground only. A remote prompt over a socket is not planned, since
    it would be arbitrary code execution reachable from a lab network.
 
