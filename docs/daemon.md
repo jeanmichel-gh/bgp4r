@@ -266,6 +266,9 @@ export:
 
 fib:
   table: 100                       # absent means compute and do not install
+
+mark:                              # added to routes made by hand; see route.originate
+  large_communities: ['65000:1:1']
 ```
 
 Three notes on it.
@@ -306,8 +309,13 @@ RIB views answer an empty page rather than failing.
 ## The command line
 
 ```
-bgp4rd -f FILE [--socket PATH] [--state FILE] [--log FILE] [-d] [-v] [-h]
+bgp4rd -f FILE [--socket PATH] [--state FILE] [--log FILE] [--interact] [-d] [-v] [-h]
 ```
+
+`--interact` opens an irb prompt on the daemon, whose verbs are the
+control socket's methods; the socket still answers beside it, and `exit`
+sends Cease 6/2 to each peer and stops the daemon. docs/console.md
+section 10 is the guide.
 
 `-d` logs at debug. `--log -` is standard output, which is what a
 container wants, and is the default. `--state FILE` wins over
@@ -695,6 +703,16 @@ toward an internal peer and our AS alone toward an external one, and
 NEXT_HOP is a placeholder, because section 5.1.3 makes it ours on each
 session. It validates nothing, so an ORIGIN no RFC defines goes in.
 
+**It adds the configuration's `mark`**, a mapping of the three community
+keys, to each route it makes, and `marked` in the answer says whether it
+did. A route made through this method or at the `bgp4rd --interact`
+prompt is one a person made by hand, and the mark lets a router that
+receives it act on that. An `originate:` block in the file is not
+marked. The mark is read from the running configuration on each call, so
+it is a live key in a commit. A key it does not read, or a community it
+cannot parse, is refused when the file is read and by a commit, naming
+`mark`. docs/console.md section 10 has the decision.
+
 **`route.withdraw` answers `not_held` rather than refusing it.**
 Withdrawing a route nobody has is not an error, and a caller walking a
 list wants to know which ones did nothing. Membership is read before the
@@ -1060,7 +1078,7 @@ peer.clear    {"peer":"10.0.10.1","cleared":true,"was":"established","state":"id
 peer.stop     {"peer":"10.0.10.1","was":"established","state":"idle","shutdown":true}
 peer.start    {"peer":"10.0.10.1","state":"idle","shutdown":false,"connect":true}
 peer.refresh  {"peer":"10.0.10.1","afi":1,"safi":1,"subtype":0,"sent":true}
-route.originate {"originated":["10.255.0.0/24"],"total":1,"changes":1,"rib":7}
+route.originate {"originated":["10.255.0.0/24"],"total":1,"changes":1,"rib":7,"marked":false}
 route.withdraw  {"withdrawn":["10.255.0.0/24"],"not_held":[],"total":1,"changes":1,"rib":6}
 ```
 
@@ -1333,10 +1351,11 @@ the same name. That is why the list is `verbs` and not `help`, and
 because the `Gemfile` names it. A program run without the Gemfile's
 gems and without irb is told so before any session starts.
 
-`bgp4r sim --interact` and `bgp4rd --interact` are the next steps; the
-second would need a Console over a Speaker with a Loc-RIB rather than
-an Injector. A remote prompt over a socket is not planned: it would be
-arbitrary code execution reachable from a lab network.
+`bgp4r sim --interact` and `bgp4rd --interact` are built, the second as
+a Console of its own whose verbs are the daemon's control methods rather
+than the injector's actions; docs/console.md section 10 has both. A
+remote prompt over a socket is not planned: it would be arbitrary code
+execution reachable from a lab network.
 
 ## Configuration
 

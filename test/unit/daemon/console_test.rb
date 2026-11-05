@@ -242,8 +242,10 @@ class BGP_Daemon_Console_Test < Test::Unit::TestCase
   # has to answer here.
   def test_every_verb_the_guide_names_is_here
     doc = File.read('docs/console.md', :encoding => 'UTF-8')
-    section = doc[/^### `bgp4rd --interact`.*?(?=^### )/m]
-    assert_not_nil(section, 'docs/console.md has the bgp4rd --interact section')
+    # The three bullets that list the verbs, and not the notes after
+    # them, which name the verbs 3b-iii has still to build.
+    section = doc[/^\* \*\*Reading\*\*.*?(?=^Built, in bgp\/daemon\/console\.rb)/m]
+    assert_not_nil(section, 'docs/console.md has the bgp4rd --interact verb list')
     named = section.scan(/`([a-z_]+)(?: [A-Z]+)*`/).flatten.uniq
     assert_operator(named.size, :>=, 15, "the guide names the verbs: #{named.inspect}")
     named.each { |v| assert(@c.respond_to?(v), "docs/console.md names #{v}") }
