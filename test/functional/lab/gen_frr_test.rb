@@ -58,7 +58,10 @@ class LabGenFrrTest < Test::Unit::TestCase
 
   # The major versions these expectations were measured against, the
   # shape and the reason fault_matrix_frr_test.rb's MEASURED has.
-  MEASURED = (8..8).freeze
+  # 8.4.4, and 10.5.1 on the owner's VM on 2026-11-04 with no change to
+  # an expectation: 5 tests, 241 assertions, all passing, and the IPv6
+  # case omitted on 10 as its own comment says.
+  MEASURED = (8..10).freeze
 
   # FRR's family names, by AFI.
   FAMILY = { 1 => 'ipv4 unicast', 2 => 'ipv6 unicast' }

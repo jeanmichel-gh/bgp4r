@@ -582,6 +582,10 @@ lab holds two routers rather than one:
 | a type at most once | **resets the session** | accepts, keeps both |
 | an unknown type makes the NLRI malformed | accepts and installs it | **resets the session**, 3/9 |
 
+FRR 10.5.1 answers the same. The owner ran `flow_spec_frr_test.rb` on it
+on 2026-11-04 and every assertion passed unchanged, including both VPN
+family cases below.
+
 So each router enforces one of the two enforceable rules, and a different
 one, and neither enforces the ordering MUST. Three things follow:
 
