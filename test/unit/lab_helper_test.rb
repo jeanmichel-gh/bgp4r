@@ -314,4 +314,19 @@ class LabHelperTest < Test::Unit::TestCase
   ensure
     [plain, asked].compact.each { |r| FileUtils.rm_rf(r.dir) }
   end
+
+  # A system zebra holds FRR 10's eBGP peers at "Waiting for NHT", so
+  # bgpd is pointed at a zebra socket in its own folder, which nothing
+  # creates.
+  def test_bgpd_never_reaches_a_system_zebra
+    r = F.new
+    argv = r.command('bgpd.conf')
+    assert(argv.include?('-z'), 'bgpd is given a zebra socket of its own')
+    socket = argv[argv.index('-z') + 1]
+    assert_equal(File.join(r.dir, 'zserv.api'), socket)
+    assert(!File.exist?(socket), 'nothing listens there')
+    assert(!argv.include?('-Z'), '-Z changes how bgpd judges a next hop')
+  ensure
+    FileUtils.rm_rf(r.dir) if r
+  end
 end
