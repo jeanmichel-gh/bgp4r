@@ -915,16 +915,7 @@ module LabHelper
       path = File.join(@dir, 'bgpd.conf')
       File.write(path, config)
       @log = File.join(@dir, 'bgpd.log')
-      @pid = Process.spawn(self.class.bin,
-                           '-f', path,
-                           '-i', File.join(@dir, 'bgpd.pid'),
-                           '-p', @listen_port.to_s,   # its own BGP port
-                           '-P', @vty_port.to_s,
-                           '-l', @local,
-                           '--vty_socket', @dir,
-                           '-S',             # see the class comment
-                           '--no_kernel',
-                           out: @log, err: [:child, :out])
+      @pid = Process.spawn(*command(path), out: @log, err: [:child, :out])
       deadline = Time.now + timeout
       until summary
         dead = exited?
@@ -937,6 +928,30 @@ module LabHelper
         sleep 0.5
       end
       self
+    end
+
+    # The bgpd command line.
+    #
+    # **-z names a zebra socket that never exists**, in this bgpd's own
+    # folder. Without it bgpd dials the default socket, and on a machine
+    # running FRR's own service a zebra answers there. FRR 10 then holds
+    # every eBGP peer at "Waiting for NHT, no path to neighbor present"
+    # and never connects: bgp_fsm.c waits on nexthop tracking only when
+    # bgp_zebra_num_connects() is not zero. Measured on the owner's VM
+    # against 10.5.1 on 2026-11-04. With no zebra to reach, bgpd behaves
+    # as it does in CI, where none runs. Not -Z, which turns zebra off
+    # and changes how bgpd judges a next hop.
+    def command(conf)
+      [self.class.bin,
+       '-f', conf,
+       '-i', File.join(@dir, 'bgpd.pid'),
+       '-p', @listen_port.to_s,   # its own BGP port
+       '-P', @vty_port.to_s,
+       '-l', @local,
+       '--vty_socket', @dir,
+       '-z', File.join(@dir, 'zserv.api'),
+       '-S',             # see the class comment
+       '--no_kernel']
     end
 
     # True once the child is gone, reaping it. Gobgpd's, for the same reason.

@@ -7117,6 +7117,14 @@ the registry's.
   `Frr.measured?`, so a run on a new version says what differs before
   any range is widened. A range is widened only from such a run. The
   IPv6 case of `gen_frr_test.rb` omits on 10 and later regardless.
+  **The first such run failed nearly everything, and the cause was the
+  machine's own zebra.** bgpd dials the default zebra socket, and FRR's
+  service answers there on the VM. FRR 10 then holds every eBGP peer at
+  "Waiting for NHT, no path to neighbor present" and never connects,
+  since bgp_fsm.c waits on nexthop tracking only when a zebra is
+  connected. `Frr#command` passes `-z` with a socket path in bgpd's own
+  folder, which nothing creates, so bgpd runs as it does in CI. Not
+  `-Z`, which changes how bgpd judges a next hop.
 
 **The `### GoBGP` block of `capture.sh` ran next, and it settles the
 two things that node is on the topology for.** All three kinds of
