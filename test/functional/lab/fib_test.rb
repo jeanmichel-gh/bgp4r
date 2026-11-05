@@ -48,10 +48,13 @@ require 'bgp/rib'
 # Omitted when a namespace cannot be created, which is the ordinary case
 # without root, unless LAB_REQUIRE_NETNS=1 asks for a failure instead.
 #
-# IPv6 is not exercised. The kernel this was written on has IPv6 compiled
-# out: /proc/sys/net/ipv6 does not exist and `ip -6 route add` answers
-# "Operation not supported", on the host as much as in a namespace. The v6
-# command building is asserted in test/unit/rib/ip_route_test.rb instead.
+# The IPv6 cases at the end omit themselves where the kernel has IPv6
+# compiled out, which is the case on the machine this file was first
+# written on: /proc/sys/net/ipv6 does not exist there and `ip -6 route add`
+# answers "Operation not supported", on the host as much as in a
+# namespace. They were written on 2026-11-05 without a kernel to run them
+# on, so their first run is their first measurement. The v6 command
+# building is asserted in test/unit/rib/ip_route_test.rb as well.
 #
 # BGP:: names are written out in full here, see Conventions in CLAUDE.md.
 class TestBgpRibFibNetns < Test::Unit::TestCase
@@ -290,6 +293,117 @@ class TestBgpRibFibNetns < Test::Unit::TestCase
                       :err => [:child, :out]) { |io| io.read }
     assert(!host.include?('198.51.100.0/24'),
            "the host's table #{TABLE} must not have it")
+  end
+
+  # IPv6. The next hop travels in MP_REACH_NLRI (RFC 4760 section 3),
+  # which Route#next_hop reads, and the adapter adds `-6` to every command
+  # for a prefix with a colon in it.
+  #
+  # **The link is a veth pair and not lo.** Linux refuses an IPv6 route
+  # whose egress device is the loopback, so the IPv4 trick above, a subnet
+  # on lo, does not carry over. The pair stays inside the namespace, both
+  # ends up so the link has carrier, and `nodad` skips duplicate address
+  # detection so the address is usable at once.
+  V6_SUBNET = '2001:db8:77::1/64'
+  V6_NEXT_HOP = '2001:db8:77::2'
+  V6_OTHER_NEXT_HOP = '2001:db8:77::3'
+
+  def ipv6!
+    unless File.directory?('/proc/sys/net/ipv6')
+      omit('this kernel has IPv6 compiled out')
+    end
+    assert(sh('ip', '-n', NETNS, 'link', 'add', 'v6a', 'type', 'veth',
+              'peer', 'name', 'v6b'), 'a veth pair in the namespace')
+    assert(sh('ip', '-n', NETNS, 'link', 'set', 'v6a', 'up'))
+    assert(sh('ip', '-n', NETNS, 'link', 'set', 'v6b', 'up'))
+    assert(sh('ip', '-n', NETNS, '-6', 'addr', 'add', V6_SUBNET,
+              'dev', 'v6a', 'nodad'), 'an IPv6 address on it')
+  end
+
+  def route6(prefix, next_hop = V6_NEXT_HOP, as_path = [65002], peer = PEER)
+    mp = BGP::Mp_reach.new(:afi => 2, :safi => 1, :nexthop => [next_hop],
+                           :nlris => [prefix])
+    pa = BGP::Path_attribute.new(BGP::Origin.new(0),
+                                 BGP::As_path.new(*as_path), mp)
+    BGP::Rib::Route.new(prefix, pa, peer)
+  end
+
+  # The same read as kernel_routes, for the other family.
+  def kernel_routes6
+    out = ::IO.popen(['ip', '-6', '-n', NETNS, 'route', 'show',
+                      'table', TABLE.to_s, 'proto', 'bgp'],
+                     :err => [:child, :out]) { |io| io.read }
+    out.lines.each_with_object({}) do |line, h|
+      fields = line.split
+      h[fields[0]] = fields[2] if fields[1] == 'via'
+    end
+  end
+
+  def test_an_ipv6_route_reaches_the_kernel
+    ipv6!
+    install
+    @rib.announce(route6('2001:db8:1::/48'))
+    @rib.drain
+    assert_equal({}, @rib.fib_installer.failed, 'the kernel took it')
+    assert_equal({ '2001:db8:1::/48' => V6_NEXT_HOP }, kernel_routes6)
+    assert_equal(V6_NEXT_HOP, @rib.fib['2001:db8:1::/48'])
+    assert_equal({}, kernel_routes, 'and nothing in the IPv4 table')
+  end
+
+  def test_a_withdrawn_ipv6_route_leaves_the_kernel
+    ipv6!
+    install
+    @rib.announce(route6('2001:db8:1::/48'))
+    @rib.drain
+    assert_equal(1, kernel_routes6.size)
+    @rib.withdraw(PEER, '2001:db8:1::/48')
+    @rib.drain
+    assert_equal({}, kernel_routes6)
+    assert(@rib.fib.empty?)
+  end
+
+  def test_a_better_ipv6_route_replaces_the_one_in_the_kernel
+    ipv6!
+    install
+    @rib.announce(route6('2001:db8:1::/48'))
+    @rib.drain
+    assert_equal(V6_NEXT_HOP, kernel_routes6['2001:db8:1::/48'])
+    other = BGP::Rib::Peer.new(:address => '10.0.0.9', :remote_as => 65009,
+                               :router_id => '9.9.9.9', :local_as => LOCAL_AS)
+    @rib.announce(route6('2001:db8:1::/48', V6_OTHER_NEXT_HOP, [], other))
+    @rib.drain
+    assert_equal({ '2001:db8:1::/48' => V6_OTHER_NEXT_HOP }, kernel_routes6,
+                 'replaced, not added beside')
+  end
+
+  # A flush names one family, so uninstall runs two. A table with only one
+  # of them installed would pass with either flush missing; this one needs
+  # both.
+  def test_uninstall_takes_both_families_back_out
+    ipv6!
+    install
+    @rib.announce(route('198.51.100.0/24'))
+    @rib.announce(route6('2001:db8:1::/48'))
+    @rib.drain
+    assert_equal(1, kernel_routes.size)
+    assert_equal(1, kernel_routes6.size)
+    @rib.uninstall
+    assert_equal({}, kernel_routes, 'the IPv4 routes are gone')
+    assert_equal({}, kernel_routes6, 'and the IPv6 ones')
+  end
+
+  # The kernel refuses a gateway it cannot reach, and the refusal is a
+  # recorded failure rather than a route the FIB claims.
+  def test_an_unreachable_ipv6_next_hop_is_refused_and_recorded
+    ipv6!
+    install
+    @rib.announce(route6('2001:db8:1::/48', '2001:db8:ffff::1'))
+    @rib.drain
+    assert_equal({}, kernel_routes6, 'the kernel would not take it')
+    assert(@rib.fib.empty?, 'and the FIB does not claim it')
+    result = @rib.fib_installer.failed['2001:db8:1::/48']
+    assert_not_nil(result, 'the failure is recorded')
+    assert(!result.ok?)
   end
 
 end
