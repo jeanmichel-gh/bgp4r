@@ -7,6 +7,9 @@ the flags leave out, and what the router at the other end has to be
 configured with. `docs/daemon.md`'s console section is the short form,
 and `bgp/sim/console.rb` is the code.
 
+`docs/console-examples.md` is six sessions to type, from a prompt with
+no peer to a daemon lab, each with what comes back.
+
 ```sh
 # in the VM
 ruby -I. exe/bgp4r routegen --peer 10.0.0.2 --peer-as 65002 --interact
