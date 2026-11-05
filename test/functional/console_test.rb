@@ -421,8 +421,8 @@ class TestConsole < Test::Unit::TestCase
         assert_kind_of(BGP::Update, u, 'the typed route did not cross')
         assert_equal(['10.7.0.0/24'], nlri_of(u))
         assert_equal('65001:100', u.path_attribute[:communities].communities)
-        assert_equal(['65001:1:1'], u.path_attribute[:large_communities].communities.collect(&:to_s),
-                     'the mark did not go out with the route')
+        assert(u.path_attribute.has?(BGP::Large_communities), 'the mark did not go out with the route')
+        assert_equal(['65001:1:1'], u.path_attribute[:large_communities].communities.collect(&:to_s))
         # The prompt and the socket are one daemon: the route typed at one
         # is in the table the other reads.
         rows = BGP::Daemon::Client.new(sock).call('show.routes', 'prefix' => '10.7.0.0/24')['rows']
