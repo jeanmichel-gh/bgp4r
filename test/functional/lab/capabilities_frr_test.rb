@@ -48,9 +48,14 @@ class LabCapabilitiesFrrTest < Test::Unit::TestCase
   THEIR_AS = 65002
   F = LabHelper::Frr
 
-  # The major version this was measured against, the shape and the
-  # reason fault_matrix_frr_test.rb's MEASURED has.
-  MEASURED = (8..8).freeze
+  # The major versions this was measured against, the shape and the
+  # reason fault_matrix_frr_test.rb's MEASURED has. 8.4.4 here, and
+  # 10.5.1 on the owner's VM on 2026-11-04: 7 tests, 17 assertions, all
+  # passing. That run needed FRR_BGPD pointing at a copy of the binary,
+  # because FRR 10's AppArmor profile for /usr/lib/frr/bgpd refuses the
+  # pid file under /tmp. No 9.x has been run, so 9 is in the range on
+  # the strength of the two ends and nothing else.
+  MEASURED = (8..10).freeze
 
   def setup
     unless F.available?

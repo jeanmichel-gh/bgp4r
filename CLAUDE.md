@@ -1391,7 +1391,9 @@ ruby -I. test/functional/lab/rib_router_frr_test.rb
 ```
 
 The OPEN capabilities FRR sends that bgp4r names, codes 6 and 71, and
-FRR's own report of the ones we send. 9 seconds against bgpd 8.4.4:
+FRR's own report of the ones we send. 9 seconds against bgpd 8.4.4,
+and passing against 10.5.1 too, under `FRR_BGPD` with a copy of the
+binary because of FRR 10's AppArmor profile:
 ```
 ruby -I. test/functional/lab/capabilities_frr_test.rb
 ```
