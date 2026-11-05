@@ -116,6 +116,8 @@ Worth knowing about those four lines:
   was verified at all.
 * The same two lines are the `Install gobgpd` step of the `lab` job in
   `.github/workflows/test.yml`, which is where CI gets its router.
+* On an arm64 machine, such as an Ubuntu VM on Apple silicon, write
+  `linux_arm64` where the lines say `linux_amd64`.
 
 Two versions can sit side by side, and neither has to be on `PATH`,
 because `GOBGPD` and `GOBGP` tell the test where to look:
@@ -124,6 +126,58 @@ because `GOBGPD` and `GOBGP` tell the test where to look:
 GOBGPD=/opt/gobgp4/gobgpd GOBGP=/opt/gobgp4/gobgp \
   ruby -I. test/functional/lab/fault_matrix_native_test.rb
 ```
+
+Set the two in your shell profile to make one version the default. CI
+pins 3.23.0, so that is the one every GoBGP lab test is measured
+against; on 4.x some files omit themselves as unmeasured.
+
+#### From a Docker image you already have
+
+**A GoBGP image does not satisfy these tests.** They start `gobgpd` as
+a process on the host, on loopback, so a binary inside an image is
+invisible to them and every case omits itself with "gobgpd is not
+installed". Only the `compose` lab group runs GoBGP in a container,
+through `GOBGP_IMAGE`.
+
+When the image is already pulled, copy the two binaries out of it. They
+are static Go binaries, so they run on the host as they are, and `docker
+pull` fetched the variant for the host's architecture:
+
+```
+v=3.23.0
+docker pull jauderho/gobgp:v$v
+docker create --name gtmp jauderho/gobgp:v$v
+docker export gtmp | tar -tv | grep -E '/gobgpd?$'
+```
+
+The last line prints where the two binaries sit in the image. The lines
+below assume `/usr/local/bin`; use the path it printed:
+
+```
+mkdir -p ~/gobgp/$v
+docker cp gtmp:/usr/local/bin/gobgpd ~/gobgp/$v/
+docker cp gtmp:/usr/local/bin/gobgp  ~/gobgp/$v/
+docker rm gtmp
+~/gobgp/$v/gobgpd --version
+```
+
+Then point the tests at them, as above:
+
+```
+export GOBGPD=~/gobgp/3.23.0/gobgpd GOBGP=~/gobgp/3.23.0/gobgp
+ruby test/run_lab.rb gobgp-families
+```
+
+The tarball is the better source when you can reach GitHub, because it
+comes with a checksum file and an image does not. Checked on an arm64
+Ubuntu VM on 2026-11-05: with `jauderho/gobgp:v3.23.0` copied out this
+way, `gen_gobgp_test.rb` passed its 25 cases and `gobgp-families` passed
+its 50.
+
+A GoBGP lab test can sit quiet for 15 to 20 seconds before its first
+dot, because GoBGP holds a new session for its idle time first. Let it
+run: a case that waits too long fails on its own timeout and names what
+it waited for. Add `-v` to a single file to see each test as it starts.
 
 #### Running one without root
 
