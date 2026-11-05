@@ -794,8 +794,15 @@ module LabHelper
     # families: extra address families, each activated for the peer, such
     #           as FS_IPV4. Empty by default, so a config with none is
     #           what it always was.
+    # ipv6:     activate IPv6 unicast for the peer. **Off by default**,
+    #           because FRR 10 refuses it over an IPv4 session with no
+    #           zebra: it logs "No local IPv6 address, and zebra does not
+    #           support V6 routing with v4 nexthops" and sends Cease 6/0,
+    #           where 8.4.4 only warned. Measured on the owner's VM against
+    #           10.5.1 on 2026-11-04. A test that sends IPv6 unicast asks
+    #           for it and runs on 8.x only.
     def initialize(local: '127.0.0.2', as: 65002, router_id: '10.0.0.2',
-                   peer: '127.0.0.1', peer_as: 65001, port: nil, ipv6: true,
+                   peer: '127.0.0.1', peer_as: 65001, port: nil, ipv6: false,
                    network: nil, families: [])
       @local, @as, @router_id = local, as, router_id
       @peer, @peer_as, @ipv6 = peer, peer_as, ipv6
@@ -857,9 +864,40 @@ module LabHelper
       lines.join("\n") + "\n"
     end
 
+    # A line to add when bgpd did not come up, or nil.
+    #
+    # **FRR 10's packages carry an AppArmor profile for the packaged
+    # bgpd**, and it denies the pid file this harness puts under /tmp, as
+    # root too. bgpd then logs "Can't create pid lock file ... (Permission
+    # denied), exiting" and exits 1, which reads like the -S problem in the
+    # class comment and is not. A profile attaches by path, so a copy of
+    # the binary somewhere else runs unconfined. Measured on the owner's
+    # VM against 10.5.1 on 2026-11-04.
+    #
+    # The hint fires on the log line, or when bgpd exited while AppArmor
+    # is on and the binary is the packaged one, because bgpd may write the
+    # pid error before it reads the config that sends its log to stdout.
+    # Pure, so the unit suite pins it with no daemon.
+    def self.startup_hint(log, bin: self.bin, apparmor: apparmor?, exited: true)
+      pid_denied = log.to_s =~ /pid lock file.*Permission denied/
+      packaged = (File.realpath(bin) rescue bin) == PACKAGED
+      return nil unless pid_denied || (exited && apparmor && packaged)
+      "bgpd may be confined by AppArmor. Copy it out of #{PACKAGED} and " \
+      'point FRR_BGPD at the copy, for example: ' \
+      'cp /usr/lib/frr/bgpd ~/frr-test/bgpd; FRR_BGPD=~/frr-test/bgpd'
+    end
+
+    def self.apparmor?
+      File.read('/sys/module/apparmor/parameters/enabled').strip == 'Y'
+    rescue SystemCallError
+      false
+    end
+
     # Starts bgpd and waits until its vty answers, which is the only
     # signal it read the config at all. Raises with the log, which names
-    # the line it rejected.
+    # the line it rejected. **Stops waiting the moment bgpd dies**, the
+    # way Gobgpd does, so a pid file AppArmor refused costs one second and
+    # not thirty.
     def up(timeout: 30)
       path = File.join(@dir, 'bgpd.conf')
       File.write(path, config)
@@ -876,11 +914,26 @@ module LabHelper
                            out: @log, err: [:child, :out])
       deadline = Time.now + timeout
       until summary
-        raise "bgpd did not come up in #{timeout}s:\n#{log}" if Time.now > deadline
+        dead = exited?
+        if dead || Time.now > deadline
+          text = log
+          hint = self.class.startup_hint(text, exited: dead)
+          what = dead ? 'bgpd exited without coming up' : "bgpd did not come up in #{timeout}s"
+          raise [what + ':', text, hint].compact.join("\n")
+        end
         sleep 0.5
       end
       self
     end
+
+    # True once the child is gone, reaping it. Gobgpd's, for the same reason.
+    def exited?
+      return false unless @pid
+      !Process.wait(@pid, Process::WNOHANG).nil?
+    rescue Errno::ECHILD
+      true
+    end
+    private :exited?
 
     def down
       @log_text = log

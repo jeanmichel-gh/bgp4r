@@ -1625,7 +1625,7 @@ CI: `.github/workflows/test.yml` runs both suites on every push to master and ev
 
 `.github/workflows/capture.yml` is the one workflow that deploys a containerlab lab: it builds the `lab-node` and BIRD images, deploys `lab/routescope/bgp4r-lab`, and runs its `capture.sh`, on demand and on a push that changes that folder or the Dockerfile. Its log is what routescope's BGP fixtures are cut from.
 
-Baseline on 2026-11-04: 3615 tests, 36394 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
+Baseline on 2026-11-04: 3619 tests, 36403 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
 
 **That coverage figure is 98.5% for the library and the rest is the two
 programs, not a gap anywhere else.** Measured the same run: with
@@ -7073,16 +7073,22 @@ the registry's.
   is section 4.1's rule. bgp4r still sends LLGR alone if asked, since
   nothing validates. So both capabilities this lab found unnamed with
   an RFC behind them are named; 73 and 76 are drafts.
-* **That file activates no IPv6 family, because FRR 10.5.1 refuses the
-  OPEN otherwise.** With IPv6 unicast activated over an IPv4 session and
-  no zebra it logs "No local IPv6 address, and zebra does not support V6
-  routing with v4 nexthops" and sends Cease 6/0, where 8.4.4 only
-  warned. Every other FRR lab file still activates IPv6, so on FRR 10
-  they all fail the same way. FRR 10's packages also carry an AppArmor
-  profile for `/usr/lib/frr/bgpd` that refuses the harness's pid file
-  under `/tmp`, as root too; `FRR_BGPD` pointing at a copy of the
-  binary elsewhere runs it unconfined. Both measured on 2026-11-04 on
-  the owner's VM, and neither is fixed in the harness yet.
+* **`LabHelper::Frr` activates IPv6 unicast only when asked, because
+  FRR 10.5.1 refuses the OPEN otherwise.** With IPv6 unicast activated
+  over an IPv4 session and no zebra it logs "No local IPv6 address, and
+  zebra does not support V6 routing with v4 nexthops" and sends Cease
+  6/0, where 8.4.4 only warned. This file said every other FRR lab file
+  activated it; two did, `flow_spec_frr_test.rb` and
+  `gen_frr_test.rb`, and only `gen_frr_test.rb`'s IPv6 case needs it,
+  so that one case asks and runs on 8.x only. FRR 10's packages also
+  carry an AppArmor profile for `/usr/lib/frr/bgpd` that refuses the
+  harness's pid file under `/tmp`, as root too; `FRR_BGPD` pointing at
+  a copy of the binary elsewhere runs it unconfined. `Frr#up` now stops
+  waiting when bgpd dies and names that workaround, through
+  `Frr.startup_hint`. Both measured on 2026-11-04 on the owner's VM.
+  **The other FRR lab files have not been run against 10.5.1**, and
+  their `MEASURED` ranges still say 8, so they omit themselves there
+  until someone does.
 
 **The `### GoBGP` block of `capture.sh` ran next, and it settles the
 two things that node is on the topology for.** All three kinds of
