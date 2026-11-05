@@ -111,8 +111,11 @@ module BGP
           act 'name', {...}             any action by name, as the HTTP API
           ship MSG                      any message or String, unchanged
         Watching
-          received [N]                  the last N messages in
-          last                          the last message in, as an object
+          received [N] [, KIND]         the last N messages in, as a list;
+                                        keepalives left out, :all for them,
+                                        :update etc for one kind, peer: P
+          last [KIND]                   the last message in, as an object,
+                                        keepalives left out unless asked
           watch / quiet                 print messages as they arrive, or not
           sent                          what the injector reports it sent
           announced                     what is announced on command

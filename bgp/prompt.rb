@@ -60,11 +60,43 @@ module BGP
                   "so under Bundler add gem 'irb' to the Gemfile, or run " \
                   'without bundle exec.'
 
-    # One message in, from one peer, at one time.
+    # The kinds `received` and `last` filter on, by the message's
+    # class. :all is every kind, keepalives included.
+    KINDS = %i[update keepalive notification open route_refresh malformed other].freeze
+
+    # What a person usually wants: everything but keepalives, which
+    # arrive every holdtime/3 seconds and push the rest out of view.
+    DEFAULT_KINDS = (KINDS - %i[keepalive]).freeze
+
+    # One message in, from one peer, at one time. `kind` is one of
+    # KINDS, and `inspect` is the one line `to_s` prints, so a list of
+    # these reads in irb the way `received` used to print it.
     Received = Struct.new(:at, :peer, :message) do
       def to_s
         format('%s %s %s', at.strftime('%H:%M:%S.%L'), peer, Prompt.describe(message))
       end
+      alias_method :inspect, :to_s
+
+      # irb prints a result through pp and not inspect, so both say it.
+      def pretty_print(q) ; q.text(to_s) ; end
+
+      def kind ; Prompt.kind(message) ; end
+      def msg ; message ; end
+    end
+
+    # What `received` answers: an Array of Received, oldest first, that
+    # irb prints one line per message. `messages` is the objects.
+    class List < Array
+      def messages ; collect(&:message) ; end
+
+      def inspect
+        empty? ? '(none)' : collect(&:to_s).join("\n")
+      end
+      alias_method :to_s, :inspect
+
+      # irb prints a result through pp, which would otherwise show every
+      # field of every message. One line each, as `received` printed.
+      def pretty_print(q) ; q.text(inspect) ; end
     end
 
     # The observer on one Neighbor. A separate object, so an Observable
@@ -84,6 +116,40 @@ module BGP
       require 'irb'
     rescue LoadError
       raise LoadError, IRB_MISSING
+    end
+
+    # Which of KINDS a message is. The ORF form of RFC 5291 is its own
+    # class and not a Route_refresh, so it is named too.
+    def self.kind(msg)
+      case msg
+      when BGP::Update then :update
+      when BGP::Keepalive then :keepalive
+      when BGP::Notification then :notification
+      when BGP::Open then :open
+      when BGP::Route_refresh, BGP::Orf_route_refresh then :route_refresh
+      when Exception then :malformed
+      else :other
+      end
+    end
+
+    # The kinds and the count a call to `received` or `last` asked for,
+    # in either order: `received 20`, `received :update`, `received
+    # 5, :keepalive`, `received :all`. An unknown kind is refused with
+    # the list, rather than matching nothing.
+    def self.selection(args, count)
+      kinds = []
+      args.each do |a|
+        case a
+        when Integer then count = a
+        when :all then kinds.concat(KINDS)
+        when Symbol, String
+          k = a.to_sym
+          raise ArgumentError, "no kind #{a.inspect}; the kinds are #{(KINDS + [:all]).join(', ')}" unless KINDS.include?(k)
+          kinds << k
+        else raise ArgumentError, "#{a.inspect} is neither a count nor a kind"
+        end
+      end
+      [kinds.empty? ? DEFAULT_KINDS : kinds.uniq, count]
     end
 
     # One line about a message, for `received` and `watch`.
@@ -170,13 +236,27 @@ module BGP
       nil
     end
 
-    def received(count = 10)
-      @lock.synchronize { @received.last(count) }.each { |r| @out.puts r }
-      nil
+    # The last messages in, as a List: an Array of Received, oldest
+    # first, with keepalives left out unless asked for.
+    #
+    #   received                     the last 10, keepalives left out
+    #   received 50, :all            the last 50 of anything
+    #   received :update             the last 10 UPDATEs
+    #   received :keepalive          only the keepalives
+    #   received peer: '10.0.0.2'    from one peer
+    #   received.last.message        the object, also .msg
+    #   received(:update).messages   the objects
+    def received(*args, peer: nil)
+      kinds, count = Prompt.selection(args, 10)
+      List.new(select_received(kinds, peer).last(count))
     end
 
-    def last
-      r = @lock.synchronize { @received.last }
+    # The last message in, as an object, keepalives left out unless
+    # asked for: `last`, `last :keepalive`, `last :all`, `last
+    # peer: '10.0.0.2'`.
+    def last(*args, peer: nil)
+      kinds, = Prompt.selection(args, 1)
+      r = select_received(kinds, peer).last
       r && r.message
     end
 
@@ -195,6 +275,11 @@ module BGP
     end
 
     private
+
+    def select_received(kinds, peer)
+      all = @lock.synchronize { @received.dup }
+      all.select { |r| kinds.include?(r.kind) && (peer.nil? || r.peer == peer) }
+    end
 
     # Puts a Tap on the Neighbor under a peer, once per Neighbor. A
     # Neighbor is a new object on every reconnect, so a host calls this

@@ -52,6 +52,7 @@ class TestConsoleExamplesDoc < Test::Unit::TestCase
     'two-consoles-a'  => BGP::Sim::Console,
     'two-consoles-b'  => BGP::Sim::Console,
     'two-consoles-a2' => BGP::Sim::Console,
+    'two-consoles-b2' => BGP::Sim::Console,
     'sim-a'           => BGP::Sim::Console,
     'sim-b'           => BGP::Sim::Console,
     'routegen'        => BGP::Sim::Console,

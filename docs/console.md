@@ -101,6 +101,8 @@ specimen :large_communities, '10.2.0.0/24'  # specimens lists the names
 fault :origin_value, '10.3.0.0/24'          # faults lists the names
 watch                                       # print what arrives
 received 20                                 # the last 20 messages in
+received :all                               # keepalives too
+received(:update).messages                  # the UPDATE objects
 last.path_attribute                         # the last one, as an object
 n.send_message Update.new(Path_attribute.new(Origin.new(0)), Nlri.new('10.4.0.0/24'))
 notification 6, 2                           # a Cease, when wanted
@@ -120,6 +122,27 @@ exit
 * **A tap on the Neighbor records what the peer sends**, for `received`,
   `last` and `watch`. It goes on when the session reaches Established,
   so a message that arrives in that same instant can be missed.
+* **`received` answers a list and `last` an object, and both leave
+  keepalives out.** A peer sends one every holdtime/3 seconds, so
+  without the filter they push the UPDATEs out of view and `last`
+  answers a Keepalive. The list is an Array of rows, oldest first, that
+  irb prints one line each. A row has `at`, `peer`, `kind` and
+  `message`, also `msg`, and the list has `messages`, the objects:
+
+  ```ruby
+  received                         # the last 10, keepalives left out
+  received 50, :all                # the last 50 of anything
+  received :keepalive              # only the keepalives
+  received :update, peer: '10.0.0.2'
+  received.last.message            # the object
+  received(:update).messages.collect { |m| m.nlri.to_ary }
+  last :notification               # the last NOTIFICATION
+  ```
+
+  The kinds are `update`, `keepalive`, `notification`, `open`,
+  `route_refresh`, `malformed` and `other`, and `:all` is every kind.
+  A count and a kind go in either order. An unknown kind is refused
+  with the list, rather than matching nothing.
 * **No verb is named after an irb command**, because irb's command wins
   over a method of the same name. That is why the list is `verbs` and
   not `help`. `ls` lists every method of the console.
