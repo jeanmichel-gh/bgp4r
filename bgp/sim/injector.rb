@@ -27,6 +27,7 @@ require 'bgp/gen'
 require 'bgp/daemon/views'
 require 'bgp/events'
 require 'bgp/sim/sent'
+require 'bgp/prompt'
 
 module BGP
   module Sim
@@ -980,26 +981,11 @@ module BGP
                        '(RFC 4271 section 4). Use a smaller per_update.'
       end
 
-      # How many prefixes one UPDATE carries, in either field: the RFC
-      # 4271 section 4.3 NLRI, and the MP_REACH_NLRI of RFC 4760 section
-      # 3, which is what a generated IPv6 range would use.
-      def self.prefix_count(msg)
-        return 0 unless msg.is_a?(BGP::Update)
-        n = msg.nlri ? msg.nlri.size : 0
-        pa = msg.path_attribute
-        n += pa[:mp_reach].nlris.size if pa && pa.has?(BGP::Mp_reach)
-        n
-      end
-
-      # How many prefixes one UPDATE withdraws, in either field, which
-      # is what a withdrawal feed counts.
-      def self.withdrawn_count(msg)
-        return 0 unless msg.is_a?(BGP::Update)
-        n = msg.withdrawn ? msg.withdrawn.size : 0
-        pa = msg.path_attribute
-        n += pa[:mp_unreach].nlris.size if pa && pa.has?(BGP::Mp_unreach)
-        n
-      end
+      # How many prefixes one UPDATE carries and withdraws. The counting
+      # is BGP::Prompt's, which `received` prints with and which must not
+      # load this file, so it is written once there.
+      def self.prefix_count(msg) ; Prompt.prefix_count(msg) ; end
+      def self.withdrawn_count(msg) ; Prompt.withdrawn_count(msg) ; end
 
       # ---- what was announced -----------------------------------------
 
