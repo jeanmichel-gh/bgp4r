@@ -108,16 +108,37 @@ Back in A:
 ```ruby
 received
 last.path_attribute[:as_path].as_path        # => "65002 65099"
+received :all
+received :keepalive
+received 1, :update
+received peer: '127.0.0.2'
+last :all
 shutdown
 peers
 no_shutdown
 clear
 ```
 
+Back in B, after the `clear`:
+
+<!-- example: two-consoles-b2 -->
+```ruby
+received :notification
+last(:notification).to_s
+```
+
 For `listen`, `port:` and `local_address:` are our own. For `connect`
 they are the far end's. `shutdown` sends Cease 6/2 and the session
 stays down; `no_shutdown` lets it come back; `clear` sends Cease 6/4
 and it comes back on its own.
+
+`received` leaves keepalives out. `received :all` puts them back, and a
+kind such as `:keepalive` or `:notification` shows only that kind. A
+count and a kind go in either order. `peer:` keeps one peer's rows.
+`last` takes a kind the same way, so `last :all` can answer a
+keepalive and `last` alone cannot. B's `received :notification` holds
+the 6/2 from `shutdown` and the 6/4 from `clear`, and `last` reads the
+6/4.
 
 ## 4. The injector with a prompt
 
