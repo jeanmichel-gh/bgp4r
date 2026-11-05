@@ -43,11 +43,15 @@ module BGP
     # verb that returns data returns what the socket would have sent,
     # String keys and all. `api` reaches any method by name.
     #
-    # **No verb sends octets around the records.** A daemon keeps a
-    # Loc-RIB and an Adj-RIB-Out per peer, and a message put on the wire
-    # behind their back would make its own answers wrong. Sending by hand
-    # on a daemon is the next step, with a list of what was sent beside
-    # the Adj-RIB-Out; docs/console.md section 10 has it.
+    # **Four verbs send behind the Adj-RIB-Out's back**: `specimen`,
+    # `fault`, `replay` and `ship`. The Adj-RIB-Out is never patched for
+    # them, because after one the daemon cannot know what the peer holds.
+    # What they touched is listed beside it instead, by `adj_out` and
+    # counted by `peers`, until the daemon sends the prefix again, the
+    # session ends, or `resend` puts the peer back in line.
+    # bgp/daemon/hand.rb has the list and docs/console.md section 10 the
+    # decision. `ship` is the one that is not a socket method, since it
+    # takes an object; it goes through the same `Control#ship`.
     #
     # `received`, `last`, `watch`, `guide` and `verbs` come from
     # `BGP::Prompt`, which is why this file does not load the injector.
@@ -67,8 +71,9 @@ module BGP
           rib [STYLE [, PFX]]           show bgp, in ios, junos or iosxr style
           why PFX                       each path to one prefix, and why it won
                                         or lost
-          adj_in PEER [, PFX]           what PEER sent us, as received
-          adj_out PEER [, PFX]          what we sent PEER, and what we did not
+          adj_in [PEER [, PFX]]         what PEER sent us, as received
+          adj_out [PEER [, PFX]]        what we sent PEER, what we did not,
+                                        and what we sent it by hand
           fib                           what the forwarding table is believed
                                         to hold
         Acting
@@ -83,6 +88,14 @@ module BGP
           no_shutdown [PEER]            let it come back up
           refresh [PEER], afi: 1, safi: 1, subtype: nil
                                         a ROUTE-REFRESH
+        Sending by hand, listed by adj_out and never in the Adj-RIB-Out
+          specimen NAME, PFX..., peer: P  a valid UPDATE by name, with the
+                                        mark key added
+          fault NAME, PFX..., peer: P   a BGP::Fault case, never marked
+          replay HEX, peer: P           octets on the wire, unchanged
+          ship MSG, peer: P             any message object, unchanged
+          resend PEER                   the daemon's own answer for each
+                                        prefix sent by hand
           api 'METHOD', {...}           any control socket method by name
         Watching
           received [N]                  the last N messages in
@@ -128,16 +141,16 @@ module BGP
 
       # ---- reading -------------------------------------------------------
 
-      PEER_HEADING = format('%-15s %-7s %-12s %-9s %5s %5s %5s',
-                            'peer', 'as', 'state', 'uptime', 'rcvd', 'sent', 'best')
+      PEER_HEADING = format('%-15s %-7s %-12s %-9s %5s %5s %5s %5s',
+                            'peer', 'as', 'state', 'uptime', 'rcvd', 'sent', 'best', 'hand')
 
       def peers
         rows = api('show.peers')
         @out.puts PEER_HEADING
         rows.each do |r|
-          @out.puts format('%-15s %-7s %-12s %-9s %5s %5s %5s',
+          @out.puts format('%-15s %-7s %-12s %-9s %5s %5s %5s %5s',
                            r['address'], r['remote_as'], r['state'], clock(r['uptime']),
-                           r['received'], r['sent'] || '-', r['best'])
+                           r['received'], r['sent'] || '-', r['best'], r['hand'] || 0)
         end
         nil
       end
@@ -172,19 +185,30 @@ module BGP
         nil
       end
 
-      def adj_in(peer, prefix = nil)
-        page = api('show.adj_in', paged(peer, prefix))
+      # PEER may be left out when there is one peer, or one up, as for
+      # every other verb.
+      def adj_in(address = nil, prefix = nil)
+        page = api('show.adj_in', paged(peer(address).address, prefix))
         table(page, %w[from])
         nil
       end
 
-      def adj_out(peer, prefix = nil)
-        page = api('show.adj_out', paged(peer, prefix))
+      def adj_out(address = nil, prefix = nil)
+        page = api('show.adj_out', paged(peer(address).address, prefix))
         table(page, [])
         skipped = page['skipped']
         if skipped && skipped['total'] > 0
           @out.puts "\nnot advertised:"
           skipped['rows'].each { |s| @out.puts format('%-18s %s', s['prefix'], s['reason']) }
+        end
+        hand = page['hand']
+        if hand
+          @out.puts "\nsent by hand, state at peer unknown:"
+          hand['rows'].each do |h|
+            what = h['prefix'] ? h['prefix'] : '(the whole peer)'
+            what = "#{h['family']} #{what}" if h['family']
+            @out.puts format('%-18s %s at %s', what, h['verb'], clock_of(h['at']))
+          end
         end
         nil
       end
@@ -238,6 +262,37 @@ module BGP
 
       def refresh(address = nil, **opts)
         api('peer.refresh', stringify(opts).merge('peer' => peer(address).address))
+      end
+
+      # ---- sending by hand ------------------------------------------------
+
+      # `peer.specimen`: a `BGP::Specimen` by name, with the mark added.
+      def specimen(name, *prefixes, **opts)
+        api('peer.specimen', body(prefixes, opts).merge('name' => name.to_s))
+      end
+
+      # `peer.fault`: a `BGP::Fault` case by name, never marked.
+      def fault(name, *prefixes, **opts)
+        api('peer.fault', body(prefixes, opts).merge('case' => name.to_s))
+      end
+
+      # `peer.replay`: octets as hex, sent unchanged.
+      def replay(hex, **opts)
+        api('peer.replay', stringify(opts).merge('hex' => hex.to_s))
+      end
+
+      # Any message, sent as it is, which is the one way to send what no
+      # verb builds. Octets go as they are too. Listed like the others,
+      # by reading the message back.
+      def ship(msg, peer: nil)
+        r = @api_server.control.ship(self.peer(peer), msg)
+        JSON.parse(JSON.generate(r))
+      end
+
+      # `peer.resend`: the daemon's own answer for each prefix PEER was
+      # sent by hand.
+      def resend(address = nil)
+        api('peer.resend', 'peer' => peer(address).address)
       end
 
       def state(address = nil) ; peer(address).state ; end
@@ -319,6 +374,12 @@ module BGP
       def clock(s)
         return '-' if s.nil?
         format('%02d:%02d:%02d', s / 3600, s / 60 % 60, s % 60)
+      end
+
+      # The time of day out of an ISO 8601 time, which is what a person
+      # reading the list wants.
+      def clock_of(iso)
+        iso.to_s[/T(\d\d:\d\d:\d\d)/, 1] || iso.to_s
       end
 
       def body(prefixes, opts)

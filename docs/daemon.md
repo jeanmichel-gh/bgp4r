@@ -491,6 +491,9 @@ prefix is by definition not in the Adj-RIB-Out, and `configured` and
 `table` are not per prefix at all. A reader keyed on `rows`, `total` and
 `next_offset` is unaffected. `skipped` carries its own total and is
 capped at the same limit, so a caller can see there is more than it got.
+`show.adj_out` carries a third, `hand`, in the same shape and **only
+when there is something in it**: what was sent to that peer by hand,
+below.
 
 ### The methods
 
@@ -509,6 +512,8 @@ capped at the same limit, so a caller can see there is more than it got.
 | `events.subscribe`, `events.unsubscribe` | a stream, one event per line | built |
 | `peer.clear`, `peer.stop`, `peer.start` | one session | built |
 | `peer.refresh` | a ROUTE-REFRESH, RFC 2918 and the RFC 7313 subtypes | built |
+| `peer.specimen`, `peer.fault`, `peer.replay` | one message sent by hand, listed and never written into the Adj-RIB-Out | built |
+| `peer.resend` | the daemon's own answer for each prefix a peer was sent by hand | built |
 | `route.originate`, `route.withdraw` | our own prefixes | built |
 | `show.configuration` | the running configuration, or the candidate | built |
 | `config.changed` | whether the candidate differs, as a **boolean** | built |
@@ -693,6 +698,23 @@ RFC does not define. **Nothing checks that the peer advertised capability
 protocol has to be able to send a refresh to a speaker that never asked
 for one. What is refused is a session that is not Established, because
 there is no connection to write to.
+
+**`peer.specimen`, `peer.fault` and `peer.replay` send by hand**, and
+`bgp4rd --interact` adds `ship` for a message object. A `BGP::Specimen`
+by `name`, a `BGP::Fault` by `case`, octets by `hex`, each with an
+optional `peer`, and the first two with `prefix` or `prefixes` and
+`next_hop`. They build what `bgp4r-sim` builds for the same name, so
+one name is one set of octets for both programs. **The Adj-RIB-Out is
+never written for them**, because after one the daemon cannot know what
+the peer holds; each prefix they touch is listed under `hand` in
+`show.adj_out` and counted as `hand` on the peer's `show.peers` row,
+both present only when the list is not empty. A row clears when the
+daemon sends the prefix the normal way, when the session ends, or on
+`peer.resend`, which sends the route where export has one and a
+withdrawal where it does not, whatever the Adj-RIB-Out says. **The
+configuration's `mark` goes on a specimen and never on a fault or a
+replay**, since those are the message under test. docs/console.md
+section 10 has the decision and bgp/daemon/hand.rb the list.
 
 **`route.originate` takes the `originate:` block's own keys**, so the
 runtime vocabulary is the configuration vocabulary and a prefix
@@ -1081,6 +1103,25 @@ peer.refresh  {"peer":"10.0.10.1","afi":1,"safi":1,"subtype":0,"sent":true}
 route.originate {"originated":["10.255.0.0/24"],"total":1,"changes":1,"rib":7,"marked":false}
 route.withdraw  {"withdrawn":["10.255.0.0/24"],"not_held":[],"total":1,"changes":1,"rib":6}
 ```
+
+Sending by hand, measured against the library, then what `show.adj_out`
+answers under `hand` and the `resend` that follows. The replayed octets
+are not a message, so their row is the whole peer and `resend` keeps it,
+since only the session ending can settle it:
+
+```json
+peer.specimen {"specimen":"large_communities","prefixes":["10.30.0.0/24"],"marked":false,"sent":[{"peer":"10.0.10.1","prefixes":["10.30.0.0/24"]}]}
+peer.fault    {"case":"origin_value","prefixes":["10.10.0.0/24"],"sent":[{"peer":"10.0.10.1","prefixes":["10.10.0.0/24"]}]}
+peer.replay   {"octets":2,"sent":[{"peer":"10.0.10.1","prefixes":[null]}]}
+"hand": {"total":3,"rows":[{"prefix":"10.30.0.0/24","verb":"specimen large_communities","at":"2026-11-05T01:42:52.161Z"},
+                           {"prefix":"10.10.0.0/24","verb":"fault origin_value","at":"2026-11-05T01:42:52.161Z"},
+                           {"prefix":null,"verb":"replay","at":"2026-11-05T01:42:52.161Z"}]}
+peer.resend   {"peer":"10.0.10.1","resent":[],"withdrawn":["10.30.0.0/24","10.10.0.0/24"],"hand":1,
+               "kept":[{"prefix":null,"verb":"replay","at":"2026-11-05T01:42:52.161Z"}]}
+```
+
+`resent` is empty there because that daemon has no `export:`, so its
+answer for every prefix is a withdrawal.
 
 `changes` is how many Loc-RIB changes it caused, which is not always the
 same as `total`: see `route.withdraw` above.

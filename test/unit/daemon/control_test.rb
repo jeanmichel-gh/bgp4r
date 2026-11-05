@@ -337,4 +337,137 @@ class BGP_Daemon_Control_Test < Test::Unit::TestCase
     assert_equal({}, BGP::Daemon::Control.mark(nil))
   end
 
+
+  # ====================================================================
+  # Sending by hand: peer.specimen, peer.fault, peer.replay, peer.resend
+
+  # A Peer that says its session is up and keeps what it was asked to
+  # send. A real session crossing these is test/functional/daemon_test.rb's.
+  def up(c, address = '10.0.0.2')
+    p = c.speaker.peer(address)
+    sent = []
+    p.define_singleton_method(:established?) { true }
+    p.define_singleton_method(:send_message) { |m| sent << m }
+    p.define_singleton_method(:local_ip) { '10.0.0.1' }
+    sent
+  end
+
+  def test_a_specimen_goes_to_the_named_peer_and_is_listed_not_written
+    c = control
+    sent = up(c)
+    r = c.peer_specimen('name' => 'large_communities', 'prefix' => '10.30.0.0/24',
+                        'peer' => '10.0.0.2')
+    assert_equal('large_communities', r[:specimen])
+    assert_equal([{ :peer => '10.0.0.2', :prefixes => ['10.30.0.0/24'] }], r[:sent])
+    assert_equal(1, sent.size)
+    assert_kind_of(BGP::Large_communities, sent.first.path_attribute[BGP::Large_communities])
+    assert_equal('65000', sent.first.path_attribute[BGP::As_path].as_path, 'our AS toward an external peer')
+    rows = c.speaker.hand.rows('10.0.0.2')
+    assert_equal(['10.30.0.0/24'], rows.collect { |x| x[:prefix] })
+    assert_equal(['specimen large_communities'], rows.collect { |x| x[:verb] })
+    assert_equal(0, c.speaker.rib.loc_rib.size, 'it never enters the Loc-RIB')
+  end
+
+  # The mark goes into the specimen's own attribute of that type, so the
+  # UPDATE carries one of each, and is appended where there is none.
+  def test_a_specimen_carries_the_mark
+    mark = { 'mark' => { 'large_communities' => ['65000:1:1'], 'communities' => ['65000:9'] } }
+    c = control(mark)
+    sent = up(c)
+    r = c.peer_specimen('name' => 'large_communities', 'peer' => '10.0.0.2')
+    assert_equal(true, r[:marked])
+    pa = sent.first.path_attribute
+    assert_equal(1, pa.attributes.count { |a| a.is_a?(BGP::Large_communities) })
+    assert_include(pa[BGP::Large_communities].large_communities.split, '65000:1:1')
+    assert_equal('65000:9', pa[BGP::Communities].communities)
+  end
+
+  # A fault is the message under test, so nothing is added to it.
+  def test_a_fault_is_never_marked
+    c = control('mark' => { 'communities' => ['65000:9'] })
+    sent = up(c)
+    r = c.peer_fault('case' => 'origin_value', 'prefix' => '10.10.0.0/24', 'peer' => '10.0.0.2')
+    assert_equal('origin_value', r[:case])
+    assert(!sent.first.path_attribute.has?(BGP::Communities))
+    assert_equal(BGP::Fault.update(:origin_value, :my_as => 65_000, :next_hop => '10.0.0.1',
+                                   :prefixes => ['10.10.0.0/24']).encode,
+                 sent.first.encode, 'the catalog octets, unchanged')
+    assert_equal(['fault origin_value'], c.speaker.hand.rows('10.0.0.2').collect { |x| x[:verb] })
+  end
+
+  def test_replay_sends_octets_unchanged_and_reads_them_back
+    c = control
+    sent = up(c)
+    hex = BGP::Update.new(BGP::Path_attribute.new(BGP::Origin.new(0), BGP::As_path.new(65_000),
+                                                  BGP::Next_hop.new('10.0.0.1')),
+                          BGP::Nlri.new('10.40.0.0/24')).to_shex
+    r = c.peer_replay('hex' => hex, 'peer' => '10.0.0.2')
+    assert_equal([hex].pack('H*'), sent.first)
+    assert_equal(hex.size / 2, r[:octets])
+    assert_equal(['10.40.0.0/24'], c.speaker.hand.prefixes('10.0.0.2'))
+    c.peer_replay('hex' => 'ff 00', 'peer' => '10.0.0.2')
+    assert_include(c.speaker.hand.rows('10.0.0.2').collect { |x| x[:prefix] }, nil,
+                   'octets that are not a message list the whole peer')
+  end
+
+  # With no peer named, every session that is up, as bgp4r-sim does.
+  def test_with_no_peer_named_every_session_that_is_up
+    c = control
+    a = up(c, '10.0.0.2')
+    b = up(c, '10.0.0.3')
+    c.peer_fault('case' => 'origin_value', 'prefix' => '10.10.0.0/24')
+    assert_equal([1, 1], [a.size, b.size])
+    assert_equal('empty', b.first.path_attribute[BGP::As_path].as_path, 'empty toward an internal peer')
+  end
+
+  # A send that would go nowhere is refused, never an answer that sent
+  # nothing.
+  def test_a_send_with_no_session_is_refused
+    c = control
+    e = assert_raise(ArgumentError) { c.peer_fault('case' => 'origin_value') }
+    assert_match(/no established session: 10.0.0.2 idle, 10.0.0.3 idle/, e.message)
+    e = assert_raise(ArgumentError) { c.peer_replay('hex' => '00', 'peer' => '10.0.0.2') }
+    assert_match(/10.0.0.2 has no established session/, e.message)
+  end
+
+  def test_the_send_refusals_name_what_is_wrong
+    c = control
+    up(c)
+    assert_raise_message(/name: is required; the catalog has/) { c.peer_specimen({}) }
+    assert_raise_message(/unknown specimen "nope"/) { c.peer_specimen('name' => 'nope') }
+    assert_raise_message(/case: is required/) { c.peer_fault({}) }
+    assert_raise_message(/unknown case "nope"/) { c.peer_fault('case' => 'nope') }
+    assert_raise_message(/not a non-empty, even number of hex digits/) { c.peer_replay('hex' => 'abc') }
+    assert_raise_message(/not a non-empty, even number of hex digits/) { c.peer_replay({}) }
+    assert_raise_message(/unknown parameter\(s\) med/) { c.peer_fault('case' => 'origin_value', 'med' => 1) }
+  end
+
+  # With no Router, which is no export: block, the daemon advertises
+  # nothing, so its answer for every prefix is a withdrawal.
+  def test_resend_with_no_router_withdraws_every_prefix
+    c = control
+    sent = up(c)
+    c.speaker.hand.record('10.0.0.2', BGP::Fault.update(:origin_value, :prefixes => %w[10.10.0.0/24]), 'fault origin_value')
+    sent.clear
+    r = c.peer_resend('peer' => '10.0.0.2')
+    assert_equal({ :peer => '10.0.0.2', :resent => [], :withdrawn => ['10.10.0.0/24'], :hand => 0 }, r)
+    assert_equal(['10.10.0.0/24'], sent.flat_map { |m| m.withdrawn.to_ary })
+  end
+
+  # A row resend has no answer for is kept and named.
+  def test_resend_keeps_what_it_cannot_answer
+    c = control
+    up(c)
+    c.speaker.hand.record('10.0.0.2', "\xff".b, 'replay')
+    r = c.peer_resend('peer' => '10.0.0.2')
+    assert_equal(1, r[:hand])
+    assert_equal([nil], r[:kept].collect { |x| x[:prefix] })
+  end
+
+  def test_resend_needs_a_peer_that_is_up
+    c = control
+    assert_raise_message(/peer is required/) { c.peer_resend({}) }
+    assert_raise_message(/10.0.0.2 has no established session/) { c.peer_resend('peer' => '10.0.0.2') }
+  end
+
 end
