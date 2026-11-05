@@ -50,7 +50,10 @@ class EvpnFrrTest < Test::Unit::TestCase
 
   # The major versions these expectations were measured against, the same
   # shape and the same reason as flow_spec_frr_test.rb's.
-  MEASURED = (8..8).freeze
+  # 8.4.4, and 10.5.1 on the owner's VM on 2026-11-04 once the route
+  # types 6 to 11 case counted UPDATEs rather than reading a debug line
+  # 10.5.1 does not write: 9 tests, 55 assertions, all passing.
+  MEASURED = (8..10).freeze
 
   # RFC 7432 section 5, a Type 0 ESI. FRR prints the ten octets as they
   # are, where GoBGP names the Type octet, so between them both readings

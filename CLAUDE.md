@@ -1650,7 +1650,7 @@ CI: `.github/workflows/test.yml` runs both suites on every push to master and ev
 
 `.github/workflows/capture.yml` is the one workflow that deploys a containerlab lab: it builds the `lab-node` and BIRD images, deploys `lab/routescope/bgp4r-lab`, and runs its `capture.sh`, on demand and on a push that changes that folder or the Dockerfile. Its log is what routescope's BGP fixtures are cut from.
 
-Baseline on 2026-11-04: 3701 tests, 36674 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
+Baseline on 2026-11-04: 3701 tests, 36675 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
 
 **That coverage figure is 98.5% for the library and the rest is the two
 programs, not a gap anywhere else.** Measured the same run: with
@@ -7121,10 +7121,11 @@ the registry's.
   which has no gate. Measured on the owner's VM on 2026-11-04 with no
   expectation changed. `fault_matrix_frr_test.rb` asserts 8 to 10
   too, with **expectations of its own for 10**, since 10.5.1 agrees on
-  17 of the 18 rows where 8.4.4 agreed on 6. `evpn_frr_test.rb` stays
-  at 8: it failed on the case that sends route types 6 to 11, by
-  reading a debug line 10.5.1 does not write, and now counts UPDATEs
-  instead, which still wants a run on 10.5.1.
+  17 of the 18 rows where 8.4.4 agreed on 6. `evpn_frr_test.rb` asserts
+  8 to 10 too: it failed on the case that sends route types 6 to 11, by
+  reading a debug line 10.5.1 does not write, and passed on 10.5.1 once
+  it counted UPDATEs instead. **So every FRR lab file now runs on
+  10.5.1.**
   **The first such run failed nearly everything, and the cause was the
   machine's own zebra.** bgpd dials the default zebra socket, and FRR's
   service answers there on the VM. FRR 10 then holds every eBGP peer at
