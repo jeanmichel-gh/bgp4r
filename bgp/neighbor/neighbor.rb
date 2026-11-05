@@ -841,10 +841,12 @@ module BGP
       end
     end
     
+    # The observers are told by dispatch_event after this hook, as for
+    # every message, so this tells nobody. It used to, and an observer
+    # saw each NOTIFICATION twice.
     def rcv_notification(m)
       log_info "#{m}"
       publish_notification(m, :receive)
-      changed and notify_observers(m)
       stop
     end
 
