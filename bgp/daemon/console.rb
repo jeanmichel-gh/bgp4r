@@ -98,8 +98,11 @@ module BGP
                                         prefix sent by hand
           api 'METHOD', {...}           any control socket method by name
         Watching
-          received [N]                  the last N messages in
-          last                          the last message in, as an object
+          received [N] [, KIND]         the last N messages in, as a list;
+                                        keepalives left out, :all for them,
+                                        :update etc for one kind, peer: P
+          last [KIND]                   the last message in, as an object,
+                                        keepalives left out unless asked
           watch / quiet                 print messages as they arrive, or not
           state [PEER]                  one peer's FSM state
           n, neighbor [PEER]            the BGP::Neighbor, the whole API

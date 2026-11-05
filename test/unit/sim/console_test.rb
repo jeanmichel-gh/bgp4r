@@ -170,10 +170,10 @@ class BGP_Sim_Console_Test < Test::Unit::TestCase
     upd = BGP::Update.new(BGP::Path_attribute.new(BGP::Origin.new(0)), BGP::Nlri.new('10.1.0.0/24'))
     @n1.deliver(upd)
     assert_same(upd, @c.last)
-    assert_nil(@c.received(10))
-    lines = @out.string.lines
+    lines = @c.received(10, :all).inspect.lines
     assert_equal(3, lines.size, 'the ring keeps what it was told to')
     assert_match(/ 10\.0\.0\.2 Update, 1 prefixes, 0 withdrawn$/, lines.last)
+    assert_equal([upd], @c.received.messages, 'keepalives are left out by default')
   end
 
   # A Neighbor is a new object on every reconnect, so the console taps
@@ -184,10 +184,10 @@ class BGP_Sim_Console_Test < Test::Unit::TestCase
     @speaker.hooks.each { |h| h.call(@p2) }
     @speaker.hooks.each { |h| h.call(@p2) }
     n2.deliver(BGP::Keepalive.new)
-    assert_kind_of(BGP::Keepalive, @c.last)
-    @c.received
-    assert_equal(1, @out.string.lines.size, 'tapped twice would record it twice')
-    assert_match(/ 10\.0\.0\.3 Keepalive$/, @out.string)
+    assert_kind_of(BGP::Keepalive, @c.last(:all))
+    list = @c.received(:all)
+    assert_equal(1, list.size, 'tapped twice would record it twice')
+    assert_match(/ 10\.0\.0\.3 Keepalive$/, list.inspect)
   end
 
   def test_watch_prints_as_messages_arrive_and_quiet_stops_it

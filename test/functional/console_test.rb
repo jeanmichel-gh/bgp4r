@@ -133,8 +133,7 @@ class TestConsole < Test::Unit::TestCase
                                Nlri.new('192.0.2.0/24'))
     assert(wait { c.last.is_a?(BGP::Update) }, 'nothing reached the console')
     assert_equal(['192.0.2.0/24'], nlri_of(c.last))
-    c.received
-    assert_match(/127\.0\.0\.1 Update, 1 prefixes, 0 withdrawn/, @out.string)
+    assert_match(/127\.0\.0\.1 Update, 1 prefixes, 0 withdrawn/, c.received.inspect)
   end
 
   # ---- connect, listen, shutdown and clear: bgp4r console ---------------

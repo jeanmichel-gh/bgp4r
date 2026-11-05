@@ -68,10 +68,14 @@ withdraw '10.9.0.0/24'
 remote.last.withdrawn.to_ary                  # => ["10.9.0.0/24"]
 sent
 remote.received 3
+remote.received(:update).size                 # => 4
+remote.received(:update).messages.last.withdrawn.to_ary # => ["10.9.0.0/24"]
 exit
 ```
 
-`exit` stops both sides. The remote side logs to `/tmp/b2b-remote.log`.
+`received` answers a list, oldest first, with keepalives left out, so
+the four UPDATEs our side sent are the four rows. `received :all`
+puts the keepalives back. `exit` stops both sides. The remote side logs to `/tmp/b2b-remote.log`.
 
 ## 3. Two consoles
 

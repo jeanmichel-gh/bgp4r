@@ -1665,7 +1665,7 @@ CI: `.github/workflows/test.yml` runs both suites on every push to master and ev
 
 `.github/workflows/capture.yml` is the one workflow that deploys a containerlab lab: it builds the `lab-node` and BIRD images, deploys `lab/routescope/bgp4r-lab`, and runs its `capture.sh`, on demand and on a push that changes that folder or the Dockerfile. Its log is what routescope's BGP fixtures are cut from.
 
-Baseline on 2026-11-04: 3708 tests, 36763 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
+Baseline on 2026-11-04: 3717 tests, 36807 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
 
 **That coverage figure is 98.5% for the library and the rest is the two
 programs, not a gap anywhere else.** Measured the same run: with
@@ -8052,6 +8052,17 @@ is the open "Cease subcode per method" item under routescope labs;
 `notification 6, 2` sends one by hand. And a message that arrives
 between Established and the console's tap is not in `received`, since
 the tap goes on through `Speaker#on_established`, after the fact.
+
+**`received` answers a list and `last` an object, both without
+keepalives by default.** Reported by the owner on 2026-11-04: a peer's
+keepalive every holdtime/3 seconds pushed the UPDATEs out of view and
+made `last` answer a Keepalive, and `received` printed and answered nil,
+so nothing could be picked. It is a `Prompt::List` now, an Array of
+`Received` rows with `at`, `peer`, `kind` and `message`, filtered by a
+kind, `:all` or `peer:`. **irb prints a result through `pp` and not
+`inspect`**, so both classes define `pretty_print`; the first version
+had `inspect` only and dumped every field of every message at the
+prompt, which only running the program showed.
 
 ## Known issues to work on
 

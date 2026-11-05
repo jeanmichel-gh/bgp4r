@@ -86,9 +86,112 @@ class BGP_Prompt_Test < Test::Unit::TestCase
 
   def test_received_keeps_the_last_n_and_last_answers_the_object
     5.times { |i| @h.received_from('10.0.0.1', "m#{i}") }
-    @h.received(10)
-    assert_equal(%w[m2 m3 m4], @out.string.lines.collect { |l| l.split.last })
+    list = @h.received(10)
+    assert_equal(%w[m2 m3 m4], list.messages)
     assert_equal('m4', @h.last)
+    assert_equal('', @out.string, 'received answers a list and prints nothing')
+  end
+
+  # ---- received and last, picked and chosen -------------------------------
+
+  def keepalive ; BGP::Keepalive.new ; end
+
+  def update(prefix)
+    BGP::Update.new(BGP::Path_attribute.new(BGP::Origin.new(0)), BGP::Nlri.new(prefix))
+  end
+
+  def fill
+    h = Host.new(@out)
+    h.received_from('10.0.0.1', update('10.1.0.0/24'))
+    3.times { h.received_from('10.0.0.1', keepalive) }
+    h.received_from('10.0.0.2', update('10.2.0.0/24'))
+    h.received_from('10.0.0.2', keepalive)
+    h
+  end
+
+  # The reported case: a keepalive every holdtime/3 seconds pushed the
+  # UPDATE out of view and made `last` answer a Keepalive.
+  def test_keepalives_are_left_out_by_default
+    h = fill
+    assert_kind_of(BGP::Update, h.last)
+    assert_equal(['10.2.0.0/24'], h.last.nlri.to_ary)
+    assert_equal(%i[update update], h.received.collect(&:kind))
+  end
+
+  def test_all_and_one_kind_can_be_asked_for
+    h = fill
+    assert_equal(6, h.received(:all).size)
+    assert_equal(4, h.received(:keepalive).size)
+    assert_kind_of(BGP::Keepalive, h.last(:keepalive))
+    assert_kind_of(BGP::Keepalive, h.last(:all))
+    assert_equal(%i[update keepalive], h.received(:all).last(2).collect(&:kind))
+  end
+
+  def test_a_count_and_a_kind_in_either_order
+    h = fill
+    assert_equal(2, h.received(2, :all).size)
+    assert_equal(2, h.received(:all, 2).size)
+    assert_equal(1, h.received(1).size)
+    assert_equal(['10.2.0.0/24'], h.received(1).first.message.nlri.to_ary)
+  end
+
+  def test_one_peer_can_be_asked_for
+    h = fill
+    assert_equal(['10.1.0.0/24'], h.received(peer: '10.0.0.1').messages.collect { |m| m.nlri.to_ary }.flatten)
+    assert_equal(['10.1.0.0/24'], h.last(peer: '10.0.0.1').nlri.to_ary)
+    assert_nil(h.last(:notification))
+  end
+
+  # A list is an Array, so it can be indexed, selected and mapped, and
+  # each row answers its message.
+  def test_the_list_is_an_array_of_rows
+    h = fill
+    list = h.received(:all)
+    assert_kind_of(Array, list)
+    assert_kind_of(BGP::Update, list[0].message)
+    assert_same(list[0].message, list[0].msg)
+    assert_equal('10.0.0.1', list[0].peer)
+    assert_kind_of(Time, list[0].at)
+    assert_equal(2, list.select { |r| r.kind == :update }.size)
+  end
+
+  # irb shows the inspect, so a list reads as the lines `received` used
+  # to print, and a row read alone is one of those lines.
+  def test_the_list_reads_one_line_per_message
+    h = fill
+    lines = h.received(:all).inspect.lines
+    assert_equal(6, lines.size)
+    assert_match(/ 10\.0\.0\.1 Update, 1 prefixes, 0 withdrawn$/, lines.first)
+    assert_match(/ 10\.0\.0\.2 Keepalive$/, lines.last)
+    assert_equal(h.received.first.to_s, h.received.first.inspect)
+    assert_equal('(none)', h.received(:notification).inspect)
+  end
+
+  # irb prints a result with pp, not inspect, which is how the first
+  # version of this printed every field of every message.
+  def test_pp_prints_the_same_lines
+    require 'pp'
+    h = fill
+    assert_equal(h.received(:all).inspect + "\n", h.received(:all).pretty_inspect)
+    assert_equal(h.received.first.to_s + "\n", h.received.first.pretty_inspect)
+  end
+
+  def test_an_unknown_kind_names_the_kinds
+    e = assert_raise(ArgumentError) { fill.received(:updates) }
+    assert_match(/no kind :updates; the kinds are update, keepalive/, e.message)
+    assert_raise(ArgumentError) { fill.last(1.5) }
+  end
+
+  def test_each_message_class_has_its_kind
+    assert_equal(:update, BGP::Prompt.kind(update('10.0.0.0/8')))
+    assert_equal(:keepalive, BGP::Prompt.kind(keepalive))
+    assert_equal(:notification, BGP::Prompt.kind(BGP::Notification.new(6, 2)))
+    assert_equal(:open, BGP::Prompt.kind(BGP::Open.new(4, 100, 180, '10.0.0.1')))
+    assert_equal(:route_refresh, BGP::Prompt.kind(BGP::Route_refresh.new(1, 1)))
+    assert_equal(:route_refresh, BGP::Prompt.kind(BGP::Orf_route_refresh.new))
+    assert_equal(:malformed, BGP::Prompt.kind(RuntimeError.new('x')))
+    assert_equal(:other, BGP::Prompt.kind('m0'))
+    assert_equal(BGP::Prompt::KINDS - [:keepalive], BGP::Prompt::DEFAULT_KINDS)
   end
 
   def test_last_is_nil_before_anything_arrives
@@ -117,7 +220,7 @@ class BGP_Prompt_Test < Test::Unit::TestCase
     @h.tap(peer)
     assert_equal(1, n1.observers.size)
     n1.deliver(BGP::Keepalive.new)
-    assert_kind_of(BGP::Keepalive, @h.last)
+    assert_kind_of(BGP::Keepalive, @h.last(:all))
     n2 = FakeNeighbor.new
     @h.tap(FakePeer.new('10.0.0.1', n2))
     assert_equal(1, n2.observers.size)
