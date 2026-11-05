@@ -979,6 +979,11 @@ by having two wrong rows read as verified for months.
 | config family name | `l2vpn-evpn` | `l2vpn evpn` |
 | client or show family name | `evpn` | `l2vpn evpn` |
 
+FRR 10.5.1 gives the same answers, measured on the owner's VM on
+2026-11-04 with the same file. One harness fact changed: 10.5.1 writes
+no `rcvd UPDATE w/ attr` debug line for an NLRI it discards, so the
+route types 6 to 11 case counts the UPDATEs FRR received instead.
+
 **Both implement route types 1 to 5 and neither knows 6 to 11.** So the
 split this plan guessed at is real: types 1 to 5 are what a router will
 actually send, and the six that RFC 9251 and RFC 9572 add are ahead of

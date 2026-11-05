@@ -7136,10 +7136,11 @@ the registry's.
   which has no gate. Measured on the owner's VM on 2026-11-04 with no
   expectation changed. `fault_matrix_frr_test.rb` asserts 8 to 10
   too, with **expectations of its own for 10**, since 10.5.1 agrees on
-  17 of the 18 rows where 8.4.4 agreed on 6. `evpn_frr_test.rb` stays
-  at 8: it failed on the case that sends route types 6 to 11, by
-  reading a debug line 10.5.1 does not write, and now counts UPDATEs
-  instead, which still wants a run on 10.5.1.
+  17 of the 18 rows where 8.4.4 agreed on 6. `evpn_frr_test.rb` asserts
+  8 to 10 too: it failed on the case that sends route types 6 to 11, by
+  reading a debug line 10.5.1 does not write, and passed on 10.5.1 once
+  it counted UPDATEs instead. **So every FRR lab file now runs on
+  10.5.1.**
   **The first such run failed nearly everything, and the cause was the
   machine's own zebra.** bgpd dials the default zebra socket, and FRR's
   service answers there on the VM. FRR 10 then holds every eBGP peer at

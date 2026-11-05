@@ -543,8 +543,9 @@ class EvpnDocTest < Test::Unit::TestCase
     frr   = File.read(File.join(lab, 'evpn_frr_test.rb'), :encoding => 'UTF-8')
     assert_match(/MEASURED_MAJOR = 3\b/, gobgp,
                  "#{DOC} says GoBGP 3.23.0 and the test asserts another major")
-    assert_match(/MEASURED = \(8\.\.8\)/, frr,
-                 "#{DOC} says FRR 8.4.4 and the test asserts another major")
+    assert_match(/MEASURED = \(8\.\.10\)/, frr,
+                 "#{DOC} says FRR 8.4.4 and 10.5.1 and the test asserts another range")
+    assert_match(/FRR 10\.5\.1 gives the same answers/, doc)
     # And the two findings the document leans on hardest, each the reason
     # one of the tests reads the way it does.
     assert_match(/Both implement route types 1 to 5 and neither knows 6 to 11/, doc)
