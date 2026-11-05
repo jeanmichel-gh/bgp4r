@@ -758,6 +758,19 @@ module LabHelper
       v[/version\s+(\d+)\./, 1]&.to_i
     end
 
+    # Whether a test measured against `range` should run on this bgpd.
+    #
+    # **LAB_FRR_ANY=1 runs it on an unmeasured version anyway**, so a new
+    # FRR can be measured without editing every file's MEASURED first.
+    # The expectations are still the measured version's, so a failure
+    # there is a difference to read, not a verdict. A range is widened
+    # only once a run has said what the new version does. Pure in its
+    # arguments, so the unit suite pins it with no daemon.
+    def self.measured?(range, major = self.major, env = ENV)
+      return false unless major
+      range.cover?(major) || env['LAB_FRR_ANY'] == '1'
+    end
+
     attr_reader :local, :as, :router_id, :peer, :peer_as, :port,
                 :listen_port, :vty_port, :dir
 

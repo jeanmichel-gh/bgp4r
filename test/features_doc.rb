@@ -329,6 +329,7 @@ module FeaturesDoc
       | `LAB_REQUIRE_DOCKER` | unset | `1` fails instead of omitting when Docker is missing |
       | `LAB_REQUIRE_GOBGPD` | unset | `1` fails instead of omitting when `gobgpd` is missing |
       | `LAB_REQUIRE_FRR` | unset | `1` fails instead of omitting when FRR is missing |
+      | `LAB_FRR_ANY` | unset | `1` runs the FRR lab tests on a version their `MEASURED` does not cover, against the measured expectations |
       | `LAB_REQUIRE_NETNS` | unset | `1` fails instead of omitting without CAP_NET_ADMIN |
 
       **The four `LAB_REQUIRE_*` are what CI sets**, so a job that was

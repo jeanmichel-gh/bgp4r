@@ -1625,7 +1625,7 @@ CI: `.github/workflows/test.yml` runs both suites on every push to master and ev
 
 `.github/workflows/capture.yml` is the one workflow that deploys a containerlab lab: it builds the `lab-node` and BIRD images, deploys `lab/routescope/bgp4r-lab`, and runs its `capture.sh`, on demand and on a push that changes that folder or the Dockerfile. Its log is what routescope's BGP fixtures are cut from.
 
-Baseline on 2026-11-04: 3619 tests, 36403 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
+Baseline on 2026-11-04: 3621 tests, 36409 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
 
 **That coverage figure is 98.5% for the library and the rest is the two
 programs, not a gap anywhere else.** Measured the same run: with
@@ -7087,8 +7087,11 @@ the registry's.
   waiting when bgpd dies and names that workaround, through
   `Frr.startup_hint`. Both measured on 2026-11-04 on the owner's VM.
   **The other FRR lab files have not been run against 10.5.1**, and
-  their `MEASURED` ranges still say 8, so they omit themselves there
-  until someone does.
+  their `MEASURED` ranges still say 8, so they omit themselves there.
+  `LAB_FRR_ANY=1` runs them anyway against 8.x's expectations, through
+  `Frr.measured?`, so a run on a new version says what differs before
+  any range is widened. A range is widened only from such a run. The
+  IPv6 case of `gen_frr_test.rb` omits on 10 and later regardless.
 
 **The `### GoBGP` block of `capture.sh` ran next, and it settles the
 two things that node is on the topology for.** All three kinds of

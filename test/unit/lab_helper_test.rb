@@ -292,6 +292,18 @@ class LabHelperTest < Test::Unit::TestCase
                'a config bgpd rejected')
   end
 
+  def test_a_measured_major_runs_and_an_unmeasured_one_omits
+    assert(F.measured?(8..8, 8, {}))
+    assert(!F.measured?(8..8, 10, {}), 'FRR 10 is not measured for 8..8')
+    assert(!F.measured?(8..8, nil, {}), 'no version read means nothing to run against')
+  end
+
+  def test_lab_frr_any_runs_an_unmeasured_version
+    assert(F.measured?(8..8, 10, 'LAB_FRR_ANY' => '1'))
+    assert(!F.measured?(8..8, 10, 'LAB_FRR_ANY' => '0'), 'only 1 turns it on')
+    assert(!F.measured?(8..8, nil, 'LAB_FRR_ANY' => '1'), 'still needs a version')
+  end
+
   # FRR 10 refuses IPv6 unicast over an IPv4 session with no zebra, so a
   # config only carries it when a test asks.
   def test_ipv6_unicast_is_off_unless_asked_for

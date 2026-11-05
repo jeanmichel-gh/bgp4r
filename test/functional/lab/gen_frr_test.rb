@@ -72,7 +72,7 @@ class LabGenFrrTest < Test::Unit::TestCase
       omit('FRR bgpd is not installed')
     end
     major = F.major
-    unless major && MEASURED.cover?(major)
+    unless F.measured?(MEASURED, major)
       omit("measured against FRR #{MEASURED}, found #{major.inspect}: re-measure before asserting")
     end
   end
@@ -147,7 +147,12 @@ class LabGenFrrTest < Test::Unit::TestCase
             'attributes' => ATTRIBUTES.merge('next_hop' => F::NEXT_HOP))
   end
 
+  # FRR 10 refuses IPv6 unicast over an IPv4 session with no zebra, Cease
+  # 6/0, measured against 10.5.1 on 2026-11-04. So this case needs 8.x
+  # or a zebra, whatever LAB_FRR_ANY says.
   def test_ipv6_unicast
+    major = F.major
+    omit("FRR #{major} refuses IPv6 unicast here without zebra") if major && major >= 10
     session([], [], :ipv6 => true)
     crosses('family' => 'unicast', 'start' => '2001:db8::/64', 'count' => 1500,
             'attributes' => ATTRIBUTES.merge('next_hop' => '2001:db8::1'))
