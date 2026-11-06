@@ -121,7 +121,19 @@ check 'peer.start: the direct link wins again' restore
 echo "### d cut off"
 ex d ip link set eth1 down
 ex d ip link set eth2 down
-gone() { wait_until 25 a $D_LO ""; }
+# Not `ip route get`: a containerlab node has a default route out of its
+# management interface, eth0, so the lookup answers that gateway once
+# the BGP route is gone. Measured on the first CI run. The check is that
+# no route for the /32 is left in the main table.
+gone() {
+  local i
+  for i in $(seq 1 125); do
+    [ -z "$(ex a ip route show exact $D_LO/32)" ] && { echo "  a has no route for $D_LO/32"; return 0; }
+    sleep 0.2
+  done
+  echo "  a still has: $(ex a ip route show exact $D_LO/32)"
+  return 1
+}
 check 'a withdraws d when d has no link' gone
 no_answer() { read -r got c <<<"$(ping_d)"; [ "$got" = 0 ]; }
 check 'no ping answered' no_answer

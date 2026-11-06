@@ -228,7 +228,9 @@ class FwdLabNetnsTest < Test::Unit::TestCase
   # route rather than keeping a stale one.
   def test_6_d_cut_off_is_unreachable_and_comes_back
     %w[eth1 eth2].each { |i| sh('ip', '-n', ns('d'), 'link', 'set', i, 'down') }
-    wait_for('a to withdraw d\'s loopback', HOLD + 6) { next_hop('a', D_LO).nil? }
+    # The route itself and not `ip route get`, which in a containerlab
+    # node answers the management default route once this one is gone.
+    wait_for('a to withdraw d\'s loopback', HOLD + 6) { out('a', 'ip', 'route', 'show', 'exact', "#{D_LO}/32").empty? }
     assert_equal(0, ping.first, 'no ping answered')
     %w[eth1 eth2].each { |i| sh('ip', '-n', ns('d'), 'link', 'set', i, 'up') }
     wait_for('a to learn d\'s loopback again', 30) { next_hop('a', D_LO) == '10.200.1.2' }

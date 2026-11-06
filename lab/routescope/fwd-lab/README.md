@@ -61,14 +61,24 @@ person.
 
 ## What was measured
 
-In network namespaces, with the lab's own files, on 2026-11-06:
+On 2026-11-06, in network namespaces with the lab's own files, and in
+containerlab on CI's first deploy:
 
-| Event | Time to the new path |
-|---|---|
-| B to D link down | 9.0 seconds, the hold time |
-| B to D link up | 0.6 seconds |
-| B to D session stopped | under 0.2 seconds |
-| `d` cut off, withdrawn at `a` | 9.2 seconds |
+| Event | Namespaces | Containerlab |
+|---|---|---|
+| B to D link down | 9.0 s, the hold time | 6.5 s |
+| B to D link up | 0.6 s | 0.8 s |
+| B to D session stopped | under 0.2 s | under 0.2 s |
+
+The link down time is anywhere up to the hold time, depending on when
+the last keepalive arrived.
+
+**A containerlab node has a default route** out of its management
+interface, eth0. So once `d` is cut off, `ip route get 10.255.0.4` on
+`a` answers that gateway rather than failing, and the ping goes out of
+the lab and is not answered. The check for a withdrawn route reads the
+/32 itself, `ip route show exact 10.255.0.4/32`. CI's first run found
+this.
 
 `test/functional/lab/fwd_lab_netns_test.rb` runs the same sequence on
 every pull request, and CI's Capture job runs `capture.sh` on the
