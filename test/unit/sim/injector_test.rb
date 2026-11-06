@@ -898,6 +898,63 @@ class BGP_Sim_Injector_Test < Test::Unit::TestCase
 
   # A set that grows too large halfway is a failed feed with its reason,
   # since it cannot be known at the start: see bgp/gen/unicast.rb.
+  # ---- specs named in the node file -----------------------------------
+
+  def test_a_named_spec_sends_what_the_spec_itself_sends
+    inj = injector('specs' => { 'ten' => SPEC })
+    inj.act('announce', { 'spec' => 'ten' }, false)
+    want = BGP::Gen.new(SPEC, sender(peer)).updates.collect(&:to_shex)
+    assert_equal(want, peer.updates.collect(&:to_shex))
+  end
+
+  def test_a_named_spec_withdraws_and_plans_and_churns
+    inj = injector('specs' => { 'ten' => SPEC })
+    assert_equal(10, inj.plan('spec' => 'ten')[:plans].first[:total])
+    inj.act('withdraw', { 'spec' => 'ten' }, false)
+    assert_equal(BGP::Gen.new(SPEC).withdrawals.collect(&:to_shex), peer.updates.collect(&:to_shex))
+    churn = { 'events' => 4, 'routes' => 4, 'withdraw' => 1.0, 'seed' => 1 }
+    by_name = inj.plan('spec' => 'ten', 'churn' => churn)[:plans].first
+    by_value = inj.plan('spec' => SPEC, 'churn' => churn)[:plans].first
+    assert_equal(by_value[:churn], by_name[:churn])
+    assert_operator(by_name[:total], :<, 10, 'the churn withdrew something')
+  end
+
+  # Naming traffic sends none of it: the node still starts silent.
+  def test_a_specs_block_sends_nothing_at_start
+    inj = injector('specs' => { 'ten' => SPEC })
+    assert_equal([], peer.updates)
+    assert_equal(0, inj.sent.summary[:prefixes_sent])
+    assert_equal(['ten'], inj.topology[:specs])
+  end
+
+  def test_an_unknown_spec_name_is_refused_with_the_names_there_are
+    inj = injector('specs' => { 'ten' => SPEC })
+    %w[announce withdraw].each do |action|
+      e = assert_raise(BGP::Sim::Injector::Refused) { inj.act(action, 'spec' => 'eleven') }
+      assert_match(/eleven/, e.message)
+      assert_match(/names ten/, e.message)
+    end
+    e = assert_raise(BGP::Sim::Injector::Refused) { inj.plan('spec' => 'eleven') }
+    assert_match(/names ten/, e.message)
+    e = assert_raise(BGP::Sim::Injector::Refused) { injector.act('announce', 'spec' => 'ten') }
+    assert_match(/names none/, e.message)
+    assert_equal([], peer.updates)
+  end
+
+  # A spec the library cannot read stops the node at start-up, naming
+  # the spec, rather than failing the first scenario that sends it.
+  def test_a_specs_block_is_read_at_start_up
+    [[[], /mapping of name/],
+     [{ 'ten' => 5 }, /ten is not a mapping/],
+     [{ 'a b' => SPEC }, /not a name/],
+     [{ 'bad' => SPEC.merge('family' => 'nosuch') }, /bad: unknown family/]].each do |specs, why|
+      e = assert_raise(BGP::Sim::Injector::Refused, specs.inspect) do
+        BGP::Sim::Injector.new(CONFIG.merge('specs' => specs))
+      end
+      assert_match(why, e.message)
+    end
+  end
+
   def test_a_spec_that_stops_halfway_is_a_failed_feed
     spec = { 'start' => '11.0.0.0/24', 'count' => 3, 'per_update' => 1,
              'attributes' => { 'communities' => { 'count' => { 'base' => '1:1',

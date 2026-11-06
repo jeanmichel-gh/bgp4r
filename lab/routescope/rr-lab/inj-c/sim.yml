@@ -2,7 +2,8 @@
 # routes rr1 reflects as client routes.
 #
 # No `announce` block: an injector starts silent, so the scenarios put
-# every route on the wire. The four router keys, `rib`, `originate`,
+# every route on the wire. `specs` names generated traffic and sends
+# none of it: generated-feed-is-reflected.yml announces `feed` by name. The four router keys, `rib`, `originate`,
 # `export` and `fib`, are refused here; an injector holds no Loc-RIB.
 #
 # Over iBGP the injector sends its own address as NEXT_HOP and a
@@ -22,3 +23,17 @@ neighbors:
     hold_time: 30
     description: rr1
     capabilities: [as4_byte, route_refresh]
+
+# A thousand /24s from 10.30.0.0, MED 10 and 20 in turn, one community.
+# Over iBGP the injector adds its own address as NEXT_HOP and a
+# LOCAL_PREF of 100, so the first prefix arrives with MED 10 and the
+# last, 10.33.231.0/24, with MED 20. docs/route-generation.md section 4
+# is the spec language.
+specs:
+  feed:
+    family: unicast
+    start: 10.30.0.0/24
+    count: 1000
+    attributes:
+      med: { cycle: [10, 20] }
+      communities: ["65100:30"]

@@ -1,0 +1,76 @@
+# A generated feed, named in the lab and sent by name. inj-c's node file
+# carries `feed`, a thousand /24s, and this scenario announces it with
+# `spec: feed`. It must cross rr1 whole: the first and the last prefix,
+# each with its own MED from the spec's cycle, at a client of each kind
+# and at rr2. Then the same name withdraws all of it.
+#
+# The checks read single prefixes rather than a count, because a count
+# depends on what earlier scenarios left in the table. The two ends are
+# what a packing slip would lose.
+#
+# routescope passes `spec` to the injector from its #53 on. Before
+# that, the announce step is refused as an unknown key.
+#
+# NOT RUN: the lab is deployed by bgp4r's Capture job, but this scenario
+# has not been run, so nothing here is a measurement. Every expectation
+# is read out of the node files and BGP::Gen's own expected rows.
+name: A generated feed is reflected whole
+description: >-
+  inj-c announces the spec named feed, 1000 prefixes from 10.30.0.0/24.
+  The first and the last must reach the clients and rr2 with the MED the
+  spec gave each, then all of it is withdrawn by the same name.
+capture: [rr1]
+timeout: 300
+
+steps:
+  - expect: { bgp_session: { node: rr1, peer: 10.100.1.1, state: established } }
+    within: 60
+  - expect: { bgp_session: { node: rr1, peer: 10.100.11.2, state: established } }
+    within: 60
+  - expect: { bgp_session: { node: rr1, peer: 10.100.12.2, state: established } }
+    within: 60
+  - expect: { bgp_session: { node: rr1, peer: 10.100.13.2, state: established } }
+    within: 60
+  - expect: { bgp_session: { node: rr1, peer: 10.100.20.2, state: established } }
+    within: 60
+  - expect: { bgp_prefix: { node: c1, prefix: 10.30.0.0/24, present: false } }
+    name: nothing injected yet
+
+  - bgp: announce
+    node: inj-c
+    spec: feed
+
+  - expect: { bgp_prefix: { node: rr1, prefix: 10.33.231.0/24, med: 20 } }
+    within: 30
+    measure: feed_to_rr1
+  - expect: { bgp_prefix: { node: c1, prefix: 10.30.0.0/24, next_hop: 10.100.1.1,
+                            med: 10, community: "65100:30" } }
+    within: 30
+    name: the first prefix, FRR
+  - expect: { bgp_prefix: { node: c1, prefix: 10.33.231.0/24, med: 20 } }
+    within: 30
+    measure: feed_to_client
+    name: the last prefix, FRR
+  - expect: { bgp_prefix: { node: c2, prefix: 10.33.231.0/24, med: 20 } }
+    within: 30
+    name: the last prefix, BIRD
+  - expect: { bgp_prefix: { node: c3, prefix: 10.33.231.0/24, med: 20 } }
+    within: 30
+    name: the last prefix, GoBGP
+  - expect: { bgp_prefix: { node: rr2, prefix: 10.33.231.0/24, med: 20, local_pref: 100 } }
+    within: 30
+    name: the last prefix, the non-client
+  - expect: { bgp_drained: { node: rr1 } }
+    within: 60
+
+  - bgp: withdraw
+    node: inj-c
+    spec: feed
+
+  - expect: { bgp_prefix: { node: c1, prefix: 10.33.231.0/24, present: false } }
+    within: 30
+    measure: feed_withdrawn
+  - expect: { bgp_prefix: { node: c3, prefix: 10.30.0.0/24, present: false } }
+    within: 30
+  - expect: { bgp_prefix: { node: rr2, prefix: 10.30.0.0/24, present: false } }
+    within: 30

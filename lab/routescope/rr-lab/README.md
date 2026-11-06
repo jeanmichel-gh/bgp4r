@@ -88,6 +88,7 @@ reachable and needs nothing.
 | 8 | originator loop dropped | `originator-loop-is-dropped.yml` | the same |
 | | withdrawal reflected | `withdraw-reaches-every-reader.yml` | |
 | | client flap, reflected again | `flap-and-reflect-again.yml` | `c2` holds it after a flap |
+| | a generated feed, sent by name | `generated-feed-is-reflected.yml` | |
 
 **The scenario language has no key for ORIGINATOR_ID or CLUSTER_LIST.**
 Read at routescope `7eabde1` and its `claude/bgp-panes` branch,

@@ -451,7 +451,10 @@ bgp/sim/                 `bgp4r-sim` the route injector, and `bgp4r
                          lacks, a prefix never announced, hex that is
                          not octets, no session. It holds **no Loc-RIB**
                          and refuses the four node file keys that would
-                         build one, naming `bgp4rd`
+                         build one, naming `bgp4rd`. A `specs` block
+                         names `BGP::Gen` specs and sends none of them,
+                         so `announce`, `withdraw` and `plan` take
+                         `spec: NAME` and the node still starts silent
                          sent.rb the send side of
                          `BGP::Daemon::Recorder`, answering the same
                          five keys for what left as that answers for
@@ -964,7 +967,10 @@ lab/                     speakers in containers: lab/speaker.rb and lab/topologi
                          client of both, so it sees one route twice and
                          says the step was `cluster_list_length`. Its
                          README has a table of each RFC 4456 rule, its
-                         scenario and what `capture.sh` checks. CI
+                         scenario and what `capture.sh` checks.
+                         `generated-feed-is-reflected.yml` sends
+                         `inj-c`'s named spec, a thousand prefixes, and
+                         needs routescope #53 to pass `spec`. CI
                          deploys it; see "routescope labs"
                          lab/speaker.rb is the **command line** now and nothing
                          else: the sessions, the configuration and the recording
@@ -1702,7 +1708,7 @@ CI: `.github/workflows/test.yml` runs both suites on every push to master and ev
 
 `.github/workflows/capture.yml` is the one workflow that deploys a containerlab lab: it builds the `lab-node`, BIRD and GoBGP images, deploys `lab/routescope/bgp4r-lab` and `lab/routescope/rr-lab` in a job each, and runs each one's `capture.sh`, on demand and on a push that changes `lab/routescope/` or the Dockerfile. Its log is what routescope's BGP fixtures are cut from. **rr-lab's `capture.sh` also checks**: it prints one `CHECK ok` or `CHECK FAIL` line per RFC 4456 fact and fails the job when one fails, because the scenario language has no key for ORIGINATOR_ID or CLUSTER_LIST.
 
-Baseline on 2026-11-06: 3755 tests, 36979 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
+Baseline on 2026-11-06: 3760 tests, 37006 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
 
 **That coverage figure is 98.5% for the library and the rest is the two
 programs, not a gap anywhere else.** Measured the same run: with
