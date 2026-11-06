@@ -60,4 +60,9 @@ module RoutescopeVocabulary
                  'bgp_best' => %w[node prefix reason],
                  'bgp_drained' => %w[node] }.freeze
   COMMON = %w[name continue].freeze
+
+  # What a `pause:` step takes beside its text, `Scenario#step`'s `when
+  # 'pause'` arm, read at routescope main 2026-11-06. A run with nobody
+  # to press Resume skips it, so a pause costs a CI run nothing.
+  PAUSE_KEYS = %w[for].freeze
 end

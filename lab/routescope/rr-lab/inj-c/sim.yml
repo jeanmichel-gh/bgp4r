@@ -3,8 +3,9 @@
 #
 # No `announce` block: an injector starts silent, so the scenarios put
 # every route on the wire. `specs` names generated traffic and sends
-# none of it: generated-feed-is-reflected.yml announces `feed` by name. The four router keys, `rib`, `originate`,
-# `export` and `fib`, are refused here; an injector holds no Loc-RIB.
+# none of it: generated-feed-is-reflected.yml announces `feed` by name.
+# The four router keys, `rib`, `originate`, `export` and `fib`, are
+# refused here; an injector holds no Loc-RIB.
 #
 # Over iBGP the injector sends its own address as NEXT_HOP and a
 # LOCAL_PREF of 100, and an empty AS_PATH. Reflection changes none of

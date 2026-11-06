@@ -436,12 +436,16 @@ class LabRrLabTopologyTest < Test::Unit::TestCase
     scenario_files.each do |f|
       load_yaml("scenarios/#{f}")['steps'].each_with_index do |step, i|
         where = "#{f} step #{i}"
-        kinds = step.keys & %w[bgp expect mark]
+        kinds = step.keys & %w[bgp expect mark pause]
         assert_equal 1, kinds.size, "#{where}: one action per step"
         kind = kinds.first
-        extra = { 'bgp' => v::BGP_KEYS, 'expect' => %w[within measure] }.fetch(kind, [])
+        extra = { 'bgp' => v::BGP_KEYS, 'expect' => %w[within measure], 'pause' => v::PAUSE_KEYS }.fetch(kind, [])
         assert_equal [], step.keys - (v::COMMON + [kind] + extra), "#{where}: #{kind} does not take those keys"
         next if kind == 'mark'
+        if kind == 'pause'
+          assert_kind_of String, step['pause'], "#{where}: a pause says what to do meanwhile"
+          next
+        end
         checked += 1
         if kind == 'bgp'
           assert_include v::BGP_ACTIONS, step['bgp'], where
@@ -537,6 +541,22 @@ class LabRrLabTopologyTest < Test::Unit::TestCase
                .collect { |s| (s['expect'] || {}).dig('bgp_prefix', 'prefix') }.compact
     assert_include asserted, first
     assert_include asserted, last
+  end
+
+  # The feed scenario holds twice for a look by hand at the clients:
+  # once before the announce and once after the feed has arrived and rr1
+  # has drained, before the withdraw. A hold elsewhere would show a
+  # person a table that is still filling.
+  def test_the_feed_scenario_pauses_before_and_after_the_announce
+    steps = load_yaml('scenarios/generated-feed-is-reflected.yml')['steps']
+    at = ->(pred) { steps.index(&pred) }
+    pauses = steps.each_index.select { |i| steps[i].key?('pause') }
+    announce = at.(->(s) { s['bgp'] == 'announce' })
+    withdraw = at.(->(s) { s['bgp'] == 'withdraw' })
+    drained = at.(->(s) { (s['expect'] || {}).key?('bgp_drained') })
+    assert_equal [announce - 1, withdraw - 1], pauses
+    assert_operator drained, :<, withdraw - 1, 'the second hold comes once rr1 has drained'
+    assert_operator drained, :>, announce
   end
 
   # ------------------------------------------------------------- ABOUT and README

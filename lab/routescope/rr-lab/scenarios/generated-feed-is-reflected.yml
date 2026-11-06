@@ -2,7 +2,8 @@
 # carries `feed`, a thousand /24s, and this scenario announces it with
 # `spec: feed`. It must cross rr1 whole: the first and the last prefix,
 # each with its own MED from the spec's cycle, at a client of each kind
-# and at rr2. Then the same name withdraws all of it.
+# and at rr2. Then the same name withdraws all of it. Two pause steps
+# hold the run before and after the announce for a look by hand.
 #
 # The checks read single prefixes rather than a count, because a count
 # depends on what earlier scenarios left in the table. The two ends are
@@ -36,6 +37,12 @@ steps:
   - expect: { bgp_prefix: { node: c1, prefix: 10.30.0.0/24, present: false } }
     name: nothing injected yet
 
+  # Two holds for a person: look at the clients before and after. Each
+  # waits for Resume. A run with nobody to press it skips them.
+  - pause: >-
+      Before the feed. c1, c2, c3 and rr2 hold no 10.30.x.x route yet.
+      Look in their BGP tables, then resume to announce the 1000 routes.
+
   - bgp: announce
     node: inj-c
     spec: feed
@@ -62,6 +69,11 @@ steps:
     name: the last prefix, the non-client
   - expect: { bgp_drained: { node: rr1 } }
     within: 60
+
+  - pause: >-
+      After the feed. Every client and rr2 should hold the 1000 routes
+      from 10.30.0.0/24 to 10.33.231.0/24, with ORIGINATOR_ID 10.100.255.11
+      and CLUSTER_LIST 1.1.1.1. Look, then resume to withdraw them.
 
   - bgp: withdraw
     node: inj-c
