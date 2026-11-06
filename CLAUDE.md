@@ -1671,7 +1671,7 @@ CI: `.github/workflows/test.yml` runs both suites on every push to master and ev
 
 `.github/workflows/capture.yml` is the one workflow that deploys a containerlab lab: it builds the `lab-node` and BIRD images, deploys `lab/routescope/bgp4r-lab`, and runs its `capture.sh`, on demand and on a push that changes that folder or the Dockerfile. Its log is what routescope's BGP fixtures are cut from.
 
-Baseline on 2026-11-05: 3724 tests, 36848 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
+Baseline on 2026-11-05: 3728 tests, 36855 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
 
 **That coverage figure is 98.5% for the library and the rest is the two
 programs, not a gap anywhere else.** Measured the same run: with
@@ -8076,6 +8076,75 @@ kind, `:all` or `peer:`. **irb prints a result through `pp` and not
 `inspect`**, so both classes define `pretty_print`; the first version
 had `inspect` only and dumped every field of every message at the
 prompt, which only running the program showed.
+
+### Route reflection as a feature of `bgp4rd`, six phases. Phase 1 Done
+
+Asked for by the owner on 2026-11-05: start a route reflector on
+purpose, the way a router is configured as one. **The protocol half is
+not new work.** RFC 4456 has been in the library since #128 and #129:
+the client matrix of section 6, ORIGINATOR_ID and CLUSTER_LIST on
+export (section 8), both loop checks and the CLUSTER_LIST tie break in
+the decision process (sections 8 and 9), and the receive checks of RFC
+7606 sections 7.9 and 7.10. GoBGP and FRR both read our reflected route
+back, in `rib_router_gobgp_test.rb` and `rib_router_frr_test.rb`. What
+is missing is the daemon's side: how a person says "this is a
+reflector", what it shows about itself, and a lab that runs one.
+
+1. **`cluster_id` and `default_local_pref` reach the decision process.
+   Done**, in #300. Both are written under `export` and have two
+   readers. The Table was built with neither, so a reflector whose
+   cluster ID was not its router ID prepended one and loop checked the
+   other. Found by reading `Speaker#initialize` while answering whether
+   route reflection was supported.
+2. **A `route_reflector_client` key per neighbor.** The owner chose the
+   name, after IOS's `neighbor X route-reflector-client`. The daemon
+   derives `Export`'s client list from it. Decisions to take in the
+   pull request and record here:
+   * Giving both the flag and `export.clients` is refused, since they
+     can disagree. `clients: []` and no `clients` key already mean
+     opposite things, which is the trap the flag exists to remove.
+   * A client flag on an external neighbor is refused. RFC 4456 section
+     6 makes clients IBGP peers.
+   * Whether a client flag turns reflection on by itself, or still needs
+     `export: {route_reflector: true}`. IOS turns it on. Either way a
+     flag with reflection off must not be accepted in silence, which is
+     `export_options`' own rule.
+   * The key is restart class in a commit, as every `export` key is,
+     for the Adj-RIB-Out reason under "Known issues to work on".
+   * **A neighbor key is not checked for its name today**, where
+     `export` and `fib` keys are. So `route_reflector_clinet: true`
+     would be ignored and the router would run with no clients. Decide
+     whether this phase refuses unknown neighbor keys, which may break a
+     node file that carries a stray one, or leaves it as a known issue.
+3. **Show the role.** A peer row in `show.peers` says whether the peer
+   is a client, and `show.status` gives `route_reflector` and
+   `cluster_id`. Path rows in `show.rib` and `show.routes` carry
+   `originator_id` and `cluster_list`, which `Rib::Route` already
+   answers and no view prints. All additive keys, so routescope's two
+   table rows still read. `bgp4r-cli -c 'show bgp'` in the IOS detail
+   form prints "Originator" and "Cluster list" only if a vendor sample
+   shows them, per the honesty rule in show.rb.
+4. **Fault cases for ORIGINATOR_ID and CLUSTER_LIST.** Both are among
+   the attributes `test/coverage_matrix.rb` reports with no fault case.
+   The receive rules are already in `validation.rb`, RFC 7606 sections
+   7.9 and 7.10, both treat-as-withdraw. **This phase touches every
+   fault matrix lab test**, since each catalog case is a row each router
+   is asserted on: GoBGP 3.23.0 and 4.10.0 in CI, FRR 8.4.4 in CI and
+   10.5.1 on the owner's VM. So the expectations need a run on each
+   before they are written, not a guess.
+5. **A lab with `bgp4rd` as the reflector.** Native, no Docker, the
+   `rib_router_*` shape: `bgp4rd` from a node file, FRR and GoBGP as
+   two clients on loopback, and a bgp4r speaker as a non-client. A
+   route from one client reaches the other with ORIGINATOR_ID and
+   CLUSTER_LIST as each router reads them, a non-client route reaches
+   clients only, and a route carrying our cluster ID is not used. What
+   it adds over the two `rib_router_*` tests is that the node file
+   reaches it and that two real routers read one reflector's UPDATE.
+   It needs both binaries, so it wants a lab group that installs both,
+   which `test/lab_groups.rb` has none of yet.
+6. **`client_to_client: false`, only if asked for.** IOS's `no bgp
+   client-to-client reflection`, for clients already fully meshed. RFC
+   4456 section 6 allows it. Not started until somebody needs it.
 
 ## Known issues to work on
 
