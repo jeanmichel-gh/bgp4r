@@ -174,21 +174,27 @@ class TestBgpRibFibNetns < Test::Unit::TestCase
     assert_equal(1, kernel_routes.size, 'replaced, not added beside')
   end
 
-  # A table fed by nothing but rib.originate has no session and nothing to
-  # attach, which is the case that found the feed's worker only starting on
-  # the first attach.
+  # A prefix we originate is not installed. Its NEXT_HOP is the router ID,
+  # a placeholder the export step replaces per session (RFC 4271 section
+  # 5.1.3), and "via" the router ID was either refused by the kernel or
+  # installed a gateway that is not where the prefix lives. The kernel's
+  # own route is what forwards to it: here the connected route of SUBNET,
+  # which is in the main table and untouched.
   #
-  # originate uses the router ID as its next hop (RFC 4271 section 5.1.3),
-  # so the router ID has to be an address this namespace can reach for the
-  # route to be installable at all. The next test is the other half.
-  def test_a_prefix_we_originate_with_no_peers_at_all
+  # Until this was skipped, this test asserted the opposite, that the
+  # router ID came out as the gateway. A table fed by nothing but
+  # rib.originate is also where the feed's worker was found to start only
+  # on the first attach; that half is still here, since the skip is
+  # recorded on the worker and drain would answer before it ran.
+  def test_a_prefix_we_originate_is_not_installed_and_says_why
     @rib.feed.stop
     @rib = BGP::Rib.new(:local_as => LOCAL_AS, :router_id => '10.77.0.9')
     install
-    @rib.originate('203.0.113.0/24')
+    @rib.originate('10.77.0.0/24')
     @rib.drain
-    assert_equal('10.77.0.9', kernel_routes['203.0.113.0/24'],
-                 'originate uses the router ID as its next hop')
+    assert_equal({}, kernel_routes, 'nothing of ours in the table')
+    assert_equal(:originated, @rib.fib.skipped['10.77.0.0/24'])
+    assert_equal({}, @rib.fib_installer.failed, 'and no command was run to fail')
   end
 
   # **bgp4r does not resolve a next hop.** A real router resolves the BGP
@@ -202,7 +208,7 @@ class TestBgpRibFibNetns < Test::Unit::TestCase
   # whole reason plan and commit are separate.
   def test_an_unreachable_next_hop_is_refused_and_recorded
     install
-    @rib.originate('203.0.113.0/24')    # next hop 1.1.1.1, outside the subnet
+    @rib.announce(route('203.0.113.0/24', '1.1.1.1'))   # outside the subnet
     @rib.drain
     assert_equal({}, kernel_routes, 'the kernel would not take it')
     assert(@rib.fib.empty?, 'and the FIB does not claim it')

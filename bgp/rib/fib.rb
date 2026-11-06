@@ -77,6 +77,17 @@ module BGP
         prefix = change.prefix
         route = change.new
         return removal(prefix) if route.nil?
+        if route.local?
+          # A route we originated is not ours to install. Its NEXT_HOP is
+          # the router ID, a placeholder the export step replaces on each
+          # session (RFC 4271 section 5.1.3), so "via" it is either refused
+          # by the kernel or points nowhere useful. What forwards to a
+          # prefix we originate is the kernel's own route for it: the
+          # connected route of an interface address, or a static one. So
+          # it is skipped, and a learned route installed before it came out.
+          note_skip(prefix, :originated)
+          return removal(prefix)
+        end
         next_hop = route.next_hop
         if next_hop.nil? or next_hop.to_s.empty?
           # A route the Loc-RIB can no longer describe is not a route to
@@ -91,6 +102,10 @@ module BGP
           note_skip(prefix, :no_next_hop)
           return removal(prefix)
         end
+        # A prefix that can be installed is no longer skipped, or a route
+        # we stopped originating would go on reading :originated beside
+        # the learned route that replaced it.
+        @skipped.delete(prefix)
         return nil if current?(prefix, next_hop)
         Op.new(:install, prefix, next_hop.to_s)
       end

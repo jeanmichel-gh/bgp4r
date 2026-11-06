@@ -878,6 +878,20 @@ class TestBgpRibView < Test::Unit::TestCase
     assert_match(/refused/, f[:failed].first[:error])
   end
 
+  # Through a live table: rib.originate reaches the FIB, which installs
+  # nothing for it and says why, so show.fib can tell a person.
+  def test_fib_says_a_prefix_we_originate_was_skipped_and_why
+    backend = Backend.new
+    @rib.install(:backend => backend)
+    @rib.originate('10.255.0.1/32')
+    @rib.announce(route(E1, P))
+    @rib.drain
+    f = @rib.view.fib
+    assert_equal(1, f[:total], 'the learned route only')
+    assert_equal([{ :prefix => '10.255.0.1/32', :reason => 'originated' }], f[:skipped])
+    assert_equal([P], @rib.view.fib_prefixes)
+  end
+
   # A backend that records an operation rather than running it. Its own
   # Result shape is what FibInstaller#apply reads: ok? and to_s.
   class Backend

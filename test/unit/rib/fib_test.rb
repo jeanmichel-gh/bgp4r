@@ -145,6 +145,44 @@ class TestBgpRibFib < Test::Unit::TestCase
     assert(@fib.empty?)
   end
 
+  LOCAL = BGP::Rib::LocalPeer.new(:local_as => 65001, :router_id => '10.255.0.1')
+
+  # What Table#originate builds: our own peer, and the router ID in
+  # NEXT_HOP as a placeholder.
+  def originated(prefix = '10.255.0.1/32')
+    pa = BGP::Path_attribute.new(BGP::Origin.new(0), BGP::As_path.new,
+                                 BGP::Next_hop.new('10.255.0.1'))
+    BGP::Rib::Route.new(prefix, pa, LOCAL)
+  end
+
+  # Installing it would be "via" our own router ID, which the kernel
+  # refuses or, worse, accepts and points nowhere. The kernel's own route
+  # for the prefix is what forwards to it.
+  def test_a_route_we_originated_is_not_installed
+    assert_nil(@fib.plan(change('10.255.0.1/32', originated)))
+    assert(@fib.empty?)
+    assert_equal(:originated, @fib.skipped['10.255.0.1/32'])
+  end
+
+  # A learned route was installed, then we began originating the same
+  # prefix and ours won: the learned next hop is not where it lives now.
+  def test_a_learned_route_comes_out_when_one_we_originate_replaces_it
+    install('10.255.0.1/32')
+    op = @fib.plan(change('10.255.0.1/32', originated, route('10.255.0.1/32')))
+    assert(op.remove?)
+    @fib.commit(op)
+    assert(@fib.empty?)
+  end
+
+  # And the other way round: we stop originating and a learned route takes
+  # over. It installs, and skipped no longer says :originated.
+  def test_a_learned_route_installs_once_we_stop_originating_and_is_not_skipped
+    @fib.plan(change('10.255.0.1/32', originated))
+    op = @fib.plan(change('10.255.0.1/32', route('10.255.0.1/32'), originated))
+    assert(op.install?)
+    assert_nil(@fib.skipped['10.255.0.1/32'])
+  end
+
   def test_skipped_can_be_cleared
     @fib.plan(change('192.0.2.0/24', route('192.0.2.0/24', nil)))
     assert_equal(1, @fib.skipped.size)
