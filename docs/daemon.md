@@ -262,6 +262,7 @@ export:
   next_hops: { 1: 10.0.20.1 }      # ours, per AFI, toward external peers
   route_reflector: false
   clients: []                      # RFC 4456 section 6, when a reflector
+  cluster_id: 7.7.7.7              # RFC 4456 section 7, default router_id
   mrai: { ebgp: 0, ibgp: 0 }       # 0 is off, which stays the default
 
 fib:
@@ -271,12 +272,21 @@ mark:                              # added to routes made by hand; see route.ori
   large_communities: ['65000:1:1']
 ```
 
-Three notes on it.
+Four notes on it.
 
 `capabilities` takes `add_path` as `(send_recv, afi, safi)`, matching
 `CAP::Add_path#add`, so `[3, 1, 1]` is IPv4 unicast both ways. Three
 comments in the repository gave `[1, 1, 3]` while meaning that, which is
 SAFI 3, NSAP, receive only.
+
+`cluster_id` and `default_local_pref` are written under `export` and
+read by the decision process too. The first is the ID a reflector
+prepends to a CLUSTER_LIST and the one whose presence makes a route
+unusable here, RFC 4456 section 8. The second is what an internal peer
+is sent for a route with no LOCAL_PREF and what that route is ranked
+at. Each is one value with two readers, so `Speaker` hands both to the
+`Rib::Table` it builds. It did not before 2026-11-05, and a reflector
+with its own cluster ID loop checked its router ID instead.
 
 `mrai` defaults to off, which is the recorded decision: a script driving
 a router through a sequence of UPDATEs wants each one on the wire when it
