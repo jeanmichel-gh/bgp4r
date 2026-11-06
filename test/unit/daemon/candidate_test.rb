@@ -295,6 +295,15 @@ class BGP_Daemon_Candidate_Test < Test::Unit::TestCase
            errors.inspect)
   end
 
+  # A client flag becomes Export's client list, so it is restart class
+  # with export's own reason rather than the generic one.
+  def test_a_route_reflector_client_flag_cannot_change_while_running
+    @candidate.load('lines' => ['set neighbors 127.0.0.9 route_reflector_client true'])
+    errors = @candidate.commit('check' => true)[:errors]
+    assert(errors.any? { |e| e =~ /route_reflector_client cannot change while bgp4rd runs: it becomes Export's client list/ },
+           errors.inspect)
+  end
+
   def test_a_log_level_no_logger_takes_is_refused
     @candidate.load('lines' => ['set log_level shouting'])
     assert_match(/log_level: log level "shouting"/,

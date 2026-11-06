@@ -250,6 +250,9 @@ neighbors:
     description: inj1
     capabilities: [as4_byte, route_refresh, {add_path: [3, 1, 1]}]
     record: routes
+  - address: 10.0.30.1
+    as: 65000
+    route_reflector_client: true   # RFC 4456 section 6; see below
 
 originate:
   - prefixes: [10.255.0.0/24]
@@ -272,7 +275,7 @@ mark:                              # added to routes made by hand; see route.ori
   large_communities: ['65000:1:1']
 ```
 
-Five notes on it.
+Six notes on it.
 
 `capabilities` takes `add_path` as `(send_recv, afi, safi)`, matching
 `CAP::Add_path#add`, so `[3, 1, 1]` is IPv4 unicast both ways. Three
@@ -283,6 +286,22 @@ A neighbor block takes only the keys it is read for, listed in
 `Peer::KEYS`, and any other key is refused at start-up and in a commit,
 naming it. A typo used to be ignored, so `hold_tme: 30` ran the session
 with the default hold time and said nothing.
+
+`route_reflector_client: true` on a neighbor makes it a client of this
+reflector, as IOS's `neighbor X route-reflector-client` does. It turns
+reflection on by itself, with no `export` block needed, and the flagged
+neighbors become `Export`'s client list. Four things are refused:
+
+* a value that is not true or false;
+* the flag on an external neighbor, since RFC 4456 section 6 makes a
+  client an internal peer;
+* the flag beside `export.clients`, even `clients: []`, since the two
+  lists could disagree;
+* the flag beside `export.route_reflector: false`.
+
+Like every `export` key, it cannot change in a commit, because a
+replacement Router starts with an empty Adj-RIB-Out per peer.
+`bgp4r-sim` refuses it, since an injector holds no Loc-RIB.
 
 `cluster_id` and `default_local_pref` are written under `export` and
 read by the decision process too. The first is the ID a reflector
