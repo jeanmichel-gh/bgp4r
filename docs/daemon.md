@@ -1604,7 +1604,13 @@ added them:
   **`churn` beside it sends that spec's churn instead**, section 8 of
   the same document: one UPDATE per event, paced at its `rate`, to
   routes the spec already announced. The answer carries the churn's
-  `summary`.
+  `summary`. **A String `spec` is a name** looked up in the node file's
+  `specs` block, so a lab defines its traffic beside the node and a
+  scenario sends `spec: feed`. `withdraw` and `POST /api/plan` take the
+  name too. Naming a spec sends nothing, so the node still starts
+  silent. Each spec is read by `BGP::Gen` at start-up, so one it cannot
+  read stops the node, and an unknown name is refused with the names
+  there are. `GET /api/topology` lists them under `specs`.
 * **`mp_reach` and `mp_unreach`** take the Hash `Mp_reach.new` and
   `Mp_unreach.new` read, so one message in any family the library
   builds. JSON keys are Strings and the constructors read Symbols, at

@@ -415,6 +415,7 @@ class LabRrLabTopologyTest < Test::Unit::TestCase
 
   SCENARIOS = %w[client-reflects-to-everyone.yml cluster-loop-is-dropped.yml
                  ebgp-reaches-every-internal-peer.yml flap-and-reflect-again.yml
+                 generated-feed-is-reflected.yml
                  non-client-reaches-clients-only.yml originator-loop-is-dropped.yml
                  shorter-cluster-list-wins.yml withdraw-reaches-every-reader.yml].freeze
 
@@ -491,10 +492,51 @@ class LabRrLabTopologyTest < Test::Unit::TestCase
     assert_include nodes_in.('non-client-reaches-clients-only.yml', 'bgp_prefix', 'present' => false), 'rr2'
     assert_include nodes_in.('ebgp-reaches-every-internal-peer.yml', 'bgp_prefix'), 'rr2'
     assert_include nodes_in.('shorter-cluster-list-wins.yml', 'bgp_best'), 'dual'
+    assert_equal [], (%w[c1 c2 c3 rr2] - nodes_in.('generated-feed-is-reflected.yml', 'bgp_prefix')),
+                 'a generated feed must be read at every client kind and at rr2'
     %w[cluster-loop-is-dropped.yml originator-loop-is-dropped.yml].each do |f|
       assert_include nodes_in.(f, 'bgp_prefix', 'present' => false), 'rr1', f
       assert_include nodes_in.(f, 'bgp_session'), 'rr1', "#{f} must show the session stayed up"
     end
+  end
+
+  # A spec a scenario sends by name is one its injector's node file
+  # names, so the step is not refused in the middle of a run.
+  def test_every_spec_a_scenario_sends_is_named_by_its_injector
+    sent = 0
+    scenario_files.each do |f|
+      load_yaml("scenarios/#{f}")['steps'].each do |step|
+        next unless step['bgp'] && step['spec'].is_a?(String)
+        specs = load_yaml(INJECTORS.fetch(step['node']))['specs'] || {}
+        assert_include specs.keys, step['spec'], "#{f}: #{step['node']} names no spec #{step['spec']}"
+        sent += 1
+      end
+    end
+    assert_operator sent, :>=, 2, 'the feed scenario announces and withdraws by name'
+  end
+
+  # The prefixes and MEDs the feed scenario checks are the ones the spec
+  # generates for inj-c's session, read from BGP::Gen rather than typed.
+  def test_the_feed_scenario_checks_what_the_spec_generates
+    spec = load_yaml(INJECTORS['inj-c'])['specs']['feed']
+    sender = { 'as' => 65_100, 'ebgp' => false, 'next_hop' => '10.100.1.1' }
+    rows = BGP::Gen.new(spec, sender).expected.to_a.to_h { |r| [r['prefix'], r] }
+    checked = 0
+    load_yaml('scenarios/generated-feed-is-reflected.yml')['steps'].each do |step|
+      p = (step['expect'] || {})['bgp_prefix'] or next
+      next if p['present'] == false
+      row = rows[p['prefix']]
+      assert_not_nil row, "#{p['prefix']} is not in the spec"
+      %w[med next_hop local_pref].each { |k| assert_equal row[k], p[k], "#{p['node']} #{p['prefix']} #{k}" if p.key?(k) }
+      assert_include row['communities'], p['community'] if p.key?('community')
+      checked += 1
+    end
+    assert_operator checked, :>=, 6
+    first, last = rows.keys.first, rows.keys.last
+    asserted = load_yaml('scenarios/generated-feed-is-reflected.yml')['steps']
+               .collect { |s| (s['expect'] || {}).dig('bgp_prefix', 'prefix') }.compact
+    assert_include asserted, first
+    assert_include asserted, last
   end
 
   # ------------------------------------------------------------- ABOUT and README

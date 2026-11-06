@@ -42,15 +42,18 @@ module RoutescopeVocabulary
   # 7eabde1 on its `claude/bgp4r-driver` branch on 2026-11-02, and then
   # from its `claude/bgp-panes` branch on 2026-11-03, which added
   # `extended_communities` and `large_communities` to the body keys,
-  # `bgp_drained` and the `community` key of `bgp_prefix`.
+  # `bgp_drained` and the `community` key of `bgp_prefix`. `spec`,
+  # `churn`, `mp_reach`, `mp_unreach`, `specimen` and `as_path_literal`
+  # are routescope #53, claude/injector-spec at 9966920, read on
+  # 2026-11-05; until it merges a scenario with `spec` is refused there.
   BGP_ACTIONS = %w[announce attribute fault notification peer.clear peer.refresh
                    peer.start peer.stop refresh replay route.originate
                    route.withdraw session.flap session.start session.stop
                    withdraw].freeze
-  BGP_KEYS = %w[afi as_path case code communities count data extended_communities
-                generate hex interval large_communities
-                local_pref med next_hop node origin path_id peer prefix prefixes
-                safi subcode subtype].freeze
+  BGP_KEYS = %w[afi as_path as_path_literal case churn code communities count data
+                extended_communities generate hex interval large_communities
+                local_pref med mp_reach mp_unreach next_hop node origin path_id peer
+                prefix prefixes safi spec specimen subcode subtype].freeze
   CONDITIONS = { 'bgp_session' => %w[node peer state],
                  'bgp_routes' => %w[node count],
                  'bgp_prefix' => %w[node prefix present next_hop med as_path local_pref community],

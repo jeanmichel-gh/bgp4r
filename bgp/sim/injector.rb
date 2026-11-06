@@ -155,7 +155,7 @@ module BGP
       # The node file keys an injector reads. The session half is the
       # Speaker's, so this is that list plus `api`.
       CONFIG_KEYS = %w[router_id as api log_level local_address listen_address
-                       port state_file neighbors announce].freeze
+                       port state_file neighbors announce specs].freeze
 
       # The four keys that would build a Loc-RIB, which an injector does
       # not have. Refused by name, pointing at the program that does:
@@ -185,6 +185,7 @@ module BGP
         Injector.check_config(config)
         @logger = arg[:logger]
         @speaker = Daemon::Speaker.new(config, :logger => @logger)
+        @specs = config['specs'] || {}
         @sent = Sent.new
         @announced = {}
         @lock = Mutex.new
@@ -216,7 +217,32 @@ module BGP
                 "unknown configuration key(s) #{unknown.join(', ')}: " \
                 "an injector reads #{CONFIG_KEYS.join(', ')}"
         end
+        check_specs(config['specs'])
         config
+      end
+
+      # `specs` names traffic the lab defines, so a scenario sends
+      # `spec: NAME` rather than carrying the whole spec. **Naming a spec
+      # sends nothing**: the injector still starts silent, and only an
+      # `announce` starts a feed. Each spec is read by `BGP::Gen` here,
+      # at start-up, so a spec it cannot read stops the node rather than
+      # failing the first scenario that names it.
+      SPEC_NAME = /\A[A-Za-z0-9_.-]{1,64}\z/
+
+      def self.check_specs(specs)
+        return if specs.nil?
+        raise Refused, 'specs: a mapping of name to spec' unless specs.is_a?(Hash)
+        specs.each do |name, spec|
+          unless name.is_a?(String) && name.match?(SPEC_NAME)
+            raise Refused, "specs: #{name.inspect} is not a name: letters, digits, _ . and -"
+          end
+          raise Refused, "specs: #{name} is not a mapping" unless spec.is_a?(Hash)
+          begin
+            BGP::Gen.new(spec)
+          rescue BGP::Gen::SpecError => e
+            raise Refused, "specs: #{name}: #{e.message}"
+          end
+        end
       end
 
       def start
@@ -317,6 +343,7 @@ module BGP
           :announce_at_start => @speaker.announcements.size,
           :actions           => ACTIONS,
           :plan              => PLAN_KEYS,
+          :specs             => @specs.keys,
           :generators        => BGP::Gen::GENERATORS.keys,
           :faults            => BGP::Fault.names.collect { |n| n.to_s },
           :specimens         => BGP::Specimen.names.collect { |n| n.to_s } }
@@ -376,6 +403,7 @@ module BGP
           raise Refused, "plan: unknown key(s) #{unknown.join(', ')}; it reads #{PLAN_KEYS.join(', ')}"
         end
         raise Refused, 'plan: spec is required' if block['spec'].nil?
+        named_spec(block)
         check(block.reject { |k, _| %w[offset limit churn].include?(k) }, 'announce')
         offset = integer(block, 'offset', 0)
         offset = 0 if offset.negative?
@@ -1080,6 +1108,7 @@ module BGP
                          "it reads #{keys.join(', ')}"
         end
         block = body.to_h { |k, v| [k.to_s, v] }
+        named_spec(block)
         # A JSON boolean and nothing else. `Speaker#path_attribute` reads
         # only `true`, so a string `"true"` would quietly prepend our AS
         # and send a path the caller did not ask for.
@@ -1088,6 +1117,21 @@ module BGP
           raise Refused, "as_path_literal must be true or false, got #{v.inspect}"
         end
         block
+      end
+
+      # A `spec` given as a String is the name of one in the node file's
+      # `specs`, and is replaced by it. An unknown name is refused with
+      # the names there are, rather than read as a spec and refused for
+      # not being one.
+      def named_spec(block)
+        name = block['spec']
+        return unless name.is_a?(String)
+        spec = @specs[name]
+        unless spec
+          known = @specs.empty? ? 'this node file names none' : "it names #{@specs.keys.join(', ')}"
+          raise Refused, "spec #{name.inspect} is not in this node's specs; #{known}"
+        end
+        block['spec'] = spec
       end
 
       def one_of(block, *names)
