@@ -696,6 +696,23 @@ class LabBgp4rLabTopologyTest < Test::Unit::TestCase
     end
   end
 
+  # ------------------------------------------------------------------ ABOUT.md
+
+  # What routescope shows above the map, from routescope #45. It is prose,
+  # so what is held is what drifts: every node and every AS it should
+  # name, the scenario count it states, and that its first paragraph,
+  # which is the line the Labs panel shows, says what the lab is.
+  def test_about_names_every_node_and_as_and_counts_the_scenarios
+    about = read('ABOUT.md')
+    NODES.each_key { |n| assert_match(/`#{n}`/, about, "ABOUT.md does not name #{n}") }
+    %w[65000 65001 65002 65010].each { |as| assert_include about, as, "ABOUT.md does not give AS #{as}" }
+    count = Dir.glob(File.join(DIR, 'scenarios', '*.yml')).size
+    words = %w[zero one two three four five six seven eight nine ten]
+    assert_match(/\b#{words.fetch(count)} scenarios in `scenarios\/`/i, about, 'ABOUT.md states another scenario count')
+    first = about.split(/\n\s*\n/).map(&:strip).find { |b| !b.empty? && !b.start_with?('#') }
+    assert_match(/\bSeven nodes and four BGP implementations\b/, first)
+  end
+
   # ------------------------------------------------------------------ the README
 
   # The README's scenario table says which actions each file uses. Read

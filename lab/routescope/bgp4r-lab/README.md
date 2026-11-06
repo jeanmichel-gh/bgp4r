@@ -4,6 +4,9 @@ Seven nodes, four implementations, one containerlab topology: two bgp4r
 injectors feeding a bgp4r router that feeds an FRR and BIRD AS and a
 GoBGP of its own.
 
+`ABOUT.md` is the short version, the one routescope shows above the map
+and in its Labs panel.
+
 This is `docs/routescope-labs.md` section 8's "lab to build first,
 concretely", built. It is the first topology in this repository that is
 **containerlab** rather than Compose, and the first written for the

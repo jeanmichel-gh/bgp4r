@@ -1012,6 +1012,10 @@ lab/                     speakers in containers: lab/speaker.rb and lab/topologi
                          run, 2026-11-03, found BIRD dropping rtr's
                          routes until `gateway recursive`. Its
                          scenarios have not been run.
+                         Its ABOUT.md is what routescope shows above the
+                         map and in its Labs panel (routescope #45); the
+                         topology test holds it to the nodes, the ASes
+                         and the scenario count.
                          **`g1`, the GoBGP, is a second reader of
                          `rtr`'s export side and not a fourth opinion of
                          the protocol**: section 8 gives three reasons a
