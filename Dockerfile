@@ -108,6 +108,12 @@ FROM speaker AS lab-node
 USER root
 RUN apt-get update && apt-get install -y --no-install-recommends iproute2 \
     && rm -rf /var/lib/apt/lists/*
+# A shell in the node types the commands by name, and the client finds
+# the daemon's socket with no -s: `bgp4r-cli -c 'show bgp'`, or `cli`
+# for short. docs/bgp4r-cli.md is the guide to that shell.
+RUN for c in bgp4r bgp4rd bgp4r-cli bgp4r-sim; do ln -s /app/exe/$c /usr/local/bin/$c; done \
+ && ln -s /app/exe/bgp4r-cli /usr/local/bin/cli
+ENV BGP4R_SOCKET=/run/bgp4r/bgp4rd.sock
 
 # The capture image. Its entrypoint is the bgp4r command, so the argv
 # routescope hard-codes works unchanged:

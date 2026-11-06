@@ -353,7 +353,7 @@ module Features
       :area  => 'programs',
       :about => 'bgp4rd and bgp4r-cli: the control socket, the views and the configuration',
       :doc   => 'docs/daemon.md',
-      :unit  => %w[daemon/api_test daemon/client_test daemon/cli_test
+      :unit  => %w[daemon/api_test daemon/client_test daemon/cli_test daemon/cli_doc_test
                    daemon/server_test daemon/views_test daemon/control_test
                    daemon/log_ring_test daemon/config_test
                    daemon/candidate_test daemon/speaker_test

@@ -809,6 +809,19 @@ docs/                    protocol-testing.md: using bgp4r to test a router
                          router's half. Its defaults table and its
                          node file are asserted by
                          test/unit/sim/console_test.rb
+                         bgp4r-cli.md: what to type in a lab node's
+                         shell, for a person rather than a driver:
+                         where the shell is, every operator command and
+                         every control method with its parameters, one
+                         line per route with Ruby since the image has no
+                         jq, and the FIB. The lab images put the four
+                         commands and a short `cli` on the PATH and set
+                         BGP4R_SOCKET, so no `-s` is needed.
+                         test/unit/daemon/cli_doc_test.rb holds its
+                         method tables to `Api.names` both ways, its
+                         operator commands to `CLI::COMMANDS`, and the
+                         three lab Dockerfiles to the PATH and socket it
+                         promises
                          console-examples.md: seven sessions to type
                          in the VM, from a prompt with no peer to a
                          daemon lab, then generated routes with
@@ -1716,7 +1729,7 @@ CI: `.github/workflows/test.yml` runs both suites on every push to master and ev
 
 `.github/workflows/capture.yml` is the one workflow that deploys a containerlab lab: it builds the `lab-node`, BIRD and GoBGP images, deploys `lab/routescope/bgp4r-lab` and `lab/routescope/rr-lab` in a job each, and runs each one's `capture.sh`, on demand and on a push that changes `lab/routescope/` or the Dockerfile. Its log is what routescope's BGP fixtures are cut from. **rr-lab's `capture.sh` also checks**: it prints one `CHECK ok` or `CHECK FAIL` line per RFC 4456 fact and fails the job when one fails, because the scenario language has no key for ORIGINATOR_ID or CLUSTER_LIST.
 
-Baseline on 2026-11-06: 3760 tests, 37006 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
+Baseline on 2026-11-06: 3763 tests, 37027 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
 
 **That coverage figure is 98.5% for the library and the rest is the two
 programs, not a gap anywhere else.** Measured the same run: with
