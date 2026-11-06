@@ -237,6 +237,37 @@ class BGP_Daemon_CLI_Test < Test::Unit::TestCase
     assert_match(/clear bgp PEER/, err)
   end
 
+  # `show fib` reads every page, so a table larger than one page prints
+  # whole, and prints what was skipped and refused beside the routes.
+  def test_show_fib_reads_every_page_and_prints_what_was_not_installed
+    info = { 'configured' => true, 'backend' => 'ip route, table 254, proto bgp', 'total' => 2,
+             'skipped' => [{ 'prefix' => '10.255.0.2/32', 'reason' => 'originated' }],
+             'failed' => [{ 'prefix' => '10.9.0.0/16', 'error' => 'Nexthop has invalid gateway' }] }
+    pages = [{ 'rows' => [{ 'prefix' => '10.255.0.1/32', 'next_hop' => '10.200.1.1' }],
+               'next_offset' => 1, 'fib' => info },
+             { 'rows' => [{ 'prefix' => '10.255.0.4/32', 'next_hop' => '10.200.4.2' }],
+               'next_offset' => nil, 'fib' => info }]
+    client = FakeClient.new
+    client.define_singleton_method(:call) { |m, p = {}| @calls << [m, p] ; pages.shift }
+    out, err = StringIO.new, StringIO.new
+    status = BGP::Daemon::CLI.new(out, err, client).start(['-c', 'show fib'], {})
+    assert_equal(0, status, err.string)
+    assert_equal([['show.fib', { 'offset' => 0 }], ['show.fib', { 'offset' => 1 }]], client.calls)
+    assert_match(/table 254, proto bgp, 2 route\(s\) installed/, out.string)
+    assert_match(%r{^10\.255\.0\.1/32 +10\.200\.1\.1$}, out.string)
+    assert_match(%r{^10\.255\.0\.4/32 +10\.200\.4\.2$}, out.string)
+    assert_match(%r{Not installed:\n10\.255\.0\.2/32 +originated$}, out.string)
+    assert_match(%r{Refused by the kernel:\n10\.9\.0\.0/16 +Nexthop has invalid gateway$}, out.string)
+  end
+
+  def test_show_fib_says_when_nothing_installs
+    answers = { 'show.fib' => { 'rows' => [], 'next_offset' => nil,
+                                'fib' => { 'configured' => false, 'skipped' => [], 'failed' => [] } } }
+    status, out = run_cli(['-c', 'show fib'], answers)
+    assert_equal(0, status)
+    assert_match(/no fib: block/, out)
+  end
+
   def test_the_commands_list_names_clear
     assert_include(BGP::Daemon::CLI::COMMANDS, 'clear bgp PEER')
   end

@@ -380,6 +380,7 @@ a person types what they would type at a router:
 # in the VM
 bgp4r-cli -c 'show bgp summary'
 bgp4r-cli -c 'show bgp 10.255.10.0/24'
+bgp4r-cli -c 'show fib'
 bgp4r-cli -c 'show configuration'
 bgp4r-cli -c 'show configuration candidate'
 bgp4r-cli -c 'clear bgp 10.0.10.1'
@@ -443,7 +444,9 @@ console must not parse this text.
 because `Show` has **no** summary form: no vendor sample was found
 behind one, so adding a fourth thing to those three styles would be
 inventing a format inside the file that says it never does. Its columns
-are `bgp/daemon/cli.rb`'s own and no test depends on them.
+are `bgp/daemon/cli.rb`'s own and no test depends on them. `show fib`
+is rendered there too, for the same reason: no style in `Show` has a
+forwarding table, and its layout is bgp4r's own.
 
 **`show.text` is not paged**, which is honest rather than tidy: a
 vendor's `show bgp` prints the table and this prints the table. A
