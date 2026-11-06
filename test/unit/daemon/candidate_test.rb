@@ -285,6 +285,16 @@ class BGP_Daemon_Candidate_Test < Test::Unit::TestCase
     assert_match(/key not found/, @candidate.commit('check' => true)[:errors].first)
   end
 
+  # A typo in a neighbor key is refused by name, through the same
+  # throwaway Peer the dry run builds, rather than only as a key that
+  # cannot change while bgp4rd runs.
+  def test_an_unknown_neighbor_key_is_refused_by_name
+    @candidate.load('lines' => ['set neighbors 127.0.0.9 hold_tme 60'])
+    errors = @candidate.commit('check' => true)[:errors]
+    assert(errors.any? { |e| e =~ /neighbor 127\.0\.0\.9: unknown key\(s\) hold_tme/ },
+           errors.inspect)
+  end
+
   def test_a_log_level_no_logger_takes_is_refused
     @candidate.load('lines' => ['set log_level shouting'])
     assert_match(/log_level: log level "shouting"/,

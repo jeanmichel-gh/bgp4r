@@ -1671,7 +1671,7 @@ CI: `.github/workflows/test.yml` runs both suites on every push to master and ev
 
 `.github/workflows/capture.yml` is the one workflow that deploys a containerlab lab: it builds the `lab-node` and BIRD images, deploys `lab/routescope/bgp4r-lab`, and runs its `capture.sh`, on demand and on a push that changes that folder or the Dockerfile. Its log is what routescope's BGP fixtures are cut from.
 
-Baseline on 2026-11-05: 3728 tests, 36855 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
+Baseline on 2026-11-05: 3734 tests, 36890 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
 
 **That coverage figure is 98.5% for the library and the rest is the two
 programs, not a gap anywhere else.** Measured the same run: with
@@ -8105,17 +8105,26 @@ reflector", what it shows about itself, and a lab that runs one.
      opposite things, which is the trap the flag exists to remove.
    * A client flag on an external neighbor is refused. RFC 4456 section
      6 makes clients IBGP peers.
-   * Whether a client flag turns reflection on by itself, or still needs
-     `export: {route_reflector: true}`. IOS turns it on. Either way a
-     flag with reflection off must not be accepted in silence, which is
-     `export_options`' own rule.
    * The key is restart class in a commit, as every `export` key is,
      for the Adj-RIB-Out reason under "Known issues to work on".
-   * **A neighbor key is not checked for its name today**, where
-     `export` and `fib` keys are. So `route_reflector_clinet: true`
-     would be ignored and the router would run with no clients. Decide
-     whether this phase refuses unknown neighbor keys, which may break a
-     node file that carries a stray one, or leaves it as a known issue.
+   * **A neighbor key is checked for its name now. Done**, in its own
+     pull request before this phase, by the owner's choice. `Peer::KEYS`
+     lists the ten keys a neighbor is read for and `Peer.check_keys`
+     refuses any other, in `Peer#initialize` and `Peer#reconfigure`, so
+     `bgp4rd`, `bgp4r-sim`, `lab/speaker.rb` and a commit all refuse
+     `route_reflector_clinet: true` by name. Measured first: all ten
+     node files in the tree and every neighbor block in the tests use
+     only listed keys, so nothing broke.
+     `test_every_key_a_peer_reads_is_listed` reads the `Peer` class as
+     text, so a key read there and not listed fails the suite. **This
+     phase's key is read in `Speaker#export_options` and not in `Peer`**,
+     so it has to be added to `KEYS` by hand, or the check refuses it
+     and the phase's own tests fail at once. The guard's other half
+     reads `config['key']` across the library, so the read has to keep
+     that shape or the guard will say the key is listed and unread.
+   * **The owner chose that the flag turns reflection on by itself**, as
+     IOS does, and `route_reflector: false` beside a client flag is
+     refused.
 3. **Show the role.** A peer row in `show.peers` says whether the peer
    is a client, and `show.status` gives `route_reflector` and
    `cluster_id`. Path rows in `show.rib` and `show.routes` carry
