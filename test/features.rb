@@ -306,7 +306,8 @@ module Features
       :unit  => %w[rib/export_test rib/adj_rib_out_test rib/update_builder_test
                    rib/mrai_test rib/router_test],
       :functional => %w[rib_router_test],
-      :lab   => %w[rib_router_gobgp_test rib_router_frr_test speaker_router_test],
+      :lab   => %w[rib_router_gobgp_test rib_router_frr_test speaker_router_test
+                   reflector_test],
     },
 
     'fib' => {
@@ -358,6 +359,7 @@ module Features
                    daemon/candidate_test daemon/speaker_test
                    daemon/community_keys_test daemon/hand_test sim/injector_test],
       :functional => %w[daemon_test],
+      :lab   => %w[reflector_test],
     },
 
     'injector' => {
@@ -464,6 +466,7 @@ module Features
     'gobgp-families' => 'gobgpd',
     'gobgp-router'  => 'gobgpd',
     'frr'           => 'frr',
+    'reflector'     => 'gobgpd and frr',
     'local'         => 'nothing',
   }.freeze
 

@@ -1486,6 +1486,13 @@ ruby -I. test/functional/lab/link_state_gobgp_test.rb
 ruby -I. test/functional/lab/link_state_frr_test.rb
 ```
 
+`bgp4rd` as a route reflector, from a node file, with an FRR client, a
+GoBGP client and two bgp4r non-clients on loopback. Needs both binaries,
+which is why it is the `reflector` lab group. 7 seconds:
+```
+ruby -I. test/functional/lab/reflector_test.rb
+```
+
 `bgp4rd` over its real control socket, and the only test that can say
 the two halves of a line agree: every unit test on the server side reads
 a request a test wrote and every one on the client side reads an answer a
@@ -1671,7 +1678,7 @@ CI: `.github/workflows/test.yml` runs both suites on every push to master and ev
 
 `.github/workflows/capture.yml` is the one workflow that deploys a containerlab lab: it builds the `lab-node` and BIRD images, deploys `lab/routescope/bgp4r-lab`, and runs its `capture.sh`, on demand and on a push that changes that folder or the Dockerfile. Its log is what routescope's BGP fixtures are cut from.
 
-Baseline on 2026-11-05: 3755 tests, 36958 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
+Baseline on 2026-11-05: 3755 tests, 36969 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
 
 **That coverage figure is 98.5% for the library and the rest is the two
 programs, not a gap anywhere else.** Measured the same run: with
@@ -8077,7 +8084,7 @@ kind, `:all` or `peer:`. **irb prints a result through `pp` and not
 had `inspect` only and dumped every field of every message at the
 prompt, which only running the program showed.
 
-### Route reflection as a feature of `bgp4rd`, six phases. Phases 1 to 4 Done
+### Route reflection as a feature of `bgp4rd`, six phases. Phases 1 to 5 Done
 
 Asked for by the owner on 2026-11-05: start a route reflector on
 purpose, the way a router is configured as one. **The protocol half is
@@ -8167,16 +8174,28 @@ reflector", what it shows about itself, and a lab that runs one.
      lab, because FRR 8.4.4 resets on both internal cases and so no
      route verdict rests on the clean route; `fault_test.rb` holds
      `Fault.update`'s half.
-5. **A lab with `bgp4rd` as the reflector.** Native, no Docker, the
-   `rib_router_*` shape: `bgp4rd` from a node file, FRR and GoBGP as
-   two clients on loopback, and a bgp4r speaker as a non-client. A
-   route from one client reaches the other with ORIGINATOR_ID and
-   CLUSTER_LIST as each router reads them, a non-client route reaches
-   clients only, and a route carrying our cluster ID is not used. What
-   it adds over the two `rib_router_*` tests is that the node file
-   reaches it and that two real routers read one reflector's UPDATE.
-   It needs both binaries, so it wants a lab group that installs both,
-   which `test/lab_groups.rb` has none of yet.
+5. **A lab with `bgp4rd` as the reflector. Done**, as
+   `test/functional/lab/reflector_test.rb`: 6 cases, 22 assertions, 7
+   seconds, no Docker. `bgp4rd` runs in process from a node file with
+   `route_reflector_client` on two neighbors and a `cluster_id`, an FRR
+   and a GoBGP are those two clients, and two bgp4r speakers are
+   non-clients. Each peer has its own loopback address, because the
+   daemon tells its peers apart by source address.
+   * GoBGP's route reaches FRR and both non-clients, a non-client's
+     route reaches both routers and not the other non-client, which
+     `show.adj_out` names as `non_client_to_non_client`, and a route
+     carrying our cluster ID is in `show.adj_in` and nowhere else.
+     ORIGINATOR_ID and CLUSTER_LIST are read by FRR and GoBGP each.
+   * **A group of its own, `reflector`**, since it needs both binaries
+     and no other group installs both. Passes on GoBGP 3.23.0 and
+     4.10.0 with FRR 8.4.4, as root and as a user with no privilege.
+   * **GoBGP originates the client's route**, through `gobgp global rib
+     add`. FRR would need `network` and an import check with no zebra,
+     so it is the reading client only.
+   * Four sabotages, all landing: the GoBGP neighbor made a non-client
+     in the node file, `cluster_id` not passed to the decision process,
+     the non-client to non-client refusal removed, and the cluster
+     loop check removed.
 6. **`client_to_client: false`, only if asked for.** IOS's `no bgp
    client-to-client reflection`, for clients already fully meshed. RFC
    4456 section 6 allows it. Not started until somebody needs it.
