@@ -59,7 +59,13 @@ module RoutescopeVocabulary
                  'bgp_routes' => %w[node count],
                  'bgp_prefix' => %w[node prefix present next_hop med as_path local_pref community],
                  'bgp_best' => %w[node prefix reason],
-                 'bgp_drained' => %w[node] }.freeze
+                 'bgp_drained' => %w[node],
+                 # `ping` and `traceroute` check forwarding from inside a
+                 # node, read at routescope claude/ping-traceroute on
+                 # 2026-11-06. Until that merges, a scenario using either
+                 # is refused there, which is fwd-lab's four.
+                 'ping' => %w[node to from count reachable],
+                 'traceroute' => %w[node to from hops through] }.freeze
   COMMON = %w[name continue].freeze
 
   # What a `pause:` step takes beside its text, `Scenario#step`'s `when

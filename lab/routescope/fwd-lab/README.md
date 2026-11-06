@@ -88,13 +88,35 @@ deployed lab.
 
 | Scenario | What |
 |---|---|
-| `direct-link-wins.yml` | Every loopback everywhere, `b` on the direct link, decided by `as_path_length`. |
-| `link-down-moves-to-c.yml` | `b:eth3` down, `b` through `c` after the hold time, then back. |
-| `session-stop-moves-to-c.yml` | `peer.stop` on `b`, through `c` at once, then `peer.start`. |
-| `d-cut-off.yml` | Both of `d`'s links down, `d` withdrawn, then back. |
+| `direct-link-wins.yml` | Every loopback everywhere, `b` on the direct link, decided by `as_path_length`. A ping and a traceroute from `a` to `d` and back take the direct link. |
+| `link-down-moves-to-c.yml` | `b:eth3` down. The traceroute goes through `c` after the hold time, the ping is answered, then the link comes back and so does the direct path. |
+| `session-stop-moves-to-c.yml` | `peer.stop` on `b`. The traceroute goes through `c` at once, then `peer.start` brings the direct path back. |
+| `d-cut-off.yml` | Both of `d`'s links down, `d` withdrawn, no ping answered, then back. |
 
-None has been run in routescope yet. Each starts and ends with the lab
-whole, so they run in any order.
+Every check of forwarding is a `ping` or `traceroute` condition, run
+inside node `a` or `d` from its loopback. Those two conditions are
+routescope's `claude/ping-traceroute` branch, so until it merges
+routescope refuses these four scenarios.
+
+Each starts and ends with the lab whole, so they run in any order.
+
+They have been run once, by routescope's real scenario runner, against
+this folder's own files in four network namespaces, with a script
+standing in for docker. All four passed. The measures from that run:
+
+| Scenario | Measure | ms |
+|---|---|---|
+| `link-down-moves-to-c.yml` | failover | 8141 |
+| `link-down-moves-to-c.yml` | restore | 2044 |
+| `session-stop-moves-to-c.yml` | failover | 1530 |
+| `session-stop-moves-to-c.yml` | restore | 86 |
+| `d-cut-off.yml` | withdrawn | 7734 |
+| `d-cut-off.yml` | restore | 2559 |
+
+Each is the time from the action to the first passing check, so it
+includes that check's own run. The `session-stop` failover is mostly the
+traceroute: the route moved in under 0.2 seconds by the netns test. They
+have not been run in a deployed lab.
 
 ## By hand
 

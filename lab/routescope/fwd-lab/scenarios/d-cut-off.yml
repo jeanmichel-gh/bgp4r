@@ -1,20 +1,30 @@
 # Both of d's links go down, so there is no path to it at all. Every
-# router withdraws d's loopback rather than keeping a stale one, and
-# learns it again when the links come back.
+# router withdraws d's loopback rather than keeping a stale one, no ping
+# is answered, and the links coming back bring it all back.
 #
-# NOT RUN: the lab is deployed by bgp4r's Capture job, but this scenario
-# has not been run, so nothing here is a measurement. Its twin is
+# A containerlab node has a default route out of its management
+# interface, so a's ping still leaves the node and goes nowhere useful:
+# `reachable: false` is the check, not an error.
+#
+# RUN IN NAMESPACES ONLY: routescope ran this on 2026-11-06, from its
+# claude/ping-traceroute branch, against this lab's own files in four
+# network namespaces with docker stood in by a script. It passed. It has
+# not been run in a deployed lab. Its twin in this repository is
 # test/functional/lab/fwd_lab_netns_test.rb.
+#
+# ping and traceroute are routescope's forwarding conditions, which ask
+# the node's own kernel. traceroute names each hop by the address it
+# answers from, the near end of the link a packet arrived on.
 name: d cut off is unreachable, then back
 description: >-
-  d:eth1 and d:eth2 go down. a withdraws d's loopback within a hold
-  time. The links come back and a learns it again through the direct
-  link.
+  d:eth1 and d:eth2 go down. a withdraws d's loopback within a hold time
+  and no ping is answered. The links come back and a reaches d over the
+  direct link again.
 capture: [b]
 timeout: 180
 
 steps:
-  - expect: { bgp_prefix: { node: a, prefix: 10.255.0.4/32, present: true } }
+  - expect: { ping: { node: a, from: 10.255.0.1, to: 10.255.0.4, count: 20 } }
     within: 60
 
   - mark: d cut off
@@ -26,12 +36,15 @@ steps:
     within: 25
     measure: withdrawn
   - expect: { bgp_prefix: { node: b, prefix: 10.255.0.4/32, present: false } }
+  - expect: { ping: { node: a, from: 10.255.0.1, to: 10.255.0.4, reachable: false } }
 
   - mark: d back
   - interface: d:eth1
     state: up
   - interface: d:eth2
     state: up
-  - expect: { bgp_prefix: { node: a, prefix: 10.255.0.4/32, as_path: '65002 65004' } }
+  - expect: { traceroute: { node: a, from: 10.255.0.1, to: 10.255.0.4, hops: [10.200.1.2, 10.255.0.4] } }
     within: 40
     measure: restore
+  - expect: { ping: { node: a, from: 10.255.0.1, to: 10.255.0.4, count: 20 } }
+    within: 10
