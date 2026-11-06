@@ -1134,6 +1134,13 @@ not missing data.
            "skipped": [] } }
 ```
 
+`skipped` names a prefix the FIB chose not to install, with a reason.
+`originated` is a prefix this daemon originates: its NEXT_HOP is the
+router ID until the export step replaces it per session, so the kernel's
+own route for it, connected or static, is what forwards to it.
+`no_next_hop` is a route with no NEXT_HOP, which a live table never
+decides as best.
+
 `show.log`, the last lines, oldest first:
 
 ```json

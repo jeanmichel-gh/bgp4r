@@ -470,11 +470,22 @@ class LabSpeakerRouterConfigTest < Test::Unit::TestCase
   # question with a reproducible answer: every command fails, and each
   # failure is a row in the state file rather than an exception out of the
   # worker thread.
+  #
+  # The route is announced into the table directly rather than through
+  # originate, because a prefix we originate is never installed and so
+  # never runs a command to fail. That skip is the second assertion.
   def test_a_fib_command_that_fails_is_a_row_in_the_state_file
-    s = speaker('originate' => [{ 'prefixes' => ['10.1.0.0/16'] }],
+    s = speaker('originate' => [{ 'prefixes' => ['10.9.0.0/16'] }],
                 'fib' => { 'table' => 100, 'netns' => 'bgp4r-no-such-netns' })
     s.start_rib
+    peer = BGP::Rib::Peer.new(:address => '10.0.0.2', :remote_as => 65002,
+                              :router_id => '2.2.2.2', :local_as => 65001)
+    pa = BGP::Path_attribute.new(BGP::Origin.new(0), BGP::As_path.new(65002),
+                                 BGP::Next_hop.new('10.0.0.2'))
+    s.rib.announce(BGP::Rib::Route.new('10.1.0.0/16', pa, peer))
     s.rib.drain
+    assert_equal(:originated, s.rib.fib.skipped['10.9.0.0/16'],
+                 'our own prefix ran no command')
     fib = s.state['fib']
     assert_equal('100', fib['table'])
     assert_equal(0, fib['installed'], 'nothing is claimed to be in the table')

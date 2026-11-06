@@ -211,6 +211,13 @@ prefix under `failed`. The FRR and BIRD nodes avoid this with one static
 route for 10.100.0.0/16. A bgp4rd node has no IGP and no static routes,
 so it installs only routes whose next hop is on one of its links.
 
+**A prefix the node originates is not installed.** Its NEXT_HOP is the
+node's router ID, a placeholder each session replaces with the address
+it is sent from, so there is no gateway to install it via. What forwards
+to it is the kernel's own route, such as the connected route of an
+address on `lo` or a link. `show.fib` lists it under `skipped` with the
+reason `originated`.
+
 ## More
 
 - `docs/daemon.md`: the control API, the JSON of every answer, and the
