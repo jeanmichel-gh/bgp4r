@@ -706,7 +706,7 @@ module BGP
         # sent and advertises the winner to both. Built here rather than in
         # run, because it starts no thread until something attaches to it.
         @rib = BGP::Rib::Table.new(:local_as => @my_as, :router_id => @router_id,
-                                   :logger => @logger) if rib?
+                                   :logger => @logger, **decision_options) if rib?
       end
 
       def stopping? ; @stopping ; end
@@ -897,6 +897,26 @@ module BGP
         attrs << BGP::Local_pref.new(a['local_pref']) if a['local_pref']
         attrs.concat(CommunityKeys.community_attributes(a))
         BGP::Path_attribute.new(*attrs)
+      end
+
+      # The export: keys the decision process must share with Rib::Export.
+      #
+      # **Two of them are one router-wide value read in two places.** The
+      # export side prepends cluster_id to a CLUSTER_LIST and gives an
+      # internal peer default_local_pref; the decision side drops a route
+      # carrying our cluster_id (RFC 4456 section 8) and ranks a route with
+      # no LOCAL_PREF at default_local_pref. Until this was passed on, the
+      # Table was built with neither, so a reflector whose cluster_id was
+      # not its router_id prepended one ID and loop checked another, and a
+      # route that came back through a second reflector of the same cluster
+      # stayed usable. Measured on 2026-11-05: decision 1.1.1.1, export
+      # 9.9.9.9, for `cluster_id: 9.9.9.9`.
+      def decision_options
+        e = @export.is_a?(Hash) ? @export : {}
+        opts = {}
+        opts[:cluster_id] = e['cluster_id'] if e['cluster_id']
+        opts[:default_local_pref] = e['default_local_pref'] if e['default_local_pref']
+        opts
       end
 
       # The export: block as Rib::Router.new's options. A key no option

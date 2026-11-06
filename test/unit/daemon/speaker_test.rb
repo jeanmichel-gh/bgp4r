@@ -301,6 +301,54 @@ class BGP_Daemon_Speaker_Test < Test::Unit::TestCase
     Log.class_variable_set(:@@logger, state[0])
   end
 
+  # cluster_id is one value with two readers: the export side prepends it
+  # to a CLUSTER_LIST and the decision process drops a route that already
+  # carries it (RFC 4456 section 8). The Table used to be built without
+  # it, so the decision process loop checked the router ID instead.
+  def test_the_decision_process_takes_the_cluster_id_the_export_side_writes
+    s = speaker('router_id' => '1.1.1.1',
+                'export' => { 'route_reflector' => true, 'cluster_id' => '9.9.9.9' })
+    assert_equal('9.9.9.9', s.send(:export_options)[:export].cluster_id)
+    assert_equal('9.9.9.9', s.rib.decision.cluster_id)
+  end
+
+  # The behaviour that follows from it: a route reflected back to us by a
+  # second reflector of our cluster is not usable. Before the fix it was.
+  def test_a_route_carrying_our_cluster_id_is_not_usable
+    s = speaker('router_id' => '1.1.1.1',
+                'export' => { 'route_reflector' => true, 'cluster_id' => '9.9.9.9' })
+    peer = BGP::Rib::Peer.new(address: '10.0.0.3', remote_as: 65_000,
+                              router_id: '3.3.3.3', local_as: 65_000)
+    pa = BGP::Path_attribute.new(BGP::Origin.new(0), BGP::Next_hop.new('10.0.0.3'),
+                                 BGP::As_path.new, BGP::Local_pref.new(100),
+                                 BGP::Originator_id.new('4.4.4.4'),
+                                 BGP::Cluster_list.new('9.9.9.9'))
+    route = BGP::Rib::Route.new('10.1.0.0/16', pa, peer)
+    assert_equal(:cluster_list_loop, s.rib.decision.ineligible_reason(route))
+  end
+
+  # With no cluster_id the default stays the router ID, on both sides.
+  def test_with_no_cluster_id_both_sides_use_the_router_id
+    s = speaker('router_id' => '1.1.1.1', 'export' => { 'route_reflector' => true })
+    assert_equal('1.1.1.1', s.rib.decision.cluster_id)
+    assert_equal('1.1.1.1', s.send(:export_options)[:export].cluster_id)
+  end
+
+  # default_local_pref has the same two readers: what an internal peer is
+  # sent for a route with no LOCAL_PREF, and what that route is ranked at
+  # here. A router that ranked at 100 and advertised 200 would disagree
+  # with its own clients about the same route.
+  def test_the_decision_process_takes_the_default_local_pref_the_export_side_sends
+    s = speaker('export' => { 'default_local_pref' => 200 })
+    assert_equal(200, s.send(:export_options)[:export].default_local_pref)
+    peer = BGP::Rib::Peer.new(address: '10.0.0.2', remote_as: 65_001,
+                              router_id: '2.2.2.2', local_as: 65_000)
+    pa = BGP::Path_attribute.new(BGP::Origin.new(0), BGP::Next_hop.new('10.0.0.2'),
+                                 BGP::As_path.new(65_001))
+    route = BGP::Rib::Route.new('10.1.0.0/16', pa, peer)
+    assert_equal(200, s.rib.decision.degree_of_preference(route))
+  end
+
   private
 
   def speaker_with_logger(logger, extra = {})
