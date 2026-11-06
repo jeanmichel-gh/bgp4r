@@ -1,0 +1,40 @@
+# d, a bgp4rd in AS 65004: the destination. b and c dial it.
+#
+# It announces its loopback, routes what it learns, and installs the
+# result in the kernel's main table. The loopback itself is not
+# installed: the kernel already has it, and show.fib lists it under
+# skipped as `originated`.
+#
+# hold_time 9, so a link that fails without a NOTIFICATION ends its
+# session within 9 seconds. That is the failover time capture.sh
+# measures.
+router_id: 10.255.0.4
+as: 65004
+log_level: info
+
+neighbors:
+  - address: 10.200.3.1
+    as: 65003
+    description: c
+    hold_time: 9
+    capabilities: [as4_byte, route_refresh]
+    record: routes
+
+  - address: 10.200.4.1
+    as: 65002
+    description: b, the direct link
+    hold_time: 9
+    capabilities: [as4_byte, route_refresh]
+    record: routes
+
+originate:
+  - prefixes: [10.255.0.4/32]
+
+# Transit: routes from one peer go to the others with our AS prepended
+# and our address as the next hop. No next_hops: each next hop is the
+# session's own address.
+export: {}
+
+# Table 254 is the kernel's main table, the one it forwards from.
+fib:
+  table: 254

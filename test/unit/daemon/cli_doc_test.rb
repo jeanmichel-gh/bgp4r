@@ -56,7 +56,8 @@ class TestBgp4rCliDoc < Test::Unit::TestCase
   # Each image that runs bgp4rd in a containerlab lab has to make that
   # true, and the socket has to be the one the topologies pass to bgp4rd.
   def test_the_lab_images_put_the_client_on_the_path_and_the_socket_in_the_environment
-    images = ['Dockerfile', 'lab/routescope/rr-lab/Dockerfile.node', 'lab/routescope/bgp4r-lab/Dockerfile.node']
+    images = ['Dockerfile', 'lab/routescope/rr-lab/Dockerfile.node', 'lab/routescope/bgp4r-lab/Dockerfile.node',
+              'lab/routescope/fwd-lab/Dockerfile.node']
     images.each do |f|
       text = read(f)
       text = text[text.index('AS lab-node')..] if f == 'Dockerfile'
@@ -64,7 +65,7 @@ class TestBgp4rCliDoc < Test::Unit::TestCase
       assert_match(%r{^ && ln -s /app/exe/bgp4r-cli /usr/local/bin/cli$}, text, f)
       assert_match(/^ENV BGP4R_SOCKET=#{Regexp.escape(SOCKET)}$/, text, f)
     end
-    %w[rr-lab/rr-lab.clab.yml bgp4r-lab/bgp4r-lab.clab.yml].each do |t|
+    %w[rr-lab/rr-lab.clab.yml bgp4r-lab/bgp4r-lab.clab.yml fwd-lab/fwd-lab.clab.yml].each do |t|
       cmds = read("lab/routescope/#{t}").lines.grep(/cmd: exe\/bgp4rd /)
       assert_not_empty cmds, t
       cmds.each { |c| assert_include c, "-s #{SOCKET}", t }

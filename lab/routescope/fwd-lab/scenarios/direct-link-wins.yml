@@ -1,0 +1,46 @@
+# Every router learns every loopback, and a packet from a to d crosses b
+# and the direct link: AS_PATH 65004 against 65003 65004 through c, and
+# the shorter wins (RFC 4271 section 9.1.2.2 a). The way back is the same
+# link.
+#
+# RUN IN NAMESPACES ONLY: routescope ran this on 2026-11-06, from its
+# claude/ping-traceroute branch, against this lab's own files in four
+# network namespaces with docker stood in by a script. It passed. It has
+# not been run in a deployed lab. Its twin in this repository is
+# test/functional/lab/fwd_lab_netns_test.rb.
+#
+# ping and traceroute are routescope's forwarding conditions, which ask
+# the node's own kernel. traceroute names each hop by the address it
+# answers from, the near end of the link a packet arrived on.
+name: The direct link to d wins, and packets take it
+description: >-
+  Four eBGP sessions come up, every loopback reaches every router, b
+  chooses the direct link to d, and a ping and a traceroute from a's
+  loopback to d's go that way, both directions.
+capture: [b]
+timeout: 120
+
+steps:
+  - expect: { bgp_session: { node: b, peer: 10.200.4.2, state: established } }
+    within: 60
+  - expect: { bgp_session: { node: b, peer: 10.200.2.2, state: established } }
+    within: 60
+  - expect: { bgp_session: { node: a, peer: 10.200.1.2, state: established } }
+    within: 60
+  - expect: { bgp_drained: {} }
+    within: 30
+  - expect: { bgp_prefix: { node: b, prefix: 10.255.0.4/32, next_hop: 10.200.4.2, as_path: '65004' } }
+    within: 30
+  - expect: { bgp_best: { node: b, prefix: 10.255.0.4/32, reason: as_path_length } }
+    name: b chose the direct link on AS_PATH length
+  - expect: { bgp_prefix: { node: a, prefix: 10.255.0.4/32, next_hop: 10.200.1.2, as_path: '65002 65004' } }
+  - expect: { bgp_prefix: { node: d, prefix: 10.255.0.1/32, next_hop: 10.200.4.1, as_path: '65002 65001' } }
+
+  - mark: forwarding
+  - expect: { ping: { node: a, from: 10.255.0.1, to: 10.255.0.4, count: 20 } }
+    within: 10
+    name: a reaches d
+  - expect: { traceroute: { node: a, from: 10.255.0.1, to: 10.255.0.4, hops: [10.200.1.2, 10.255.0.4] } }
+    name: a to d over the direct link
+  - expect: { traceroute: { node: d, from: 10.255.0.4, to: 10.255.0.1, hops: [10.200.4.1, 10.255.0.1] } }
+    name: d to a over the direct link

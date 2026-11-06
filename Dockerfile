@@ -92,6 +92,9 @@ ENTRYPOINT ["ruby", "-I/app"]
 #   with `exec: ip addr add ...` and there is no `ip` in the speaker
 #   image. `bgp/rib/ip_route.rb` shells out to the same binary, so a
 #   `fib:` key in a node file needs it too.
+# * **ping and traceroute**, because `lab/routescope/fwd-lab` checks that
+#   packets follow the routes a `fib:` key installs, and a person in a
+#   node's shell wants the same two commands.
 # * **root**, because `BGP::Daemon::Api#start` does `mkdir_p` on the
 #   socket's directory and the default is `/run/bgp4r`, which uid 1000
 #   cannot create. routescope's `Drivers::Bgp4rd` hard-codes that path
@@ -106,7 +109,7 @@ ENTRYPOINT ["ruby", "-I/app"]
 # bgp4r-lab on it, first on 2026-11-03.
 FROM speaker AS lab-node
 USER root
-RUN apt-get update && apt-get install -y --no-install-recommends iproute2 \
+RUN apt-get update && apt-get install -y --no-install-recommends iproute2 iputils-ping traceroute \
     && rm -rf /var/lib/apt/lists/*
 # A shell in the node types the commands by name, and the client finds
 # the daemon's socket with no -s: `bgp4r-cli -c 'show bgp'`, or `cli`
