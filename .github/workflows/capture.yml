@@ -6,9 +6,9 @@ name: Capture
 # routescope's BGP driver commands, to the job log. Runs on demand, and on
 # a push that changes the lab or this file.
 #
-# It is also the one place bgp4r-lab and rr-lab are deployed at all, so a
-# lab that does not come up fails here first. One job per lab, each on
-# its own runner.
+# It is also the one place bgp4r-lab, rr-lab and fwd-lab are deployed
+# at all, so a lab that does not come up fails here first. One job per
+# lab, each on its own runner.
 on:
   workflow_dispatch:
   push:
@@ -64,3 +64,24 @@ jobs:
         if: failure()
         run: |
           for n in inj-c inj-n inj-e rr1 rr2 c1 c2 c3 dual; do echo "--- $n"; docker logs --tail 60 clab-rr-lab-$n 2>&1 || true; done
+
+  # fwd-lab, forwarding: four bgp4rd routers in four ASes installing into
+  # the kernel's main table. Its capture.sh pings across them, fails the
+  # B to D link three ways, and checks which way the packets went.
+  fwd-lab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: containerlab and image
+        run: |
+          bash -c "$(curl -sL https://get.containerlab.dev)"
+          docker build -q --target lab-node -t bgp4r-lab:latest .
+      - name: fwd-lab up
+        run: sudo containerlab deploy -t lab/routescope/fwd-lab/fwd-lab.clab.yml
+      - name: capture
+        run: bash lab/routescope/fwd-lab/capture.sh
+      - name: logs on failure
+        if: failure()
+        run: |
+          for n in a b c d; do echo "--- $n"; docker logs --tail 60 clab-fwd-lab-$n 2>&1 || true; done

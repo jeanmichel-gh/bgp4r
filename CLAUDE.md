@@ -985,6 +985,21 @@ lab/                     speakers in containers: lab/speaker.rb and lab/topologi
                          `inj-c`'s named spec, a thousand prefixes, and
                          needs routescope #53 to pass `spec`. CI
                          deploys it; see "routescope labs"
+                         lab/routescope/fwd-lab is **forwarding**: four
+                         `bgp4rd` routers in four ASes, a square A B C D
+                         with a B to D diagonal, each announcing its
+                         loopback and installing into the kernel's main
+                         table, `fib: {table: 254}`. A pings D, and the
+                         path is the direct link until the B to D
+                         session ends, then through C. `capture.sh`
+                         reads which way from C's eth1 receive counter,
+                         and fails the job on a wrong path. **Every next
+                         hop is on a shared link**, which is why this
+                         lab can forward and rr-lab's `dual` cannot.
+                         Measured in namespaces: a link down fails over
+                         in the 9 second hold time, a session stopped by
+                         hand in under 0.2. The lab images carry ping
+                         and traceroute for it
                          lab/speaker.rb is the **command line** now and nothing
                          else: the sessions, the configuration and the recording
                          moved into bgp/daemon/speaker.rb, because `bgp4rd`
@@ -1153,9 +1168,19 @@ test/functional/lab/     lab tests: loopback speaker test and one Compose test p
                          rr_lab_topology_test.rb is the same shape for
                          lab/routescope/rr-lab, and also decodes the two
                          looped UPDATEs its scenarios replay and runs
-                         them through `rr1`'s own table. Both tests read
+                         them through `rr1`'s own table.
+                         fwd_lab_topology_test.rb is the same shape for
+                         lab/routescope/fwd-lab, and
+                         fwd_lab_netns_test.rb **runs that lab's own
+                         files** in four network namespaces, links and
+                         `exec:` lines out of the clab file, and pings
+                         across them through link down, link up,
+                         peer.stop and D cut off. It needs root, like
+                         fib_test.rb, and is the only test that says a
+                         packet followed a route bgp4rd installed. The
+                         topology tests read
                          routescope's vocabulary from
-                         routescope_vocabulary.rb, one copy for the two;
+                         routescope_vocabulary.rb, one copy for all;
                          bgp4r_lab_topology_test.rb is the same shape for
                          lab/routescope/bgp4r-lab and loads each of its
                          three node files through the program that reads
@@ -1452,6 +1477,15 @@ decodes the two looped UPDATEs the scenarios replay and checks that
 ruby -I. test/functional/lab/rr_lab_topology_test.rb
 ```
 
+The same for `lab/routescope/fwd-lab`, the forwarding lab, and its twin
+that runs the lab's files in network namespaces and pings across them.
+The second needs root and ping, and is about 30 seconds, most of it two
+hold timers:
+```
+ruby -I. test/functional/lab/fwd_lab_topology_test.rb
+sudo ruby -I. test/functional/lab/fwd_lab_netns_test.rb
+```
+
 `lab/speaker.rb` as a router, from node files. Three speakers on
 loopback as processes, so a route crosses the middle one and comes out
 with the export rules applied, plus the node file keys read in process
@@ -1727,9 +1761,9 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. The `lab` job is a matrix, one job per group in `test/lab_groups.rb`, so its cost is the slowest group and not the total: it was 12m42s as one serial suite. Each job installs only what its group needs, which is why the matrix entry carries a `gobgp`, `frr`, `docker` or `netns` flag. The `gobgp` groups pin 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-`.github/workflows/capture.yml` is the one workflow that deploys a containerlab lab: it builds the `lab-node`, BIRD and GoBGP images, deploys `lab/routescope/bgp4r-lab` and `lab/routescope/rr-lab` in a job each, and runs each one's `capture.sh`, on demand and on a push that changes `lab/routescope/` or the Dockerfile. Its log is what routescope's BGP fixtures are cut from. **rr-lab's `capture.sh` also checks**: it prints one `CHECK ok` or `CHECK FAIL` line per RFC 4456 fact and fails the job when one fails, because the scenario language has no key for ORIGINATOR_ID or CLUSTER_LIST.
+`.github/workflows/capture.yml` is the one workflow that deploys a containerlab lab: it builds the `lab-node`, BIRD and GoBGP images, deploys `lab/routescope/bgp4r-lab`, `lab/routescope/rr-lab` and `lab/routescope/fwd-lab` in a job each, and runs each one's `capture.sh`, on demand and on a push that changes `lab/routescope/` or the Dockerfile. Its log is what routescope's BGP fixtures are cut from. **rr-lab's `capture.sh` also checks**: it prints one `CHECK ok` or `CHECK FAIL` line per RFC 4456 fact and fails the job when one fails, because the scenario language has no key for ORIGINATOR_ID or CLUSTER_LIST. **fwd-lab's does the same for forwarding**, because the scenario language has no ping step.
 
-Baseline on 2026-11-06: 3767 tests, 37037 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
+Baseline on 2026-11-06: 3767 tests, 37060 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
 
 **That coverage figure is 98.5% for the library and the rest is the two
 programs, not a gap anywhere else.** Measured the same run: with

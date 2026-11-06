@@ -248,6 +248,14 @@ jobs:
         run: |
           sudo -E env "PATH=$PATH" LAB_REQUIRE_NETNS=1 \
             bundle exec ruby -I. test/functional/lab/fib_test.rb
+      # The same capability, for forwarding: fwd-lab's four bgp4rd
+      # routers in network namespaces, with pings across them.
+      - name: Forwarding in network namespaces
+        if: matrix.netns
+        shell: bash
+        run: |
+          sudo -E env "PATH=$PATH" LAB_REQUIRE_NETNS=1 \
+            bundle exec ruby -I. test/functional/lab/fwd_lab_netns_test.rb
       - name: Show test failures as an annotation
         if: failure()
         shell: bash

@@ -22,8 +22,9 @@
 
 # What routescope reads, **copied** from routescope, so the containerlab
 # labs under lab/routescope/ can be held to it with no routescope here.
-# Two topology tests read it: bgp4r_lab_topology_test.rb and
-# rr_lab_topology_test.rb. One copy, so the two cannot drift apart.
+# Three topology tests read it: bgp4r_lab_topology_test.rb,
+# rr_lab_topology_test.rb and fwd_lab_topology_test.rb. One copy, so they
+# cannot drift apart.
 #
 # docs/routescope-labs.md section 12 is why this is a copy: every fact in
 # this repository about that one is a read at a commit, and this suite
@@ -58,11 +59,23 @@ module RoutescopeVocabulary
                  'bgp_routes' => %w[node count],
                  'bgp_prefix' => %w[node prefix present next_hop med as_path local_pref community],
                  'bgp_best' => %w[node prefix reason],
-                 'bgp_drained' => %w[node] }.freeze
+                 'bgp_drained' => %w[node],
+                 # `ping` and `traceroute` check forwarding from inside a
+                 # node, read at routescope claude/ping-traceroute on
+                 # 2026-11-06. Until that merges, a scenario using either
+                 # is refused there, which is fwd-lab's four.
+                 'ping' => %w[node to from count reachable],
+                 'traceroute' => %w[node to from hops through] }.freeze
   COMMON = %w[name continue].freeze
 
   # What a `pause:` step takes beside its text, `Scenario#step`'s `when
   # 'pause'` arm, read at routescope main 2026-11-06. A run with nobody
   # to press Resume skips it, so a pause costs a CI run nothing.
   PAUSE_KEYS = %w[for].freeze
+
+  # What an `interface:` step takes beside its NODE:IFACE value,
+  # `Scenario#step`'s `when 'interface'` arm, read at routescope main
+  # 9615aa0 on 2026-11-06. The state is up or down, and the runner sets
+  # it on the containerlab link with `Links#set`.
+  INTERFACE_KEYS = %w[state].freeze
 end

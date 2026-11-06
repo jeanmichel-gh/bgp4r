@@ -1,0 +1,113 @@
+# fwd-lab: forwarding through bgp4rd. Four bgp4rd routers, each in its
+# own AS, peering eBGP. Each announces its loopback and installs what it
+# learns in the kernel's main table, so a ping from A to D crosses B and
+# either C or the direct link to D.
+#
+#   A ----- B ----- C ----- D
+#           |               |
+#           +---------------+
+#
+#   node  AS     loopback        role
+#   a     65001  10.255.0.1/32   the source of the pings
+#   b     65002  10.255.0.2/32   the router that chooses
+#   c     65003  10.255.0.3/32   the backup path
+#   d     65004  10.255.0.4/32   the destination
+#
+#   link     prefix          ends
+#   a - b    10.200.1.0/30   a:eth1 .1   b:eth1 .2
+#   b - c    10.200.2.0/30   b:eth2 .1   c:eth1 .2
+#   c - d    10.200.3.0/30   c:eth2 .1   d:eth1 .2
+#   b - d    10.200.4.0/30   b:eth3 .1   d:eth2 .2
+#
+# B hears D's loopback twice: from D with AS_PATH 65004 and from C with
+# 65003 65004. The shorter AS_PATH wins (RFC 4271 section 9.1.2.2 a), so
+# traffic takes the direct link. When the B to D session ends, B
+# withdraws that path and the one through C is best. When the session
+# comes back, the direct link wins again. D's choice for A's loopback is
+# the same in reverse, so both directions move together.
+#
+# Every next hop is the eBGP neighbor's address on a shared link, so the
+# kernel takes every route bgp4rd installs. bgp4rd does not resolve a
+# next hop recursively, and here it has no need to.
+#
+# Two `exec:` lines per node beyond the links: the loopback address, and
+# IP forwarding on. `exec:` runs after the entrypoint, so bgp4rd starts
+# before its addresses exist; it binds the wildcard and its dials retry.
+#
+#   sudo containerlab deploy -t lab/routescope/fwd-lab/fwd-lab.clab.yml
+#   LAB=fwd-lab lab/routescope/fwd-lab/capture.sh
+#   sudo containerlab destroy -t lab/routescope/fwd-lab/fwd-lab.clab.yml
+name: fwd-lab
+
+topology:
+  nodes:
+
+    a:
+      kind: linux
+      image: bgp4r-lab:latest
+      cmd: exe/bgp4rd -f /etc/bgp4r/bgp4rd.yml -s /run/bgp4r/bgp4rd.sock -l -
+      labels:
+        routescope.kind: bgp4r
+        routescope.build: Dockerfile.node
+        routescope.protocols: bgp
+      binds:
+        - a/bgp4rd.yml:/etc/bgp4r/bgp4rd.yml
+      exec:
+        - ip addr add 10.255.0.1/32 dev lo
+        - ip addr add 10.200.1.1/30 dev eth1
+        - sh -c "echo 1 > /proc/sys/net/ipv4/ip_forward"
+
+    b:
+      kind: linux
+      image: bgp4r-lab:latest
+      cmd: exe/bgp4rd -f /etc/bgp4r/bgp4rd.yml -s /run/bgp4r/bgp4rd.sock -l -
+      labels:
+        routescope.kind: bgp4r
+        routescope.build: Dockerfile.node
+        routescope.protocols: bgp
+      binds:
+        - b/bgp4rd.yml:/etc/bgp4r/bgp4rd.yml
+      exec:
+        - ip addr add 10.255.0.2/32 dev lo
+        - ip addr add 10.200.1.2/30 dev eth1
+        - ip addr add 10.200.2.1/30 dev eth2
+        - ip addr add 10.200.4.1/30 dev eth3
+        - sh -c "echo 1 > /proc/sys/net/ipv4/ip_forward"
+
+    c:
+      kind: linux
+      image: bgp4r-lab:latest
+      cmd: exe/bgp4rd -f /etc/bgp4r/bgp4rd.yml -s /run/bgp4r/bgp4rd.sock -l -
+      labels:
+        routescope.kind: bgp4r
+        routescope.build: Dockerfile.node
+        routescope.protocols: bgp
+      binds:
+        - c/bgp4rd.yml:/etc/bgp4r/bgp4rd.yml
+      exec:
+        - ip addr add 10.255.0.3/32 dev lo
+        - ip addr add 10.200.2.2/30 dev eth1
+        - ip addr add 10.200.3.1/30 dev eth2
+        - sh -c "echo 1 > /proc/sys/net/ipv4/ip_forward"
+
+    d:
+      kind: linux
+      image: bgp4r-lab:latest
+      cmd: exe/bgp4rd -f /etc/bgp4r/bgp4rd.yml -s /run/bgp4r/bgp4rd.sock -l -
+      labels:
+        routescope.kind: bgp4r
+        routescope.build: Dockerfile.node
+        routescope.protocols: bgp
+      binds:
+        - d/bgp4rd.yml:/etc/bgp4r/bgp4rd.yml
+      exec:
+        - ip addr add 10.255.0.4/32 dev lo
+        - ip addr add 10.200.3.2/30 dev eth1
+        - ip addr add 10.200.4.2/30 dev eth2
+        - sh -c "echo 1 > /proc/sys/net/ipv4/ip_forward"
+
+  links:
+    - endpoints: ["a:eth1", "b:eth1"]
+    - endpoints: ["b:eth2", "c:eth1"]
+    - endpoints: ["c:eth2", "d:eth1"]
+    - endpoints: ["b:eth3", "d:eth2"]
