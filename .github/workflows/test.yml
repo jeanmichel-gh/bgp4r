@@ -167,6 +167,11 @@ jobs:
             gobgp: true
           - group: frr
             frr: true
+          # The one group that needs both routers: bgp4rd as a route
+          # reflector with an FRR client and a GoBGP client.
+          - group: reflector
+            gobgp: true
+            frr: true
           # No router binary and no Docker, and the one group that runs
           # a second step: fib_test needs CAP_NET_ADMIN.
           - group: local

@@ -138,6 +138,15 @@ module LabGroups
       rib_router_frr_test
     ],
 
+    # Needs **both** gobgpd and FRR's bgpd, which is why it is a group
+    # of its own: a `bgp4rd` route reflector with one client of each
+    # kind, so two real routers read one reflector's UPDATE. A new lab
+    # test that wants both routers at once goes here. 7s, measured on
+    # 2026-11-05.
+    'reflector' => %w[
+      reflector_test
+    ],
+
     # No router binary and no Docker. fib_test is here and needs
     # CAP_NET_ADMIN, which is why this group's job runs it a second time
     # under sudo; see the workflow. 10s.
