@@ -21,7 +21,7 @@ amounts. Measured 2026-11-03:
 |---|---|---:|---|---|
 | unit | Ruby | 159 | 21s | `ruby test/run_unit.rb` |
 | functional | a loopback socket | 15 | 18s | one file at a time, below |
-| lab | gobgpd, FRR, Docker or root | 30 | 10s to 400s per group | `ruby test/run_lab.rb GROUP` |
+| lab | gobgpd, FRR, Docker or root | 31 | 10s to 400s per group | `ruby test/run_lab.rb GROUP` |
 
 **The first two tiers together are under a minute and need nothing
 installed.** That is worth knowing before reaching for a lab test.
@@ -110,7 +110,7 @@ Deciding and advertising routes.
 | Feature | unit | func | lab | What |
 |---|---:|---:|---:|---|
 | `rib` | 7 | 1 | 0 | Adj-RIB-In, the decision process and the Loc-RIB |
-| `export` | 5 | 1 | 4 | The export rules, Adj-RIB-Out, UPDATE building and the MRAI timer |
+| `export` | 5 | 1 | 5 | The export rules, Adj-RIB-Out, UPDATE building and the MRAI timer |
 | `fib` | 3 | 0 | 1 | Putting the Loc-RIB in a forwarding table |
 | `show` | 2 | 0 | 0 | The three vendor styles, and the same state as plain data |
 
@@ -135,7 +135,7 @@ The four executables.
 | `console` | 6 | 2 | 0 | An irb prompt on bgp4r: bgp4r console, routegen, sim and bgp4rd --interact |
 | `gen` | 18 | 1 | 2 | bgp/gen: UPDATEs and withdrawals from a spec, and what they meant |
 | `capture` | 4 | 0 | 0 | Reading BGP off a wire or a pcap file, and bgp4r lab new |
-| `speaker` | 1 | 0 | 4 | lab/speaker.rb and the five topologies under lab/topologies |
+| `speaker` | 1 | 0 | 5 | lab/speaker.rb and the five topologies under lab/topologies |
 | `events` | 2 | 0 | 0 | The structured event stream both programs serve |
 | `logging` | 1 | 0 | 1 | The injected logger, the process log and the log level |
 | `live-feed` | 1 | 0 | 0 | The client for an old public BGP feed, whose functional twin must never run |
@@ -287,6 +287,7 @@ The export rules, Adj-RIB-Out, UPDATE building and the MRAI timer.
   - `reflector_test`, needs gobgpd and frr
   - `rib_router_frr_test`, needs frr
   - `rib_router_gobgp_test`, needs gobgpd
+  - `rr_lab_topology_test`
   - `speaker_router_test`
 
 ```
@@ -543,6 +544,7 @@ lab/speaker.rb and the five topologies under lab/topologies.
 - lab:
   - `add_path_topology_test`
   - `bgp4r_lab_topology_test`
+  - `rr_lab_topology_test`
   - `speaker_test`
   - `two_speakers_test`, needs docker
 
@@ -845,5 +847,5 @@ test file has to be tagged before the suite is green again, which is
 the same arrangement `test/unit/lab_groups_test.rb` has with the CI
 matrix.
 
-204 of 204 test files are tagged. The
+205 of 205 test files are tagged. The
 remainder, if any, is what the guard names.

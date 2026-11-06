@@ -1,0 +1,38 @@
+# dual, a bgp4rd in AS 65100, and a client of both reflectors: rr1 in
+# cluster 1.1.1.1 and rr2 in cluster 2.2.2.2.
+#
+# A route from inj-c reaches it twice. rr1 reflects it with CLUSTER_LIST
+# 1.1.1.1. rr2 hears it from rr1 as a non-client and reflects it to its
+# own clients with CLUSTER_LIST 2.2.2.2 1.1.1.1. Both copies carry
+# inj-c's ORIGINATOR_ID, so RFC 4456 section 9 makes the router ID step
+# a tie, and the shorter CLUSTER_LIST wins. `show.rib` says so as
+# `cluster_list_length`.
+#
+# rr2's router ID is lower than rr1's on purpose. Without the section 9
+# rule, that the ORIGINATOR_ID stands in for the BGP Identifier, rr2's
+# copy would win at the router ID step instead. So the step name is the
+# assertion.
+#
+# It holds a table and advertises nothing: no `export`, no `originate`.
+# It dials rr2; rr1 dials it.
+router_id: 10.100.255.30
+as: 65100
+log_level: info
+
+neighbors:
+  - address: 10.100.14.1
+    as: 65100
+    description: rr1, cluster 1.1.1.1
+    hold_time: 30
+    capabilities: [as4_byte, route_refresh]
+    record: routes
+
+  - address: 10.100.21.1
+    as: 65100
+    connect: true
+    description: rr2, cluster 2.2.2.2
+    hold_time: 30
+    capabilities: [as4_byte, route_refresh]
+    record: routes
+
+rib: true

@@ -1,0 +1,198 @@
+# rr-lab: route reflection, RFC 4456, with a bgp4rd as the reflector and
+# FRR, BIRD and GoBGP as its clients. Nine nodes, four implementations.
+#
+#                         AS 65100 (iBGP, two clusters)
+#
+#   inj-c (bgp4r-sim) --client-----\
+#   inj-n (bgp4r-sim) --non-client--\        /--client-- c1 (FRR)
+#                                    rr1 ----+--client-- c2 (BIRD)
+#   AS 65200                        (bgp4rd) +--client-- c3 (GoBGP)
+#   inj-e (bgp4r-sim) --eBGP--------/ 1.1.1.1 \--client-- dual (bgp4rd)
+#                                       |                   |
+#                                   non-client            client
+#                                       |                   |
+#                                      rr2 (FRR) -----------/
+#                                      cluster 2.2.2.2
+#
+#   link             prefix           ends
+#   inj-c - rr1      10.100.1.0/30    inj-c:eth1 .1   rr1:eth1 .2
+#   inj-n - rr1      10.100.2.0/30    inj-n:eth1 .1   rr1:eth2 .2
+#   inj-e - rr1      10.100.3.0/30    inj-e:eth1 .1   rr1:eth3 .2
+#   rr1   - c1       10.100.11.0/30   rr1:eth4 .1     c1:eth1 .2
+#   rr1   - c2       10.100.12.0/30   rr1:eth5 .1     c2:eth1 .2
+#   rr1   - c3       10.100.13.0/30   rr1:eth6 .1     c3:eth1 .2
+#   rr1   - dual     10.100.14.0/30   rr1:eth7 .1     dual:eth1 .2
+#   rr1   - rr2      10.100.20.0/30   rr1:eth8 .1     rr2:eth1 .2
+#   rr2   - dual     10.100.21.0/30   rr2:eth2 .1     dual:eth2 .2
+#
+# rr1 is the reflector under test. Its clients are inj-c, c1, c2, c3 and
+# dual. Its non-clients are inj-n and rr2. inj-e is an external peer.
+#
+# rr2 is an FRR reflector of a second cluster, with dual as its client.
+# So dual hears a client route twice: from rr1 with one cluster in its
+# CLUSTER_LIST, and through rr2 with two. That is the RFC 4456 section 9
+# tie break, and dual is a bgp4rd so it can say which step decided.
+#
+# **inj-n and rr2 are not meshed with each other, on purpose.** Two
+# non-clients would normally peer, and then rr2 would hold inj-n's route
+# from inj-n itself. Without that session, an absence at rr2 is rr1
+# refusing to reflect a non-client route to a non-client, and nothing
+# else.
+#
+# Every address is inside 10.100.0.0/16, so one static route on each FRR
+# and BIRD node resolves every next hop. Reflection leaves NEXT_HOP alone,
+# and this lab has no IGP to carry it.
+#
+# The injectors start silent. The scenarios put every route on the wire.
+#
+#   sudo containerlab deploy -t lab/routescope/rr-lab/rr-lab.clab.yml
+#   LAB=$PWD/lab/routescope/rr-lab docker compose -f ~/routescope/compose.yml up -d
+#   sudo containerlab destroy -t lab/routescope/rr-lab/rr-lab.clab.yml
+#
+# The images are bgp4r-lab's, built the same way. The README has the
+# commands. `exec:` runs after a node's entrypoint, so no node here binds
+# a link address at start-up; every listener is the wildcard.
+name: rr-lab
+
+topology:
+  nodes:
+
+    # AS 65100. inj-c is a client of rr1, inj-n a non-client.
+    inj-c:
+      kind: linux
+      image: bgp4r-lab:latest
+      cmd: exe/bgp4r-sim /lab/sim.yml -l -
+      labels:
+        routescope.kind: bgp4r-sim
+        routescope.build: Dockerfile.node
+        routescope.protocols: bgp
+      binds:
+        - inj-c:/lab
+      exec:
+        - ip addr add 10.100.1.1/30 dev eth1
+
+    inj-n:
+      kind: linux
+      image: bgp4r-lab:latest
+      cmd: exe/bgp4r-sim /lab/sim.yml -l -
+      labels:
+        routescope.kind: bgp4r-sim
+        routescope.build: Dockerfile.node
+        routescope.protocols: bgp
+      binds:
+        - inj-n:/lab
+      exec:
+        - ip addr add 10.100.2.1/30 dev eth1
+
+    # AS 65200, the one external peer.
+    inj-e:
+      kind: linux
+      image: bgp4r-lab:latest
+      cmd: exe/bgp4r-sim /lab/sim.yml -l -
+      labels:
+        routescope.kind: bgp4r-sim
+        routescope.build: Dockerfile.node
+        routescope.protocols: bgp
+      binds:
+        - inj-e:/lab
+      exec:
+        - ip addr add 10.100.3.1/30 dev eth1
+
+    # The reflector under test, cluster 1.1.1.1.
+    rr1:
+      kind: linux
+      image: bgp4r-lab:latest
+      cmd: exe/bgp4rd -f /etc/bgp4r/bgp4rd.yml -s /run/bgp4r/bgp4rd.sock -l -
+      labels:
+        routescope.kind: bgp4r
+        routescope.build: Dockerfile.node
+        routescope.protocols: bgp
+      binds:
+        - rr1/bgp4rd.yml:/etc/bgp4r/bgp4rd.yml
+      exec:
+        - ip addr add 10.100.1.2/30 dev eth1
+        - ip addr add 10.100.2.2/30 dev eth2
+        - ip addr add 10.100.3.2/30 dev eth3
+        - ip addr add 10.100.11.1/30 dev eth4
+        - ip addr add 10.100.12.1/30 dev eth5
+        - ip addr add 10.100.13.1/30 dev eth6
+        - ip addr add 10.100.14.1/30 dev eth7
+        - ip addr add 10.100.20.1/30 dev eth8
+
+    # The second reflector, FRR, cluster 2.2.2.2.
+    rr2:
+      kind: linux
+      image: quay.io/frrouting/frr:10.2.1
+      labels:
+        routescope.kind: frr
+        routescope.protocols: bgp
+      binds:
+        - rr2:/etc/frr
+      exec:
+        - sh -c "ip addr add 10.100.20.2/30 dev eth1 2>/dev/null || true"
+        - sh -c "ip addr add 10.100.21.1/30 dev eth2 2>/dev/null || true"
+
+    # rr1's three router clients, one per implementation.
+    c1:
+      kind: linux
+      image: quay.io/frrouting/frr:10.2.1
+      labels:
+        routescope.kind: frr
+        routescope.protocols: bgp
+      binds:
+        - c1:/etc/frr
+      exec:
+        - sh -c "ip addr add 10.100.11.2/30 dev eth1 2>/dev/null || true"
+
+    c2:
+      kind: linux
+      image: bgp4r-bird:latest
+      labels:
+        routescope.kind: bird
+        routescope.build: Dockerfile.bird
+        routescope.protocols: bgp
+      binds:
+        - c2:/etc/bird
+      exec:
+        - ip addr add 10.100.12.2/30 dev eth1
+
+    # routescope has no gobgp kind, read at routescope b8e2704, so this
+    # node renders as a plain Linux box there. bgp4r-lab's g1 says more.
+    c3:
+      kind: linux
+      image: bgp4r-gobgp:latest
+      labels:
+        routescope.kind: gobgp
+        routescope.build: Dockerfile.gobgp
+        routescope.protocols: bgp
+      binds:
+        - c3:/etc/gobgp
+      exec:
+        - ip addr add 10.100.13.2/30 dev eth1
+
+    # A client of both reflectors, and a bgp4rd so it can say why a path
+    # won. It holds a table and advertises nothing.
+    dual:
+      kind: linux
+      image: bgp4r-lab:latest
+      cmd: exe/bgp4rd -f /etc/bgp4r/bgp4rd.yml -s /run/bgp4r/bgp4rd.sock -l -
+      labels:
+        routescope.kind: bgp4r
+        routescope.build: Dockerfile.node
+        routescope.protocols: bgp
+      binds:
+        - dual/bgp4rd.yml:/etc/bgp4r/bgp4rd.yml
+      exec:
+        - ip addr add 10.100.14.2/30 dev eth1
+        - ip addr add 10.100.21.2/30 dev eth2
+
+  links:
+    - endpoints: ["inj-c:eth1", "rr1:eth1"]
+    - endpoints: ["inj-n:eth1", "rr1:eth2"]
+    - endpoints: ["inj-e:eth1", "rr1:eth3"]
+    - endpoints: ["rr1:eth4", "c1:eth1"]
+    - endpoints: ["rr1:eth5", "c2:eth1"]
+    - endpoints: ["rr1:eth6", "c3:eth1"]
+    - endpoints: ["rr1:eth7", "dual:eth1"]
+    - endpoints: ["rr1:eth8", "rr2:eth1"]
+    - endpoints: ["rr2:eth2", "dual:eth2"]

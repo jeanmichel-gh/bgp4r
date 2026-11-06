@@ -1,0 +1,63 @@
+# RFC 4456 section 6: a route from a client is reflected to every other
+# client and to every non-client. inj-c is a client of rr1, so its route
+# must reach c1 (FRR), c2 (BIRD), c3 (GoBGP) and dual (bgp4rd), which
+# are clients, and rr2, which is not.
+#
+# The next hop is inj-c's own address at every reader. A reflector does
+# not change NEXT_HOP, and an iBGP speaker does not either (RFC 4271
+# section 5.1.3).
+#
+# ORIGINATOR_ID and CLUSTER_LIST are what makes it reflection, and the
+# scenario language has no key for either. capture.sh reads them on all
+# four implementations and fails the CI job when one is wrong.
+#
+# NOT RUN: the lab is deployed by bgp4r's Capture job, but this scenario
+# has not been run, so nothing here is a measurement. Every expectation
+# is read out of the node files and the RFC sections they cite.
+name: A client route reaches every client and every non-client
+description: >-
+  inj-c announces 10.10.1.0/24 to rr1. It must reach the three router
+  clients, dual and rr2, with inj-c's address as the next hop.
+capture: [rr1]
+timeout: 180
+
+steps:
+  - expect: { bgp_session: { node: rr1, peer: 10.100.1.1, state: established } }
+    within: 60
+  - expect: { bgp_session: { node: rr1, peer: 10.100.11.2, state: established } }
+    within: 60
+  - expect: { bgp_session: { node: rr1, peer: 10.100.12.2, state: established } }
+    within: 60
+  - expect: { bgp_session: { node: rr1, peer: 10.100.13.2, state: established } }
+    within: 60
+  - expect: { bgp_session: { node: rr1, peer: 10.100.14.2, state: established } }
+    within: 60
+  - expect: { bgp_session: { node: rr1, peer: 10.100.20.2, state: established } }
+    within: 60
+  - expect: { bgp_prefix: { node: c1, prefix: 10.10.1.0/24, present: false } }
+    name: nothing injected yet
+
+  - bgp: announce
+    node: inj-c
+    prefixes: [10.10.1.0/24]
+
+  - expect: { bgp_prefix: { node: rr1, prefix: 10.10.1.0/24, next_hop: 10.100.1.1 } }
+    within: 15
+    measure: announce_to_rr1
+  - expect: { bgp_prefix: { node: c1, prefix: 10.10.1.0/24, next_hop: 10.100.1.1 } }
+    within: 20
+    name: a client, FRR
+  - expect: { bgp_prefix: { node: c2, prefix: 10.10.1.0/24, next_hop: 10.100.1.1 } }
+    within: 20
+    name: a client, BIRD
+  - expect: { bgp_prefix: { node: c3, prefix: 10.10.1.0/24, next_hop: 10.100.1.1 } }
+    within: 20
+    name: a client, GoBGP
+  - expect: { bgp_prefix: { node: dual, prefix: 10.10.1.0/24, next_hop: 10.100.1.1 } }
+    within: 20
+    name: a client, bgp4rd
+  - expect: { bgp_prefix: { node: rr2, prefix: 10.10.1.0/24,
+                            next_hop: 10.100.1.1, local_pref: 100 } }
+    within: 20
+    measure: announce_to_non_client
+    name: a non-client, the other cluster's reflector

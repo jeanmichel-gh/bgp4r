@@ -1,0 +1,22 @@
+# inj-n, a bgp4r-sim in AS 65100 and a non-client of rr1. Its routes
+# reach rr1's clients and must not reach rr2, the other non-client.
+#
+# It has no session to rr2 on purpose. Non-clients are normally meshed,
+# and then rr2 would hold this route from inj-n itself. Without that
+# session an absence at rr2 can only be rr1 refusing to reflect it.
+#
+# No `announce` block: it starts silent.
+router_id: 10.100.255.12
+as: 65100
+api: 127.0.0.1:8080
+log_level: info
+
+local_address: 10.100.2.1
+
+neighbors:
+  - address: 10.100.2.2
+    as: 65100
+    connect: true
+    hold_time: 30
+    description: rr1
+    capabilities: [as4_byte, route_refresh]

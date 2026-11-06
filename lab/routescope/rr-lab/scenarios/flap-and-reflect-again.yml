@@ -1,0 +1,41 @@
+# A client session that flaps. When it goes down rr1 withdraws the
+# client's routes from everyone it reflected them to (RFC 4271 section
+# 6, the session's routes go with it). When it comes back the injector
+# re-announces, and rr1 reflects again.
+#
+# NOT RUN: the lab is deployed by bgp4r's Capture job, but this scenario
+# has not been run, so nothing here is a measurement. Every expectation
+# is read out of the node files and the RFC sections they cite.
+name: A client flaps and its routes are reflected again
+description: >-
+  inj-c announces 10.10.10.0/24, flaps its session to rr1 once, and the
+  prefix must be back on every client and on rr2 afterwards.
+capture: [rr1]
+timeout: 240
+
+steps:
+  - expect: { bgp_session: { node: rr1, peer: 10.100.1.1, state: established } }
+    within: 60
+  - bgp: announce
+    node: inj-c
+    prefixes: [10.10.10.0/24]
+  - expect: { bgp_drained: {} }
+    within: 30
+  - expect: { bgp_prefix: { node: c2, prefix: 10.10.10.0/24, present: true } }
+
+  - mark: flapping inj-c to rr1
+  - bgp: session.flap
+    node: inj-c
+    count: 1
+  - expect: { bgp_session: { node: rr1, peer: 10.100.1.1, state: established } }
+    within: 60
+    measure: back_up
+  - expect: { bgp_drained: {} }
+    within: 30
+    measure: drained
+  - expect: { bgp_prefix: { node: c1, prefix: 10.10.10.0/24, next_hop: 10.100.1.1 } }
+  - expect: { bgp_prefix: { node: c2, prefix: 10.10.10.0/24, next_hop: 10.100.1.1 } }
+  - expect: { bgp_prefix: { node: c3, prefix: 10.10.10.0/24, next_hop: 10.100.1.1 } }
+  - expect: { bgp_prefix: { node: rr2, prefix: 10.10.10.0/24, next_hop: 10.100.1.1 } }
+  - expect: { bgp_best: { node: dual, prefix: 10.10.10.0/24, reason: cluster_list_length } }
+    name: dual has both copies again and chooses the same one

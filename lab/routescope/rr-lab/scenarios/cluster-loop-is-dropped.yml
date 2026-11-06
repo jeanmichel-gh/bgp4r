@@ -1,0 +1,54 @@
+# RFC 4456 section 8: a reflector ignores a route whose CLUSTER_LIST
+# already holds its own cluster ID, since that route has been round the
+# cluster once.
+#
+# No body key of an announce sets a CLUSTER_LIST, so the looped UPDATE
+# is replayed as octets. The hex was built with the library, and
+# rr_lab_topology_test.rb decodes it and checks what it claims: ORIGIN
+# IGP, an empty AS_PATH, NEXT_HOP 10.100.1.1, LOCAL_PREF 100, CLUSTER_LIST
+# 1.1.1.1, which is rr1's cluster ID, and 10.10.6.0/24.
+#
+# A loop is not a malformed attribute, so the session stays up. A clean
+# prefix sent first must reach a client, and still be there after.
+#
+# rr1 keeps the looped route in its Adj-RIB-In and out of its Loc-RIB.
+# show.adj_in shows it, which capture.sh reads; bgp_prefix reads the
+# Loc-RIB.
+#
+# NOT RUN: the lab is deployed by bgp4r's Capture job, but this scenario
+# has not been run, so nothing here is a measurement. Every expectation
+# is read out of the node files and the RFC sections they cite.
+name: A route carrying rr1's cluster ID is dropped
+description: >-
+  inj-c sends 10.10.5.0/24 clean, then replays an UPDATE for
+  10.10.6.0/24 whose CLUSTER_LIST holds 1.1.1.1. rr1 must hold the first,
+  drop the second, reflect it nowhere, and keep the session.
+capture: [rr1]
+timeout: 180
+
+steps:
+  - expect: { bgp_session: { node: rr1, peer: 10.100.1.1, state: established } }
+    within: 60
+  - bgp: announce
+    node: inj-c
+    prefixes: [10.10.5.0/24]
+  - expect: { bgp_prefix: { node: c1, prefix: 10.10.5.0/24, present: true } }
+    within: 20
+
+  - mark: replaying an UPDATE with CLUSTER_LIST 1.1.1.1
+  - bgp: replay
+    node: inj-c
+    hex: ffffffffffffffffffffffffffffffff0037020000001c400101004002004003040a64010140050400000064800a0401010101180a0a06
+
+  - expect: { bgp_drained: { node: rr1 } }
+    within: 30
+  - expect: { bgp_prefix: { node: rr1, prefix: 10.10.6.0/24, present: false } }
+    name: not in rr1's Loc-RIB
+  - expect: { bgp_prefix: { node: c1, prefix: 10.10.6.0/24, present: false } }
+  - expect: { bgp_prefix: { node: c2, prefix: 10.10.6.0/24, present: false } }
+  - expect: { bgp_prefix: { node: rr2, prefix: 10.10.6.0/24, present: false } }
+    name: and reflected nowhere
+  - expect: { bgp_prefix: { node: c1, prefix: 10.10.5.0/24, present: true } }
+    name: the clean prefix is still there
+  - expect: { bgp_session: { node: rr1, peer: 10.100.1.1, state: established } }
+    name: and the session never went down

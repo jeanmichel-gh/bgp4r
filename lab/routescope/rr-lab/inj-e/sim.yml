@@ -1,0 +1,24 @@
+# inj-e, a bgp4r-sim in AS 65200, rr1's one external peer. A route from
+# it reaches every internal peer of rr1, clients and non-clients alike,
+# and it is not reflection: it carries no ORIGINATOR_ID and no
+# CLUSTER_LIST out of rr1. RFC 4456 section 6 is about routes from
+# internal peers only.
+#
+# rr1 leaves its NEXT_HOP alone toward internal peers (RFC 4271 section
+# 5.1.3), so the clients see 10.100.3.1.
+#
+# No `announce` block: it starts silent.
+router_id: 10.200.255.13
+as: 65200
+api: 127.0.0.1:8080
+log_level: info
+
+local_address: 10.100.3.1
+
+neighbors:
+  - address: 10.100.3.2
+    as: 65100
+    connect: true
+    hold_time: 30
+    description: rr1
+    capabilities: [as4_byte, route_refresh]

@@ -48,6 +48,7 @@ require 'stringio'
 require 'bgp4r'
 require 'bgp/daemon'
 require 'bgp/sim'
+require_relative 'routescope_vocabulary'
 
 class LabBgp4rLabTopologyTest < Test::Unit::TestCase
 
@@ -59,15 +60,11 @@ class LabBgp4rLabTopologyTest < Test::Unit::TestCase
             'r1' => 'frr', 'r2' => 'frr', 'r3' => 'bird',
             'g1' => 'gobgp' }.freeze
 
-  # `Lab::KINDS`, **copied** from routescope `b8e2704`, read on
-  # 2026-11-03, for the same reason the scenario vocabulary below is a
-  # copy: this suite cannot assert another repository. What it can do is
-  # say which of this topology's kinds that read knew, so a kind
-  # routescope does not have is a recorded measurement rather than a
-  # silence. `Drivers.for` is `BY_KIND.fetch(node.kind, Linux)`, so an
-  # unknown kind is a plain Linux node that answers nothing about BGP.
-  ROUTESCOPE_KINDS = %w[ospfd frr ospfv2-sim bird srlinux
-                        bgp4r bgp4r-sim linux].freeze
+  # `Lab::KINDS`, copied from routescope, in routescope_vocabulary.rb.
+  # What this test can do is say which of this topology's kinds that read
+  # knew, so a kind routescope does not have is a recorded measurement
+  # rather than a silence.
+  ROUTESCOPE_KINDS = RoutescopeVocabulary::KINDS
 
   # The kinds on this topology that routescope had no driver for at that
   # commit. One, and it is the GoBGP node: `grep -rln gobgp` across
@@ -78,31 +75,14 @@ class LabBgp4rLabTopologyTest < Test::Unit::TestCase
   INJECTORS = { 'inj1' => 'inj1/sim.yml', 'inj2' => 'inj2/sim.yml' }.freeze
   ROUTER = 'rtr/bgp4rd.yml'
 
-  # The scenario language, **copied** from routescope `7eabde1` on its
-  # `claude/bgp4r-driver` branch, read on 2026-11-02, and then from its
-  # `claude/bgp-panes` branch on 2026-11-03, which added
-  # `extended_communities` and `large_communities` to the body keys,
-  # `bgp_drained` and the `community` key of `bgp_prefix`:
-  # `Scenario::BGP_ACTIONS`, `Scenario::BGP_KEYS`, `Scenario::CONDITIONS`
-  # and `Scenario::COMMON`. docs/routescope-labs.md section 12 is why
-  # this is a copy: every fact in this repository about that one is a read
-  # at a commit and this suite cannot assert one. What it can do is keep
-  # these four files inside the vocabulary that read gave, so a scenario
-  # here is not merely plausible YAML.
-  BGP_ACTIONS = %w[announce attribute fault notification peer.clear peer.refresh
-                   peer.start peer.stop refresh replay route.originate
-                   route.withdraw session.flap session.start session.stop
-                   withdraw].freeze
-  BGP_KEYS = %w[afi as_path case code communities count data extended_communities
-                generate hex interval large_communities
-                local_pref med next_hop node origin path_id peer prefix prefixes
-                safi subcode subtype].freeze
-  CONDITIONS = { 'bgp_session' => %w[node peer state],
-                 'bgp_routes' => %w[node count],
-                 'bgp_prefix' => %w[node prefix present next_hop med as_path local_pref community],
-                 'bgp_best' => %w[node prefix reason],
-                 'bgp_drained' => %w[node] }.freeze
-  COMMON = %w[name continue].freeze
+  # The scenario language, copied from routescope into
+  # routescope_vocabulary.rb, which rr_lab_topology_test.rb reads too.
+  # What this test can do is keep these files inside the vocabulary that
+  # read gave, so a scenario here is not merely plausible YAML.
+  BGP_ACTIONS = RoutescopeVocabulary::BGP_ACTIONS
+  BGP_KEYS = RoutescopeVocabulary::BGP_KEYS
+  CONDITIONS = RoutescopeVocabulary::CONDITIONS
+  COMMON = RoutescopeVocabulary::COMMON
 
   def read(rel) ; File.read(File.join(DIR, rel), :encoding => 'UTF-8') ; end
   def load_yaml(rel) ; YAML.safe_load(read(rel)) ; end
