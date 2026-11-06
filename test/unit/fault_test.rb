@@ -190,6 +190,31 @@ class TestFault < Test::Unit::TestCase
                         .path_attribute.attributes.count { |a| a.type == ATTR::AS_PATH }
   end
 
+  # A LOCAL_PREF only when asked for, which is what an internal session
+  # wants (RFC 4271 section 5.1.5) and the fault matrix asks for there.
+  # FRR 8.4.4 treats an internal route without one as a withdraw, so the
+  # matrix's clean route never installed until it was added.
+  def test_a_local_pref_is_added_when_asked_for
+    plain = Fault.update(:med_length, OPTS).path_attribute
+    assert_nil plain[ATTR::LOCAL_PREF]
+    pa = Fault.update(:med_length, OPTS.merge(:local_pref => 100)).path_attribute
+    assert_equal 100, pa[ATTR::LOCAL_PREF].to_i
+  end
+
+  # The two route reflection cases and no others. RFC 7606 sections 7.9
+  # and 7.10 judge their length only from an internal peer, and from an
+  # external one discard the attribute whatever its length, so the
+  # catalog's treat_as_withdraw holds only on an internal session.
+  def test_the_internal_cases_are_the_route_reflection_ones
+    internal = Fault.catalog.select { |e| e[:ibgp] }
+    assert_equal %i[originator_id_length cluster_list_length], internal.collect { |e| e[:name] }
+    internal.each do |e|
+      assert_equal :treat_as_withdraw, e[:action], e[:name].to_s
+      assert_match(/\ARFC 7606 7\.(9|10)\z/, e[:rfc], e[:name].to_s)
+    end
+    assert_equal false, Fault.catalog.find { |e| e[:name] == :origin_length }[:ibgp]
+  end
+
   def test_every_catalog_case_builds_an_update_that_encodes
     Fault.names.each do |name|
       u = Fault.update(name, OPTS)

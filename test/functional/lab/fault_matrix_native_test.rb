@@ -66,22 +66,17 @@ class LabFaultMatrixNativeTest < Test::Unit::TestCase
     return unless LabHelper::Gobgpd.available?
     @@major = LabHelper::Gobgpd.major
     return unless @@major && MEASURED.cover?(@@major)
-    @@router = LabHelper::Gobgpd.new
+    # Two routers, one per kind of session: see
+    # FaultMatrixScenario.run_sessions for why the :ibgp cases need one
+    # of their own. Each router's log says what it made of each UPDATE,
+    # in its own words, and run_sessions takes it while it is there.
+    ebgp = LabHelper::Gobgpd.new
+    @@routers = [['external', ebgp],
+                 ['internal', LabHelper::Gobgpd.new(:peer_as => ebgp.as)]]
     @@dir = Dir.mktmpdir('bgp4r-fault-matrix-native')
-    json = File.join(@@dir, 'fault-matrix.json')
-    begin
-      @@router.up
-      @@output, @@status = run_matrix(@@router, json)
-      @@results = JSON.parse(File.read(json))
-    rescue StandardError => e
-      @@results = nil
-      @@error = "#{e.class}: #{e.message}"
-    ensure
-      # The router's own log says what it made of each UPDATE, in its
-      # words, and it goes with the daemon, so take it while it is there.
-      @@router.down
-      @@output = "#{LabHelper::Gobgpd.version}\n#{@@output}\n== gobgpd\n#{@@router.log}"
-    end
+    @@results, out, @@status, @@error =
+      FaultMatrixScenario.run_sessions(@@dir, @@routers, method(:run_matrix))
+    @@output = "#{LabHelper::Gobgpd.version}\n#{out}"
   end
 
   # The matrix in a process of its own, which is also how a person runs
@@ -115,7 +110,7 @@ class LabFaultMatrixNativeTest < Test::Unit::TestCase
   end
 
   def self.shutdown
-    @@router.down if defined?(@@router)
+    @@routers.each { |_, r| r.down } if defined?(@@routers)
     FileUtils.rm_rf(@@dir) if defined?(@@dir)
   end
 

@@ -45,6 +45,7 @@
 #   installed_divergences treat-as-withdraw cases this router installs anyway
 #   reset_divergences     name => subcode, cases this router resets on
 #   kept_divergences      name => installed, reset cases it keeps instead
+#   sent_names            the catalog cases it sent, all of them by default
 #
 # The last two are where a router's own behaviour lives, because the
 # answers are not the same on every version: see GOBGP_3 below.
@@ -178,8 +179,22 @@ module FaultMatrixScenario
     # RFC 7606 section 4, the same row GoBGP 3 got wrong
     'attr_overrun'    => 5,
     # RFC 7606 section 3 (g) says discard the later copies, not reset
-    'duplicate_attr'  => 1
+    'duplicate_attr'  => 1,
+    # The two :ibgp cases, on the internal session
+    'originator_id_length' => 5,
+    'cluster_list_length'  => 5
   }.freeze
+
+  # **The two :ibgp cases reset with subcode 5**, Attribute Length Error,
+  # where RFC 7606 sections 7.9 and 7.10 ask an internal peer for
+  # treat-as-withdraw. Measured on 2026-11-05. The log names the attribute,
+  # "Bad originator ID length 5" and "Bad cluster list length 5", and sends
+  # the NOTIFICATION. That is not the broken withdraw path of the eight 10s
+  # above: there FRR says it is treating the UPDATE as a withdrawal first.
+  # Here it never says so, and on the same internal session origin_value
+  # resets too, with 3/6, where on an external one it gets as far as the
+  # withdraw. So FRR 8.4.4 seems to apply RFC 7606 to external peers only.
+  # That last is read off two rows and not the code, so it is a reading.
 
   # unknown_wellknown is not a divergence: it is a session_reset case and
   # FRR does reset, so the category is right. Only the reason is wrong.
@@ -208,6 +223,48 @@ module FaultMatrixScenario
   # treat-as-withdraw is the gentler answer, and BIRD keeps the session
   # here too. The route is dropped, which the value records.
   FRR_10_KEPT = { 'unknown_wellknown' => false }.freeze
+
+  # The cases sent on an internal session, the ones the catalog marks
+  # :ibgp, and those sent on an external one.
+  IBGP_NAMES = BGP::Fault.catalog.select { |e| e[:ibgp] }.collect { |e| e[:name].to_s }.sort.freeze
+  EBGP_NAMES = (ACTIONS.keys - IBGP_NAMES).sort.freeze
+
+  # The matrix twice against one kind of router: an external session for
+  # most of the catalog and an internal one for the :ibgp cases, which
+  # RFC 7606 sections 7.9 and 7.10 judge only from an internal peer.
+  # sessions is [[label, router], ...], and run is the including class's
+  # run_matrix, which reads the AS numbers off the router, so an internal
+  # router is one whose peer_as is its own AS.
+  #
+  # Answers [results, output, status, error]. The results are merged, the
+  # outputs joined and the exit status is the worse one. Each router is
+  # brought down here and its log kept, which is the router saying in its
+  # own words what it made of each UPDATE, so the log is in the output
+  # even when a run raised. results is nil and error says why when one
+  # did.
+  def self.run_sessions(dir, sessions, run)
+    results, output, status = [], +'', 0
+    sessions.each do |label, router|
+      json = File.join(dir, "fault-matrix-#{label}.json")
+      begin
+        router.up
+        out, st = run.call(router, json)
+        output << "== #{label} session\n#{out}\n"
+        status = [status, st.to_i].max
+        results.concat(JSON.parse(File.read(json)))
+      ensure
+        router.down
+        output << "== #{label} router log\n#{router.log}\n"
+      end
+    end
+    [results, output, status, nil]
+  rescue StandardError => e
+    [nil, output, status, "#{e.class}: #{e.message}"]
+  end
+
+  # What the including class sent. The Compose topology has one external
+  # session and so sends EBGP_NAMES; the native runs send both.
+  def sent_names ; ACTIONS.keys.sort ; end
 
   # Every name this router is expected to answer differently from the
   # catalog, whether by installing the route or by resetting.
@@ -262,12 +319,12 @@ module FaultMatrixScenario
 
   # The catalog cases whose expected RFC 7606 action is this one.
   def names_for(action)
-    ACTIONS.select { |_, a| a == action }.keys.sort
+    ACTIONS.select { |n, a| a == action && sent_names.include?(n) }.keys.sort
   end
 
   def test_every_catalog_fault_was_sent
     sent = results.collect { |r| r['name'] }.sort
-    assert_equal BGP::Fault::CATALOG.collect { |e| e.first.to_s }.sort, sent,
+    assert_equal sent_names, sent,
                  "the matrix must send every catalog case\n#{output}"
   end
 
