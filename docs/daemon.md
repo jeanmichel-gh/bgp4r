@@ -919,7 +919,8 @@ the test rather than by reading.
 `show.status`, which is the shape routescope's `#bgp(container)` wants:
 
 ```json
-{ "router_id": "10.255.0.1", "as": 65000, "uptime": 412,
+{ "router_id": "10.255.0.1", "as": 65000, "route_reflector": false,
+  "cluster_id": null, "uptime": 412,
   "peers": [
     { "address": "10.0.10.1", "router_id": "10.255.10.1", "remote_as": 65010,
       "state": "established", "description": "inj1", "uptime": 380,
@@ -934,6 +935,22 @@ States are lowercase and are RFC 4271 section 8's: `idle`, `connect`,
 `active`, `opensent`, `openconfirm`, `established`. `router_id` on a peer
 is nil until the OPEN arrives, which is what lets a map draw a session
 that has not come up.
+
+**A route reflector says so**, RFC 4456. `route_reflector` is true
+when the export rules reflect, from `export.route_reflector` or a
+neighbor's `route_reflector_client` flag, and `cluster_id` is then the
+ID it prepends to a CLUSTER_LIST: `export.cluster_id`, or the router ID
+by default. Both are false and null otherwise. A peer row gains
+`route_reflector_client` only on a reflector, true or false, from
+`Export#client?`, so it says what the export rules decide. With
+`route_reflector: true` and no client list that is every internal
+peer, which is the single cluster case of section 6.
+
+**Every path row of every view carries `originator_id` and
+`cluster_list`**, RFC 4456 section 8, as it carries the three community
+lists: null and an empty list for a route that was never reflected. In
+`show.adj_out` they are what the peer was sent, so a reflector's own
+ORIGINATOR_ID and cluster ID show there and not in the Loc-RIB.
 
 **Measured on 2026-11-02 rather than assumed: every state bgp4r's FSM
 reaches is in that list once downcased.** The ones it sets are `:Idle`,
@@ -1089,7 +1106,8 @@ beside the page:
     { "prefix": "10.255.10.0/24", "path_id": null, "next_hop": "10.0.20.1",
       "as_path": "65000 65010", "origin": "igp", "local_pref": null,
       "med": null, "communities": ["65000:1"],
-      "extended_communities": [], "large_communities": [] } ],
+      "extended_communities": [], "large_communities": [],
+      "originator_id": null, "cluster_list": [] } ],
   "total": 1, "offset": 0, "limit": 500, "next_offset": null,
   "skipped": { "total": 1,
                "rows": [ { "prefix": "10.255.11.0/24",

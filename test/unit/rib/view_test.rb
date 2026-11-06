@@ -359,6 +359,7 @@ class TestBgpRibView < Test::Unit::TestCase
                    :as_path => '65002', :origin => :igp, :local_pref => nil,
                    :med => 10, :path_id => nil, :local => false,
                    :communities => [], :extended_communities => [], :large_communities => [],
+                   :originator_id => nil, :cluster_list => [],
                    :paths => 2, :best => true, :decided_by => :med }, rows.first)
   end
 
@@ -381,12 +382,49 @@ class TestBgpRibView < Test::Unit::TestCase
     end
   end
 
+  # ORIGINATOR_ID and CLUSTER_LIST, RFC 4456 section 8, on every path
+  # row of every view, as the three community lists are. A route with
+  # neither answers nil and an empty list, which the tests on either side
+  # pin; this is a route that was reflected to us.
+  def test_every_path_row_carries_the_reflection_attributes
+    @rib.announce(route(I1, P, :originator_id => '9.9.9.9', :cluster_list => ['2.2.2.2', '3.3.3.3']))
+    want = { :originator_id => '9.9.9.9', :cluster_list => ['2.2.2.2', '3.3.3.3'] }
+    [@rib.view.routes.first, @rib.view.rib.first[:paths].first,
+     @rib.view.adj_in(I1.address).first].each do |row|
+      assert_equal(want, row.slice(*want.keys))
+    end
+  end
+
+  # **In the Adj-RIB-Out they are what the client was sent**, so a
+  # reflector's own additions show there and not in the Loc-RIB: RFC 4456
+  # section 8 sets ORIGINATOR_ID to the router ID of the route's
+  # originator and prepends our cluster ID to the CLUSTER_LIST.
+  def test_adj_out_carries_what_a_reflector_added
+    @rib.announce(route(I1, P))
+    n = Recording.new(:my_as => LOCAL_AS, :remote_addr => '10.0.0.5',
+                      :local_addr => '10.0.0.1', :id => ROUTER_ID)
+    n.instance_variable_set(:@rmt_as, LOCAL_AS)
+    n.instance_variable_set(:@rmt_bgp_id, '5.5.5.5')
+    n.instance_variable_set(:@state, :Established)
+    @neighbors << n
+    @rib.attach(n)
+    @rib.advertise(:export => BGP::Rib::Export.new(:local_as => LOCAL_AS, :router_id => ROUTER_ID,
+                                                   :route_reflector => true))
+    @rib.drain
+    row = @rib.view.adj_out('10.0.0.5').first
+    assert_equal('4.4.4.4', row[:originator_id], 'the router ID of the peer it came from')
+    assert_equal([ROUTER_ID], row[:cluster_list], 'our cluster ID, which is the router ID')
+    loc = @rib.view.routes.first
+    assert_equal([nil, []], [loc[:originator_id], loc[:cluster_list]], 'the Loc-RIB holds neither')
+  end
+
   def test_a_rib_path_carries_the_decision_as_well
     rib = loss_table(:med)
     assert_equal({ :from => '10.0.0.9', :next_hop => '10.0.0.9', :as_path => '65002',
                    :origin => :igp, :local_pref => nil, :med => 20, :path_id => nil,
                    :local => false,
                    :communities => [], :extended_communities => [], :large_communities => [],
+                   :originator_id => nil, :cluster_list => [],
                    :best => false, :usable => true, :lost_at => :med,
                    :reason => 'higher MED from the same neighbouring AS' },
                  paths_of(rib).last)
@@ -475,7 +513,7 @@ class TestBgpRibView < Test::Unit::TestCase
     row = @rib.view.routes.first
     assert_equal([], cols - row.keys,
                  'a column of routescope bgp_routes row that the view cannot answer')
-    assert_equal(%i[path_id local decided_by], row.keys - cols,
+    assert_equal(%i[path_id local originator_id cluster_list decided_by], row.keys - cols,
                  'and what the view adds beyond it')
   end
 

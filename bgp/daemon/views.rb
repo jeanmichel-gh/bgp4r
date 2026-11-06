@@ -86,6 +86,8 @@ module BGP
         rows = peer_rows(base)
         { :router_id => @speaker.router_id,
           :as        => @speaker.my_as,
+          :route_reflector => !reflector.nil?,
+          :cluster_id      => reflector && reflector.cluster_id,
           :uptime    => uptime(@speaker.started_at),
           :peers     => rows,
           :summary   => ((base && base[:summary]) || {}).merge(
@@ -250,8 +252,27 @@ module BGP
           # when there are some, so a row reads as it always has until
           # something is. See bgp/daemon/hand.rb.
           hand = @speaker.hand.count(peer.address)
-          hand.zero? ? row : row.merge(:hand => hand)
+          row = row.merge(:hand => hand) unless hand.zero?
+          # Whether this peer is a client of ours, RFC 4456 section 6,
+          # present only on a reflector, as `hand` is present only when
+          # there is some: a row on a speaker that reflects nothing reads
+          # as it always has.
+          reflector ? row.merge(:route_reflector_client => client?(peer)) : row
         end
+      end
+
+      # The export rules when this speaker reflects, or nil.
+      def reflector
+        e = @speaker.router && @speaker.router.export
+        e && e.route_reflector? ? e : nil
+      end
+
+      # Export#client? asks a Rib::Peer, and reads only its address and
+      # whether it is internal, so the router ID here is a placeholder
+      # nothing reads: the peer's own may not have arrived yet.
+      def client?(peer)
+        reflector.client?(BGP::Rib::Peer.new(address: peer.address, remote_as: peer.remote_as,
+                                             router_id: '0.0.0.0', local_as: @speaker.my_as))
       end
 
       def rib_view

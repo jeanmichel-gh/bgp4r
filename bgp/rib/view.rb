@@ -478,6 +478,18 @@ module BGP
           :origin     => ORIGINS[value(pa, Origin) { |a| a.to_i }],
           :local_pref => value(pa, Local_pref) { |a| a.to_i },
           :med        => value(pa, Multi_exit_disc) { |a| a.to_i } }.merge(communities(pa))
+                                                                      .merge(reflection(pa))
+      end
+
+      # The two attributes of RFC 4456 section 8, on every path row of
+      # every view, as the three community keys are. ORIGINATOR_ID is nil
+      # when the path carries none and CLUSTER_LIST an empty list, which
+      # is what a route that was never reflected has. In the Adj-RIB-Out
+      # these are what the peer was sent, so a reflector's own additions
+      # show there and not in the Loc-RIB.
+      def reflection(pa)
+        { :originator_id => value(pa, Originator_id) { |a| a.originator_id },
+          :cluster_list  => value(pa, Cluster_list) { |a| a.cluster_ids } || [] }
       end
 
       # The three community attributes of a path, each a list, empty when
@@ -523,6 +535,7 @@ module BGP
           :med        => route.med,
           :path_id    => route.path_id,
           :local      => route.local? }.merge(communities(route.path_attribute))
+                                       .merge(reflection(route.path_attribute))
       end
 
       # One path in the rib view. lost_at is nil for the best one, and
