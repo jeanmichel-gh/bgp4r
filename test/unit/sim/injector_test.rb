@@ -126,6 +126,14 @@ class BGP_Sim_Injector_Test < Test::Unit::TestCase
     assert_match(/router_id/, e.message)
   end
 
+  # The injector builds its sessions through the daemon's Peer, so a
+  # neighbor typo is refused here too, before any session starts.
+  def test_an_unknown_neighbor_key_is_refused
+    neighbors = CONFIG['neighbors'].map { |n| n.merge('hold_tme' => 30) }
+    e = assert_raise(ArgumentError) { BGP::Sim::Injector.new(CONFIG.merge('neighbors' => neighbors)) }
+    assert_match(/unknown key\(s\) hold_tme/, e.message)
+  end
+
   def test_a_configuration_that_is_not_a_mapping_is_refused
     assert_raise(BGP::Sim::Injector::Refused) { BGP::Sim::Injector.new([]) }
   end

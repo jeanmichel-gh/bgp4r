@@ -272,12 +272,17 @@ mark:                              # added to routes made by hand; see route.ori
   large_communities: ['65000:1:1']
 ```
 
-Four notes on it.
+Five notes on it.
 
 `capabilities` takes `add_path` as `(send_recv, afi, safi)`, matching
 `CAP::Add_path#add`, so `[3, 1, 1]` is IPv4 unicast both ways. Three
 comments in the repository gave `[1, 1, 3]` while meaning that, which is
 SAFI 3, NSAP, receive only.
+
+A neighbor block takes only the keys it is read for, listed in
+`Peer::KEYS`, and any other key is refused at start-up and in a commit,
+naming it. A typo used to be ignored, so `hold_tme: 30` ran the session
+with the default hold time and said nothing.
 
 `cluster_id` and `default_local_pref` are written under `export` and
 read by the decision process too. The first is the ID a reflector

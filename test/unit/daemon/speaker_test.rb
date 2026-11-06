@@ -327,6 +327,55 @@ class BGP_Daemon_Speaker_Test < Test::Unit::TestCase
     assert_equal(:cluster_list_loop, s.rib.decision.ineligible_reason(route))
   end
 
+  # A neighbor key nothing reads used to be ignored, so a typo ran the
+  # session with the default and said nothing. It is refused now, naming
+  # the key and every key there is.
+  def test_an_unknown_neighbor_key_is_refused_and_names_the_ones_there_are
+    e = assert_raise(ArgumentError) do
+      speaker('neighbors' => [{ 'address' => '10.0.0.2', 'as' => 65_001, 'hold_tme' => 30 }])
+    end
+    assert_match(/neighbor 10\.0\.0\.2/, e.message)
+    assert_match(/unknown key\(s\) hold_tme/, e.message)
+    BGP::Daemon::Peer::KEYS.each { |k| assert_match(/\b#{k}\b/, e.message) }
+  end
+
+  def test_every_listed_key_is_accepted
+    config = { 'address' => '10.0.0.2', 'as' => 65_001, 'capabilities' => [],
+               'connect' => false, 'description' => 'd', 'hold_time' => 30,
+               'open_timeout' => 5, 'port' => 179, 'record' => 'routes', 'retry' => 2 }
+    assert_equal(BGP::Daemon::Peer::KEYS.sort, config.keys.sort, 'the case covers every key')
+    assert_nothing_raised { speaker('neighbors' => [config]) }
+  end
+
+  # A commit reaches a running Peer through reconfigure, so the same
+  # refusal has to be there too.
+  def test_reconfigure_refuses_an_unknown_key
+    peer = speaker.peers.first
+    e = assert_raise(ArgumentError) do
+      peer.reconfigure('address' => '10.0.0.2', 'as' => 65_001, 'conect' => true)
+    end
+    assert_match(/unknown key\(s\) conect/, e.message)
+    assert_equal(65_001, peer.remote_as, 'the running configuration is untouched')
+    assert_nil(peer.config['conect'])
+  end
+
+  # The list cannot drift from the code: every key the Peer class reads
+  # off its configuration is listed, and every listed key is read
+  # somewhere in the library. Read as text, because the reads are
+  # `@config['x']` and `config.fetch('x', ...)` spread over the class.
+  def test_every_key_a_peer_reads_is_listed
+    src = File.read(File.expand_path('../../../bgp/daemon/speaker.rb', __dir__))
+    body = src[/^    class Peer\b.*?^    end$/m]
+    assert_not_nil(body, 'found the Peer class')
+    read = body.scan(/\bconfig(?:\.fetch\(|\[)'([a-z_]+)'/).flatten.uniq
+    assert_operator(read.size, :>=, 8, 'the pattern finds the reads')
+    assert_equal([], read - BGP::Daemon::Peer::KEYS, 'read by Peer and not listed in KEYS')
+    lib = Dir[File.expand_path('../../../bgp/**/*.rb', __dir__)].map { |f| File.read(f) }.join
+    BGP::Daemon::Peer::KEYS.each do |k|
+      assert_match(/config(?:\.fetch\(|\[)'#{k}'/, lib, "#{k} is listed and nothing reads it")
+    end
+  end
+
   # With no cluster_id the default stays the router ID, on both sides.
   def test_with_no_cluster_id_both_sides_use_the_router_id
     s = speaker('router_id' => '1.1.1.1', 'export' => { 'route_reflector' => true })

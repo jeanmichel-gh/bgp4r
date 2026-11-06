@@ -278,6 +278,27 @@ module BGP
     # One configured neighbor: its settings, its current session, its record.
     class Peer
 
+      # The keys a neighbor block is read for, and the only ones it takes.
+      #
+      # **A key nothing reads is refused rather than ignored**, which is
+      # `export_options`' rule one level down: a typo in a node file that
+      # silently drops a setting is the worst of both. A neighbor written
+      # `hold_tme: 30` used to run with the default hold time and say
+      # nothing. `test_every_key_a_peer_reads_is_listed` holds this list
+      # to the code, so a key read here and not listed fails the suite.
+      KEYS = %w[address as capabilities connect description hold_time
+                open_timeout port record retry].freeze
+
+      # Raises ArgumentError naming every key `config` carries that no
+      # code reads, and the keys there are.
+      def self.check_keys(config)
+        unknown = config.keys.map(&:to_s) - KEYS
+        return config if unknown.empty?
+        raise ArgumentError,
+              "neighbor #{config['address']}: unknown key(s) #{unknown.join(', ')}: " \
+              "a neighbor takes #{KEYS.join(', ')}"
+      end
+
       attr_reader :address, :recorder, :config
 
       # The BGP::Neighbor running the current session, or nil before the
@@ -300,7 +321,7 @@ module BGP
       # that said otherwise was cut off by a `head`.
       attr_reader :neighbor
       def initialize(speaker, config)
-        @speaker, @config = speaker, config
+        @speaker, @config = speaker, Peer.check_keys(config)
         @address = config.fetch('address')
         @recorder = Recorder.new(config.fetch('record', 'routes'))
         @neighbor = nil
@@ -333,7 +354,7 @@ module BGP
           raise ArgumentError,
                 "a peer is named by its address: #{@address} cannot become #{config['address']}"
         end
-        @config = config
+        @config = Peer.check_keys(config)
         self
       end
 
