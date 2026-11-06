@@ -71,7 +71,7 @@ module BGP
       # would have to invent a syntax for, and this file is a string
       # match against a short list and not a parser.
       COMMANDS = ['show bgp summary', 'show bgp', 'show bgp PREFIX',
-                  'show configuration', 'show configuration candidate',
+                  'show fib', 'show configuration', 'show configuration candidate',
                   'clear bgp PEER'].freeze
 
       STYLES = %w[ios junos iosxr].freeze
@@ -216,6 +216,7 @@ TEXT
         when 'show bgp summary' then @out.print summary(client)
         when 'show bgp' then @out.print routes(client, opts[:style], nil)
         when /\Ashow bgp (\S+)\z/ then @out.print routes(client, opts[:style], $1)
+        when 'show fib' then @out.print fib(client)
         when 'show configuration' then @out.print configuration(client, false)
         when 'show configuration candidate' then @out.print configuration(client, true)
         when /\Aclear bgp (\S+)\z/ then @out.print cleared(client, $1)
@@ -255,6 +256,40 @@ TEXT
                         p['address'], p['remote_as'], p['state'],
                         p['uptime'] ? "#{p['uptime']}s" : 'never',
                         p['received'] || 0, p['sent'] || 0, p['description'])
+        end
+        out
+      end
+
+      # `show fib`, what this daemon put in the kernel's forwarding table,
+      # and what it did not: a prefix it skipped with the reason, and a
+      # prefix the kernel refused with its error. The layout is this
+      # file's own, as the summary's is. Every page of `show.fib` is read,
+      # so a large table prints whole rather than its first page.
+      #
+      # It is bgp4rd's account and not the kernel's. `ip route show table
+      # N` is the other question, and the header names the table to ask.
+      def fib(client)
+        rows, offset, info = [], 0, {}
+        loop do
+          page = client.call('show.fib', 'offset' => offset)
+          info = page['fib'] || {}
+          rows.concat(Array(page['rows']))
+          offset = page['next_offset'] or break
+        end
+        return "No FIB: this daemon has no fib: block, so it installs nothing.\n" unless info['configured']
+        out = +''
+        out << format("FIB: %s, %d route(s) installed\n\n", info['backend'], rows.size)
+        out << format("%-20s %s\n", 'Prefix', 'Next hop')
+        rows.each { |r| out << format("%-20s %s\n", r['prefix'], r['next_hop']) }
+        skipped = Array(info['skipped'])
+        unless skipped.empty?
+          out << "\nNot installed:\n"
+          skipped.each { |r| out << format("%-20s %s\n", r['prefix'], r['reason']) }
+        end
+        failed = Array(info['failed'])
+        unless failed.empty?
+          out << "\nRefused by the kernel:\n"
+          failed.each { |r| out << format("%-20s %s\n", r['prefix'], r['error']) }
         end
         out
       end

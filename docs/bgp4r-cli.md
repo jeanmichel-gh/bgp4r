@@ -55,6 +55,7 @@ does.
 | `show bgp summary` | router ID, AS, and one line per neighbor: state, up time, prefixes received and sent |
 | `show bgp` | the Loc-RIB as a table, one line per route |
 | `show bgp PREFIX` | the same, for one prefix |
+| `show fib` | what the daemon installed in the kernel table, what it skipped and why, and what the kernel refused |
 | `show configuration` | the running configuration, as set lines |
 | `show configuration candidate` | the candidate configuration, as set lines |
 | `clear bgp PEER` | resets the session with PEER, an address |
@@ -196,12 +197,12 @@ lab, or the node.
 Two ways to look, which answer different questions:
 
 ```
-cli show.fib --pretty         what the daemon believes it installed, and what failed
+cli -c 'show fib'             what the daemon believes it installed, and what failed
 ip route show table 100       what the kernel holds
 ```
 
-`show.fib` with no `fib:` block answers `"configured": false` and no
-rows.
+`cli show.fib --pretty` is the same as JSON. With no `fib:` block it
+answers `"configured": false` and no rows, and `show fib` says so.
 
 **The kernel refuses a next hop it cannot reach directly.** A reflected
 route keeps its NEXT_HOP, so in rr-lab most routes `dual` learns name a
