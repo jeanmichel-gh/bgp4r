@@ -1,0 +1,52 @@
+# RFC 4456 section 6: a route from a non-client is reflected to clients
+# only. Non-clients are meant to be fully meshed, so a second non-client
+# already has it.
+#
+# inj-n is a non-client of rr1, and so is rr2. This lab leaves those two
+# unmeshed on purpose, so rr2 can only hear inj-n's route from rr1, and
+# rr1 must refuse. The absence at rr2 is the rule. rr1's show.adj_out
+# toward rr2 names it as non_client_to_non_client, which capture.sh
+# reads.
+#
+# A client prefix is sent too, and must reach rr2, so the absence is not
+# a dead session.
+#
+# NOT RUN: the lab is deployed by bgp4r's Capture job, but this scenario
+# has not been run, so nothing here is a measurement. Every expectation
+# is read out of the node files and the RFC sections they cite.
+name: A non-client route reaches clients and not the other non-client
+description: >-
+  inj-n announces 10.10.2.0/24. The clients must have it. rr2 must not,
+  while a client route sent alongside does reach rr2.
+capture: [rr1]
+timeout: 180
+
+steps:
+  - expect: { bgp_session: { node: rr1, peer: 10.100.2.1, state: established } }
+    within: 60
+  - expect: { bgp_session: { node: rr1, peer: 10.100.20.2, state: established } }
+    within: 60
+
+  - bgp: announce
+    node: inj-n
+    prefixes: [10.10.2.0/24]
+  - bgp: announce
+    node: inj-c
+    prefixes: [10.10.12.0/24]
+
+  - expect: { bgp_prefix: { node: c1, prefix: 10.10.2.0/24, next_hop: 10.100.2.1 } }
+    within: 20
+  - expect: { bgp_prefix: { node: c2, prefix: 10.10.2.0/24, next_hop: 10.100.2.1 } }
+    within: 20
+  - expect: { bgp_prefix: { node: c3, prefix: 10.10.2.0/24, next_hop: 10.100.2.1 } }
+    within: 20
+  - expect: { bgp_prefix: { node: dual, prefix: 10.10.2.0/24, next_hop: 10.100.2.1 } }
+    within: 20
+
+  - expect: { bgp_prefix: { node: rr2, prefix: 10.10.12.0/24, present: true } }
+    within: 20
+    name: rr2 hears from rr1, so the session is not the reason
+  - expect: { bgp_drained: { node: rr1 } }
+    within: 30
+  - expect: { bgp_prefix: { node: rr2, prefix: 10.10.2.0/24, present: false } }
+    name: no non-client to non-client

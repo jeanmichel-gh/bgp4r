@@ -1,0 +1,58 @@
+# A withdrawal is reflected the way the route was. inj-c withdraws a
+# client route and it must leave every client and rr2, while a second
+# prefix stays, so it is a withdrawal and not a reset.
+#
+# dual held two copies, one from each reflector, and both have to go.
+#
+# NOT RUN: the lab is deployed by bgp4r's Capture job, but this scenario
+# has not been run, so nothing here is a measurement. Every expectation
+# is read out of the node files and the RFC sections they cite.
+name: A client withdrawal reaches every reader
+description: >-
+  inj-c announces 10.10.8.0/24 and 10.10.9.0/24, then withdraws the
+  first. It must leave c1, c2, c3, dual and rr2, and the second must
+  stay.
+capture: [rr1]
+timeout: 240
+
+steps:
+  - expect: { bgp_session: { node: rr1, peer: 10.100.1.1, state: established } }
+    within: 60
+  - bgp: announce
+    node: inj-c
+    prefixes: [10.10.9.0/24]
+  - bgp: announce
+    node: inj-c
+    prefixes: [10.10.8.0/24]
+  - expect: { bgp_prefix: { node: c2, prefix: 10.10.8.0/24, present: true } }
+    within: 20
+  - expect: { bgp_prefix: { node: dual, prefix: 10.10.8.0/24, present: true } }
+    within: 20
+  - expect: { bgp_prefix: { node: rr2, prefix: 10.10.8.0/24, present: true } }
+    within: 20
+
+  - mark: withdrawing 10.10.8.0/24 at inj-c
+  - bgp: withdraw
+    node: inj-c
+    prefixes: [10.10.8.0/24]
+
+  - expect: { bgp_prefix: { node: rr1, prefix: 10.10.8.0/24, present: false } }
+    within: 15
+    measure: withdraw_at_rr1
+  - expect: { bgp_prefix: { node: c1, prefix: 10.10.8.0/24, present: false } }
+    within: 20
+  - expect: { bgp_prefix: { node: c2, prefix: 10.10.8.0/24, present: false } }
+    within: 20
+  - expect: { bgp_prefix: { node: c3, prefix: 10.10.8.0/24, present: false } }
+    within: 20
+  - expect: { bgp_prefix: { node: rr2, prefix: 10.10.8.0/24, present: false } }
+    within: 20
+  - expect: { bgp_prefix: { node: dual, prefix: 10.10.8.0/24, present: false } }
+    within: 25
+    measure: withdraw_to_dual
+    name: both of dual's copies are gone
+
+  - expect: { bgp_prefix: { node: c2, prefix: 10.10.9.0/24, present: true } }
+    name: the prefix we did not name is still there
+  - expect: { bgp_session: { node: rr1, peer: 10.100.1.1, state: established } }
+    name: and the session never went down

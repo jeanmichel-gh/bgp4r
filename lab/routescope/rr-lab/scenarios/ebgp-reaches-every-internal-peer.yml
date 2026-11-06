@@ -1,0 +1,55 @@
+# A route from an external peer is not reflection. rr1 sends it to every
+# internal peer, clients and non-clients alike, and adds no ORIGINATOR_ID
+# and no CLUSTER_LIST. RFC 4456 section 6 covers routes from internal
+# peers only; its Appendix B records that the EBGP case was removed.
+#
+# rr1 leaves NEXT_HOP alone toward an internal peer (RFC 4271 section
+# 5.1.3), so every reader sees inj-e's address, and the AS_PATH is inj-e's
+# own AS once.
+#
+# dual hears it twice: from rr1, and from rr2, which reflects it to its
+# client with rr1's BGP Identifier as ORIGINATOR_ID and CLUSTER_LIST
+# 2.2.2.2. The router ID step ties, because RFC 4456 section 9 compares
+# the ORIGINATOR_ID, and the shorter CLUSTER_LIST wins: rr1's copy, with
+# none.
+#
+# NOT RUN: the lab is deployed by bgp4r's Capture job, but this scenario
+# has not been run, so nothing here is a measurement. Every expectation
+# is read out of the node files and the RFC sections they cite.
+name: An external route reaches every internal peer, unreflected
+description: >-
+  inj-e in AS 65200 announces 10.20.3.0/24. Every client and rr2 must
+  have it with AS_PATH 65200 and inj-e's address as the next hop.
+capture: [rr1]
+timeout: 180
+
+steps:
+  - expect: { bgp_session: { node: rr1, peer: 10.100.3.1, state: established } }
+    within: 60
+  - expect: { bgp_prefix: { node: rr2, prefix: 10.20.3.0/24, present: false } }
+    name: nothing injected yet
+
+  - bgp: announce
+    node: inj-e
+    prefixes: [10.20.3.0/24]
+
+  - expect: { bgp_prefix: { node: rr1, prefix: 10.20.3.0/24,
+                            as_path: '65200', next_hop: 10.100.3.1 } }
+    within: 15
+  - expect: { bgp_prefix: { node: c1, prefix: 10.20.3.0/24,
+                            as_path: '65200', next_hop: 10.100.3.1, local_pref: 100 } }
+    within: 20
+  - expect: { bgp_prefix: { node: c2, prefix: 10.20.3.0/24,
+                            as_path: '65200', next_hop: 10.100.3.1 } }
+    within: 20
+  - expect: { bgp_prefix: { node: c3, prefix: 10.20.3.0/24,
+                            as_path: '65200', next_hop: 10.100.3.1 } }
+    within: 20
+  - expect: { bgp_prefix: { node: rr2, prefix: 10.20.3.0/24,
+                            as_path: '65200', next_hop: 10.100.3.1 } }
+    within: 20
+    name: a non-client has it too, which reflection alone would not give
+  - expect: { bgp_prefix: { node: dual, prefix: 10.20.3.0/24, next_hop: 10.100.3.1 } }
+    within: 25
+  - expect: { bgp_best: { node: dual, prefix: 10.20.3.0/24, reason: cluster_list_length } }
+    name: rr1's copy wins over rr2's on CLUSTER_LIST length

@@ -158,7 +158,8 @@ module LabGroups
     # topology, and is here for the same reason: it parses that folder and
     # loads each node file through the program that reads it, with no
     # Docker daemon, no router binary and no socket. Hundredths of a
-    # second.
+    # second. rr_lab_topology_test is the same again for lab/routescope/
+    # rr-lab, the route reflection lab.
     'local' => %w[
       add_path_topology_test
       bgp4r_lab_topology_test
@@ -166,6 +167,7 @@ module LabGroups
       generate_test
       log_level_test
       routegen_loopback_test
+      rr_lab_topology_test
       speaker_router_test
       speaker_test
     ],

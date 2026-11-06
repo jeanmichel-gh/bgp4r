@@ -1,0 +1,52 @@
+# RFC 4456 section 9, and a second implementation reflecting into bgp4r.
+#
+# dual is a client of both reflectors. A route from inj-c reaches it
+# from rr1 with CLUSTER_LIST 1.1.1.1, and through rr2, FRR, with
+# CLUSTER_LIST 2.2.2.2 1.1.1.1. Everything before the router ID step is
+# equal: LOCAL_PREF 100, the same empty AS_PATH, ORIGIN and MED, both
+# iBGP, no IGP cost.
+#
+# The router ID step ties, because section 9 says the ORIGINATOR_ID is
+# compared in place of the BGP Identifier, and both copies carry inj-c's.
+# So the step that decides is cluster_list_length, and rr1's copy wins.
+#
+# rr2's router ID, 10.100.255.1, is lower than rr1's, 10.100.255.2. A
+# decision without the ORIGINATOR_ID rule would pick rr2's copy at the
+# router ID step. So the step name tells the two apart.
+#
+# Both copies have one next hop, so bgp_prefix cannot say which won.
+# show.rib on dual lists both paths with their CLUSTER_LISTs, which
+# capture.sh reads.
+#
+# NOT RUN: the lab is deployed by bgp4r's Capture job, but this scenario
+# has not been run, so nothing here is a measurement. Every expectation
+# is read out of the node files and the RFC sections they cite.
+name: The shorter CLUSTER_LIST wins, after the ORIGINATOR_ID ties
+description: >-
+  inj-c announces 10.10.4.0/24. dual hears it from rr1 and through rr2
+  and must choose rr1's copy, decided by cluster_list_length.
+capture: [dual]
+timeout: 180
+
+steps:
+  - expect: { bgp_session: { node: dual, peer: 10.100.14.1, state: established } }
+    within: 60
+  - expect: { bgp_session: { node: dual, peer: 10.100.21.1, state: established } }
+    within: 60
+  - expect: { bgp_session: { node: rr1, peer: 10.100.1.1, state: established } }
+    within: 60
+
+  - bgp: announce
+    node: inj-c
+    prefixes: [10.10.4.0/24]
+
+  - expect: { bgp_prefix: { node: rr2, prefix: 10.10.4.0/24, next_hop: 10.100.1.1 } }
+    within: 20
+    name: rr2 has it from rr1, so it can reflect it to dual
+  - expect: { bgp_drained: {} }
+    within: 30
+    measure: drained
+  - expect: { bgp_prefix: { node: dual, prefix: 10.10.4.0/24,
+                            next_hop: 10.100.1.1, local_pref: 100 } }
+  - expect: { bgp_best: { node: dual, prefix: 10.10.4.0/24, reason: cluster_list_length } }
+    name: decided by CLUSTER_LIST length, not by router ID

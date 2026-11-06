@@ -1,0 +1,100 @@
+# rr1, a bgp4rd in AS 65100: the route reflector under test, in cluster
+# 1.1.1.1.
+#
+# `route_reflector_client: true` on a neighbor makes it a client and
+# turns reflection on by itself, as IOS's `neighbor X
+# route-reflector-client` does. A neighbor without it is a non-client.
+# RFC 4456 section 6 is the matrix:
+#   - a client's route goes to every client and every non-client;
+#   - a non-client's route goes to clients only;
+#   - an external peer's route goes to every internal peer, unreflected.
+#
+# The cluster ID is not the router ID, so a CLUSTER_LIST read at a
+# client says which of the two rr1 put there.
+#
+# rr1 dials its router peers, and FRR, BIRD and GoBGP dial back; one
+# side wins. The injectors dial rr1.
+#
+# No `local_address`: rr1 has eight links and a next hop toward the one
+# external peer is per session, so it comes from the socket.
+router_id: 10.100.255.2
+as: 65100
+log_level: info
+
+neighbors:
+  - address: 10.100.1.1
+    as: 65100
+    description: inj-c
+    route_reflector_client: true
+    hold_time: 30
+    capabilities: [as4_byte, route_refresh]
+    record: routes
+
+  - address: 10.100.2.1
+    as: 65100
+    description: inj-n, a non-client
+    hold_time: 30
+    capabilities: [as4_byte, route_refresh]
+    record: routes
+
+  - address: 10.100.3.1
+    as: 65200
+    description: inj-e, external
+    hold_time: 30
+    capabilities: [as4_byte, route_refresh]
+    record: routes
+
+  - address: 10.100.11.2
+    as: 65100
+    connect: true
+    description: c1, FRR
+    route_reflector_client: true
+    hold_time: 30
+    capabilities: [as4_byte, route_refresh]
+    record: routes
+
+  - address: 10.100.12.2
+    as: 65100
+    connect: true
+    description: c2, BIRD
+    route_reflector_client: true
+    hold_time: 30
+    # **mbgp_ipv4_unicast, or BIRD refuses the OPEN.** BIRD 2 treats IPv4
+    # unicast as negotiated without the capability only when the peer
+    # sends no capabilities at all. With As4 and Route Refresh and no
+    # Multiprotocol, it has no channel to run and answers 2/7, "Required
+    # capability missing". Measured on the first deploy, 2026-11-06.
+    capabilities: [as4_byte, route_refresh, mbgp_ipv4_unicast]
+    record: routes
+
+  - address: 10.100.13.2
+    as: 65100
+    connect: true
+    description: c3, GoBGP
+    route_reflector_client: true
+    hold_time: 30
+    capabilities: [as4_byte, route_refresh]
+    record: routes
+
+  - address: 10.100.14.2
+    as: 65100
+    connect: true
+    description: dual, a client of both reflectors
+    route_reflector_client: true
+    hold_time: 30
+    capabilities: [as4_byte, route_refresh]
+    record: routes
+
+  - address: 10.100.20.2
+    as: 65100
+    connect: true
+    description: rr2, the other cluster's reflector, a non-client
+    hold_time: 30
+    capabilities: [as4_byte, route_refresh]
+    record: routes
+
+# The flags above turn reflection on; this sets the cluster ID it uses
+# on the wire and in the loop check. No `next_hops`: a reflected route
+# keeps its NEXT_HOP, and the one external session takes rr1's own.
+export:
+  cluster_id: 1.1.1.1

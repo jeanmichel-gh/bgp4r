@@ -6,8 +6,9 @@ name: Capture
 # routescope's BGP driver commands, to the job log. Runs on demand, and on
 # a push that changes the lab or this file.
 #
-# It is also the one place bgp4r-lab is deployed at all, so a lab that
-# does not come up fails here first.
+# It is also the one place bgp4r-lab and rr-lab are deployed at all, so a
+# lab that does not come up fails here first. One job per lab, each on
+# its own runner.
 on:
   workflow_dispatch:
   push:
@@ -37,3 +38,29 @@ jobs:
         if: failure()
         run: |
           for n in inj1 inj2 rtr r1 r2 r3 g1; do echo "--- $n"; docker logs --tail 60 clab-bgp4r-lab-$n 2>&1 || true; done
+
+  # rr-lab, route reflection: bgp4rd reflecting to FRR, BIRD, GoBGP and
+  # a second bgp4rd, with an FRR reflector of a second cluster. Its
+  # capture.sh also checks the RFC 4456 attributes each implementation
+  # read, which no scenario can assert, and fails the job when one is
+  # wrong.
+  rr-lab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: containerlab and images
+        run: |
+          bash -c "$(curl -sL https://get.containerlab.dev)"
+          docker pull -q quay.io/frrouting/frr:10.2.1
+          docker build -q --target lab-node -t bgp4r-lab:latest .
+          docker build -q -f lab/routescope/rr-lab/Dockerfile.bird -t bgp4r-bird:latest lab/routescope/rr-lab
+          docker build -q -f lab/routescope/rr-lab/Dockerfile.gobgp -t bgp4r-gobgp:latest lab/routescope/rr-lab
+      - name: rr-lab up
+        run: sudo containerlab deploy -t lab/routescope/rr-lab/rr-lab.clab.yml
+      - name: capture
+        run: bash lab/routescope/rr-lab/capture.sh
+      - name: logs on failure
+        if: failure()
+        run: |
+          for n in inj-c inj-n inj-e rr1 rr2 c1 c2 c3 dual; do echo "--- $n"; docker logs --tail 60 clab-rr-lab-$n 2>&1 || true; done

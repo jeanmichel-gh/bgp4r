@@ -955,6 +955,17 @@ lab/                     speakers in containers: lab/speaker.rb and lab/topologi
                          that this suite drives; `bgp4r lab new` reads
                          both (CLI::ROOTS), and routescope's CI deploys
                          from here
+                         lab/routescope/rr-lab is route reflection, RFC
+                         4456: nine nodes, a `bgp4rd` reflector `rr1`
+                         whose clients are an FRR, a BIRD, a GoBGP, a
+                         second `bgp4rd` and an injector, a non-client
+                         injector, an external one, and `rr2`, an FRR
+                         reflector of a second cluster. `dual` is a
+                         client of both, so it sees one route twice and
+                         says the step was `cluster_list_length`. Its
+                         README has a table of each RFC 4456 rule, its
+                         scenario and what `capture.sh` checks. CI
+                         deploys it; see "routescope labs"
                          lab/speaker.rb is the **command line** now and nothing
                          else: the sessions, the configuration and the recording
                          moved into bgp/daemon/speaker.rb, because `bgp4rd`
@@ -1112,6 +1123,12 @@ test/functional/lab/     lab tests: loopback speaker test and one Compose test p
                          lab/topologies/add-path to its own README with no Docker,
                          no router and no socket, which is all the cover those files
                          have until the Compose form can be run;
+                         rr_lab_topology_test.rb is the same shape for
+                         lab/routescope/rr-lab, and also decodes the two
+                         looped UPDATEs its scenarios replay and runs
+                         them through `rr1`'s own table. Both tests read
+                         routescope's vocabulary from
+                         routescope_vocabulary.rb, one copy for the two;
                          bgp4r_lab_topology_test.rb is the same shape for
                          lab/routescope/bgp4r-lab and loads each of its
                          three node files through the program that reads
@@ -1401,6 +1418,13 @@ scenarios to routescope's own vocabulary. Hundredths of a second:
 ruby -I. test/functional/lab/bgp4r_lab_topology_test.rb
 ```
 
+The same for `lab/routescope/rr-lab`, the route reflection lab. It also
+decodes the two looped UPDATEs the scenarios replay and checks that
+`rr1`'s own table drops them. Hundredths of a second:
+```
+ruby -I. test/functional/lab/rr_lab_topology_test.rb
+```
+
 `lab/speaker.rb` as a router, from node files. Three speakers on
 loopback as processes, so a route crosses the middle one and comes out
 with the export rules applied, plus the node file keys read in process
@@ -1676,9 +1700,9 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. The `lab` job is a matrix, one job per group in `test/lab_groups.rb`, so its cost is the slowest group and not the total: it was 12m42s as one serial suite. Each job installs only what its group needs, which is why the matrix entry carries a `gobgp`, `frr`, `docker` or `netns` flag. The `gobgp` groups pin 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-`.github/workflows/capture.yml` is the one workflow that deploys a containerlab lab: it builds the `lab-node` and BIRD images, deploys `lab/routescope/bgp4r-lab`, and runs its `capture.sh`, on demand and on a push that changes that folder or the Dockerfile. Its log is what routescope's BGP fixtures are cut from.
+`.github/workflows/capture.yml` is the one workflow that deploys a containerlab lab: it builds the `lab-node`, BIRD and GoBGP images, deploys `lab/routescope/bgp4r-lab` and `lab/routescope/rr-lab` in a job each, and runs each one's `capture.sh`, on demand and on a push that changes `lab/routescope/` or the Dockerfile. Its log is what routescope's BGP fixtures are cut from. **rr-lab's `capture.sh` also checks**: it prints one `CHECK ok` or `CHECK FAIL` line per RFC 4456 fact and fails the job when one fails, because the scenario language has no key for ORIGINATOR_ID or CLUSTER_LIST.
 
-Baseline on 2026-11-05: 3755 tests, 36969 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
+Baseline on 2026-11-06: 3755 tests, 36979 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
 
 **That coverage figure is 98.5% for the library and the rest is the two
 programs, not a gap anywhere else.** Measured the same run: with
@@ -8196,6 +8220,26 @@ reflector", what it shows about itself, and a lab that runs one.
      in the node file, `cluster_id` not passed to the decision process,
      the non-client to non-client refusal removed, and the cluster
      loop check removed.
+   * **And a containerlab lab for routescope, `lab/routescope/rr-lab`.**
+     Nine nodes, four implementations, eight scenarios, one per RFC
+     4456 rule. CI deploys it and its `capture.sh` checks what the
+     scenarios cannot: the first green run, 2026-11-06, had FRR 10.2.1,
+     BIRD 2.0.12 and GoBGP 4.10.0 read bgp4r's ORIGINATOR_ID and
+     CLUSTER_LIST alike, and `dual`, a bgp4rd client of `rr1` and of an
+     FRR reflector in a second cluster, read FRR's CLUSTER_LIST 2.2.2.2
+     1.1.1.1 and chose on `cluster_list_length`. All 20 checks passed.
+   * **The first deploy failed on BIRD**: BIRD 2 counts IPv4 unicast as
+     negotiated without the Multiprotocol capability only when the
+     peer sends no capabilities at all, so an OPEN with As4 and no
+     Multiprotocol got 2/7. `rr1` offers `mbgp_ipv4_unicast` to it now.
+     Worth knowing before pointing any bgp4r node at BIRD.
+   * The loops are replayed as octets, since no announce key sets a
+     CLUSTER_LIST. `rr_lab_topology_test.rb` decodes both and runs
+     them through `rr1`'s table built from its node file.
+   * **The scenario language has no key for either attribute**, read at
+     routescope 7eabde1. `originator_id` and `cluster_list` on
+     `bgp_prefix` would let the scenarios assert what `capture.sh`
+     checks; that is routescope's column.
 6. **`client_to_client: false`, only if asked for.** IOS's `no bgp
    client-to-client reflection`, for clients already fully meshed. RFC
    4456 section 6 allows it. Not started until somebody needs it.

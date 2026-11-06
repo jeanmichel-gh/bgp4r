@@ -307,7 +307,7 @@ module Features
                    rib/mrai_test rib/router_test],
       :functional => %w[rib_router_test],
       :lab   => %w[rib_router_gobgp_test rib_router_frr_test speaker_router_test
-                   reflector_test],
+                   reflector_test rr_lab_topology_test],
     },
 
     'fib' => {
@@ -415,7 +415,7 @@ module Features
       :doc   => 'docs/routescope-labs.md',
       :unit  => %w[lab_helper_test],
       :lab   => %w[speaker_test two_speakers_test add_path_topology_test
-                   bgp4r_lab_topology_test],
+                   bgp4r_lab_topology_test rr_lab_topology_test],
     },
 
     'events' => {

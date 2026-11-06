@@ -1,0 +1,45 @@
+# RFC 4456 section 8: a router ignores a route whose ORIGINATOR_ID is its
+# own BGP Identifier.
+#
+# inj-c replays an UPDATE for 10.10.7.0/24 with ORIGINATOR_ID
+# 10.100.255.2, which is rr1's router ID. The hex was built with the
+# library, and rr_lab_topology_test.rb decodes it and checks that.
+#
+# A loop is not a malformed attribute, so the session stays up. rr1
+# keeps the route in its Adj-RIB-In and out of its Loc-RIB.
+#
+# NOT RUN: the lab is deployed by bgp4r's Capture job, but this scenario
+# has not been run, so nothing here is a measurement. Every expectation
+# is read out of the node files and the RFC sections they cite.
+name: A route carrying rr1's own ORIGINATOR_ID is dropped
+description: >-
+  inj-c sends 10.10.15.0/24 clean, then replays an UPDATE for
+  10.10.7.0/24 whose ORIGINATOR_ID is rr1's router ID. rr1 must hold the
+  first and not the second, and keep the session.
+capture: [rr1]
+timeout: 180
+
+steps:
+  - expect: { bgp_session: { node: rr1, peer: 10.100.1.1, state: established } }
+    within: 60
+  - bgp: announce
+    node: inj-c
+    prefixes: [10.10.15.0/24]
+  - expect: { bgp_prefix: { node: c3, prefix: 10.10.15.0/24, present: true } }
+    within: 20
+
+  - mark: replaying an UPDATE with ORIGINATOR_ID 10.100.255.2
+  - bgp: replay
+    node: inj-c
+    hex: ffffffffffffffffffffffffffffffff0037020000001c400101004002004003040a640101400504000000648009040a64ff02180a0a07
+
+  - expect: { bgp_drained: { node: rr1 } }
+    within: 30
+  - expect: { bgp_prefix: { node: rr1, prefix: 10.10.7.0/24, present: false } }
+    name: not in rr1's Loc-RIB
+  - expect: { bgp_prefix: { node: c1, prefix: 10.10.7.0/24, present: false } }
+  - expect: { bgp_prefix: { node: c3, prefix: 10.10.7.0/24, present: false } }
+  - expect: { bgp_prefix: { node: c3, prefix: 10.10.15.0/24, present: true } }
+    name: the clean prefix is still there
+  - expect: { bgp_session: { node: rr1, peer: 10.100.1.1, state: established } }
+    name: and the session never went down

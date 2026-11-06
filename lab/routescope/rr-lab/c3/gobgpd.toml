@@ -1,0 +1,28 @@
+# c3: GoBGP in AS 65100, a client of rr1. It receives and originates
+# nothing, so its RIB is what rr1 reflected.
+#
+# No `local-address-list`: containerlab adds 10.100.13.2 after gobgpd
+# starts, and a listener bound to it then would kill the deploy. See
+# bgp4r-lab's g1/gobgpd.toml. The neighbour's `local-address` is a dial,
+# which retries, so it is fine.
+#
+# GoBGP without a zebra treats every next hop as reachable, so it needs
+# no static route.
+[global.config]
+  as = 65100
+  router-id = "10.100.255.23"
+
+[[neighbors]]
+  [neighbors.config]
+    neighbor-address = "10.100.13.1"
+    peer-as = 65100
+    description = "rr1"
+  [neighbors.transport.config]
+    local-address = "10.100.13.2"
+  [neighbors.timers.config]
+    hold-time = 30
+    connect-retry = 2
+    idle-hold-time-after-reset = 0
+  [[neighbors.afi-safis]]
+    [neighbors.afi-safis.config]
+      afi-safi-name = "ipv4-unicast"

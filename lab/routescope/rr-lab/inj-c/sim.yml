@@ -1,0 +1,24 @@
+# inj-c, a bgp4r-sim in AS 65100 and a client of rr1. It makes the
+# routes rr1 reflects as client routes.
+#
+# No `announce` block: an injector starts silent, so the scenarios put
+# every route on the wire. The four router keys, `rib`, `originate`,
+# `export` and `fib`, are refused here; an injector holds no Loc-RIB.
+#
+# Over iBGP the injector sends its own address as NEXT_HOP and a
+# LOCAL_PREF of 100, and an empty AS_PATH. Reflection changes none of
+# the three, so a client of rr1 sees 10.100.1.1 as the next hop.
+router_id: 10.100.255.11
+as: 65100
+api: 127.0.0.1:8080
+log_level: info
+
+local_address: 10.100.1.1
+
+neighbors:
+  - address: 10.100.1.2
+    as: 65100
+    connect: true            # the injector dials
+    hold_time: 30
+    description: rr1
+    capabilities: [as4_byte, route_refresh]
