@@ -204,6 +204,12 @@ module BGP
                 "#{router.join(', ')}: an injector holds no Loc-RIB, so it has no " \
                 "table to decide with. Those keys are bgp4rd's; see docs/daemon.md."
         end
+        clients = Array(config['neighbors']).select { |n| n.is_a?(Hash) && n.key?('route_reflector_client') }
+        unless clients.empty?
+          raise Refused,
+                "neighbor #{clients.map { |n| n['address'] }.join(', ')}: route_reflector_client: " \
+                "an injector reflects nothing, since it holds no Loc-RIB. That key is bgp4rd's."
+        end
         unknown = config.keys - CONFIG_KEYS
         unless unknown.empty?
           raise Refused,

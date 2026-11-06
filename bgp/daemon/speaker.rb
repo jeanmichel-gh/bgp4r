@@ -287,7 +287,7 @@ module BGP
       # nothing. `test_every_key_a_peer_reads_is_listed` holds this list
       # to the code, so a key read here and not listed fails the suite.
       KEYS = %w[address as capabilities connect description hold_time
-                open_timeout port record retry].freeze
+                open_timeout port record retry route_reflector_client].freeze
 
       # Raises ArgumentError naming every key `config` carries that no
       # code reads, and the keys there are.
@@ -363,6 +363,11 @@ module BGP
       # Nothing in the protocol carries it.
       def description ; @config['description'] ; end
       def ebgp? ; remote_as != @speaker.my_as ; end
+      # RFC 4456 section 6: a client of this reflector. IOS's
+      # `neighbor X route-reflector-client`. The Speaker turns the flags
+      # into Export's client list and refuses what cannot be one; see
+      # Speaker#check_reflector_clients.
+      def route_reflector_client? ; @config['route_reflector_client'] == true ; end
       def active? ; @config.fetch('connect', false) ; end
       def state ; @neighbor ? @neighbor.state : 'Idle' ; end
       def established? ; @neighbor && @neighbor.is_established? ; end
@@ -722,6 +727,7 @@ module BGP
         @originate = Array(config['originate'])
         @export = config['export']
         @fib = config['fib']
+        check_reflector_clients
         # One table, shared by every session, which is what makes this a
         # router: a Rib::Table with two Neighbors attached decides what both
         # sent and advertises the winner to both. Built here rather than in
@@ -830,7 +836,7 @@ module BGP
       # a speaker watching its peers rather than routing between them; the
       # other three keys each need one, so each implies it.
       def rib?
-        @config.fetch('rib', false) || !@originate.empty? || !@export.nil? || !@fib.nil?
+        @config.fetch('rib', false) || !@originate.empty? || advertise? || !@fib.nil?
       end
 
       # The tables, the listening socket and the sessions, and nothing
@@ -873,7 +879,7 @@ module BGP
       # finds the table ready and gets the whole Loc-RIB.
       def start_rib
         return unless @rib
-        @router = @rib.advertise(**export_options) if @export
+        @router = @rib.advertise(**export_options) if advertise?
         # A prefix the daemon sends the normal way is no longer one only
         # sent by hand.
         @router&.on_sent { |peer, prefixes| @hand.sent(peer.address, prefixes) }
@@ -940,6 +946,56 @@ module BGP
         opts
       end
 
+      # True when this speaker advertises: an export block, or a neighbor
+      # flagged as a reflector client, which turns reflection on by itself
+      # as IOS's `route-reflector-client` does.
+      def advertise?
+        !@export.nil? || !reflector_clients.empty?
+      end
+
+      # The addresses of the neighbors flagged `route_reflector_client`.
+      def reflector_clients
+        @peers.select(&:route_reflector_client?).map(&:address)
+      end
+
+      # Refuses a `route_reflector_client` flag this speaker cannot act on.
+      # Four cases, each an input with two readings or none:
+      #
+      # * a value that is not true or false, since `'yes'` in quotes would
+      #   otherwise read as false and say nothing;
+      # * a flag on an external neighbor, because RFC 4456 section 6 makes
+      #   clients IBGP peers;
+      # * a flag beside `export.clients`, because the two lists can
+      #   disagree and `clients: []` already means the opposite of no key;
+      # * a flag beside `export.route_reflector: false`, which asks for
+      #   reflection to be off and on at once.
+      def check_reflector_clients
+        @peers.each do |p|
+          v = p.config['route_reflector_client']
+          next if v.nil? || v == true || v == false
+          raise ArgumentError,
+                "neighbor #{p.address}: route_reflector_client is true or false, not #{v.inspect}"
+        end
+        return if reflector_clients.empty?
+        ebgp = @peers.select { |p| p.route_reflector_client? && p.ebgp? }.map(&:address)
+        unless ebgp.empty?
+          raise ArgumentError,
+                "neighbor #{ebgp.join(', ')}: route_reflector_client on an external peer: " \
+                'a client is an internal peer, RFC 4456 section 6'
+        end
+        e = @export.is_a?(Hash) ? @export : {}
+        if e.key?('clients')
+          raise ArgumentError,
+                'export: clients and a neighbor route_reflector_client flag cannot both be given; ' \
+                'use one or the other'
+        end
+        if e['route_reflector'] == false
+          raise ArgumentError,
+                'export: route_reflector is false and a neighbor is a route_reflector_client; ' \
+                'a client flag turns reflection on'
+        end
+      end
+
       # The export: block as Rib::Router.new's options. A key no option
       # answers to raises rather than doing nothing quietly, which is what
       # add_capability does for a capability name: a typo in a node file
@@ -962,6 +1018,10 @@ module BGP
         # one on the wire when it says so.
         opts[:mrai] = e['mrai'].to_h { |k, v| [k.to_sym, v] } if e['mrai']
         policy = e.select { |k, _v| EXPORT_POLICY_KEYS.include?(k) }
+        unless reflector_clients.empty?
+          policy['route_reflector'] = true
+          policy['clients'] = reflector_clients
+        end
         unless policy.empty?
           opts[:export] = BGP::Rib::Export.new(:local_as => @my_as, :router_id => @router_id,
                                                **policy.to_h { |k, v| [k.to_sym, v] })

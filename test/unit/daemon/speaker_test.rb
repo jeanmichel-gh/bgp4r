@@ -342,7 +342,8 @@ class BGP_Daemon_Speaker_Test < Test::Unit::TestCase
   def test_every_listed_key_is_accepted
     config = { 'address' => '10.0.0.2', 'as' => 65_001, 'capabilities' => [],
                'connect' => false, 'description' => 'd', 'hold_time' => 30,
-               'open_timeout' => 5, 'port' => 179, 'record' => 'routes', 'retry' => 2 }
+               'open_timeout' => 5, 'port' => 179, 'record' => 'routes', 'retry' => 2,
+               'route_reflector_client' => false }
     assert_equal(BGP::Daemon::Peer::KEYS.sort, config.keys.sort, 'the case covers every key')
     assert_nothing_raised { speaker('neighbors' => [config]) }
   end
@@ -374,6 +375,93 @@ class BGP_Daemon_Speaker_Test < Test::Unit::TestCase
     BGP::Daemon::Peer::KEYS.each do |k|
       assert_match(/config(?:\.fetch\(|\[)'#{k}'/, lib, "#{k} is listed and nothing reads it")
     end
+  end
+
+  # ---- route_reflector_client ----
+
+  # Three internal neighbors, two of them flagged, and whatever export
+  # block a test adds.
+  def reflector(export = nil, flags = [true, true, nil])
+    neighbors = %w[10.0.0.2 10.0.0.3 10.0.0.4].zip(flags).map do |a, f|
+      n = { 'address' => a, 'as' => 65_000 }
+      n['route_reflector_client'] = f unless f.nil?
+      n
+    end
+    extra = { 'neighbors' => neighbors }
+    extra['export'] = export if export
+    speaker(extra)
+  end
+
+  # The flag is the client list and turns reflection on by itself, as
+  # IOS's `route-reflector-client` does. With no export block the
+  # speaker still builds a table and advertises.
+  def test_the_flags_are_the_client_list_and_turn_reflection_on
+    s = reflector
+    assert_not_nil(s.rib, 'a client flag implies a table')
+    s.start_rib
+    begin
+      assert_not_nil(s.router, 'a client flag starts a Router with no export block')
+    ensure
+      s.stop_rib
+    end
+    export = s.send(:export_options)[:export]
+    assert(export.route_reflector?)
+    assert_equal(%w[10.0.0.2 10.0.0.3], export.clients)
+  end
+
+  # The other export keys still reach Export beside the flags.
+  def test_the_flags_sit_beside_the_other_export_keys
+    export = reflector('cluster_id' => '9.9.9.9').send(:export_options)[:export]
+    assert_equal('9.9.9.9', export.cluster_id)
+    assert_equal(%w[10.0.0.2 10.0.0.3], export.clients)
+  end
+
+  # With no flag nothing changes: no export block is no Export at all.
+  def test_with_no_flag_nothing_reflects
+    s = reflector(nil, [nil, false, nil])
+    assert(!s.send(:advertise?))
+    assert_nil(s.send(:export_options)[:export])
+  end
+
+  # The flag decides RFC 4456 section 6's matrix: a route from the
+  # non-client goes to a client and not to the other non-client.
+  def test_the_flag_decides_who_gets_a_reflected_route
+    export = reflector(nil, [true, nil, nil]).send(:export_options)[:export]
+    peer = ->(a) { BGP::Rib::Peer.new(address: a, remote_as: 65_000, router_id: a, local_as: 65_000) }
+    assert(export.client?(peer['10.0.0.2']))
+    assert(!export.client?(peer['10.0.0.3']))
+  end
+
+  def test_a_flag_that_is_not_a_boolean_is_refused
+    e = assert_raise(ArgumentError) { reflector(nil, ['yes', nil, nil]) }
+    assert_match(/neighbor 10\.0\.0\.2: route_reflector_client is true or false, not "yes"/, e.message)
+  end
+
+  def test_a_flag_on_an_external_peer_is_refused
+    e = assert_raise(ArgumentError) do
+      speaker('neighbors' => [{ 'address' => '10.0.0.2', 'as' => 65_001, 'route_reflector_client' => true }])
+    end
+    assert_match(/neighbor 10\.0\.0\.2: route_reflector_client on an external peer/, e.message)
+  end
+
+  def test_a_flag_beside_export_clients_is_refused
+    e = assert_raise(ArgumentError) { reflector('clients' => ['10.0.0.2']) }
+    assert_match(/clients and a neighbor route_reflector_client flag cannot both be given/, e.message)
+  end
+
+  # An empty list too, since `clients: []` and no key mean opposite things.
+  def test_a_flag_beside_an_empty_export_clients_is_refused
+    assert_raise(ArgumentError) { reflector('clients' => []) }
+  end
+
+  def test_a_flag_beside_route_reflector_false_is_refused
+    e = assert_raise(ArgumentError) { reflector('route_reflector' => false) }
+    assert_match(/route_reflector is false and a neighbor is a route_reflector_client/, e.message)
+  end
+
+  # route_reflector: true beside the flags says the same thing twice.
+  def test_a_flag_beside_route_reflector_true_is_accepted
+    assert(reflector('route_reflector' => true).send(:export_options)[:export].route_reflector?)
   end
 
   # With no cluster_id the default stays the router ID, on both sides.

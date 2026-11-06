@@ -134,6 +134,13 @@ class BGP_Sim_Injector_Test < Test::Unit::TestCase
     assert_match(/unknown key\(s\) hold_tme/, e.message)
   end
 
+  # An injector holds no Loc-RIB, so it has nothing to reflect.
+  def test_a_route_reflector_client_flag_is_refused
+    neighbors = CONFIG['neighbors'].map { |n| n.merge('route_reflector_client' => true) }
+    e = assert_raise(BGP::Sim::Injector::Refused) { BGP::Sim::Injector.new(CONFIG.merge('neighbors' => neighbors)) }
+    assert_match(/route_reflector_client: an injector reflects nothing/, e.message)
+  end
+
   def test_a_configuration_that_is_not_a_mapping_is_refused
     assert_raise(BGP::Sim::Injector::Refused) { BGP::Sim::Injector.new([]) }
   end

@@ -177,6 +177,10 @@ module BGP
       # a person that `record` could not change because `@peers` has no
       # lock.
       NEIGHBOR_RESTART_REASONS = {
+        'route_reflector_client' => 'it becomes Export\'s client list, and export cannot change ' \
+                                    'while bgp4rd runs: a replacement Router starts with an empty ' \
+                                    'Adj-RIB-Out per peer, so a route the new rules refuse is never ' \
+                                    'withdrawn from a peer that holds it',
         'record' => 'the Recorder is built once, in Peer#initialize, and counts ' \
                     'established_count and flaps across sessions, so a bounce deliberately ' \
                     'leaves those alone and replacing it would reset them'
