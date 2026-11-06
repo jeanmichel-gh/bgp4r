@@ -180,6 +180,17 @@ class LabBgp4rLabTopologyTest < Test::Unit::TestCase
     df = read('Dockerfile.node')
     assert_match(/\A# syntax=docker\/dockerfile:1\n/, df, 'ADD of a git URL needs the BuildKit frontend line first')
     assert_match(%r{^ADD https://github\.com/jeanmichel-gh/bgp4r\.git#\$\{BGP4R_REF\} /app$}, df)
+    # The git ADD was trusted to notice a new commit and a lab ran code
+    # from before #308. A remote URL is fetched on every build, so the
+    # commit's own answer goes first and every layer after it, the git
+    # ADD included, is rebuilt when the commit moves. And the image says
+    # which commit it holds, which is how a stale one is told from a
+    # container that was never recreated.
+    adds = df.lines.grep(/^ADD /)
+    assert_equal ['https://api.github.com/repos/jeanmichel-gh/bgp4r/commits/${BGP4R_REF}',
+                  'https://github.com/jeanmichel-gh/bgp4r.git#${BGP4R_REF}'],
+                 adds.collect { |l| l.split[1] }, 'the commit is fetched before the code'
+    assert_match(%r{^RUN ruby -rjson .*fetch\("sha"\)'.*\n\s+> /etc/bgp4r-revision$}, df)
     assert_match(/^ENTRYPOINT \["ruby", "-I\/app"\]$/, df, 'the cmd lines are paths under /app')
   end
 

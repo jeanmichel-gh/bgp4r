@@ -1083,6 +1083,14 @@ lab/                     speakers in containers: lab/speaker.rb and lab/topologi
                          GitHub master with BuildKit's `ADD` of a git
                          URL, which rebuilds only when master moves; CI
                          keeps the root stage, since it tests the branch.
+                         **The git `ADD` alone was not trusted to see a
+                         new commit**: on 2026-11-06 a lab ran an
+                         injector from before #308. So GitHub's answer
+                         for the commit is fetched first, which a build
+                         always fetches, and the image keeps it in
+                         `/etc/bgp4r-revision` to compare against a
+                         running container, which keeps its old image
+                         until the lab is stopped and started.
                          Dockerfile.gobgp is a wrapper over
                          `${GOBGP_IMAGE}` for the same one reason
                          Dockerfile.bird exists, iproute2 for the
