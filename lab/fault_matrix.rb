@@ -34,6 +34,10 @@
 #   ruby lab/fault_matrix.rb --peer 127.0.0.2 --peer-as 65002
 #   ruby lab/fault_matrix.rb --peer 127.0.0.2 --peer-as 65002 --json out.json
 #   ruby lab/fault_matrix.rb --peer 127.0.0.2 --peer-as 65002 --dial 1790
+#   ruby lab/fault_matrix.rb --peer 127.0.0.2 --peer-as 65002 --my-as 65002
+#
+# The last is an internal session, which sends the catalog cases marked
+# :ibgp and only those. The others send the rest.
 #
 # What it can tell apart from one session:
 #
@@ -94,10 +98,7 @@ module BGP
       with_session do |up|
         next unless up
         drain
-        @peer.send_message Update.new(
-          Path_attribute.new(Origin.new(0), As_path.new(@opts[:my_as]),
-                             Next_hop.new(@opts[:next_hop])),
-          Nlri.new(PREFIX))
+        @peer.send_message Fault.wrap(Path_attribute.new, envelope)
         wait_for_notification(@opts[:settle])
         @rib_usable = route_installed? == true
       end
@@ -163,11 +164,27 @@ module BGP
     # because `bgp4r-sim` injects the same cases on a long-lived session
     # and two copies of it is how two programs come to put different
     # octets on the wire for one catalog name. The move was checked
-    # rather than assumed: all 18 cases build byte for byte what this
-    # method built before it.
+    # rather than assumed: all 18 cases there were then built byte for
+    # byte what this method built before it.
     def update_for(name)
-      Fault.update(name, :my_as => @opts[:my_as], :next_hop => @opts[:next_hop],
-                         :prefixes => [PREFIX])
+      Fault.update(name, envelope)
+    end
+
+    # Whether this run is an internal session: the router is in our AS.
+    def ibgp?
+      @opts[:my_as] == @opts[:peer_as]
+    end
+
+    # What a plain UPDATE carries around the fault, the clean route and
+    # every case alike. On an internal session that is an empty AS_PATH,
+    # because a speaker does not prepend its own AS for an internal peer
+    # (RFC 4271 section 5.1.2) and a router reads its own AS as a loop,
+    # and a LOCAL_PREF, which section 5.1.5 says a speaker SHALL send to
+    # an internal peer. FRR 8.4.4 treats a route without one as a
+    # withdraw, so with no LOCAL_PREF the clean route never installs.
+    def envelope
+      e = { :next_hop => @opts[:next_hop], :prefixes => [PREFIX] }
+      ibgp? ? e.merge(:local_pref => 100) : e.merge(:my_as => @opts[:my_as])
     end
 
     # A session of its own for each fault, because a reset leaves
@@ -366,7 +383,13 @@ if __FILE__ == $0
   Log.create
   Log.level = opts[:verbose] ? Logger::WARN : Logger::FATAL
 
-  names = opts[:only] || BGP::Fault::CATALOG.collect(&:first)
+  # A case marked :ibgp is about an internal session and means something
+  # else on an external one, so each run sends the cases for its own kind
+  # of session: run the matrix twice, once with --my-as equal to
+  # --peer-as, to send them all.
+  ibgp = opts[:my_as] == opts[:peer_as]
+  names = opts[:only] ||
+          BGP::Fault.catalog.select { |e| e[:ibgp] == ibgp }.collect { |e| e[:name] }
   matrix = BGP::Fault_matrix.new(opts)
   results = matrix.run(names)
 

@@ -313,10 +313,23 @@ Fault.wire(:origin_length)         # its octets either way
 | `atomic_length` | ATOMIC_AGGREGATE length not 0 | attribute discard |
 | `aggregator_length` | AGGREGATOR length wrong | attribute discard |
 | `community_length` | COMMUNITIES length not a multiple of 4 | treat as withdraw |
+| `originator_id_length` | ORIGINATOR_ID length not 4, internal session | treat as withdraw |
+| `cluster_list_length` | CLUSTER_LIST length not a multiple of 4, internal session | treat as withdraw |
 | `unknown_wellknown` | unrecognized well known type | session reset |
 | `attr_overrun` | length past the attribute list | treat as withdraw |
 | `duplicate_attr` | attribute sent twice | attribute discard |
 | `duplicate_mp_reach` | MP_REACH_NLRI sent twice | session reset |
+
+The two route reflection cases are sent on an internal session, and the
+catalog marks them `:ibgp`. RFC 7606 sections 7.9 and 7.10 judge their
+length only from an internal peer: from an external one "it SHALL be
+discarded using the approach of 'attribute discard'" whatever its
+length. So `lab/fault_matrix.rb` sends the cases for its own kind of
+session, and the native tests run it twice, once with `--my-as` equal
+to `--peer-as`. The Compose topology has one external session and sends
+the rest. On an internal session the matrix sends an empty AS_PATH and a
+LOCAL_PREF of 100: without the LOCAL_PREF, FRR 8.4.4 treats the clean
+route as a withdraw and no route verdict means anything.
 
 The last five are attributes that carry their own TLVs, where the
 framing is what a receiver gets wrong. Each cuts the nesting at a
@@ -546,7 +559,8 @@ measurement for it.
 
 | | GoBGP 4.10.0 | GoBGP 3.23.0 | FRR 10.5.1 | FRR 8.4.4 | BIRD 2.14 |
 |---|---|---|---|---|---|
-| treat as withdraw cases | agrees | agrees but one, below | agrees | reset 3/10, 8 of 11 | keeps the session |
+| treat as withdraw cases, external | agrees | agrees but one, below | agrees | reset 3/10, 8 of 11 | keeps the session |
+| ORIGINATOR_ID and CLUSTER_LIST length, internal | agrees | agrees | to measure | reset 3/5 | - |
 | attribute discard cases | agrees | agrees | agrees | agrees but one, below | keeps the session |
 | unrecognized well known | reset 3/2 | reset 3/2 | keeps the session, drops the route | reset 3/10 | keeps the session |
 | attribute overruns the list | agrees | reset 3/5 | agrees | reset 3/5 | - |
@@ -558,8 +572,17 @@ measurement for it.
 | tunnel TLV overruns | installs the route | installs the route | agrees | installs the route | keeps the session |
 | sub-TLV overruns its TLV | discards the attribute | discards the attribute | agrees | installs the route | keeps the session |
 
-GoBGP 4.10.0 agrees on 16 of the 18, 3.23.0 on 15, FRR 10.5.1 on 17
-and FRR 8.4.4 on 6.
+GoBGP 4.10.0 agrees on 18 of the 20, 3.23.0 on 17 and FRR 8.4.4 on 6.
+FRR 10.5.1 agreed on 17 of the 18 external cases; the two internal ones
+were measured on 2026-11-05 here, where only FRR 8.4.4 was installed.
+
+**FRR 8.4.4 resets on both internal cases with subcode 5**, and logs
+"Bad originator ID length 5" and "Bad cluster list length 5" before the
+NOTIFICATION, with no line saying it treats the UPDATE as a withdraw. On
+the same internal session it also resets on an undefined ORIGIN value,
+with 3/6, where on an external one it gets as far as the withdraw. So it
+seems to apply RFC 7606 to external peers only. That is read off three
+rows and not the code.
 
 FRR 10.5.1 was measured on the owner's VM on 2026-11-04, and it fixed
 every FRR 8.4.4 row below but one. The one left moved the other way: an

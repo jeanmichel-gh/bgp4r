@@ -36,10 +36,11 @@ module BGP
 
     # The catalog of RFC 7606 cases. Each entry is [name, description,
     # expected RFC 7606 action, UPDATE error subcode (RFC 4271 section
-    # 6.3), RFC section, a block that builds the faulty form]. The block
-    # returns one attribute, or a Path_attribute when the fault needs
-    # more than one. Fault.wire gives the octets either way. A
-    # conformance test sends each and checks the reply.
+    # 6.3), RFC section, a block that builds the faulty form], and
+    # :ibgp after them for a case whose action holds only on an internal
+    # session. The block returns one attribute, or a Path_attribute when
+    # the fault needs more than one. Fault.wire gives the octets either
+    # way. A conformance test sends each and checks the reply.
     CATALOG = [
       [:origin_length,     'ORIGIN length not 1',            :treat_as_withdraw, 5, '7606 7.1',
         -> { Fault.truncate(Origin.new(0)) }],
@@ -59,6 +60,17 @@ module BGP
         -> { Fault.truncate(Aggregator.new('10.0.0.1', 100), 5) }],
       [:community_length,  'COMMUNITIES length not /4',      :treat_as_withdraw, 5, '7606 7.8',
         -> { Fault.pad(Communities.new('100:1')) }],
+      # The two route reflection attributes. RFC 7606 sections 7.9 and
+      # 7.10 make a wrong length malformed only from an internal peer:
+      # "If the ORIGINATOR_ID attribute is received from an external
+      # neighbor, it SHALL be discarded using the approach of 'attribute
+      # discard'", whatever its length, and the same for CLUSTER_LIST. So
+      # these two are sent on an internal session, which the trailing
+      # :ibgp says, and their action is the internal one.
+      [:originator_id_length, 'ORIGINATOR_ID length not 4', :treat_as_withdraw, 5, '7606 7.9',
+        -> { Fault.pad(Originator_id.new('10.0.0.9')) }, :ibgp],
+      [:cluster_list_length, 'CLUSTER_LIST length not /4',   :treat_as_withdraw, 5, '7606 7.10',
+        -> { Fault.pad(Cluster_list.new('10.0.0.9')) }, :ibgp],
       [:unknown_wellknown, 'unrecognized well-known type',   :session_reset,     2, '4271 6.3',
         -> { Attr::Raw.new(ATTR::WELL_KNOWN_MANDATORY, 240, "\x00".b) }],
       [:attr_overrun,      'length past the attribute list', :treat_as_withdraw, 1, '7606 4',
@@ -155,9 +167,10 @@ module BGP
 
       # The CATALOG entries, as Hashes.
       def catalog
-        CATALOG.collect { |name, desc, action, subcode, rfc, build|
+        CATALOG.collect { |name, desc, action, subcode, rfc, build, peer|
           { :name => name, :description => desc, :action => action,
-            :subcode => subcode, :rfc => "RFC #{rfc}", :build => build }
+            :subcode => subcode, :rfc => "RFC #{rfc}", :build => build,
+            :ibgp => peer == :ibgp }
         }
       end
 
@@ -180,6 +193,9 @@ module BGP
       #   Fault.update(:origin_length, :my_as => 65001,
       #                :next_hop => '10.0.0.1',
       #                :prefixes => ['203.0.113.0/24'])
+      #
+      # `local_pref` adds a LOCAL_PREF, which an internal peer is sent
+      # (RFC 4271 section 5.1.5) and an :ibgp case wants.
       #
       # **Two programs want exactly this and it is here so that there is
       # one answer.** lab/fault_matrix.rb sends every case to a router on
@@ -213,6 +229,9 @@ module BGP
         pa.append As_path.new(*Array(arg[:my_as])) unless have.include?(ATTR::AS_PATH)
         unless have.include?(ATTR::NEXT_HOP) || arg[:next_hop].nil?
           pa.append Next_hop.new(arg[:next_hop])
+        end
+        unless have.include?(ATTR::LOCAL_PREF) || arg[:local_pref].nil?
+          pa.append Local_pref.new(arg[:local_pref])
         end
         prefixes = Array(arg[:prefixes])
         prefixes.empty? ? Update.new(pa) : Update.new(pa, Nlri.new(*prefixes))

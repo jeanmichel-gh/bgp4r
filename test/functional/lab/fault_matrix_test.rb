@@ -84,6 +84,10 @@ class LabFaultMatrixComposeTest < Test::Unit::TestCase
   # version measured.
   def installed_divergences ; FaultMatrixScenario::TUNNEL_ENCAP ; end
 
+  # The topology has one session and it is external, so the :ibgp cases
+  # are not sent here. The two native runs send them.
+  def sent_names ; FaultMatrixScenario::EBGP_NAMES ; end
+
   # GoBGP 3 resets on attr_overrun where RFC 7606 section 4 makes
   # treat-as-withdraw a MUST, and GoBGP 4 fixed it, so the expectation
   # follows the image. The compose file's default is a 4.x image;

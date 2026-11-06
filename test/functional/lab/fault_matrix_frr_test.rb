@@ -77,22 +77,17 @@ class LabFaultMatrixFrrTest < Test::Unit::TestCase
     return unless LabHelper::Frr.available?
     @@major = LabHelper::Frr.major
     return unless LabHelper::Frr.measured?(MEASURED, @@major)
-    @@router = LabHelper::Frr.new(:ipv6 => false)
+    # Two routers, one per kind of session: see
+    # FaultMatrixScenario.run_sessions for why the :ibgp cases need one
+    # of their own. Each router's log says what it made of each UPDATE,
+    # in its own words, and run_sessions takes it while it is there.
+    ebgp = LabHelper::Frr.new(:ipv6 => false)
+    @@routers = [['external', ebgp],
+                 ['internal', LabHelper::Frr.new(:ipv6 => false, :peer_as => ebgp.as)]]
     @@dir = Dir.mktmpdir('bgp4r-fault-matrix-frr')
-    json = File.join(@@dir, 'fault-matrix.json')
-    begin
-      @@router.up
-      @@output, @@status = run_matrix(@@router, json)
-      @@results = JSON.parse(File.read(json))
-    rescue StandardError => e
-      @@results = nil
-      @@error = "#{e.class}: #{e.message}"
-    ensure
-      # The router's own log says what it made of each UPDATE, in its
-      # words, and it goes with the daemon, so take it while it is there.
-      @@router.down
-      @@output = "#{LabHelper::Frr.version}\n#{@@output}\n== bgpd\n#{@@router.log}"
-    end
+    @@results, out, @@status, @@error =
+      FaultMatrixScenario.run_sessions(@@dir, @@routers, method(:run_matrix))
+    @@output = "#{LabHelper::Frr.version}\n#{out}"
   end
 
   # The matrix in a process of its own, which is also how a person runs
@@ -127,7 +122,7 @@ class LabFaultMatrixFrrTest < Test::Unit::TestCase
   end
 
   def self.shutdown
-    @@router.down if defined?(@@router)
+    @@routers.each { |_, r| r.down } if defined?(@@routers)
     FileUtils.rm_rf(@@dir) if defined?(@@dir)
   end
 
