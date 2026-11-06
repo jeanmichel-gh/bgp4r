@@ -1671,7 +1671,7 @@ CI: `.github/workflows/test.yml` runs both suites on every push to master and ev
 
 `.github/workflows/capture.yml` is the one workflow that deploys a containerlab lab: it builds the `lab-node` and BIRD images, deploys `lab/routescope/bgp4r-lab`, and runs its `capture.sh`, on demand and on a push that changes that folder or the Dockerfile. Its log is what routescope's BGP fixtures are cut from.
 
-Baseline on 2026-11-05: 3753 tests, 36930 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
+Baseline on 2026-11-05: 3755 tests, 36958 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
 
 **That coverage figure is 98.5% for the library and the rest is the two
 programs, not a gap anywhere else.** Measured the same run: with
@@ -8077,7 +8077,7 @@ kind, `:all` or `peer:`. **irb prints a result through `pp` and not
 had `inspect` only and dumped every field of every message at the
 prompt, which only running the program showed.
 
-### Route reflection as a feature of `bgp4rd`, six phases. Phases 1 to 3 Done
+### Route reflection as a feature of `bgp4rd`, six phases. Phases 1 to 4 Done
 
 Asked for by the owner on 2026-11-05: start a route reflector on
 purpose, the way a router is configured as one. **The protocol half is
@@ -8140,14 +8140,33 @@ reflector", what it shows about itself, and a lab that runs one.
    * Eight sabotages, seven landing first time. The eighth, `reflector`
      ignoring `route_reflector?`, passed because no test had a router
      that does not reflect; one does now.
-4. **Fault cases for ORIGINATOR_ID and CLUSTER_LIST.** Both are among
-   the attributes `test/coverage_matrix.rb` reports with no fault case.
-   The receive rules are already in `validation.rb`, RFC 7606 sections
-   7.9 and 7.10, both treat-as-withdraw. **This phase touches every
-   fault matrix lab test**, since each catalog case is a row each router
-   is asserted on: GoBGP 3.23.0 and 4.10.0 in CI, FRR 8.4.4 in CI and
-   10.5.1 on the owner's VM. So the expectations need a run on each
-   before they are written, not a guess.
+4. **Fault cases for ORIGINATOR_ID and CLUSTER_LIST. Done**, except
+   the FRR 10.5.1 run. `originator_id_length` and `cluster_list_length`
+   are in `BGP::Fault::CATALOG`, both treat-as-withdraw with subcode 5.
+   * **They mean what the catalog says only on an internal session.**
+     RFC 7606 sections 7.9 and 7.10 discard either attribute from an
+     external peer whatever its length, and the matrix was eBGP. The
+     owner chose a second run: the catalog marks both `:ibgp`,
+     `lab/fault_matrix.rb` sends the cases for its own kind of session,
+     and each native test starts a second router in its own AS through
+     `FaultMatrixScenario.run_sessions`. The Compose topology stays
+     external and `sent_names` says so.
+   * **An internal run needs an envelope of its own**: an empty AS_PATH,
+     or the router reads its own AS as a loop, and a LOCAL_PREF.
+     `Fault.update` takes `local_pref` for it. Without one, FRR 8.4.4
+     treats even the clean route as a withdraw.
+   * Measured here on 2026-11-05, where gobgpd 3.23.0 and 4.10.0 came
+     from their release tarballs and FRR 8.4.4 from apt: both GoBGP
+     versions agree, and **FRR 8.4.4 resets with 3/5** on both. On the
+     same internal session it resets on `origin_value` too, so it seems
+     to apply RFC 7606 to external peers only. GoBGP also
+     treats-as-withdraw on an external session, where the RFC asks for
+     attribute discard; that is not asserted, since no case is sent
+     there.
+   * Five sabotages, four landing. Dropping the LOCAL_PREF passes the
+     lab, because FRR 8.4.4 resets on both internal cases and so no
+     route verdict rests on the clean route; `fault_test.rb` holds
+     `Fault.update`'s half.
 5. **A lab with `bgp4rd` as the reflector.** Native, no Docker, the
    `rib_router_*` shape: `bgp4rd` from a node file, FRR and GoBGP as
    two clients on loopback, and a bgp4r speaker as a non-client. A
@@ -8309,7 +8328,7 @@ Lab and conformance:
         shape of the fix.
     * **A lab test file that is pure ASCII is not a style preference.** `to_hash_round_trip_test.rb` reads every test file body and matches regexps against it, and one `\u2192` in a comment made it error with "invalid byte sequence in US-ASCII" from a file it does not own. It passed on its own and failed in the suite, which is the load order trap in Conventions arriving from a third direction. That fragility is `to_hash_round_trip_test.rb`'s and is filed below rather than fixed here.
 * **GoBGP runs natively, so the fault matrix needs no Docker.** `gobgpd` from a release tarball peers with bgp4r on loopback, and `test/functional/lab/fault_matrix_native_test.rb` runs the whole matrix against it. Both sides get a port of their own, so neither needs root nor `net.ipv4.ip_unprivileged_port_start`: the generated config sets `[global.config] port` and `[neighbors.transport.config] remote-port`, both of which GoBGP 3 and 4 honour. `LabHelper::Gobgpd` writes that config and starts the daemon. This is the harness to reach for before assuming a conformance question is blocked. `docs/protocol-testing.md` has the recipe under "On a Linux VM": how to get a particular version from a release tarball, with its checksum, and the two config keys that keep both ends off port 179. **Check which version you have**, because it changes the answers: Ubuntu 24.04's `gobgpd` package is 3.23.0, and GoBGP publishes Linux builds only.
-* The two GoBGP columns and the FRR one in `docs/protocol-testing.md` are asserted by the three fault matrix tests, so they are re-measured rather than recorded by hand. **The versions do not answer alike, and the column used to claim they did.** GoBGP 3.23.0 resets with subcode 5 on `attr_overrun` where RFC 7606 section 4 makes treat-as-withdraw a MUST; GoBGP 4.10.0 fixed it. So 4.10.0 agrees on 16 of the 18 rows, 3.23.0 on 15, FRR 10.5.1 on 17 and FRR 8.4.4 on 6. The expectations are per router and per version in `test/functional/lab/fault_matrix_scenario.rb`: the native GoBGP test asks the binary, the Compose test reads `GOBGP_IMAGE`, and the FRR test asserts against majors 8 and 10 with separate expectations, so keep those in step if a pin moves. **FRR 10.5.1 fixed every FRR 8.4.4 divergence but one**, measured on the owner's VM on 2026-11-04, and that one moved the other way: an unrecognized well known attribute keeps the session and drops the route, where RFC 4271 section 6.3 asks for a reset with subcode 2. `kept_divergences` in the scenario is the new shape for that, a reset case a router keeps the session on, and `FRR_10_KEPT` holds it. **Only the BIRD column is still a hand measurement**, from 2.14, and only the session level outcomes there, since BIRD gives no usable RIB answer over a loopback session. Two rows of the FRR column were wrong when it was asserted in #159, both the hand measurement's fault; see phase 5 above.
+* The two GoBGP columns and the FRR one in `docs/protocol-testing.md` are asserted by the three fault matrix tests, so they are re-measured rather than recorded by hand. **The versions do not answer alike, and the column used to claim they did.** GoBGP 3.23.0 resets with subcode 5 on `attr_overrun` where RFC 7606 section 4 makes treat-as-withdraw a MUST; GoBGP 4.10.0 fixed it. So 4.10.0 agrees on 18 of the 20 rows, 3.23.0 on 17 and FRR 8.4.4 on 6; FRR 10.5.1 agreed on 17 of the 18 external rows and the two internal ones wait for its run. The expectations are per router and per version in `test/functional/lab/fault_matrix_scenario.rb`: the native GoBGP test asks the binary, the Compose test reads `GOBGP_IMAGE`, and the FRR test asserts against majors 8 and 10 with separate expectations, so keep those in step if a pin moves. **FRR 10.5.1 fixed every FRR 8.4.4 divergence but one**, measured on the owner's VM on 2026-11-04, and that one moved the other way: an unrecognized well known attribute keeps the session and drops the route, where RFC 4271 section 6.3 asks for a reset with subcode 2. `kept_divergences` in the scenario is the new shape for that, a reset case a router keeps the session on, and `FRR_10_KEPT` holds it. **Only the BIRD column is still a hand measurement**, from 2.14, and only the session level outcomes there, since BIRD gives no usable RIB answer over a loopback session. Two rows of the FRR column were wrong when it was asserted in #159, both the hand measurement's fault; see phase 5 above.
 * How that wrong row survived is the lesson, not the row. The table was measured by hand once and never re-run, because the only harness that could re-run it needed a Docker daemon that the sandbox did not have. A conformance claim nothing checks reads as verified, exactly like an unread RFC citation, and this one sat in the docs, in `CLAUDE.md` and in a test's comments at the same time.
 * `lab/conformance/gobgpd.conf` and `lab/topologies/fault-matrix/gobgp.toml` are written in the 3.23 style and GoBGP 4 reads them unchanged. Every key is still in the 4.x config structs under the same `mapstructure` name, and 4.x registers `mapstructure.StringToNetIPAddrHookFunc` so the address fields still decode from TOML strings. No schema work is needed; an earlier version of this entry said otherwise and was wrong.
 * `lab/topologies/fault-matrix` exits 1, and that is the right answer: GoBGP discards the malformed tunnel encapsulation attribute and installs the route where RFC 9012 section 13 asks for treat-as-withdraw. Both cases are asserted as a known divergence; see the comment on `TUNNEL_ENCAP` in `test/functional/lab/fault_matrix_scenario.rb`. It is not an old bug since fixed: 3.23.0 and 4.10.0 both do it, measured natively on each, so it is worth reporting upstream.
