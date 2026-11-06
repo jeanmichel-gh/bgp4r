@@ -22,8 +22,9 @@
 
 # What routescope reads, **copied** from routescope, so the containerlab
 # labs under lab/routescope/ can be held to it with no routescope here.
-# Two topology tests read it: bgp4r_lab_topology_test.rb and
-# rr_lab_topology_test.rb. One copy, so the two cannot drift apart.
+# Three topology tests read it: bgp4r_lab_topology_test.rb,
+# rr_lab_topology_test.rb and fwd_lab_topology_test.rb. One copy, so they
+# cannot drift apart.
 #
 # docs/routescope-labs.md section 12 is why this is a copy: every fact in
 # this repository about that one is a read at a commit, and this suite
@@ -65,4 +66,10 @@ module RoutescopeVocabulary
   # 'pause'` arm, read at routescope main 2026-11-06. A run with nobody
   # to press Resume skips it, so a pause costs a CI run nothing.
   PAUSE_KEYS = %w[for].freeze
+
+  # What an `interface:` step takes beside its NODE:IFACE value,
+  # `Scenario#step`'s `when 'interface'` arm, read at routescope main
+  # 9615aa0 on 2026-11-06. The state is up or down, and the runner sets
+  # it on the containerlab link with `Links#set`.
+  INTERFACE_KEYS = %w[state].freeze
 end

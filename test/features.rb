@@ -312,9 +312,9 @@ module Features
 
     'fib' => {
       :area  => 'routing',
-      :about => 'Putting the Loc-RIB in a forwarding table',
+      :about => 'Putting the Loc-RIB in a forwarding table, and packets following it',
       :unit  => %w[rib/fib_test rib/ip_route_test rib/fib_installer_test],
-      :lab   => %w[fib_test],
+      :lab   => %w[fib_test fwd_lab_netns_test fwd_lab_topology_test],
     },
 
     'show' => {
@@ -415,7 +415,7 @@ module Features
       :doc   => 'docs/routescope-labs.md',
       :unit  => %w[lab_helper_test],
       :lab   => %w[speaker_test two_speakers_test add_path_topology_test
-                   bgp4r_lab_topology_test rr_lab_topology_test],
+                   bgp4r_lab_topology_test rr_lab_topology_test fwd_lab_topology_test],
     },
 
     'events' => {
@@ -470,10 +470,11 @@ module Features
     'local'         => 'nothing',
   }.freeze
 
-  # The one lab file whose group says `nothing` and which wants more:
-  # it puts routes in a real kernel table, so it omits itself without
-  # CAP_NET_ADMIN. `lab_groups.rb` records the same thing in prose.
-  ROOT_ONLY = %w[fib_test].freeze
+  # The two lab files whose group says `nothing` and which want more:
+  # they put routes in a real kernel table, so they omit themselves
+  # without CAP_NET_ADMIN. `lab_groups.rb` records the same thing in
+  # prose.
+  ROOT_ONLY = %w[fib_test fwd_lab_netns_test].freeze
 
   class << self
 

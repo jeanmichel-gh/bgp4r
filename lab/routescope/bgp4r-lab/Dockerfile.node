@@ -54,13 +54,14 @@
 # buildx plugin is installed; the legacy builder cannot add a git URL.
 #
 # The rest is `lab-node`: Ruby, iproute2 for the `exec: ip addr add`
-# lines, and root so `bgp4rd` can create `/run/bgp4r`. No gems: the
+# lines, ping and traceroute so fwd-lab can send traffic through a
+# node, and root so `bgp4rd` can create `/run/bgp4r`. No gems: the
 # library's one runtime gem, `logger`, ships with Ruby 3.4, and the
 # root Dockerfile's Gemfile install is test and development gems.
 
 ARG RUBY_VERSION=3.4
 FROM ruby:${RUBY_VERSION}-slim
-RUN apt-get update && apt-get install -y --no-install-recommends iproute2 \
+RUN apt-get update && apt-get install -y --no-install-recommends iproute2 iputils-ping traceroute \
     && rm -rf /var/lib/apt/lists/*
 ARG BGP4R_REF=master
 ADD https://api.github.com/repos/jeanmichel-gh/bgp4r/commits/${BGP4R_REF} /etc/bgp4r-commit.json

@@ -1,0 +1,37 @@
+# Both of d's links go down, so there is no path to it at all. Every
+# router withdraws d's loopback rather than keeping a stale one, and
+# learns it again when the links come back.
+#
+# NOT RUN: the lab is deployed by bgp4r's Capture job, but this scenario
+# has not been run, so nothing here is a measurement. Its twin is
+# test/functional/lab/fwd_lab_netns_test.rb.
+name: d cut off is unreachable, then back
+description: >-
+  d:eth1 and d:eth2 go down. a withdraws d's loopback within a hold
+  time. The links come back and a learns it again through the direct
+  link.
+capture: [b]
+timeout: 180
+
+steps:
+  - expect: { bgp_prefix: { node: a, prefix: 10.255.0.4/32, present: true } }
+    within: 60
+
+  - mark: d cut off
+  - interface: d:eth1
+    state: down
+  - interface: d:eth2
+    state: down
+  - expect: { bgp_prefix: { node: a, prefix: 10.255.0.4/32, present: false } }
+    within: 25
+    measure: withdrawn
+  - expect: { bgp_prefix: { node: b, prefix: 10.255.0.4/32, present: false } }
+
+  - mark: d back
+  - interface: d:eth1
+    state: up
+  - interface: d:eth2
+    state: up
+  - expect: { bgp_prefix: { node: a, prefix: 10.255.0.4/32, as_path: '65002 65004' } }
+    within: 40
+    measure: restore
