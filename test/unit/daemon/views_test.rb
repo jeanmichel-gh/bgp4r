@@ -62,6 +62,52 @@ class BGP_Daemon_Views_Test < Test::Unit::TestCase
     assert_equal(0, s[:summary][:established])
   end
 
+  # ---- the reflector role, RFC 4456 ----
+
+  CLIENT = { 'address' => '10.0.0.4', 'as' => 65_000, 'route_reflector_client' => true }.freeze
+
+  # A speaker that reflects nothing says so and adds no per peer key, so
+  # its rows read as they always have.
+  def test_a_speaker_that_reflects_nothing_says_so
+    v = views(loaded)
+    assert_equal([false, nil], v.status.values_at(:route_reflector, :cluster_id))
+    assert(v.peers.none? { |r| r.has_key?(:route_reflector_client) })
+  end
+
+  # The same with a router that advertises and does not reflect, which
+  # is the case that needs Export#route_reflector? asked: a speaker with
+  # no export block has no router at all.
+  def test_a_router_that_does_not_reflect_says_so
+    v = views(loaded(1, 'export' => { 'next_hops' => { 1 => '10.0.0.1' } }))
+    assert_not_nil(v.speaker.router)
+    assert_equal([false, nil], v.status.values_at(:route_reflector, :cluster_id))
+    assert(v.peers.none? { |r| r.has_key?(:route_reflector_client) })
+  end
+
+  # The flag is the client list: the flagged internal peer is a client,
+  # the other internal peer is not, and an external peer never is.
+  def test_a_reflector_names_its_clients
+    v = views(loaded(1, 'neighbors' => NEIGHBORS + [CLIENT]))
+    assert_equal([true, '10.0.0.1'], v.status.values_at(:route_reflector, :cluster_id),
+                 'the cluster ID defaults to the router ID')
+    assert_equal({ '10.0.0.2' => false, '10.0.0.3' => false, '10.0.0.4' => true },
+                 v.peers.to_h { |r| [r[:address], r[:route_reflector_client]] })
+  end
+
+  def test_the_cluster_id_is_the_one_configured
+    v = views(loaded(1, 'neighbors' => NEIGHBORS + [CLIENT], 'export' => { 'cluster_id' => '7.7.7.7' }))
+    assert_equal('7.7.7.7', v.status[:cluster_id])
+  end
+
+  # With route_reflector and no client list every internal peer is a
+  # client, which is the single cluster case of RFC 4456 section 6. The
+  # row says what Export decides and not only what was flagged.
+  def test_with_no_client_list_every_internal_peer_is_a_client
+    v = views(loaded(1, 'export' => { 'route_reflector' => true }))
+    assert_equal({ '10.0.0.2' => false, '10.0.0.3' => true },
+                 v.peers.to_h { |r| [r[:address], r[:route_reflector_client]] })
+  end
+
   # **The configured count and not the table's.** rib.view counts the
   # peers the table has seen, which for a daemon whose neighbors are
   # down is zero, and a peer table that hides the peers that are down

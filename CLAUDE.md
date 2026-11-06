@@ -1671,7 +1671,7 @@ CI: `.github/workflows/test.yml` runs both suites on every push to master and ev
 
 `.github/workflows/capture.yml` is the one workflow that deploys a containerlab lab: it builds the `lab-node` and BIRD images, deploys `lab/routescope/bgp4r-lab`, and runs its `capture.sh`, on demand and on a push that changes that folder or the Dockerfile. Its log is what routescope's BGP fixtures are cut from.
 
-Baseline on 2026-11-05: 3746 tests, 36915 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
+Baseline on 2026-11-05: 3753 tests, 36930 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
 
 **That coverage figure is 98.5% for the library and the rest is the two
 programs, not a gap anywhere else.** Measured the same run: with
@@ -8077,7 +8077,7 @@ kind, `:all` or `peer:`. **irb prints a result through `pp` and not
 had `inspect` only and dumped every field of every message at the
 prompt, which only running the program showed.
 
-### Route reflection as a feature of `bgp4rd`, six phases. Phases 1 and 2 Done
+### Route reflection as a feature of `bgp4rd`, six phases. Phases 1 to 3 Done
 
 Asked for by the owner on 2026-11-05: start a route reflector on
 purpose, the way a router is configured as one. **The protocol half is
@@ -8119,14 +8119,27 @@ reflector", what it shows about itself, and a lab that runs one.
    * Twelve sabotages, eleven landing. The twelfth reads the flag with
      `!!` rather than `== true` and cannot differ, since the boolean
      check refuses every other value first.
-3. **Show the role.** A peer row in `show.peers` says whether the peer
-   is a client, and `show.status` gives `route_reflector` and
-   `cluster_id`. Path rows in `show.rib` and `show.routes` carry
-   `originator_id` and `cluster_list`, which `Rib::Route` already
-   answers and no view prints. All additive keys, so routescope's two
-   table rows still read. `bgp4r-cli -c 'show bgp'` in the IOS detail
-   form prints "Originator" and "Cluster list" only if a vendor sample
-   shows them, per the honesty rule in show.rb.
+3. **Show the role. Done**, except the text form. `docs/daemon.md`'s
+   JSON section is the guide.
+   * `show.status` gives `route_reflector` and `cluster_id`, false and
+     null when the export rules do not reflect.
+   * A peer row gains `route_reflector_client` only on a reflector, as
+     `hand` is present only when there is some. **It answers
+     `Export#client?` and not the flag**, so `route_reflector: true`
+     with no list says every internal peer is a client, which is what
+     the export rules do.
+   * Every path row of every view carries `originator_id` and
+     `cluster_list`, through one `View#reflection` beside
+     `communities`. In `show.adj_out` they are what went out, so the
+     reflector's own additions show there and not in the Loc-RIB.
+   * All additive. `view_test.rb`'s guard on what the view adds beyond
+     routescope's `bgp_routes` row lists the two new keys.
+   * **Left**: "Originator" and "Cluster list" in `show bgp`'s IOS
+     detail form. That needs a vendor sample per the honesty rule in
+     show.rb, and none has been looked for.
+   * Eight sabotages, seven landing first time. The eighth, `reflector`
+     ignoring `route_reflector?`, passed because no test had a router
+     that does not reflect; one does now.
 4. **Fault cases for ORIGINATOR_ID and CLUSTER_LIST.** Both are among
    the attributes `test/coverage_matrix.rb` reports with no fault case.
    The receive rules are already in `validation.rb`, RFC 7606 sections
