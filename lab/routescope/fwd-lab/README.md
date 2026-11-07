@@ -140,6 +140,14 @@ cli show.fib --pretty
 cli -c 'show bgp'
 ```
 
+**Send from the loopback, `-s` for traceroute and `-I` for ping.** The
+routers announce their loopbacks and not their link addresses. With no
+source given, a packet leaves from the outgoing link's address. Only the
+next hop can answer that, so a plain `traceroute 10.255.0.4` shows hop 1
+and then `* * *`: the far routers send their replies out of eth0, their
+default route. `traceroute -i` takes an interface name, not an address,
+and answers "No such device" when given one.
+
 In `b`'s shell, take the direct link down and watch the route move:
 
 ```
