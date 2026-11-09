@@ -6,6 +6,10 @@ Part of the BGP-LS lab. Two other specs go with it:
 isis `docs/design/bgp-ls-export.md` and routescope
 `docs/design/bgp-ls-lab.md`.
 
+`docs/bgp-ls-howto.md` explains the design as questions and answers:
+what a Producer is, why it reads the LSDB and not the routes, and what
+one LSP becomes in BGP-LS.
+
 ## The problem
 
 We want a lab that shows an IS-IS LSDB carried in BGP-LS (RFC 9552,
