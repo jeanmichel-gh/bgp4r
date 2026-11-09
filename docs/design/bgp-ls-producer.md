@@ -1,6 +1,6 @@
 # BGP-LS Producer and collector in bgp4rd
 
-Status: draft, waiting for approval.
+Status: approved 2026-11-09, with option A (a table of its own).
 
 Part of the BGP-LS lab. Two other specs go with it:
 isis `docs/design/bgp-ls-export.md` and routescope
@@ -72,7 +72,7 @@ Read on master at 8fb8edd.
 - `bgp/gen/link_state_routes.rb` builds NLRIs for made-up topologies. Its
   `head`, `igp_router_id` and `prefix_key` helpers can be reused.
 
-## Decision asked: where BGP-LS routes live
+## Decision: where BGP-LS routes live (A chosen)
 
 **A. A table of their own, outside the RIB (recommended for phase 1).**
 The Producer keeps the routes it sends. The collector keeps the routes it
