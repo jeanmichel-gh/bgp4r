@@ -194,7 +194,7 @@ NLRI to a new `BGP::Daemon::LinkStateTable` instead of dropping it:
 
 ## Pull request
 
-One: bgp4r `claude/bgp-ls-lab`. This spec, then the Producer, the
+One: bgp4r `claude/bgp-ls-producer`. This spec, then the Producer, the
 collector table, the API method and the CLI, then `docs/bgp-ls.md` and
 `docs/daemon.md`.
 
