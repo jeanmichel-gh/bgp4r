@@ -24,10 +24,30 @@ require 'bgp/optional_parameters/capability'
 
 module BGP::OPT_PARM::CAP
   
-  class Mbgp < BGP::OPT_PARM::Capability 
-    
+  class Mbgp < BGP::OPT_PARM::Capability
+
+    # Families named by one word, because both registries give the AFI
+    # and the SAFI the same name. RFC 9552 section 5.2: "All non-VPN
+    # link, node, and prefix information SHALL be encoded using AFI 16388
+    # / SAFI 71. VPN link, node, and prefix information SHALL be encoded
+    # using AFI 16388 / SAFI 72." The split on `_` below reads `bgp_ls`
+    # as AFI `bgp` and SAFI `ls`, which name nothing, and
+    # `Mbgp.new(:bgp_ls)` read it as an AFI with no SAFI. This table is
+    # what makes `{mbgp: bgp_ls}` in a node file mean 16388/71.
+    FAMILIES = {
+      :bgp_ls     => [IANA::AFI::BGP_LS, IANA::SAFI::BGP_LS],
+      :bgp_ls_vpn => [IANA::AFI::BGP_LS, IANA::SAFI::BGP_LS_VPN],
+    }.freeze
+
+    # The [afi, safi] of a one-word family name, or nil.
+    def self.family(name)
+      return nil unless name.is_a?(Symbol) or (name.is_a?(String) and !name.is_packed?)
+      FAMILIES[name.to_sym]
+    end
+
     class << self
       def method_missing(name, *args, &block)
+        return new(*FAMILIES[name]) if FAMILIES.has_key?(name)
         afi, *safi = name.to_s.split('_')
         _afi  = IANA.afi?(afi.to_sym)
         _safi = IANA.safi?((safi.join('_')).to_sym)
@@ -46,6 +66,9 @@ module BGP::OPT_PARM::CAP
     def initialize(afi,safi=nil)
       if safi.nil? and afi.is_a?(String) and afi.is_packed?
         parse(afi)
+      elsif safi.nil? and Mbgp.family(afi)
+        super(OPT_PARM::CAP_MBGP)
+        self.afi, self.safi = Mbgp.family(afi)
       elsif safi.nil? and afi.is_a?(Hash)
         super(OPT_PARM::CAP_MBGP)
         h = afi[:capability] || afi
