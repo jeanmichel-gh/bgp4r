@@ -212,18 +212,34 @@ jobs:
           tar -xzf "$tarball" gobgp gobgpd
           echo "$RUNNER_TEMP/gobgp" >> "$GITHUB_PATH"
           ./gobgpd --version
-      # For the frr group. Ubuntu packages FRR, and 24.04's build is
-      # 8.4.4, which is the version those tests assert against. No
-      # container and no zebra: bgpd runs standalone on loopback, with
-      # -S so it keeps the invoking user and needs no privilege. The
-      # daemons are not started as a service, and must not be: the
-      # tests run their own bgpd on ports of their own.
+      # For the frr group. Ubuntu packages FRR. No container and no
+      # zebra: bgpd runs standalone on loopback, with -S so it keeps the
+      # invoking user and needs no privilege. The daemons are not
+      # started as a service, and must not be: the tests run their own
+      # bgpd on ports of their own.
+      #
+      # Which FRR depends on the image. ubuntu-latest moved from 24.04
+      # to 26.04 between 6 and 9 November 2026: 24.04 installs 8.4.4,
+      # 26.04 installs 10.5.1. The FRR tests take 8 to 10.
+      #
+      # FRR 10's package carries an AppArmor profile for
+      # /usr/lib/frr/bgpd that refuses the pid file in the test's own
+      # folder, so bgpd exits before any test runs. A copy outside
+      # /usr/lib/frr is not confined. That is the way round it the lab
+      # helper's own message gives, and it does nothing on 24.04, which
+      # has no profile. vtysh is copied too, so both ends are the same
+      # build and neither is confined.
       - name: Install FRR
         if: matrix.frr
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends frr
-          /usr/lib/frr/bgpd --version | head -1
+          mkdir -p "$RUNNER_TEMP/frr"
+          cp /usr/lib/frr/bgpd "$(command -v vtysh)" "$RUNNER_TEMP/frr/"
+          echo "FRR_BGPD=$RUNNER_TEMP/frr/bgpd" >> "$GITHUB_ENV"
+          echo "VTYSH=$RUNNER_TEMP/frr/vtysh" >> "$GITHUB_ENV"
+          "$RUNNER_TEMP/frr/bgpd" --version | head -1
+          ls /etc/apparmor.d | grep -E "bgpd|frr" || echo "no FRR AppArmor profile"
       - name: Lab tests
         shell: bash
         env:
