@@ -22,25 +22,32 @@
 
 require 'bgp4r'
 require 'bgp/daemon/link_state_table'
+require 'bgp/daemon/link_state_sources'
 require 'socket'
 require 'io/wait'
 
 module BGP
   module Daemon
 
-    # A BGP-LS Producer: it reads isisd's LSDB and originates BGP-LS
-    # routes. RFC 9552 section 3: "The term BGP-LS Producer refers to a
-    # BGP Speaker that is originating link-state information into BGP."
+    # A BGP-LS Producer: it reads an IGP's LSDB, isisd's or ospfd's, and
+    # originates BGP-LS routes. RFC 9552 section 3: "The term BGP-LS
+    # Producer refers to a BGP Speaker that is originating link-state
+    # information into BGP."
     #
-    # docs/design/bgp-ls-producer.md is the design and
-    # docs/bgp-ls-howto.md explains it. One thread:
+    # docs/design/bgp-ls-producer.md is the design, with
+    # docs/design/bgp-ls-ospf.md for OSPF, and docs/bgp-ls-howto.md
+    # explains it. One thread:
     #
-    # 1. Subscribe to isisd's events.
-    # 2. Read `show.topology` for each configured level, and build the
-    #    routes.
+    # 1. Subscribe to the IGP daemon's events.
+    # 2. Read `show.topology` for each configured level (isisd) or area
+    #    and the AS scope (ospfd), and build the routes.
     # 3. Compare with the routes already sent. Send what is new or
     #    changed in MP_REACH_NLRI, and what is gone in MP_UNREACH_NLRI.
-    # 4. Wait for an `spf` event of a configured level. Go to 2.
+    # 4. Wait for an event saying one of them changed: isisd's `spf` of
+    #    a configured level, ospfd's `topology`. Go to 2.
+    #
+    # One IGP source per Producer: the block names `isisd` or `ospfd`.
+    # The source objects are in link_state_sources.rb.
     #
     # If the socket closes, it tries again every RETRY seconds and keeps
     # what it sent, so the next read sends only what changed. A session
@@ -53,10 +60,17 @@ module BGP
       include BGP::Logging
 
       # The node file's `link_state:` keys. Any other is refused.
-      KEYS = %w[isisd levels identifier peers unreachable].freeze
+      KEYS = %w[isisd levels ospfd areas external identifier peers unreachable].freeze
 
-      SOCKET = '/run/isis4r/isisd.sock'
+      SOCKET = IsisSource::SOCKET
       RETRY = 5
+
+      # RFC 9552 section 5.2, Table 2: "3 OSPFv2".
+      OSPFV2 = 3
+
+      # Section 5.2.3.1's route types, by ospfd's `route_type` name.
+      ROUTE_TYPES = { 'intra' => 1, 'inter' => 2, 'external_1' => 3, 'external_2' => 4,
+                      'nssa_1' => 5, 'nssa_2' => 6 }.freeze
 
       # `unreachable: withdraw`, the default, is RFC 9552 section 5.9's
       # SHOULD. `keep` is the MAY.
@@ -70,27 +84,29 @@ module BGP
 
       Sent = Struct.new(:nlri, :attribute, :since)
 
-      class Error < StandardError ; end
-
-      attr_reader :levels, :identifier, :peers, :path, :last_error
+      attr_reader :source, :identifier, :peers, :last_error
 
       # config is the node file's `link_state:` block. arg[:connect] is a
       # callable that answers a connected IO, for a test; by default a
-      # UNIXSocket on `isisd`. arg[:retry] is seconds between attempts.
+      # UNIXSocket on the source's path. ospfd's source calls it twice.
+      # arg[:retry] is seconds between attempts.
       def initialize(speaker, config, arg = {})
         @speaker = speaker
         @logger = arg[:logger]
         read_config(config)
-        @connect = arg[:connect] || -> { UNIXSocket.new(@path) }
+        @connect = arg[:connect] || -> { UNIXSocket.new(@source.path) }
         @retry = arg[:retry] || RETRY
         @lock = Mutex.new
         @sent = {} # NLRI octets => Sent
         @stopping = false
         @wake = ConditionVariable.new
         @wake_lock = Mutex.new
-        @id = 0
         @reads = 0
       end
+
+      def path ; @source.path ; end
+      def levels ; @source.is_a?(IsisSource) ? @source.levels : [] ; end
+      def areas ; @source.is_a?(OspfSource) ? @source.areas : [] ; end
 
       # How many times it has read the topology and diffed it.
       def reads ; @lock.synchronize { @reads } ; end
@@ -105,8 +121,7 @@ module BGP
 
       def stop
         @stopping = true
-        sock = @sock
-        sock.close if sock && !sock.closed? rescue nil
+        @source.close rescue nil
         @wake_lock.synchronize { @wake.broadcast }
         @thread.join(2) if @thread
         self
@@ -114,16 +129,20 @@ module BGP
 
       # The routes as built from the topology answers, without sending
       # them: { NLRI octets => [Link_state, Link_state_attribute] }.
-      # topologies is one `show.topology` answer per level.
+      # topologies is one `show.topology` answer per level, from isisd,
+      # or per area and for the AS scope, from ospfd. Each answer says
+      # which it is: `level`, `area` or `scope`.
       def build(topologies)
         out = {}
         topologies.each do |topo|
-          pid = Integer(topo.fetch('level'))
           Array(topo['nodes']).each do |node|
             next if node['reachable'] == false && @unreachable == 'withdraw'
-            LinkStateProducer.node_routes(node, pid, @identifier).each do |ls, attr|
-              out[ls.encode] = [ls, attr]
-            end
+            routes = if topo.key?('level')
+                       LinkStateProducer.node_routes(node, Integer(topo['level']), @identifier)
+                     else
+                       LinkStateProducer.ospf_routes(node, topo['area'], @identifier)
+                     end
+            routes.each { |ls, attr| out[ls.encode] = [ls, attr] }
           end
         end
         out
@@ -220,6 +239,79 @@ module BGP
         routes
       end
 
+      # The routes of one ospfd `show.topology` node (ospfv2
+      # docs/design/ospf-topology.md), as [Link_state,
+      # Link_state_attribute] pairs. area is the answer's dotted quad, or
+      # nil for the AS scope. The mapping is docs/design/bgp-ls-ospf.md's.
+      #
+      # * Protocol-ID 3 on every NLRI (Table 2: "3 OSPFv2").
+      # * Node Descriptors: OSPF Area-ID (514), then IGP Router-ID
+      #   (515), in ascending order (section 5.2.1.4: "MUST be arranged
+      #   in ascending order"). 515 is the 4-octet Router-ID, or for a
+      #   network node (a pseudonode) the DR's Router-ID and its
+      #   interface address, 8 octets. No Area-ID for the AS scope: it
+      #   "is not used for NLRIs when carrying information that is
+      #   derived from AS-scope LSAs" (section 5.2.1.4).
+      # * One Node NLRI for an area's node, with Node Flag Bits (1024): B
+      #   for an ABR, E for an ASBR. No Node Name: ospfd has none.
+      # * One Link NLRI per neighbor, with IPv4 interface (259) and
+      #   neighbor (260) addresses when ospfd gives both, as section
+      #   5.2.2 says they MUST be then. IGP Metric (1095) in 2 octets:
+      #   "OSPF link metrics have a length of 2 octets" (5.3.2.4).
+      # * One Prefix NLRI per IPv4 prefix: OSPF Route Type (264), then
+      #   IP Reachability (265). Prefix Metric (1155), and the OSPF
+      #   Forwarding Address (1156) when it is not 0.0.0.0.
+      # * The AS scope gives prefixes only; its ASBR's Node NLRI comes
+      #   from its area.
+      def self.ospf_routes(node, area, identifier)
+        local = { :local_node_descriptors => ospf_descriptors(node.fetch('id'), area) }
+        routes = []
+        if area
+          flags = []
+          flags << :abr if node['abr']
+          flags << :external if node['asbr']
+          routes << [BGP::Link_state.new(:node => head(OSPFV2, identifier, local)),
+                     BGP::Link_state_attribute.new(T::Node_flag_bits.new(*flags))]
+          Array(node['neighbors']).each do |nb|
+            tlvs = [local, { :remote_node_descriptors => ospf_descriptors(nb.fetch('id'), area) }]
+            if nb['address'] && nb['remote_address']
+              tlvs << { :ipv4_interface_address => nb['address'] }
+              tlvs << { :ipv4_neighbor_address => nb['remote_address'] }
+            end
+            routes << [BGP::Link_state.new(:link => head(OSPFV2, identifier, *tlvs)),
+                       BGP::Link_state_attribute.new(T::Igp_metric.new(Integer(nb.fetch('metric')), 2))]
+          end
+        end
+        Array(node['prefixes']).each do |pf|
+          prefix = pf.fetch('prefix').to_s
+          next if prefix.include?(':')
+          tlvs = [local]
+          type = ROUTE_TYPES[pf['route_type'].to_s]
+          tlvs << { :ospf_route_type => type } if type
+          tlvs << { :ip_reachability => prefix }
+          attrs = [T::Prefix_metric.new(Integer(pf.fetch('metric', 0)))]
+          fwd = pf['forwarding'].to_s
+          attrs << T::Ospf_forwarding_address.new(fwd) unless fwd.empty? || fwd == '0.0.0.0'
+          routes << [BGP::Link_state.new(:ipv4_prefix => head(OSPFV2, identifier, *tlvs)),
+                     BGP::Link_state_attribute.new(*attrs)]
+        end
+        routes
+      end
+
+      # [{ospf_area_id}, {igp_router_id}], or the Router-ID alone with no
+      # area.
+      def self.ospf_descriptors(id, area)
+        rid = { :igp_router_id => ospf_router_id(id) }
+        area ? [{ :ospf_area_id => area }, rid] : [rid]
+      end
+
+      # ospfd's `10.255.0.2` as 4 octets of hex, and a network node's
+      # `10.255.0.2:10.0.23.1`, the DR and its interface address, as 8
+      # (section 5.2.1.4).
+      def self.ospf_router_id(id)
+        id.to_s.split(':').collect { |a| IPAddr.new(a).hton.unpack1('H*') }.join
+      end
+
       def self.head(pid, identifier, *tlvs)
         { :protocol_id => pid, :identifier => identifier, :tlvs => tlvs }
       end
@@ -240,10 +332,7 @@ module BGP
         unless unknown.empty?
           raise ArgumentError, "link_state: unknown key(s) #{unknown.join(', ')}: use one of #{KEYS.join(', ')}"
         end
-        @path = config.fetch('isisd', SOCKET).to_s
-        @levels = Array(config.fetch('levels', [1])).collect { |l| Integer(l) }
-        bad = @levels - [1, 2]
-        raise ArgumentError, "link_state: levels are 1 and 2, not #{bad.join(', ')}" unless bad.empty?
+        @source = config.key?('ospfd') ? ospf_source(config) : isis_source(config)
         @identifier = Integer(config.fetch('identifier', 0))
         @peers = Array(config.fetch('peers', [])).collect(&:to_s)
         missing = @peers.reject { |a| @speaker.peer(a) }
@@ -254,6 +343,43 @@ module BGP
         unless UNREACHABLE.include?(@unreachable)
           raise ArgumentError, "link_state: unreachable is #{UNREACHABLE.join(' or ')}, not #{@unreachable}"
         end
+      end
+
+      # An absent source means isisd at its default path, so every phase
+      # 1 and 2 file reads as before.
+      def isis_source(config)
+        %w[areas external].each do |k|
+          raise ArgumentError, "link_state: #{k} goes with ospfd, not isisd" if config.key?(k)
+        end
+        levels = Array(config.fetch('levels', [1])).collect { |l| Integer(l) }
+        bad = levels - [1, 2]
+        raise ArgumentError, "link_state: levels are 1 and 2, not #{bad.join(', ')}" unless bad.empty?
+        IsisSource.new(config.fetch('isisd', SOCKET).to_s, levels)
+      end
+
+      def ospf_source(config)
+        raise ArgumentError, 'link_state: isisd or ospfd, not both: one IGP per Producer' if config.key?('isisd')
+        raise ArgumentError, 'link_state: levels go with isisd, not ospfd' if config.key?('levels')
+        areas = Array(config.fetch('areas', ['0.0.0.0'])).collect { |a| LinkStateProducer.area_id(a) }
+        raise ArgumentError, 'link_state: areas is empty' if areas.empty?
+        external = config.fetch('external', true)
+        unless [true, false].include?(external)
+          raise ArgumentError, "link_state: external is true or false, not #{external.inspect}"
+        end
+        OspfSource.new(config.fetch('ospfd', OspfSource::SOCKET).to_s, areas.uniq, external)
+      end
+
+      # An OSPF area as a dotted quad, given as one or as a number.
+      def self.area_id(a)
+        n = case a
+            when Integer then a
+            when /\A\d+\z/ then Integer(a, 10)
+            when /\A\d{1,3}(\.\d{1,3}){3}\z/ then IPAddr.new(a).to_i
+            end
+        raise ArgumentError, "link_state: area #{a.inspect} is not a dotted quad or a number" unless n && n.between?(0, 0xffff_ffff)
+        IPAddr.new(n, Socket::AF_INET).to_s
+      rescue IPAddr::InvalidAddressError
+        raise ArgumentError, "link_state: area #{a.inspect} is not a dotted quad or a number"
       end
 
       def send_to(peer, announced, withdrawn)
@@ -318,9 +444,9 @@ module BGP
             session
           rescue SystemCallError, IOError, Error, JSON::ParserError, KeyError, ArgumentError, TypeError => e
             @last_error = "#{e.class}: #{e.message}"
-            log(:warn, "bgp-ls: isisd #{@path}: #{e.message}; again in #{@retry}s") unless @stopping
+            log(:warn, "bgp-ls: #{@source.name} #{path}: #{e.message}; again in #{@retry}s") unless @stopping
           ensure
-            close
+            @source.close
           end
           @wake_lock.synchronize { @wake.wait(@wake_lock, @retry) unless @stopping }
         end
@@ -328,62 +454,16 @@ module BGP
         log(:error, "bgp-ls: producer stopped: #{e.class}: #{e.message}")
       end
 
-      # One connection to isisd: subscribe, then read and wait, until it
-      # closes.
+      # One connection to the IGP daemon (two for ospfd): subscribe, then
+      # read and wait, until it closes.
       def session
-        @sock = @connect.call
-        @dirty = false
-        call('events.subscribe', {})
+        @source.open(@connect)
         @last_error = nil
+        stopping = -> { @stopping }
         until @stopping
-          @dirty = false
-          refresh(@levels.collect { |l| call('show.topology', 'level' => l) })
-          wait_for_spf unless @dirty
+          refresh(@source.read)
+          @source.wait(stopping) unless @source.dirty?
         end
-      end
-
-      def close
-        s, @sock = @sock, nil
-        s.close if s && !s.closed?
-      rescue IOError
-        nil
-      end
-
-      # Sends one request and reads lines until its answer. An event read
-      # on the way is noted.
-      def call(method, params)
-        id = (@id += 1)
-        @sock.write("#{JSON.generate('id' => id, 'method' => method, 'params' => params)}\n")
-        loop do
-          msg = next_message
-          next note(msg) unless msg.key?('id')
-          next unless msg['id'] == id
-          raise Error, "#{method}: #{msg['error']}" if msg['error']
-          return msg['result']
-        end
-      end
-
-      # Reads until an `spf` event of a configured level, then a little
-      # longer, so one change that runs SPF at both levels is one read.
-      def wait_for_spf
-        note(next_message) until @dirty || @stopping
-        note(next_message) while !@stopping && @sock.wait_readable(0.1)
-      end
-
-      def next_message
-        line = @sock.gets
-        raise IOError, 'isisd closed the socket' if line.nil?
-        msg = JSON.parse(line)
-        raise Error, 'isisd sent a line that is not a JSON object' unless msg.is_a?(Hash)
-        msg
-      end
-
-      # An `spf` event names its IS-IS level in its data, as `level`.
-      def note(msg)
-        ev = msg['event']
-        return unless ev.is_a?(Hash) && ev['kind'] == 'spf'
-        data = ev['data'].is_a?(Hash) ? ev['data'] : {}
-        @dirty = true if @levels.include?(data['level'])
       end
     end
 

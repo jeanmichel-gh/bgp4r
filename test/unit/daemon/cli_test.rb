@@ -349,8 +349,27 @@ class BGP_Daemon_CLI_Test < Test::Unit::TestCase
     assert_equal(0, status, err.string)
     assert_equal([['show.link_state', { 'offset' => 0 }], ['show.link_state', { 'offset' => 1 }]], client.calls)
     assert_match(/^2 BGP-LS route\(s\)$/, out.string)
-    assert_match(/^- +node +1 0000\.0001\.0101\.00 +r1c1 overload 49\.0001$/, out.string)
-    assert_match(/^10\.2\.0\.1 +link +1 0000\.0001\.0101\.00 +0000\.0001\.0102\.00 +10$/, out.string)
+    assert_match(/^Peer +Type +Proto +Area +Local +Remote or prefix +Metric +Node$/, out.string)
+    assert_match(/^- +node +L1 +- +0000\.0001\.0101\.00 +r1c1 overload 49\.0001$/, out.string)
+    assert_match(/^10\.2\.0\.1 +link +L1 +- +0000\.0001\.0101\.00 +0000\.0001\.0102\.00 +10$/, out.string)
+  end
+
+  # OSPF rows: Proto OSPF, the area, the route type first in Node, and a
+  # pseudonode as DR:address.
+  def test_show_link_state_with_ospf_rows
+    base = { 'peer' => '10.2.0.5', 'protocol_id' => 3, 'identifier' => 1, 'name' => nil, 'flags' => [],
+             'areas' => [], 'remote' => nil, 'prefix' => nil, 'metric' => nil, 'route_type' => nil,
+             'forwarding' => nil, 'since' => '2026-11-10T10:00:00.000Z' }
+    rows = [base.merge('type' => 'node', 'area' => '0.0.0.1', 'local' => '10.255.0.2', 'flags' => ['abr']),
+            base.merge('type' => 'link', 'area' => '0.0.0.1', 'local' => '10.255.0.3',
+                       'remote' => '10.255.0.2:10.0.23.1', 'metric' => 10),
+            base.merge('type' => 'prefix', 'area' => nil, 'local' => '10.255.0.3', 'prefix' => '192.0.2.0/24',
+                       'metric' => 20, 'route_type' => 'external_2')]
+    status, out = run_cli(['-c', 'show link-state'], 'show.link_state' => { 'rows' => rows, 'next_offset' => nil })
+    assert_equal(0, status)
+    assert_match(/^10\.2\.0\.5 +node +OSPF +0\.0\.0\.1 +10\.255\.0\.2 +abr$/, out)
+    assert_match(/^10\.2\.0\.5 +link +OSPF +0\.0\.0\.1 +10\.255\.0\.3 +10\.255\.0\.2:10\.0\.23\.1 +10$/, out)
+    assert_match(%r{^10\.2\.0\.5 +prefix +OSPF +- +10\.255\.0\.3 +192\.0\.2\.0/24 +20 external_2$}, out)
   end
 
   def test_show_link_state_says_when_there_is_none

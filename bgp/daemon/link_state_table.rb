@@ -86,7 +86,29 @@ module BGP
           'flags'       => flags(tlv(attr, 1024)),
           'areas'       => attr ? attr.tlvs.select { |t| t.type == 1027 }.collect { |t| area(t.value) } : [],
           'metric'      => metric(n, attr),
+          'area'        => ospf_area(n),
+          'route_type'  => route_type(n),
+          'forwarding'  => (t = tlv(attr, 1156)) ? t.address.to_s : nil,
           'since'       => Recorder.iso(since) }
+      end
+
+      # Section 5.2.3.1's six names, in ospfd's spelling.
+      ROUTE_TYPES = { 1 => 'intra', 2 => 'inter', 3 => 'external_1', 4 => 'external_2',
+                      5 => 'nssa_1', 6 => 'nssa_2' }.freeze
+
+      # The OSPF Area-ID (514) of the local node, as a dotted quad, or
+      # nil: IS-IS has none, and an AS-scope OSPF object carries none.
+      def self.ospf_area(n)
+        d = n.respond_to?(:local_node_descriptors) && n.local_node_descriptors
+        t = d && d.sub_tlvs.find { |x| x.is_a?(BGP::Link_state::Tlv::Ospf_area_id) }
+        t && t.area
+      end
+
+      # The OSPF Route Type (264) of a prefix, by name; a value section
+      # 5.2.3.1 does not name stays a number.
+      def self.route_type(n)
+        t = n.respond_to?(:tlv) && n.tlv(264)
+        t && ROUTE_TYPES.fetch(t.route_type, t.route_type)
       end
 
       # `node`, `link` or `prefix`, the three NLRI types of RFC 9552
@@ -105,8 +127,9 @@ module BGP
       # 9552 section 5.2.1.4): an IS-IS system ID of 6 octets prints with
       # `.00` after it, and the 7-octet pseudonode form with its PSN
       # octet, so `0000.0001.0101.00` reads the same on both sides. A
-      # 4-octet OSPF Router-ID prints as an address, and anything else as
-      # hex.
+      # 4-octet OSPF Router-ID prints as an address, an 8-octet OSPF
+      # pseudonode as `DR:address` the way ospfd names it, and anything
+      # else as hex.
       def self.node_id(descriptors)
         return nil unless descriptors
         rid = descriptors.sub_tlvs.find { |t| t.is_a?(BGP::Link_state::Tlv::Igp_router_id) }
@@ -117,6 +140,7 @@ module BGP
           h = v.unpack1('H*')
           "#{h[0, 4]}.#{h[4, 4]}.#{h[8, 4]}.#{v.size == 7 ? h[12, 2] : '00'}"
         when 4 then v.unpack('C4').join('.')
+        when 8 then "#{v[0, 4].unpack('C4').join('.')}:#{v[4, 4].unpack('C4').join('.')}"
         else v.unpack1('H*')
         end
       end
@@ -157,7 +181,8 @@ module BGP
       def self.sort(rows)
         rows.sort_by do |r|
           [r['peer'].to_s, TYPES.index(r['type']) || TYPES.size, r['protocol_id'].to_i,
-           r['identifier'].to_i, r['local'].to_s, r['remote'].to_s, r['prefix'].to_s]
+           r['identifier'].to_i, r['area'].to_s, r['local'].to_s, r['remote'].to_s, r['prefix'].to_s,
+           r['route_type'].to_s]
         end
       end
 

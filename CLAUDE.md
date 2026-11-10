@@ -8337,6 +8337,13 @@ it.
 2. **Phase 2, a Propagator. Not started.** Option B: the RIB carries
    SAFI 71, with `Route` keyed by NLRI octets, the decision process,
    `UpdateBuilder` and every show command. It needs a spec of its own.
+3. **Phase 3, an OSPFv2 source. Built** in the pull request that wrote
+   this; `docs/design/bgp-ls-ospf.md`. `link_state: { ospfd:, areas:,
+   external: }`, the source objects in `link_state_sources.rb`
+   (isisd's, then ospfd's, which needs two connections), the OSPF
+   mapping in `LinkStateProducer.ospf_routes`, and `area`, `route_type`
+   and `forwarding` in the row. The gate is routescope's `bgp-ls-ospf`
+   lab against the real ospfd.
 
 ## Known issues to work on
 

@@ -1595,8 +1595,10 @@ UPDATE to RFC 7606 rather than to its RIB.
 
 ## 12. The Producer and the collector, in bgp4rd
 
-bgp4rd can originate BGP-LS from an IS-IS LSDB, and keep the BGP-LS
-routes it receives. The design is `docs/design/bgp-ls-producer.md`.
+bgp4rd can originate BGP-LS from an IS-IS or an OSPFv2 LSDB, and keep
+the BGP-LS routes it receives. The design is
+`docs/design/bgp-ls-producer.md`, with `docs/design/bgp-ls-ospf.md` for
+OSPF.
 `docs/bgp-ls-howto.md` explains it as questions and answers.
 `docs/daemon.md` has the node file and the API.
 
@@ -1659,6 +1661,43 @@ interface addresses (259, 260), TE and SR TLVs, IPv6 prefixes and the
 AS sub-TLV. Two parallel links between one pair of nodes give one Link
 NLRI key, so the second overwrites the first.
 
+### What the Producer sends for OSPFv2
+
+With `ospfd:` in the block, it reads ospfd's `show.topology` per
+configured area, and for the AS scope unless `external: false`
+(ospfv2 `docs/design/ospf-topology.md`). Each node gives:
+
+| NLRI | Descriptors | BGP-LS Attribute |
+|---|---|---|
+| Node, per area | OSPF Area-ID (514), IGP Router-ID (515) | Node Flag Bits (1024): B for an ABR, E for an ASBR |
+| Link, per neighbor | local and remote 514 and 515; for a p2p link with both addresses, IPv4 interface (259) and neighbor (260) address | IGP Metric (1095), 2 octets |
+| Prefix, per IPv4 prefix | local 514 and 515, OSPF Route Type (264), IP Reachability (265) | Prefix Metric (1155), OSPF Forwarding Address (1156) when not 0.0.0.0 |
+
+* The Protocol-ID is 3 for every area (Table 2). The area is in 514.
+* 515 is the 4-octet Router-ID. A LAN is a pseudonode: 8 octets, the
+  DR's Router-ID, then its interface address (section 5.2.1.4). It
+  gets a Node NLRI, as an IS-IS pseudonode does, and its links to
+  routers carry metric 0, as RFC 2328 section 2.1 says: "arcs leading
+  from networks to routers always have cost 0".
+* 514 then 515: section 5.2.1.4 says the sub-TLVs "MUST be arranged in
+  ascending order".
+* 259 and 260 when ospfd knows both addresses: section 5.2.2 says they
+  MUST be included then.
+* "OSPF link metrics have a length of 2 octets" (section 5.3.2.4).
+* The route type is `intra`, `inter`, `external_1`, `external_2`,
+  `nssa_1` or `nssa_2` in ospfd's answer, 1 to 6 on the wire (section
+  5.2.3.1).
+* An AS-scope prefix (type 5) has 515 and no 514: the Area-ID "is not
+  used for NLRIs when carrying information that is derived from
+  AS-scope LSAs" (section 5.2.1.4). The ASBR's Node NLRI comes from its
+  area.
+* An ABR's Node NLRI comes once per area, each with its area.
+* No Node Name: ospfd has no hostname.
+
+ospfd's `events.subscribe` makes its connection a stream that takes no
+other request, so the Producer opens two: one for `topology` events,
+one for `show.topology`.
+
 The UPDATE carries ORIGIN IGP, AS_PATH (our AS toward an external peer,
 empty toward an internal one), LOCAL_PREF 100 toward an internal peer,
 MP_REACH_NLRI with the session's own address as next hop, and the BGP-LS
@@ -1690,11 +1729,20 @@ Producer's rows have `peer` null:
  "since": "2026-11-09T10:00:00.000Z"}
 ```
 
-`local` and `remote` are spelled as isisd spells a node. `areas` is
-spelled as isisd spells an area, `49.0001`. `flags` holds bit names
+`local` and `remote` are spelled as isisd spells a node, or as ospfd
+does: a dotted quad, and `DR:address` for a pseudonode. `areas` is
+spelled as isisd spells an area, `49.0001`. `area` is the OSPF Area-ID
+(514) as a dotted quad, null for IS-IS and for an AS-scope route.
+`route_type` is the OSPF Route Type (264) by name, and `forwarding` the
+OSPF Forwarding Address (1156), both null when absent. `flags` holds bit names
 from `Node_flag_bits::BITS`. `metric` is the IGP Metric on a link and
 the Prefix Metric on a prefix. `type` is `unknown` for an NLRI type the
 library keeps whole without reading. `LinkStateTable.row` builds the row
 for both sides, so a Producer and its collector answer the same rows,
 apart from `peer` and `since`. `test/functional/link_state_daemon_test.rb`
-checks that over loopback.
+checks that over loopback, and `link_state_ospf_daemon_test.rb` for
+ospfd.
+
+`bgp4r-cli -c 'show link-state'` prints the Protocol-ID as `L1`, `L2` or
+`OSPF` in the column "Proto", the area in "Area", and an OSPF prefix's
+route type first in "Node".
