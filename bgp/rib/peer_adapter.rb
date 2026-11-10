@@ -61,6 +61,44 @@ module BGP
       # command, not a change here.
       MP_SAFIS = [IANA::SAFI::UNICAST, IANA::SAFI::MULTICAST].freeze
 
+      # BGP-LS, RFC 9552 section 5.2: "All non-VPN link, node, and prefix
+      # information SHALL be encoded using AFI 16388 / SAFI 71."
+      #
+      # **It does not go in the table, and that is
+      # docs/design/bgp-ls-producer.md's option A.** A BGP-LS NLRI is not
+      # a prefix, so `Route` has no key for it, for the reason MP_SAFIS
+      # gives for a label or an RD. `BGP::Daemon::LinkStateTable` keeps
+      # these routes instead, keyed by the NLRI's octets, with no
+      # decision process. The translation lives here, beside the one for
+      # the families that do go in the table, so one file says what an
+      # UPDATE carries.
+      LINK_STATE = [IANA::AFI::BGP_LS, IANA::SAFI::BGP_LS].freeze
+
+      # What one UPDATE asks a BGP-LS table to do, withdrawals first, as
+      # `operations` orders them:
+      #
+      #   [[:withdraw, link_state], [:announce, link_state, attribute]]
+      #
+      # attribute is the UPDATE's BGP-LS Attribute (RFC 9552 section
+      # 5.3), or nil when it carried none. Any other family gives nothing.
+      def self.link_state_operations(update)
+        pa = update.path_attribute
+        return [] unless pa
+        ops = []
+        each_link_state(pa, BGP::Mp_unreach) { |ls| ops << [:withdraw, ls] }
+        attr = pa.has?(BGP::Link_state_attribute) ? pa[BGP::Link_state_attribute] : nil
+        each_link_state(pa, BGP::Mp_reach) { |ls| ops << [:announce, ls, attr] }
+        ops
+      end
+
+      def self.each_link_state(pa, klass)
+        return unless pa.has?(klass)
+        mp = pa[klass]
+        return unless [mp.afi, mp.safi] == LINK_STATE
+        Array(mp.nlris).each { |ls| yield ls if ls.is_a?(BGP::Link_state) }
+      end
+      private_class_method :each_link_state
+
       attr_reader :neighbor, :sink
 
       # neighbor: a BGP::Neighbor.
