@@ -3,11 +3,12 @@
 Questions and answers about the BGP-LS Producer: what it is, what it
 reads, and what it sends. It describes the design in
 `docs/design/bgp-ls-producer.md` and the isis4r method in isis's
-`docs/design/bgp-ls-export.md`. Until both are built, this is how it
-will work, not how it works.
+`docs/design/bgp-ls-export.md`. The bgp4rd side is built:
+`BGP::Daemon::LinkStateProducer` and `BGP::Daemon::LinkStateTable`.
+`docs/daemon.md` has the `link_state:` block of the node file.
 
-For the wire format (NLRI types, TLVs, MP_REACH framing), read
-`docs/bgp-ls.md`.
+For the wire format (NLRI types, TLVs, MP_REACH framing), and what
+bgp4rd sends, read `docs/bgp-ls.md`, section 12 for bgp4rd.
 
 ## How does a BGP speaker configured for BGP-LS learn the IS-IS LSDB?
 
