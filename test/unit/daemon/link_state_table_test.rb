@@ -113,10 +113,12 @@ class BGP_Daemon_LinkStateTable_Test < Test::Unit::TestCase
     assert_equal({ 'peer' => '10.2.0.1', 'type' => 'link', 'protocol_id' => 1, 'identifier' => 0,
                    'local' => '0000.0001.0101.00', 'remote' => '0000.0001.0102.00',
                    'prefix' => nil, 'name' => nil, 'flags' => [], 'areas' => [], 'metric' => 10,
+                   'area' => nil, 'route_type' => nil, 'forwarding' => nil,
                    'since' => '2026-11-09T10:00:00.000Z' }, rows[1])
     assert_equal({ 'peer' => '10.2.0.1', 'type' => 'node', 'protocol_id' => 1, 'identifier' => 0,
                    'local' => '0000.0001.0101.00', 'remote' => nil, 'prefix' => nil, 'name' => 'r1c1',
                    'flags' => %w[overload attached], 'areas' => ['49.0001'], 'metric' => nil,
+                   'area' => nil, 'route_type' => nil, 'forwarding' => nil,
                    'since' => '2026-11-09T10:00:00.000Z' }, rows[0])
     assert_equal('10.200.0.1/32', rows[2]['prefix'])
     assert_equal(5, rows[2]['metric'])
@@ -196,5 +198,48 @@ class BGP_Daemon_LinkStateTable_Test < Test::Unit::TestCase
     @t.attach(n)
     n.receive(update_with([node]))
     assert_equal(0, @t.size)
+  end
+
+  # --- OSPF rows (docs/design/bgp-ls-ospf.md) -------------------------------
+
+  def ospf_head(*tlvs) ; { :protocol_id => 3, :identifier => 1, :tlvs => tlvs } ; end
+  def ospf_local(area, id) ; { :local_node_descriptors => [{ :ospf_area_id => area }, { :igp_router_id => id }].compact } ; end
+
+  O2 = '0aff0002'         # 10.255.0.2
+  O3 = '0aff0003'         # 10.255.0.3
+  LAN = '0aff00020a001701' # 10.255.0.2:10.0.23.1
+
+  def test_ospf_rows_carry_the_area_the_route_type_and_the_forwarding_address
+    at = Time.utc(2026, 11, 10, 10)
+    lan_link = BGP::Link_state.new(:link => ospf_head(ospf_local('0.0.0.1', O3),
+                                                      { :remote_node_descriptors => [{ :ospf_area_id => '0.0.0.1' }, { :igp_router_id => LAN }] }))
+    ext = BGP::Link_state.new(:ipv4_prefix => ospf_head({ :local_node_descriptors => [{ :igp_router_id => O3 }] },
+                                                        { :ospf_route_type => 4 }, { :ip_reachability => '192.0.2.0/24' }))
+    inter = BGP::Link_state.new(:ipv4_prefix => ospf_head(ospf_local('0.0.0.0', O2), { :ospf_route_type => 2 },
+                                                          { :ip_reachability => '10.0.23.0/24' }))
+    @t.announce('10.2.0.5', lan_link, attr(T::Igp_metric.new(10, 2)), at)
+    @t.announce('10.2.0.5', ext, attr(T::Prefix_metric.new(20), T::Ospf_forwarding_address.new('10.0.23.3')), at)
+    @t.announce('10.2.0.5', inter, attr(T::Prefix_metric.new(10)), at)
+    link, *prefixes = @t.rows
+    assert_equal(['0.0.0.1', '10.255.0.3', '10.255.0.2:10.0.23.1', 10, nil],
+                 link.values_at('area', 'local', 'remote', 'metric', 'route_type'))
+    assert_equal([[nil, '192.0.2.0/24', 'external_2', '10.0.23.3'], ['0.0.0.0', '10.0.23.0/24', 'inter', nil]],
+                 prefixes.collect { |r| r.values_at('area', 'prefix', 'route_type', 'forwarding') })
+  end
+
+  # An ABR's Node NLRI comes once per area; the rows sort by area.
+  def test_an_abr_is_one_row_per_area
+    [%w[0.0.0.1 abr], %w[0.0.0.0 abr]].each do |area, _|
+      @t.announce('10.2.0.5', BGP::Link_state.new(:node => ospf_head(ospf_local(area, O2))),
+                  attr(T::Node_flag_bits.new(:abr)))
+    end
+    assert_equal([['0.0.0.0', '10.255.0.2', ['abr']], ['0.0.0.1', '10.255.0.2', ['abr']]],
+                 @t.rows.collect { |r| r.values_at('area', 'local', 'flags') })
+  end
+
+  def test_a_route_type_section_5_2_3_1_does_not_name_stays_a_number
+    n = BGP::Link_state.new(:ipv4_prefix => ospf_head(ospf_local('0.0.0.0', O2), { :ospf_route_type => 9 },
+                                                      { :ip_reachability => '10.9.0.0/16' }))
+    assert_equal(9, LST.route_type(n.nlri))
   end
 end

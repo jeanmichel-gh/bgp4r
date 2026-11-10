@@ -272,8 +272,12 @@ fib:
   table: 100                       # absent means compute and do not install
 
 link_state:                        # a BGP-LS Producer; see below
-  isisd: /run/isis4r/isisd.sock    # the default
+  isisd: /run/isis4r/isisd.sock    # the default source
   levels: [1]                      # IS-IS levels, the default; Protocol-ID 1 and 2
+  # or, for OSPFv2, in place of isisd and levels:
+  # ospfd: /run/ospfv2/ospfd.sock  # Protocol-ID 3
+  # areas: [0.0.0.0]               # dotted quads or numbers; the default
+  # external: true                 # type 5 LSAs too; the default
   identifier: 0                    # RFC 9552 section 5.2, the default
   peers: [10.0.10.1]               # who gets BGP-LS; default none
   unreachable: withdraw            # or keep; the default is withdraw
@@ -342,11 +346,16 @@ corrected it, and `lab/README.md` carries the same caveat.
 
 **`link_state` makes this bgp4rd a BGP-LS Producer** (RFC 9552,
 AFI 16388 / SAFI 71). It reads isisd's `show.topology` on the `isisd`
-socket after each `spf` event of a configured level, and sends Node,
-Link and Prefix NLRIs to each address in `peers`. Each of those must be
+socket after each `spf` event of a configured level, or ospfd's on the
+`ospfd` socket after each `topology` event of a configured area or of
+the AS scope, and sends Node, Link and Prefix NLRIs to each address in
+`peers`. A block names `isisd` or `ospfd`, not both: two IGP domains on
+one box are two bgp4rd. With neither, it is isisd at its default path.
+`areas` and `external` go with `ospfd` only, `levels` with `isisd`
+only. Each of those must be
 a configured neighbor, and its session must negotiate 16388/71, which a
 neighbor asks for with `capabilities: [as4_byte, {mbgp: bgp_ls}]`.
-Other sessions get nothing. A node isisd marks unreachable is withdrawn,
+Other sessions get nothing. A node the IGP marks unreachable is withdrawn,
 unless `unreachable: keep`. If the socket closes, it tries again every
 5 seconds. Any other key is refused at start-up. Every bgp4rd also keeps
 the BGP-LS routes it receives, in a table of their own outside the RIB.

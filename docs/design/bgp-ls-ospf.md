@@ -1,6 +1,6 @@
 # OSPFv2 as a BGP-LS Producer source
 
-Status: draft, for approval.
+Status: approved (#317, merged 2026-11-10). Built in the pull request that changed this line.
 
 Two other specs go with this one: ospfv2 `docs/design/ospf-topology.md`
 (ospfd's `show.topology` and its `topology` event) and routescope
@@ -68,13 +68,17 @@ link_state:
 - `identifier`, `peers`, `unreachable` as today.
 
 One source per Producer. Two domains on one box are two bgp4rd
-processes. The Producer stays one socket, one thread, one `@sent`.
+processes. The Producer stays one thread and one `@sent`. It is not one
+socket for ospfd: ospfd's `events.subscribe` turns its connection into
+a stream that answers no other request (ospfv2
+`lib/ospfv2/daemon/api.rb`), so the OSPF source opens two, one for
+events and one for requests. Found while building it.
 
 ### Reading ospfd
 
-- Connect to `ospfd`, `events.subscribe { kinds: ["topology"] }`, then
-  read `show.topology` for each configured area, and `{ scope: "as" }`
-  when `external`.
+- Connect to `ospfd` twice. On the first, `events.subscribe { kinds:
+  ["topology"] }`. On the second, read `show.topology` for each
+  configured area, and `{ scope: "as" }` when `external`.
 - Re-read after a `topology` event whose area is configured, or whose
   scope is `as` when `external`. Keep reading 0.1 s more, as for isisd,
   so a run over several areas gives one read.

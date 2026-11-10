@@ -310,14 +310,20 @@ TEXT
         return "No BGP-LS routes.\n" if rows.empty?
         out = +''
         out << format("%d BGP-LS route(s)\n\n", rows.size)
-        line = "%-15s %-6s %2s %-20s %-20s %6s %s\n"
-        out << format(line, 'Peer', 'Type', 'L', 'Local', 'Remote or prefix', 'Metric', 'Node')
+        line = "%-15s %-6s %-5s %-7s %-20s %-20s %6s %s\n"
+        out << format(line, 'Peer', 'Type', 'Proto', 'Area', 'Local', 'Remote or prefix', 'Metric', 'Node')
         rows.each do |r|
-          node = [r['name'], *Array(r['flags']), *Array(r['areas'])].compact.join(' ')
-          out << format(line, r['peer'] || '-', r['type'], r['protocol_id'], r['local'],
+          node = [r['route_type'], r['name'], *Array(r['flags']), *Array(r['areas'])].compact.join(' ')
+          out << format(line, r['peer'] || '-', r['type'], proto(r['protocol_id']), r['area'] || '-', r['local'],
                         r['remote'] || r['prefix'], r['metric'], node).sub(/ +\n\z/, "\n")
         end
         out
+      end
+
+      # RFC 9552 section 5.2, Table 2: 1 and 2 are IS-IS's levels, 3 is
+      # OSPFv2. Any other prints as its number.
+      def proto(pid)
+        { 1 => 'L1', 2 => 'L2', 3 => 'OSPF' }.fetch(pid, pid.to_s)
       end
 
       # `clear bgp PEER`, which resets one session. The line it prints is

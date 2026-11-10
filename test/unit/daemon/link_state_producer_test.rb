@@ -311,7 +311,8 @@ class BGP_Daemon_LinkStateProducer_Test < Test::Unit::TestCase
     node = rows.find { |r| r['type'] == 'node' && r['name'] == 'r1' }
     assert_equal({ 'peer' => nil, 'type' => 'node', 'protocol_id' => 1, 'identifier' => 0,
                    'local' => R1, 'remote' => nil, 'prefix' => nil, 'name' => 'r1',
-                   'flags' => [], 'areas' => ['49.0001'], 'metric' => nil },
+                   'flags' => [], 'areas' => ['49.0001'], 'metric' => nil,
+                   'area' => nil, 'route_type' => nil, 'forwarding' => nil },
                  node.reject { |k, _| k == 'since' })
     assert_match(/\A\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z\z/, node['since'])
   end
