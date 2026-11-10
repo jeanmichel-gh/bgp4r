@@ -433,6 +433,21 @@ bgp/daemon/              `bgp4rd` the daemon and `bgp4r-cli` its client;
                          or on `peer.resend`, which is `Router#resend`: the
                          one send that does not diff against the
                          Adj-RIB-Out
+                         link_state_table.rb the BGP-LS routes a speaker
+                         received, per peer, keyed by NLRI octets,
+                         outside the RIB: option A of
+                         docs/design/bgp-ls-producer.md. Every Speaker
+                         has one, fed by `PeerAdapter.link_state_operations`
+                         from sessions that negotiated 16388/71.
+                         `LinkStateTable.row` is the `show.link_state` row
+                         for both sides
+                         link_state_producer.rb the BGP-LS Producer of a
+                         `link_state:` block: reads isisd's
+                         `show.topology` after each `spf` event, diffs,
+                         and sends MP_REACH and MP_UNREACH to the peers in
+                         `peers`. docs/bgp-ls.md section 12.
+                         `test/helpers/fake_isisd.rb` is the isisd its
+                         tests talk to
 bgp/sim/                 `bgp4r-sim` the route injector, and `bgp4r
                          routegen`; require 'bgp/sim', which bgp4r.rb
                          does not, the same arrangement bgp/daemon.rb and
@@ -1763,7 +1778,7 @@ CI: `.github/workflows/test.yml` runs both suites on every push to master and ev
 
 `.github/workflows/capture.yml` is the one workflow that deploys a containerlab lab: it builds the `lab-node`, BIRD and GoBGP images, deploys `lab/routescope/bgp4r-lab`, `lab/routescope/rr-lab` and `lab/routescope/fwd-lab` in a job each, and runs each one's `capture.sh`, on demand and on a push that changes `lab/routescope/` or the Dockerfile. Its log is what routescope's BGP fixtures are cut from. **rr-lab's `capture.sh` also checks**: it prints one `CHECK ok` or `CHECK FAIL` line per RFC 4456 fact and fails the job when one fails, because the scenario language has no key for ORIGINATOR_ID or CLUSTER_LIST. **fwd-lab's does the same for forwarding**, because the scenario language has no ping step.
 
-Baseline on 2026-11-06: 3767 tests, 37060 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%.
+Baseline on 2026-11-10: 3814 tests, 37217 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%, measured on 2026-11-06 and not since.
 
 **That coverage figure is 98.5% for the library and the rest is the two
 programs, not a gap anywhere else.** Measured the same run: with
@@ -8304,6 +8319,24 @@ reflector", what it shows about itself, and a lab that runs one.
 6. **`client_to_client: false`, only if asked for.** IOS's `no bgp
    client-to-client reflection`, for clients already fully meshed. RFC
    4456 section 6 allows it. Not started until somebody needs it.
+
+### The BGP-LS lab, bgp4rd as Producer and collector. Phase 1 Done
+
+The design is `docs/design/bgp-ls-producer.md`, with isis's
+`docs/design/bgp-ls-export.md` and routescope's
+`docs/design/bgp-ls-lab.md` beside it. `docs/bgp-ls-howto.md` explains
+it.
+
+1. **Phase 1, one IGP domain. Done** in the pull request that wrote
+   this. The `link_state:` block, `LinkStateProducer`,
+   `LinkStateTable`, `show.link_state`, `bgp4r-cli -c 'show
+   link-state'` and `{mbgp: bgp_ls}`. BGP-LS lives outside the RIB
+   (option A). `test/functional/link_state_daemon_test.rb` is the gate
+   on this side. It runs against a fake isisd, so the real isisd's
+   `show.topology` is checked in the lab, which is routescope's gate.
+2. **Phase 2, a Propagator. Not started.** Option B: the RIB carries
+   SAFI 71, with `Route` keyed by NLRI octets, the decision process,
+   `UpdateBuilder` and every show command. It needs a spec of its own.
 
 ## Known issues to work on
 

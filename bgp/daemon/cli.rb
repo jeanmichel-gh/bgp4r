@@ -71,7 +71,7 @@ module BGP
       # would have to invent a syntax for, and this file is a string
       # match against a short list and not a parser.
       COMMANDS = ['show bgp summary', 'show bgp', 'show bgp PREFIX',
-                  'show fib', 'show configuration', 'show configuration candidate',
+                  'show fib', 'show link-state', 'show configuration', 'show configuration candidate',
                   'clear bgp PEER'].freeze
 
       STYLES = %w[ios junos iosxr].freeze
@@ -94,6 +94,7 @@ Usage: bgp4r-cli [options] [METHOD [JSON]]
   bgp4r-cli -c 'show bgp summary'      an operator command, as text
   bgp4r-cli -c 'show bgp'              the Loc-RIB, as a router prints it
   bgp4r-cli -c 'show bgp 10.0.0.0/8'   one prefix, in detail
+  bgp4r-cli -c 'show link-state'       BGP-LS routes, sent and received
   bgp4r-cli -c 'show configuration'    its configuration, as set lines
   bgp4r-cli -c 'clear bgp 10.0.10.1'   reset one session
   bgp4r-cli show.peers                 an API method, as JSON
@@ -217,6 +218,7 @@ TEXT
         when 'show bgp' then @out.print routes(client, opts[:style], nil)
         when /\Ashow bgp (\S+)\z/ then @out.print routes(client, opts[:style], $1)
         when 'show fib' then @out.print fib(client)
+        when 'show link-state' then @out.print link_state(client)
         when 'show configuration' then @out.print configuration(client, false)
         when 'show configuration candidate' then @out.print configuration(client, true)
         when /\Aclear bgp (\S+)\z/ then @out.print cleared(client, $1)
@@ -290,6 +292,30 @@ TEXT
         unless failed.empty?
           out << "\nRefused by the kernel:\n"
           failed.each { |r| out << format("%-20s %s\n", r['prefix'], r['error']) }
+        end
+        out
+      end
+
+      # `show link-state`, the rows of `show.link_state` as a table: what
+      # this daemon sent as a BGP-LS Producer, under peer `-`, and what it
+      # received, per peer. Every page is read. The layout is this
+      # file's own, as the summary's is.
+      def link_state(client)
+        rows, offset = [], 0
+        loop do
+          page = client.call('show.link_state', 'offset' => offset)
+          rows.concat(Array(page['rows']))
+          offset = page['next_offset'] or break
+        end
+        return "No BGP-LS routes.\n" if rows.empty?
+        out = +''
+        out << format("%d BGP-LS route(s)\n\n", rows.size)
+        line = "%-15s %-6s %2s %-20s %-20s %6s %s\n"
+        out << format(line, 'Peer', 'Type', 'L', 'Local', 'Remote or prefix', 'Metric', 'Node')
+        rows.each do |r|
+          node = [r['name'], *Array(r['flags']), *Array(r['areas'])].compact.join(' ')
+          out << format(line, r['peer'] || '-', r['type'], r['protocol_id'], r['local'],
+                        r['remote'] || r['prefix'], r['metric'], node).sub(/ +\n\z/, "\n")
         end
         out
       end

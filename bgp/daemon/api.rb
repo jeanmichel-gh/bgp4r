@@ -122,6 +122,7 @@ module BGP
         'show.adj_in'     => ->(a, p) { a.views.adj_in(p) },
         'show.adj_out'    => ->(a, p) { a.views.adj_out(p) },
         'show.fib'        => ->(a, p) { a.views.fib(p) },
+        'show.link_state' => ->(a, p) { a.views.link_state(p) },
         'show.log'        => ->(a, p) { a.views.log(p) },
         'show.text'       => ->(a, p) { a.views.text(p) },
         'peer.clear'      => ->(a, p) { a.control.peer_clear(p) },

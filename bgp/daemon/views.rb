@@ -177,6 +177,17 @@ module BGP
         end
       end
 
+      # BGP-LS routes, one row per route, one page of them: the ones this
+      # speaker sent as a Producer, with `peer` null, then the ones it
+      # received, per peer. Outside the RIB, so outside its lock: see
+      # bgp/daemon/link_state_table.rb for the row.
+      def link_state(params = {})
+        rows = @speaker.link_state_rows
+        offset, limit = window(params)
+        nxt = offset + limit
+        envelope(rows[offset, limit].to_a, rows.size, offset, limit, nxt < rows.size ? nxt : nil)
+      end
+
       # The last lines this daemon logged, oldest first.
       #
       # `count` is how many, clamped. `kept` is how many the ring holds

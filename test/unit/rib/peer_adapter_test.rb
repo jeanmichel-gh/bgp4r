@@ -328,4 +328,36 @@ class TestBgpRibPeerAdapter < Test::Unit::TestCase
     @adapter.detach
     assert_equal(0, @n.count_observers)
   end
+
+  # BGP-LS, AFI 16388 SAFI 71, does not go in the table: it is option A
+  # of docs/design/bgp-ls-producer.md. operations gives nothing for it,
+  # and link_state_operations gives what BGP::Daemon::LinkStateTable
+  # applies, withdrawals first, with the UPDATE's BGP-LS Attribute.
+  def test_bgp_ls_is_read_for_its_own_table_and_not_for_this_one
+    peer_opened
+    node = { :node => { :protocol_id => 1, :identifier => 0,
+                        :tlvs => [{ :local_node_descriptors => [{ :igp_router_id => '000000010101' }] }] } }
+    attr = BGP::Link_state_attribute.new(BGP::Link_state::Tlv::Node_name.new('r1'))
+    reach = BGP::Update.new(BGP::Path_attribute.new(
+      BGP::Origin.new(0), BGP::As_path.new(65002),
+      BGP::Mp_reach.new(:afi => 16388, :safi => 71, :nexthop => ['10.0.0.2'], :nlris => [node]), attr))
+    assert_equal([], @adapter.operations(reach))
+    ops = BGP::Rib::PeerAdapter.link_state_operations(reach)
+    assert_equal([:announce], ops.map(&:first))
+    assert_instance_of(BGP::Link_state, ops[0][1])
+    assert_equal(attr.encode, ops[0][2].encode)
+    both = BGP::Update.new(BGP::Path_attribute.new(
+      BGP::Mp_unreach.new(:afi => 16388, :safi => 71, :nlris => [node]),
+      BGP::Mp_reach.new(:afi => 16388, :safi => 71, :nexthop => ['10.0.0.2'], :nlris => [node])))
+    assert_equal([:withdraw, :announce], BGP::Rib::PeerAdapter.link_state_operations(both).map(&:first))
+    assert_nil(BGP::Rib::PeerAdapter.link_state_operations(both)[1][2], 'no attribute, nil')
+  end
+
+  def test_link_state_operations_ignores_every_other_family
+    peer_opened
+    assert_equal([], BGP::Rib::PeerAdapter.link_state_operations(
+      BGP::Update.new(mp_reach(1, 1, '10.0.0.1', '10.1.0.0/16'))))
+    assert_equal([], BGP::Rib::PeerAdapter.link_state_operations(
+      BGP::Update.new(path_attribute, BGP::Nlri.new('10.0.0.0/8'))))
+  end
 end

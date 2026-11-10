@@ -461,4 +461,25 @@ class BGP_Daemon_Views_Test < Test::Unit::TestCase
                             BGP::Next_hop.new('10.0.0.1'))
   end
 
+  # `show.link_state`: one page of BGP-LS rows, in the envelope of every
+  # other paged view. The table is outside the RIB. A speaker that holds
+  # none answers an empty page.
+  def test_link_state_answers_a_page_of_rows
+    s = speaker
+    v = views(s)
+    assert_equal({ :rows => [], :total => 0, :offset => 0, :limit => 500, :next_offset => nil },
+                 v.link_state)
+    ls = ->(id) {
+      BGP::Link_state.new(:node => { :protocol_id => 1, :identifier => 0,
+                                     :tlvs => [{ :local_node_descriptors => [{ :igp_router_id => id }] }] })
+    }
+    s.link_state.announce('10.0.0.2', ls.call('000000010101'), nil)
+    s.link_state.announce('10.0.0.2', ls.call('000000010102'), nil)
+    page = v.link_state('limit' => 1)
+    assert_equal(2, page[:total])
+    assert_equal(1, page[:next_offset])
+    assert_equal('0000.0001.0101.00', page[:rows].first['local'])
+    assert_equal('10.0.0.2', page[:rows].first['peer'])
+    assert_equal('0000.0001.0102.00', v.link_state('offset' => 1)[:rows].first['local'])
+  end
 end

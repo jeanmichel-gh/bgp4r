@@ -6,7 +6,8 @@ encoding and decoding. Read this before touching
 `bgp/nlris/link_state_tlv.rb` or `bgp/nlris/link_state.rb`, before
 adding a TLV type or an NLRI type, before changing how `mp_reach.rb`
 and `mp_unreach.rb` frame an NLRI or read a next hop, and before
-putting a BGP-LS check in `validation.rb`.
+putting a BGP-LS check in `validation.rb`. Section 12 is how bgp4rd
+originates BGP-LS from isisd and keeps what it receives.
 
 Its load bearing claims are asserted by `test/unit/bgp_ls_doc_test.rb`,
 whose NLRI type and TLV tables are **discovered** rather than listed,
@@ -1591,3 +1592,109 @@ other side, and it is why the multi-NLRI cases in
 the only cover the parse-side framing has. The send direction does
 catch it, because GoBGP reads the length and a wrong one sends the
 UPDATE to RFC 7606 rather than to its RIB.
+
+## 12. The Producer and the collector, in bgp4rd
+
+bgp4rd can originate BGP-LS from an IS-IS LSDB, and keep the BGP-LS
+routes it receives. The design is `docs/design/bgp-ls-producer.md`.
+`docs/bgp-ls-howto.md` explains it as questions and answers.
+`docs/daemon.md` has the node file and the API.
+
+RFC 9552 section 3 names the roles: "The term BGP-LS Producer refers to
+a BGP Speaker that is originating link-state information into BGP." The
+collector is a BGP speaker too. The program that reads it, such as
+routescope, is the Consumer, and "a BGP-LS Consumer MUST NOT be able to
+send information to a BGP Speaker for origination into BGP-LS." The
+collector's table has no write method.
+
+### Where the routes live
+
+In a table of their own, outside the RIB. This is option A of the
+design. A BGP-LS NLRI is not a prefix, and `Rib::Route` keys on a
+prefix. So `PeerAdapter::MP_SAFIS` stays unicast and multicast.
+`PeerAdapter.link_state_operations` reads AFI 16388 / SAFI 71 out of
+an UPDATE, and `BGP::Daemon::LinkStateTable` keeps the routes:
+
+* keyed by peer and by the NLRI's octets;
+* the value is the NLRI, its BGP-LS Attribute and the time it came;
+* MP_UNREACH_NLRI removes the key, and a session going down removes
+  all of that peer's keys;
+* only from a session where both OPENs carried 16388/71;
+* no decision process, and nothing is sent on.
+
+A Propagator, which runs the decision process on BGP-LS and passes it
+on, needs the RIB to carry SAFI 71. That is phase 2 and is not built.
+
+### What the Producer sends
+
+`BGP::Daemon::LinkStateProducer` reads isisd's `show.topology`. Each
+node gives:
+
+| NLRI | Descriptors | BGP-LS Attribute |
+|---|---|---|
+| Node | IGP Router-ID (515) | Node Flag Bits (1024), Node Name (1026), IS-IS Area Identifier (1027) per area |
+| Link, per neighbor | local and remote IGP Router-ID | IGP Metric (1095) |
+| Prefix, per IPv4 prefix | local IGP Router-ID, IP Reachability (265) | Prefix Metric (1155) |
+
+* The Protocol-ID is the IS-IS level: 1 for Level 1 and 2 for Level 2,
+  section 5.2's Table 2.
+* The IGP Router-ID is the 6-octet system ID, or 7 octets with the
+  pseudonode octet when it is not zero (section 5.2.1.4).
+* Node Flag Bits is always sent, with O for overload and A for
+  attached. A is bit 1, per erratum 7789 on section 5.3.1.1.
+* The IGP Metric is 3 octets for a wide metric and 1 for a narrow one.
+  Section 5.3.2.4: "IS-IS wide metrics have a length of 3 octets."
+* Each node lists its own neighbors, so a link is two Link NLRIs, one
+  from each end.
+* Nodes with `reachable: false` give no routes, which is section 5.9's
+  SHOULD: "A BGP-LS Producer SHOULD withdraw all link-state objects
+  advertised by it in BGP when the node that originated its
+  corresponding LSPs/LSAs is determined to have become unreachable in
+  the IGP." Building the set from reachable nodes on each read also
+  meets the MUST that follows: it re-advertises them when the node is
+  reachable again. `unreachable: keep` turns this off.
+
+Phase 1 leaves out the Link Local/Remote Identifiers (258), the
+interface addresses (259, 260), TE and SR TLVs, IPv6 prefixes and the
+AS sub-TLV. Two parallel links between one pair of nodes give one Link
+NLRI key, so the second overwrites the first.
+
+The UPDATE carries ORIGIN IGP, AS_PATH (our AS toward an external peer,
+empty toward an internal one), LOCAL_PREF 100 toward an internal peer,
+MP_REACH_NLRI with the session's own address as next hop, and the BGP-LS
+Attribute. Routes that share an attribute share an UPDATE.
+
+### When it sends
+
+1. It subscribes to isisd's events and reads `show.topology` for each
+   configured level.
+2. It compares the routes with the ones it sent. What is new or changed
+   goes in MP_REACH_NLRI. What is gone goes in MP_UNREACH_NLRI.
+3. It waits for an `spf` event of a configured level, and reads again.
+
+A session that comes up gets every route, from
+`Speaker#on_established`. A session gets BGP-LS only when its address
+is in `peers` and both OPENs carried 16388/71. If isisd's socket closes,
+the Producer tries again every 5 seconds and keeps its set, so the next
+read sends only what changed.
+
+### The row
+
+`show.link_state` answers one row per route, on both sides. The
+Producer's rows have `peer` null:
+
+```json
+{"peer": "10.2.0.1", "type": "link", "protocol_id": 1, "identifier": 0,
+ "local": "0000.0001.0101.00", "remote": "0000.0001.0102.00",
+ "prefix": null, "name": null, "flags": [], "areas": [], "metric": 10,
+ "since": "2026-11-09T10:00:00.000Z"}
+```
+
+`local` and `remote` are spelled as isisd spells a node. `areas` is
+spelled as isisd spells an area, `49.0001`. `flags` holds bit names
+from `Node_flag_bits::BITS`. `metric` is the IGP Metric on a link and
+the Prefix Metric on a prefix. `type` is `unknown` for an NLRI type the
+library keeps whole without reading. `LinkStateTable.row` builds the row
+for both sides, so a Producer and its collector answer the same rows,
+apart from `peer` and `since`. `test/functional/link_state_daemon_test.rb`
+checks that over loopback.

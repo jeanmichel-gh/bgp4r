@@ -166,8 +166,9 @@ module Features
                    nlris/link_state_link_attribute_test
                    nlris/link_state_prefix_attribute_test
                    path_attributes/link_state_attribute_test
-                   bgp_ls_doc_test],
-      :functional => %w[link_state_test],
+                   bgp_ls_doc_test
+                   daemon/link_state_table_test daemon/link_state_producer_test],
+      :functional => %w[link_state_test link_state_daemon_test],
       :lab   => %w[link_state_gobgp_test link_state_frr_test],
     },
 

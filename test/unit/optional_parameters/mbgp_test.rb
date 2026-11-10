@@ -79,4 +79,27 @@ class Mbgp_cap_Test < Test::Unit::TestCase
       assert_equal(cap.encode, Mbgp.new(:afi => afi, :safi => safi).encode)
     end
   end
+
+  # RFC 9552 section 5.2 puts BGP-LS on AFI 16388 / SAFI 71, and both
+  # registries call their entry BGP-LS. The name used to split into AFI
+  # `bgp` and SAFI `ls`, so `{mbgp: bgp_ls}` in a node file built an
+  # AFI with no SAFI. Every way a name reaches the class is checked.
+  def test_bgp_ls_is_a_named_family
+    [Mbgp.new(:bgp_ls), Mbgp.new('bgp_ls'), Mbgp.bgp_ls].each do |cap|
+      assert_equal([16388, 71], [cap.afi, cap.safi])
+      assert_equal(Mbgp.new(16388, 71).encode, cap.encode)
+    end
+    assert_equal([16388, 72], [Mbgp.bgp_ls_vpn.afi, Mbgp.bgp_ls_vpn.safi])
+    assert_equal([16388, 72], [Mbgp.new(:bgp_ls_vpn).afi, Mbgp.new(:bgp_ls_vpn).safi])
+  end
+
+  # The node file form goes through Neighbor#capability, with a name and
+  # its arguments as YAML gives them, and through the one-word form.
+  def test_a_neighbor_builds_bgp_ls_by_name
+    n = BGP::Neighbor.new(4, 100, 180, '1.1.1.1', '127.0.0.1', '127.0.0.1')
+    [['mbgp', :bgp_ls], ['mbgp_bgp_ls']].each do |args|
+      cap = n.capability(*args).last
+      assert_equal([16388, 71], [cap.afi, cap.safi], args.inspect)
+    end
+  end
 end
