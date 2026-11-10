@@ -271,11 +271,18 @@ export:
 fib:
   table: 100                       # absent means compute and do not install
 
+link_state:                        # a BGP-LS Producer; see below
+  isisd: /run/isis4r/isisd.sock    # the default
+  levels: [1]                      # IS-IS levels, the default; Protocol-ID 1 and 2
+  identifier: 0                    # RFC 9552 section 5.2, the default
+  peers: [10.0.10.1]               # who gets BGP-LS; default none
+  unreachable: withdraw            # or keep; the default is withdraw
+
 mark:                              # added to routes made by hand; see route.originate
   large_communities: ['65000:1:1']
 ```
 
-Six notes on it.
+Seven notes on it.
 
 `capabilities` takes `add_path` as `(send_recv, afi, safi)`, matching
 `CAP::Add_path#add`, so `[3, 1, 1]` is IPv4 unicast both ways. Three
@@ -333,6 +340,19 @@ block's business and `Export`'s own comment says so. Measured in #231,
 where the first lab test asserted the opposite before the library
 corrected it, and `lab/README.md` carries the same caveat.
 
+**`link_state` makes this bgp4rd a BGP-LS Producer** (RFC 9552,
+AFI 16388 / SAFI 71). It reads isisd's `show.topology` on the `isisd`
+socket after each `spf` event of a configured level, and sends Node,
+Link and Prefix NLRIs to each address in `peers`. Each of those must be
+a configured neighbor, and its session must negotiate 16388/71, which a
+neighbor asks for with `capabilities: [as4_byte, {mbgp: bgp_ls}]`.
+Other sessions get nothing. A node isisd marks unreachable is withdrawn,
+unless `unreachable: keep`. If the socket closes, it tries again every
+5 seconds. Any other key is refused at start-up. Every bgp4rd also keeps
+the BGP-LS routes it receives, in a table of their own outside the RIB.
+`show.link_state` lists both. `docs/bgp-ls.md` section 12 has what is
+sent, and `docs/bgp-ls-howto.md` explains why.
+
 **A table is always on, which `lab/speaker.rb` differs from.** `rib`
 defaults to true here, because a daemon is a router by definition and
 `show.routes` has to answer; in the lab speaker a table has to be asked
@@ -381,6 +401,7 @@ a person types what they would type at a router:
 bgp4r-cli -c 'show bgp summary'
 bgp4r-cli -c 'show bgp 10.255.10.0/24'
 bgp4r-cli -c 'show fib'
+bgp4r-cli -c 'show link-state'
 bgp4r-cli -c 'show configuration'
 bgp4r-cli -c 'show configuration candidate'
 bgp4r-cli -c 'clear bgp 10.0.10.1'
@@ -446,7 +467,9 @@ behind one, so adding a fourth thing to those three styles would be
 inventing a format inside the file that says it never does. Its columns
 are `bgp/daemon/cli.rb`'s own and no test depends on them. `show fib`
 is rendered there too, for the same reason: no style in `Show` has a
-forwarding table, and its layout is bgp4r's own.
+forwarding table, and its layout is bgp4r's own. `show link-state` is
+rendered there too: BGP-LS is not in `Show`, and its layout is bgp4r's
+own.
 
 **`show.text` is not paged**, which is honest rather than tidy: a
 vendor's `show bgp` prints the table and this prints the table. A
@@ -545,6 +568,7 @@ below.
 | `show.adj_in` | one peer's Adj-RIB-In, as received | built |
 | `show.adj_out` | what was sent to one peer, and what was skipped | built |
 | `show.fib` | what the daemon believes is in the kernel table, and what failed | built |
+| `show.link_state` | BGP-LS routes: sent as a Producer, and received per peer | built |
 | `show.log` | the last N lines | built |
 | `events.subscribe`, `events.unsubscribe` | a stream, one event per line | built |
 | `peer.clear`, `peer.stop`, `peer.start` | one session | built |
@@ -692,6 +716,15 @@ rows are bgp4r's own account; `ip route show` is the other question and a
 person asks it with `ip`. `fib.configured` is what tells a daemon with no
 `fib:` in its configuration from one whose table happens to be empty,
 since both answer no rows.
+
+**`show.link_state` answers BGP-LS routes, one row per route, in the
+page envelope.** First the routes this daemon sent as a Producer, with
+`peer` null, then the routes it received, per peer. The row is the same
+on both sides, so a collector and its Producer answer the same rows
+apart from `peer` and `since`. It takes `offset` and `limit` and no
+`prefix`, since a BGP-LS route is not keyed by one. The table is
+outside the RIB, so this view does not take the RIB's lock.
+`docs/bgp-ls.md` section 12 has the row.
 
 **`show.log` answers text, and that is where it parts company with
 ospfv2's `show.log`, which answers its event list.** It can, because in
