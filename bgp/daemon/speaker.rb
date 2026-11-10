@@ -66,6 +66,8 @@ require 'bgp/misc/route_generator'
 require 'bgp/rib'
 require 'bgp/daemon/community_keys'
 require 'bgp/daemon/hand'
+require 'bgp/daemon/link_state_table'
+require 'bgp/daemon/link_state_producer'
 require 'socket'
 require 'thread'
 
@@ -574,6 +576,9 @@ module BGP
           # adapter nobody detached is a peer whose routes stay in the table
           # after its session is gone.
           @speaker.rib&.attach(n)
+          # BGP-LS goes in a table of its own, outside the RIB. See
+          # bgp/daemon/link_state_table.rb.
+          ls_feed = @speaker.link_state.attach(n)
           n.start(:session => sock, :timeout => @config.fetch('open_timeout', 30))
           if n.is_established?
             @recorder.established!
@@ -600,6 +605,7 @@ module BGP
             # down accumulates one adapter per attempt for as long as it
             # runs.
             @speaker.rib&.detach(n)
+            @speaker.link_state.detach(n, ls_feed) if ls_feed
             n.close
           end
         end
@@ -678,6 +684,12 @@ module BGP
       attr_reader :my_as, :router_id, :local_address, :announcements, :peers, :rib, :router,
                   :events, :started_at, :hand
 
+      # The BGP-LS routes this speaker received, per peer, and the
+      # Producer that originates them from isisd, or nil with no
+      # `link_state:` block. See bgp/daemon/link_state_table.rb and
+      # bgp/daemon/link_state_producer.rb.
+      attr_reader :link_state, :link_state_producer
+
       # The configuration this speaker was built from, which
       # `BGP::Daemon::Candidate` reads as the running one and `reconfigure`
       # replaces.
@@ -728,6 +740,11 @@ module BGP
         @export = config['export']
         @fib = config['fib']
         check_reflector_clients
+        @link_state = LinkStateTable.new
+        if config['link_state']
+          @link_state_producer = LinkStateProducer.new(self, config['link_state'], :logger => @logger)
+          on_established { |p| @link_state_producer.session_up(p) }
+        end
         # One table, shared by every session, which is what makes this a
         # router: a Rib::Table with two Neighbors attached decides what both
         # sent and advertises the winner to both. Built here rather than in
@@ -850,11 +867,13 @@ module BGP
         start_rib
         @server = listen if @peers.any? { |p| !p.active? }
         @peers.select(&:active?).each(&:run_active)
+        @link_state_producer&.start
         self
       end
 
       def stop
         @stopping = true
+        @link_state_producer&.stop
         @server.close if @server
         @peers.each(&:stop)
         stop_rib
@@ -1133,6 +1152,12 @@ module BGP
         attrs << BGP::Local_pref.new(a.fetch('local_pref', 100)) unless ebgp
         attrs.concat(CommunityKeys.community_attributes(a))
         BGP::Path_attribute.new(*attrs)
+      end
+
+      # `show.link_state`: the routes this speaker sent as a Producer,
+      # with peer nil, then the ones it received.
+      def link_state_rows
+        (@link_state_producer ? @link_state_producer.rows : []) + @link_state.rows
       end
 
       def state

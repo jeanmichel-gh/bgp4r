@@ -507,4 +507,27 @@ class BGP_Daemon_Speaker_Test < Test::Unit::TestCase
     def ip_address ; '10.0.0.1' ; end
   end
 
+  # Every speaker keeps a BGP-LS table, and only a `link_state:` block
+  # makes a Producer. A bad block stops the speaker at start, naming
+  # the key, as `export:` does.
+  def test_a_link_state_block_makes_a_producer
+    assert_instance_of(BGP::Daemon::LinkStateTable, speaker.link_state)
+    assert_nil(speaker.link_state_producer)
+    s = speaker('link_state' => { 'isisd' => '/tmp/none.sock', 'levels' => [1, 2], 'peers' => ['10.0.0.2'] })
+    assert_equal([1, 2], s.link_state_producer.levels)
+    assert_equal([], s.link_state_rows)
+    e = assert_raise(ArgumentError) { speaker('link_state' => { 'peer' => ['10.0.0.2'] }) }
+    assert_match(/link_state: unknown key\(s\) peer/, e.message)
+    e = assert_raise(ArgumentError) { speaker('link_state' => { 'peers' => ['10.0.0.9'] }) }
+    assert_match(/10\.0\.0\.9 are not configured neighbors/, e.message)
+  end
+
+  # `{mbgp: bgp_ls}` in a neighbor block is 16388/71 on the wire.
+  def test_mbgp_bgp_ls_is_a_capability_a_neighbor_block_takes
+    s = speaker('neighbors' => [{ 'address' => '10.0.0.2', 'as' => 65_001,
+                                  'capabilities' => ['as4_byte', { 'mbgp' => 'bgp_ls' }] }])
+    n = s.peers.first.send(:new_neighbor)
+    mbgp = n.instance_variable_get(:@opt_parms).find { |c| c.is_a?(BGP::OPT_PARM::CAP::Mbgp) }
+    assert_equal([16_388, 71], [mbgp.afi, mbgp.safi])
+  end
 end

@@ -56,6 +56,7 @@ does.
 | `show bgp` | the Loc-RIB as a table, one line per route |
 | `show bgp PREFIX` | the same, for one prefix |
 | `show fib` | what the daemon installed in the kernel table, what it skipped and why, and what the kernel refused |
+| `show link-state` | BGP-LS routes: what this daemon sent as a Producer, and what it received, one line per route |
 | `show configuration` | the running configuration, as set lines |
 | `show configuration candidate` | the candidate configuration, as set lines |
 | `clear bgp PEER` | resets the session with PEER, an address |
@@ -81,6 +82,7 @@ one. `prefix` reads one prefix instead of a page.
 | `show.adj_in` | what one peer sent, as received | `peer` (required), `prefix`, `offset`, `limit` |
 | `show.adj_out` | what went to one peer, and under `skipped` what did not and why | `peer` (required), `prefix`, `offset`, `limit` |
 | `show.fib` | what the daemon put in the kernel table, and what the kernel refused | `prefix`, `offset`, `limit` |
+| `show.link_state` | BGP-LS routes, one row per route: sent as a Producer (`peer` null), and received per peer | `offset`, `limit` |
 | `show.log` | the daemon's last log lines, oldest first | `count`, default 100 |
 | `show.text` | what `-c 'show bgp'` prints, as one JSON string | `style`, `prefix` |
 | `show.configuration` | the configuration as set lines | `candidate`, `format` |

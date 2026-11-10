@@ -332,5 +332,30 @@ class BGP_Daemon_CLI_Test < Test::Unit::TestCase
     end
   end
 
-end
+  # `show link-state` reads every page of `show.link_state` and prints
+  # one line per route, with `-` for the routes this daemon sent.
+  def test_show_link_state_reads_every_page_and_prints_one_line_per_route
+    row = { 'type' => 'node', 'protocol_id' => 1, 'identifier' => 0, 'local' => '0000.0001.0101.00',
+            'remote' => nil, 'prefix' => nil, 'name' => 'r1c1', 'flags' => ['overload'],
+            'areas' => ['49.0001'], 'metric' => nil, 'since' => '2026-11-09T10:00:00.000Z' }
+    pages = [{ 'rows' => [row.merge('peer' => nil)], 'next_offset' => 1 },
+             { 'rows' => [row.merge('peer' => '10.2.0.1', 'type' => 'link', 'name' => nil, 'flags' => [],
+                                    'areas' => [], 'remote' => '0000.0001.0102.00', 'metric' => 10)],
+               'next_offset' => nil }]
+    client = FakeClient.new
+    client.define_singleton_method(:call) { |m, p = {}| @calls << [m, p] ; pages.shift }
+    out, err = StringIO.new, StringIO.new
+    status = BGP::Daemon::CLI.new(out, err, client).start(['-c', 'show link-state'], {})
+    assert_equal(0, status, err.string)
+    assert_equal([['show.link_state', { 'offset' => 0 }], ['show.link_state', { 'offset' => 1 }]], client.calls)
+    assert_match(/^2 BGP-LS route\(s\)$/, out.string)
+    assert_match(/^- +node +1 0000\.0001\.0101\.00 +r1c1 overload 49\.0001$/, out.string)
+    assert_match(/^10\.2\.0\.1 +link +1 0000\.0001\.0101\.00 +0000\.0001\.0102\.00 +10$/, out.string)
+  end
 
+  def test_show_link_state_says_when_there_is_none
+    status, out = run_cli(['-c', 'show link-state'], 'show.link_state' => { 'rows' => [], 'next_offset' => nil })
+    assert_equal(0, status)
+    assert_equal("No BGP-LS routes.\n", out)
+  end
+end

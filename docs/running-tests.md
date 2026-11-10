@@ -19,8 +19,8 @@ amounts. Measured 2026-11-03:
 
 | Tier | What it needs | Files | Time | Command |
 |---|---|---:|---|---|
-| unit | Ruby | 160 | 21s | `ruby test/run_unit.rb` |
-| functional | a loopback socket | 15 | 18s | one file at a time, below |
+| unit | Ruby | 162 | 21s | `ruby test/run_unit.rb` |
+| functional | a loopback socket | 16 | 18s | one file at a time, below |
 | lab | gobgpd, FRR, Docker or root | 33 | 10s to 400s per group | `ruby test/run_lab.rb GROUP` |
 
 **The first two tiers together are under a minute and need nothing
@@ -76,7 +76,7 @@ What bgp4r can carry: one per NLRI family.
 | `evpn` | 3 | 1 | 2 | EVPN, AFI 25 SAFI 70, all eleven route types |
 | `rt-constrain` | 1 | 1 | 1 | Route Target membership, AFI 1 SAFI 132 |
 | `mcast-vpn` | 3 | 1 | 2 | MCAST-VPN, SAFI 5, all seven route types |
-| `bgp-ls` | 11 | 1 | 2 | BGP-LS, AFI 16388 SAFI 71 and 72, the NLRI and every attribute TLV |
+| `bgp-ls` | 13 | 2 | 2 | BGP-LS, AFI 16388 SAFI 71 and 72, the NLRI and every attribute TLV |
 | `add-path` | 2 | 1 | 2 | Several paths to one prefix, and the Path Identifier |
 
 ### attributes
@@ -186,7 +186,7 @@ BGP-LS, AFI 16388 SAFI 71 and 72, the NLRI and every attribute TLV.
 
 - RFC 9552
 - Read first: `docs/bgp-ls.md`
-- 11 unit files, 1 functional
+- 13 unit files, 2 functional
 - lab:
   - `link_state_frr_test`, needs frr
   - `link_state_gobgp_test`, needs gobgpd
@@ -850,5 +850,5 @@ test file has to be tagged before the suite is green again, which is
 the same arrangement `test/unit/lab_groups_test.rb` has with the CI
 matrix.
 
-208 of 208 test files are tagged. The
+211 of 211 test files are tagged. The
 remainder, if any, is what the guard names.
