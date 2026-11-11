@@ -38,15 +38,49 @@ cli() { ruby -I/app /app/exe/bgp4r-cli -s /run/bgp4r/bgp4rd.sock "$@"; }
 ## Two forms
 
 ```
-cli -c 'show bgp'                       an operator command: text for a person
+cli show bgp                            an operator command: text for a person
+cli -c 'show bgp'                       the same, quoted, for a script
 cli show.routes                         a method: JSON, one object
 cli show.rib '{"prefix":"10.30.0.0/24"}' --pretty   a method with parameters
 ```
 
-An operator command is quoted as one argument. A method takes its
-parameters as one JSON object, in single quotes. `--pretty` indents the
-JSON. A name the daemon does not answer gets the list of the ones it
-does.
+If the first word has a dot, it is a method. Any other word starts an
+operator command, which needs no quotes. A method takes its parameters
+as one JSON object, in single quotes. `--pretty` indents the JSON. A
+name the daemon does not answer gets the list of the ones it does.
+
+## The prompt
+
+`cli` with nothing after it opens a prompt, named for the node:
+
+```
+root@r1:/app# cli
+r1> show bgp summary
+r1> sh b 10.0.0.0/8
+r1> clear bgp 10.0.10.1
+r1> exit
+```
+
+- A word may be any unique prefix of itself: `sh b s` is
+  `show bgp summary`.
+- `?` and `help` list what can follow, at every level: `?`, `show ?`,
+  `show help`, `clear help`. `?` against a word, as in `sh?`, lists
+  what that word may start. After `?` the line comes back for editing.
+- Where only an address fits, as after `clear bgp`, `help` is taken as
+  the address. Type `?` there instead.
+- Tab completes a word, and after `clear bgp` it offers the configured
+  neighbors.
+- The arrow keys walk back through this session's commands. History is
+  not kept after you leave.
+- Ctrl-C stops a command and keeps the prompt. `exit`, `quit` or
+  Ctrl-D leaves.
+- `--style` given to `cli` applies to every `show bgp` at the prompt.
+
+`?` works on the command line too: `cli show ?`. If the shell says
+"no matches found", quote it: `cli show '?'`.
+
+The prompt opens only on a terminal. `cli` with its input from a pipe
+or a file prints the usage, as it always did. Use `-c` in a script.
 
 ## Operator commands
 

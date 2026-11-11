@@ -21,6 +21,7 @@
 #++
 
 require 'bgp/daemon/client'
+require 'bgp/daemon/shell'
 require 'bgp/version'
 
 module BGP
@@ -28,51 +29,42 @@ module BGP
 
     # `bgp4r-cli`, the client command for `bgp4rd`.
     #
+    #   bgp4r-cli                              a prompt, on a terminal
     #   bgp4r-cli -c 'show bgp summary'        text, for a person
+    #   bgp4r-cli show bgp summary             the same, without quotes
     #   bgp4r-cli show.peers                   JSON, for a script
     #   bgp4r-cli show.rib '{"prefix":"10.0.0.0/8"}'
     #
-    # **Two forms on purpose, which is docs/daemon.md's decision.** `-c`
-    # takes an operator command and prints what a person would read at a
-    # router; a bare method name prints the JSON a driver or a script
-    # wants. Neither is a wrapper around the other: the method form is
-    # one line of socket work, and the text form renders through
-    # `bgp/rib/show.rb`.
+    # **Two forms on purpose, which is docs/daemon.md's decision.** An
+    # operator command prints what a person would read at a router; a
+    # method name prints the JSON a driver or a script wants. Neither is
+    # a wrapper around the other: the method form is one line of socket
+    # work, and the operator commands are `Shell`'s, in
+    # bgp/daemon/shell.rb, which renders them.
     #
-    # **`show bgp` asks the daemon for the text and does not render it
-    # here, and that is a departure from ospfv2 with a reason.**
-    # `ospf-cli` renders every view client side from the data, and
-    # copying that would mean a second IOS, Junos and IOS-XR renderer in
-    # this file beside `bgp/rib/show.rb`, which already has samples
-    # behind its three styles and a column test per style. Two renderers
-    # of one format is the shape CLAUDE.md records drifting three times.
-    # `Show` takes a Rib::Table and the Table is in the daemon, so the
-    # daemon renders: `show.text` is the one API method this adds beyond
-    # the read list, and it is `rib.show(style, prefix)` and nothing
-    # else.
+    # **On the command line, a first word with a dot is a method, and any
+    # other first word starts an operator command.** No method name is a
+    # command word and no command word has a dot, so the rule is never
+    # ambiguous, and `-c` is still there for a script that quotes.
     #
-    # `show bgp summary` is the exception and is rendered here, because
-    # `Show` has **no** summary form: there is no vendor sample behind
-    # one, so adding a fourth thing to those three styles would be
-    # inventing a format inside the file that says it never does. The
-    # columns below are this file's own and no test depends on them.
+    # **With no command and no method, a terminal gets the prompt** and
+    # anything else gets the usage and status 1, as before the prompt
+    # existed. docs/design/bgp4r-cli-shell.md left that open; reading
+    # commands from a pipe would change what `bgp4r-cli </dev/null`
+    # answers, and `-c` already covers a script.
     #
     # Output goes to injected IOs, as `BGP::Capture::CLI`'s does, so a
     # test reads a String rather than capturing a process.
     class CLI
 
-      # The operator commands `-c` takes. Anything else is refused with
-      # this list, rather than guessed at.
+      # The operator commands, each with its arguments by name. Anything
+      # else is refused with this list, rather than guessed at. They are
+      # the Shell's grammar, so this list cannot drift from it.
       #
       # `clear bgp PEER` is the one that changes something, and it is
       # here because docs/daemon.md gives it as an example a person
-      # types. The rest of the write side is the method form: `peer.stop`
-      # and `route.originate` take parameters a one line command grammar
-      # would have to invent a syntax for, and this file is a string
-      # match against a short list and not a parser.
-      COMMANDS = ['show bgp summary', 'show bgp', 'show bgp PREFIX',
-                  'show fib', 'show link-state', 'show configuration', 'show configuration candidate',
-                  'clear bgp PEER'].freeze
+      # types. The rest of the write side is the method form.
+      COMMANDS = Shell::COMMANDS
 
       STYLES = %w[ios junos iosxr].freeze
 
@@ -89,8 +81,10 @@ module BGP
       STREAMS = %w[events.subscribe].freeze
 
       USAGE = <<-TEXT
-Usage: bgp4r-cli [options] [METHOD [JSON]]
+Usage: bgp4r-cli [options] [METHOD [JSON] | COMMAND...]
 
+  bgp4r-cli                            a prompt: ? lists the commands
+  bgp4r-cli show bgp summary           an operator command, no quotes
   bgp4r-cli -c 'show bgp summary'      an operator command, as text
   bgp4r-cli -c 'show bgp'              the Loc-RIB, as a router prints it
   bgp4r-cli -c 'show bgp 10.0.0.0/8'   one prefix, in detail
@@ -113,11 +107,13 @@ TEXT
 
       # `client` is the seam that keeps the tests free of a daemon: with
       # none, `start` builds a Client from `--socket` and the
-      # environment.
-      def initialize(out = $stdout, err = $stderr, client = nil)
+      # environment. `input` is where the prompt reads, and whether it is
+      # a terminal decides whether bare `bgp4r-cli` opens one.
+      def initialize(out = $stdout, err = $stderr, client = nil, input = $stdin)
         @out = out
         @err = err
         @client = client
+        @input = input
       end
 
       # Returns an exit status.
@@ -128,7 +124,10 @@ TEXT
         return help(1) if opts[:error]
         client = @client || Client.new(opts[:socket], env)
         begin
-          opts[:command] ? command(client, opts) : method_call(client, opts)
+          if opts[:prompt] then prompt(client, opts)
+          elsif opts[:command] then command(client, opts)
+          else method_call(client, opts)
+          end
         rescue Client::Error => e
           @err.puts "bgp4r-cli: #{e.message}"
           1
@@ -164,13 +163,20 @@ TEXT
           end
           i += 1
         end
-        opts[:method], opts[:params] = rest[0], rest[1]
+        if rest[0] && !rest[0].include?('.')
+          opts[:error] = true if opts[:command]
+          opts[:command] = rest.join(' ')
+        else
+          opts[:method], opts[:params] = rest[0], rest[1]
+        end
         if opts[:version]
           @out.puts BGP::VERSION
           return opts
         end
         return opts if opts[:help]
-        opts[:error] = true if opts[:command].nil? && opts[:method].nil?
+        if opts[:command].nil? && opts[:method].nil?
+          @input.respond_to?(:tty?) && @input.tty? ? opts[:prompt] = true : opts[:error] = true
+        end
         opts[:error] = true if opts[:command] && opts[:method]
         opts[:error] = true unless STYLES.include?(opts[:style].to_s)
         opts
@@ -210,135 +216,25 @@ TEXT
         0
       end
 
-      # The text form.
+      def shell(client, opts)
+        require 'socket'
+        Shell.new(client, :style => opts[:style], :hostname => Socket.gethostname.split('.').first)
+      end
+
+      # An operator command, from `-c` or the bare words: its text, or
+      # its refusal and status 1.
       def command(client, opts)
-        cmd = opts[:command].to_s.strip.squeeze(' ')
-        case cmd
-        when 'show bgp summary' then @out.print summary(client)
-        when 'show bgp' then @out.print routes(client, opts[:style], nil)
-        when /\Ashow bgp (\S+)\z/ then @out.print routes(client, opts[:style], $1)
-        when 'show fib' then @out.print fib(client)
-        when 'show link-state' then @out.print link_state(client)
-        when 'show configuration' then @out.print configuration(client, false)
-        when 'show configuration candidate' then @out.print configuration(client, true)
-        when /\Aclear bgp (\S+)\z/ then @out.print cleared(client, $1)
-        else
-          @err.puts "bgp4r-cli: #{opts[:command].inspect} is not one of: #{COMMANDS.join(', ')}"
-          return 1
-        end
+        r = shell(client, opts).execute(opts[:command])
+        @out.print r.text
+        return 0 unless r.error
+        @err.puts "bgp4r-cli: #{r.error}"
+        1
+      end
+
+      # The prompt, until `exit`, `quit` or Ctrl-D.
+      def prompt(client, opts)
+        shell(client, opts).interactive(@input, @out)
         0
-      end
-
-      # `show configuration`, which is the one operator command here
-      # whose text is not in the style of anybody's router: it is
-      # bgp4rd's own configuration, in the set lines
-      # `bgp/daemon/config.rb` defines, so a person can read what a
-      # driver diffs. `show.configuration` with no `format` answers YAML
-      # instead, which is the form the file is in.
-      def configuration(client, candidate)
-        params = { 'format' => 'set' }
-        params['candidate'] = true if candidate
-        client.call('show.configuration', params).to_s
-      end
-
-      # `show bgp summary`, in the shape of the command every router has.
-      # The column widths are this file's; see the class comment on what
-      # is quoted and what is not.
-      def summary(client)
-        s = client.call('show.status')
-        sum = s['summary'] || {}
-        out = +''
-        out << format("BGP router identifier %s, local AS number %s\n", s['router_id'], s['as'])
-        out << format("%d peer(s), %d established, %d prefix(es) in the Loc-RIB\n\n",
-                      sum['peers'].to_i, sum['established'].to_i, sum['rib'].to_i)
-        out << format("%-20s %-8s %-14s %10s %8s %8s %s\n",
-                      'Neighbor', 'AS', 'State', 'Up/Down', 'PfxRcd', 'PfxSnt', 'Description')
-        Array(s['peers']).each do |p|
-          out << format("%-20s %-8s %-14s %10s %8s %8s %s\n",
-                        p['address'], p['remote_as'], p['state'],
-                        p['uptime'] ? "#{p['uptime']}s" : 'never',
-                        p['received'] || 0, p['sent'] || 0, p['description'])
-        end
-        out
-      end
-
-      # `show fib`, what this daemon put in the kernel's forwarding table,
-      # and what it did not: a prefix it skipped with the reason, and a
-      # prefix the kernel refused with its error. The layout is this
-      # file's own, as the summary's is. Every page of `show.fib` is read,
-      # so a large table prints whole rather than its first page.
-      #
-      # It is bgp4rd's account and not the kernel's. `ip route show table
-      # N` is the other question, and the header names the table to ask.
-      def fib(client)
-        rows, offset, info = [], 0, {}
-        loop do
-          page = client.call('show.fib', 'offset' => offset)
-          info = page['fib'] || {}
-          rows.concat(Array(page['rows']))
-          offset = page['next_offset'] or break
-        end
-        return "No FIB: this daemon has no fib: block, so it installs nothing.\n" unless info['configured']
-        out = +''
-        out << format("FIB: %s, %d route(s) installed\n\n", info['backend'], rows.size)
-        out << format("%-20s %s\n", 'Prefix', 'Next hop')
-        rows.each { |r| out << format("%-20s %s\n", r['prefix'], r['next_hop']) }
-        skipped = Array(info['skipped'])
-        unless skipped.empty?
-          out << "\nNot installed:\n"
-          skipped.each { |r| out << format("%-20s %s\n", r['prefix'], r['reason']) }
-        end
-        failed = Array(info['failed'])
-        unless failed.empty?
-          out << "\nRefused by the kernel:\n"
-          failed.each { |r| out << format("%-20s %s\n", r['prefix'], r['error']) }
-        end
-        out
-      end
-
-      # `show link-state`, the rows of `show.link_state` as a table: what
-      # this daemon sent as a BGP-LS Producer, under peer `-`, and what it
-      # received, per peer. Every page is read. The layout is this
-      # file's own, as the summary's is.
-      def link_state(client)
-        rows, offset = [], 0
-        loop do
-          page = client.call('show.link_state', 'offset' => offset)
-          rows.concat(Array(page['rows']))
-          offset = page['next_offset'] or break
-        end
-        return "No BGP-LS routes.\n" if rows.empty?
-        out = +''
-        out << format("%d BGP-LS route(s)\n\n", rows.size)
-        line = "%-15s %-6s %-5s %-7s %-20s %-20s %6s %s\n"
-        out << format(line, 'Peer', 'Type', 'Proto', 'Area', 'Local', 'Remote or prefix', 'Metric', 'Node')
-        rows.each do |r|
-          node = [r['route_type'], r['name'], *Array(r['flags']), *Array(r['areas'])].compact.join(' ')
-          out << format(line, r['peer'] || '-', r['type'], proto(r['protocol_id']), r['area'] || '-', r['local'],
-                        r['remote'] || r['prefix'], r['metric'], node).sub(/ +\n\z/, "\n")
-        end
-        out
-      end
-
-      # RFC 9552 section 5.2, Table 2: 1 and 2 are IS-IS's levels, 3 is
-      # OSPFv2. Any other prints as its number.
-      def proto(pid)
-        { 1 => 'L1', 2 => 'L2', 3 => 'OSPF' }.fetch(pid, pid.to_s)
-      end
-
-      # `clear bgp PEER`, which resets one session. The line it prints is
-      # this file's own, as the summary's columns are.
-      def cleared(client, peer)
-        r = client.call('peer.clear', 'peer' => peer)
-        format("Cleared %s: was %s, now %s\n", r['peer'], r['was'], r['state'])
-      end
-
-      # `show bgp` and `show bgp PREFIX`, rendered by the daemon through
-      # bgp/rib/show.rb's three styles.
-      def routes(client, style, prefix)
-        params = { 'style' => style }
-        params['prefix'] = prefix if prefix
-        client.call('show.text', params).to_s
       end
 
     end

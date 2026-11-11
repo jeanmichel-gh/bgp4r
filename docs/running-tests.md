@@ -19,7 +19,7 @@ amounts. Measured 2026-11-03:
 
 | Tier | What it needs | Files | Time | Command |
 |---|---|---:|---|---|
-| unit | Ruby | 163 | 21s | `ruby test/run_unit.rb` |
+| unit | Ruby | 164 | 21s | `ruby test/run_unit.rb` |
 | functional | a loopback socket | 17 | 18s | one file at a time, below |
 | lab | gobgpd, FRR, Docker or root | 33 | 10s to 400s per group | `ruby test/run_lab.rb GROUP` |
 
@@ -129,7 +129,7 @@ The four executables.
 
 | Feature | unit | func | lab | What |
 |---|---:|---:|---:|---|
-| `daemon` | 14 | 1 | 1 | bgp4rd and bgp4r-cli: the control socket, the views and the configuration |
+| `daemon` | 15 | 1 | 1 | bgp4rd and bgp4r-cli: the control socket, the views and the configuration |
 | `injector` | 5 | 1 | 0 | bgp4r-sim: the ten actions, the HTTP API and what it sent |
 | `routegen` | 2 | 1 | 3 | Generating many prefixes and packing them into UPDATEs |
 | `console` | 6 | 2 | 0 | An irb prompt on bgp4r: bgp4r console, routegen, sim and bgp4rd --interact |
@@ -244,7 +244,7 @@ ruby test/run_feature.rb contracts
 bgp4rd and bgp4r-cli: the control socket, the views and the configuration.
 
 - Read first: `docs/daemon.md`
-- 14 unit files, 1 functional
+- 15 unit files, 1 functional
 - lab:
   - `reflector_test`, needs gobgpd and frr
 
@@ -850,5 +850,5 @@ test file has to be tagged before the suite is green again, which is
 the same arrangement `test/unit/lab_groups_test.rb` has with the CI
 matrix.
 
-213 of 213 test files are tagged. The
+214 of 214 test files are tagged. The
 remainder, if any, is what the guard names.

@@ -1,6 +1,6 @@
 # bgp4r-cli: an interactive prompt
 
-Status: proposal, waiting for approval. No code yet.
+Status: approved (#319). Step 1 is built: bgp/daemon/shell.rb.
 
 ## The problem
 
@@ -51,7 +51,7 @@ repositories do not depend on each other, and the command words differ.
 | Typed | Does |
 |---|---|
 | `cli` on a terminal | opens the prompt |
-| `cli` with standard input piped | reads one command per line, prints each answer, exits |
+| `cli` with standard input not a terminal | unchanged: the usage, status 1 (see question 1) |
 | `cli -c 'show bgp'` | unchanged |
 | `cli show bgp 10.0.0.0/8` | new: the words without quotes, same as `-c` |
 | `cli show.peers` | unchanged: a word with a dot is a method |
@@ -242,9 +242,12 @@ One pull request per step, each usable on its own:
 ## Open questions for the owner
 
 1. Bare `cli` with piped input: read lines, as ospf-cli does, or keep
-   printing the usage and exiting 1? Reading lines changes the exit
-   status of `cli </dev/null`. I propose reading lines.
+   printing the usage and exiting 1? **Settled in step 1: it keeps the
+   usage.** Reading lines would change what `cli </dev/null` answers,
+   which "What does not change" rules out, and `cli_test.rb` holds it.
+   `-c` covers a script.
 2. The words in section 4: IOS forms as above, or Junos forms too
    (`show bgp neighbor`), as ospf-cli takes both?
 3. Should history persist across sessions in `~/.bgp4r_history`? The
-   container's home goes away with it, so I propose no.
+   container's home goes away with it. **Step 1 keeps it in memory
+   only.**
