@@ -1,6 +1,6 @@
 # bgp4r-cli: an interactive prompt
 
-Status: approved (#319). Step 1 is built: bgp/daemon/shell.rb.
+Status: approved (#319). Steps 1 and 2 are built: bgp/daemon/shell.rb.
 
 ## The problem
 
@@ -172,7 +172,12 @@ prompt, and needs no state in the shell. A mode can come later as a
 second step if it is wanted. `show configuration` and
 `show configuration candidate` stay as they are.
 
-Tab after `config set` and `config delete` completes nothing in step 1.
+`config` makes some short prefixes ambiguous that were not in step 1:
+`c` is `clear` or `config`, so it is refused with both. Every word after
+`config set`, `config delete` and `commit comment` belongs to the line,
+`help` included, so `?` is the way to ask there.
+
+Tab after `config set` and `config delete` completes nothing in step 2.
 Completing configuration paths needs the daemon's key list, which is a
 later step.
 

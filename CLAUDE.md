@@ -377,6 +377,10 @@ bgp/daemon/              `bgp4rd` the daemon and `bgp4r-cli` its client;
                          nothing, so `-c`, the bare words and the prompt
                          share one path. Words take any unique prefix, and
                          `?` and `help` list what follows at every level.
+                         A `rest` argument takes every word after it, which
+                         is how `config set PATH... VALUE` passes a set
+                         line to config.load as typed; the `config` group
+                         is one config.* method per command
                          It renders the commands too. `show bgp` asks the
                          daemon for the text through `show.text`, because
                          bgp/rib/show.rb takes a Table and a second

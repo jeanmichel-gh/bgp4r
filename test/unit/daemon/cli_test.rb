@@ -436,4 +436,17 @@ class BGP_Daemon_CLI_Test < Test::Unit::TestCase
     assert_equal([['show.text', { 'style' => 'ios' }]], client.calls, 'nothing after exit runs')
     assert_equal(true, client.closed?)
   end
+
+  # The config commands from the command line: a refused commit is
+  # status 1, so a script can tell.
+  def test_a_config_command_without_quotes_and_its_refusal
+    answers = { 'config.load' => { 'errors' => [] },
+                'config.commit' => { 'ok' => false, 'errors' => ['as needs a restart'] } }
+    status, out, err, client = run_cli(%w[config set neighbors 10.0.10.1 hold_time 60], answers)
+    assert_equal([0, '', ''], [status, out, err])
+    assert_equal([['config.load', { 'lines' => ['set neighbors 10.0.10.1 hold_time 60'] }]], client.calls)
+    status, _o, err = run_cli(['-c', 'config commit'], answers)
+    assert_equal(1, status)
+    assert_equal("bgp4r-cli: commit refused: as needs a restart\n", err)
+  end
 end
