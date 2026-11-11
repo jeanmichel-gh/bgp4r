@@ -78,22 +78,59 @@ module BGP
         Node.new(nil, arg, name, help, action, [], true)
       end
 
+      # The `bgp` words, under `show bgp` and under `show ip bgp`, the
+      # IOS form. Built twice rather than shared, so each node has one
+      # parent and `commands` lists both forms.
+      def self.show_bgp
+        kw('bgp', 'the Loc-RIB, as a router prints it', :routes, [
+          kw('summary', 'the router, and one line per neighbor', :summary),
+          kw('neighbors', 'every neighbor, in detail', :neighbors, [
+            arg(:peer, 'PEER', 'one neighbor, in detail', :neighbors, [
+              kw('received-routes', 'what PEER sent, as received', :received),
+              kw('advertised-routes', 'what went to PEER, and what did not and why', :advertised)
+            ])
+          ]),
+          arg(:prefix, 'PREFIX', 'one prefix, in detail', :routes)
+        ])
+      end
+
+      def self.clear_bgp
+        kw('bgp', 'a BGP session', nil, [
+          arg(:peer, 'PEER', 'reset the session with PEER, an address', :clear, [
+            kw('soft', 'keep the session up', nil, [
+              kw('in', 'ask PEER to send its routes again: a ROUTE-REFRESH', :refresh)
+            ])
+          ])
+        ])
+      end
+
       GRAMMAR = kw('', '', nil, [
         kw('show', 'what the daemon holds', nil, [
-          kw('bgp', 'the Loc-RIB, as a router prints it', :routes, [
-            kw('summary', 'the router, and one line per neighbor', :summary),
-            arg(:prefix, 'PREFIX', 'one prefix, in detail', :routes)
-          ]),
+          show_bgp,
+          kw('ip', 'the IOS form: show ip bgp is show bgp', nil, [show_bgp]),
           kw('fib', 'what the daemon put in the kernel table', :fib),
           kw('link-state', 'BGP-LS routes, sent and received', :link_state),
           kw('configuration', 'the running configuration, as set lines', :configuration, [
             kw('candidate', 'the candidate configuration', :candidate)
-          ])
+          ]),
+          kw('log', "the daemon's last log lines, oldest first", :log)
         ]),
         kw('clear', 'reset something', nil, [
+          clear_bgp,
+          kw('ip', 'the IOS form: clear ip bgp is clear bgp', nil, [clear_bgp])
+        ]),
+        kw('enable', 'let a stopped session come back', nil, [
           kw('bgp', 'a BGP session', nil, [
-            arg(:peer, 'PEER', 'reset the session with PEER, an address', :clear)
+            arg(:peer, 'PEER', 'the neighbor, an address', :enable)
           ])
+        ]),
+        kw('disable', 'end a session and keep it down', nil, [
+          kw('bgp', 'a BGP session', nil, [
+            arg(:peer, 'PEER', 'the neighbor, an address', :disable)
+          ])
+        ]),
+        kw('monitor', 'watch something as it happens, until Ctrl-C', nil, [
+          kw('events', 'the daemon\'s events, one line each', :monitor)
         ]),
         kw('config', 'the candidate configuration: change it, check it, commit it', nil, [
           kw('show', 'the running configuration, as set lines', :configuration, [
@@ -137,6 +174,50 @@ module BGP
 
       COMMANDS = commands.freeze
 
+      # The methods that answer many lines rather than one, so they are
+      # printed as they arrive until Ctrl-C.
+      #
+      # **The client's own list and not `Api::STREAM_METHODS`.** This file
+      # requires `bgp/daemon/client` and nothing else, so `bgp4r-cli`
+      # loads a socket and a JSON parser rather than the whole library and
+      # a Speaker, and `events.unsubscribe` is in the server's list and
+      # is not something a caller starts. cli_test.rb holds this list
+      # inside the server's so the two cannot disagree about a name.
+      STREAMS = %w[events.subscribe].freeze
+
+      # A method's parameters, from the words after its name: one JSON
+      # object, or `key=value` words. A value that reads as an integer,
+      # `true`, `false` or `null` becomes that, one that starts with `[`
+      # or `{` is JSON, and any other is a string, so
+      # `peer=10.0.10.1` needs no quotes.
+      def self.params(words)
+        require 'json'
+        return {} if words.empty?
+        if words[0].start_with?('{', '[')
+          params = JSON.parse(words.join(' '))
+          raise Refused, 'the parameters are a JSON object, or key=value words' unless params.is_a?(Hash)
+          return params
+        end
+        words.each_with_object({}) do |w, h|
+          key, text = w.split('=', 2)
+          raise Refused, "#{w.inspect} is not key=value" if text.nil? || key.empty?
+          h[key] = convert(text)
+        end
+      rescue JSON::ParserError => e
+        raise Refused, "the parameters are not JSON: #{e.message[0, 120]}"
+      end
+
+      def self.convert(text)
+        case text
+        when /\A-?\d+\z/ then text.to_i
+        when 'true' then true
+        when 'false' then false
+        when 'null' then nil
+        when /\A[\[{]/ then JSON.parse(text)
+        else text
+        end
+      end
+
       # What `execute` answers. `text` is printed as it is, `error` is a
       # message without a prefix, and `exit` says the person asked to
       # leave.
@@ -146,13 +227,14 @@ module BGP
 
       attr_reader :hostname
 
-      # `grammar` is for the tests, which need words that share a prefix
-      # where the real table has none yet.
-      def initialize(client, style: 'ios', hostname: 'bgp4r', grammar: GRAMMAR)
+      # `out` is where a stream prints as it goes, since a stream does not
+      # return until it is stopped. `grammar` is for the tests.
+      def initialize(client, style: 'ios', hostname: 'bgp4r', out: $stdout, grammar: GRAMMAR)
         @client = client
         @grammar = grammar
         @style = style
         @hostname = hostname
+        @out = out
       end
 
       def prompt = "#{@hostname}> "
@@ -168,12 +250,39 @@ module BGP
           return Result.new('', nil, true)
         end
         return Result.new(help_text(@grammar, true), nil) if words == ['help']
+        return Result.new(api(words), nil) if words[0].include?('.')
         node, args, helped = walk(words, line)
         return Result.new(help_text(node, false), nil) if helped
         raise Refused, incomplete(words, node) unless node.action
         Result.new(send(node.action, args, words), nil)
       rescue Refused, Client::Error => e
         Result.new('', e.message)
+      end
+
+      # A method by name, at the prompt as on the command line: the
+      # result as indented JSON, or a stream line by line.
+      def api(words)
+        params = Shell.params(words[1..])
+        return stream(words[0], params) { |line| JSON.generate(line) } if STREAMS.include?(words[0])
+        "#{JSON.pretty_generate(@client.call(words[0], params))}\n"
+      end
+
+      # Prints each line the daemon streams, through the block, until the
+      # daemon ends it or Ctrl-C does. A line the block answers nil for is
+      # not printed. After Ctrl-C the stream is ended with
+      # `events.unsubscribe`, so the daemon keeps no subscriber, and the
+      # connection is closed, so a line still on its way cannot answer
+      # the next command.
+      def stream(method, params)
+        @client.stream(method, params) do |line|
+          text = yield(line)
+          @out.puts(text) if text
+        end
+        ''
+      rescue Interrupt
+        @client.unsubscribe
+        @client.close
+        ''
       end
 
       # The words that can complete `partial`, with `before` the line up
@@ -241,10 +350,12 @@ module BGP
         [node, args, false]
       end
 
-      # `help` is help where the grammar wants a keyword. Where it wants
-      # only an argument, `help` is that argument, and `?` asks instead.
+      # `help` is help where the grammar wants a keyword, or an argument
+      # `help` cannot be: an address or a prefix. Where it could be the
+      # argument, as `config rollback help` could, it is the argument,
+      # and `?` asks instead.
       def help_word?(node)
-        !node.keywords.empty? || node.argument.nil?
+        !node.keywords.empty? || node.argument.nil? || !fits?(node.argument, 'help')
       end
 
       def step(node, w, upto, line)
@@ -255,13 +366,47 @@ module BGP
         if prefixed.size > 1
           raise Refused, "#{upto.join(' ').inspect} is ambiguous: #{prefixed.collect(&:word).join(', ')}"
         end
-        return [node.argument, w] if node.argument
-        raise Refused, "#{line.inspect} is not one of: #{Shell.commands(@grammar).join(', ')}"
+        return [node.argument, w] if node.argument && fits?(node.argument, w)
+        raise Refused, unknown(node, upto)
+      end
+
+      # PEER is an address and PREFIX an address with or without a
+      # length, checked here so a word that is neither is refused with
+      # what fits, rather than sent to the daemon. N and the rest are the
+      # daemon's to check.
+      def fits?(argument, w)
+        case argument.arg
+        when :peer then address?(w) && !w.include?('/')
+        when :prefix then address?(w)
+        else true
+        end
+      end
+
+      def address?(w)
+        require 'ipaddr'
+        IPAddr.new(w)
+        true
+      rescue IPAddr::Error
+        false
+      end
+
+      # What fits where the word did not: the words that may follow the
+      # ones before it. At the start of a line that is the command words,
+      # and a method name.
+      def unknown(node, upto)
+        before = upto[0..-2].join(' ')
+        choices = node.children.collect(&:label)
+        if before.empty?
+          return "#{upto.last.inspect} is not a command. A command starts with #{choices.join(', ')}, " \
+                 'or is a method name with a dot, such as show.peers. ? lists them'
+        end
+        what = node.argument && { :peer => 'an address', :prefix => 'a prefix' }[node.argument.arg]
+        why = what ? ", and #{upto.last.inspect} is not #{what}" : ''
+        "#{upto.join(' ').inspect} is not a command#{why}. After #{before.inspect} comes #{choices.join(', ')}"
       end
 
       def incomplete(words, node)
-        rest = Shell.commands(node, words)
-        "#{words.join(' ').inspect} is not a whole command. It goes on as: #{rest.join(', ')}"
+        "#{words.join(' ').inspect} is not a whole command. After it comes #{node.children.collect(&:label).join(', ')}"
       end
 
       # `?` at the end of a line. After a space, or alone, it lists what
@@ -286,6 +431,7 @@ module BGP
         rows = node.children.collect { |c| [c.label, c.help] }
         rows << [node.name, 'more words'] if node.rest
         rows.concat(BUILTINS.to_a) if top
+        rows << ['METHOD', 'a method by name, as show.peers or peer.stop peer=10.0.10.1'] if top
         rows << ['<cr>', 'run it'] if node.action
         table(rows)
       end
@@ -505,6 +651,143 @@ module BGP
         how = r['changed'] ? 'it differs from the running configuration; config compare shows how' :
                              'it is the same as the running configuration'
         "Rollback #{r['rollback']} is the candidate now: #{how}.\n"
+      end
+
+      # ==================================================================
+      # Neighbors. The layouts are this file's own, as the summary's
+      # columns are; no vendor sample is behind them.
+
+      # `show bgp neighbors [PEER]`: one block per neighbor, every field
+      # `show.peers` answers, so nothing it knows is hidden. A PEER that
+      # is not configured is refused with the ones that are.
+      def neighbors(args, _words)
+        rows = Array(@client.call('show.peers'))
+        if args[:peer]
+          rows = rows.select { |r| r['address'] == args[:peer] }
+          raise Refused, no_peer(args[:peer]) if rows.empty?
+        end
+        return "No neighbors are configured.\n" if rows.empty?
+        rows.collect { |r| neighbor(r) }.join("\n")
+      end
+
+      def no_peer(peer)
+        "no neighbor #{peer.inspect} is configured; this bgp4rd has #{peers.join(', ')}"
+      end
+
+      HEAD = %w[address remote_as type state].freeze
+
+      def neighbor(r)
+        out = +format("BGP neighbor %s, remote AS %s, %s, %s\n", r['address'], r['remote_as'], r['type'], r['state'])
+        rest = r.reject { |k, _| HEAD.include?(k) }
+        width = rest.keys.collect(&:size).max.to_i
+        rest.each { |k, v| out << format("  %-*s  %s\n", width, k, field(k, v)) }
+        out
+      end
+
+      def field(key, value)
+        return '-' if value.nil?
+        return "#{value}s" if key == 'uptime'
+        return value.collect { |c| capability(c) }.join(', ') if key == 'capabilities' && value.is_a?(Array)
+        value.is_a?(Hash) || value.is_a?(Array) ? JSON.generate(value) : value.to_s
+      end
+
+      def capability(c)
+        return c.to_s unless c.is_a?(Hash)
+        detail = (c['capability'] || {}).collect { |k, v| "#{k}=#{v}" }
+        ([c['name'] || c['code']] + detail).join(' ')
+      end
+
+      # `show bgp neighbors PEER received-routes`, the Adj-RIB-In of one
+      # peer, every page. `*>` marks the path that is the best.
+      def received(args, _words)
+        rows, = pages('show.adj_in', args[:peer])
+        out = +"#{rows.size} path(s) received from #{args[:peer]}\n"
+        out << route_table(rows) { |r| r['best'] ? '*>' : '* ' }
+      end
+
+      # `show bgp neighbors PEER advertised-routes`, the Adj-RIB-Out, and
+      # beside it what was not sent and why, and what was sent by hand.
+      def advertised(args, _words)
+        rows, first = pages('show.adj_out', args[:peer])
+        out = +"#{rows.size} path(s) advertised to #{args[:peer]}\n"
+        out << route_table(rows) { '  ' }
+        skipped = Array((first['skipped'] || {})['rows'])
+        unless skipped.empty?
+          out << "\nNot advertised:\n"
+          skipped.each { |r| out << format("  %-20s %s\n", r['prefix'], r['reason']) }
+        end
+        hand = Array((first['hand'] || {})['rows'])
+        unless hand.empty?
+          out << "\nSent by hand, not in the Adj-RIB-Out:\n"
+          hand.each { |r| out << format("  %-20s %-10s %s\n", r['prefix'], r['verb'], r['at']) }
+        end
+        out
+      end
+
+      # Every page of a per-peer view, and the first page, which carries
+      # what is beside the rows. A peer that is not configured is the
+      # daemon's to refuse.
+      def pages(method, peer)
+        rows, offset, first = [], 0, nil
+        loop do
+          page = @client.call(method, 'peer' => peer, 'offset' => offset)
+          first ||= page
+          rows.concat(Array(page['rows']))
+          offset = page['next_offset'] or break
+        end
+        [rows, first]
+      end
+
+      ORIGIN = { 'igp' => 'i', 'egp' => 'e', 'incomplete' => '?' }.freeze
+
+      def route_table(rows)
+        return "\n" if rows.empty?
+        line = "%-2s %-20s %-16s %8s %8s %s\n"
+        out = +"\n"
+        out << format(line, '', 'Network', 'Next Hop', 'Metric', 'LocPrf', 'Path')
+        rows.each do |r|
+          path = [r['as_path'], ORIGIN.fetch(r['origin'].to_s, r['origin'].to_s)].reject { |x| x.to_s.empty? }
+          out << format(line, yield(r), r['prefix'], r['next_hop'], r['med'], r['local_pref'],
+                        path.join(' ')).sub(/ +\n\z/, "\n")
+        end
+        out
+      end
+
+      # `clear bgp PEER soft in`, a ROUTE-REFRESH, RFC 2918: the session
+      # stays up and PEER sends its routes again.
+      def refresh(args, _words)
+        r = @client.call('peer.refresh', 'peer' => args[:peer])
+        format("Asked %s to send its routes again (ROUTE-REFRESH, AFI %s SAFI %s)\n", r['peer'], r['afi'], r['safi'])
+      end
+
+      # `disable bgp PEER` and `enable bgp PEER`, which are peer.stop and
+      # peer.start.
+      def disable(args, _words)
+        r = @client.call('peer.stop', 'peer' => args[:peer])
+        format("Disabled %s: was %s, now %s, and it stays down until enable bgp %s\n",
+               r['peer'], r['was'], r['state'], r['peer'])
+      end
+
+      def enable(args, _words)
+        r = @client.call('peer.start', 'peer' => args[:peer])
+        format("Enabled %s: now %s%s\n", r['peer'], r['state'],
+               r['connect'] == false ? ', and it is passive, so it comes back when the peer dials' : '')
+      end
+
+      # `show log`, the daemon's last log lines, oldest first.
+      def log(_args, _words)
+        Array(@client.call('show.log')['lines']).collect { |l| "#{l}\n" }.join
+      end
+
+      # `monitor events`: each event on one line, time, kind, peer and
+      # message, until Ctrl-C. Keepalives and the first result line are
+      # not printed; `events.subscribe` at the prompt prints them all.
+      def monitor(_args, _words)
+        @out.puts 'Watching events. Ctrl-C stops.'
+        stream('events.subscribe', {}) do |line|
+          e = line['event'] or next
+          [e['time'], e['kind'], e['peer'], e['message']].compact.join(' ')
+        end
       end
 
       # `clear bgp PEER`, which resets one session. The line it prints is

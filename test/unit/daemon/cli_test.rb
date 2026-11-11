@@ -184,10 +184,13 @@ class BGP_Daemon_CLI_Test < Test::Unit::TestCase
     assert_match(/^10\.0\.0\.3\s+65000\s+idle\s+never\s+0\s+0/, out)
   end
 
-  def test_an_unknown_command_names_the_ones_there_are
+  # An unknown command says what fits where it went wrong, rather than
+  # listing all 37.
+  def test_an_unknown_command_says_what_fits
     status, _o, err = run_cli(['-c', 'show everything'])
     assert_equal(1, status)
-    BGP::Daemon::CLI::COMMANDS.each { |c| assert_match(/#{Regexp.escape(c)}/, err) }
+    assert_equal("bgp4r-cli: \"show everything\" is not a command. After \"show\" comes bgp, ip, fib, " \
+                 "link-state, configuration, log\n", err)
   end
 
   # Extra spaces are a person typing, not an error.
@@ -243,7 +246,7 @@ class BGP_Daemon_CLI_Test < Test::Unit::TestCase
   def test_clear_bgp_with_no_peer_is_not_one_of_the_commands
     status, _out, err = run_cli(['-c', 'clear bgp'])
     assert_equal(1, status)
-    assert_match(/clear bgp PEER/, err)
+    assert_match(/"clear bgp" is not a whole command\. After it comes PEER/, err)
   end
 
   # `show fib` reads every page, so a table larger than one page prints
@@ -414,7 +417,7 @@ class BGP_Daemon_CLI_Test < Test::Unit::TestCase
     status, out, err = run_cli(%w[show everything])
     assert_equal(1, status)
     assert_equal('', out)
-    assert_match(/bgp4r-cli: "show everything" is not one of: /, err)
+    assert_match(/bgp4r-cli: "show everything" is not a command/, err)
   end
 
   # `?` on the command line is help, and help is a success.
@@ -448,5 +451,28 @@ class BGP_Daemon_CLI_Test < Test::Unit::TestCase
     status, _o, err = run_cli(['-c', 'config commit'], answers)
     assert_equal(1, status)
     assert_equal("bgp4r-cli: commit refused: as needs a restart\n", err)
+  end
+
+  # Methods take key=value words on the command line too.
+  def test_a_method_takes_key_value_words
+    status, _o, err, client = run_cli(%w[show.rib prefix=10.0.0.0/8 --pretty])
+    assert_equal(0, status, err)
+    assert_equal([['show.rib', { 'prefix' => '10.0.0.0/8' }]], client.calls)
+  end
+
+  def test_a_method_word_that_is_not_key_value_is_status_one
+    status, out, err = run_cli(%w[peer.stop 10.0.10.1])
+    assert_equal([1, ''], [status, out])
+    assert_equal("bgp4r-cli: \"10.0.10.1\" is not key=value\n", err)
+  end
+
+  # `monitor events` from the command line streams to standard output.
+  def test_monitor_events_from_the_command_line
+    out, err = StringIO.new, StringIO.new
+    client = StreamingClient.new
+    status = BGP::Daemon::CLI.new(out, err, client, StringIO.new).start(%w[monitor events], {})
+    assert_equal(0, status, err.string)
+    assert_equal([['events.subscribe', {}]], client.streams)
+    assert_equal(['Watching events. Ctrl-C stops.', 'session 10.0.0.2'], out.string.lines.collect(&:chomp))
   end
 end

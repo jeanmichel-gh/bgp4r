@@ -68,20 +68,12 @@ module BGP
 
       STYLES = %w[ios junos iosxr].freeze
 
-      # The methods that answer many lines rather than one, so the method
-      # form reads until it is stopped instead of printing one line and
-      # leaving.
-      #
-      # **The client's own list and not `Api::STREAM_METHODS`.** This file
-      # requires `bgp/daemon/client` and nothing else, so `bgp4r-cli`
-      # loads a socket and a JSON parser rather than the whole library and
-      # a Speaker, and `events.unsubscribe` is in the server's list and
-      # is not something a caller starts. cli_test.rb holds this list
-      # inside the server's so the two cannot disagree about a name.
-      STREAMS = %w[events.subscribe].freeze
+      # The methods that answer many lines rather than one: Shell's
+      # list, which says why it is the client's own.
+      STREAMS = Shell::STREAMS
 
       USAGE = <<-TEXT
-Usage: bgp4r-cli [options] [METHOD [JSON] | COMMAND...]
+Usage: bgp4r-cli [options] [METHOD [JSON | KEY=VALUE...] | COMMAND...]
 
   bgp4r-cli                            a prompt: ? lists the commands
   bgp4r-cli show bgp summary           an operator command, no quotes
@@ -91,9 +83,10 @@ Usage: bgp4r-cli [options] [METHOD [JSON] | COMMAND...]
   bgp4r-cli -c 'show link-state'       BGP-LS routes, sent and received
   bgp4r-cli -c 'show configuration'    its configuration, as set lines
   bgp4r-cli -c 'clear bgp 10.0.10.1'   reset one session
+  bgp4r-cli show ip bgp neighbors      every neighbor, in detail
   bgp4r-cli show.peers                 an API method, as JSON
-  bgp4r-cli show.rib '{"prefix":"10.0.0.0/8"}'
-  bgp4r-cli peer.stop '{"peer":"10.0.10.1"}'
+  bgp4r-cli show.rib prefix=10.0.0.0/8   parameters as key=value, or JSON
+  bgp4r-cli peer.stop peer=10.0.10.1
   bgp4r-cli events.subscribe           a stream, one event per line
 
 Options:
@@ -167,7 +160,7 @@ TEXT
           opts[:error] = true if opts[:command]
           opts[:command] = rest.join(' ')
         else
-          opts[:method], opts[:params] = rest[0], rest[1]
+          opts[:method], opts[:params] = rest[0], rest[1..]
         end
         if opts[:version]
           @out.puts BGP::VERSION
@@ -182,13 +175,19 @@ TEXT
         opts
       end
 
-      # The method form: one call, the result as JSON.
+      # The method form: one call, the result as JSON. The parameters are
+      # one JSON object or `key=value` words, which Shell.params reads.
       def method_call(client, opts)
         require 'json'
-        params = opts[:params] ? JSON.parse(opts[:params]) : {}
-        unless params.is_a?(Hash)
-          @err.puts 'bgp4r-cli: the second argument is a JSON object of parameters'
-          return 1
+        words = Array(opts[:params])
+        if words[0] && words[0].start_with?('{', '[')
+          params = JSON.parse(words.join(' '))
+          unless params.is_a?(Hash)
+            @err.puts 'bgp4r-cli: the second argument is a JSON object of parameters'
+            return 1
+          end
+        else
+          params = Shell.params(words)
         end
         return subscribe(client, opts[:method], params) if STREAMS.include?(opts[:method])
         result = client.call(opts[:method], params)
@@ -196,6 +195,9 @@ TEXT
         0
       rescue JSON::ParserError => e
         @err.puts "bgp4r-cli: the second argument is not JSON: #{e.message[0, 120]}"
+        1
+      rescue Shell::Refused => e
+        @err.puts "bgp4r-cli: #{e.message}"
         1
       end
 
@@ -218,7 +220,7 @@ TEXT
 
       def shell(client, opts)
         require 'socket'
-        Shell.new(client, :style => opts[:style], :hostname => Socket.gethostname.split('.').first)
+        Shell.new(client, :style => opts[:style], :hostname => Socket.gethostname.split('.').first, :out => @out)
       end
 
       # An operator command, from `-c` or the bare words: its text, or
