@@ -41,13 +41,17 @@ cli() { ruby -I/app /app/exe/bgp4r-cli -s /run/bgp4r/bgp4rd.sock "$@"; }
 cli show bgp                            an operator command: text for a person
 cli -c 'show bgp'                       the same, quoted, for a script
 cli show.routes                         a method: JSON, one object
-cli show.rib '{"prefix":"10.30.0.0/24"}' --pretty   a method with parameters
+cli show.rib prefix=10.30.0.0/24 --pretty    a method with parameters
+cli show.rib '{"prefix":"10.30.0.0/24"}'     the same, as JSON
 ```
 
 If the first word has a dot, it is a method. Any other word starts an
 operator command, which needs no quotes. A method takes its parameters
-as one JSON object, in single quotes. `--pretty` indents the JSON. A
-name the daemon does not answer gets the list of the ones it does.
+as `key=value` words, or as one JSON object in single quotes. In
+`key=value`, a number, `true`, `false` and `null` are those, a value
+that starts with `[` or `{` is JSON, and anything else is a string.
+`--pretty` indents the JSON. A name the daemon does not answer gets the
+list of the ones it does.
 
 ## The prompt
 
@@ -57,7 +61,10 @@ name the daemon does not answer gets the list of the ones it does.
 root@r1:/app# cli
 r1> show bgp summary
 r1> sh b 10.0.0.0/8
-r1> clear bgp 10.0.10.1
+r1> show ip bgp neighbors 10.0.10.1 received-routes
+r1> clear bgp 10.0.10.1 soft in
+r1> show.peers
+r1> peer.refresh peer=10.0.10.1 subtype=1
 r1> exit
 ```
 
@@ -67,14 +74,18 @@ r1> exit
 - `?` and `help` list what can follow, at every level: `?`, `show ?`,
   `show help`, `clear help`. `?` against a word, as in `sh?`, lists
   what that word may start. After `?` the line comes back for editing.
-- Where only an address fits, as after `clear bgp`, `help` is taken as
-  the address. Type `?` there instead.
+- A word that is not a command is refused with what may come where it
+  is. PEER must be an address and PREFIX a prefix or an address, and
+  a word that is neither is refused before anything is sent.
+- A method works at the prompt as on the command line, and prints its
+  answer as indented JSON. `?` lists the commands, and `api.info` the
+  methods.
 - Tab completes a word, and after `clear bgp` it offers the configured
   neighbors.
 - The arrow keys walk back through this session's commands. History is
   not kept after you leave.
-- Ctrl-C stops a command and keeps the prompt. `exit`, `quit` or
-  Ctrl-D leaves.
+- Ctrl-C stops a command and keeps the prompt: `monitor events` runs
+  until it. `exit`, `quit` or Ctrl-D leaves.
 - `--style` given to `cli` applies to every `show bgp` at the prompt.
 
 `?` works on the command line too: `cli show ?`. If the shell says
@@ -94,7 +105,28 @@ or a file prints the usage, as it always did. Use `-c` in a script.
 | `show link-state` | BGP-LS routes: what this daemon sent as a Producer, and what it received, one line per route |
 | `show configuration` | the running configuration, as set lines |
 | `show configuration candidate` | the candidate configuration, as set lines |
+| `show bgp neighbors` | every neighbor, in detail: every field `show.peers` answers |
+| `show bgp neighbors PEER` | the same, for one neighbor |
+| `show bgp neighbors PEER received-routes` | what PEER sent, as received; `*>` marks the best path |
+| `show bgp neighbors PEER advertised-routes` | what went to PEER, then what did not and why, and what was sent by hand |
+| `show log` | the daemon's last log lines, oldest first |
 | `clear bgp PEER` | resets the session with PEER, an address |
+| `clear bgp PEER soft in` | asks PEER to send its routes again, with a ROUTE-REFRESH; the session stays up |
+| `disable bgp PEER` | ends the session with PEER and keeps it down |
+| `enable bgp PEER` | lets a disabled session come back |
+| `monitor events` | the daemon's events, one line each as they come, until Ctrl-C |
+
+Every `show bgp` and `clear bgp` command has an IOS form with `ip`, as
+on a Cisco router: `show ip bgp`, `show ip bgp summary`,
+`show ip bgp neighbors PEER received-routes`, `clear ip bgp PEER soft in`.
+They answer the same:
+
+| Command | Is |
+|---|---|
+| `show ip bgp`, `show ip bgp summary`, `show ip bgp PREFIX` | `show bgp`, and the same words after it |
+| `show ip bgp neighbors`, `show ip bgp neighbors PEER` | the same |
+| `show ip bgp neighbors PEER received-routes`, `show ip bgp neighbors PEER advertised-routes` | the same |
+| `clear ip bgp PEER`, `clear ip bgp PEER soft in` | `clear bgp`, and the same words after it |
 
 `--style junos` or `--style iosxr` prints `show bgp` in those styles.
 `--style ios` is the default. The styles follow those routers' layout and

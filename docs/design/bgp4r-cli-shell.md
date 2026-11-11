@@ -1,6 +1,7 @@
 # bgp4r-cli: an interactive prompt
 
-Status: approved (#319). Steps 1 and 2 are built: bgp/daemon/shell.rb.
+Status: approved (#319). Steps 1, 2, 3 and 5 are built: bgp/daemon/shell.rb.
+Step 4, pipes, and `show bgp PREFIX detail` are not.
 
 ## The problem
 
@@ -102,9 +103,9 @@ r1> clear
 - After `?` the line is put back for editing, without the `?`, as
   ospf-cli does. After `help` it is not, since `help` is a word typed
   in full.
-- `help` is help only where the grammar expects a keyword. Where it
-  expects an argument (PEER, PREFIX, a config value), `help` is that
-  argument, and `?` is the way to ask.
+- `help` is help where the grammar expects a keyword, or an argument
+  `help` cannot be (PEER, PREFIX). Where it could be the argument (a
+  config value, N), `help` is that argument, and `?` is the way to ask.
 - `?` and `help` work with `-c` and the bare words too:
   `cli show ?` and `cli -c 'config help'` print the same list.
 - Tab completes a word. For PEER it offers the configured neighbors,
@@ -131,9 +132,23 @@ grammar stays a table and not a parser:
 | `monitor events` | `events.subscribe`, until Ctrl-C, back to the prompt |
 
 The column layout for the new tables is this file's own, as
-`show bgp summary`'s is today. Where no layout is chosen yet, the
-command prints the method's JSON, indented. The words above are a first
-list for the owner to change.
+`show bgp summary`'s is today. `show bgp neighbors` prints every field
+`show.peers` answers, one per line, so it hides nothing and invents no
+names.
+
+**The words are settled as the IOS forms above**, and every `show bgp`
+and `clear bgp` command also takes the IOS `ip`: `show ip bgp`,
+`show ip bgp summary`, `clear ip bgp PEER soft in`. The owner asked for
+`show ip bgp [summary]`, as on a Cisco router.
+
+`show bgp PREFIX detail` is not built yet.
+
+PEER is checked as an address and PREFIX as a prefix or an address
+before anything is sent, so a word that is neither is refused with what
+fits. Because `help` is never an address, `clear bgp help` is help.
+
+An unknown word is refused with what may come where it is, not with
+every command; there are 37 now.
 
 Originate, withdraw, specimen, fault and replay stay in the method form.
 They take several parameters, and a grammar for them is a separate
@@ -242,7 +257,8 @@ One pull request per step, each usable on its own:
 3. `key=value` for methods (section 5).
 4. Pipes (section 6).
 5. The new show, clear, enable and disable commands (section 4), once
-   the owner has settled the words.
+   the owner has settled the words. Built with step 3, in one pull
+   request, with `show ip bgp`.
 
 ## Open questions for the owner
 
@@ -252,7 +268,8 @@ One pull request per step, each usable on its own:
    which "What does not change" rules out, and `cli_test.rb` holds it.
    `-c` covers a script.
 2. The words in section 4: IOS forms as above, or Junos forms too
-   (`show bgp neighbor`), as ospf-cli takes both?
+   (`show bgp neighbor`), as ospf-cli takes both? **Settled: the IOS
+   forms, with `show ip bgp` as well.** Junos forms can come later.
 3. Should history persist across sessions in `~/.bgp4r_history`? The
    container's home goes away with it. **Step 1 keeps it in memory
    only.**

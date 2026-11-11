@@ -48,7 +48,7 @@ class TestBgp4rCliDoc < Test::Unit::TestCase
   end
 
   def test_every_operator_command_is_listed
-    listed = first_cells.flatten.grep(/\A(show|clear|config) /)
+    listed = first_cells.flatten.grep(/\A(show|clear|config|enable|disable|monitor) /)
     assert_equal BGP::Daemon::CLI::COMMANDS.sort, listed.sort
   end
 

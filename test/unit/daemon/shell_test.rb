@@ -29,6 +29,7 @@
 
 require 'test/unit'
 require 'stringio'
+require 'json'
 require 'bgp/daemon/shell'
 
 class BGP_Daemon_Shell_Test < Test::Unit::TestCase
@@ -50,6 +51,23 @@ class BGP_Daemon_Shell_Test < Test::Unit::TestCase
     end
 
     def close ; @closes += 1 ; end
+
+    # A stream: the result line, an event, a keepalive, then what
+    # `then_` says: :end, or :interrupt for Ctrl-C.
+    attr_accessor :then_
+    attr_reader :streams, :unsubscribes
+
+    def stream(method, params = {})
+      (@streams ||= []) << [method, params]
+      [{ 'id' => 1, 'result' => { 'seq' => 0 } },
+       { 'event' => { 'seq' => 1, 'time' => '2026-11-11T03:58:53.215Z', 'kind' => 'session',
+                      'peer' => '10.2.0.2', 'message' => 'OpenConfirm -> Established' } },
+       { 'keepalive' => 1, 'seq' => 1 }].each { |l| yield l }
+      raise Interrupt if then_ == :interrupt
+      nil
+    end
+
+    def unsubscribe ; @unsubscribes = (@unsubscribes || 0) + 1 ; nil ; end
   end
 
   ANSWERS = { 'show.text' => "a table\n",
@@ -101,16 +119,35 @@ class BGP_Daemon_Shell_Test < Test::Unit::TestCase
     assert_equal([], @client.calls)
   end
 
-  def test_an_unknown_word_lists_every_command
-    r = run_line('show everything')
-    assert_match(/\A"show everything" is not one of: /, r.error)
-    Shell::COMMANDS.each { |c| assert_include(r.error, c) }
+  # An unknown word is refused with what fits where it is, not with
+  # every command: there are 37 of them.
+  def test_an_unknown_word_says_what_fits_there
+    assert_equal('"show everything" is not a command. After "show" comes bgp, ip, fib, link-state, ' \
+                 'configuration, log', run_line('show everything').error)
+    assert_match(/\A"frobnicate" is not a command. A command starts with show, clear, enable, disable, monitor, config, or is a method name with a dot/,
+                 run_line('frobnicate').error)
+  end
+
+  # PEER and PREFIX are checked before anything is sent, so a word that
+  # is neither is refused with what fits, not with the daemon's error.
+  def test_a_word_that_is_not_an_address_is_refused_before_it_is_sent
+    assert_equal('"clear bgp bob" is not a command, and "bob" is not an address. After "clear bgp" comes PEER',
+                 run_line('clear bgp bob').error)
+    assert_equal('"clear bgp 10.0.0.0/8" is not a command, and "10.0.0.0/8" is not an address. ' \
+                 'After "clear bgp" comes PEER', run_line('clear bgp 10.0.0.0/8').error)
+    assert_match(/"nonsense" is not a prefix\. After "show bgp" comes summary, neighbors, PREFIX/,
+                 run_line('show bgp nonsense').error)
+    assert_equal([], @client.calls)
+    run_line('show bgp 2001:db8::/32')
+    run_line('show bgp 10.0.0.1')
+    assert_equal(%w[2001:db8::/32 10.0.0.1], @client.calls.collect { |_m, p| p['prefix'] })
   end
 
   def test_words_that_are_not_yet_a_command_say_how_they_go_on
     r = run_line('clear bgp')
-    assert_equal('"clear bgp" is not a whole command. It goes on as: clear bgp PEER', r.error)
-    assert_match(/goes on as: show bgp, show bgp summary, show bgp PREFIX, show fib/, run_line('show').error)
+    assert_equal('"clear bgp" is not a whole command. After it comes PEER', r.error)
+    assert_equal('"show" is not a whole command. After it comes bgp, ip, fib, link-state, configuration, log',
+                 run_line('show').error)
   end
 
   def test_the_daemons_refusal_is_an_error_and_not_an_exception
@@ -154,8 +191,9 @@ class BGP_Daemon_Shell_Test < Test::Unit::TestCase
     text = run_line('show bgp ?').text
     assert_match(/^  summary +the router, and one line per neighbor$/, text)
     assert_match(/^  PREFIX +one prefix, in detail$/, text)
+    assert_match(/^  neighbors +every neighbor, in detail$/, text)
     assert_match(/^  <cr> +run it$/, text)
-    assert_equal(3, text.lines.size)
+    assert_equal(4, text.lines.size)
     assert_no_match(/<cr>/, run_line('clear bgp ?').text, 'clear bgp alone is not a command')
   end
 
@@ -166,12 +204,16 @@ class BGP_Daemon_Shell_Test < Test::Unit::TestCase
     assert_match(/nothing here starts with "z"/, run_line('show z?').error)
   end
 
-  # Where the grammar wants only an argument, `help` is that argument:
-  # it may be a peer's name one day. `?` still asks.
-  def test_help_where_only_an_argument_fits_is_the_argument
-    run_line('clear bgp help')
-    assert_equal([['peer.clear', { 'peer' => 'help' }]], @client.calls)
-    assert_match(/^  PEER +reset the session/, run_line('clear bgp ?').text)
+  # `help` cannot be an address, so where only an address fits it is
+  # help. Where it could be the argument, as N could be anything the
+  # daemon reads, it is the argument and `?` asks.
+  def test_help_is_help_where_it_cannot_be_the_argument
+    assert_equal(run_line('clear bgp ?').text, run_line('clear bgp help').text)
+    assert_match(/^  PEER +reset the session/, run_line('clear bgp help').text)
+    assert_equal([], @client.calls)
+    sh = Shell.new(@client = FakeClient.new('config.rollback' => { 'rollback' => 0 }))
+    sh.execute('config rollback help')
+    assert_equal([['config.rollback', { 'number' => 'help' }]], @client.calls)
   end
 
   def test_help_after_a_whole_command_says_cr
@@ -183,9 +225,9 @@ class BGP_Daemon_Shell_Test < Test::Unit::TestCase
 
   def test_tab_completes_keywords_and_builtins
     assert_equal(%w[show], @shell.completions('', 's'))
-    assert_equal(%w[show clear config help exit quit], @shell.completions('', ''))
+    assert_equal(%w[show clear enable disable monitor config help exit quit], @shell.completions('', ''))
     assert_equal(%w[configuration], @shell.completions('sh ', 'c'))
-    assert_equal(%w[summary], @shell.completions('show bgp ', ''), 'a prefix is not completed')
+    assert_equal(%w[summary neighbors], @shell.completions('show bgp ', ''), 'a prefix is not completed')
   end
 
   def test_tab_completes_peers_from_the_daemon
@@ -206,9 +248,10 @@ class BGP_Daemon_Shell_Test < Test::Unit::TestCase
     @shell.interactive(StringIO.new("show bgp\nshow nonsense\nclear ?\nexit\nshow bgp\n"), out)
     lines = out.string.lines
     assert_equal("a table\n", lines[0])
-    assert_match(/\A% "show nonsense" is not one of: /, lines[1])
+    assert_match(/\A% "show nonsense" is not a command\. After "show" comes /, lines[1])
     assert_match(/\A  bgp +a BGP session$/, lines[2])
-    assert_equal(3, lines.size, 'nothing after exit runs')
+    assert_match(/\A  ip +the IOS form/, lines[3])
+    assert_equal(4, lines.size, 'nothing after exit runs')
     assert_equal(1, @client.calls.size)
   end
 
@@ -279,7 +322,7 @@ class BGP_Daemon_Shell_Test < Test::Unit::TestCase
 
   def test_config_set_with_nothing_after_it_is_not_a_whole_command
     sh = config_shell({})
-    assert_equal('"config set" is not a whole command. It goes on as: config set PATH... VALUE',
+    assert_equal('"config set" is not a whole command. After it comes PATH... VALUE',
                  sh.execute('config set').error)
     assert_equal([], @client.calls)
   end
@@ -379,5 +422,188 @@ class BGP_Daemon_Shell_Test < Test::Unit::TestCase
     %w[show set delete compare check commit discard history rollback].each do |w|
       assert_match(/^  #{w} /, text)
     end
+  end
+
+  # ====================================================================
+  # show ip bgp, the IOS form, is show bgp
+
+  def test_show_ip_bgp_is_show_bgp
+    %w[show\ ip\ bgp sh\ ip\ b show\ ip\ bgp\ 10.0.0.0/8].each { |l| assert_nil(run_line(l).error, l) }
+    assert_equal([['show.text', { 'style' => 'ios' }], ['show.text', { 'style' => 'ios' }],
+                  ['show.text', { 'style' => 'ios', 'prefix' => '10.0.0.0/8' }]], @client.calls)
+    assert_equal(run_line('show bgp ?').text, run_line('show ip bgp ?').text)
+    assert_equal(run_line('clear bgp ?').text, run_line('clear ip bgp ?').text)
+  end
+
+  def test_show_ip_bgp_summary_asks_for_the_status
+    r = Shell.new(@client = FakeClient.new({})).execute('show ip bgp summary')
+    assert_equal('unknown method "show.status"', r.error, 'the summary asked for show.status')
+  end
+
+  # Every form the IOS words bring is in COMMANDS, so the guide lists it.
+  def test_every_show_bgp_command_has_its_ip_form
+    bgp = Shell::COMMANDS.grep(/\Ashow bgp/)
+    assert_equal(bgp.collect { |c| c.sub('show bgp', 'show ip bgp') }, Shell::COMMANDS.grep(/\Ashow ip bgp/))
+    assert_operator(bgp.size, :>=, 6)
+  end
+
+  # ====================================================================
+  # Neighbors
+
+  PEERS = [{ 'address' => '10.2.0.2', 'remote_as' => 65_100, 'type' => 'ebgp', 'state' => 'established',
+             'description' => 'col', 'uptime' => 1034, 'flaps' => 0, 'held' => nil,
+             'capabilities' => [{ 'name' => 'As4', 'code' => 65, 'capability' => { 'as' => 65_100 } },
+                                { 'name' => 'Route_refresh', 'code' => 2 }] },
+           { 'address' => '10.2.0.3', 'remote_as' => 65_000, 'type' => 'ibgp', 'state' => 'idle',
+             'uptime' => nil }].freeze
+
+  def test_show_bgp_neighbors_prints_every_field_of_every_neighbor
+    text = Shell.new(FakeClient.new('show.peers' => PEERS)).execute('show bgp neighbors').text
+    assert_match(/^BGP neighbor 10\.2\.0\.2, remote AS 65100, ebgp, established$/, text)
+    assert_match(/^  description +col$/, text)
+    assert_match(/^  uptime +1034s$/, text)
+    assert_match(/^  held +-$/, text)
+    assert_match(/^  capabilities +As4 as=65100, Route_refresh$/, text)
+    assert_match(/^BGP neighbor 10\.2\.0\.3, remote AS 65000, ibgp, idle$/, text)
+    assert_no_match(/^  (address|remote_as|type|state) /, text, 'the head line has those')
+  end
+
+  def test_show_bgp_neighbors_peer_is_that_one_and_an_unknown_one_is_refused
+    sh = Shell.new(FakeClient.new('show.peers' => PEERS))
+    text = sh.execute('show ip bgp neighbors 10.2.0.3').text
+    assert_match(/\ABGP neighbor 10\.2\.0\.3,/, text)
+    assert_no_match(/10\.2\.0\.2/, text)
+    assert_equal('no neighbor "10.9.9.9" is configured; this bgp4rd has 10.2.0.2, 10.2.0.3',
+                 sh.execute('show bgp neighbors 10.9.9.9').error)
+  end
+
+  ROUTE = { 'prefix' => '10.30.0.0/24', 'next_hop' => '10.2.0.2', 'as_path' => '65100 65200',
+            'origin' => 'igp', 'local_pref' => 100, 'med' => 0, 'best' => true }.freeze
+
+  # Every page is read, and `*>` marks the best path.
+  def test_received_routes_reads_every_page_of_adj_in
+    pages = [{ 'rows' => [ROUTE], 'next_offset' => 1 },
+             { 'rows' => [ROUTE.merge('prefix' => '10.31.0.0/24', 'best' => false, 'as_path' => '',
+                                      'origin' => 'incomplete', 'med' => nil)], 'next_offset' => nil }]
+    client = FakeClient.new({})
+    client.define_singleton_method(:call) { |m, p = {}| @calls << [m, p] ; pages.shift }
+    text = Shell.new(client).execute('show bgp neighbors 10.2.0.2 received-routes').text
+    assert_equal([['show.adj_in', { 'peer' => '10.2.0.2', 'offset' => 0 }],
+                  ['show.adj_in', { 'peer' => '10.2.0.2', 'offset' => 1 }]], client.calls)
+    assert_match(/\A2 path\(s\) received from 10\.2\.0\.2$/, text)
+    assert_match(/^ +Network +Next Hop +Metric +LocPrf +Path$/, text)
+    assert_match(%r{^\*> 10\.30\.0\.0/24 +10\.2\.0\.2 +0 +100 65100 65200 i$}, text)
+    assert_match(%r{^\*  10\.31\.0\.0/24 +10\.2\.0\.2 +100 \?$}, text)
+  end
+
+  def test_advertised_routes_prints_what_was_not_sent_and_what_went_by_hand
+    page = { 'rows' => [ROUTE], 'next_offset' => nil,
+             'skipped' => { 'total' => 1, 'rows' => [{ 'prefix' => '10.40.0.0/24', 'reason' => 'no_export' }] },
+             'hand' => { 'total' => 1, 'rows' => [{ 'prefix' => '10.50.0.0/24', 'verb' => 'fault',
+                                                    'at' => '2026-11-11T04:00:00.000Z' }] } }
+    sh = Shell.new(@client = FakeClient.new('show.adj_out' => page))
+    text = sh.execute('sh ip b n 10.2.0.2 a').text
+    assert_equal([['show.adj_out', { 'peer' => '10.2.0.2', 'offset' => 0 }]], @client.calls)
+    assert_match(/\A1 path\(s\) advertised to 10\.2\.0\.2$/, text)
+    assert_match(%r{^   10\.30\.0\.0/24 +10\.2\.0\.2 +0 +100 65100 65200 i$}, text)
+    assert_match(%r{^Not advertised:\n  10\.40\.0\.0/24 +no_export$}, text)
+    assert_match(%r{^Sent by hand, not in the Adj-RIB-Out:\n  10\.50\.0\.0/24 +fault +2026-11-11T04:00:00\.000Z$}, text)
+  end
+
+  # ====================================================================
+  # Sessions
+
+  def test_clear_soft_in_is_a_route_refresh
+    sh = Shell.new(@client = FakeClient.new('peer.refresh' => { 'peer' => '10.2.0.2', 'afi' => 1, 'safi' => 1,
+                                                                'subtype' => 0, 'sent' => true }))
+    r = sh.execute('clear ip bgp 10.2.0.2 soft in')
+    assert_equal([['peer.refresh', { 'peer' => '10.2.0.2' }]], @client.calls)
+    assert_equal("Asked 10.2.0.2 to send its routes again (ROUTE-REFRESH, AFI 1 SAFI 1)\n", r.text)
+  end
+
+  def test_disable_and_enable_are_peer_stop_and_peer_start
+    sh = Shell.new(@client = FakeClient.new(
+      'peer.stop' => { 'peer' => '10.2.0.2', 'was' => 'established', 'state' => 'idle', 'shutdown' => true },
+      'peer.start' => { 'peer' => '10.2.0.2', 'state' => 'idle', 'shutdown' => false, 'connect' => false }))
+    assert_match(/\ADisabled 10\.2\.0\.2: was established, now idle, and it stays down/,
+                 sh.execute('disable bgp 10.2.0.2').text)
+    assert_equal("Enabled 10.2.0.2: now idle, and it is passive, so it comes back when the peer dials\n",
+                 sh.execute('en b 10.2.0.2').text)
+    assert_equal([['peer.stop', { 'peer' => '10.2.0.2' }], ['peer.start', { 'peer' => '10.2.0.2' }]], @client.calls)
+  end
+
+  def test_show_log_prints_the_lines
+    sh = Shell.new(@client = FakeClient.new('show.log' => { 'lines' => %w[one two], 'kept' => 2 }))
+    assert_equal("one\ntwo\n", sh.execute('show log').text)
+    assert_equal('"show l" is ambiguous: link-state, log', sh.execute('show l').error)
+  end
+
+  # ====================================================================
+  # Streams
+
+  # `monitor events` prints each event on one line as it comes, and
+  # neither the result line nor a keepalive.
+  def test_monitor_events_prints_one_line_per_event
+    out = StringIO.new
+    sh = Shell.new(@client = FakeClient.new({}), :out => out)
+    r = sh.execute('monitor events')
+    assert_equal(['', nil], [r.text, r.error])
+    assert_equal([['events.subscribe', {}]], @client.streams)
+    assert_equal("Watching events. Ctrl-C stops.\n" \
+                 "2026-11-11T03:58:53.215Z session 10.2.0.2 OpenConfirm -> Established\n", out.string)
+  end
+
+  # Ctrl-C ends the stream with events.unsubscribe and drops the
+  # connection, and the prompt goes on.
+  def test_ctrl_c_ends_a_stream_and_the_prompt_goes_on
+    out = StringIO.new
+    sh = Shell.new(@client = FakeClient.new(ANSWERS), :out => out)
+    @client.then_ = :interrupt
+    sh.interactive(StringIO.new("monitor events\nshow bgp\n"), out)
+    assert_equal(1, @client.unsubscribes)
+    assert_equal(1, @client.closes)
+    assert_match(/Established\na table\n\z/, out.string)
+  end
+
+  # ====================================================================
+  # Methods at the prompt
+
+  def test_a_method_takes_key_value_words_and_prints_indented_json
+    sh = Shell.new(@client = FakeClient.new('show.rib' => { 'rows' => [] }))
+    r = sh.execute('show.rib prefix=10.0.0.0/8 limit=5 detail=true')
+    assert_equal([['show.rib', { 'prefix' => '10.0.0.0/8', 'limit' => 5, 'detail' => true }]], @client.calls)
+    assert_equal({ 'rows' => [] }, JSON.parse(r.text))
+    assert_match(/\A\{\n  "rows"/, r.text, 'indented')
+  end
+
+  def test_a_method_takes_json_with_spaces_in_it
+    sh = Shell.new(@client = FakeClient.new('route.originate' => {}))
+    sh.execute('route.originate {"prefixes": ["10.255.0.0/24"], "med": 50}')
+    assert_equal([['route.originate', { 'prefixes' => ['10.255.0.0/24'], 'med' => 50 }]], @client.calls)
+  end
+
+  def test_key_value_converts_numbers_booleans_null_and_json_and_keeps_the_rest
+    assert_equal({ 'a' => 1, 'b' => -2, 'c' => true, 'd' => false, 'e' => nil, 'f' => [1, 2],
+                   'g' => '10.0.0.1', 'h' => 'x=y' },
+                 Shell.params(%w[a=1 b=-2 c=true d=false e=null f=[1,2] g=10.0.0.1 h=x=y]))
+  end
+
+  def test_a_word_that_is_not_key_value_is_refused
+    r = Shell.new(@client = FakeClient.new({})).execute('peer.stop 10.0.10.1')
+    assert_equal('"10.0.10.1" is not key=value', r.error)
+    assert_equal('the parameters are not JSON: ' , Shell.new(@client).execute('show.rib {nope').error[0, 29])
+    assert_equal([], @client.calls)
+  end
+
+  def test_a_stream_method_at_the_prompt_prints_every_line_as_json
+    out = StringIO.new
+    Shell.new(@client = FakeClient.new({}), :out => out).execute('events.subscribe kinds=["session"]')
+    assert_equal([['events.subscribe', { 'kinds' => ['session'] }]], @client.streams)
+    assert_equal(3, out.string.lines.size)
+    assert_equal({ 'keepalive' => 1, 'seq' => 1 }, JSON.parse(out.string.lines[2]))
+  end
+
+  def test_the_top_level_help_names_methods
+    assert_match(/^  METHOD +a method by name, as show\.peers/, run_line('?').text)
   end
 end

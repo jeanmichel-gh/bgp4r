@@ -400,7 +400,7 @@ see the SIGHUP heading under "The candidate configuration" for what it
 can and cannot apply. `INT` and `TERM` stop.
 
 ```
-bgp4r-cli [--socket PATH] [--style NAME] [--pretty] -c 'COMMAND' | COMMAND... | METHOD [JSON]
+bgp4r-cli [--socket PATH] [--style NAME] [--pretty] -c 'COMMAND' | COMMAND... | METHOD [JSON | KEY=VALUE...]
 ```
 
 With no command and no method, on a terminal, it opens a prompt where

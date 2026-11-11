@@ -381,6 +381,12 @@ bgp/daemon/              `bgp4rd` the daemon and `bgp4r-cli` its client;
                          is how `config set PATH... VALUE` passes a set
                          line to config.load as typed; the `config` group
                          is one config.* method per command
+                         `show bgp` and `clear bgp` are built twice, once
+                         under `ip`, for the IOS form. PEER and PREFIX are
+                         checked as addresses before a call. A first word
+                         with a dot is a method, its parameters
+                         `key=value` words or JSON (`Shell.params`), and
+                         STREAMS print through `out` until Ctrl-C
                          It renders the commands too. `show bgp` asks the
                          daemon for the text through `show.text`, because
                          bgp/rib/show.rb takes a Table and a second
