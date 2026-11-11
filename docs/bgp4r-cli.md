@@ -62,7 +62,8 @@ r1> exit
 ```
 
 - A word may be any unique prefix of itself: `sh b s` is
-  `show bgp summary`.
+  `show bgp summary`. A prefix two words share is refused with both:
+  `c` could be `clear` or `config`, so type `cl` or `con`.
 - `?` and `help` list what can follow, at every level: `?`, `show ?`,
   `show help`, `clear help`. `?` against a word, as in `sh?`, lists
   what that word may start. After `?` the line comes back for editing.
@@ -180,6 +181,35 @@ does.
 Changes go into a candidate first, as set lines, and a commit applies
 them. Some keys apply live, some bounce a session, and some are refused
 because they need a restart. The commit says which.
+
+The `config` commands do it without JSON, at the prompt or after `cli`:
+
+| Command | Does |
+|---|---|
+| `config show`, `config show candidate` | the running or the candidate configuration, as set lines |
+| `config set PATH... VALUE` | sets one value in the candidate |
+| `config delete PATH...` | deletes a value or a subtree from the candidate |
+| `config compare` | the lines the candidate changes |
+| `config check` | checks the candidate, and says what a commit would do |
+| `config commit`, `config commit comment TEXT` | applies the candidate, with a comment if given |
+| `config discard` | sets the candidate back to the running one |
+| `config history` | the commits, newest first, numbered as `config rollback` takes them |
+| `config rollback N` | configuration N as the candidate: 0 is the running one |
+
+```
+r1> config set neighbors 10.100.14.1 hold_time 60
+r1> config compare
+set neighbors 10.100.14.1 hold_time 60
+r1> config check
+r1> config commit comment hold time 60
+```
+
+`PATH... VALUE` is a set line without its `set`, as `show configuration`
+prints it. `set` and `delete` print nothing when they work. Every word
+after `config set` and `config delete` is part of the line, so type `?`
+there for help, not `help`.
+
+The same, as methods:
 
 | Method | Does | Parameters |
 |---|---|---|

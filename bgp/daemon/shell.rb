@@ -58,8 +58,9 @@ module BGP
 
       # One node of the grammar. `word` is the keyword, or nil for an
       # argument, which is then named by `arg` (:peer, :prefix) and shown
-      # as `name`.
-      Node = Struct.new(:word, :arg, :name, :help, :action, :children) do
+      # as `name`. An argument with `rest` takes every word after it too,
+      # as `config set PATH... VALUE` does.
+      Node = Struct.new(:word, :arg, :name, :help, :action, :children, :rest) do
         def label = word || name
         def keywords = children.select(&:word)
         def argument = children.find(&:arg)
@@ -71,6 +72,10 @@ module BGP
 
       def self.arg(arg, name, help, action = nil, children = [])
         Node.new(nil, arg, name, help, action, children)
+      end
+
+      def self.rest(arg, name, help, action)
+        Node.new(nil, arg, name, help, action, [], true)
       end
 
       GRAMMAR = kw('', '', nil, [
@@ -88,6 +93,31 @@ module BGP
         kw('clear', 'reset something', nil, [
           kw('bgp', 'a BGP session', nil, [
             arg(:peer, 'PEER', 'reset the session with PEER, an address', :clear)
+          ])
+        ]),
+        kw('config', 'the candidate configuration: change it, check it, commit it', nil, [
+          kw('show', 'the running configuration, as set lines', :configuration, [
+            kw('candidate', 'the candidate configuration', :candidate)
+          ]),
+          kw('set', 'set a value in the candidate', nil, [
+            rest(:line, 'PATH... VALUE', 'as in show configuration: neighbors 10.0.10.1 hold_time 60',
+                 :config_set)
+          ]),
+          kw('delete', 'delete a value or a subtree from the candidate', nil, [
+            rest(:line, 'PATH...', 'as in show configuration: neighbors 10.0.10.1 hold_time', :config_delete)
+          ]),
+          kw('compare', 'the lines the candidate changes', :config_compare),
+          kw('check', 'check the candidate, and say what a commit would do', :config_check),
+          kw('commit', 'apply the candidate', :config_commit, [
+            kw('comment', 'with a comment the history keeps', nil, [
+              rest(:comment, 'TEXT', 'the comment', :config_commit)
+            ])
+          ]),
+          kw('discard', 'make the candidate the running configuration again', :config_discard),
+          kw('history', 'the commits, newest first, numbered as rollback takes them', :config_history),
+          kw('rollback', 'load an older configuration into the candidate', nil, [
+            arg(:number, 'N', '0 is the running configuration, 1 the one before the last commit',
+                :config_rollback)
           ])
         ])
       ]).freeze
@@ -191,14 +221,21 @@ module BGP
 
       # Follows `words` down the grammar and answers the node reached,
       # the arguments met on the way, and whether the last word asked for
-      # help. Refuses what is not a command.
+      # help. Refuses what is not a command. Once a `rest` argument has
+      # started, every word after it is the argument's, `help` and
+      # keywords too, so `?` is the only way to ask there.
       def walk(words, line)
         node, args = @grammar, {}
         words.each_with_index do |w, i|
+          if node.rest
+            args[node.arg] << ' ' << w
+            next
+          end
           if w == 'help' && i == words.size - 1 && help_word?(node)
             return [node, args, true]
           end
           node, value = step(node, w, words[0..i], line)
+          value = +value if value
           args[node.arg] = value if node.arg
         end
         [node, args, false]
@@ -240,12 +277,14 @@ module BGP
           rows.concat(BUILTINS.select { |w, _| w.start_with?(partial) }.to_a)
         end
         rows << [node.argument.name, node.argument.help] if rows.empty? && node.argument
+        rows << [node.name, 'more words'] if rows.empty? && node.rest
         raise Refused, "nothing here starts with #{partial.inspect}" if rows.empty?
         table(rows)
       end
 
       def help_text(node, top)
         rows = node.children.collect { |c| [c.label, c.help] }
+        rows << [node.name, 'more words'] if node.rest
         rows.concat(BUILTINS.to_a) if top
         rows << ['<cr>', 'run it'] if node.action
         table(rows)
@@ -385,6 +424,87 @@ module BGP
 
       def candidate(_args, _words)
         @client.call('show.configuration', 'format' => 'set', 'candidate' => true).to_s
+      end
+
+      # ==================================================================
+      # `config`: each command is one config.* method, and the set and
+      # delete lines are passed as they are, for bgp/daemon/config.rb to
+      # read and refuse. The texts are this file's own, as the summary's
+      # columns are. `set` and `delete` print nothing when they work, as a
+      # router's do.
+
+      def config_set(args, _words) = load_line("set #{args[:line]}")
+
+      def config_delete(args, _words) = load_line("delete #{args[:line]}")
+
+      def load_line(line)
+        r = @client.call('config.load', 'lines' => [line])
+        errors = Array(r['errors'])
+        raise Refused, errors.join('; ') unless errors.empty?
+        ''
+      end
+
+      def config_compare(_args, _words)
+        lines = Array(@client.call('config.compare'))
+        return "No changes: the candidate is the running configuration.\n" if lines.empty?
+        lines.collect { |l| "#{l}\n" }.join
+      end
+
+      # `config.commit` with `check` answers the changes and, under
+      # `warnings`, what applying them would do to a session.
+      def config_check(_args, _words)
+        r = commit_call('check' => true)
+        changes = Array(r['changes'])
+        return "Check passed: no changes to commit.\n" if changes.empty?
+        out = +"Check passed: #{changes.size} change(s) to commit.\n"
+        changes.each { |l| out << "  #{l}\n" }
+        Array(r['warnings']).each { |w| out << "Note: #{w}\n" }
+        out
+      end
+
+      def config_commit(args, _words)
+        params = {}
+        params['comment'] = args[:comment] if args[:comment]
+        r = commit_call(params)
+        changes = Array(r['changes'])
+        return "Nothing to commit: the candidate is the running configuration.\n" if changes.empty?
+        out = +"Committed #{changes.size} change(s).\n"
+        changes.each { |l| out << "  #{l}\n" }
+        Array(r['warnings']).each { |w| out << "Warning: #{w}\n" }
+        out
+      end
+
+      def commit_call(params)
+        r = @client.call('config.commit', params)
+        raise Refused, "commit refused: #{Array(r['errors']).join('; ')}" unless r['ok']
+        r
+      end
+
+      def config_discard(_args, _words)
+        @client.call('config.discard')
+        "Discarded: the candidate is the running configuration again.\n"
+      end
+
+      # Row i of `config.history` is rollback i, docs/daemon.md says, so
+      # the rows are numbered from 0.
+      def config_history(_args, _words)
+        rows = Array(@client.call('config.history'))
+        return "No commits yet.\n" if rows.empty?
+        out = format("%-3s %-25s %-8s %s\n", '#', 'Time', 'Changes', 'Comment')
+        rows.each_with_index do |r, i|
+          out << format("%-3d %-25s %-8s %s\n", i, r['time'], r['changes'], r['comment']).sub(/ +\n\z/, "\n")
+        end
+        out
+      end
+
+      # N goes to the daemon as a number when it is one, and as it was
+      # typed when it is not, so the daemon's refusal names it.
+      def config_rollback(args, _words)
+        n = args[:number] =~ /\A\d+\z/ ? args[:number].to_i : args[:number]
+        r = @client.call('config.rollback', 'number' => n)
+        how = r['changed'] ? 'it differs from the running configuration; config compare shows how' :
+                             'it is the same as the running configuration'
+        "Rollback #{r['rollback']} is the candidate now: #{how}.\n"
       end
 
       # `clear bgp PEER`, which resets one session. The line it prints is

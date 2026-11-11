@@ -183,7 +183,7 @@ class BGP_Daemon_Shell_Test < Test::Unit::TestCase
 
   def test_tab_completes_keywords_and_builtins
     assert_equal(%w[show], @shell.completions('', 's'))
-    assert_equal(%w[show clear help exit quit], @shell.completions('', ''))
+    assert_equal(%w[show clear config help exit quit], @shell.completions('', ''))
     assert_equal(%w[configuration], @shell.completions('sh ', 'c'))
     assert_equal(%w[summary], @shell.completions('show bgp ', ''), 'a prefix is not completed')
   end
@@ -240,5 +240,144 @@ class BGP_Daemon_Shell_Test < Test::Unit::TestCase
     @shell.interactive(input, out)
     assert_equal(1, @client.closes)
     assert_equal("\na table\na table\n", out.string)
+  end
+
+  # ====================================================================
+  # config: docs/design/bgp4r-cli-shell.md section 4a
+
+  def config_shell(answers)
+    @client = FakeClient.new(answers)
+    Shell.new(@client)
+  end
+
+  # A set or delete line goes to the daemon as typed, all its words, for
+  # bgp/daemon/config.rb to read. It prints nothing when it works.
+  def test_config_set_and_delete_load_one_line_each
+    sh = config_shell('config.load' => { 'errors' => [] })
+    r = sh.execute('config set neighbors 10.0.10.1 hold_time 60')
+    assert_equal(['', nil], [r.text, r.error])
+    sh.execute('conf del neighbors 10.0.10.1 hold_time')
+    assert_equal([['config.load', { 'lines' => ['set neighbors 10.0.10.1 hold_time 60'] }],
+                  ['config.load', { 'lines' => ['delete neighbors 10.0.10.1 hold_time'] }]], @client.calls)
+  end
+
+  def test_config_set_refused_by_the_daemon_is_an_error
+    sh = config_shell('config.load' => { 'errors' => ['line 1: unknown key "nope"'] })
+    assert_equal('line 1: unknown key "nope"', sh.execute('config set nope 1').error)
+  end
+
+  # After set, the words are the line's, so `help` and keywords are
+  # words of the line and `?` is the way to ask.
+  def test_words_after_set_are_the_line_even_help_and_keywords
+    sh = config_shell('config.load' => { 'errors' => [] })
+    sh.execute('config set description show help')
+    assert_equal([['config.load', { 'lines' => ['set description show help'] }]], @client.calls)
+    assert_match(/^  PATH\.\.\. VALUE +as in show configuration/, sh.execute('config set ?').text)
+    assert_match(/^  PATH\.\.\. VALUE +more words$/, sh.execute('config set neighbors ?').text)
+    assert_match(/^  <cr> +run it$/, sh.execute('config set neighbors ?').text)
+  end
+
+  def test_config_set_with_nothing_after_it_is_not_a_whole_command
+    sh = config_shell({})
+    assert_equal('"config set" is not a whole command. It goes on as: config set PATH... VALUE',
+                 sh.execute('config set').error)
+    assert_equal([], @client.calls)
+  end
+
+  def test_config_compare_prints_the_lines_or_says_there_are_none
+    assert_equal("set as 65001\n", config_shell('config.compare' => ['set as 65001']).execute('config compare').text)
+    assert_match(/\ANo changes/, config_shell('config.compare' => []).execute('config compare').text)
+  end
+
+  def test_config_check_asks_for_a_check_and_prints_what_a_commit_would_do
+    sh = config_shell('config.commit' => { 'ok' => true, 'errors' => [],
+                                           'warnings' => ['the session with 10.0.10.1 will be bounced'],
+                                           'changes' => ['set neighbors 10.0.10.1 hold_time 60'] })
+    r = sh.execute('config check')
+    assert_equal([['config.commit', { 'check' => true }]], @client.calls)
+    assert_equal("Check passed: 1 change(s) to commit.\n  set neighbors 10.0.10.1 hold_time 60\n" \
+                 "Note: the session with 10.0.10.1 will be bounced\n", r.text)
+  end
+
+  # A commit the daemon refuses is an error, so -c answers status 1.
+  def test_a_refused_commit_is_an_error
+    sh = config_shell('config.commit' => { 'ok' => false, 'errors' => ['as needs a restart'],
+                                           'warnings' => [], 'changes' => [] })
+    assert_equal('commit refused: as needs a restart', sh.execute('config check').error)
+    assert_equal('commit refused: as needs a restart', sh.execute('config commit').error)
+  end
+
+  def test_config_commit_takes_a_comment_of_many_words
+    sh = config_shell('config.commit' => { 'ok' => true, 'errors' => [], 'warnings' => [],
+                                           'changes' => ['set as 65001'] })
+    r = sh.execute('config commit comment hold time 60')
+    sh.execute('config commit')
+    assert_equal([['config.commit', { 'comment' => 'hold time 60' }], ['config.commit', {}]], @client.calls)
+    assert_equal("Committed 1 change(s).\n  set as 65001\n", r.text)
+  end
+
+  def test_config_commit_with_nothing_to_commit_says_so
+    sh = config_shell('config.commit' => { 'ok' => true, 'errors' => [], 'warnings' => [], 'changes' => [] })
+    assert_match(/\ANothing to commit/, sh.execute('config commit').text)
+  end
+
+  def test_config_discard
+    sh = config_shell('config.discard' => { 'discarded' => true, 'changed' => false })
+    assert_match(/\ADiscarded/, sh.execute('config discard').text)
+    assert_equal([['config.discard', {}]], @client.calls)
+  end
+
+  # Row i of config.history is rollback i, so the rows are numbered
+  # from 0.
+  def test_config_history_numbers_the_rows_as_rollback_takes_them
+    rows = [{ 'time' => '2026-11-02T03:18:31.004Z', 'comment' => 'hold time', 'changes' => 1 },
+            { 'time' => '2026-11-01T10:00:00.000Z', 'comment' => nil, 'changes' => 3 }]
+    text = config_shell('config.history' => rows).execute('config history').text
+    assert_match(/^# +Time +Changes +Comment$/, text)
+    assert_match(/^0 +2026-11-02T03:18:31\.004Z +1 +hold time$/, text)
+    assert_match(/^1 +2026-11-01T10:00:00\.000Z +3$/, text)
+    assert_equal("No commits yet.\n", config_shell('config.history' => []).execute('config history').text)
+  end
+
+  def test_config_rollback_sends_a_number
+    sh = config_shell('config.rollback' => { 'rollback' => 1, 'changed' => true })
+    r = sh.execute('config rollback 1')
+    assert_equal([['config.rollback', { 'number' => 1 }]], @client.calls)
+    assert_match(/\ARollback 1 is the candidate now: it differs/, r.text)
+  end
+
+  # What is not a number is the daemon's to refuse, so its message names
+  # what was typed.
+  def test_config_rollback_passes_what_is_not_a_number_as_typed
+    sh = config_shell('config.rollback' => { 'rollback' => 0, 'changed' => false })
+    sh.execute('config rollback x')
+    assert_equal([['config.rollback', { 'number' => 'x' }]], @client.calls)
+  end
+
+  def test_config_show_is_show_configuration
+    sh = config_shell('show.configuration' => "set as 65000\n")
+    assert_equal("set as 65000\n", sh.execute('config show').text)
+    sh.execute('config show candidate')
+    assert_equal([['show.configuration', { 'format' => 'set' }],
+                  ['show.configuration', { 'format' => 'set', 'candidate' => true }]], @client.calls)
+  end
+
+  # `config` brings words that share a start, so a prefix can be
+  # ambiguous now, where the step 1 table had none.
+  def test_prefixes_that_config_makes_ambiguous_name_the_choices
+    sh = config_shell({})
+    assert_equal('"c" is ambiguous: clear, config', sh.execute('c bgp 10.0.10.1').error)
+    assert_equal('"config co" is ambiguous: compare, commit', sh.execute('config co').error)
+    assert_equal('"config s" is ambiguous: show, set', sh.execute('config s').error)
+    assert_equal([], @client.calls)
+  end
+
+  def test_config_help_and_question_mark_list_the_config_commands
+    sh = config_shell({})
+    text = sh.execute('config ?').text
+    assert_equal(text, sh.execute('config help').text)
+    %w[show set delete compare check commit discard history rollback].each do |w|
+      assert_match(/^  #{w} /, text)
+    end
   end
 end
