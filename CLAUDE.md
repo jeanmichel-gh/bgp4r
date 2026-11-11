@@ -364,16 +364,29 @@ bgp/daemon/              `bgp4rd` the daemon and `bgp4r-cli` its client;
                          both programs work out the socket path. `stream`
                          yields every line of an event stream, where `call`
                          is one request and one reply
-                         cli.rb `bgp4r-cli`, two forms on purpose: `-c` an
-                         operator command as text, a bare method name as
-                         JSON. `show bgp` asks the daemon for the text
-                         through `show.text`, because bgp/rib/show.rb takes
-                         a Table and a second renderer here would be two
-                         copies of three vendor styles. `clear bgp PEER` is
-                         the one operator command that changes something,
-                         because docs/daemon.md gives it as a line a person
-                         types; the rest of the write side is the method
-                         form
+                         cli.rb `bgp4r-cli`, two forms on purpose: an
+                         operator command as text, a method name as JSON.
+                         A first word with a dot is a method; any other
+                         starts an operator command, quoted after `-c` or
+                         not. With neither, a terminal gets the prompt and
+                         anything else the usage, as before
+                         shell.rb the operator commands and the prompt,
+                         docs/design/bgp4r-cli-shell.md. The grammar is a
+                         table of keywords and arguments, each with its
+                         help line; `execute` returns a Result and prints
+                         nothing, so `-c`, the bare words and the prompt
+                         share one path. Words take any unique prefix, and
+                         `?` and `help` list what follows at every level.
+                         It renders the commands too. `show bgp` asks the
+                         daemon for the text through `show.text`, because
+                         bgp/rib/show.rb takes a Table and a second
+                         renderer here would be two copies of three vendor
+                         styles. `clear bgp PEER` is the one operator
+                         command that changes something, because
+                         docs/daemon.md gives it as a line a person types;
+                         the rest of the write side is the method form.
+                         `reline` loads only when the prompt opens on a
+                         terminal
                          server.rb `bgp4rd` itself: the command line, the
                          YAML file, the Speaker, the log ring, the socket
                          and the wait. **Every method answers now.**
@@ -1674,6 +1687,8 @@ and with neither it is `/run/bgp4r/bgp4rd.sock` or a path under
 `$XDG_RUNTIME_DIR`:
 ```
 ruby -I. exe/bgp4rd -f /etc/bgp4r/bgp4rd.yml -s /tmp/d.sock -l - &
+ruby -I. exe/bgp4r-cli -s /tmp/d.sock          # the prompt: ? lists the commands
+ruby -I. exe/bgp4r-cli -s /tmp/d.sock show bgp summary
 ruby -I. exe/bgp4r-cli -s /tmp/d.sock api.info
 ruby -I. exe/bgp4r-cli -s /tmp/d.sock show.rib --pretty
 ruby -I. exe/bgp4r-cli -s /tmp/d.sock show.adj_in '{"peer":"10.0.10.1"}'

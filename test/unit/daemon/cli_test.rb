@@ -83,11 +83,20 @@ class BGP_Daemon_CLI_Test < Test::Unit::TestCase
               'show.text'   => "a table\n",
               'show.rib'    => { 'rows' => [], 'total' => 0 } }.freeze
 
-  def run_cli(argv, answers = ANSWERS, env = {})
+  # `input` is not a terminal unless a test says so, so the suite never
+  # opens a prompt when it is run from one.
+  def run_cli(argv, answers = ANSWERS, env = {}, input = StringIO.new)
     out, err = StringIO.new, StringIO.new
     client = FakeClient.new(answers)
-    status = BGP::Daemon::CLI.new(out, err, client).start(argv, env)
+    status = BGP::Daemon::CLI.new(out, err, client, input).start(argv, env)
     [status, out.string, err.string, client]
+  end
+
+  # A StringIO that says it is a terminal, for the prompt.
+  def tty(text)
+    io = StringIO.new(text)
+    io.define_singleton_method(:tty?) { true }
+    io
   end
 
   # The method form: a method name and optional JSON, answered as JSON,
@@ -376,5 +385,55 @@ class BGP_Daemon_CLI_Test < Test::Unit::TestCase
     status, out = run_cli(['-c', 'show link-state'], 'show.link_state' => { 'rows' => [], 'next_offset' => nil })
     assert_equal(0, status)
     assert_equal("No BGP-LS routes.\n", out)
+  end
+
+  # ====================================================================
+  # Bare words and the prompt: docs/design/bgp4r-cli-shell.md
+
+  # The words of a command need no quotes: a first word without a dot
+  # is a command, and runs as `-c` would.
+  def test_bare_words_are_an_operator_command
+    status, out, err, client = run_cli(%w[show bgp 10.0.0.0/8])
+    assert_equal(0, status, err)
+    assert_equal("a table\n", out)
+    assert_equal([['show.text', { 'style' => 'ios', 'prefix' => '10.0.0.0/8' }]], client.calls)
+  end
+
+  def test_bare_words_take_the_options_around_them
+    _s, _o, _e, client = run_cli(%w[--style junos sh b])
+    assert_equal([['show.text', { 'style' => 'junos' }]], client.calls)
+  end
+
+  def test_bare_words_and_c_are_not_mixed
+    status, _o, err = run_cli(['-c', 'show bgp', 'show', 'fib'])
+    assert_equal(1, status)
+    assert_match(/Usage: bgp4r-cli/, err)
+  end
+
+  def test_a_bare_command_refused_is_status_one_with_the_list
+    status, out, err = run_cli(%w[show everything])
+    assert_equal(1, status)
+    assert_equal('', out)
+    assert_match(/bgp4r-cli: "show everything" is not one of: /, err)
+  end
+
+  # `?` on the command line is help, and help is a success.
+  def test_a_question_mark_on_the_command_line_lists_what_follows
+    status, out, err = run_cli(%w[show ?])
+    assert_equal(0, status, err)
+    assert_match(/^  bgp +the Loc-RIB/, out)
+    assert_match(/^  fib /, out)
+  end
+
+  # No command and no method on a terminal is the prompt; on anything
+  # else it is the usage and status 1, which test_no_arguments_is_the_
+  # usage_and_a_failure holds.
+  def test_no_arguments_on_a_terminal_opens_the_prompt
+    status, out, err, client = run_cli([], ANSWERS, {}, tty("show bgp\nexit\nshow fib\n"))
+    assert_equal(0, status, err)
+    assert_equal('', err)
+    assert_equal("a table\n", out)
+    assert_equal([['show.text', { 'style' => 'ios' }]], client.calls, 'nothing after exit runs')
+    assert_equal(true, client.closed?)
   end
 end

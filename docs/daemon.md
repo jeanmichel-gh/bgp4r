@@ -218,6 +218,7 @@ bgp/daemon/log_ring.rb   the last lines logged, so show.log can answer
 bgp/daemon/api.rb        the socket server and the method registry
 bgp/daemon/client.rb     the other half of the socket
 bgp/daemon/cli.rb        bgp4r-cli, the two forms
+bgp/daemon/shell.rb      its operator commands and its prompt
 bgp/daemon/server.rb     bgp4rd itself
 exe/bgp4rd exe/bgp4r-cli
 ```
@@ -399,8 +400,13 @@ see the SIGHUP heading under "The candidate configuration" for what it
 can and cannot apply. `INT` and `TERM` stop.
 
 ```
-bgp4r-cli [--socket PATH] [--style NAME] [--pretty] -c 'COMMAND' | METHOD [JSON]
+bgp4r-cli [--socket PATH] [--style NAME] [--pretty] -c 'COMMAND' | COMMAND... | METHOD [JSON]
 ```
+
+With no command and no method, on a terminal, it opens a prompt where
+the operator commands are typed without quotes, shortened, and listed
+with `?` or `help`. docs/bgp4r-cli.md says how to use it, and
+docs/design/bgp4r-cli-shell.md is the design.
 
 Two forms on purpose. `-c` takes an operator command and prints text, so
 a person types what they would type at a router:
