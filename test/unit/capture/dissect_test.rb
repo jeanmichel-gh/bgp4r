@@ -36,6 +36,16 @@ class Capture_Dissect_Test < Test::Unit::TestCase
 
   D = BGP::Capture::Dissect
 
+  def test_decoded_text_uses_the_wire_message_object
+    octets = keepalive
+    expected = BGP::Message.factory(octets.dup.is_packed).to_s
+    result = D.message(octets)
+    assert_equal expected, result.to_h[:decoded]
+    assert_match(/Keepalive/, result.decoded)
+    assert_equal octets.bytesize, result.length
+    assert_empty result.errors
+  end
+
   # The field at a path of names, so a test names what it is about rather
   # than indexing into a tree.
   def at(result, *names)
@@ -831,7 +841,7 @@ class Capture_Dissect_Test < Test::Unit::TestCase
 
   def test_the_hash_leaves_out_what_is_not_set
     h = D.message(keepalive).to_h
-    assert_equal(%w{summary length fields errors}, h.keys.collect { |k| k.to_s })
+    assert_equal(%w{summary length fields errors decoded}, h.keys.collect { |k| k.to_s })
     marker = h[:fields].first[:children].first
     assert(!marker.has_key?(:mask), marker.inspect)
     assert(!marker.has_key?(:children), marker.inspect)
