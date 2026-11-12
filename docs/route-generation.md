@@ -283,7 +283,7 @@ expectations, which CLAUDE.md records being wrong many times.
   `as_path_literal: true`, sends `as_path` exactly as written, and the
   prepend stays the default. Changing the default would have changed
   what every existing node file sends, and
-  `lab/routescope/bgp4r-lab/scenarios/med-decides.yml` relies on it. A
+  `routescope/labs/bgp4r-lab/scenarios/med-decides.yml` relies on it. A
   generator that wants an exact AS_PATH sets the key.
 * **`RouteGenerator`'s future.** Either it stays as it is, or it becomes
   a thin wrapper over `BGP::Gen` for unicast. Its API and its tests must

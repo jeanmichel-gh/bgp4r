@@ -15,7 +15,7 @@
 # (.github/workflows/capture.yml). Its twin with no containers is
 # test/functional/lab/fwd_lab_netns_test.rb.
 #
-#   LAB=fwd-lab lab/routescope/fwd-lab/capture.sh
+#   LAB=fwd-lab routescope/labs/fwd-lab/capture.sh
 set -uo pipefail
 LAB="${LAB:-fwd-lab}"
 SOCK=/run/bgp4r/bgp4rd.sock

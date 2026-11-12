@@ -45,9 +45,9 @@
 #
 # The injectors start silent. The scenarios put every route on the wire.
 #
-#   sudo containerlab deploy -t lab/routescope/rr-lab/rr-lab.clab.yml
-#   LAB=$PWD/lab/routescope/rr-lab docker compose -f ~/routescope/compose.yml up -d
-#   sudo containerlab destroy -t lab/routescope/rr-lab/rr-lab.clab.yml
+#   sudo containerlab deploy -t routescope/labs/rr-lab/rr-lab.clab.yml
+#   LAB=$PWD/routescope/labs/rr-lab docker compose -f ~/routescope/compose.yml up -d
+#   sudo containerlab destroy -t routescope/labs/rr-lab/rr-lab.clab.yml
 #
 # The images are bgp4r-lab's, built the same way. The README has the
 # commands. `exec:` runs after a node's entrypoint, so no node here binds

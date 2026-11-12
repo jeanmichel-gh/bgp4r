@@ -34,9 +34,9 @@
 # IP forwarding on. `exec:` runs after the entrypoint, so bgp4rd starts
 # before its addresses exist; it binds the wildcard and its dials retry.
 #
-#   sudo containerlab deploy -t lab/routescope/fwd-lab/fwd-lab.clab.yml
-#   LAB=fwd-lab lab/routescope/fwd-lab/capture.sh
-#   sudo containerlab destroy -t lab/routescope/fwd-lab/fwd-lab.clab.yml
+#   sudo containerlab deploy -t routescope/labs/fwd-lab/fwd-lab.clab.yml
+#   LAB=fwd-lab routescope/labs/fwd-lab/capture.sh
+#   sudo containerlab destroy -t routescope/labs/fwd-lab/fwd-lab.clab.yml
 name: fwd-lab
 
 topology:

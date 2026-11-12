@@ -118,8 +118,8 @@ routescope's `bgp_best` condition reads.
 Four images. **routescope builds the three local ones when it starts the
 lab**, from the `routescope.build` label on each node, so from a console
 there is nothing to do first. Each label names a Dockerfile in this
-folder and the folder is the build context, so a copy made by `bgp4r lab
-new` builds as well as the checkout. `Dockerfile.node` fetches bgp4r from
+folder and the folder is the build context, so a copy made by
+`routescope-labs install` builds as well as the checkout. `Dockerfile.node` fetches bgp4r from
 GitHub master and rebuilds only when master moves; its header says why it
 exists beside the root Dockerfile's `lab-node` stage.
 
@@ -128,10 +128,10 @@ than master:
 
 ```
 docker build --target lab-node -t bgp4r-lab:latest .
-docker build -f lab/routescope/bgp4r-lab/Dockerfile.bird \
-             -t bgp4r-bird:latest lab/routescope/bgp4r-lab
-docker build -f lab/routescope/bgp4r-lab/Dockerfile.gobgp \
-             -t bgp4r-gobgp:latest lab/routescope/bgp4r-lab
+docker build -f routescope/labs/bgp4r-lab/Dockerfile.bird \
+             -t bgp4r-bird:latest routescope/labs/bgp4r-lab
+docker build -f routescope/labs/bgp4r-lab/Dockerfile.gobgp \
+             -t bgp4r-gobgp:latest routescope/labs/bgp4r-lab
 docker pull quay.io/frrouting/frr:10.2.1
 ```
 
@@ -171,10 +171,18 @@ test asserts that rather than asking you to keep them in step.
 
 ## Run it
 
+To make it a lab of routescope's, on the VM:
+
 ```
-sudo containerlab deploy -t lab/routescope/bgp4r-lab/bgp4r-lab.clab.yml
-LAB=$PWD/lab/routescope/bgp4r-lab docker compose -f ~/routescope/compose.yml up -d
-sudo containerlab destroy -t lab/routescope/bgp4r-lab/bgp4r-lab.clab.yml
+routescope-labs install bgp4r/bgp4r-lab
+```
+
+From a checkout:
+
+```
+sudo containerlab deploy -t routescope/labs/bgp4r-lab/bgp4r-lab.clab.yml
+LAB=$PWD/routescope/labs/bgp4r-lab docker compose -f ~/routescope/compose.yml up -d
+sudo containerlab destroy -t routescope/labs/bgp4r-lab/bgp4r-lab.clab.yml
 ```
 
 By hand, without routescope:
@@ -214,7 +222,7 @@ also the one place this lab is deployed. It is a copy of ospfv2's own
 capture job, adapted, so neither repository depends on the other.
 
 ```
-bash lab/routescope/bgp4r-lab/capture.sh > capture.log
+bash routescope/labs/bgp4r-lab/capture.sh > capture.log
 ```
 
 ## What each node does with the kernel, which is three answers and a fourth that is none

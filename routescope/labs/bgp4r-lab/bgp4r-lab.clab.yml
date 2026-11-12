@@ -51,9 +51,9 @@
 #
 # Deploy it, then point routescope at the folder:
 #
-#   sudo containerlab deploy -t lab/routescope/bgp4r-lab/bgp4r-lab.clab.yml
-#   LAB=$PWD/lab/routescope/bgp4r-lab docker compose -f ~/routescope/compose.yml up -d
-#   sudo containerlab destroy -t lab/routescope/bgp4r-lab/bgp4r-lab.clab.yml
+#   sudo containerlab deploy -t routescope/labs/bgp4r-lab/bgp4r-lab.clab.yml
+#   LAB=$PWD/routescope/labs/bgp4r-lab docker compose -f ~/routescope/compose.yml up -d
+#   sudo containerlab destroy -t routescope/labs/bgp4r-lab/bgp4r-lab.clab.yml
 #
 # Four images. routescope builds the three local ones itself when it
 # starts the lab, from the `routescope.build` label on each node: a
@@ -62,10 +62,10 @@
 # Dockerfile.node):
 #
 #   docker build --target lab-node -t bgp4r-lab:latest .
-#   docker build -f lab/routescope/bgp4r-lab/Dockerfile.bird \
-#                -t bgp4r-bird:latest lab/routescope/bgp4r-lab
-#   docker build -f lab/routescope/bgp4r-lab/Dockerfile.gobgp \
-#                -t bgp4r-gobgp:latest lab/routescope/bgp4r-lab
+#   docker build -f routescope/labs/bgp4r-lab/Dockerfile.bird \
+#                -t bgp4r-bird:latest routescope/labs/bgp4r-lab
+#   docker build -f routescope/labs/bgp4r-lab/Dockerfile.gobgp \
+#                -t bgp4r-gobgp:latest routescope/labs/bgp4r-lab
 #   docker pull quay.io/frrouting/frr:10.2.1
 #
 # **`lab-node` and not `speaker`, and the reason is not cosmetic.** The

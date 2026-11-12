@@ -1003,13 +1003,27 @@ test/functional/         tests that open real TCP sessions
                          the octets another speaker reads
 test/helpers/            a small test BGP server
 lab/                     speakers in containers: lab/speaker.rb and lab/topologies/ (see lab/README.md)
-                         lab/routescope/ holds the containerlab labs
-                         written for the routescope console, apart from
-                         the Compose topologies under lab/topologies/
-                         that this suite drives; `bgp4r lab new` reads
-                         both (CLI::ROOTS), and routescope's CI deploys
-                         from here
-                         lab/routescope/rr-lab is route reflection, RFC
+                         lab/routescope is a symlink to routescope/labs/
+                         for one release, since 2026-11-12, because
+                         routescope's CI still reads that path
+routescope/labs/         the containerlab labs written for the routescope
+                         console, apart from the Compose topologies under
+                         lab/topologies/ that this suite drives. It is the
+                         path every protocol repository keeps its
+                         routescope labs in (routescope
+                         docs/design/labs-layout.md), and
+                         `routescope-labs install bgp4r/<lab>` is how a
+                         lab is made from it. `bgp4r lab new` reads both
+                         folders (CLI::ROOTS) and, for a lab here, also
+                         prints that line, for one release. Each lab has
+                         an ABOUT.md and a .gitignore listing routescope's
+                         runtime state: recordings/, *-run/* but not
+                         *-run/.gitkeep, clab-*/, .*.clab.yml.bak. Not
+                         notes.jsonl: routescope keeps notes in the lab
+                         so the lab's git keeps them. copy_lab reads no
+                         `!` line, so `lab new` drops a run folder's
+                         .gitkeep and copies the folder empty
+                         routescope/labs/rr-lab is route reflection, RFC
                          4456: nine nodes, a `bgp4rd` reflector `rr1`
                          whose clients are an FRR, a BIRD, a GoBGP, a
                          second `bgp4rd` and an injector, a non-client
@@ -1023,7 +1037,7 @@ lab/                     speakers in containers: lab/speaker.rb and lab/topologi
                          `inj-c`'s named spec, a thousand prefixes, and
                          needs routescope #53 to pass `spec`. CI
                          deploys it; see "routescope labs"
-                         lab/routescope/fwd-lab is **forwarding**: four
+                         routescope/labs/fwd-lab is **forwarding**: four
                          `bgp4rd` routers in four ASes, a square A B C D
                          with a B to D diagonal, each announcing its
                          loopback and installing into the kernel's main
@@ -1075,7 +1089,7 @@ lab/                     speakers in containers: lab/speaker.rb and lab/topologi
                          invented, and the routescope lab is containerlab
                          rather than Compose, so a Compose topology for
                          bgp4r's own tests has no reason to carry one
-                         lab/routescope/bgp4r-lab is **the one
+                         routescope/labs/bgp4r-lab is **the one
                          containerlab topology** and the only one written
                          for the routescope console rather than for this
                          test suite: seven nodes and **four**
@@ -1204,11 +1218,11 @@ test/functional/lab/     lab tests: loopback speaker test and one Compose test p
                          no router and no socket, which is all the cover those files
                          have until the Compose form can be run;
                          rr_lab_topology_test.rb is the same shape for
-                         lab/routescope/rr-lab, and also decodes the two
+                         routescope/labs/rr-lab, and also decodes the two
                          looped UPDATEs its scenarios replay and runs
                          them through `rr1`'s own table.
                          fwd_lab_topology_test.rb is the same shape for
-                         lab/routescope/fwd-lab, and
+                         routescope/labs/fwd-lab, and
                          fwd_lab_netns_test.rb **runs that lab's own
                          files** in four network namespaces, links and
                          `exec:` lines out of the clab file, and pings
@@ -1220,7 +1234,7 @@ test/functional/lab/     lab tests: loopback speaker test and one Compose test p
                          routescope's vocabulary from
                          routescope_vocabulary.rb, one copy for all;
                          bgp4r_lab_topology_test.rb is the same shape for
-                         lab/routescope/bgp4r-lab and loads each of its
+                         routescope/labs/bgp4r-lab and loads each of its
                          three node files through the program that reads
                          it, `Sim::Injector.new` for the two injectors
                          and `Daemon::Server#load_config` with
@@ -1498,7 +1512,7 @@ second:
 ruby -I. test/functional/lab/add_path_topology_test.rb
 ```
 
-The same for `lab/routescope/bgp4r-lab`, the containerlab one, which only
+The same for `routescope/labs/bgp4r-lab`, the containerlab one, which only
 the Capture workflow deploys, so this is the cover its files have on every
 pull request. It parses
 the `*.clab.yml`, loads each of the three node files through the program
@@ -1508,14 +1522,14 @@ scenarios to routescope's own vocabulary. Hundredths of a second:
 ruby -I. test/functional/lab/bgp4r_lab_topology_test.rb
 ```
 
-The same for `lab/routescope/rr-lab`, the route reflection lab. It also
+The same for `routescope/labs/rr-lab`, the route reflection lab. It also
 decodes the two looped UPDATEs the scenarios replay and checks that
 `rr1`'s own table drops them. Hundredths of a second:
 ```
 ruby -I. test/functional/lab/rr_lab_topology_test.rb
 ```
 
-The same for `lab/routescope/fwd-lab`, the forwarding lab, and its twin
+The same for `routescope/labs/fwd-lab`, the forwarding lab, and its twin
 that runs the lab's files in network namespaces and pings across them.
 The second needs root and ping, and is about 30 seconds, most of it two
 hold timers:
@@ -1742,7 +1756,10 @@ What it prints after the copy says how to start that topology, worked
 out from the folder's own files. **Mind the one limit it names**: every
 Compose topology here builds with `context: ../../..`, so a copy
 cannot build its own image where it landed; build it once in a checkout
-and run the copy without `--build`.
+and run the copy without `--build`. A routescope lab, one in
+`routescope/labs/`, is made with `routescope-labs install bgp4r/<lab>`
+now; `lab new` still copies it for one release and prints that line on
+standard error.
 
 Which `#to_hash` read back and which do not, printed from
 `test/unit/to_hash_catalog.rb` rather than written down anywhere:
@@ -1801,9 +1818,9 @@ The image runs as the non-root user `bgp`. It can still bind TCP 179, because Do
 
 CI: `.github/workflows/test.yml` runs both suites on every push to master and every pull request, on Ruby 3.3, 3.4, 4.0 and head (head may fail), both on the runner and in the Docker image. The `lab` job is a matrix, one job per group in `test/lab_groups.rb`, so its cost is the slowest group and not the total: it was 12m42s as one serial suite. Each job installs only what its group needs, which is why the matrix entry carries a `gobgp`, `frr`, `docker` or `netns` flag. The `gobgp` groups pin 3.23.0, where the Compose topology pins a 4.x image, so CI measures both.
 
-`.github/workflows/capture.yml` is the one workflow that deploys a containerlab lab: it builds the `lab-node`, BIRD and GoBGP images, deploys `lab/routescope/bgp4r-lab`, `lab/routescope/rr-lab` and `lab/routescope/fwd-lab` in a job each, and runs each one's `capture.sh`, on demand and on a push that changes `lab/routescope/` or the Dockerfile. Its log is what routescope's BGP fixtures are cut from. **rr-lab's `capture.sh` also checks**: it prints one `CHECK ok` or `CHECK FAIL` line per RFC 4456 fact and fails the job when one fails, because the scenario language has no key for ORIGINATOR_ID or CLUSTER_LIST. **fwd-lab's does the same for forwarding**, because the scenario language has no ping step.
+`.github/workflows/capture.yml` is the one workflow that deploys a containerlab lab: it builds the `lab-node`, BIRD and GoBGP images, deploys `routescope/labs/bgp4r-lab`, `routescope/labs/rr-lab` and `routescope/labs/fwd-lab` in a job each, and runs each one's `capture.sh`, on demand and on a push that changes `routescope/labs/` or the Dockerfile. Its log is what routescope's BGP fixtures are cut from. **rr-lab's `capture.sh` also checks**: it prints one `CHECK ok` or `CHECK FAIL` line per RFC 4456 fact and fails the job when one fails, because the scenario language has no key for ORIGINATOR_ID or CLUSTER_LIST. **fwd-lab's does the same for forwarding**, because the scenario language has no ping step.
 
-Baseline on 2026-11-11: 3905 tests, 37501 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%, measured on 2026-11-06 and not since.
+Baseline on 2026-11-12: 3913 tests, 37552 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%, measured on 2026-11-06 and not since.
 
 **That coverage figure is 98.5% for the library and the rest is the two
 programs, not a gap anywhere else.** Measured the same run: with
@@ -7125,7 +7142,7 @@ container registry; see "Lab and conformance" for why the daemon is not
 what is missing.
 
 **The topology itself is written**, which is the other half of item 9:
-`lab/routescope/bgp4r-lab`, that document's section 8 lab, with both
+`routescope/labs/bgp4r-lab`, that document's section 8 lab, with both
 labels on every node, node files for the two injectors and
 the daemon, FRR and BIRD configs, and six scenarios covering its points
 2 to 7. **It is seven nodes and four implementations now, not the six
@@ -8321,7 +8338,7 @@ reflector", what it shows about itself, and a lab that runs one.
      in the node file, `cluster_id` not passed to the decision process,
      the non-client to non-client refusal removed, and the cluster
      loop check removed.
-   * **And a containerlab lab for routescope, `lab/routescope/rr-lab`.**
+   * **And a containerlab lab for routescope, `routescope/labs/rr-lab`.**
      Nine nodes, four implementations, eight scenarios, one per RFC
      4456 rule. CI deploys it and its `capture.sh` checks what the
      scenarios cannot: the first green run, 2026-11-06, had FRR 10.2.1,
@@ -8439,7 +8456,7 @@ Smaller things:
 Lab and conformance:
 
 * **"No Docker daemon" is the wrong name for the block, and this file says it in six places.** A daemon starts here: `dockerd` is at `/usr/bin/dockerd`, this session is uid 0, and starting it by hand gave **29.9.2** with `API listen on /var/run/docker.sock`, measured on 2026-11-02. What actually blocks every image is the **proxy refusing the registries**: `docker build --target speaker` dies at `FROM ruby:3.4-slim` with `Forbidden` from `registry-1.docker.io`, and `curl https://HOST/v2/` answers `CONNECT tunnel failed, response 403` for `registry-1.docker.io`, `quay.io`, `ghcr.io`, `public.ecr.aws` and `mirror.gcr.io` alike. There is no local image cache to fall back on, `docker images` being empty.
-  * **So what has to be arranged is a route to a registry, not a daemon**, and that is a different request to make of whoever runs the sandbox. Everything downstream is still blocked: the `test`, `speaker`, `capture`, `lab-node` and `conformance` stages have none of them ever been built, the `compose` lab group cannot run because it needs `bgp4r-speaker`, and `containerlab` is not installed either, so `lab/routescope/bgp4r-lab` cannot be deployed **from this sandbox**. GitHub's runners reach the registries, which is why `.github/workflows/capture.yml` builds `lab-node` and deploys that lab there.
+  * **So what has to be arranged is a route to a registry, not a daemon**, and that is a different request to make of whoever runs the sandbox. Everything downstream is still blocked: the `test`, `speaker`, `capture`, `lab-node` and `conformance` stages have none of them ever been built, the `compose` lab group cannot run because it needs `bgp4r-speaker`, and `containerlab` is not installed either, so `routescope/labs/bgp4r-lab` cannot be deployed **from this sandbox**. GitHub's runners reach the registries, which is why `.github/workflows/capture.yml` builds `lab-node` and deploys that lab there.
   * **This is the fourth recorded Docker block here to come apart on being tried**, after phase 3 part 7 in #151, add-path in #153 and the FIB's network namespace in #156, and the lesson is the one those three already wrote down: probe before recording a block. The three before this were blocks that did not exist at all; this one exists and was misattributed, which is the subtler failure, because the recorded reason sends the next reader to ask for the wrong thing.
   * `gem install` from the proxy fails the same way, `index.rubygems.org` answering 403 to CONNECT. `gem install --local --ignore-dependencies` from a built `.gem` works, which is how `bgp4r lab new` was checked against an installed gem.
 * **The fault matrix dials the router, and that is where its time went.** Each fault needs a session of its own, because a reset leaves nothing to reuse, so the per case cost is however long it takes to get one. Waiting for the router to dial back in was 10 to 14s a case against GoBGP 3.23.0, which was 219s of the matrix's 257s where the 2s settle on 18 cases is 30s. `lab/fault_matrix.rb --dial PORT` reverses the direction, and both native tests pass it: the GoBGP matrix went from 265s to 123s and the FRR one from 46s to 23s, with every verdict unchanged. Listening stays the default because the header's reason holds, that it works with any implementation that can be told to peer with us, and the Compose test still exercises it.

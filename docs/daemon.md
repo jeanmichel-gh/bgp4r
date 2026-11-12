@@ -1824,6 +1824,13 @@ bgp4r lab new DIR [NAME] [--no-git]
 `lab/topologies/`, defaulting to `two-speakers`, which is the only one
 that needs nothing but bgp4r. `--no-git` copies and stops there.
 
+**The routescope labs, in `routescope/labs/`, are made with
+routescope's `routescope-labs install bgp4r/<lab>` now.** `lab new`
+still copies them for one release, so scripts keep working, and prints
+one line on standard error naming that command. The Compose topologies
+in `lab/topologies/` are this repository's test suite and get no such
+line.
+
 **The topologies are discovered and not listed, and that is the one
 deliberate difference from `ospfv2 lab new`.** That command keeps a
 `CLAB_LABS` table beside its templates, so a template added to the

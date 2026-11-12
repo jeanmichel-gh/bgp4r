@@ -81,14 +81,25 @@ module BGP
       # `lab` answers a message naming this path rather than raising.
       TOPOLOGIES = File.expand_path('../../lab/topologies', __dir__)
 
-      # The labs written for the routescope console, `lab/routescope/`,
+      # The labs written for the routescope console, `routescope/labs/`,
       # beside the Compose topologies bgp4r's own suite drives. Kept apart
       # so a reader can tell which folder is for which, and searched by
       # `lab new` all the same, so `bgp4r lab new DIR bgp4r-lab` works
       # whichever folder a lab lives in. A name in both is taken from the
       # first, which is why the order is fixed here.
-      ROUTESCOPE = File.expand_path('../../lab/routescope', __dir__)
+      #
+      # `routescope/labs/` is the path every protocol repository keeps its
+      # routescope labs in, which routescope's `routescope-labs install`
+      # reads (routescope `docs/design/labs-layout.md`). These labs were
+      # in `lab/routescope/` until 2026-11-12, and that path is a symlink
+      # to this one for one release, for routescope's CI. It is not a
+      # root here, or every lab would be found twice.
+      ROUTESCOPE = File.expand_path('../../routescope/labs', __dir__)
       ROOTS = [TOPOLOGIES, ROUTESCOPE].freeze
+
+      # The repository root, so a lab's commit message can name the folder
+      # it came from as a path a reader can open.
+      REPOSITORY = File.expand_path('../..', __dir__)
 
       # `two-speakers` because of the topologies in the repository when
       # this was written it is the only one that needs nothing but
@@ -363,9 +374,39 @@ See docs/daemon.md.
           return 1
         end
         @out.puts "lab created in #{dir}"
-        @out.puts lab_git_init(dir, "#{File.basename(File.dirname(src))}/#{name}") if git
+        @out.puts lab_git_init(dir, CLI.source_path(src)) if git
         @out.print lab_start(name, src, dir)
+        @err.puts CLI.install_hint(name) if CLI.routescope_lab?(src)
         0
+      end
+
+      # A routescope lab is made by routescope's `routescope-labs install`
+      # now, which keeps the lab's upstream history and the local edits
+      # apart (routescope `docs/design/labs-layout.md`). `lab new` still
+      # copies one for a release, so scripts and documents keep working,
+      # and says what to use instead in one line. The Compose topologies
+      # are this repository's test suite, not routescope labs, so they get
+      # no such line.
+      def self.routescope_lab?(src)
+        File.dirname(File.expand_path(src)) == ROUTESCOPE
+      end
+
+      def self.install_hint(name)
+        "use `routescope-labs install bgp4r/#{name}` instead: " \
+        "bgp4r lab new is kept one release for routescope labs"
+      end
+
+      # Where a topology folder is in the repository, as
+      # `lab/topologies/two-speakers` or `routescope/labs/bgp4r-lab`. A
+      # folder outside it, which only a test passes, is named by its last
+      # two parts.
+      def self.source_path(src)
+        src = File.expand_path(src)
+        if src.start_with?(REPOSITORY + '/')
+          src[(REPOSITORY.size + 1)..-1]
+        else
+          "#{File.basename(File.dirname(src))}/#{File.basename(src)}"
+        end
       end
 
       def lab_help(io, root = ROOTS, status = 0)
@@ -380,6 +421,10 @@ See docs/daemon.md.
 
           Topologies found in #{Array(root).join(' and ')}:
           #{found}
+
+          A routescope lab, one in #{ROUTESCOPE}, is made with
+          `routescope-labs install bgp4r/NAME` now. lab new still copies it
+          for one release.
 
           See docs/routescope-labs.md.
         TEXT
@@ -400,7 +445,7 @@ See docs/daemon.md.
              system('git', '-C', dir, 'add', '-A', :out => File::NULL, :err => File::NULL)
         return 'git: not available, the lab folder has no history' unless ok
         if system('git', '-C', dir, 'commit', '-q', '-m',
-                  "Lab created from bgp4r lab/#{name}",
+                  "Lab created from bgp4r #{name}",
                   :out => File::NULL, :err => File::NULL)
           'git: repository created with a first commit'
         else

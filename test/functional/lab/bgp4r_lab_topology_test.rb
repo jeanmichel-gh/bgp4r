@@ -20,7 +20,7 @@
 # along with BGP4R.  If not, see <http://www.gnu.org/licenses/>.
 #++
 
-# What lab/routescope/bgp4r-lab says, read out of its own files.
+# What routescope/labs/bgp4r-lab says, read out of its own files.
 #
 #   ruby -I. test/functional/lab/bgp4r_lab_topology_test.rb
 #
@@ -52,7 +52,7 @@ require_relative 'routescope_vocabulary'
 
 class LabBgp4rLabTopologyTest < Test::Unit::TestCase
 
-  DIR = File.expand_path('../../../lab/routescope/bgp4r-lab', __dir__)
+  DIR = File.expand_path('../../../routescope/labs/bgp4r-lab', __dir__)
 
   # The seven nodes and what each one is, which is the README's own table.
   # Asserted against the files rather than trusted, in both directions.
@@ -748,8 +748,8 @@ class LabBgp4rLabTopologyTest < Test::Unit::TestCase
     assert_match(/^# \*\*This topology is deployed by CI\*\*/, read('bgp4r-lab.clab.yml'))
     assert_match(/^\*\*The topology is deployed by CI\*\*/, readme)
     wf = File.read(File.expand_path('../../../.github/workflows/capture.yml', __dir__))
-    assert_match(%r{containerlab deploy -t lab/routescope/bgp4r-lab/bgp4r-lab\.clab\.yml}, wf)
-    assert_match(%r{bash lab/routescope/bgp4r-lab/capture\.sh}, wf)
+    assert_match(%r{containerlab deploy -t routescope/labs/bgp4r-lab/bgp4r-lab\.clab\.yml}, wf)
+    assert_match(%r{bash routescope/labs/bgp4r-lab/capture\.sh}, wf)
   end
 
   # **Adding a node to a topology CI deploys breaks that job, and the

@@ -20,7 +20,7 @@
 # along with BGP4R.  If not, see <http://www.gnu.org/licenses/>.
 #++
 
-# What lab/routescope/rr-lab says, read out of its own files.
+# What routescope/labs/rr-lab says, read out of its own files.
 #
 #   ruby -I. test/functional/lab/rr_lab_topology_test.rb
 #
@@ -48,8 +48,8 @@ require_relative 'routescope_vocabulary'
 
 class LabRrLabTopologyTest < Test::Unit::TestCase
 
-  DIR = File.expand_path('../../../lab/routescope/rr-lab', __dir__)
-  SIBLING = File.expand_path('../../../lab/routescope/bgp4r-lab', __dir__)
+  DIR = File.expand_path('../../../routescope/labs/rr-lab', __dir__)
+  SIBLING = File.expand_path('../../../routescope/labs/bgp4r-lab', __dir__)
   WORKFLOW = File.expand_path('../../../.github/workflows/capture.yml', __dir__)
 
   NODES = { 'inj-c' => 'bgp4r-sim', 'inj-n' => 'bgp4r-sim', 'inj-e' => 'bgp4r-sim',
@@ -602,8 +602,8 @@ class LabRrLabTopologyTest < Test::Unit::TestCase
   def test_the_capture_job_deploys_this_lab_and_logs_every_node
     j = job
     assert_not_empty j, 'the Capture workflow has no rr-lab job'
-    assert_match(%r{containerlab deploy -t lab/routescope/rr-lab/rr-lab\.clab\.yml}, j)
-    assert_match(%r{bash lab/routescope/rr-lab/capture\.sh}, j)
+    assert_match(%r{containerlab deploy -t routescope/labs/rr-lab/rr-lab\.clab\.yml}, j)
+    assert_match(%r{bash routescope/labs/rr-lab/capture\.sh}, j)
     nodes.values.collect { |n| n['image'] }.uniq.each do |image|
       assert_match(/(?:docker build[^\n]*-t|docker pull[^\n]*)\s#{Regexp.escape(image)}(\s|$)/, j,
                    "the rr-lab job neither builds nor pulls #{image}")

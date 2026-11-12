@@ -84,7 +84,7 @@ ENTRYPOINT ["ruby", "-I/app"]
 #
 #   docker build --target lab-node -t bgp4r-lab:latest .
 #
-# `lab/routescope/bgp4r-lab` is the one topology that needs it, and the
+# `routescope/labs/bgp4r-lab` is the one topology that needs it, and the
 # two things it adds are both things the `speaker` stage cannot be given
 # from a topology file.
 #
@@ -92,7 +92,7 @@ ENTRYPOINT ["ruby", "-I/app"]
 #   with `exec: ip addr add ...` and there is no `ip` in the speaker
 #   image. `bgp/rib/ip_route.rb` shells out to the same binary, so a
 #   `fib:` key in a node file needs it too.
-# * **ping and traceroute**, because `lab/routescope/fwd-lab` checks that
+# * **ping and traceroute**, because `routescope/labs/fwd-lab` checks that
 #   packets follow the routes a `fib:` key installs, and a person in a
 #   node's shell wants the same two commands.
 # * **root**, because `BGP::Daemon::Api#start` does `mkdir_p` on the

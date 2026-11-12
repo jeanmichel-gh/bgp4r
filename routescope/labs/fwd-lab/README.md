@@ -124,8 +124,8 @@ Make a copy, deploy it, and open a shell on a node:
 
 ```
 # in the VM
-bgp4r lab new ~/labs/fwd-lab fwd-lab
-cd ~/labs/fwd-lab
+routescope-labs install bgp4r/fwd-lab
+cd ~/labs/bgp4r/fwd-lab
 sudo containerlab deploy -t fwd-lab.clab.yml
 docker exec -it clab-fwd-lab-a bash
 ```

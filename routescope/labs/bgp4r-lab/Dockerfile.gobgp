@@ -20,8 +20,8 @@
 
 # GoBGP for the bgp4r-lab topology: the fourth implementation on it.
 #
-#   docker build -f lab/routescope/bgp4r-lab/Dockerfile.gobgp \
-#                -t bgp4r-gobgp:latest lab/routescope/bgp4r-lab
+#   docker build -f routescope/labs/bgp4r-lab/Dockerfile.gobgp \
+#                -t bgp4r-gobgp:latest routescope/labs/bgp4r-lab
 #
 # **Why a wrapper at all, when `jauderho/gobgp` is already this
 # repository's GoBGP image.** The two Compose topologies use it directly,

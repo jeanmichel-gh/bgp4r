@@ -28,7 +28,7 @@
 #
 # Omitted when FRR's bgpd is not installed, unless LAB_REQUIRE_FRR=1.
 #
-# Why FRR: in lab/routescope/bgp4r-lab, on 2026-11-03, bgp4r read two of
+# Why FRR: in routescope/labs/bgp4r-lab, on 2026-11-03, bgp4r read two of
 # the capabilities real peers sent as Unknown that have an RFC, code 6
 # (RFC 8654) and code 71 (RFC 9494). FRR 8.4.4 sends both here too,
 # and both are named now.

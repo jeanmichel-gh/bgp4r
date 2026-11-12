@@ -450,7 +450,7 @@ class Capture_CLI_Test < Test::Unit::TestCase
   end
 
   def test_the_routescope_labs_are_offered_beside_the_topologies
-    # bgp4r-lab lives in lab/routescope/, apart from the Compose
+    # bgp4r-lab lives in routescope/labs/, apart from the Compose
     # topologies bgp4r's own suite drives, and `lab new` still finds it.
     # Asserting the folder it came from is what says the second root is
     # read, rather than the lab having been left where it was.
@@ -462,6 +462,116 @@ class Capture_CLI_Test < Test::Unit::TestCase
     lab_new('bgp4r-lab') do |dir, status|
       assert_equal(0, status)
       assert(File.file?(File.join(dir, 'bgp4r-lab.clab.yml')))
+    end
+  end
+
+  # The routescope labs moved from lab/routescope/ to routescope/labs/,
+  # the path every protocol repository uses (routescope
+  # docs/design/labs-layout.md). The old path stays a relative symlink
+  # for one release, because routescope's CI reads bgp4r/lab/routescope.
+  def test_the_routescope_labs_are_in_routescope_labs
+    root = File.expand_path('../../..', __dir__)
+    assert_equal(File.join(root, 'routescope', 'labs'), BGP::Capture::CLI::ROUTESCOPE)
+    %w{bgp4r-lab fwd-lab rr-lab}.each do |n|
+      assert_equal(File.join(BGP::Capture::CLI::ROUTESCOPE, n),
+                   BGP::Capture::CLI.topology_dir(n), "#{n} is not in routescope/labs")
+    end
+  end
+
+  def test_lab_routescope_is_a_relative_symlink_to_routescope_labs
+    old = File.expand_path('../../../lab/routescope', __dir__)
+    assert(File.symlink?(old), 'lab/routescope is not a symlink')
+    assert_equal('../routescope/labs', File.readlink(old))
+    assert_equal(File.realpath(BGP::Capture::CLI::ROUTESCOPE), File.realpath(old))
+    assert(File.file?(File.join(old, 'rr-lab', 'rr-lab.clab.yml')),
+           'rr-lab is not reached through the old path')
+  end
+
+  def test_each_routescope_lab_is_offered_once
+    # The symlink is not a root, so a lab is not found twice.
+    found = BGP::Capture::CLI.topologies
+    %w{bgp4r-lab fwd-lab rr-lab}.each do |n|
+      assert_equal(1, found.count(n), "#{n} found #{found.count(n)} times")
+    end
+    assert(!BGP::Capture::CLI::ROOTS.any? { |r| r.end_with?('lab/routescope') })
+  end
+
+  def test_each_routescope_lab_ignores_routescope_runtime_state
+    Dir.children(BGP::Capture::CLI::ROUTESCOPE).sort.each do |n|
+      dir = File.join(BGP::Capture::CLI::ROUTESCOPE, n)
+      next unless File.directory?(dir)
+      assert(File.file?(File.join(dir, 'ABOUT.md')), "#{n} has no ABOUT.md")
+      gitignore = File.join(dir, '.gitignore')
+      assert(File.file?(gitignore), "#{n} has no .gitignore")
+      lines = File.readlines(gitignore, :chomp => true).map(&:strip)
+      %w{recordings/ *-run/* !*-run/.gitkeep clab-*/ .*.clab.yml.bak}.each do |l|
+        assert(lines.include?(l), "#{n}/.gitignore lacks #{l}")
+      end
+      # routescope keeps a lab's notes in the lab folder so the lab's git
+      # keeps them (routescope lib/routescope/notes.rb).
+      assert(!lines.include?('notes.jsonl'), "#{n}/.gitignore drops the notes")
+    end
+  end
+
+  def test_the_copy_leaves_routescope_runtime_state_out
+    # The lines above are read by copy_lab as well as by git, so a lab a
+    # person ran in place does not carry its recordings and what its
+    # nodes wrote into a copy. Its notes do come across.
+    src0 = BGP::Capture::CLI.topology_dir('rr-lab')
+    Dir.mktmpdir('bgp4r-lab-src') do |t|
+      src = File.join(t, 'rr-lab')
+      BGP::Capture::CLI.copy_lab(src0, src)
+      File.write(File.join(src, 'notes.jsonl'), "{}\n")
+      Dir.mkdir(File.join(src, 'recordings'))
+      File.write(File.join(src, 'recordings', 'run.pcap'), "x\n")
+      Dir.mkdir(File.join(src, 'rr1-run'))
+      File.write(File.join(src, 'rr1-run', 'bgp4rd.sock'), "")
+      File.write(File.join(src, '.rr-lab.clab.yml.bak'), "old\n")
+      Dir.mktmpdir('bgp4r-lab') do |tmp|
+        dir = File.join(tmp, 'lab')
+        BGP::Capture::CLI.copy_lab(src, dir)
+        got = entries(dir)
+        assert(got.include?('notes.jsonl'), 'the notes did not come across')
+        assert_equal([], got.grep(/\Arecordings/), 'recordings came across')
+        assert(!got.include?('rr1-run/bgp4rd.sock'), 'a run file came across')
+        # The run folder itself arrives, empty, since a bind mount needs it.
+        assert(got.include?('rr1-run'), 'the run folder did not')
+        assert(!got.include?('.rr-lab.clab.yml.bak'), 'the clab backup came across')
+        assert(got.include?('rr-lab.clab.yml'), 'the topology file did not')
+      end
+    end
+  end
+
+  def test_lab_new_of_a_routescope_lab_points_at_routescope_labs_install
+    err = StringIO.new
+    cli = BGP::Capture::CLI.new(@out, err)
+    Dir.mktmpdir('bgp4r-lab') do |tmp|
+      dir = File.join(tmp, 'lab')
+      assert_equal(0, cli.lab(['new', dir, 'fwd-lab', '--no-git']))
+      # It still copies, for one release.
+      assert(File.file?(File.join(dir, 'fwd-lab.clab.yml')))
+    end
+    lines = err.string.lines
+    assert_equal(1, lines.size, err.string)
+    assert_match(/routescope-labs install bgp4r\/fwd-lab/, lines.first)
+    assert_no_match(/routescope-labs/, @out.string)
+  end
+
+  def test_lab_new_of_a_compose_topology_says_nothing_of_routescope_labs
+    err = StringIO.new
+    cli = BGP::Capture::CLI.new(@out, err)
+    Dir.mktmpdir('bgp4r-lab') do |tmp|
+      assert_equal(0, cli.lab(['new', File.join(tmp, 'lab'), 'two-speakers', '--no-git']))
+    end
+    assert_equal('', err.string)
+  end
+
+  def test_the_commit_of_a_routescope_lab_names_its_path
+    omit 'git is not installed here' unless git?
+    lab_new('bgp4r-lab') do |dir, status|
+      assert_equal(0, status)
+      subject = `git -C #{dir} log -1 --format=%s`.strip
+      assert_equal('Lab created from bgp4r routescope/labs/bgp4r-lab', subject)
     end
   end
 

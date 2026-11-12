@@ -4,7 +4,15 @@ Run bgp4r speakers in containers and test what they say to each other.
 
 Each node runs the same program, `lab/speaker.rb`, driven by its own YAML file. A topology is a folder with a `compose.yml` and one YAML per node. To build a new topology, copy a folder and edit the YAML.
 
-**One topology is containerlab rather than Compose and runs the two programs instead of `lab/speaker.rb`**: `bgp4r-lab`, which is the lab `docs/routescope-labs.md` designs for the routescope console. Compose is right for the four that this test suite drives and wrong for that one, because routescope's `Links#ends` resolves both ends of a link from the lab's own `links`, which a Compose file does not declare, so on Compose only one end of a link fault is acted on. The four here stay Compose; a new topology for a lab test should too.
+**The labs for the routescope console are not here.** They are containerlab labs in `routescope/labs/` at the repository root (`bgp4r-lab`, `fwd-lab`, `rr-lab`), the path every protocol repository keeps its routescope labs in. Make one on the VM with routescope's command:
+
+```
+routescope-labs install bgp4r/bgp4r-lab
+```
+
+`lab/routescope` is a symlink to `routescope/labs` for one release, because routescope's CI still reads the old path. The Compose topologies in `lab/topologies/` stay here: they are this test suite, not routescope labs.
+
+**One topology is containerlab rather than Compose and runs the two programs instead of `lab/speaker.rb`**: `bgp4r-lab`, in `routescope/labs/`, which is the lab `docs/routescope-labs.md` designs for the routescope console. Compose is right for the four that this test suite drives and wrong for that one, because routescope's `Links#ends` resolves both ends of a link from the lab's own `links`, which a Compose file does not declare, so on Compose only one end of a link fault is acted on. The four here stay Compose; a new topology for a lab test should too.
 
 The machinery behind that program is in the library, as `BGP::Daemon::Speaker` in `bgp/daemon/speaker.rb`, because `bgp4rd` needs the same sessions, the same configuration and the same recording and `lab/` is not on an installed gem's load path. `lab/speaker.rb` is its command line, its state file writer and three constants pointing at it, so `Lab::Speaker`, `Lab::Peer` and `Lab::Recorder` mean what they always did. That file's header has the decision and the two options it rejected, and `docs/daemon.md` is the daemon.
 
@@ -33,8 +41,12 @@ a new lab made from a template somebody deployed in place.
 
 ```
 ruby -I. exe/bgp4r lab new ~/labs/my-lab two-speakers
-ruby -I. exe/bgp4r lab new ~/labs/bgp4r-lab bgp4r-lab
 ```
+
+`lab new` still copies the routescope labs in `routescope/labs/` for one
+release, and then prints one line: use `routescope-labs install
+bgp4r/<lab>` instead. That command keeps the lab's upstream files and
+your edits on two branches, so a later update keeps your edits.
 
 The message after the copy says how to start that topology, which for
 `bgp4r-lab` is `containerlab deploy` and for the rest is `docker
@@ -107,7 +119,7 @@ The speakers run as the non-root user `bgp` and still listen on TCP 179. Docker 
 | `two-speakers` | eBGP between AS 65001 and AS 65002 on one link. r2 connects, r1 waits. Routes cross both ways with AS_PATH, NEXT_HOP, MED and communities. |
 | `routegen` | A dockerized routegen. gen (AS 65001, 10.20.0.1) connects and sends 10000 generated prefixes. sink (AS 65002, 10.20.0.2) waits, counts them and times them. |
 | `add-path` | ADD-PATH, RFC 7911: one prefix, two paths, three nodes. sim (AS 65001, 10.40.0.1) sends identifiers 7 and 9 and dials both receivers. gobgp (AS 65002, 10.40.0.2) reports how many paths it holds; peer (AS 65003, 10.40.0.3) reports which identifiers arrived. Two receivers because neither answers both questions: GoBGP's `global rib -j` has no identifier key for a received path. It is the port of `test/functional/lab/add_path_gobgp_test.rb` and the first topology with a `scenarios/` folder, which nothing reads yet. Its own README says what ported and what did not. |
-| `bgp4r-lab` | **The one containerlab topology**, and the only one written for the routescope console rather than for this test suite: six nodes and three implementations, two `bgp4r-sim` injectors in AS 65010 feeding a `bgp4rd` in AS 65000 that feeds an FRR and BIRD AS 65001. It is `docs/routescope-labs.md` section 8's "lab to build first", and its `scenarios/` folder covers that section's points 2 to 5: a prefix injected on command, the decision naming the step that chose it, one action flipping the winner, and a withdraw reaching BIRD. It wants the Dockerfile's `lab-node` stage rather than `speaker`. **It has never been deployed**; `test/functional/lab/bgp4r_lab_topology_test.rb` reads its files and holds them to its own README with no Docker. |
+| `bgp4r-lab` | In `routescope/labs/`, not here; `routescope-labs install bgp4r/bgp4r-lab` makes it. **The one containerlab topology**, and the only one written for the routescope console rather than for this test suite: six nodes and three implementations, two `bgp4r-sim` injectors in AS 65010 feeding a `bgp4rd` in AS 65000 that feeds an FRR and BIRD AS 65001. It is `docs/routescope-labs.md` section 8's "lab to build first", and its `scenarios/` folder covers that section's points 2 to 5: a prefix injected on command, the decision naming the step that chose it, one action flipping the winner, and a withdraw reaching BIRD. It wants the Dockerfile's `lab-node` stage rather than `speaker`. **It has never been deployed**; `test/functional/lab/bgp4r_lab_topology_test.rb` reads its files and holds them to its own README with no Docker. |
 | `fault-matrix` | Every `BGP::Fault::CATALOG` case sent to GoBGP. matrix (AS 65001, 10.30.0.1) listens, router (AS 65002, 10.30.0.2) connects. It reads the router's RIB with the `gobgp` client, so it scores routes as well as sessions. The matrix runs once and exits, non-zero on any disagreement, which against either GoBGP version measured means 1. `test/functional/lab/fault_matrix_native_test.rb` runs the same matrix against a `gobgpd` on loopback, with no container at all. |
 
 ## Node file

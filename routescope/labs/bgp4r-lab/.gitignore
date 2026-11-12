@@ -1,0 +1,20 @@
+# Files the routers write next to their configuration, once this folder
+# has been copied out and git-inited as a lab of its own. The lab's git
+# history replaces their backups and rollbacks.
+*.sav
+*.tmp
+*.broken
+*.kernel
+*.rollback.*
+# routescope runtime state: recordings and scenario reports, and what
+# nodes write in their run folders. A run folder keeps its .gitkeep,
+# because a bind-mounted folder must exist. notes.jsonl is not listed:
+# routescope keeps the notes in the lab so the lab's git can keep them.
+recordings/
+*-run/*
+!*-run/.gitkeep
+# what containerlab writes when it deploys the lab, and its backup of
+# the topology file
+clab-*/
+.*.clab.yml.bak
+.*.bak
