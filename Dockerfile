@@ -132,14 +132,13 @@ ENV BGP4R_SOCKET=/run/bgp4r/bgp4rd.sock
 # packet socket in pure Ruby would be a native dependency, so the capture
 # spawns tcpdump into a pipe, as ospfv2's does.
 #
-# **Not built here.** No Docker daemon was reachable in the sandbox this
-# was written in, so this stage is the only part of the capture work that
-# nothing has run. Build it before trusting it.
+# This helper opens a packet socket in the router network namespace.
+# Run as root with only the requested NET_RAW/NET_ADMIN capabilities;
+# switching to the bgp user loses the effective capabilities for tcpdump.
 FROM base AS capture
 USER root
 RUN apt-get update && apt-get install -y --no-install-recommends tcpdump \
     && rm -rf /var/lib/apt/lists/*
-USER bgp
 ENTRYPOINT ["ruby", "-I/app", "exe/bgp4r"]
 CMD ["capture", "-i", "eth0"]
 

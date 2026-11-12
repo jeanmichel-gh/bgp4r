@@ -1491,3 +1491,12 @@ rest of section 4 can. What becomes assertable, and when:
 
 Until then this is a design, and the status line for it lives in
 CLAUDE.md under "Where the work is going".
+
+### Capture decoded text
+
+Capture JSON includes `decoded` when the existing BGP wire object can render
+itself with `to_s`. The message factory invokes the protocol objects' parse
+path; the field tree still describes offsets into the original message.
+Rendering failures are reported without dropping the bytes or field tree.
+The capture image runs as root so tcpdump can use NET_RAW in the shared
+network namespace; router images are unchanged.

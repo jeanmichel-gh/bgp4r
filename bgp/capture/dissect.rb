@@ -88,10 +88,10 @@ module BGP
         end
       end
 
-      Result = Struct.new(:summary, :length, :fields, :errors) do
+      Result = Struct.new(:summary, :length, :fields, :errors, :decoded, :decoded_error) do
         def to_h
           { :summary => summary, :length => length,
-            :fields => fields.collect { |f| f.to_h }, :errors => errors }
+            :fields => fields.collect { |f| f.to_h }, :errors => errors }.tap { |h| h[:decoded] = decoded if decoded; h[:decoded_error] = decoded_error if decoded_error }
         end
       end
 
@@ -311,7 +311,7 @@ module BGP
           fields = []
           summary = header(fields)
           decode
-          Result.new(summary, @b.bytesize, fields.compact, @errors)
+          Result.new(summary, @b.bytesize, fields.compact, @errors, @decoded, @decoded_error)
         end
 
         private
@@ -337,6 +337,11 @@ module BGP
         # stop reading a capture.
         def decode
           msg = Message.factory(@b.dup.is_packed)
+          begin
+            @decoded = msg.to_s
+          rescue StandardError => error
+            @decoded_error = "bgp4r could not print this message: #{error.class}: #{error.message}"
+          end
           return unless msg.respond_to?(:path_attribute) and msg.path_attribute
           msg.path_attribute.errors.each do |f|
             @errors << "the sender got this wrong: #{f}"
