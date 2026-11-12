@@ -120,19 +120,27 @@ test. By hand, from a bgp4r checkout:
 
 ```
 docker build --target lab-node -t bgp4r-lab:latest .
-docker build -f lab/routescope/rr-lab/Dockerfile.bird \
-             -t bgp4r-bird:latest lab/routescope/rr-lab
-docker build -f lab/routescope/rr-lab/Dockerfile.gobgp \
-             -t bgp4r-gobgp:latest lab/routescope/rr-lab
+docker build -f routescope/labs/rr-lab/Dockerfile.bird \
+             -t bgp4r-bird:latest routescope/labs/rr-lab
+docker build -f routescope/labs/rr-lab/Dockerfile.gobgp \
+             -t bgp4r-gobgp:latest routescope/labs/rr-lab
 docker pull quay.io/frrouting/frr:10.2.1
 ```
 
 ## Run it
 
+To make it a lab of routescope's, on the VM:
+
 ```
-sudo containerlab deploy -t lab/routescope/rr-lab/rr-lab.clab.yml
-LAB=$PWD/lab/routescope/rr-lab docker compose -f ~/routescope/compose.yml up -d
-sudo containerlab destroy -t lab/routescope/rr-lab/rr-lab.clab.yml
+routescope-labs install bgp4r/rr-lab
+```
+
+From a checkout:
+
+```
+sudo containerlab deploy -t routescope/labs/rr-lab/rr-lab.clab.yml
+LAB=$PWD/routescope/labs/rr-lab docker compose -f ~/routescope/compose.yml up -d
+sudo containerlab destroy -t routescope/labs/rr-lab/rr-lab.clab.yml
 ```
 
 By hand, without routescope:
@@ -156,7 +164,7 @@ flaps `inj-c`. It changes the running lab, so run it on a lab you can
 redeploy.
 
 ```
-bash lab/routescope/rr-lab/capture.sh > capture.log
+bash routescope/labs/rr-lab/capture.sh > capture.log
 ```
 
 ## What has been run, and what has not

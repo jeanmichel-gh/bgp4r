@@ -20,7 +20,7 @@
 # along with BGP4R.  If not, see <http://www.gnu.org/licenses/>.
 #++
 
-# What lab/routescope/fwd-lab says, read out of its own files.
+# What routescope/labs/fwd-lab says, read out of its own files.
 #
 #   ruby -I. test/functional/lab/fwd_lab_topology_test.rb
 #
@@ -45,8 +45,8 @@ require_relative 'routescope_vocabulary'
 
 class LabFwdLabTopologyTest < Test::Unit::TestCase
 
-  DIR = File.expand_path('../../../lab/routescope/fwd-lab', __dir__)
-  SIBLING = File.expand_path('../../../lab/routescope/bgp4r-lab', __dir__)
+  DIR = File.expand_path('../../../routescope/labs/fwd-lab', __dir__)
+  SIBLING = File.expand_path('../../../routescope/labs/bgp4r-lab', __dir__)
   WORKFLOW = File.expand_path('../../../.github/workflows/capture.yml', __dir__)
 
   # node => [AS, loopback]
@@ -223,8 +223,8 @@ class LabFwdLabTopologyTest < Test::Unit::TestCase
   def test_ci_deploys_it_and_runs_its_capture_script
     wf = File.read(WORKFLOW, :encoding => 'UTF-8')
     job = wf[/^  fwd-lab:\n.*?(?=^  \S|\z)/m].to_s
-    assert_include job, 'containerlab deploy -t lab/routescope/fwd-lab/fwd-lab.clab.yml'
-    assert_include job, 'bash lab/routescope/fwd-lab/capture.sh'
+    assert_include job, 'containerlab deploy -t routescope/labs/fwd-lab/fwd-lab.clab.yml'
+    assert_include job, 'bash routescope/labs/fwd-lab/capture.sh'
     assert(File.executable?(File.join(DIR, 'capture.sh')), 'capture.sh is executable')
   end
 

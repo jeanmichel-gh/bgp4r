@@ -728,7 +728,7 @@ tells the command to print `containerlab deploy` rather than `docker
 compose up`, and its `.gitignore` is what made the copier read a
 directory pattern rather than a basename.
 
-**It lives in `lab/routescope/`, and that folder is where every lab
+**It lives in `routescope/labs/`, and that folder is where every lab
 written for the routescope console goes.** It started in
 `lab/topologies/` and moved on 2026-11-03, so the Compose topologies
 bgp4r's own suite drives and the containerlab labs routescope deploys are
@@ -736,7 +736,29 @@ two folders a reader can tell apart. `bgp4r lab new` reads both.
 routescope's CI checks out bgp4r on the branch of the same name, else
 master, and deploys it from there.
 
-**The folder exists now**, as `lab/routescope/bgp4r-lab`: the
+**On 2026-11-12 the folder moved again, from `lab/routescope/` to
+`routescope/labs/`**, the path every protocol repository now keeps its
+routescope labs in (routescope `docs/design/labs-layout.md`). The way
+to make one of them is routescope's command, on the VM:
+
+```
+routescope-labs install bgp4r/bgp4r-lab
+routescope-labs install bgp4r/fwd-lab
+routescope-labs install bgp4r/rr-lab
+```
+
+It keeps the lab's upstream files on one branch and local edits on
+another, so an update later keeps the edits. `bgp4r lab new` still
+copies these labs for one release, and prints that line instead.
+`lab/routescope` is a symlink to `routescope/labs` for the same
+release, because routescope's CI reads the old path. Each lab's
+`.gitignore` lists routescope's runtime state: `recordings/`,
+`*-run/*` but not `*-run/.gitkeep` (a bind-mounted run folder must
+exist), `clab-*/` and `.*.clab.yml.bak`. `notes.jsonl` is not in it:
+routescope keeps a lab's notes in the lab folder so the lab's git keeps
+them.
+
+**The folder exists now**, as `routescope/labs/bgp4r-lab`: the
 `*.clab.yml` with those six nodes and both labels on each, node files for
 the two injectors and the daemon, FRR and BIRD configs, and four
 scenarios, one per point 2 to 5 above. Its README says what each node is

@@ -28,7 +28,7 @@
 #   - the inj1 to rtr session is flapped, r1's link to rtr goes down and
 #     up, and r3 restarts its session to r1, so the flap counters move.
 #
-#   LAB=bgp4r-lab lab/routescope/bgp4r-lab/capture.sh
+#   LAB=bgp4r-lab routescope/labs/bgp4r-lab/capture.sh
 set -uo pipefail
 LAB="${LAB:-bgp4r-lab}"
 SOCK=/run/bgp4r/bgp4rd.sock

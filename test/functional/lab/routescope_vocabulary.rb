@@ -21,7 +21,7 @@
 #++
 
 # What routescope reads, **copied** from routescope, so the containerlab
-# labs under lab/routescope/ can be held to it with no routescope here.
+# labs under routescope/labs/ can be held to it with no routescope here.
 # Three topology tests read it: bgp4r_lab_topology_test.rb,
 # rr_lab_topology_test.rb and fwd_lab_topology_test.rb. One copy, so they
 # cannot drift apart.

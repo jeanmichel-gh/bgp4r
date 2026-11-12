@@ -40,7 +40,7 @@ module BGP::OPT_PARM::CAP
   # change to every packer and to the receive path, so it is its own
   # piece of work. What this buys today is that a peer's OPEN prints the
   # capability by name where it printed as Unknown: FRR and GoBGP both
-  # send it, measured in lab/routescope/bgp4r-lab on 2026-11-03.
+  # send it, measured in routescope/labs/bgp4r-lab on 2026-11-03.
   #
   # The capability carries no value. RFC 8654 says nothing about one that
   # arrives anyway, so the octets are kept and written back, as

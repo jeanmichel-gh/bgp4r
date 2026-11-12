@@ -20,7 +20,7 @@
 # along with BGP4R.  If not, see <http://www.gnu.org/licenses/>.
 #++
 
-# lab/routescope/fwd-lab run in four network namespaces, with no Docker
+# routescope/labs/fwd-lab run in four network namespaces, with no Docker
 # and no containerlab. Packets cross bgp4rd routers here, which nothing
 # else in the suite checks: fib_test.rb says a route reached the kernel,
 # and this says the kernel forwards on it.
@@ -53,7 +53,7 @@ class FwdLabNetnsTest < Test::Unit::TestCase
   self.test_order = :defined
 
   ROOT = File.expand_path('../../..', __dir__)
-  DIR = File.join(ROOT, 'lab/routescope/fwd-lab')
+  DIR = File.join(ROOT, 'routescope/labs/fwd-lab')
   TOPOLOGY = YAML.safe_load(File.read(File.join(DIR, 'fwd-lab.clab.yml')))
   NODES = TOPOLOGY['topology']['nodes'].keys
   LINKS = TOPOLOGY['topology']['links'].collect { |l| l['endpoints'] }

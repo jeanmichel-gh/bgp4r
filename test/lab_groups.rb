@@ -158,7 +158,7 @@ module LabGroups
     # topology, and is here for the same reason: it parses that folder and
     # loads each node file through the program that reads it, with no
     # Docker daemon, no router binary and no socket. Hundredths of a
-    # second. rr_lab_topology_test is the same again for lab/routescope/
+    # second. rr_lab_topology_test is the same again for routescope/labs/
     # rr-lab, the route reflection lab, and fwd_lab_topology_test for
     # fwd-lab. fwd_lab_netns_test runs fwd-lab's own files in network
     # namespaces and pings across them, so like fib_test it needs

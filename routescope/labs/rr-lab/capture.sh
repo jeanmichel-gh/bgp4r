@@ -18,7 +18,7 @@
 # replays two looped UPDATEs, then flaps inj-c. Run it on a lab you can
 # redeploy.
 #
-#   LAB=rr-lab lab/routescope/rr-lab/capture.sh
+#   LAB=rr-lab routescope/labs/rr-lab/capture.sh
 set -uo pipefail
 LAB="${LAB:-rr-lab}"
 SOCK=/run/bgp4r/bgp4rd.sock
