@@ -229,6 +229,48 @@ class BGP_Daemon_LinkStateProducer_Test < Test::Unit::TestCase
     assert_equal(10, @producer.size)
   end
 
+  # `unreachable` changed on a running Producer rebuilds from the
+  # topology it last read: the peer sees it with no SPF and no read.
+  def test_switching_to_keep_sends_an_unreachable_node_again_at_once
+    started
+    change { |nodes| find('r3', nodes)['reachable'] = false }
+    assert_equal(7, @producer.size)
+    @peer.clear
+    reads = @producer.reads
+    announced, withdrawn = @producer.set_unreachable('keep')
+    assert_equal('keep', @producer.unreachable)
+    assert_equal({ 'node' => 1, 'link' => 1, 'prefix' => 1 }, kinds(reached))
+    assert_equal(3, announced.size)
+    assert_equal([], withdrawn)
+    assert_equal(10, @producer.size)
+    assert_equal(reads, @producer.reads)
+  end
+
+  def test_switching_back_to_withdraw_withdraws_at_once
+    producer('unreachable' => 'keep').start
+    wait_for { @producer.reads == 1 }
+    change { |nodes| find('r3', nodes)['reachable'] = false }
+    assert_equal([], @peer.updates)
+    @producer.unreachable = 'withdraw'
+    assert_equal([], reached)
+    assert_equal({ 'node' => 1, 'link' => 1, 'prefix' => 1 }, kinds(unreached))
+    assert_equal(7, @producer.size)
+  end
+
+  def test_unreachable_before_the_first_read_changes_the_next_one
+    producer
+    assert_equal([[], []], @producer.set_unreachable(:keep))
+    assert_equal('keep', @producer.unreachable)
+    assert_equal([], @peer.updates)
+  end
+
+  def test_an_unreachable_that_is_not_withdraw_or_keep_is_refused
+    started
+    e = assert_raise(ArgumentError) { @producer.set_unreachable('drop') }
+    assert_match(/withdraw or keep, not drop/, e.message)
+    assert_equal('withdraw', @producer.unreachable)
+  end
+
   def test_a_refresh_that_changes_nothing_sends_nothing
     started
     change { |_nodes| }
