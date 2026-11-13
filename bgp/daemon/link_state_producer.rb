@@ -102,6 +102,7 @@ module BGP
         @wake = ConditionVariable.new
         @wake_lock = Mutex.new
         @reads = 0
+        @topologies = nil # the last `show.topology` answers it read
       end
 
       def path ; @source.path ; end
@@ -110,6 +111,40 @@ module BGP
 
       # How many times it has read the topology and diffed it.
       def reads ; @lock.synchronize { @reads } ; end
+
+      # `withdraw` or `keep`: what it does with a node the IGP marks
+      # unreachable.
+      def unreachable ; @lock.synchronize { @unreachable } ; end
+
+      # Changes `unreachable` on a running Producer, and rebuilds at once
+      # from the topology it last read, so the peers see the change now
+      # and not at the next SPF: `withdraw` withdraws what an unreachable
+      # node originated, and `keep` sends it again. Answers [announced,
+      # withdrawn] as `refresh` does, or two empty lists before the
+      # first read.
+      #
+      # **The rebuild holds the lock from the build to the send**, as
+      # `refresh` does, so it cannot interleave with a read on the
+      # Producer's thread and send a diff of an older topology after a
+      # newer one.
+      def set_unreachable(value)
+        value = LinkStateProducer.unreachable(value)
+        @lock.synchronize do
+          @unreachable = value
+          @topologies ? diff(@topologies) : [[], []]
+        end
+      end
+
+      def unreachable=(value)
+        set_unreachable(value)
+      end
+
+      # `withdraw` or `keep` as a String, or ArgumentError naming both.
+      def self.unreachable(value)
+        v = value.to_s
+        raise ArgumentError, "link_state: unreachable is #{UNREACHABLE.join(' or ')}, not #{v}" unless UNREACHABLE.include?(v)
+        v
+      end
 
       def start
         @thread ||= Thread.new do
@@ -152,22 +187,30 @@ module BGP
       # send the difference to every peer that takes BGP-LS. Answers
       # [announced, withdrawn] as two lists of Link_state.
       def refresh(topologies)
-        now = build(topologies)
         @lock.synchronize do
           @reads += 1
-          changed = now.reject { |k, (_ls, attr)| (s = @sent[k]) && s.attribute.encode == attr.encode }
-          gone = @sent.keys - now.keys
-          at = Time.now
-          changed.each { |k, (ls, attr)| @sent[k] = Sent.new(ls, attr, at) }
-          withdrawn = gone.collect { |k| @sent.delete(k).nlri }
-          announced = changed.values.collect { |ls, attr| [ls, attr] }
-          unless announced.empty? && withdrawn.empty?
-            log(:info, "bgp-ls: #{announced.size} to announce, #{withdrawn.size} to withdraw")
-            eligible.each { |p| send_to(p, announced, withdrawn) }
-          end
-          [announced.collect(&:first), withdrawn]
+          @topologies = topologies
+          diff(topologies)
         end
       end
+
+      # The body of `refresh`, with the lock held: `build` reads
+      # `@unreachable`, which `set_unreachable` changes under it.
+      def diff(topologies)
+        now = build(topologies)
+        changed = now.reject { |k, (_ls, attr)| (s = @sent[k]) && s.attribute.encode == attr.encode }
+        gone = @sent.keys - now.keys
+        at = Time.now
+        changed.each { |k, (ls, attr)| @sent[k] = Sent.new(ls, attr, at) }
+        withdrawn = gone.collect { |k| @sent.delete(k).nlri }
+        announced = changed.values.collect { |ls, attr| [ls, attr] }
+        unless announced.empty? && withdrawn.empty?
+          log(:info, "bgp-ls: #{announced.size} to announce, #{withdrawn.size} to withdraw")
+          eligible.each { |p| send_to(p, announced, withdrawn) }
+        end
+        [announced.collect(&:first), withdrawn]
+      end
+      private :diff
 
       # A session came up: send it every route, if it takes BGP-LS.
       def session_up(peer)
@@ -339,10 +382,7 @@ module BGP
         unless missing.empty?
           raise ArgumentError, "link_state: peers #{missing.join(', ')} are not configured neighbors"
         end
-        @unreachable = config.fetch('unreachable', 'withdraw').to_s
-        unless UNREACHABLE.include?(@unreachable)
-          raise ArgumentError, "link_state: unreachable is #{UNREACHABLE.join(' or ')}, not #{@unreachable}"
-        end
+        @unreachable = LinkStateProducer.unreachable(config.fetch('unreachable', 'withdraw'))
       end
 
       # An absent source means isisd at its default path, so every phase

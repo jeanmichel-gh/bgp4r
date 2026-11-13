@@ -135,6 +135,7 @@ module BGP
         'peer.resend'     => ->(a, p) { a.control.peer_resend(p) },
         'route.originate' => ->(a, p) { a.control.route_originate(p) },
         'route.withdraw'  => ->(a, p) { a.control.route_withdraw(p) },
+        'link_state.unreachable' => ->(a, p) { a.candidate.link_state_unreachable(p) },
         'config.changed'  => ->(a, p) { a.candidate.changed?(p) },
         'config.compare'  => ->(a, p) { a.candidate.compare(p) },
         'config.history'  => ->(a, p) { a.candidate.history(p) },

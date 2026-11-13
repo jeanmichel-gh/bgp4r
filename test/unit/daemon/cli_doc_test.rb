@@ -42,7 +42,7 @@ class TestBgp4rCliDoc < Test::Unit::TestCase
   end
 
   def test_every_method_the_daemon_answers_has_a_row_and_every_row_is_a_method
-    documented = first_cells.flatten.grep(/\A[a-z]+\.[a-z_]+\z/)
+    documented = first_cells.flatten.grep(/\A[a-z_]+\.[a-z_]+\z/)
     assert_operator documented.size, :>=, 30, 'the tables were read'
     assert_equal BGP::Daemon::Api.names.sort, documented.sort
   end

@@ -21,6 +21,7 @@
 #++
 
 require 'bgp/daemon/config'
+require 'bgp/daemon/link_state_producer'
 require 'bgp/daemon/control'
 
 module BGP
@@ -53,7 +54,7 @@ module BGP
     #
     # | Effect | Keys | What a commit does |
     # |---|---|---|
-    # | live | `log_level`, `originate`, a neighbor's `description` | applies it, and nothing on the wire stops |
+    # | live | `log_level`, `originate`, `mark`, `link_state unreachable`, a neighbor's `description` | applies it, and nothing on the wire stops |
     # | bounce | a neighbor's `as`, `hold_time`, `capabilities`, `connect`, `port`, `retry` | ends that session and lets it come back |
     # | bounce all | `announce` | ends every session and lets them come back |
     # | restart | everything else | **refuses the commit**, naming the key |
@@ -185,6 +186,11 @@ module BGP
                     'established_count and flaps across sessions, so a bounce deliberately ' \
                     'leaves those alone and replacing it would reset them'
       }.freeze
+
+      # Why `link_state unreachable` cannot change where nothing reads
+      # it.
+      NO_PRODUCER = 'the LinkStateProducer is built in Speaker#initialize, and only when ' \
+                    'the file has a link_state block'
 
       # Adding a neighbor or taking one away, which is refused before the
       # per key pass because its keys read as ordinary bounce-class
@@ -336,6 +342,42 @@ module BGP
         end
       end
 
+      # `link_state.unreachable`: `withdraw` or `keep` on a running
+      # BGP-LS Producer, as one commit of that one key.
+      #
+      #   bgp4r-cli link_state.unreachable '{"unreachable":"keep"}'
+      #
+      # **It is a commit and not a flag on the Producer**, so the running
+      # configuration goes on saying what the speaker does: it goes in
+      # `config.history`, a rollback undoes it, and `show.configuration`
+      # answers the new value. The candidate gets the same key, so a
+      # commit of other edits afterwards does not quietly put it back.
+      # What else the candidate holds is left alone and not committed.
+      #
+      # Answers the value, the one it replaced, and how many BGP-LS
+      # routes the rebuild sent and withdrew.
+      def link_state_unreachable(params = {})
+        p = strings(params, %w[unreachable])
+        raise ArgumentError, 'unreachable is required: withdraw or keep' unless p.key?('unreachable')
+        value = LinkStateProducer.unreachable(p['unreachable'])
+        producer = @speaker.link_state_producer
+        raise ArgumentError, "this bgp4rd is not a BGP-LS Producer: #{NO_PRODUCER}" if producer.nil?
+        @lock.synchronize do
+          was = producer.unreachable
+          target = Config.deep_copy(@running)
+          target['link_state'] = (target['link_state'] || {}).merge('unreachable' => value)
+          plan = Plan.new(@speaker, @running, target)
+          raise ArgumentError, plan.errors.join('; ') unless plan.errors.empty?
+          unless plan.changes.empty?
+            plan.apply
+            record_tree(target, plan, "link_state.unreachable #{value}")
+            @candidate['link_state']['unreachable'] = value if @candidate['link_state'].is_a?(Hash)
+          end
+          announced, withdrawn = plan.link_state_diff || [[], []]
+          { :unreachable => value, :was => was, :announced => announced.size, :withdrawn => withdrawn.size }
+        end
+      end
+
       # The running configuration, for a caller that wants the tree rather
       # than the text. A copy, so nothing outside can edit what the
       # speaker is running.
@@ -353,9 +395,15 @@ module BGP
       # the new one and the commit goes in the history, so the two stay in
       # step and `history[i]` keeps describing rollback `i`.
       def record(plan, comment)
+        record_tree(@candidate, plan, comment)
+      end
+
+      # The same, for a configuration other than the candidate, which is
+      # what `link_state_unreachable` commits.
+      def record_tree(tree, plan, comment)
         @previous.unshift(@running)
         @previous.pop while @previous.size > ROLLBACKS
-        @running = Config.deep_copy(@candidate)
+        @running = Config.deep_copy(tree)
         @commits.unshift(:time => Recorder.iso(Time.now),
                          :comment => comment && comment.to_s,
                          :changes => plan.changes.size)
@@ -399,6 +447,10 @@ module BGP
 
         attr_reader :changes, :errors, :notices
 
+        # [announced, withdrawn] from the Producer's rebuild, once `apply`
+        # has changed `link_state unreachable`; nil otherwise.
+        attr_reader :link_state_diff
+
         def initialize(speaker, running, candidate)
           @speaker, @running, @candidate = speaker, running, candidate
           @changes = Config.compare(running, candidate)
@@ -417,6 +469,7 @@ module BGP
           @speaker.reconfigure(Config.deep_copy(@candidate))
           done.concat(apply_log_level)
           done.concat(apply_originate(originate))
+          done.concat(apply_link_state)
           done.concat(apply_bounces)
           done
         end
@@ -447,6 +500,10 @@ module BGP
           # configuration `Speaker#reconfigure` swaps in, so nothing else
           # has to change.
           return LIVE if path.first == 'mark'
+          # Read by `LinkStateProducer#build` on each rebuild, and set
+          # under the Producer's lock by `set_unreachable`, which
+          # rebuilds from the topology it last read.
+          return LIVE if path == %w[link_state unreachable]
           return BOUNCE_ALL if path.first == 'announce'
           if path.first == 'neighbors' && path.size >= 3
             return LIVE   if NEIGHBOR_LIVE_KEYS.include?(path[2])
@@ -518,6 +575,26 @@ module BGP
           bounced_or_live_neighbors.each { |c| refuse_unbuildable_neighbor(c) }
           refuse_originate_with_no_table
           refuse_unreadable_mark
+          refuse_unreachable_it_cannot_apply
+        end
+
+        # `link_state unreachable` is live only where a Producer reads
+        # it, and only as one of the two values it takes.
+        def refuse_unreachable_it_cannot_apply
+          return unless @paths.include?(%w[link_state unreachable])
+          if @speaker.link_state_producer.nil?
+            return @errors << 'link_state unreachable cannot change while bgp4rd runs with no ' \
+                              "BGP-LS Producer: #{NO_PRODUCER}. Edit the file and restart bgp4rd."
+          end
+          LinkStateProducer.unreachable(Plan.unreachable_of(@candidate))
+        rescue ArgumentError => e
+          @errors << e.message
+        end
+
+        # The configuration's `link_state unreachable`, with its default.
+        def self.unreachable_of(config)
+          ls = config['link_state']
+          ls.is_a?(Hash) ? ls.fetch('unreachable', 'withdraw').to_s : 'withdraw'
         end
 
         # The same check `bgp4rd` makes when it reads the file, so a
@@ -630,6 +707,17 @@ module BGP
           notes << "withdrew #{ops[:withdraw].join(', ')}" unless ops[:withdraw].empty?
           notes << "originated #{ops[:originate].keys.join(', ')}" unless ops[:originate].empty?
           notes
+        end
+
+        # The Producer rebuilds from the topology it last read, so a peer
+        # sees the change now and not at the next SPF.
+        def apply_link_state
+          return [] unless @live.include?(%w[link_state unreachable])
+          value = Plan.unreachable_of(@candidate)
+          @link_state_diff = @speaker.link_state_producer.set_unreachable(value)
+          announced, withdrawn = @link_state_diff
+          ["link_state unreachable is #{value} now: #{announced.size} BGP-LS route(s) sent, " \
+           "#{withdrawn.size} withdrawn"]
         end
 
         # **Stop then start, and not `clear`.** `Peer#clear` is an alias

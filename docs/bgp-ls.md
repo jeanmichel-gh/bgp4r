@@ -1654,7 +1654,10 @@ node gives:
   corresponding LSPs/LSAs is determined to have become unreachable in
   the IGP." Building the set from reachable nodes on each read also
   meets the MUST that follows: it re-advertises them when the node is
-  reachable again. `unreachable: keep` turns this off.
+  reachable again. `unreachable: keep` turns this off. It can change
+  while bgp4rd runs, by a commit or by `link_state.unreachable`, and
+  the Producer then rebuilds from the topology it last read and sends
+  the difference at once.
 
 Phase 1 leaves out the Link Local/Remote Identifiers (258), the
 interface addresses (259, 260), TE and SR TLVs, IPv6 prefixes and the

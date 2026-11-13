@@ -357,7 +357,13 @@ only. Each of those must be
 a configured neighbor, and its session must negotiate 16388/71, which a
 neighbor asks for with `capabilities: [as4_byte, {mbgp: bgp_ls}]`.
 Other sessions get nothing. A node the IGP marks unreachable is withdrawn,
-unless `unreachable: keep`. If the socket closes, it tries again every
+unless `unreachable: keep`. `unreachable` is the one `link_state` key that
+changes while bgp4rd runs: a commit of `set link_state unreachable keep`,
+a SIGHUP, or `link_state.unreachable '{"unreachable":"keep"}'`, which is
+that commit of that one key. The Producer rebuilds at once from the
+topology it last read, so switching back to `withdraw` withdraws at once
+and not at the next SPF. Every other `link_state` key is refused in a
+commit, since the Producer is built once. If the socket closes, it tries again every
 5 seconds. Any other key is refused at start-up. Every bgp4rd also keeps
 the BGP-LS routes it receives, in a table of their own outside the RIB.
 `show.link_state` lists both. `docs/bgp-ls.md` section 12 has what is
@@ -591,6 +597,7 @@ below.
 | `peer.specimen`, `peer.fault`, `peer.replay` | one message sent by hand, listed and never written into the Adj-RIB-Out | built |
 | `peer.resend` | the daemon's own answer for each prefix a peer was sent by hand | built |
 | `route.originate`, `route.withdraw` | our own prefixes | built |
+| `link_state.unreachable` | the BGP-LS Producer's `unreachable`, `keep` or `withdraw`, as one commit | built |
 | `show.configuration` | the running configuration, or the candidate | built |
 | `config.changed` | whether the candidate differs, as a **boolean** | built |
 | `config.compare` | what the candidate changes, as **lines** | built |
@@ -891,7 +898,7 @@ hoping:
 
 | Effect | Keys | What a commit does |
 |---|---|---|
-| live | `log_level`, `originate`, a neighbor's `description` | applies it, and nothing on the wire stops |
+| live | `log_level`, `originate`, `mark`, `link_state unreachable`, a neighbor's `description` | applies it, and nothing on the wire stops |
 | bounce | a neighbor's `as`, `hold_time`, `capabilities`, `connect`, `port`, `retry` | ends that session and lets it come back |
 | bounce all | `announce` | ends every session and lets them come back |
 | restart | everything else | **refuses the commit**, naming the key |

@@ -379,6 +379,8 @@ class BGP_Daemon_Candidate_Test < Test::Unit::TestCase
     assert_equal(BGP::Daemon::Candidate::LIVE, e.effect(%w[log_level]))
     assert_equal(BGP::Daemon::Candidate::LIVE, e.effect(%w[originate 0 med]))
     assert_equal(BGP::Daemon::Candidate::LIVE, e.effect(%w[neighbors 1.1.1.1 description]))
+    assert_equal(BGP::Daemon::Candidate::LIVE, e.effect(%w[link_state unreachable]))
+    assert_equal(BGP::Daemon::Candidate::RESTART, e.effect(%w[link_state peers]))
     assert_equal(BGP::Daemon::Candidate::BOUNCE_ALL, e.effect(%w[announce 0 prefixes]))
     BGP::Daemon::Candidate::NEIGHBOR_BOUNCE_KEYS.each do |k|
       assert_equal(BGP::Daemon::Candidate::BOUNCE, e.effect(['neighbors', '1.1.1.1', k]), k)
@@ -396,6 +398,97 @@ class BGP_Daemon_Candidate_Test < Test::Unit::TestCase
   def test_a_key_nobody_classified_is_restart_class
     assert_equal(BGP::Daemon::Candidate::RESTART,
                  BGP::Daemon::Candidate::Plan.effect(%w[something_new]))
+  end
+
+  # ---- link_state unreachable, live ----
+
+  # A Producer whose isisd is not there, so it never reads: the tests
+  # hand it a topology through `refresh`. The session to 127.0.0.9 is
+  # never up, so nothing is sent and what it holds is read from `size`.
+  def producer_speaker(unreachable = nil)
+    @speaker.stop
+    ls = { 'isisd' => File.join(Dir.tmpdir, 'bgp4r-candidate-no-isisd.sock'), 'peers' => ['127.0.0.9'] }
+    ls['unreachable'] = unreachable if unreachable
+    @config = @config.merge('link_state' => ls)
+    @speaker = BGP::Daemon::Speaker.new(@config)
+    @candidate = BGP::Daemon::Candidate.new(@speaker, @config)
+    # r1 -- r2, and r2 unreachable: 2 Node, 2 Link and 2 Prefix NLRIs,
+    # or 1, 1 and 1 with r2's withdrawn, since r1's link to r2 is r1's.
+    node = lambda do |id, name, nb, reachable|
+      { 'id' => id, 'hostname' => name, 'reachable' => reachable,
+        'neighbors' => [{ 'id' => nb, 'metric' => 10 }],
+        'prefixes' => [{ 'prefix' => "10.200.0.#{name[1]}/32", 'metric' => 0 }] }
+    end
+    @speaker.link_state_producer.refresh(
+      [{ 'level' => 1, 'nodes' => [node.call('0000.0001.0101.00', 'r1', '0000.0001.0102.00', true),
+                                   node.call('0000.0001.0102.00', 'r2', '0000.0001.0101.00', false)] }])
+    @speaker.link_state_producer
+  end
+
+  def test_a_link_state_unreachable_commit_is_live_and_rebuilds
+    producer = producer_speaker
+    assert_equal(3, producer.size)
+    @candidate.load('lines' => ['set link_state unreachable keep'])
+    assert_equal(true, @candidate.commit('check' => true)[:ok])
+    r = @candidate.commit
+    assert_equal(true, r[:ok], r[:errors].inspect)
+    assert_equal(['link_state unreachable is keep now: 3 BGP-LS route(s) sent, 0 withdrawn'], r[:warnings])
+    assert_equal('keep', producer.unreachable)
+    assert_equal(6, producer.size)
+    assert_equal('keep', @candidate.running['link_state']['unreachable'])
+    # And back, which takes the key away and so is the default.
+    @candidate.load('lines' => ['delete link_state unreachable'])
+    r = @candidate.commit
+    assert_equal(true, r[:ok], r[:errors].inspect)
+    assert_equal('withdraw', producer.unreachable)
+    assert_equal(3, producer.size)
+  end
+
+  def test_a_link_state_unreachable_with_no_producer_is_refused
+    @candidate.load('lines' => ['set link_state unreachable keep'])
+    r = @candidate.commit
+    assert_equal(false, r[:ok])
+    assert_match(/no BGP-LS Producer/, r[:errors].join(' '))
+    assert_nil(@candidate.running['link_state'])
+  end
+
+  def test_a_link_state_unreachable_that_is_not_withdraw_or_keep_is_refused
+    producer = producer_speaker
+    @candidate.load('lines' => ['set link_state unreachable drop'])
+    r = @candidate.commit
+    assert_equal(false, r[:ok])
+    assert_match(/withdraw or keep, not drop/, r[:errors].join(' '))
+    assert_equal('withdraw', producer.unreachable)
+  end
+
+  # The control method is one commit of the one key: in the history, in
+  # the running configuration, and in the candidate, with the
+  # candidate's other edits left uncommitted.
+  def test_the_link_state_unreachable_method_commits_one_key
+    producer = producer_speaker
+    @candidate.load('lines' => ['set log_level debug'])
+    r = @candidate.link_state_unreachable('unreachable' => 'keep')
+    assert_equal({ :unreachable => 'keep', :was => 'withdraw', :announced => 3, :withdrawn => 0 }, r)
+    assert_equal('keep', producer.unreachable)
+    assert_equal('keep', @candidate.running['link_state']['unreachable'])
+    assert_equal('info', @candidate.running['log_level'])
+    assert_equal('link_state.unreachable keep', @candidate.history.first[:comment])
+    assert_equal(['set log_level debug'], @candidate.compare)
+    r = @candidate.link_state_unreachable(:unreachable => 'withdraw')
+    assert_equal({ :unreachable => 'withdraw', :was => 'keep', :announced => 0, :withdrawn => 3 }, r)
+    assert_equal(3, producer.size)
+  end
+
+  def test_the_link_state_unreachable_method_refuses_what_it_cannot_do
+    e = assert_raise(ArgumentError) { @candidate.link_state_unreachable('unreachable' => 'keep') }
+    assert_match(/not a BGP-LS Producer/, e.message)
+    producer_speaker
+    e = assert_raise(ArgumentError) { @candidate.link_state_unreachable('unreachable' => 'drop') }
+    assert_match(/withdraw or keep, not drop/, e.message)
+    e = assert_raise(ArgumentError) { @candidate.link_state_unreachable({}) }
+    assert_match(/unreachable is required/, e.message)
+    assert_raise(ArgumentError) { @candidate.link_state_unreachable('unreachable' => 'keep', 'peer' => 'x') }
+    assert_equal([], @candidate.history)
   end
 
 end

@@ -195,12 +195,14 @@ Both read one page. Add `'{"limit":5000}'` after the method name for more.
 | `peer.fault` | sends one malformed UPDATE by hand, from `BGP::Fault` | `peer`, `case`, `prefix` or `prefixes`, `next_hop` |
 | `peer.replay` | sends octets as given, in hex | `peer`, `hex` |
 | `peer.resend` | sends the daemon's own answer for every prefix sent by hand | `peer` |
+| `link_state.unreachable` | sets the BGP-LS Producer's `unreachable` to `keep` or `withdraw`, as a commit of that one key | `unreachable` |
 
 ```
 cli route.originate '{"prefixes":["10.255.0.0/24"],"med":50}'
 cli route.withdraw '{"prefixes":["10.255.0.0/24"]}'
 cli peer.refresh '{"peer":"10.100.14.1"}'
 cli peer.fault '{"peer":"10.100.14.1","case":"origin_value","prefixes":["10.255.1.0/24"]}'
+cli link_state.unreachable '{"unreachable":"keep"}'
 ```
 
 A send by hand is not written into the Adj-RIB-Out, since after it the
