@@ -1,6 +1,8 @@
 # BGP-LS Producer and collector in bgp4rd
 
 Status: approved 2026-11-09, with option A (a table of its own).
+Built in #315. Phase 3, the OSPFv2 source, is built too
+(`docs/design/bgp-ls-ospf.md`). Phase 2, a Propagator, is not started.
 
 Part of the BGP-LS lab. Two other specs go with it:
 isis `docs/design/bgp-ls-export.md` and routescope
