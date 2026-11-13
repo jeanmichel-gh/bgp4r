@@ -47,14 +47,17 @@ module RoutescopeVocabulary
   # `churn`, `mp_reach`, `mp_unreach`, `specimen` and `as_path_literal`
   # are routescope #53, claude/injector-spec at 9966920, read on
   # 2026-11-05; until it merges a scenario with `spec` is refused there.
-  BGP_ACTIONS = %w[announce attribute fault notification peer.clear peer.refresh
+  # `link_state.unreachable` and its key `unreachable` are routescope
+  # #126, read at its main 675d1ef on 2026-11-13: a scenario switches a
+  # bgp4rd Producer to keep or withdraw (this repo's #325).
+  BGP_ACTIONS = %w[announce attribute fault link_state.unreachable notification peer.clear peer.refresh
                    peer.start peer.stop refresh replay route.originate
                    route.withdraw session.flap session.start session.stop
                    withdraw].freeze
   BGP_KEYS = %w[afi as_path as_path_literal case churn code communities count data
                 extended_communities generate hex interval large_communities
                 local_pref med mp_reach mp_unreach next_hop node origin path_id peer
-                prefix prefixes safi spec specimen subcode subtype].freeze
+                prefix prefixes safi spec specimen subcode subtype unreachable].freeze
   CONDITIONS = { 'bgp_session' => %w[node peer state],
                  'bgp_routes' => %w[node count],
                  'bgp_prefix' => %w[node prefix present next_hop med as_path local_pref community],
