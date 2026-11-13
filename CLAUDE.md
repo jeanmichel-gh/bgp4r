@@ -2030,6 +2030,18 @@ Update the status in the pull request that moves a phase.
   than bugs.
 * "Attribute work left": 7 entries, RFC sections left out on purpose.
 
+### Noted for later, from the owner, 2026-11-13
+
+Not designed yet; routescope's `CLAUDE.md`, "Where the work is going",
+holds the full note.
+
+* One CLI for OSPF, IS-IS and BGP in Cisco syntax (IOS XE is the likely
+  OS, once its public command references are checked). `bgp/rib/show.rb` already prints the RIB in IOS, Junos and IOS XR styles, and the vendor style `to_s` plan below is the same idea for objects; `bgp4r-cli` would join `ospf-cli` and `isis-cli` behind one shell.
+* CI runs only the jobs a change's paths need.
+* Review and document every lab in `routescope/labs/`.
+* Do not open a pull request for documents alone: CI costs money. Let a
+  document change ride with the next code change, or ask first.
+
 ### Phase 0, before the RIB work resumes. Done
 
 Fixing the existing path attribute bugs came first, deliberately, and that is
