@@ -2037,7 +2037,10 @@ holds the full note.
 
 * One CLI for OSPF, IS-IS and BGP in Cisco syntax (IOS XE is the likely
   OS, once its public command references are checked). `bgp/rib/show.rb` already prints the RIB in IOS, Junos and IOS XR styles, and the vendor style `to_s` plan below is the same idea for objects; `bgp4r-cli` would join `ospf-cli` and `isis-cli` behind one shell.
-* CI runs only the jobs a change's paths need.
+* CI runs only the jobs a change's paths need. Not done. Done on
+  2026-11-13, a first step: each commit runs once (a pull request through
+  pull_request, master through push), and a newer push cancels a pull
+  request's older run.
 * Review and document every lab in `routescope/labs/`.
 * Do not open a pull request for documents alone: CI costs money. Let a
   document change ride with the next code change, or ask first.

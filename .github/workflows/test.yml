@@ -1,9 +1,19 @@
 name: test
 
+# Each commit runs once: a pull request's commits through pull_request,
+# master through push.
 on:
   push:
     branches: [master]
   pull_request:
+
+# A new push to a pull request cancels that pull request's older run.
+# master's runs are never cancelled: each merge is tested to the end.
+# master gets a group per run, because GitHub cancels a run waiting in a
+# group when a newer one joins it, whatever cancel-in-progress says.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || (github.ref == 'refs/heads/master' && github.run_id) || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
 
 jobs:
   # Fast feedback: install each Ruby on the runner and run the suites.
