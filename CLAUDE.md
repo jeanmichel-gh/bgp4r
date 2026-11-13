@@ -2001,6 +2001,50 @@ A plan that spans more than one session lives here, as phases with their
 status, so the next reader can see the direction without reconstructing it.
 Update the status in the pull request that moves a phase.
 
+**Status of every plan below, measured 2026-11-13** against master
+`0048623`. Update this table in the pull request that moves a phase.
+
+| Plan | Status | Left |
+| --- | --- | --- |
+| Phase 0, before the RIB work | Done | – |
+| RIB and FIB, five phases | Done | – |
+| Breadth | Phases 2, 3 and 4 done | Phase 1, the NLRI registry, deferred by decision (PR #173 closed) |
+| routescope labs | Done | – (item 9 runs in routescope's CI, below) |
+| Route generation, `bgp/gen` | Phases 0 to 6 done | – |
+| Vendor style `to_s` | Not started | All of it; no pull request yet |
+| irb console | Done | – |
+| Route reflection | Items 1 to 5 done | Item 6, `client_to_client: false`, only if asked for. Item 3 lacks the text form |
+| BGP-LS lab | Phases 1 and 3 done | Phase 2, a Propagator, not started; needs its own spec |
+
+**Left, outside the tables above:**
+
+* `docs/design/bgp4r-cli-shell.md`: step 4, pipes, and `show bgp PREFIX
+  detail` (PREFIX maps to `:routes` today, `bgp/daemon/shell.rb:93`).
+  Its later items are not started either: Junos forms, a configure mode,
+  Tab completion of config paths.
+* BGP-LS for IS-IS sends no Link Local/Remote Identifiers or interface
+  addresses (TLVs 258, 259 and 260). OSPF sends 259 and 260. IS-IS waits
+  on isisd's `show.topology` giving TLV 132, which isis's
+  `docs/design/bgp-ls-export.md` leaves open.
+* "Known issues to work on": 29 entries. Some are interop notes rather
+  than bugs.
+* "Attribute work left": 7 entries, RFC sections left out on purpose.
+
+### Noted for later, from the owner, 2026-11-13
+
+Not designed yet; routescope's `CLAUDE.md`, "Where the work is going",
+holds the full note.
+
+* One CLI for OSPF, IS-IS and BGP in Cisco syntax (IOS XE is the likely
+  OS, once its public command references are checked). `bgp/rib/show.rb` already prints the RIB in IOS, Junos and IOS XR styles, and the vendor style `to_s` plan below is the same idea for objects; `bgp4r-cli` would join `ospf-cli` and `isis-cli` behind one shell.
+* CI runs only the jobs a change's paths need. Not done. Done on
+  2026-11-13, a first step: each commit runs once (a pull request through
+  pull_request, master through push), and a newer push cancels a pull
+  request's older run.
+* Review and document every lab in `routescope/labs/`.
+* Do not open a pull request for documents alone: CI costs money. Let a
+  document change ride with the next code change, or ask first.
+
 ### Phase 0, before the RIB work resumes. Done
 
 Fixing the existing path attribute bugs came first, deliberately, and that is
@@ -7051,7 +7095,17 @@ Decisions taken before this starts, so they are not re-litigated:
   in a convenience form for test code, each with a reason recorded, and
   clearing the list to empty it is not worth a phase.
 
-### routescope labs. Items 1 to 6 and 8 of section 6 are Done, and so is every control API method and section 8's first lab; item 7 and running that lab are left, then routescope's own column
+### routescope labs. Done: items 1 to 8 of section 6, every control API method, section 8's first lab, and routescope's own column
+
+**Status, measured 2026-11-13.** Item 7 is done, as the text below says.
+Running the lab is done too: routescope's CI deploys
+`routescope/labs/bgp4r-lab` under containerlab and runs its end to end
+test, job `bgp4r-lab` in routescope's `.github/workflows/ci.yml`, since
+routescope `69a2de7` (2026-11-03). routescope's own column is in:
+the `bgp4r`, `bgp4r-sim` and `gobgp` kinds, their drivers (`gobgp` since
+routescope #41), and the `bgp:` scenario step and conditions. The
+paragraph below that says routescope has no `gobgp` kind was true at
+`b8e2704` and is not now.
 
 **Done so far**: items 1 and 5, the `bgp4r` umbrella executable and
 `bgp4r capture`, which landed together because the capture contract
