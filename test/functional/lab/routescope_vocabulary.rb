@@ -81,4 +81,92 @@ module RoutescopeVocabulary
   # 9615aa0 on 2026-11-06. The state is up or down, and the runner sets
   # it on the containerlab link with `Links#set`.
   INTERFACE_KEYS = %w[state].freeze
+
+  # What routescope reads from bgp4rd's API: each method its Bgp4rd
+  # driver calls, and the keys it reads from the answer, as paths: "a.b"
+  # a key under a key, "[]" every element of an array. A method with none
+  # is one whose answer goes to the page whole, or whose success is all
+  # that is read. routescope's docs/design/api-contract.md, part 3.
+  #
+  # Written by `rake vocabulary` in routescope at be270f3 (its #129) on
+  # 2026-11-14, which notes what the driver reads while routescope's unit
+  # tests run, and copied here unchanged: the "bgp4rd" section of its
+  # tmp/vocabulary.json. To refresh, run that in routescope and copy the
+  # section again; do not edit by hand.
+  #
+  # One change to routescope's recorder went with it, made in that run
+  # and asked of #129: it notes a key only when the answer has it. As
+  # be270f3 has it, it also noted keys the driver reads that bgp4rd never
+  # sends, because one reader serves several answers (`paths` and `best`
+  # on adj_out rows, `summary.announced`, which is bgp4r-sim's) or
+  # because the driver merged them in itself (`prefix` and `paths` on a
+  # rib path). This test found those: bgp4rd answered every other key.
+  #
+  # show.link_state has keys in two shapes, a page (rows[]) and a bare
+  # array ([]), because routescope reads both: a bgp4rd from before
+  # show.link_state was paged answered an array. routescope_api_test.rb
+  # checks the shape this bgp4rd answers.
+  BGP4RD = {
+    "events.subscribe" => [].freeze,
+    "link_state.unreachable" => [].freeze,
+    "peer.clear" => [].freeze,
+    "peer.refresh" => [].freeze,
+    "peer.start" => [].freeze,
+    "peer.stop" => [].freeze,
+    "route.originate" => [].freeze,
+    "route.withdraw" => [].freeze,
+    "show.adj_in" => [
+      "next_offset", "rows", "rows[].as_path", "rows[].best",
+      "rows[].communities", "rows[].extended_communities", "rows[].from", "rows[].large_communities",
+      "rows[].local", "rows[].local_pref", "rows[].med", "rows[].next_hop",
+      "rows[].origin", "rows[].prefix", "total"
+    ].freeze,
+    "show.adj_out" => [
+      "next_offset", "rows", "rows[].as_path", "rows[].communities",
+      "rows[].extended_communities", "rows[].large_communities", "rows[].local_pref", "rows[].med",
+      "rows[].next_hop", "rows[].origin", "rows[].prefix", "total"
+    ].freeze,
+    "show.fib" => [
+      "fib", "fib.backend", "fib.configured", "fib.failed",
+      "fib.failed[].error", "fib.failed[].prefix", "fib.skipped", "fib.skipped[].prefix",
+      "fib.skipped[].reason", "fib.total", "next_offset", "rows",
+      "rows[].next_hop", "rows[].prefix", "total"
+    ].freeze,
+    "show.link_state" => [
+      "[].areas", "[].flags", "[].identifier", "[].local",
+      "[].metric", "[].name", "[].peer", "[].prefix",
+      "[].protocol_id", "[].remote", "[].since", "[].type",
+      "next_offset", "rows", "rows[].area", "rows[].areas",
+      "rows[].flags", "rows[].forwarding", "rows[].identifier", "rows[].local",
+      "rows[].metric", "rows[].name", "rows[].peer", "rows[].prefix",
+      "rows[].protocol_id", "rows[].remote", "rows[].route_type", "rows[].since",
+      "rows[].type", "total"
+    ].freeze,
+    "show.peers" => [
+      "[].address", "[].description", "[].flaps", "[].held",
+      "[].inq", "[].outq", "[].received", "[].remote_as",
+      "[].router_id", "[].sent", "[].state", "[].type",
+      "[].uptime"
+    ].freeze,
+    "show.rib" => [
+      "rows", "rows[].decided_by", "rows[].paths", "rows[].paths[].as_path",
+      "rows[].paths[].best", "rows[].paths[].communities", "rows[].paths[].extended_communities", "rows[].paths[].from",
+      "rows[].paths[].large_communities", "rows[].paths[].local", "rows[].paths[].local_pref", "rows[].paths[].lost_at",
+      "rows[].paths[].med", "rows[].paths[].next_hop", "rows[].paths[].origin", "rows[].paths[].reason",
+      "rows[].prefix"
+    ].freeze,
+    "show.routes" => [
+      "next_offset", "rows", "rows[].as_path", "rows[].best",
+      "rows[].communities", "rows[].extended_communities", "rows[].from", "rows[].large_communities",
+      "rows[].local", "rows[].local_pref", "rows[].med", "rows[].next_hop",
+      "rows[].origin", "rows[].paths", "rows[].prefix", "total"
+    ].freeze,
+    "show.status" => [
+      "as", "peers", "peers[].address", "peers[].description",
+      "peers[].flaps", "peers[].held", "peers[].inq", "peers[].outq",
+      "peers[].received", "peers[].remote_as", "peers[].router_id", "peers[].sent",
+      "peers[].state", "peers[].uptime", "router_id", "summary",
+      "summary.established", "summary.peers", "summary.rib"
+    ].freeze
+  }.freeze
 end

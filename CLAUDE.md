@@ -1237,7 +1237,13 @@ test/functional/lab/     lab tests: loopback speaker test and one Compose test p
                          packet followed a route bgp4rd installed. The
                          topology tests read
                          routescope's vocabulary from
-                         routescope_vocabulary.rb, one copy for all;
+                         routescope_vocabulary.rb, one copy for all; its
+                         BGP4RD is what routescope reads from bgp4rd's
+                         API, method and key paths, copied from
+                         routescope's `rake vocabulary`, and
+                         test/functional/routescope_api_test.rb holds
+                         bgp4rd to it (routescope
+                         docs/design/api-contract.md, part 3);
                          bgp4r_lab_topology_test.rb is the same shape for
                          routescope/labs/bgp4r-lab and loads each of its
                          three node files through the program that reads
@@ -1644,6 +1650,17 @@ only place a ROUTE-REFRESH from the control socket reaches a session. No
 privilege, no router, no Docker. 1.6 seconds:
 ```
 ruby -I. test/functional/daemon_test.rb
+```
+**What routescope reads from bgp4rd** is held by its own test: two
+bgp4rd on loopback, so every answer has rows, ask each method in
+`RoutescopeVocabulary::BGP4RD` through the socket, and every key path
+routescope reads must be there. An array that is empty where a path goes
+through it fails, so the forwarding table has a fake backend that refuses
+one prefix. A key renamed in `bgp/daemon/views.rb` fails it. Refresh the
+copy from routescope (`rake vocabulary`, its "bgp4rd" section), never by
+hand. Under a second, measured 2026-11-14:
+```
+ruby -I. test/functional/routescope_api_test.rb
 ```
 It is also where the `config.` methods are asserted as a **JSON round
 trip**, which is the half a unit test cannot reach: `config.changed` is

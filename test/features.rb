@@ -360,7 +360,7 @@ module Features
                    daemon/log_ring_test daemon/config_test
                    daemon/candidate_test daemon/speaker_test
                    daemon/community_keys_test daemon/hand_test sim/injector_test],
-      :functional => %w[daemon_test],
+      :functional => %w[daemon_test routescope_api_test],
       :lab   => %w[reflector_test],
     },
 
