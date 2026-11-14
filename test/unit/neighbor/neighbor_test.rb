@@ -164,6 +164,35 @@ class TestBgpNeighbor < Test::Unit::TestCase
   rescue Timeout::Error
     assert false, "Timeout"
   end
+  # A peer that reads our OPEN and closes the connection. The session falls
+  # back to Idle in OpenSent, so start returns then, not after :timeout.
+  # Before the fix it waited the whole :timeout: bgp4rd's open_timeout is
+  # 30 s, and a dialling peer waited that long before it dialled again.
+  def start_closing_server
+    @server = TCPServer.new('127.0.0.1', 0)
+    @thread = Thread.new do
+      loop { s = @server.accept ; s.read(19) ; s.close }
+    rescue IOError
+    end
+    @server.addr[1]
+  end
+  def test_start_returns_when_the_session_falls_back_to_idle
+    port = start_closing_server
+    @c = Neighbor.new(4, 100, 180, '0.0.0.2', '127.0.0.1', '127.0.0.1')
+    t0 = Time.now
+    assert_equal(false, @c.start(:port=> port, :timeout=> 5))
+    assert_operator(Time.now - t0, :<, 2)
+    assert @c.is_idle?
+    assert_match(/Idle before Established/, @c.last_error.message)
+  end
+  def test_start_with_raise_raises_when_the_session_falls_back_to_idle
+    port = start_closing_server
+    @c = Neighbor.new(4, 100, 180, '0.0.0.2', '127.0.0.1', '127.0.0.1')
+    t0 = Time.now
+    e = assert_raise(RuntimeError) { @c.start(:port=> port, :timeout=> 5, :raise=> true) }
+    assert_operator(Time.now - t0, :<, 2)
+    assert_match(/Idle before Established/, e.message)
+  end
   def test_start_with_session
     # Hand an already connected socket to start via :session.
     @server = TCPServer.new('127.0.0.1', 0)
