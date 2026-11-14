@@ -50,7 +50,7 @@ neighbors:
 
   - address: 10.0.20.2
     as: 65001
-    connect: true              # we dial r1; FRR dials us too and one wins
+    connect: true              # we dial r1; FRR's dials are refused (README)
     hold_time: 30
     description: r1
     capabilities: [as4_byte, route_refresh]
@@ -58,8 +58,8 @@ neighbors:
 
   # g1, the GoBGP in AS 65002, and the second reader of what `export`
   # below puts on the wire. The same three keys as r1 for the same
-  # reasons: GoBGP dials us as well, so one side wins the race, and a
-  # recorded session is what lets the state file say what went out.
+  # reasons: we dial it (GoBGP's own dials are refused, as r1's are),
+  # and a recorded session is what lets the state file say what went out.
   #
   # **Nothing about `export` is per peer**, which is the point of having
   # this node at all: one Loc-RIB change goes through one `Export#for`

@@ -13,4 +13,4 @@ It exercises:
 - a standard, an extended and a large community crossing intact
 - a session flap counted, and every speaker done with its work afterwards
 
-The six scenarios in `scenarios/` drive these, and each opens by waiting for the sessions. README.md has the addressing, the images and the commands to read each router by hand.
+The six scenarios in `scenarios/` drive these, and each opens by waiting for the sessions. Run them on a freshly started lab: each expects its prefixes absent at the start, so a second run fails there. README.md has the addressing, the images and the commands to read each router by hand.
