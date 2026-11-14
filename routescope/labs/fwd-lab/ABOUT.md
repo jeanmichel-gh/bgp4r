@@ -11,7 +11,7 @@ a ----- b ----- c ----- d
 It exercises:
 - every router learning every loopback, and `b` choosing the direct link on AS_PATH length
 - the B to D link going down, and traffic moving through `c` once the hold timer ends the session
-- the link coming back, and traffic moving back
+- the link coming back, and traffic moving back (today it can take over 30 s, which fails its scenario: README.md says why)
 - the B to D session stopped by hand, and the same move with no hold timer to wait out
 - `d` cut off entirely, and its loopback withdrawn everywhere
 

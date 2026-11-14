@@ -94,29 +94,40 @@ deployed lab.
 | `d-cut-off.yml` | Both of `d`'s links down, `d` withdrawn, no ping answered, then back. |
 
 Every check of forwarding is a `ping` or `traceroute` condition, run
-inside node `a` or `d` from its loopback. Those two conditions are
-routescope's `claude/ping-traceroute` branch, so until it merges
-routescope refuses these four scenarios.
+inside node `a` or `d` from its loopback. routescope has both.
 
 Each starts and ends with the lab whole, so they run in any order.
 
-They have been run once, by routescope's real scenario runner, against
-this folder's own files in four network namespaces, with a script
-standing in for docker. All four passed. The measures from that run:
+They were first run on 2026-11-06, by routescope's scenario runner,
+against this folder's own files in four network namespaces, with a
+script standing in for docker. All four passed. On 2026-11-14 they ran
+twice in the deployed lab on the VM, through routescope's API, the
+second time in reverse order. Three passed both times;
+`link-down-moves-to-c.yml` failed both times (below). The measures, in
+ms:
 
-| Scenario | Measure | ms |
-|---|---|---|
-| `link-down-moves-to-c.yml` | failover | 8141 |
-| `link-down-moves-to-c.yml` | restore | 2044 |
-| `session-stop-moves-to-c.yml` | failover | 1530 |
-| `session-stop-moves-to-c.yml` | restore | 86 |
-| `d-cut-off.yml` | withdrawn | 7734 |
-| `d-cut-off.yml` | restore | 2559 |
+| Scenario | Measure | Namespaces | Deployed, run 1 | Deployed, run 2 |
+|---|---|---|---|---|
+| `link-down-moves-to-c.yml` | failover | 8141 | 9619 | 9489 |
+| `link-down-moves-to-c.yml` | restore | 2044 | failed | failed |
+| `session-stop-moves-to-c.yml` | failover | 1530 | 1656 | 1598 |
+| `session-stop-moves-to-c.yml` | restore | 86 | 111 | 166 |
+| `d-cut-off.yml` | withdrawn | 7734 | 8589 | 8688 |
+| `d-cut-off.yml` | restore | 2559 | 3828 | 3806 |
 
 Each is the time from the action to the first passing check, so it
 includes that check's own run. The `session-stop` failover is mostly the
-traceroute: the route moved in under 0.2 seconds by the netns test. They
-have not been run in a deployed lab.
+traceroute: the route moved in under 0.2 seconds by the netns test.
+
+**`link-down-moves-to-c.yml` fails in the deployed lab** at its link-up
+traceroute: the direct path is not back within 30 s. `b` dials `d`.
+When a dial connects but the session then drops to Idle before
+Established, bgp4rd still waits out its whole `open_timeout` (30 s)
+before it dials again, because `Neighbor#wait_for_state` returns only on
+the state it waits for or on the timeout. `b`'s `show bgp neighbors`
+says so in `last_error`: "timeout after 30s waiting for state
+Established, state is Idle". bgp4r-lab's `rtr` meets the same wait with
+`r1`. The fix belongs in bgp4rd, not in this lab.
 
 ## By hand
 
@@ -154,5 +165,5 @@ The whole check, from the host:
 
 ```
 # in the VM
-LAB=fwd-lab ~/labs/fwd-lab/capture.sh
+LAB=fwd-lab ~/labs/bgp4r/fwd-lab/capture.sh
 ```
