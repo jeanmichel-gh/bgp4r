@@ -13,9 +13,8 @@
 # the ORIGINATOR_ID, and the shorter CLUSTER_LIST wins: rr1's copy, with
 # none.
 #
-# NOT RUN: the lab is deployed by bgp4r's Capture job, but this scenario
-# has not been run, so nothing here is a measurement. Every expectation
-# is read out of the node files and the RFC sections they cite.
+# RUN: passed through routescope on the VM, 2026-11-14, on a freshly
+# started lab.
 name: An external route reaches every internal peer, unreflected
 description: >-
   inj-e in AS 65200 announces 10.20.3.0/24. Every client and rr2 must

@@ -11,9 +11,8 @@
 # A client prefix is sent too, and must reach rr2, so the absence is not
 # a dead session.
 #
-# NOT RUN: the lab is deployed by bgp4r's Capture job, but this scenario
-# has not been run, so nothing here is a measurement. Every expectation
-# is read out of the node files and the RFC sections they cite.
+# RUN: passed through routescope on the VM, 2026-11-14, on a freshly
+# started lab.
 name: A non-client route reaches clients and not the other non-client
 description: >-
   inj-n announces 10.10.2.0/24. The clients must have it. rr2 must not,

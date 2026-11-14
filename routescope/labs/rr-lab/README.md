@@ -199,7 +199,20 @@ One more thing the run shows and nothing asserts: FRR reflected the
 external route to `dual` with MED 0, where `rr1` sent none. bgp4r reads
 a missing MED as 0, so the two copies still tie at the MED step.
 
-**The scenarios have not been run.** Nothing in this repository runs
-them; routescope does. `test/functional/lab/rr_lab_topology_test.rb`
+**All nine scenarios pass**, run through routescope's API on the VM on
+2026-11-14, in this README's order, on a freshly started lab. Nothing
+in CI runs them: bgp4r's Capture job runs `capture.sh`, and routescope's
+CI has no rr-lab job. `test/functional/lab/rr_lab_topology_test.rb`
 holds them to routescope's vocabulary and to this README with no
-Docker.
+Docker. The feed crossed `rr1` whole in about 4.4 s, and its withdrawal
+took 1.3 s.
+
+`generated-feed-is-reflected.yml` waits at its two pauses when run from
+the Scenarios panel or the API, until someone presses Resume. Only
+routescope's command line and CI skip them.
+
+One more thing seen and asserted nowhere: `c1`'s `show bgp summary`
+prints `NoNeg` for `rr1`, though `c1` holds every reflected route.
+`rr1` does not offer the Multiprotocol capability to `c1` (only to
+`c2`, for BIRD's sake), so FRR uses IPv4 unicast without it and its
+summary says so.

@@ -11,8 +11,9 @@
 # reading: everything in its table arrived from somewhere else, so an
 # absence there cannot be satisfied by anything r3 did itself.
 #
-# NOT RUN: the lab is deployed by bgp4r's Capture job, but this scenario
-# has not been run, so nothing here is a measurement.
+# RUN: passed through routescope on the VM, 2026-11-14, on a freshly
+# started lab.
+# routescope's bgp4r-lab CI job runs it too.
 
 name: A withdraw reaches BIRD
 description: >-

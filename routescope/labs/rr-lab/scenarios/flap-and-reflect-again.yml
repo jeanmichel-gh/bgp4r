@@ -3,9 +3,8 @@
 # 6, the session's routes go with it). When it comes back the injector
 # re-announces, and rr1 reflects again.
 #
-# NOT RUN: the lab is deployed by bgp4r's Capture job, but this scenario
-# has not been run, so nothing here is a measurement. Every expectation
-# is read out of the node files and the RFC sections they cite.
+# RUN: passed through routescope on the VM, 2026-11-14, on a freshly
+# started lab.
 name: A client flaps and its routes are reflected again
 description: >-
   inj-c announces 10.10.10.0/24, flaps its session to rr1 once, and the

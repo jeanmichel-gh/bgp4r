@@ -281,8 +281,8 @@ no Docker.
 **Unlike add-path's, none of them is waiting on bgp4r.** That folder's
 table records two of its three scenarios as needing the injector, which
 did not exist when it was written; `bgp4r-sim` is built now, so every
-action these six use is one the injector answers today. What they are
-waiting on is being run, by routescope's `bgp4r-lab` job.
+action these six use is one the injector answers today. routescope's
+`bgp4r-lab` CI job runs them, and all six pass.
 
 ## What has been run, and what has not
 

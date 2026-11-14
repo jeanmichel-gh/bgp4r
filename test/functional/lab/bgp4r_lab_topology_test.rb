@@ -675,15 +675,15 @@ class LabBgp4rLabTopologyTest < Test::Unit::TestCase
     assert_operator checked, :>=, 40, 'the walk found almost no steps, so it checked nothing'
   end
 
-  # The lab is deployed by the Capture job, but nothing runs these
-  # scenarios here: routescope does. A reader has to know that before
-  # trusting an expectation in one. Matched at the start of a comment
+  # Nothing runs these scenarios here: routescope does. A reader has to
+  # know whether one has been run before trusting an expectation in it,
+  # so each says NOT RUN, or RUN with the date it passed. Matched at the start of a comment
   # line, so the words have to be the file's own statement and not a
   # phrase inside a step.
-  def test_every_scenario_says_it_has_not_been_run
+  def test_every_scenario_says_whether_it_has_been_run
     scenario_files.each do |f|
-      assert_match(/^# NOT RUN: the lab is deployed by bgp4r's Capture job, but this scenario\n# has not been run/, read("scenarios/#{f}"),
-                   "#{f} does not say it has never been run")
+      assert_match(/^# (NOT RUN: the lab is deployed by bgp4r's Capture job, but this scenario\n# has not been run|RUN: passed through routescope on the VM, \d{4}-\d\d-\d\d)/, read("scenarios/#{f}"),
+                   "#{f} does not say whether it has been run")
     end
   end
 
