@@ -87,6 +87,9 @@ jobs:
       - name: Functional test (bgp4rd over its control socket)
         run: bundle exec ruby -I. test/functional/daemon_test.rb
         timeout-minutes: 2
+      - name: Functional test (bgp4rd answers what routescope reads)
+        run: bundle exec ruby -I. test/functional/routescope_api_test.rb
+        timeout-minutes: 2
       - name: Functional test (bgp4r-sim over its HTTP API and a session)
         run: bundle exec ruby -I. test/functional/sim_test.rb
         timeout-minutes: 3
