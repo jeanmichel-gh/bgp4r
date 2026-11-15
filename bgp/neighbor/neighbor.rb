@@ -517,7 +517,22 @@ module BGP
       end
       retry_thread if options[:auto_retry] == true
       unless options[:no_blocking] == true
-        unless wait_for_state(options[:waitfor], options[:timeout])
+        # **The wait ends when the session falls back to Idle**, since
+        # nothing brings an Idle session back but another start. The peer
+        # closing the connection, or a NOTIFICATION, ends it in OpenSent or
+        # OpenConfirm, and the wait then ran out the whole :timeout:
+        # bgp4rd's open_timeout is 30 s, so a dialling peer waited that long
+        # before it dialled again. Measured in routescope's fwd-lab on
+        # 2026-11-14.
+        #
+        # Not with :auto_retry. The retry thread starts a new session from
+        # Idle, and the caller has always waited through those for the
+        # state it asked for.
+        give_up = options[:auto_retry] == true ? nil : :Idle
+        unless wait_for_state(options[:waitfor], options[:timeout], give_up)
+          if give_up && @state == give_up
+            raise "session went Idle before #{options[:waitfor]}"
+          end
           raise "timeout after #{options[:timeout]}s waiting for state #{options[:waitfor]}, state is #{@state}"
         end
         log_info "#{self} started"
@@ -533,10 +548,15 @@ module BGP
         
     # Block until @state is state or timeout seconds pass. A nil timeout waits forever.
     # Returns true if the state was reached, false on timeout.
-    def wait_for_state(state, timeout=nil)
+    #
+    # With give_up, it also returns false as soon as @state is give_up.
+    # `start` passes :Idle, so a session that ends before it is up ends the
+    # wait too.
+    def wait_for_state(state, timeout=nil, give_up=nil)
       deadline = Time.now + timeout if timeout
       @mutex.synchronize do
         until @state == state
+          return false if give_up && @state == give_up
           if deadline
             remaining = deadline - Time.now
             return false if remaining <= 0
