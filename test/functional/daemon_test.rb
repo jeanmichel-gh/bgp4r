@@ -606,6 +606,46 @@ class BGP_Daemon_Functional_Test < Test::Unit::TestCase
     end
   end
 
+  # **`peer.clear` and `peer.stop` send a Cease before the session
+  # closes**, as a router does for `clear bgp` and `neighbor shutdown`.
+  # RFC 4486 section 4: Administrative Reset, subcode 4, for a reset, and
+  # Administrative Shutdown, subcode 2, for a shut down. Read off the far
+  # side of a real session, because the gap this closes was a message
+  # that never reached the wire.
+  def test_clear_and_stop_send_a_cease_the_peer_reads
+    [['peer.clear', 4, 'cease/administrative_reset', PORT + 9],
+     ['peer.stop', 2, 'cease/administrative_shutdown', PORT + 10]].each do |method, subcode, name, port|
+      peer = Catcher.new(:my_as => 65_001, :remote_addr => '127.0.0.1', :id => '10.0.0.9')
+      server = TCPServer.new('127.0.0.1', port)
+      begin
+        ours = @server.speaker.peer('127.0.0.9')
+        client = TCPSocket.new('127.0.0.1', port)
+        accepted = server.accept
+        Thread.new { peer.start(:session => accepted, :timeout => 10) }
+        ours.instance_variable_set(:@neighbor, neighbor_on(client))
+        assert_equal(true, wait_until { ours.neighbor.is_established? }, 'the session came up')
+
+        r = routescope_client(method, 'peer' => '127.0.0.9')['result']
+        assert_equal(name, r['notification'], "#{method} says what it sent")
+        assert_equal(true, wait_until { peer.notifications.size == 1 },
+                     "#{method}: no NOTIFICATION reached the peer")
+        assert_equal([6, subcode], peer.notifications.first.to_hash.values_at(:code, :subcode))
+      ensure
+        ours.instance_variable_get(:@neighbor)&.close
+        peer.close
+        server.close
+        routescope_client('peer.start', 'peer' => '127.0.0.9')
+      end
+    end
+  end
+
+  # With no session there is nothing to send a Cease on, and the answer
+  # says so rather than claiming one.
+  def test_clear_and_stop_with_no_session_send_nothing
+    assert_nil(routescope_client('peer.clear', 'peer' => '127.0.0.9')['result']['notification'])
+    assert_nil(routescope_client('peer.stop', 'peer' => '127.0.0.9')['result']['notification'])
+  end
+
   # ---- the candidate configuration ----
   #
   # **Written as routescope's Config pane calls them**, in the order it
@@ -716,6 +756,13 @@ class BGP_Daemon_Functional_Test < Test::Unit::TestCase
                    'the commit said it bounced the session and the session is still up')
       assert_equal(false, ours.shutdown?, 'a bounce leaves the peer administratively up')
       assert_equal(90, ours.config['hold_time'])
+      # RFC 4486 section 4: a reset "due to a configuration change other
+      # than the ones described above" is Cease, Other Configuration
+      # Change, subcode 6. Read off the far side.
+      assert_equal(true, wait_until { peer.notifications.size == 1 },
+                   'no NOTIFICATION reached the peer on a bounce')
+      assert_equal([6, 6], peer.notifications.first.to_hash.values_at(:code, :subcode))
+      assert_match(/Cease 6\/6/, r['warnings'].first)
     ensure
       ours.instance_variable_get(:@neighbor)&.close
       peer.close
@@ -759,6 +806,13 @@ class BGP_Daemon_Functional_Test < Test::Unit::TestCase
 
     def rcv_route_refresh(m)
       refreshes << m
+      super
+    end
+
+    def notifications ; @notifications ||= [] ; end
+
+    def rcv_notification(m)
+      notifications << m
       super
     end
   end

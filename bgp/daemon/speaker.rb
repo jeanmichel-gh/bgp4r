@@ -419,17 +419,10 @@ module BGP
       # retry interval and a passive one waits to be dialled: this is
       # `peer.clear`, not `peer.stop`.
       #
-      # **It closes the connection and sends no NOTIFICATION, and that is
-      # a gap recorded rather than a choice.** A router answers
-      # `clear bgp NEIGHBOR` with Cease and RFC 4486 section 4's
-      # Administrative Reset, subcode 4, or Administrative Shutdown,
-      # subcode 2. `Neighbor#stop` closes the output queue and the socket
-      # in one breath, so a NOTIFICATION queued just before it is one the
-      # writer thread may never get on the wire, and a method that
-      # reported sending one would be claiming something it cannot
-      # verify. Sending it properly means draining the output before the
-      # socket closes, which is a change to `bgp/io.rb` and its own piece
-      # of work.
+      # It sends nothing itself. `peer.clear`, `peer.stop` and a commit's
+      # bounce send a Cease first through `cease`, and the injector's
+      # `session.stop` does not, so the choice of subcode stays with the
+      # caller that knows why the session is ending.
       def stop
         @admin.synchronize { @resume.broadcast }
         @neighbor.stop if @neighbor
@@ -516,6 +509,27 @@ module BGP
         sock.local_address.ip_address
       rescue IOError, SystemCallError
         @speaker.local_address
+      end
+
+      # RFC 4486 section 4: the Cease subcodes a router sends when it
+      # administratively shuts a peering down, when it administratively
+      # resets one, and when it resets one "due to a configuration change
+      # other than the ones described above".
+      CEASE = 6
+      ADMIN_SHUTDOWN = 2
+      ADMIN_RESET = 4
+      OTHER_CONFIG_CHANGE = 6
+
+      # A Cease with that subcode, when the session is up. True when one
+      # was queued. `Neighbor#stop` waits for its writer, so a Cease sent
+      # just before `stop` or `admin_stop` reaches the wire before the
+      # socket closes.
+      def cease(subcode)
+        return false unless established?
+        send_message(BGP::Notification.new(CEASE, subcode))
+        true
+      rescue NoSession
+        false
       end
 
       # Sends one message on this peer's session, or raises NoSession.

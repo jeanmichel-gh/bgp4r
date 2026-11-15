@@ -727,11 +727,20 @@ module BGP
         # rather than in `retry` seconds. For a passive peer `admin_start`
         # is a permission and not a dial, which is the same thing
         # `peer.start` reports and what the notice above says.
+        #
+        # A session that is up gets a Cease first, Other Configuration
+        # Change, subcode 6: RFC 4486 section 4 asks for it from a speaker
+        # that resets a peering "due to a configuration change other than
+        # the ones described above". Those above it are the prefix limit,
+        # a shutdown, a de-configured peer, a plain reset and a rejected
+        # connection, and a commit is none of them.
         def apply_bounces
           @bounce.map do |peer|
+            sent = peer.cease(Peer::OTHER_CONFIG_CHANGE)
             peer.admin_stop
             peer.admin_start
             "the session with #{peer.address} was bounced" \
+              "#{sent ? ' after a Cease 6/6, Other Configuration Change' : ''}" \
               "#{peer.active? ? '' : ', and it is a passive peer, so it comes back when ' \
                                      'the peer next dials'}"
           end

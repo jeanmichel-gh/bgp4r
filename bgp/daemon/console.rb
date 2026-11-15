@@ -59,12 +59,6 @@ module BGP
       include BGP
       include BGP::Prompt
 
-      # RFC 4486 section 4: the Cease subcodes a router sends for
-      # `neighbor shutdown` and for `clear bgp`.
-      CEASE = 6
-      ADMIN_SHUTDOWN = 2
-      ADMIN_RESET = 4
-
       VERBS = <<~TEXT
         Reading
           peers                         every configured peer and its state
@@ -244,19 +238,16 @@ module BGP
         api('route.withdraw', body(prefixes, opts))
       end
 
-      # `clear bgp PEER`: Cease, Administrative Reset, then `peer.clear`.
+      # `clear bgp PEER`: `peer.clear`, which sends Cease, Administrative
+      # Reset, first.
       def clear(address = nil)
-        p = peer(address)
-        cease(p, ADMIN_RESET)
-        api('peer.clear', 'peer' => p.address)
+        api('peer.clear', 'peer' => peer(address).address)
       end
 
-      # `neighbor PEER shutdown`: Cease, Administrative Shutdown, then
-      # `peer.stop`, so it stays down.
+      # `neighbor PEER shutdown`: `peer.stop`, which sends Cease,
+      # Administrative Shutdown, first, so it stays down.
       def shutdown(address = nil)
-        p = peer(address)
-        cease(p, ADMIN_SHUTDOWN)
-        api('peer.stop', 'peer' => p.address)
+        api('peer.stop', 'peer' => peer(address).address)
       end
 
       def no_shutdown(address = nil)
@@ -312,7 +303,7 @@ module BGP
       # output queue, so the Cease reaches the wire before the socket
       # closes.
       def stop
-        speaker.established_peers.count { |p| cease(p, ADMIN_SHUTDOWN) }
+        speaker.established_peers.count { |p| p.cease(Peer::ADMIN_SHUTDOWN) }
       end
 
       private
@@ -329,16 +320,6 @@ module BGP
         return up.first if up.size == 1
         raise ArgumentError, "#{list.size} peers; name one. The peers are " \
                              "#{list.collect(&:address).join(', ')}"
-      end
-
-      # A Cease with that subcode when the session is up. True when one
-      # was sent.
-      def cease(p, subcode)
-        return false unless p.established?
-        p.send_message(BGP::Notification.new(CEASE, subcode))
-        true
-      rescue NoSession
-        false
       end
 
       def paged(peer, prefix)

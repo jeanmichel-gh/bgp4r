@@ -769,15 +769,21 @@ a `peer.stop` reads as a session that flapped. A shut down passive peer
 refuses the connection the listener hands it, because a passive peer
 cannot be stopped by not dialling. Both are idempotent.
 
-**Neither sends a NOTIFICATION, and that is a gap recorded rather than a
-choice.** A router answers `clear bgp NEIGHBOR` with Cease and RFC 4486
-section 4's Administrative Reset, subcode 4, or Administrative Shutdown,
-subcode 2. `Neighbor#stop` closes the output queue and the socket in one
-breath, so a NOTIFICATION queued just before it is one the writer thread
-may never get on the wire, and a method reporting that it sent one would
-be claiming something it cannot verify. Sending it properly means
-draining the output before the socket closes, which is a change to
-`bgp/io.rb` and its own piece of work.
+**Each sends a Cease first when the session is up**, which is what a
+router does: RFC 4486 section 4 asks a speaker that "decides to
+administratively reset the peering" for Administrative Reset, subcode 4,
+and one that decides to "administratively shut down its peering" for
+Administrative Shutdown, subcode 2. So `peer.clear` sends 6/4 and
+`peer.stop` 6/2, and `Neighbor#stop` waits for its writer, so the Cease
+reaches the wire before the socket closes. The answer gains one key,
+`notification`, which is `cease/administrative_reset` or
+`cease/administrative_shutdown`, and null when no session was up to send
+it on. `bgp4r-cli`'s `clear bgp` and `disable bgp` go through these two
+methods, and so does `bgp4rd --interact`'s `clear` and `shutdown`. A
+commit's bounce sends Cease 6/6, "Other Configuration Change", which RFC
+4486 section 4 asks for from a speaker that resets a peering "due to a
+configuration change other than the ones described above"; a `SIGHUP`
+reload is a commit, so it sends the same.
 
 **`peer.refresh` is RFC 2918 section 3's message with RFC 7313 section
 3.2's Message Subtype**, which that RFC redefines out of RFC 2918's
@@ -941,7 +947,9 @@ replacing it would reset them.
 
 **`warnings` is where a bounce is reported**, because a bounce is
 something that happened to the session rather than something that went
-wrong: `"the session with 10.0.10.1 was bounced to pick up hold_time"`.
+wrong: `"the session with 10.0.10.1 was bounced after a Cease 6/6, Other
+Configuration Change"`, where the Cease part is there only when a
+session was up to send it on.
 A `check` says it in the future tense, so a person sees what a commit
 would cost before paying it, and a passive peer is named as one, since
 `config.commit` can end its session and not bring it back: only the peer
@@ -1213,8 +1221,8 @@ The write methods, each answering what it did, so a caller can assert on
 it rather than reading a view back:
 
 ```json
-peer.clear    {"peer":"10.0.10.1","cleared":true,"was":"established","state":"idle","shutdown":false}
-peer.stop     {"peer":"10.0.10.1","was":"established","state":"idle","shutdown":true}
+peer.clear    {"peer":"10.0.10.1","cleared":true,"was":"established","state":"idle","shutdown":false,"notification":"cease/administrative_reset"}
+peer.stop     {"peer":"10.0.10.1","was":"established","state":"idle","shutdown":true,"notification":"cease/administrative_shutdown"}
 peer.start    {"peer":"10.0.10.1","state":"idle","shutdown":false,"connect":true}
 peer.refresh  {"peer":"10.0.10.1","afi":1,"safi":1,"subtype":0,"sent":true}
 route.originate {"originated":["10.255.0.0/24"],"total":1,"changes":1,"rib":7,"marked":false}
@@ -1252,7 +1260,7 @@ config.changed      true
 config.compare      ["set neighbors 10.0.10.1 hold_time 60"]
 config.replace      {"errors":[]}
 config.load         {"errors":[]}
-config.commit       {"ok":true,"errors":[],"warnings":["the session with 10.0.10.1 was bounced to pick up hold_time"],"changes":["set neighbors 10.0.10.1 hold_time 60"]}
+config.commit       {"ok":true,"errors":[],"warnings":["the session with 10.0.10.1 was bounced after a Cease 6/6, Other Configuration Change"],"changes":["set neighbors 10.0.10.1 hold_time 60"]}
 config.discard      {"discarded":true,"changed":false}
 config.history      [{"time":"2026-11-02T03:18:31.004Z","comment":"hold time","changes":1}]
 config.rollback     {"rollback":1,"changed":true}
