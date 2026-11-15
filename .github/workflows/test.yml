@@ -2,10 +2,16 @@ name: test
 
 # Each commit runs once: a pull request's commits through pull_request,
 # master through push.
+#
+# A draft pull request runs the ruby jobs only, the checks master
+# requires. Marked ready (ready_for_review), it runs everything. The lab
+# and docker jobs are the slow ones (lab gobgp-families, 389 s, set the
+# run's length), and an agent pushes to a draft often while it works.
 on:
   push:
     branches: [master]
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
 
 # A new push to a pull request cancels that pull request's older run.
 # master's runs are never cancelled: each merge is tested to the end.
@@ -110,6 +116,7 @@ jobs:
   # The same suites inside the Docker image, so the Dockerfile is tested too.
   docker:
     name: docker ruby ${{ matrix.ruby }}
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
@@ -162,6 +169,7 @@ jobs:
   # since run_lab.rb raises on a group it does not know.
   lab:
     name: lab ${{ matrix.group }}
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
