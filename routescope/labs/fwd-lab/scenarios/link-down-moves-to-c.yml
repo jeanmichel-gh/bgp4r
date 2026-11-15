@@ -12,7 +12,9 @@
 # deployed lab on the VM, through routescope's API, and FAILED both times
 # at the link-up traceroute: the direct path took longer than 30 s to
 # come back. bgp4rd's dial to d waits out its open_timeout (30 s) when
-# the session drops to Idle; the README has the detail. Its twin in this
+# the session drops to Idle; the README has the detail. On 2026-11-15,
+# with bgp4r master d29569a, which has the fix (#329), it ran twice in the
+# deployed lab, on a freshly started lab, and passed both times. Its twin in this
 # repository is test/functional/lab/fwd_lab_netns_test.rb.
 #
 # ping and traceroute are routescope's forwarding conditions, which ask

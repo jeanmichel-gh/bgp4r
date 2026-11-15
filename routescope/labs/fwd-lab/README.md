@@ -103,31 +103,34 @@ against this folder's own files in four network namespaces, with a
 script standing in for docker. All four passed. On 2026-11-14 they ran
 twice in the deployed lab on the VM, through routescope's API, the
 second time in reverse order. Three passed both times;
-`link-down-moves-to-c.yml` failed both times (below). The measures, in
-ms:
+`link-down-moves-to-c.yml` failed both times (below). On 2026-11-15,
+with bgp4r master d29569a, which has the fix (#329), all four passed on
+a freshly started lab, `link-down-moves-to-c.yml` twice. The measures,
+in ms:
 
-| Scenario | Measure | Namespaces | Deployed, run 1 | Deployed, run 2 |
-|---|---|---|---|---|
-| `link-down-moves-to-c.yml` | failover | 8141 | 9619 | 9489 |
-| `link-down-moves-to-c.yml` | restore | 2044 | failed | failed |
-| `session-stop-moves-to-c.yml` | failover | 1530 | 1656 | 1598 |
-| `session-stop-moves-to-c.yml` | restore | 86 | 111 | 166 |
-| `d-cut-off.yml` | withdrawn | 7734 | 8589 | 8688 |
-| `d-cut-off.yml` | restore | 2559 | 3828 | 3806 |
+| Scenario | Measure | Namespaces | 11-14, run 1 | 11-14, run 2 | 11-15 (#329) |
+|---|---|---|---|---|---|
+| `link-down-moves-to-c.yml` | failover | 8141 | 9619 | 9489 | 8050, 7932 |
+| `link-down-moves-to-c.yml` | restore | 2044 | failed | failed | 2798, 2805 |
+| `session-stop-moves-to-c.yml` | failover | 1530 | 1656 | 1598 | 1634 |
+| `session-stop-moves-to-c.yml` | restore | 86 | 111 | 166 | 189 |
+| `d-cut-off.yml` | withdrawn | 7734 | 8589 | 8688 | 8748 |
+| `d-cut-off.yml` | restore | 2559 | 3828 | 3806 | 3212 |
 
 Each is the time from the action to the first passing check, so it
 includes that check's own run. The `session-stop` failover is mostly the
 traceroute: the route moved in under 0.2 seconds by the netns test.
 
-**`link-down-moves-to-c.yml` fails in the deployed lab** at its link-up
-traceroute: the direct path is not back within 30 s. `b` dials `d`.
+**`link-down-moves-to-c.yml` failed in the deployed lab before #329**,
+at its link-up traceroute: the direct path was not back within 30 s. `b` dials `d`.
 When a dial connects but the session then drops to Idle before
 Established, bgp4rd still waits out its whole `open_timeout` (30 s)
 before it dials again, because `Neighbor#wait_for_state` returns only on
 the state it waits for or on the timeout. `b`'s `show bgp neighbors`
 says so in `last_error`: "timeout after 30s waiting for state
 Established, state is Idle". bgp4r-lab's `rtr` meets the same wait with
-`r1`. The fix belongs in bgp4rd, not in this lab.
+`r1`. bgp4r #329 fixed it in bgp4rd: `Neighbor#start` now returns when
+the session falls back to Idle, so `b` dials again at once.
 
 ## By hand
 
