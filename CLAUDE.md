@@ -1587,6 +1587,15 @@ binary because of FRR 10's AppArmor profile:
 ruby -I. test/functional/lab/capabilities_frr_test.rb
 ```
 
+What FRR reads when `bgp4rd` ends a session on purpose: `peer.clear`,
+`peer.stop` and a bouncing `config.commit`, through the control socket,
+each held to FRR's own `lastErrorCodeSubcode` and
+`lastNotificationReason`, 6/4, 6/2 and 6/6. 9 seconds against 10.5.1,
+under `FRR_BGPD` for the same reason; 8.4.4 is measured by CI:
+```
+ruby -I. test/functional/lab/cease_frr_test.rb
+```
+
 A flow spec rule from bgp4r read back by each router, which is the only
 check on our components, operator octets, section 4.1 length, RFC 8956
 offset and section 8 RD that is not bgp4r's own opinion. 61 and 45
@@ -7504,6 +7513,8 @@ now:
   `test/functional/daemon_test.rb` reads it off the far side. A commit's
   bounce, and so a `SIGHUP` reload, sends 6/6, Other Configuration
   Change, which `test_a_bounce_really_ends_the_session` reads the same way.
+  FRR 10.5.1 reads all three by name, held by
+  `test/functional/lab/cease_frr_test.rb`.
 
 **And a decision with a cost, recorded with the two options it beat.**
 `lab/speaker.rb` was most of a daemon and `lab/` is not on an installed
