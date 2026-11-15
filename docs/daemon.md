@@ -769,15 +769,19 @@ a `peer.stop` reads as a session that flapped. A shut down passive peer
 refuses the connection the listener hands it, because a passive peer
 cannot be stopped by not dialling. Both are idempotent.
 
-**Neither sends a NOTIFICATION, and that is a gap recorded rather than a
-choice.** A router answers `clear bgp NEIGHBOR` with Cease and RFC 4486
-section 4's Administrative Reset, subcode 4, or Administrative Shutdown,
-subcode 2. `Neighbor#stop` closes the output queue and the socket in one
-breath, so a NOTIFICATION queued just before it is one the writer thread
-may never get on the wire, and a method reporting that it sent one would
-be claiming something it cannot verify. Sending it properly means
-draining the output before the socket closes, which is a change to
-`bgp/io.rb` and its own piece of work.
+**Each sends a Cease first when the session is up**, which is what a
+router does: RFC 4486 section 4 asks a speaker that "decides to
+administratively reset the peering" for Administrative Reset, subcode 4,
+and one that decides to "administratively shut down its peering" for
+Administrative Shutdown, subcode 2. So `peer.clear` sends 6/4 and
+`peer.stop` 6/2, and `Neighbor#stop` waits for its writer, so the Cease
+reaches the wire before the socket closes. The answer gains one key,
+`notification`, which is `cease/administrative_reset` or
+`cease/administrative_shutdown`, and null when no session was up to send
+it on. `bgp4r-cli`'s `clear bgp` and `disable bgp` go through these two
+methods, and so does `bgp4rd --interact`'s `clear` and `shutdown`. A
+commit's bounce sends no Cease; RFC 4486's "Other Configuration Change",
+subcode 6, would be the one, and that is its own change.
 
 **`peer.refresh` is RFC 2918 section 3's message with RFC 7313 section
 3.2's Message Subtype**, which that RFC redefines out of RFC 2918's
@@ -1213,8 +1217,8 @@ The write methods, each answering what it did, so a caller can assert on
 it rather than reading a view back:
 
 ```json
-peer.clear    {"peer":"10.0.10.1","cleared":true,"was":"established","state":"idle","shutdown":false}
-peer.stop     {"peer":"10.0.10.1","was":"established","state":"idle","shutdown":true}
+peer.clear    {"peer":"10.0.10.1","cleared":true,"was":"established","state":"idle","shutdown":false,"notification":"cease/administrative_reset"}
+peer.stop     {"peer":"10.0.10.1","was":"established","state":"idle","shutdown":true,"notification":"cease/administrative_shutdown"}
 peer.start    {"peer":"10.0.10.1","state":"idle","shutdown":false,"connect":true}
 peer.refresh  {"peer":"10.0.10.1","afi":1,"safi":1,"subtype":0,"sent":true}
 route.originate {"originated":["10.255.0.0/24"],"total":1,"changes":1,"rib":7,"marked":false}

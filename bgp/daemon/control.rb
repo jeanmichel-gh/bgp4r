@@ -119,24 +119,34 @@ module BGP
       # peer dials again after its retry interval and a passive one waits
       # to be dialled: that is the difference from `peer.stop`.
       #
-      # It sends no NOTIFICATION, which is a gap recorded rather than a
-      # choice; `Peer#stop` has the mechanism.
+      # A session that is up gets a Cease first, Administrative Reset,
+      # which is what RFC 4486 section 4 asks of a speaker that
+      # "decides to administratively reset the peering". `notification`
+      # names what was sent, and is null when no session was up to send
+      # it on.
       def peer_clear(params = {})
         peer = peer_of(params, PEER_KEYS)
         was = peer.state.to_s
+        sent = peer.cease(Peer::ADMIN_RESET)
         peer.clear
         { :peer => peer.address, :cleared => true, :was => was.downcase,
-          :state => peer.state.to_s.downcase, :shutdown => peer.shutdown? }
+          :state => peer.state.to_s.downcase, :shutdown => peer.shutdown?,
+          :notification => sent ? 'cease/administrative_reset' : nil }
       end
 
       # Administratively down: the session ends and does not come back
       # until `peer.start`. Idempotent, so a second one is not an error.
+      #
+      # A session that is up gets a Cease first, Administrative Shutdown,
+      # RFC 4486 section 4. `notification` as for `peer.clear`.
       def peer_stop(params = {})
         peer = peer_of(params, PEER_KEYS)
         was = peer.state.to_s
+        sent = peer.cease(Peer::ADMIN_SHUTDOWN)
         peer.admin_stop
         { :peer => peer.address, :was => was.downcase,
-          :state => peer.state.to_s.downcase, :shutdown => true }
+          :state => peer.state.to_s.downcase, :shutdown => true,
+          :notification => sent ? 'cease/administrative_shutdown' : nil }
       end
 
       # Administratively up again. Idempotent.

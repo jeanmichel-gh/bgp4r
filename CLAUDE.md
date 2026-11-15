@@ -2018,8 +2018,11 @@ A plan that spans more than one session lives here, as phases with their
 status, so the next reader can see the direction without reconstructing it.
 Update the status in the pull request that moves a phase.
 
-**Status of every plan below, measured 2026-11-13** against master
-`0048623`. Update this table in the pull request that moves a phase.
+**Status of every plan below, measured 2026-11-15** against master
+`d9d7698`. #328 (routescope's API vocabulary), #329 (`Neighbor#start`
+returns on a fall back to Idle) and #330 (the three routescope labs run
+and recorded) moved no phase. Update this table in the pull request
+that moves a phase.
 
 | Plan | Status | Left |
 | --- | --- | --- |
@@ -2030,7 +2033,7 @@ Update the status in the pull request that moves a phase.
 | Route generation, `bgp/gen` | Phases 0 to 6 done | – |
 | Vendor style `to_s` | Not started | All of it; no pull request yet |
 | irb console | Done | – |
-| Route reflection | Items 1 to 5 done | Item 6, `client_to_client: false`, only if asked for. Item 3 lacks the text form |
+| Route reflection | Items 1 to 5 done, with two gaps | Item 6, `client_to_client: false`, only if asked for. Item 3 lacks the text form. Item 4 lacks the FRR 10.5.1 run |
 | BGP-LS lab | Phases 1 and 3 done | Phase 2, a Propagator, not started; needs its own spec |
 
 **Left, outside the tables above:**
@@ -2045,7 +2048,7 @@ Update the status in the pull request that moves a phase.
   FRR 10.5.1 sends at most 8, so both get neither TLV. It sends no
   Link Local/Remote Identifiers (258), since isisd does not give
   sub-TLV 4.
-* "Known issues to work on": 29 entries. Some are interop notes rather
+* "Known issues to work on": 35 entries. Some are interop notes rather
   than bugs.
 * "Attribute work left": 7 entries, RFC sections left out on purpose.
 
@@ -7493,12 +7496,12 @@ now:
   as an event and bgp4r publishes from two places only.
   `bgp/daemon/log_ring.rb` has the decision and the three things it
   rejected.
-* **`peer.clear` and `peer.stop` send no NOTIFICATION**, which is a
-  gap recorded with its mechanism rather than a choice. It used to be
-  that `Neighbor#stop` closed the output queue and the socket in one
-  breath, so a Cease queued before it never reached the wire; `stop`
-  waits for the writer now, so what is left is only the choice of
-  subcode per method. See "Known issues to work on".
+* **`peer.clear` and `peer.stop` send a Cease first**, 6/4 and 6/2
+  from RFC 4486 section 4, when the session is up, and answer
+  `notification` naming it. `Peer#cease` sends it and `Neighbor#stop`
+  waits for its writer, so it reaches the wire before the close.
+  `test_clear_and_stop_send_a_cease_the_peer_reads` in
+  `test/functional/daemon_test.rb` reads it off the far side.
 
 **And a decision with a cost, recorded with the two options it beat.**
 `lab/speaker.rb` was most of a daemon and `lab/` is not on an installed
@@ -8122,8 +8125,8 @@ shows it or the way a Junos router does.
 `STYLES = %i[ios junos iosxr]`. What it does not do is objects. A
 `Path_attribute`, an `Mp_reach`, an `Evpn` route type or an `Update`
 each have one `to_s` and it is bgp4r's own wording. So the work is
-taking show.rb's shape down a level, and the 185 `def to_s` in `bgp/`
-are the scale of it.
+taking show.rb's shape down a level, and the 193 `def to_s` in `bgp/`,
+counted on 2026-11-15, are the scale of it.
 
 **The design question to settle first, because it decides everything
 after it.** `to_s` takes no argument today and 185 classes define one,
@@ -8287,9 +8290,9 @@ the guide.
    it would be arbitrary code execution reachable from a lab network.
 
 Two things found in step 1 and not changed by it. `exit` closes the
-session with no NOTIFICATION, because `Neighbor#stop` sends none, which
-is the open "Cease subcode per method" item under routescope labs;
-`notification 6, 2` sends one by hand. And a message that arrives
+session with no NOTIFICATION, because `Neighbor#stop` sends none;
+`notification 6, 2` sends one by hand. The daemon's `peer.clear` and
+`peer.stop` send a Cease now, and so its prompt does. And a message that arrives
 between Established and the console's tap is not in `received`, since
 the tap goes on through `Speaker#on_established`, after the fact.
 
@@ -8481,9 +8484,6 @@ Smaller things:
 
 * **`Table#import` re-encodes an IPv6 route's whole UPDATE to drop its LOCAL_PREF**, so an eBGP IPv6 feed that carries LOCAL_PREF costs about as much per route as per message. It drops the attribute (RFC 4271 section 5.1.5) by encoding and re-parsing `route.path_attribute`, and for IPv6 that holds the MP_REACH_NLRI with every prefix of the UPDATE. Measured on 2026-11-03 with `test/functional/gen_test.rb`: 3000 IPv6 routes, about 450 to a message, took 45 seconds to import against 2.4 without LOCAL_PREF. IPv4 is cheap because its NLRI is outside the attribute set. The fix is to copy the attribute list without LOCAL_PREF rather than round trip it, and to leave MP_REACH_NLRI out of the copy since the route already holds its prefix; it is the RIB's and not the generator's, so that test sends no LOCAL_PREF over IPv6 and says why.
 
-* **`peer.clear` and `peer.stop` still send no NOTIFICATION, and now nothing is in the way of one.** A router answers `clear bgp NEIGHBOR` with Cease and RFC 4486 section 4's Administrative Reset, subcode 4, or Administrative Shutdown, subcode 2. The prerequisite is done: `Neighbor#stop` drains the output queue before closing the socket, so a message queued just before it reaches the wire. What is left is choosing the subcode per method and sending it, which is `bgp/daemon/control.rb` and a line in `Peer#stop`, plus a lab measurement of what each router logs on receipt. Until then the two methods close the connection and **report no NOTIFICATION at all** rather than claiming one they cannot verify, which is honest and is not what a router does.
-  * **The mechanism this entry used to give was half right and the half it got wrong is the interesting one.** It said `stop` was `@out.close` then `@socket.close`, so a queued message "may never" be written, and that the fix was for `stop` to drain the queue. `SizedQueue#close` already drains: `deq` keeps handing out what is queued and only then answers nil, so the writer loop in `BGP::IO::Output` empties the queue of its own accord. What was missing was **waiting for it**, and the entry had the right shape for the wrong reason, which is why it read as a bigger change than it was. Measured on 2026-11-02 rather than read this time: a NOTIFICATION sent and then followed by `stop` reached the peer in **0 of 20** loopback runs and 20 of 20 with a bounded join. Not "may never": never.
-  * **`BGP::IO::Output#exit` is the form that really does drop, and nothing in the library calls it.** It sets `@continue` false before closing, so the loop stops after one more `deq`. Only `test/unit/io_test.rb` reaches it. The comment on `Neighbor#pending` cited it as the reason `stop` dropped, which was a citation to a method that path does not touch; both comments say so now. Whether a public method with no caller should stay is its own decision and nothing here needs it either way.
 * **`CLI.copy_lab` reads three of a `.gitignore`'s shapes and not `!` negation**, so a pattern that re-includes something an earlier pattern excluded is ignored and the file is left out. A directory pattern, a pattern holding a slash and a bare basename all work, which is what `copy_lab`'s header lays out and what `bgp4r-lab`'s own `.gitignore` needs; what is missing is ordering, `**` and anchoring, so this is not gitignore and does not claim to be. Measured on 2026-11-02:
   `ruby -I. -e 'require "bgp/capture/cli"; require "tmpdir"; Dir.mktmpdir { |t| s = File.join(t, "s"); Dir.mkdir(s); File.write(File.join(s, ".gitignore"), "*.log\n!keep.log\n"); File.write(File.join(s, "a.log"), "x\n"); File.write(File.join(s, "keep.log"), "x\n"); d = File.join(t, "d"); BGP::Capture::CLI.copy_lab(s, d); p Dir.children(d).sort }'`
   prints `[".gitignore"]` where git would have kept `keep.log`. (`Dir.children` and not `Dir.glob`, which hides a dotfile without `FNM_DOTMATCH` and so prints `[]` for both the broken and the fixed case: measured, after the first draft of this line said `Dir.glob`.) **Nothing is wrong today**: no `.gitignore` in the tree uses `!`, and the one that exists, `bgp4r-lab`'s, is read correctly, which `test_the_real_gitignore_of_bgp4r_lab_keeps_its_directories_out` asserts against the real file. The fix is a decision rather than a patch, because doing negation properly means doing ordering with it: either shell out to `git check-ignore`, which makes the copier need git where today it does not, or walk the patterns in order with a last-match-wins rule and accept that the rest of gitignore is still missing.

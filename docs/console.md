@@ -456,8 +456,8 @@ Built, in bgp/daemon/console.rb. Four things to know when using it:
   refusal is the daemon's own message. `api 'show.fib'` reaches any
   method by name.
 * **`clear` and `shutdown` send a Cease first**, 6/4 and 6/2, when the
-  session is up, then call `peer.clear` and `peer.stop`. The socket
-  methods still send none; that open item is theirs.
+  session is up, because `peer.clear` and `peer.stop` do: the verbs
+  call those methods and send nothing of their own.
 * **A verb with no peer** goes to the only one configured or the only
   one up, and otherwise names the peers rather than picking one.
 * **`adj_in` and `adj_out` take the peer as the others do**: it may be
