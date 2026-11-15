@@ -381,13 +381,16 @@ routescope's API on a freshly started lab. **Run them on a fresh lab.**
 Each one opens by expecting its prefixes absent, so a second run on the
 same lab fails at that step (four of the six did).
 
-**`rtr` takes 18 to 31 s to reach `r1`**, where the other sessions take
-under a second. bgp4rd accepts a connection only from a passive peer
+**`rtr` reaches `r1` in about 3 s**, where it took 18 to 31 s before
+bgp4r #329. bgp4rd accepts a connection only from a passive peer
 (`Speaker#listen`), and `r1` is `connect: true`, so FRR's own dials are
 refused, logged as "refused connection from unknown peer 10.0.20.2". The
-session waits for bgp4rd's first dial, which waits out its whole
-`open_timeout` (30 s) although the session is already Idle, then dials
-again. Measured 2026-11-14 from rtr's log and `show bgp neighbors`.
+session waits for bgp4rd's own dial. Its first try goes Idle before
+Established. Before #329, bgp4rd then waited out its whole
+`open_timeout` (30 s) before it dialled again; now it dials again at
+once. Measured from `rtr`'s `show.peers`, from the end of the lab's
+start: 2026-11-14, 18 to 31 s; 2026-11-15, on master d29569a, 2.9 s,
+and 2.9 s to `g1` too.
 
 What is left unverified:
 
