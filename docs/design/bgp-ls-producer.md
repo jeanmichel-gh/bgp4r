@@ -140,7 +140,21 @@ Each node gives:
   Remote node descriptors: the neighbor. Attribute: IGP Metric (1095), 3
   octets for `wide`, 1 for `narrow`. Section 5.3.2.4: "IS-IS wide
   metrics have a length of 3 octets." Each node lists its own neighbors,
-  so a link shows as two Link NLRIs, one from each end.
+  so a link shows as two Link NLRIs, one from each end. Link
+  descriptors: IPv4 interface address (259) and IPv4 neighbor address
+  (260), when isisd gives the neighbor both `interface_address`
+  and `neighbor_address`. Those come from TLV 22 sub-TLVs 6 and 8, which
+  section 5.2.2's Table 4 names as the source of 259 and 260, and
+  RFC 5305 sections 3.2 and 3.3 let a router leave out unless it runs
+  traffic engineering. With one or none, neither TLV is sent, which
+  is the OSPF rule too. So a link toward a pseudonode gets neither:
+  isisd sends only sub-TLV 6 there, since section 3.3 asks for 8 on
+  point to point adjacencies. And an FRR 10.5.1 node gets neither: it
+  sends no sub-TLV without MPLS-TE and only sub-TLV 8 with it, measured
+  in isis's interop run. They are
+  not paired from TLV 132: RFC 1195 section 3.1 makes that the
+  router's own addresses, "at least one", and FRR 10.5.1 with a
+  loopback lists only the loopback.
 - **One Prefix NLRI per prefix.** Local node descriptors: this node.
   Prefix descriptor: IP Reachability Information (265). Attribute:
   Prefix Metric (1155).
@@ -164,9 +178,9 @@ Section 5.9 has no errata. Both rules follow from building the set from
 `reachable` nodes on each read. A setting `unreachable: keep` turns this
 off. The section allows that with a "MAY".
 
-Phase 1 leaves out: Link Local/Remote Identifiers (258), interface
-addresses (259, 260), TE attributes, SR, IPv6 prefixes and the AS
-sub-TLV. Two parallel links between one pair of nodes would collide.
+Left out: Link Local/Remote Identifiers (258), IPv6 interface and
+neighbor addresses (261, 262), TE attributes, SR, IPv6 prefixes and the
+AS sub-TLV. Two parallel links between one pair of nodes would collide.
 This lab has none.
 
 ### Collector
