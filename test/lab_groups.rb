@@ -129,6 +129,7 @@ module LabGroups
     # docs/bgp-ls.md section 11.
     'frr' => %w[
       capabilities_frr_test
+      cease_frr_test
       evpn_frr_test
       fault_matrix_frr_test
       flow_spec_frr_test

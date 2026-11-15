@@ -158,6 +158,7 @@ module CoverageMatrix
     'add_path'     => 'RFC 7911, which cuts across families',
     'attr_set'     => 'attribute 128, which has no NLRI',
     'capabilities' => 'OPEN capabilities, which are per session and not per family',
+    'cease'        => 'the Cease bgp4rd sends when it ends a session, which is per session',
     'gen'          => 'bgp/gen, a generator; docs/route-generation.md phase 6 reports those',
   }.freeze
 
