@@ -1842,7 +1842,7 @@ CI: `.github/workflows/test.yml` runs both suites on every push to master and ev
 
 `.github/workflows/capture.yml` is the one workflow that deploys a containerlab lab: it builds the `lab-node`, BIRD and GoBGP images, deploys `routescope/labs/bgp4r-lab`, `routescope/labs/rr-lab` and `routescope/labs/fwd-lab` in a job each, and runs each one's `capture.sh`, on demand and on a push that changes `routescope/labs/` or the Dockerfile. Its log is what routescope's BGP fixtures are cut from. **rr-lab's `capture.sh` also checks**: it prints one `CHECK ok` or `CHECK FAIL` line per RFC 4456 fact and fails the job when one fails, because the scenario language has no key for ORIGINATOR_ID or CLUSTER_LIST. **fwd-lab's does the same for forwarding**, because the scenario language has no ping step.
 
-Baseline on 2026-11-14: 3924 tests, 37615 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%, measured on 2026-11-06 and not since.
+Baseline on 2026-11-15: 3925 tests, 37619 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%, measured on 2026-11-06 and not since.
 
 **That coverage figure is 98.5% for the library and the rest is the two
 programs, not a gap anywhere else.** Measured the same run: with
@@ -2039,10 +2039,12 @@ Update the status in the pull request that moves a phase.
   detail` (PREFIX maps to `:routes` today, `bgp/daemon/shell.rb:93`).
   Its later items are not started either: Junos forms, a configure mode,
   Tab completion of config paths.
-* BGP-LS for IS-IS sends no Link Local/Remote Identifiers or interface
-  addresses (TLVs 258, 259 and 260). OSPF sends 259 and 260. IS-IS waits
-  on isisd's `show.topology` giving TLV 132, which isis's
-  `docs/design/bgp-ls-export.md` leaves open.
+* BGP-LS for IS-IS sends 259 and 260 only for a neighbor whose TLV 22
+  carries sub-TLVs 6 and 8, which isisd gives as `interface_address`
+  and `neighbor_address`. A link toward a pseudonode carries only 6 and
+  FRR 10.5.1 sends at most 8, so both get neither TLV. It sends no
+  Link Local/Remote Identifiers (258), since isisd does not give
+  sub-TLV 4.
 * "Known issues to work on": 29 entries. Some are interop notes rather
   than bugs.
 * "Attribute work left": 7 entries, RFC sections left out on purpose.

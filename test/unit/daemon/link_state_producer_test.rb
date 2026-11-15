@@ -412,6 +412,32 @@ class BGP_Daemon_LinkStateProducer_Test < Test::Unit::TestCase
     assert_equal(7, ls.nlri.remote_node_descriptors.sub_tlvs.first.value.size)
   end
 
+  # RFC 9552 section 5.2.2, Table 4: TLV 259 is IS-IS 22/6 and 260 is
+  # 22/8, and "If interface and neighbor addresses ... are present, then
+  # the interface/neighbor address TLVs MUST be included". isisd gives
+  # the two sub-TLVs per neighbor; with one of them missing, neither is
+  # sent, as on the OSPF path.
+  def test_a_link_with_both_addresses_carries_259_and_260
+    n = node(R1, 'r1', [[R2, 10]], [])
+    n['neighbors'][0].merge!('interface_address' => '10.0.12.1', 'neighbor_address' => '10.0.12.2')
+    _node, (ls, _attr) = routes_of(n)
+    hand = BGP::Link_state.new(:link => {
+      :protocol_id => 1, :identifier => 0,
+      :tlvs => [{ :local_node_descriptors => [{ :igp_router_id => '000000010101' }] },
+                { :remote_node_descriptors => [{ :igp_router_id => '000000010102' }] },
+                { :ipv4_interface_address => '10.0.12.1' },
+                { :ipv4_neighbor_address => '10.0.12.2' }] })
+    assert_equal(hand.encode, ls.encode)
+    assert_match(/010300040a000c01010400040a000c02\z/, ls.to_shex)
+    _node, (plain, _attr) = routes_of(node(R1, 'r1', [[R2, 10]], []))
+    %w[interface_address neighbor_address].each do |k|
+      one = node(R1, 'r1', [[R2, 10]], [])
+      one['neighbors'][0][k] = '10.0.12.1'
+      _node, (alone, _attr) = routes_of(one)
+      assert_equal(plain.to_shex, alone.to_shex, "#{k} alone sends neither")
+    end
+  end
+
   def test_the_identifier_and_the_level_are_in_the_head
     ls, = routes_of(node(R1, 'r1', [], []), 2, 7)[0]
     assert_equal('0001' '0017' '02' '0000000000000007', ls.to_shex[0, 26])

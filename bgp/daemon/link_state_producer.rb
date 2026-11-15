@@ -250,11 +250,15 @@ module BGP
       #   bit is the table's, per erratum 7789 on section 5.3.1.1.
       # * One Link NLRI per neighbor, with IGP Metric (1095), 3 octets
       #   for a wide metric and 1 for a narrow one. Section 5.3.2.4:
-      #   "IS-IS wide metrics have a length of 3 octets."
+      #   "IS-IS wide metrics have a length of 3 octets." The IPv4
+      #   interface (259) and neighbor (260) addresses when isisd gives
+      #   both, from TLV 22 sub-TLVs 6 and 8 (section 5.2.2, Table 4).
+      #   Not from TLV 132, which is the router's addresses and may hold
+      #   none of its links' (RFC 1195 section 3.1).
       # * One Prefix NLRI per IPv4 prefix, with Prefix Metric (1155).
       #
-      # Phase 1 leaves out IPv6 prefixes, the link identifiers and
-      # addresses (258 to 260), and every TE and SR TLV.
+      # Left out: IPv6 prefixes, the link identifiers (258), the IPv6
+      # addresses (261, 262), and every TE and SR TLV.
       def self.node_routes(node, pid, identifier)
         local = { :local_node_descriptors => [{ :igp_router_id => router_id(node.fetch('id')) }] }
         routes = []
@@ -268,9 +272,10 @@ module BGP
         routes << [BGP::Link_state.new(:node => head(pid, identifier, local)),
                    BGP::Link_state_attribute.new(*tlvs)]
         Array(node['neighbors']).each do |nb|
-          remote = { :remote_node_descriptors => [{ :igp_router_id => router_id(nb.fetch('id')) }] }
+          tlvs = [local, { :remote_node_descriptors => [{ :igp_router_id => router_id(nb.fetch('id')) }] }]
+          tlvs.concat(link_addresses(nb['interface_address'], nb['neighbor_address']))
           width = nb['style'] == 'narrow' ? 1 : 3
-          routes << [BGP::Link_state.new(:link => head(pid, identifier, local, remote)),
+          routes << [BGP::Link_state.new(:link => head(pid, identifier, *tlvs)),
                      BGP::Link_state_attribute.new(T::Igp_metric.new(Integer(nb.fetch('metric')), width))]
         end
         Array(node['prefixes']).each do |pf|
@@ -317,10 +322,7 @@ module BGP
                      BGP::Link_state_attribute.new(T::Node_flag_bits.new(*flags))]
           Array(node['neighbors']).each do |nb|
             tlvs = [local, { :remote_node_descriptors => ospf_descriptors(nb.fetch('id'), area) }]
-            if nb['address'] && nb['remote_address']
-              tlvs << { :ipv4_interface_address => nb['address'] }
-              tlvs << { :ipv4_neighbor_address => nb['remote_address'] }
-            end
+            tlvs.concat(link_addresses(nb['address'], nb['remote_address']))
             routes << [BGP::Link_state.new(:link => head(OSPFV2, identifier, *tlvs)),
                        BGP::Link_state_attribute.new(T::Igp_metric.new(Integer(nb.fetch('metric')), 2))]
           end
@@ -353,6 +355,17 @@ module BGP
       # (section 5.2.1.4).
       def self.ospf_router_id(id)
         id.to_s.split(':').collect { |a| IPAddr.new(a).hton.unpack1('H*') }.join
+      end
+
+      # IPv4 interface (259) and neighbor (260) address TLVs for one
+      # link, from either IGP's `show.topology`, or none. Section 5.2.2:
+      # "If interface and neighbor addresses ... are present, then the
+      # interface/neighbor address TLVs MUST be included". Both or
+      # neither: one alone is not the pair that section describes.
+      def self.link_addresses(local, remote)
+        return [] unless local && remote
+        [{ :ipv4_interface_address => local },
+         { :ipv4_neighbor_address => remote }]
       end
 
       def self.head(pid, identifier, *tlvs)
