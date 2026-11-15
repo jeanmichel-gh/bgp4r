@@ -7501,7 +7501,9 @@ now:
   `notification` naming it. `Peer#cease` sends it and `Neighbor#stop`
   waits for its writer, so it reaches the wire before the close.
   `test_clear_and_stop_send_a_cease_the_peer_reads` in
-  `test/functional/daemon_test.rb` reads it off the far side.
+  `test/functional/daemon_test.rb` reads it off the far side. A commit's
+  bounce, and so a `SIGHUP` reload, sends 6/6, Other Configuration
+  Change, which `test_a_bounce_really_ends_the_session` reads the same way.
 
 **And a decision with a cost, recorded with the two options it beat.**
 `lab/speaker.rb` was most of a daemon and `lab/` is not on an installed

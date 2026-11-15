@@ -419,9 +419,9 @@ module BGP
       # retry interval and a passive one waits to be dialled: this is
       # `peer.clear`, not `peer.stop`.
       #
-      # It sends nothing itself. `peer.clear` and `peer.stop` send a Cease
-      # first through `cease`, and a commit's bounce and the injector's
-      # `session.stop` do not, so the choice of subcode stays with the
+      # It sends nothing itself. `peer.clear`, `peer.stop` and a commit's
+      # bounce send a Cease first through `cease`, and the injector's
+      # `session.stop` does not, so the choice of subcode stays with the
       # caller that knows why the session is ending.
       def stop
         @admin.synchronize { @resume.broadcast }
@@ -512,11 +512,13 @@ module BGP
       end
 
       # RFC 4486 section 4: the Cease subcodes a router sends when it
-      # administratively shuts a peering down and when it administratively
-      # resets one.
+      # administratively shuts a peering down, when it administratively
+      # resets one, and when it resets one "due to a configuration change
+      # other than the ones described above".
       CEASE = 6
       ADMIN_SHUTDOWN = 2
       ADMIN_RESET = 4
+      OTHER_CONFIG_CHANGE = 6
 
       # A Cease with that subcode, when the session is up. True when one
       # was queued. `Neighbor#stop` waits for its writer, so a Cease sent

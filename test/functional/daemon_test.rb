@@ -756,6 +756,13 @@ class BGP_Daemon_Functional_Test < Test::Unit::TestCase
                    'the commit said it bounced the session and the session is still up')
       assert_equal(false, ours.shutdown?, 'a bounce leaves the peer administratively up')
       assert_equal(90, ours.config['hold_time'])
+      # RFC 4486 section 4: a reset "due to a configuration change other
+      # than the ones described above" is Cease, Other Configuration
+      # Change, subcode 6. Read off the far side.
+      assert_equal(true, wait_until { peer.notifications.size == 1 },
+                   'no NOTIFICATION reached the peer on a bounce')
+      assert_equal([6, 6], peer.notifications.first.to_hash.values_at(:code, :subcode))
+      assert_match(/Cease 6\/6/, r['warnings'].first)
     ensure
       ours.instance_variable_get(:@neighbor)&.close
       peer.close
