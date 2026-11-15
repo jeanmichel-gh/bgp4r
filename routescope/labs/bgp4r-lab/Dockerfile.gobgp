@@ -31,13 +31,8 @@
 # topology file, so it needs iproute2, and `Dockerfile.bird` in this
 # folder exists for exactly that reason and says so.
 #
-# **Whether the base image already has `ip` was not verifiable where this
-# was written**, since no container registry was reachable from it. If it
-# does, this file is dead weight and the topology can point `g1` straight
-# at `${GOBGP_IMAGE}`. That is one command to settle:
-#
-#   docker run --rm --entrypoint sh jauderho/gobgp:v4.10.0 \
-#              -c 'command -v ip || echo no-iproute2'
+# **The base image has no `ip`**, so this wrapper is needed. Measured
+# 2026-11-14: jauderho/gobgp:v4.10.0 has no sh, no ls and no ip.
 #
 # **The binaries are copied out of the GoBGP image rather than
 # downloaded**, which is what the repository root's Dockerfile already
@@ -53,9 +48,8 @@
 # has the same default as the two Compose topologies and the root
 # Dockerfile, so one value moves all four.
 #
-# **Not built here.** No container registry was reachable where this was
-# written, which `Dockerfile.bird` beside it and the root Dockerfile both
-# record of themselves for the same reason. Build it before trusting it.
+# Built by routescope from the `routescope.build` label, and by
+# routescope's bgp4r-lab CI job; both ran it on 2026-11-14.
 ARG GOBGP_IMAGE=jauderho/gobgp:v4.10.0
 FROM ${GOBGP_IMAGE} AS gobgp
 

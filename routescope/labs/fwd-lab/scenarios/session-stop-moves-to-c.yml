@@ -2,10 +2,10 @@
 # sides, so packets move through c with no hold timer to wait out, which
 # is the comparison with link-down-moves-to-c.yml.
 #
-# RUN IN NAMESPACES ONLY: routescope ran this on 2026-11-06, from its
-# claude/ping-traceroute branch, against this lab's own files in four
-# network namespaces with docker stood in by a script. It passed. It has
-# not been run in a deployed lab. Its twin in this repository is
+# RUN: routescope ran this on 2026-11-06 against this lab's own files in
+# four network namespaces, and passed. On 2026-11-14 it ran twice in the
+# deployed lab on the VM, through routescope's API, and passed both
+# times. Its twin in this repository is
 # test/functional/lab/fwd_lab_netns_test.rb.
 #
 # ping and traceroute are routescope's forwarding conditions, which ask

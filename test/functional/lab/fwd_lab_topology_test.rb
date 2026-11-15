@@ -176,8 +176,8 @@ class LabFwdLabTopologyTest < Test::Unit::TestCase
     scenario_files.each do |f|
       s = load_yaml("scenarios/#{f}")
       assert_equal [], s.keys - %w[name description capture timeout steps], f
-      # Says how far it has been run: in namespaces, not in a deployed lab.
-      assert_match(/^# RUN IN NAMESPACES ONLY: .*\n(# .*\n)*# not been run in a deployed lab\./,
+      # Says how far it has been run: in namespaces, and in a deployed lab.
+      assert_match(/^# RUN: .*\n(# .*\n)*# .*deployed lab/,
                    read("scenarios/#{f}"), f)
       s['steps'].each_with_index do |step, i|
         where = "#{f} step #{i}"

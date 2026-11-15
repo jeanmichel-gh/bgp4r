@@ -4,9 +4,8 @@
 #
 # dual held two copies, one from each reflector, and both have to go.
 #
-# NOT RUN: the lab is deployed by bgp4r's Capture job, but this scenario
-# has not been run, so nothing here is a measurement. Every expectation
-# is read out of the node files and the RFC sections they cite.
+# RUN: passed through routescope on the VM, 2026-11-14, on a freshly
+# started lab.
 name: A client withdrawal reaches every reader
 description: >-
   inj-c announces 10.10.8.0/24 and 10.10.9.0/24, then withdraws the

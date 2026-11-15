@@ -11,9 +11,8 @@
 # scenario language has no key for either. capture.sh reads them on all
 # four implementations and fails the CI job when one is wrong.
 #
-# NOT RUN: the lab is deployed by bgp4r's Capture job, but this scenario
-# has not been run, so nothing here is a measurement. Every expectation
-# is read out of the node files and the RFC sections they cite.
+# RUN: passed through routescope on the VM, 2026-11-14, on a freshly
+# started lab.
 name: A client route reaches every client and every non-client
 description: >-
   inj-c announces 10.10.1.0/24 to rr1. It must reach the three router

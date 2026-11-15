@@ -8,9 +8,8 @@
 # A loop is not a malformed attribute, so the session stays up. rr1
 # keeps the route in its Adj-RIB-In and out of its Loc-RIB.
 #
-# NOT RUN: the lab is deployed by bgp4r's Capture job, but this scenario
-# has not been run, so nothing here is a measurement. Every expectation
-# is read out of the node files and the RFC sections they cite.
+# RUN: passed through routescope on the VM, 2026-11-14, on a freshly
+# started lab.
 name: A route carrying rr1's own ORIGINATOR_ID is dropped
 description: >-
   inj-c sends 10.10.15.0/24 clean, then replays an UPDATE for

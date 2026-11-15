@@ -7,11 +7,15 @@
 # so packets to d are dropped until the session ends. `failover` is that
 # gap, measured where it matters: the first traceroute through c.
 #
-# RUN IN NAMESPACES ONLY: routescope ran this on 2026-11-06, from its
-# claude/ping-traceroute branch, against this lab's own files in four
-# network namespaces with docker stood in by a script. It passed. It has
-# not been run in a deployed lab. Its twin in this repository is
-# test/functional/lab/fwd_lab_netns_test.rb.
+# RUN: routescope ran this on 2026-11-06 against this lab's own files in
+# four network namespaces, and passed. On 2026-11-14 it ran twice in the
+# deployed lab on the VM, through routescope's API, and FAILED both times
+# at the link-up traceroute: the direct path took longer than 30 s to
+# come back. bgp4rd's dial to d waits out its open_timeout (30 s) when
+# the session drops to Idle; the README has the detail. On 2026-11-15,
+# with bgp4r master d29569a, which has the fix (#329), it ran twice in the
+# deployed lab, on a freshly started lab, and passed both times. Its twin in this
+# repository is test/functional/lab/fwd_lab_netns_test.rb.
 #
 # ping and traceroute are routescope's forwarding conditions, which ask
 # the node's own kernel. traceroute names each hop by the address it

@@ -58,22 +58,10 @@ announcing the prefix the injectors announce would be compared before
 the MED step, and `med-decides.yml` would stop meaning anything. See
 `g1/gobgpd.toml`.
 
-**routescope has no `gobgp` kind yet, so today this node renders as a
-plain Linux box.** Read at routescope `b8e2704`: `Lab::KINDS` is
-`ospfd frr ospfv2-sim bird srlinux bgp4r bgp4r-sim linux`, and
-`grep -rln gobgp` across its Ruby, Markdown, TSX and YAML finds nothing
-at all. `Drivers.for` is `BY_KIND.fetch(node.kind, Linux)`, so an
-unknown kind answers nothing about BGP. The label here says `gobgp`
-anyway, so the node is right the day a driver lands and this file needs
-no edit then.
-
-The read side such a driver needs is already written and tested, in
-`LabHelper::Gobgpd`: `neighbors`, `neighbor(address)`, `rib`,
-`path(prefix)` and `rib_family(family)`, all out of `gobgp ... -j`,
-exercised by ten lab test files against GoBGP 3.23.0 and 4.10.0. For
-scale, routescope's existing drivers are 114 lines for `Bgp4rd`, 203 for
-`Sim`, 240 for `Bird` and 300 for `Frr`; a GoBGP one sits near the low
-end, because its client answers JSON where BIRD needs a text parser.
+**routescope reads `g1` with its Gobgp driver.** When this was first
+written routescope had no `gobgp` kind and the node showed as a plain
+Linux box. It has one now: on 2026-11-14 routescope listed `g1` as kind
+`gobgp`, beside `bgp4r`, `bgp4r-sim`, `frr` and `bird` for the others.
 
 **Both injectors are in one AS on purpose.** MULTI_EXIT_DISC is compared
 only between paths from the same neighbouring AS (RFC 4271 section
@@ -155,15 +143,9 @@ already uses**, and it exists for the same one reason: iproute2 for the
 gives each service its address from the network definition and nothing
 has to run `ip`. A containerlab node sets its own, so it needs `ip`.
 
-Whether that base image already has `ip` could not be verified where
-this was written, since no container registry was reachable from it. One
-command settles it, and if it does the wrapper is dead weight and `g1`
-can point straight at `${GOBGP_IMAGE}`:
-
-```
-docker run --rm --entrypoint sh jauderho/gobgp:v4.10.0 \
-           -c 'command -v ip || echo no-iproute2'
-```
+The base image has no `ip`, so the wrapper is needed. Measured on
+2026-11-14: `jauderho/gobgp:v4.10.0` has no `sh`, no `ls` and no `ip`,
+and `docker run --entrypoint ip` fails with "executable file not found".
 
 Its `GOBGP_IMAGE` default is the same as the two Compose topologies' and
 the root Dockerfile's, so one value moves all four, and the topology
@@ -263,12 +245,11 @@ docker exec clab-bgp4r-lab-rtr ip -4 route show table 100
 docker exec clab-bgp4r-lab-r3 ip -4 route show
 ```
 
-**None of this is measured, even though the lab is deployed now.** CI
-deploys it and runs `capture.sh`, and `capture.sh` reads BGP tables: its
-one `ip route` is a static route configured into `r2`'s FRR, not a
-kernel table read anywhere. So the table above is read out of the four
-config files, and the three `ip` commands here are what a person runs
-to check it.
+**Measured on 2026-11-14**, with the scenarios' prefixes on the wire:
+`rtr` holds them in table 100 and nothing but the default in main; `r1`
+and `r2` hold them in main as `proto bgp`, `r3` as `proto bird`; `g1`
+holds them in `gobgp global rib` and has nothing but the default in its
+kernel. So `rtr` can write table 100.
 
 ## The scenarios
 
@@ -300,8 +281,8 @@ no Docker.
 **Unlike add-path's, none of them is waiting on bgp4r.** That folder's
 table records two of its three scenarios as needing the injector, which
 did not exist when it was written; `bgp4r-sim` is built now, so every
-action these six use is one the injector answers today. What they are
-waiting on is being run, by routescope's `bgp4r-lab` job.
+action these six use is one the injector answers today. routescope's
+`bgp4r-lab` CI job runs them, and all six pass.
 
 ## What has been run, and what has not
 
@@ -383,10 +364,8 @@ one in a protobuf Any with a base64 value. That helper runs against
 3.23.0 too, which is where its own claim was measured, so this is a
 version difference and not an error in it.
 
-**`Dockerfile.gobgp`'s own open question is still open**: the wrapper
-works, which says nothing about whether `${GOBGP_IMAGE}` already has
-`ip` and the wrapper could go. The one command that settles it is in
-that file.
+**`Dockerfile.gobgp`'s open question is settled**: the base image has
+no `ip` (nor a shell), so the wrapper stays.
 
 **It found one bug, which a parse could not.** On a `direct` iBGP
 session BIRD wants the next hop on one of its own links. 10.0.20.1 is
@@ -395,14 +374,23 @@ directly reachable" and dropped every route from rtr while r1 and r2
 held them. `r3/bird.conf` now has `gateway recursive`, which resolves
 the next hop through the static route it already had for this.
 
-**The scenarios have not been run.** Nothing in this repository runs
-them; routescope does, in a job of its own, which has not run either.
+**The scenarios are run by routescope**, not by this repository:
+routescope's `bgp4r-lab` CI job deploys the lab and runs all six, and
+each must pass. On the VM, 2026-11-14, all six passed through
+routescope's API on a freshly started lab. **Run them on a fresh lab.**
+Each one opens by expecting its prefixes absent, so a second run on the
+same lab fails at that step (four of the six did).
+
+**`rtr` takes 18 to 31 s to reach `r1`**, where the other sessions take
+under a second. bgp4rd accepts a connection only from a passive peer
+(`Speaker#listen`), and `r1` is `connect: true`, so FRR's own dials are
+refused, logged as "refused connection from unknown peer 10.0.20.2". The
+session waits for bgp4rd's first dial, which waits out its whole
+`open_timeout` (30 s) although the session is already Idle, then dials
+again. Measured 2026-11-14 from rtr's log and `show bgp neighbors`.
+
 What is left unverified:
 
-* **Whether `rtr` can write routing table 100.** `fib:` needs
-  CAP_NET_ADMIN as well as `ip`. Where it cannot, bgp4r says so rather
-  than dying: the reason lands under `fib` in the state file, with a row
-  per prefix whose command failed.
 * **Everything this folder says about routescope.** The kinds, the
   driver method shapes, the `bgp:` step key and the four `bgp_`
   conditions are a read of routescope at `7eabde1`, on its

@@ -463,9 +463,9 @@ class LabRrLabTopologyTest < Test::Unit::TestCase
     assert_operator checked, :>=, 80, 'the walk found almost no steps'
   end
 
-  def test_every_scenario_says_it_has_not_been_run
+  def test_every_scenario_says_whether_it_has_been_run
     scenario_files.each do |f|
-      assert_match(/^# NOT RUN: the lab is deployed by bgp4r's Capture job, but this scenario\n# has not been run/,
+      assert_match(/^# (NOT RUN: the lab is deployed by bgp4r's Capture job, but this scenario\n# has not been run|RUN: passed through routescope on the VM, \d{4}-\d\d-\d\d)/,
                    read("scenarios/#{f}"), f)
     end
   end

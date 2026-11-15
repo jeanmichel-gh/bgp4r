@@ -766,8 +766,9 @@ and what it proves, and
 `test/functional/lab/bgp4r_lab_topology_test.rb` holds the files to it
 with no Docker. **It is deployed by bgp4r's Capture workflow**, first on
 2026-11-03, which measured points 2, 3, 6 and 7 and found one bug (BIRD
-needs `gateway recursive` to resolve rtr's next hop); its scenarios have
-not been run, and each says so.
+needs `gateway recursive` to resolve rtr's next hop). Its six scenarios
+pass in routescope's bgp4r-lab CI job, and passed by hand through
+routescope on 2026-11-14; each says so.
 
 Four things the building of it settled, each in that README:
 
