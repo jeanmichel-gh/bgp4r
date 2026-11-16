@@ -2073,8 +2073,9 @@ holds the full note.
   pull_request, master through push), and a newer push cancels a pull
   request's older run.
 * Review and document every lab in `routescope/labs/`.
-* Do not open a pull request for documents alone: CI costs money. Let a
-  document change ride with the next code change, or ask first.
+* A change to documents alone may have its own pull request: CI no
+  longer costs money (2026-11-15, the repository is public). A small
+  note may still ride with a code change on the same topic.
 
 ### Phase 0, before the RIB work resumes. Done
 
