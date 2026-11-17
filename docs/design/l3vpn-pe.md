@@ -326,15 +326,48 @@ bgp4rd creates no VRF device and moves no interface: the lab does that,
 as it sets the addresses. bgp4rd checks the device exists and has the
 configured table, and says so when it does not.
 
+### Who filters: the receiver
+
+RFC 4364 sends every VPN route to every VPN peer and has the receiver
+choose. Section 4.3.1:
+
+> "Any route associated with Route Target T must be distributed to every
+> PE router that has a VRF associated with Route Target T. When such a
+> route is received by a PE router, it is eligible to be installed in
+> those of the PE's VRFs that are associated with Route Target T."
+
+And section 4.3.2, on what the receiver does with the rest:
+
+> "A PE router, UNLESS it is a route reflector [...] should not install
+> a VPN-IPv4 route unless it has at least one VRF with an Import Target
+> identical to one of the route's Route Target attributes. Inbound
+> filtering should be used to cause such routes to be discarded."
+
+The same section names the cost: when a VRF gains an Import Target (a
+"VPN Join"), the PE "must then acquire the routes it may previously have
+discarded", by route refresh (RFC 2918).
+
+Filtering at the sender came later, in RFC 4684 (Route Target
+Constraint). A PE advertises the RTs it imports, and its peers then
+send it only the VPN routes it wants: "Received Route Target membership
+information can then be used to restrict advertisement of VPN NLRI to
+peers that have advertised their respective Route Targets". It is
+negotiated, and out of scope here.
+
+So bgp4rd sends every VPN route to every VPN peer, and filters what it
+receives by its VRFs' Import Targets.
+
 ### Receiving
 
 1. `PeerAdapter` reads SAFI 128 out of MP_REACH and MP_UNREACH into the
    `VpnTable`, with each route's RD, labels and RTs.
-2. A route none of whose RTs any VRF imports is not kept, as RFC 4364
-   section 4.3.2 says a PE "should not install a VPN-IPv4 route unless
-   it has at least one VRF with an Import Target identical to one of the
-   route's Route Target attributes". (A route reflector keeps them all:
-   pull request 6.)
+2. A route none of whose RTs any VRF imports is not installed, as
+   section 4.3.2 says. The draft still keeps it in the Adj-RIB-In, so a
+   VPN Join (a VRF given a new Import Target by a config change) takes
+   it from there, with no route refresh: bgp4rd sends refreshes but
+   does not answer them yet (routescope's `protocol-coverage.md`, 2918
+   and 7313), and a lab's tables are small. A route reflector keeps and
+   reflects them all: pull request 6.
 3. Best path per [RD, prefix], with the resolver of decision 3.
 4. Import: each VRF takes the best route of every [RD, prefix] whose RTs
    it imports. Two RDs may give the same prefix to one VRF; the decision
@@ -351,7 +384,11 @@ configured table, and says so when it does not.
 2. The label route goes in first: `ip -f mpls route replace L dev V
    proto bgp`.
 3. The routes go to every neighbor that sent the VPNv4 capability in
-   its OPEN. A neighbor that did not gets none.
+   its OPEN, with no Route Target filtering at the sender (above). A
+   neighbor that did not send the capability gets none: RFC 4364
+   section 4.3.4, "In order for two BGP speakers to exchange labeled
+   VPN-IPv4 NLRI, they must use BGP Capabilities Advertisement to ensure
+   that they both are capable of properly processing such NLRI".
 4. A withdrawal sends Compatibility 0x800000 (RFC 8277 section 2.4:
    "Upon transmission, the Compatibility field SHOULD be set to
    0x800000").
@@ -529,7 +566,7 @@ Each later, with its own spec:
 4. **`network-mode: container:`** makes pe1 two nodes in routescope.
    The alternative is one image with both daemons. The draft keeps two
    images.
-5. **Capability negotiation.** The draft sends VPN routes only to a
-   neighbor whose OPEN carried SAFI 128. That is the first family check
-   bgp4rd makes; unicast stays as it is (it is sent to every neighbor
-   today).
+5. ~~**Capability negotiation.**~~ Answered by RFC 4364 section 4.3.4:
+   VPN routes go only to a neighbor whose OPEN carried AFI 1, SAFI 128
+   (Exporting, step 3). It is the first family check bgp4rd makes;
+   unicast stays as it is, sent to every neighbor.
