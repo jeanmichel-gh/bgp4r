@@ -8,7 +8,8 @@ This is P2 in routescope's `docs/protocol-coverage.md`: "L3VPN PE in
 bgp4rd". It builds on P1, SR-MPLS in IS-IS (isis
 `docs/design/sr-mpls.md`, built), which gives the transport labels. A
 routescope spec for the views, `docs/design/l3vpn-views.md`, follows
-once this one is approved.
+once this one is approved. `docs/design/l3vpn-ruby-pe.md` builds labs
+where every PE runs our own daemons, with isisd or ospfd as the IGP.
 
 ## The problem
 
@@ -226,8 +227,9 @@ there.
 ### 5. What fills a VRF
 
 Phase 1: the VRF's connected prefixes and its `originate` list,
-configured. Routes learned from a CE by eBGP inside a VRF come later
-(RFC 4364 section 7); the lab's CEs need only a default route.
+configured; the lab's CEs need only a default route. Pull request 7
+adds routes learned from a CE by eBGP inside the VRF, so a CE can be a
+bgp4rd too ("PE to CE by eBGP", below).
 
 ## The design
 
@@ -361,8 +363,50 @@ first two at boot; routescope's `tools/vm-update.sh` adds `vrf` to
 6. **A VPN route reflector.** bgp4rd reflecting SAFI 128 between PEs,
    keeping every route (RFC 4364 section 4.3.3).
 
+7. **PE to CE by eBGP.** A neighbor bound to a VRF, so a CE can run
+   bgp4rd: see "PE to CE by eBGP" below.
+
 routescope's views come in its own spec, after PR 2, when `show.vrfs`
 and `show.vrf` exist.
+
+## PE to CE by eBGP (pull request 7)
+
+RFC 4364 section 7 lists four ways a PE learns a site's routes, and
+says of eBGP: "Unlike the IGP alternatives, this does not require the
+PE to run multiple routing algorithm instances". It is also the one
+bgp4rd can do on both ends: as a CE, bgp4rd needs nothing new, since it
+already speaks unicast eBGP, announces its `originate` prefixes and
+installs what it learns.
+
+On the PE:
+
+- **A neighbor in a VRF.** `vrf: A` on a neighbor. Its TCP session is
+  bound to the VRF's device. bgp4rd opens sessions unbound today
+  (`bgp/neighbor/neighbor.rb:512`, `bgp/daemon/speaker.rb:390`); ospfd
+  already binds its sockets with `SO_BINDTODEVICE`
+  (ospfv2 `lib/ospfv2/infra/transport.rb:59`).
+- **A unicast table per VRF.** The CE's routes go into VRF A's table,
+  not the speaker's global one. They are exported as VPN routes along
+  the export path above, with the VRF's connected and configured
+  prefixes.
+- **Back to the CE.** VRF A's imported routes are advertised to the CE,
+  with the PE's AS prepended.
+- **One ASN at every site.** Section 7: a site not in a transit VPN
+  "need not have a unique Autonomous System Number [...] Every CE whose
+  site is not in a transit VPN can use the same ASN. This can be chosen
+  from the private ASN space, and it will be stripped out by the PE."
+  The draft has the PE replace the CE's ASN by its own when it sends a
+  route to another site's CE with the same ASN (vendors call it AS
+  override), and sets the Site of Origin extended community, as the
+  same section says, so a route is not sent back into its own site.
+
+```yaml
+neighbors:
+  - address: 192.168.1.2      # ce1, in VRF A
+    as: 65101
+    vrf: A
+    as_override: true
+```
 
 ## Tests
 
@@ -398,7 +442,8 @@ On `l3vpn-lab`, against FRR 10.2.1:
 
 Each later, with its own spec:
 
-- PE to CE routing protocols (RFC 4364 section 7): eBGP first.
+- PE to CE routing by an IGP (RFC 4364 section 7): OSPF (RFC 4577),
+  and RIP. eBGP is pull request 7.
 - Labels per prefix and per attachment circuit.
 - Route Target Constraint (RFC 4684) and route refresh for a VPN join.
 - Multi-AS backbones and carriers' carriers (RFC 4364 sections 9 and 10).
