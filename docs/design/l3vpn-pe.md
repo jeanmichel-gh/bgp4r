@@ -283,6 +283,16 @@ encap mpls L dev TUNNEL` (`gre`), `ip -f mpls route replace L dev V`,
 and their `del`. Each carries `proto bgp`, so a restart can flush what
 bgp4rd put there.
 
+**What is installed is the kernel's**, read back at each sync with `ip
+-j route show vrf V proto bgp` (and `-6`, and the bgp label routes),
+compared as labels, gateway and device. Pull requests 2 to 5 compared
+with a record of what bgp4rd had sent, so a route removed by hand
+stayed removed until a restart: found on `l3vpn-lab` on 2026-11-17,
+when one `ip route flush vrf A proto bgp` left VRF A empty. Fixed after
+pull request 5. A sync whose read-back matches sends nothing, so the
+route events of its own commands settle: 0 events in 10 quiet seconds
+on the lab.
+
 ### 5. What fills a VRF
 
 Phase 1: the VRF's connected prefixes and its `prefixes` list,

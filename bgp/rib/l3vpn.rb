@@ -43,7 +43,13 @@ module BGP
     # **The kernel.** The chosen route is installed in the VRF's table,
     # pushing the transport's labels and the VPN label (VrfFib). What is
     # installed is compared with what is wanted after every change, and
-    # only the difference is sent. A VRF whose device is missing, or is
+    # only the difference is sent. **What is installed is read from the
+    # kernel at each sync**, its proto bgp routes in the VRF and its bgp
+    # label routes, not taken from what this sent before: a route removed
+    # or changed by hand, or by another program, is put back by the sync
+    # its removal starts (`ip monitor route` reports it). Before, one
+    # `ip route flush vrf A proto bgp` left VRF A empty until bgp4rd
+    # restarted (found on l3vpn-lab, 2026-11-17). A VRF whose device is missing, or is
     # not a VRF on the configured table, gets nothing, and show.vrfs says
     # why: the lab makes the device (open question 2).
     #
@@ -133,6 +139,7 @@ module BGP
           @syncs += 1
           hops = {}
           hop = ->(nh, v6) { hops[[nh.to_s, v6]] ||= @transport.resolve(nh, ipv6: v6) }
+          forget_missing_labels unless @labels.empty?
           @vrfs.each do |v|
             @devices[v.name] = device_error(v)
             want, rows = wanted(v, winners, hop)
@@ -305,6 +312,8 @@ module BGP
       # Sends the kernel what differs, and marks each row.
       def apply(v, want, rows)
         have = @installed[v.name]
+        kernel = kernel_routes(v)
+        have.delete_if { |prefix, argv| kernel[prefix] != VrfFib.signature(argv) }
         (have.keys - want.keys).each do |prefix|
           r = @fib.run(@fib.remove_argv(v.name, prefix))
           log(:warn, "vrf #{v.name}: #{r}") unless r.ok?
@@ -324,6 +333,25 @@ module BGP
           end
           by_prefix[prefix]['installed'] = have[prefix] == w.argv
         end
+      end
+
+      # The VRF's proto bgp routes as the kernel has them, both families:
+      # prefix => [labels, gateway, dev], as VrfFib.signature gives them.
+      def kernel_routes(v)
+        require 'json' # here, as View#json does: see vpn_transport.rb
+        [@fib.installed_argv(v.name), @fib.installed6_argv(v.name)].flat_map { |argv| read_routes(argv) }.to_h do |r|
+          [normalize(r['dst'].to_s), VrfFib.kernel_signature(r)]
+        end
+      rescue IPAddr::Error
+        {}
+      end
+
+      # Forgets each label route the kernel no longer has, or has toward
+      # another device, so export puts it back. Lock held.
+      def forget_missing_labels
+        require 'json'
+        present = read_routes(@fib.labels_argv).to_h { |r| [r['dst'].to_i, r['dev']] }
+        @labels.each { |vrf, label| @label_installed.delete(label) unless present[label] == vrf }
       end
 
       def prefix_order(prefix)

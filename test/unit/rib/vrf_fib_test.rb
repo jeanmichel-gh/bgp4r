@@ -72,6 +72,24 @@ class TestBgpRibVrfFib < Test::Unit::TestCase
                  @fib.install_argv('A', '2001:db8:2::/64', [17003, 16], hop).join(' '))
   end
 
+  # What is installed is read back from the kernel at each sync, and
+  # compared as [labels, gateway, dev] (measured JSON, iproute2 6.19).
+  def test_the_read_back_and_its_signature
+    assert_equal('ip -j route show vrf A proto bgp', @fib.installed_argv('A').join(' '))
+    assert_equal('ip -6 -j route show vrf A proto bgp', @fib.installed6_argv('A').join(' '))
+    assert_equal('ip -j -f mpls route show proto bgp', @fib.labels_argv.join(' '))
+    mpls = Hop.new('mpls', [17003], '10.0.12.2', 'eth1', nil)
+    sent = @fib.install_argv('A', '192.168.2.0/24', [17003, 16], mpls)
+    read = { 'dst' => '192.168.2.0/24', 'encap' => { 'encap_type' => 'mpls', 'dst' => '17003/16' },
+             'gateway' => '10.0.12.2', 'dev' => 'eth1', 'flags' => [] }
+    assert_equal(['17003/16', '10.0.12.2', 'eth1'], BGP::Rib::VrfFib.signature(sent))
+    assert_equal(BGP::Rib::VrfFib.signature(sent), BGP::Rib::VrfFib.kernel_signature(read))
+    gre = @fib.install_argv('A', '192.168.2.0/24', [24001], Hop.new('gre', [], nil, 'gre-pe2', nil))
+    assert_equal(['24001', nil, 'gre-pe2'], BGP::Rib::VrfFib.signature(gre))
+    assert_equal(['24001', nil, 'gre-pe2'],
+                 BGP::Rib::VrfFib.kernel_signature({ 'dst' => '192.168.2.0/24', 'encap' => { 'encap_type' => 'mpls', 'dst' => '24001' }, 'dev' => 'gre-pe2' }))
+  end
+
   # With no runner a real process runs, and its exit status is read.
   def test_with_no_runner_the_command_runs
     assert_equal(0, BGP::Rib::VrfFib.new(bin: 'true').run(%w[true]).status)
