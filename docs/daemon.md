@@ -369,6 +369,36 @@ the BGP-LS routes it receives, in a table of their own outside the RIB.
 `show.link_state` lists both. `docs/bgp-ls.md` section 12 has what is
 sent, and `docs/bgp-ls-howto.md` explains why.
 
+**VRFs, a PE's half of an L3VPN** (`docs/design/l3vpn-pe.md`, pull
+request 2). With a `vrfs:` block, bgp4rd imports the VPN-IPv4 routes it
+receives into each VRF by Route Target, and installs the winners in the
+VRF's kernel table:
+
+```yaml
+vrfs:
+  - name: A                        # the kernel VRF device, made by the lab
+    table: 100                     # its table; bgp4rd checks the device has it
+    rd: 65000:1                    # rd, export and prefixes: pull request 3
+    import: [65000:100]            # Import Targets, RFC 4364 section 4.3.1
+    export: [65000:100]
+    prefixes: [192.168.1.0/24]
+l3vpn:
+  transport: mpls                  # the default: the IGP's labels to the next hop
+  tunnels:                         # or GRE toward these PEs
+    10.255.0.9: { gre: gre-pe9 }
+```
+
+`mpls` reads the kernel's route to the BGP next hop (`ip -j route get`),
+where isisd or FRR put their SR label, and pushes it over the VPN label:
+`ip route replace vrf A P encap mpls 17003/24001 via GW dev D proto bgp`.
+`gre` pushes the VPN label alone into the tunnel: `encap mpls 24001 dev
+gre-pe9`. A next hop with no transport is unreachable, so the decision
+process passes over it. `ip monitor route` tells bgp4rd when the kernel's
+routes change, and the VRFs follow the IGP. Routes go in with `proto
+bgp`; at start and stop bgp4rd flushes its own and nothing else. A VRF
+whose device is missing, or not on its table, gets nothing, and
+`show.vrfs` says why. `vrfs` and `l3vpn` are read once, at start.
+
 **A table is always on, which `lab/speaker.rb` differs from.** `rib`
 defaults to true here, because a daemon is a router by definition and
 `show.routes` has to answer; in the lab speaker a table has to be asked
@@ -591,6 +621,8 @@ below.
 | `show.fib` | what the daemon believes is in the kernel table, and what failed | built |
 | `show.link_state` | BGP-LS routes: sent as a Producer, and received per peer | built |
 | `show.vpn` | the VPN-IPv4 routes received (AFI 1 / SAFI 128), one row each: RD, prefix, peer, next hop, labels, Route Targets, best | built |
+| `show.vrfs` | the VRFs: name, table, RD, Route Targets, the device's state, routes imported and installed | built |
+| `show.vrf` | each VRF's imported routes: what is pushed, where it goes, installed or why not; `vrf` picks one | built |
 | `show.log` | the last N lines | built |
 | `events.subscribe`, `events.unsubscribe` | a stream, one event per line | built |
 | `peer.clear`, `peer.stop`, `peer.start` | one session | built |
@@ -1930,5 +1962,5 @@ BGP-LS (`bgp/daemon/link_state_table.rb`) and, since
 (`bgp/rib/vpn_table.rb`). The VPN table keys a route on its Route
 Distinguisher and prefix and runs the unicast decision process per key.
 It is filled only on a session whose two OPENs carried that family (RFC
-4364 section 4.3.4), and `show.vpn` reads it. No VRF uses it yet; that is
-the spec's pull request 2.
+4364 section 4.3.4), and `show.vpn` reads it. Since pull request 2, VRFs
+import from it (`bgp/rib/l3vpn.rb`), into kernel tables of their own.

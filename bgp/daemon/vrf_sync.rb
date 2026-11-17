@@ -1,0 +1,103 @@
+#--
+# Copyright 2026 Jean-Michel Esnault.
+# All rights reserved.
+# See LICENSE.txt for permissions.
+#
+#
+# This file is part of BGP4R.
+#
+# BGP4R is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# BGP4R is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with BGP4R.  If not, see <http://www.gnu.org/licenses/>.
+#++
+
+require 'bgp/rib'
+
+module BGP
+  module Daemon
+
+    # Keeps a PE's VRFs in step: docs/design/l3vpn-pe.md, pull request 2.
+    #
+    # Rib::L3vpn#sync! works out every VRF's routes and sends the kernel
+    # the difference. This runs it on a thread of its own, whenever:
+    #
+    # * the VPN table changes, a route announced or withdrawn or a
+    #   session gone (VpnTable#on_change), and
+    # * the kernel's routes change, which is how the IGP's convergence
+    #   reaches a VRF: a new SR label toward a PE. `ip monitor route` in a
+    #   child process says so. It is a trigger only: `ip -j monitor route`
+    #   prints plain text, not JSON, with iproute2 6.19 (measured), and
+    #   the sync reads each next hop again anyway.
+    #
+    # Pokes that arrive while a sync runs make one more sync, not one each.
+    # The sync's own commands are route changes too, so they poke it
+    # again; the next sync finds nothing to send and the loop settles.
+    class VrfSync
+
+      def initialize(l3vpn, logger: nil, bin: 'ip', monitor: true)
+        @l3vpn = l3vpn
+        @logger = logger
+        @bin = bin
+        @monitor = monitor
+        @queue = Queue.new
+      end
+
+      def start
+        @l3vpn.start
+        @worker = Thread.new { work }
+        @watcher = Thread.new { watch } if @monitor
+        self
+      end
+
+      def poke
+        @queue << :sync
+        self
+      end
+
+      def stop
+        @queue << :stop
+        @worker&.join(5)
+        if @pid
+          Process.kill('TERM', @pid) rescue nil
+          Process.wait(@pid) rescue nil
+        end
+        @watcher&.kill
+        @l3vpn.stop
+        self
+      end
+
+      private
+
+      def work
+        loop do
+          job = @queue.pop
+          jobs = [job]
+          jobs << @queue.pop until @queue.empty?
+          break if jobs.include?(:stop)
+          @l3vpn.sync!
+        end
+      rescue StandardError => e
+        @logger&.error("vrf sync: #{e.class}: #{e.message}")
+        retry
+      end
+
+      def watch
+        io = ::IO.popen([@bin, 'monitor', 'route'], :err => [:child, :out])
+        @pid = io.pid
+        io.each_line { poke }
+      rescue SystemCallError => e
+        @logger&.error("vrf sync: ip monitor route: #{e.message}")
+      end
+    end
+
+  end
+end

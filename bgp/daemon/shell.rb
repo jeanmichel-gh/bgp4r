@@ -113,6 +113,9 @@ module BGP
           kw('ip', 'the IOS form: show ip bgp is show bgp', nil, [show_bgp]),
           kw('fib', 'what the daemon put in the kernel table', :fib),
           kw('link-state', 'BGP-LS routes, sent and received', :link_state),
+          kw('vrf', "the VRFs: table, Route Targets, routes imported and installed", :vrfs, [
+            arg(:vrf, 'NAME', "one VRF's routes, with their transport", :vrf_routes)
+          ]),
           kw('configuration', 'the running configuration, as set lines', :configuration, [
             kw('candidate', 'the candidate configuration', :candidate)
           ]),
@@ -582,6 +585,50 @@ module BGP
           end
         end
         out
+      end
+
+      # `show vrf`, the rows of `show.vrfs`: one line per VRF.
+      def vrfs(_args, _words)
+        rows = all_rows('show.vrfs', {})
+        return "No VRFs.\n" if rows.empty?
+        out = +''
+        line = "%-12s %6s %-14s %-24s %7s %9s  %s\n"
+        out << format(line, 'VRF', 'Table', 'RD', 'Import', 'Routes', 'Installed', 'Device')
+        rows.each do |r|
+          out << format(line, r['name'], r['table'], r['rd'] || '-', Array(r['import']).join(' '), r['routes'],
+                        r['installed'], r['error'] || r['device']).sub(/ +\n\z/, "\n")
+        end
+        out
+      end
+
+      # `show vrf NAME`, the rows of `show.vrf` for one VRF: each route it
+      # imported, what is pushed (the transport's labels, then the VPN
+      # label), where it goes, and whether the kernel has it.
+      def vrf_routes(args, _words)
+        rows = all_rows('show.vrf', 'vrf' => args[:vrf])
+        return "No routes in VRF #{args[:vrf]}.\n" if rows.empty?
+        out = +''
+        out << format("VRF %s, %d route(s)\n\n", args[:vrf], rows.size)
+        line = "%-3s %-18s %-15s %-12s %-15s %-10s %s\n"
+        out << format(line, '', 'Prefix', 'Next Hop', 'Push', 'Via', 'Dev', 'RD')
+        rows.each do |r|
+          push = (Array(r['transport_labels']) + Array(r['vpn_labels'])).join('/')
+          out << format(line, r['installed'] ? '*>' : '', r['prefix'], r['next_hop'], push, r['gateway'] || '-',
+                        r['dev'] || '-', r['rd'])
+          out << "      not installed: #{r['error']}\n" if r['error']
+        end
+        out
+      end
+
+      # Every page of one paged method.
+      def all_rows(method, params)
+        rows, offset = [], 0
+        loop do
+          page = @client.call(method, params.merge('offset' => offset))
+          rows.concat(Array(page['rows']))
+          offset = page['next_offset'] or break
+        end
+        rows
       end
 
       # RFC 4271 section 5.1.1: i IGP, e EGP, ? INCOMPLETE.

@@ -158,7 +158,7 @@ module BGP
 
       # A list whose elements are objects, keyed by one of their own
       # fields rather than by their position.
-      KEYED_LISTS = { 'neighbors' => 'address' }.freeze
+      KEYED_LISTS = { 'neighbors' => 'address', 'vrfs' => 'name' }.freeze
 
       # A list whose elements are objects with nothing to key them by, so
       # the key is the ordinal. See the grammar above for what that costs.

@@ -123,7 +123,7 @@ class BGP_Daemon_Shell_Test < Test::Unit::TestCase
   # every command: there are 37 of them.
   def test_an_unknown_word_says_what_fits_there
     assert_equal('"show everything" is not a command. After "show" comes bgp, ip, fib, link-state, ' \
-                 'configuration, log', run_line('show everything').error)
+                 'vrf, configuration, log', run_line('show everything').error)
     assert_match(/\A"frobnicate" is not a command. A command starts with show, clear, enable, disable, monitor, config, or is a method name with a dot/,
                  run_line('frobnicate').error)
   end
@@ -146,7 +146,7 @@ class BGP_Daemon_Shell_Test < Test::Unit::TestCase
   def test_words_that_are_not_yet_a_command_say_how_they_go_on
     r = run_line('clear bgp')
     assert_equal('"clear bgp" is not a whole command. After it comes PEER', r.error)
-    assert_equal('"show" is not a whole command. After it comes bgp, ip, fib, link-state, configuration, log',
+    assert_equal('"show" is not a whole command. After it comes bgp, ip, fib, link-state, vrf, configuration, log',
                  run_line('show').error)
   end
 

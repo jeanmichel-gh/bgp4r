@@ -68,6 +68,7 @@ require 'bgp/daemon/community_keys'
 require 'bgp/daemon/hand'
 require 'bgp/daemon/link_state_table'
 require 'bgp/daemon/link_state_producer'
+require 'bgp/daemon/vrf_sync'
 require 'socket'
 require 'thread'
 
@@ -711,6 +712,13 @@ module BGP
       # docs/design/l3vpn-pe.md, and bgp/rib/vpn_table.rb.
       attr_reader :vpn
 
+      # The PE's VRFs, filled from the VPN table and put in the kernel, or
+      # nil with no vrfs: block (bgp/rib/l3vpn.rb, pull request 2).
+      attr_reader :l3vpn
+
+      # The l3vpn: block's keys. labels is pull request 3's.
+      L3VPN_KEYS = %w[labels transport tunnels].freeze
+
       # The configuration this speaker was built from, which
       # `BGP::Daemon::Candidate` reads as the running one and `reconfigure`
       # replaces.
@@ -764,6 +772,7 @@ module BGP
         @link_state = LinkStateTable.new
         @vpn = BGP::Rib::VpnTable.new(local_as: @my_as, router_id: @router_id,
                                       cluster_id: decision_options[:cluster_id])
+        build_l3vpn(config['vrfs'], config['l3vpn'])
         if config['link_state']
           @link_state_producer = LinkStateProducer.new(self, config['link_state'], :logger => @logger)
           on_established { |p| @link_state_producer.session_up(p) }
@@ -888,6 +897,7 @@ module BGP
       # output and `bgp4rd` takes `--log FILE`.
       def start
         start_rib
+        @vrf_sync&.start
         @server = listen if @peers.any? { |p| !p.active? }
         @peers.select(&:active?).each(&:run_active)
         @link_state_producer&.start
@@ -900,6 +910,7 @@ module BGP
         @server.close if @server
         @peers.each(&:stop)
         stop_rib
+        @vrf_sync&.stop
         self
       end
 
@@ -1186,6 +1197,34 @@ module BGP
       # `show.vpn`: the VPN-IPv4 routes received, one row each.
       def vpn_rows
         @vpn.rows
+      end
+
+      # `show.vrfs` and `show.vrf`: none without a vrfs: block.
+      def vrfs_rows
+        @l3vpn ? @l3vpn.vrf_rows : []
+      end
+
+      def vrf_route_rows(vrf = nil)
+        @l3vpn ? @l3vpn.rows(vrf) : []
+      end
+
+      # vrfs: and l3vpn:, read and checked once, at start: a change needs a
+      # restart (Candidate's RESTART_DEFAULT). With no vrfs the PE part is
+      # off, whatever l3vpn says.
+      def build_l3vpn(vrfs, l3vpn)
+        l3vpn ||= {}
+        raise ArgumentError, 'l3vpn: is a mapping' unless l3vpn.is_a?(Hash)
+        unknown = l3vpn.keys - L3VPN_KEYS
+        unless unknown.empty?
+          raise ArgumentError, "l3vpn: unknown key(s) #{unknown.join(', ')}: use one of #{L3VPN_KEYS.join(', ')}"
+        end
+        list = BGP::Rib::Vrf.list(vrfs)
+        transport = BGP::Rib::VpnTransport.from_config(l3vpn)
+        return if list.empty?
+        @l3vpn = BGP::Rib::L3vpn.new(vpn_table: @vpn, vrfs: list, transport: transport, local_as: @my_as,
+                                     router_id: @router_id, logger: @logger)
+        @vrf_sync = VrfSync.new(@l3vpn, logger: @logger)
+        @vpn.on_change { @vrf_sync.poke }
       end
 
       def state
