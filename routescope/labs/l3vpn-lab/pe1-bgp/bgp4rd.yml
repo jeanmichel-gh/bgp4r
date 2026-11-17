@@ -1,0 +1,14 @@
+# pe1's BGP half: iBGP VPNv4 to pe2 (FRR) between loopbacks, and VRFs A
+# and B. The VRF devices are made by pe1's start command.
+router_id: 10.255.0.1
+as: 65000
+local_address: 10.255.0.1
+log_level: info
+neighbors:
+  - { address: 10.255.0.3, as: 65000, description: pe2, hold_time: 30, connect: true,
+      capabilities: [as4_byte, route_refresh, mbgp_ipv4_mpls_vpn_unicast] }
+vrfs:
+  - { name: A, table: 100, rd: "65000:1", import: ["65000:100"], export: ["65000:100"] }
+  - { name: B, table: 200, rd: "65000:2", import: ["65000:200"], export: ["65000:200"] }
+l3vpn:
+  labels: { start: 24000, size: 1000 }

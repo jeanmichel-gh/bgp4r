@@ -1057,6 +1057,14 @@ routescope/labs/         the containerlab labs written for the routescope
                          in the 9 second hold time, a session stopped by
                          hand in under 0.2. The lab images carry ping
                          and traceroute for it
+                         routescope/labs/l3vpn-lab is an **L3VPN**:
+                         `bgp4rd` as one PE (pe1, beside isis4r in its
+                         namespace) and FRR as the other, over an IS-IS
+                         SR-MPLS core of two paths, p1 and p2. Two VRFs on
+                         the same addresses. Its gate scenario pings
+                         across both VRFs, fails the p1 to pe2 link and
+                         checks pe1 moves to p2's label. Not deployed in
+                         CI: it needs isis4r's image
                          lab/speaker.rb is the **command line** now and nothing
                          else: the sessions, the configuration and the recording
                          moved into bgp/daemon/speaker.rb, because `bgp4rd`
@@ -2045,7 +2053,7 @@ that moves a phase.
 | irb console | Done | – |
 | Route reflection | Items 1 to 5 done, with two gaps | Item 6, `client_to_client: false`, only if asked for. Item 3 lacks the text form. Item 4 lacks the FRR 10.5.1 run |
 | BGP-LS lab | Phases 1 and 3 done | Phase 2, a Propagator, not started; needs its own spec |
-| L3VPN PE (routescope's P2) | Specs approved 2026-11-17, `docs/design/l3vpn-pe.md` and `l3vpn-ruby-pe.md`; PRs 1 to 3 of 7 built: the VPN table, then VRFs, import and both transports, then export and labels | Seven pull requests for the PE, from the VPN table to PE to CE eBGP; four for the labs of our own daemons |
+| L3VPN PE (routescope's P2) | Specs approved 2026-11-17, `docs/design/l3vpn-pe.md` and `l3vpn-ruby-pe.md`; PRs 1 to 4 of 7 built: the VPN table, then VRFs, import and both transports, then export and labels, then `l3vpn-lab` with FRR as the other PE and its gate passing | Seven pull requests for the PE, from the VPN table to PE to CE eBGP; four for the labs of our own daemons |
 
 **Left, outside the tables above:**
 

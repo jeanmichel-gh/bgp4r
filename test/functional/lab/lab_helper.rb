@@ -804,6 +804,9 @@ module LabHelper
     # its show command, so unlike GoBGP there is one name.
     EVPN = 'l2vpn evpn'
 
+    # VPN-IPv4, AFI 1 SAFI 128 (RFC 4364), by FRR's own name.
+    VPN = 'ipv4 vpn'
+
     # families: extra address families, each activated for the peer, such
     #           as FS_IPV4. Empty by default, so a config with none is
     #           what it always was.
@@ -816,11 +819,12 @@ module LabHelper
     #           for it and runs on 8.x only.
     def initialize(local: '127.0.0.2', as: 65002, router_id: '10.0.0.2',
                    peer: '127.0.0.1', peer_as: 65001, port: nil, ipv6: false,
-                   network: nil, families: [])
+                   network: nil, families: [], vpn_networks: [])
       @local, @as, @router_id = local, as, router_id
       @peer, @peer_as, @ipv6 = peer, peer_as, ipv6
       @network = network
       @families = families
+      @vpn_networks = vpn_networks
       @port = port || Local.free_port
       @listen_port = Local.free_port
       @vty_port = Local.free_port
@@ -838,6 +842,9 @@ module LabHelper
                'log stdout debugging',
                'debug bgp updates in',
                'debug bgp neighbor-events',
+               # Before `router bgp`: a `network` naming a route-map not
+               # yet defined originates nothing (measured, 10.5.1).
+               *vpn_route_maps,
                'router bgp %d' % @as,
                ' bgp router-id %s' % @router_id,
                # A lab, not a network. Without the first, FRR refuses to
@@ -872,10 +879,29 @@ module LabHelper
       @families.each do |f|
         lines << ' address-family %s' % f
         lines << '  neighbor %s activate' % @peer
+        if f == VPN
+          @vpn_networks.each_with_index do |v, i|
+            lines << '  network %s rd %s label %d route-map VPN%d' % [v[:prefix], v[:rd], v[:label], i]
+          end
+        end
         lines << ' exit-address-family'
       end
       lines.join("\n") + "\n"
     end
+
+    # vpn_networks: VPN routes for this router to originate, each
+    # { prefix:, rd:, label:, rt: }. FRR's static VPN `network` takes the
+    # RD and the label; its Route Target comes from a route-map, one per
+    # route. Needs VPN in families. With no zebra there is no VRF, so
+    # this is the way a standalone bgpd sends VPN routes. Measured
+    # against 10.5.1 on 2026-11-17: bgp4r read back the RD, the label,
+    # the Route Target and bgpd's own address as next hop.
+    def vpn_route_maps
+      @vpn_networks.each_with_index.flat_map do |v, i|
+        ['route-map VPN%d permit 10' % i, ' set extcommunity rt %s' % v[:rt]]
+      end
+    end
+    private :vpn_route_maps
 
     # A line to add when bgpd did not come up, or nil.
     #
@@ -1109,6 +1135,27 @@ module LabHelper
         v.each { |k, p| out[k] = p['paths'] if p.is_a?(Hash) and p['paths'] }
       end
       out
+    end
+
+    # One VPN-IPv4 route's best path, from FRR's per-route JSON, or nil.
+    #
+    # **The table JSON leaves out what a VPN test reads.** `show bgp ipv4
+    # vpn json` keys routes by RD under `routes.routeDistinguishers` and
+    # carries no label and no extended community; the per-route form
+    # does, as `remoteLabel` and `extendedCommunity.string`. Measured
+    # against 10.5.1 on 2026-11-17.
+    def vpn_path(rd, prefix)
+      answer = vty_json("show bgp #{VPN} rd #{rd} #{prefix} json") or return nil
+      paths = (answer[rd] || {})['paths'] or return nil
+      paths.find { |p| p['bestpath'].is_a?(Hash) && p['bestpath']['overall'] } || paths.first
+    end
+
+    # [rd, prefix] of every VPN-IPv4 route FRR holds, or nil while it is
+    # not answering.
+    def vpn_keys
+      answer = vty_json("show bgp #{VPN} json") or return nil
+      rds = (answer['routes'] || {})['routeDistinguishers'] || {}
+      rds.flat_map { |rd, h| h.keys.collect { |prefix| [rd, prefix] } }.sort
     end
 
     # How many prefixes FRR says that table holds, which is its own count

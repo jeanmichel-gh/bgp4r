@@ -21,7 +21,7 @@ amounts. Measured 2026-11-03:
 |---|---|---:|---|---|
 | unit | Ruby | 172 | 21s | `ruby test/run_unit.rb` |
 | functional | a loopback socket | 19 | 18s | one file at a time, below |
-| lab | gobgpd, FRR, Docker or root | 34 | 10s to 400s per group | `ruby test/run_lab.rb GROUP` |
+| lab | gobgpd, FRR, Docker or root | 35 | 10s to 400s per group | `ruby test/run_lab.rb GROUP` |
 
 **The first two tiers together are under a minute and need nothing
 installed.** That is worth knowing before reaching for a lab test.
@@ -110,7 +110,7 @@ Deciding and advertising routes.
 | Feature | unit | func | lab | What |
 |---|---:|---:|---:|---|
 | `rib` | 7 | 1 | 0 | Adj-RIB-In, the decision process and the Loc-RIB |
-| `vpn-table` | 2 | 1 | 0 | The VPN-IPv4 table: SAFI 128 routes received, keyed on RD and prefix, best path per key |
+| `vpn-table` | 2 | 1 | 1 | The VPN-IPv4 table: SAFI 128 routes received, keyed on RD and prefix, best path per key |
 | `vrfs` | 6 | 0 | 0 | A PE's VRFs: import by Route Target, the mpls and gre transports, VRF routes in the kernel, export with a label per VRF |
 | `export` | 5 | 1 | 5 | The export rules, Adj-RIB-Out, UPDATE building and the MRAI timer |
 | `fib` | 3 | 0 | 3 | Putting the Loc-RIB in a forwarding table, and packets following it |
@@ -613,6 +613,8 @@ The VPN-IPv4 table: SAFI 128 routes received, keyed on RD and prefix, best path 
 
 - RFC 4364 sections 4.1 and 4.3
 - 2 unit files, 1 functional
+- lab:
+  - `vpn_frr_test`, needs frr
 
 ```
 ruby test/run_feature.rb vpn-table
@@ -875,5 +877,5 @@ test file has to be tagged before the suite is green again, which is
 the same arrangement `test/unit/lab_groups_test.rb` has with the CI
 matrix.
 
-225 of 225 test files are tagged. The
+226 of 226 test files are tagged. The
 remainder, if any, is what the guard names.

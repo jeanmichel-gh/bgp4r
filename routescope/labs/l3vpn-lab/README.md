@@ -1,0 +1,120 @@
+# l3vpn-lab
+
+An L3VPN with `bgp4rd` as one PE and FRR as the other, across an
+IS-IS core with SR-MPLS. It is the lab of `docs/design/l3vpn-pe.md`
+(pull request 4), and the place its gate runs.
+
+`ABOUT.md` is the short version, the one routescope shows.
+
+```
+                       p1 (isis4r, SRGB 17000)
+  ce1a --+            /  metric 10        \             +-- ce2a
+         |  eth1     /                     \     eth1   |
+         pe1 -------                         ------- pe2
+         |  isis4r + bgp4rd                   FRR       |
+  ce1b --+  SRGB 16000  \  eth2         eth2 / SRGB     +-- ce2b
+                         \   metric 20     /   18000
+                       p2 (FRR, SRGB 19000)
+```
+
+## The nodes
+
+| Node | Runs | Loopback, SID index | Addresses |
+|---|---|---|---|
+| `pe1` | isis4r; makes VRFs A (table 100) and B (table 200) | 10.255.0.1, 1 | eth1 10.0.12.1/30, eth2 10.0.14.1/30, eth3 192.168.1.1/24 in A, eth4 192.168.1.1/24 in B |
+| `pe1-bgp` | `bgp4rd`, in pe1's namespace | | |
+| `p1` | isis4r | 10.255.0.2, 2 | eth1 10.0.12.2/30, eth2 10.0.23.1/30 |
+| `p2` | FRR 10.2.1, IS-IS | 10.255.0.4, 4 | eth1 10.0.14.2/30, eth2 10.0.34.1/30 |
+| `pe2` | FRR 10.2.1, IS-IS and bgpd; VRFs A and B made at start | 10.255.0.3, 3 | eth1 10.0.23.2/30, eth2 10.0.34.2/30, eth3 192.168.2.1/24 in A, eth4 192.168.2.1/24 in B |
+| `ce1a`, `ce1b` | Linux, default route to pe1 | | eth1 192.168.1.2/24 |
+| `ce2a`, `ce2b` | Linux, default route to pe2 | | eth1 192.168.2.2/24 |
+
+Every SRGB is 8000 labels, so a node's label for pe2 is its base plus 3.
+The SRLBs are all 15000 to 15999.
+
+| VRF | RD | Route Target | pe1's label (bgp4rd) | pe2's label (FRR) |
+|---|---|---|---|---|
+| A | 65000:1 | 65000:100 | 24000 | 16 |
+| B | 65000:2 | 65000:200 | 24001 | 17 |
+
+bgp4rd's labels come from its `l3vpn: labels:` block, 24000 and up, in
+VRF order. FRR's come from its own label manager (`label vpn export
+auto`): 16 and 17 on this lab, measured, not configured.
+
+## What happens to a packet
+
+A ping from ce1a to ce2a, read with tcpdump on p1's two links
+(2026-11-17, on the VM):
+
+```
+p1 eth1, from pe1:
+  MPLS (label 17003, tc 0, ttl 63) (label 16, tc 0, [S], ttl 63) IP 192.168.1.2 > 192.168.2.2: ICMP echo request
+  MPLS (label 24000, tc 0, [S], ttl 63) IP 192.168.2.2 > 192.168.1.2: ICMP echo reply
+p1 eth2, toward pe2:
+  MPLS (label 16, tc 0, [S], ttl 63) IP 192.168.1.2 > 192.168.2.2: ICMP echo request
+  MPLS (label 17001, tc 0, ttl 63) (label 24000, tc 0, [S], ttl 63) IP 192.168.2.2 > 192.168.1.2: ICMP echo reply
+```
+
+- pe1's VRF A route for 192.168.2.0/24 pushes `17003/16`: p1's label for
+  pe2's loopback, which isisd put in the kernel, then FRR's VPN label.
+  bgp4rd read the first from `ip route get 10.255.0.3`.
+- p1 pops 17003 (PHP), so pe2 sees 16 alone. FRR's label 16 sends it to
+  VRF A.
+- FRR pushes `17001/24000` on the way back. p1 pops 17001, and pe1's label
+  route for 24000 (`ip -f mpls route`: `24000 dev A proto bgp`) pops
+  24000 and looks the address up in VRF A.
+
+From ce1b the same addresses carry 17 and 24001, through VRF B. A
+tcpdump on ce2b while ce1a pings 192.168.2.2 sees nothing.
+
+With p1's eth2 down, pe1's route to pe2 becomes `encap mpls 19003 via
+10.0.14.2 dev eth2`, and bgp4rd moves every VRF route onto it
+(`19003/16`, `19003/17`) within the IGP's convergence. When the link
+comes back they move back to `17003`. Two runs of the gate scenario
+measured 2.6 s and 1.6 s to fail over, and 2.2 s to restore.
+
+## Reading it by hand
+
+```sh
+docker exec clab-l3vpn-lab-pe1-bgp bgp4r-cli show vrf
+docker exec clab-l3vpn-lab-pe1-bgp bgp4r-cli show vrf A
+docker exec clab-l3vpn-lab-pe1-bgp bgp4r-cli show bgp vpnv4
+docker exec clab-l3vpn-lab-pe1 ip route show vrf A
+docker exec clab-l3vpn-lab-pe1 ip -f mpls route
+docker exec clab-l3vpn-lab-pe2 vtysh -c 'show bgp ipv4 vpn'
+docker exec clab-l3vpn-lab-pe2 vtysh -c 'show ip route vrf A'
+docker exec clab-l3vpn-lab-pe2 vtysh -c 'show mpls table'
+docker exec clab-l3vpn-lab-ce1a ping -c 3 192.168.2.2
+```
+
+The labels on the wire, on p1's link from pe1 (eth2 is toward pe2):
+
+```sh
+docker exec clab-l3vpn-lab-p1 tcpdump -nn -i eth1 mpls
+```
+
+## Scenarios
+
+| Scenario | What it checks |
+|---|---|
+| `gate` | IS-IS and the VPN session up, both VRFs reaching across in both directions, then p1 to pe2 down: pe1 on p2's label 19003 and the pings crossing again, then the link back |
+
+## Running it
+
+Images: `isis4r:latest` (isis), `bgp4r-lab:latest` from this repository
+(`docker build --target lab-node -t bgp4r-lab:latest .`, with L3VPN pull
+request 3 or later) and `quay.io/frrouting/frr:10.2.1`. The host needs
+the `vrf`, `mpls_router` and `mpls_iptunnel` modules.
+
+```sh
+routescope-labs install bgp4r/l3vpn-lab
+```
+
+and start it from routescope's Labs panel, or here: `sudo containerlab
+deploy -t l3vpn-lab.clab.yml`.
+
+## What it does not have yet
+
+- **PE to CE routing.** The CEs have a default route; each PE sends its
+  connected CE subnet. eBGP from a CE is pull request 7.
+- **Per-prefix labels.** One label per VRF on both PEs.

@@ -1,8 +1,9 @@
 # L3VPN PE in bgp4rd
 
 Status: approved by the owner 2026-11-17. Pull requests 1, the VPN
-table, 2, VRFs and both transports, and 3, export and labels, built the
-same day. The open questions
+table, 2, VRFs and both transports, 3, export and labels, and 4, the
+lab and the interop test, built the same day. The gate passed on the
+VM, through routescope. The open questions
 at the end keep the answers this document gives until the owner changes
 them.
 
@@ -519,6 +520,19 @@ neighbors:
 - Interop: bgp4rd and FRR 10.2.1 exchange VPNv4 routes, each reading
   the other's RD, RTs and label (`show bgp ipv4 vpn` on FRR, `show.vpn`
   on bgp4rd).
+  **Built in pull request 4** as `test/functional/lab/vpn_frr_test.rb`,
+  in CI's `lab frr` group, against FRR 10.5.1, which ubuntu-latest
+  installs. FRR runs there with no zebra and so no VRF; it sends VPN
+  routes from its static form, `network P rd RD label L route-map M`,
+  with the Route Target set by the route-map. Measured on 2026-11-17:
+  FRR read the RD, label, Route Target and next hop of the UPDATEs
+  `VpnExporter` builds, kept one prefix under two RDs as two routes,
+  and withdrew one RD's route on our withdrawal, whose label field its
+  log shows as 524288, the 0x800000 Compatibility value. bgp4rd's
+  `VpnTable` read FRR's two routes back with their RDs (an AS one and
+  an IPv4 one), labels and Route Targets. `test/coverage_matrix.rb`
+  vouches `'vpn'` as `:both` for FRR. A `network` whose route-map is
+  defined after it originated nothing.
 - Lab: the gate below, as a scenario.
 
 ## Gate
@@ -537,6 +551,23 @@ On `l3vpn-lab`, against FRR 10.2.1:
 - The p1 to pe2 link down: pe1's VRF routes move to the transport
   label through p2 (in p2's block, 19000 + pe2's index), with none left
   stale, and the pings cross again. Link up: they move back.
+
+**Passed on 2026-11-17**, on the VM with FRR 10.2.1 and bgp4rd from
+master after pull request 3, every point above, with nothing set by
+hand:
+- ce1a to ce2a: `17003/16` on pe1 to p1, `16` alone on p1 to pe2; the
+  reply `17001/24000`, then `24000` alone. FRR's label manager gave 16
+  and 17.
+- ce1b to ce2b: `17003/17`, reply `24001`. A tcpdump on ce2b saw
+  nothing of ce1a's pings.
+- FRR's `show bgp ipv4 vpn` listed RDs 65000:1 and 65000:2, RTs
+  65000:100 and 65000:200, labels 24000 and 24001.
+- p1's eth2 down: pe1's VRF routes became `19003/16` and `19003/17` via
+  p2, and the pings crossed; up, back to `17003`.
+
+`scenarios/gate.yml` runs all of it but the captures and the
+separation, which a scenario cannot see. Through routescope it passed
+twice: failover 2.6 s and 1.6 s, restore 2.2 s both times.
 
 This lab's core runs SR, so it gates `mpls`. `gre` is gated by
 `docs/design/l3vpn-ruby-pe.md`'s OSPF lab, whose core has no labels.
