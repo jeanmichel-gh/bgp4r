@@ -1,7 +1,7 @@
 # L3VPN PE in bgp4rd
 
-Status: approved by the owner 2026-11-17. Pull request 1, the VPN table
-and receiving, built the same day. The open questions
+Status: approved by the owner 2026-11-17. Pull requests 1, the VPN
+table, and 2, VRFs and both transports, built the same day. The open questions
 at the end keep the answers this document gives until the owner changes
 them.
 
@@ -283,7 +283,7 @@ bgp4rd put there.
 
 ### 5. What fills a VRF
 
-Phase 1: the VRF's connected prefixes and its `originate` list,
+Phase 1: the VRF's connected prefixes and its `prefixes` list,
 configured; the lab's CEs need only a default route. Pull request 7
 adds routes learned from a CE by eBGP inside the VRF, so a CE can be a
 bgp4rd too ("PE to CE by eBGP", below).
@@ -307,7 +307,7 @@ vrfs:
     rd: 65000:1
     import: [65000:100]            # Route Targets
     export: [65000:100]
-    originate: [192.168.1.0/24]    # besides its connected prefixes
+    prefixes: [192.168.1.0/24]     # besides its connected prefixes
   - name: B
     table: 200
     rd: 65000:2

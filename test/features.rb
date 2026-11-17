@@ -309,6 +309,13 @@ module Features
       :functional => %w[vpn_daemon_test],
     },
 
+    'vrfs' => {
+      :area  => 'routing',
+      :about => "A PE's VRFs: import by Route Target, the mpls and gre transports, VRF routes in the kernel",
+      :rfc   => 'RFC 4364 sections 4.3.1, 4.3.2 and 5',
+      :unit  => %w[rib/vrf_test rib/vpn_transport_test rib/vrf_fib_test rib/l3vpn_test daemon/vrf_sync_test],
+    },
+
     'export' => {
       :area  => 'routing',
       :about => 'The export rules, Adj-RIB-Out, UPDATE building and the MRAI timer',

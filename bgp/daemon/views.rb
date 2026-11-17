@@ -193,10 +193,28 @@ module BGP
       # Outside the RIB, so outside its lock: see bgp/rib/vpn_table.rb for
       # the row. docs/design/l3vpn-pe.md, pull request 1.
       def vpn(params = {})
-        rows = @speaker.vpn_rows
+        rows_page(@speaker.vpn_rows, params)
+      end
+
+      # One page of rows, as show.vpn and the VRF views answer them.
+      def rows_page(rows, params)
         offset, limit = window(params)
         nxt = offset + limit
         envelope(rows[offset, limit].to_a, rows.size, offset, limit, nxt < rows.size ? nxt : nil)
+      end
+
+      # The PE's VRFs, one row each: name, table, RD, Route Targets, the
+      # device's state, and how many routes it imported and installed.
+      # bgp/rib/l3vpn.rb, docs/design/l3vpn-pe.md pull request 2.
+      def vrfs(params = {})
+        rows_page(@speaker.vrfs_rows, params)
+      end
+
+      # The routes each VRF imported, installed or not, one row each:
+      # prefix, RD, next hop, VPN labels, transport and its labels, gateway
+      # and device, installed, and why not. `vrf` picks one VRF.
+      def vrf(params = {})
+        rows_page(@speaker.vrf_route_rows(params['vrf'] || params[:vrf]), params)
       end
 
       # The last lines this daemon logged, oldest first.

@@ -44,18 +44,19 @@ class BGP_Vpn_Daemon_Functional_Test < Test::Unit::TestCase
   def teardown
     @peer.close if @peer
     @server.stop if @server
+  ensure
     @listener.close if @listener
     FileUtils.remove_entry(@dir) if @dir
   end
 
   # bgp4rd, dialing our listener, with these capabilities.
-  def daemon(caps)
+  def daemon(caps, extra = {})
     err = StringIO.new
     @server = BGP::Daemon::Server.new(StringIO.new, err)
     config = BGP::Daemon::Server.with_defaults(
-      'as' => 65_000, 'router_id' => '10.255.0.1', 'state_file' => File.join(@dir, 'state.json'),
-      'neighbors' => [{ 'address' => '127.0.0.1', 'as' => 65_000, 'connect' => true, 'port' => PORT,
-                        'retry' => 1, 'description' => 'pe2', 'capabilities' => caps }])
+      { 'as' => 65_000, 'router_id' => '10.255.0.1', 'state_file' => File.join(@dir, 'state.json'),
+        'neighbors' => [{ 'address' => '127.0.0.1', 'as' => 65_000, 'connect' => true, 'port' => PORT,
+                          'retry' => 1, 'description' => 'pe2', 'capabilities' => caps }] }.merge(extra))
     assert_not_nil(@server.build(config, :socket => File.join(@dir, 'bgp4rd.sock')),
                    "bgp4rd did not start: #{err.string}")
   end
@@ -86,11 +87,11 @@ class BGP_Vpn_Daemon_Functional_Test < Test::Unit::TestCase
     end
   end
 
-  def announce(*nlris)
+  def announce(*nlris, rt: [65_000, 100])
     @peer.send_message(BGP::Update.new(BGP::Path_attribute.new(
       BGP::Origin.new(0), BGP::As_path.new, BGP::Local_pref.new(100),
       BGP::Mp_reach.new(:safi => 128, :nexthop => ['10.255.0.3'], :nlris => nlris),
-      BGP::Extended_communities.new(BGP::Route_target.new(65_000, 100)))))
+      BGP::Extended_communities.new(BGP::Route_target.new(*rt)))))
   end
 
   def withdraw(*nlris)
@@ -131,6 +132,39 @@ class BGP_Vpn_Daemon_Functional_Test < Test::Unit::TestCase
     announce({ :prefix => '192.168.2.0/30', :rd => [65_000, 1], :label => 24_001 })
     sleep 1
     assert_equal(0, call('show.vpn')['total'])
+  end
+
+  # Pull request 2, through a real session: the VRF takes the route its
+  # Import Target matches and not the other. With no such VRF device on
+  # this machine (the lab makes it), nothing is installed, and both
+  # show.vrfs and show.vrf say why.
+  VRF = 'bgp4r-test-none'
+
+  def test_a_vrf_imports_by_route_target_and_says_why_it_installs_nothing
+    daemon(['as4_byte', 'mbgp_ipv4_mpls_vpn_unicast'],
+           'vrfs' => [{ 'name' => VRF, 'table' => 4242, 'import' => ['65000:100'] }])
+    peer
+    announce({ :prefix => '192.168.2.0/30', :rd => [65_000, 1], :label => 24_001 })
+    announce({ :prefix => '10.9.0.0/16', :rd => [65_000, 9], :label => 24_009 }, rt: [65_000, 999])
+    wait_for('both VPN routes') { call('show.vpn')['total'] == 2 }
+    wait_for('the VRF to import its route') { call('show.vrf', 'vrf' => VRF)['total'] == 1 }
+    r = call('show.vrf', 'vrf' => VRF)['rows'].first
+    assert_equal([VRF, '192.168.2.0/30', '65000:1', '10.255.0.3', [24_001], false],
+                 r.values_at('vrf', 'prefix', 'rd', 'next_hop', 'vpn_labels', 'installed'))
+    assert_match(/\Ano VRF device #{VRF}: /, r['error'])
+    v = call('show.vrfs')['rows'].first
+    assert_equal([VRF, 4242, ['65000:100'], 'unusable', 1, 0],
+                 v.values_at('name', 'table', 'import', 'device', 'routes', 'installed'))
+    assert_equal(2, call('show.vpn')['total'], 'the VPN table keeps both')
+    shell = BGP::Daemon::Shell.new(BGP::Daemon::Client.new(@server.api.path))
+    assert_match(/^#{VRF} +4242 +- +65000:100 +1 +0  no VRF device/, shell.execute('show vrf').text)
+    assert_match(/^ +192\.168\.2\.0\/30 +10\.255\.0\.3 /, shell.execute("show vrf #{VRF}").text)
+  end
+
+  def test_no_vrfs_no_rows
+    daemon(['as4_byte', 'mbgp_ipv4_mpls_vpn_unicast'])
+    assert_equal(0, call('show.vrfs')['total'])
+    assert_equal(0, call('show.vrf')['total'])
   end
 
   def test_show_bgp_vpnv4_in_the_cli

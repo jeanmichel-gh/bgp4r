@@ -61,6 +61,22 @@ module BGP
         @lock = Mutex.new
         @in = {}   # peer address => { [rd, prefix, path_id] => Entry }
         @best = {} # [rd, prefix] => Decision::Result
+        @winner = {} # [rd, prefix] => the VpnRoute that won
+        @listeners = []
+      end
+
+      # Calls block, with no argument, after every change to the table:
+      # an announcement, a withdrawal or a session's end. It runs on the
+      # caller's thread, outside the table's lock, so a VRF can read the
+      # table from it. docs/design/l3vpn-pe.md, pull request 2.
+      def on_change(&block)
+        @lock.synchronize { @listeners << block }
+        self
+      end
+
+      # The VpnRoute that won each [RD, prefix], in RD then prefix order.
+      def winners
+        @lock.synchronize { @winner.sort_by { |(rd, prefix), _| [rd, prefix_order(prefix)] }.collect(&:last) }
       end
 
       # True when both OPENs of a session carried the Multiprotocol
@@ -101,6 +117,7 @@ module BGP
           end
           touched.uniq.each { |k| decide(k) }
         end
+        changed
         self
       end
 
@@ -110,6 +127,7 @@ module BGP
           gone = @in.delete(peer)
           gone&.each_value { |e| decide([e.vpn_route.rd, e.vpn_route.prefix]) }
         end
+        changed
         self
       end
 
@@ -158,9 +176,17 @@ module BGP
         }.collect { |e| e.vpn_route.route }
         if candidates.empty?
           @best.delete(key)
+          @winner.delete(key)
         else
-          @best[key] = @decision.best(candidates)
+          result = @decision.best(candidates)
+          @best[key] = result
+          winner = result.best && @in.values.flat_map(&:values).find { |e| e.vpn_route.route.equal?(result.best) }
+          winner ? @winner[key] = winner.vpn_route : @winner.delete(key)
         end
+      end
+
+      def changed
+        @lock.synchronize { @listeners.dup }.each(&:call)
       end
 
       def row(peer, e)

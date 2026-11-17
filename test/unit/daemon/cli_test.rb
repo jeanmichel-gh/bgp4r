@@ -190,7 +190,7 @@ class BGP_Daemon_CLI_Test < Test::Unit::TestCase
     status, _o, err = run_cli(['-c', 'show everything'])
     assert_equal(1, status)
     assert_equal("bgp4r-cli: \"show everything\" is not a command. After \"show\" comes bgp, ip, fib, " \
-                 "link-state, configuration, log\n", err)
+                 "link-state, vrf, configuration, log\n", err)
   end
 
   # Extra spaces are a person typing, not an error.

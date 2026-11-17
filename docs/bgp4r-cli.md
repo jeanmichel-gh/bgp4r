@@ -105,6 +105,8 @@ or a file prints the usage, as it always did. Use `-c` in a script.
 | `show link-state` | BGP-LS routes: what this daemon sent as a Producer, and what it received, one line per route |
 | `show bgp vpnv4` | the VPN-IPv4 routes received, under one heading per Route Distinguisher, with labels and Route Targets |
 | `show bgp vpnv4 unicast`, `show bgp vpnv4 unicast all` | the same, in IOS's words |
+| `show vrf` | the VRFs, one line each: table, RD, Import Targets, routes imported and installed, the device's state |
+| `show vrf NAME` | one VRF's routes: the labels pushed (transport, then VPN), via and device, installed or why not |
 | `show configuration` | the running configuration, as set lines |
 | `show configuration candidate` | the candidate configuration, as set lines |
 | `show bgp neighbors` | every neighbor, in detail: every field `show.peers` answers |
@@ -153,6 +155,8 @@ one. `prefix` reads one prefix instead of a page.
 | `show.adj_out` | what went to one peer, and under `skipped` what did not and why | `peer` (required), `prefix`, `offset`, `limit` |
 | `show.fib` | what the daemon put in the kernel table, and what the kernel refused | `prefix`, `offset`, `limit` |
 | `show.link_state` | BGP-LS routes, one row per route: sent as a Producer (`peer` null), and received per peer | `offset`, `limit` |
+| `show.vrfs` | the VRFs, one row each: `name`, `table`, `rd`, `import`, `export`, `device`, `error`, `routes`, `installed` | `offset`, `limit` |
+| `show.vrf` | each VRF's imported routes: `vrf`, `prefix`, `rd`, `peer`, `next_hop`, `vpn_labels`, `transport`, `transport_labels`, `gateway`, `dev`, `candidates`, `installed`, `error` | `vrf`, `offset`, `limit` |
 | `show.vpn` | VPN-IPv4 routes received, one row per route: `rd`, `prefix`, `path_id`, `peer`, `next_hop`, `labels`, `route_targets`, `as_path`, `origin`, `local_pref`, `med`, `best`, `reason`, `since` | `offset`, `limit` |
 | `show.log` | the daemon's last log lines, oldest first | `count`, default 100 |
 | `show.text` | what `-c 'show bgp'` prints, as one JSON string | `style`, `prefix` |
