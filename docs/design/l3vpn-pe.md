@@ -121,6 +121,25 @@ MPLS (label 100, tc 0, ttl 63) (label 2001, tc 0, [S], ttl 63) IP 192.168.1.2 > 
 MPLS (label 1001, tc 0, [S], ttl 63) IP 192.168.2.2 > 192.168.1.2: ICMP echo reply
 ```
 
+**And over GRE, across a core with no MPLS.** The same five namespaces,
+p routing IP only, with no MPLS at all, and a GRE tunnel between the
+PEs' loopbacks:
+
+```
+pe1# ip link add gre-pe2 type gre local 10.255.0.1 remote 10.255.0.2 ttl 64
+pe1# sysctl -w net.mpls.conf.gre-pe2.input=1
+pe1# ip route add vrf A 192.168.2.0/24 encap mpls 2001 dev gre-pe2
+pe2# ip -f mpls route add 2001 dev A
+```
+
+The ping from ce1 to ce2 passed both ways. tcpdump on p:
+
+```
+10.255.0.1 > 10.255.0.2: GREv0, Flags [none], length 92
+    MPLS (label 2001, tc 0, [S], ttl 63)
+    IP 192.168.1.2 > 192.168.2.2: ICMP echo request
+```
+
 **The transport label is in the kernel already.** isisd and FRR both
 install a route to the far PE's loopback that pushes its SR label, and
 `ip -j route` shows it. On r1 of isis's `isis4r-sr` lab:
@@ -190,13 +209,33 @@ in the same kernel. In the lab, pe1's SRGB is 16000 to 23999 and its
 SRLB 15000 to 15999, so bgp4rd takes 24000 to 24999. Other routers'
 blocks do not matter: a label is local to the router that gave it.
 
-### 3. The transport from the kernel
+### 3. Two transports to the far PE: MPLS and GRE
 
-bgp4rd runs no IGP and no LDP. To reach a remote PE it reads the
-kernel's route to the BGP next hop, `ip -j route get NH`: its `encap`
-labels, gateway and device. The VRF route then pushes those labels and
-the VPN label below them. With r1's route of isis4r-sr above and a VPN
-label 24001:
+bgp4rd runs no IGP and no LDP. The VPN label has to reach the BGP next
+hop some way, and RFC 4364 names two:
+
+- section 4.3.2: "either that a label switched path exist between
+  those two routers or else that some other tunneling technology (e.g.,
+  [MPLS-in-IP-GRE]) can be used between them";
+- section 5: "If the backbone does not support MPLS, the MPLS packet
+  carrying only the VPN route label may be tunneled to the BGP Next Hop
+  using the techniques of [MPLS-in-IP-GRE]" (RFC 4023).
+
+bgp4rd does both, chosen per remote PE, so one PE can reach FRR over an
+SR core and another PE over GRE:
+
+| Transport | The VRF route | When |
+| --- | --- | --- |
+| `mpls`, the default | the IGP's labels to the next hop, then the VPN label | the core switches labels: isisd or FRR with SR |
+| `gre` | the VPN label alone, out of a GRE tunnel to the next hop | the core routes IP only: ospfd today, or any core without labels |
+
+Both were measured on the lab VM ("What exists"): two labels across an
+SR core, and one label inside GRE across a core that had no MPLS.
+
+**`mpls`.** To reach a remote PE bgp4rd reads the kernel's route to
+the BGP next hop, `ip -j route get NH`: its `encap` labels, gateway and
+device. The VRF route then pushes those labels and the VPN label below
+them. With r1's route of isis4r-sr above and a VPN label 24001:
 
 ```
 ip route replace vrf A 192.168.2.0/24 encap mpls 18004/24001 via 10.0.23.2 dev eth2 proto bgp
@@ -213,16 +252,33 @@ them: `ip monitor route` in a child process, as a trigger only, then
 `ip -j route get` again for each next hop in use. (`ip -j monitor route`
 prints plain text, not JSON, with iproute2 6.19: measured.)
 
-This is also the first next-hop resolver the decision process has had:
-a next hop with no route is `next_hop_unreachable` (`decision.rb:61`).
+**`gre`.** The VRF route sends the VPN label alone out of the tunnel
+device toward that PE:
+
+```
+ip route replace vrf A 192.168.2.0/24 encap mpls 24001 dev gre-pe2 proto bgp
+```
+
+The tunnel runs between the two PEs' loopbacks, so its outer packets
+follow the IGP's routes and a core reroute needs nothing from bgp4rd.
+The far PE needs `net.mpls.conf.gre-X.input=1` on its end; its label
+route is the same as with `mpls`. A next hop whose tunnel is missing or
+down is unusable, as one with no route under `mpls`. The lab makes the
+tunnels, as it makes the VRF devices; bgp4rd checks each one exists and
+is up.
+
+Either way, this is the first next-hop resolver the decision process
+has had: a next hop with no transport is `next_hop_unreachable`
+(`decision.rb:61`).
 
 ### 4. iproute2, as today
 
 The FIB keeps running `ip` commands, as `Rib::Fib::IpRoute` does, not
-netlink. The three new forms are the measured ones: `ip route replace
-vrf V ... encap mpls ...`, `ip -f mpls route replace L dev V`, and their
-`del`. Each carries `proto bgp`, so a restart can flush what bgp4rd put
-there.
+netlink. The new forms are the measured ones: `ip route replace vrf V
+... encap mpls T/L via GW dev D` (`mpls`), `ip route replace vrf V ...
+encap mpls L dev TUNNEL` (`gre`), `ip -f mpls route replace L dev V`,
+and their `del`. Each carries `proto bgp`, so a restart can flush what
+bgp4rd put there.
 
 ### 5. What fills a VRF
 
@@ -241,6 +297,9 @@ router_id: 10.255.0.1
 local_address: 10.255.0.1          # the BGP next hop we advertise
 l3vpn:
   labels: { start: 24000, size: 1000 }
+  transport: mpls                  # the default for every remote PE
+  tunnels:                         # the PEs reached over GRE instead
+    10.255.0.9: { gre: gre-pe9 }   # next hop: the tunnel device
 vrfs:
   - name: A                        # the kernel VRF device
     table: 100
@@ -349,9 +408,10 @@ first two at boot; routescope's `tools/vm-update.sh` adds `vrf` to
 1. **The VPN table and receiving.** `VpnTable`, `PeerAdapter` reading
    SAFI 128, the decision per [RD, prefix], `show.vpn`. Checked against
    `bgp4r-sim` sending VPN routes. No VRF yet.
-2. **VRFs and import.** The `vrfs:` configuration, RT import, the
-   transport resolver and its `ip monitor` watch, the VRF FIB, `show.vrfs`
-   and `show.vrf`.
+2. **VRFs and import.** The `vrfs:` configuration, RT import, both
+   transports (`mpls` with its resolver and `ip monitor` watch, `gre`
+   with its `tunnels:` and their check), the VRF FIB, `show.vrfs` and
+   `show.vrf`, which names each route's transport.
 3. **Export and labels.** Label allocation, label routes, VPN routes
    sent with RD, RTs and label, withdrawals with 0x800000,
    `show.vpn_labels`.
@@ -413,7 +473,8 @@ neighbors:
 - Unit, one file per new class: the table, RT import (with two RDs for
   one prefix), the label allocator (a block used up, a VRF removed),
   the resolver reading `ip -j route` answers recorded from isisd and
-  FRR, the iproute2 argv of each form.
+  FRR, the tunnel check (a device missing, a device down, a next hop
+  with no tunnel), the iproute2 argv of each form for both transports.
 - Functional: two bgp4rd speakers, one sending VPN routes, the other
   importing them, with the FIB as a recorder.
 - Interop: bgp4rd and FRR 10.2.1 exchange VPNv4 routes, each reading
@@ -438,6 +499,9 @@ On `l3vpn-lab`, against FRR 10.2.1:
   label through p2 (in p2's block, 19000 + pe2's index), with none left
   stale, and the pings cross again. Link up: they move back.
 
+This lab's core runs SR, so it gates `mpls`. `gre` is gated by
+`docs/design/l3vpn-ruby-pe.md`'s OSPF lab, whose core has no labels.
+
 ## Out of scope
 
 Each later, with its own spec:
@@ -455,13 +519,17 @@ Each later, with its own spec:
 
 1. **Decision 1.** A table of its own (A), or a RIB keyed on any NLRI
    (B)? The draft takes A.
-2. **Who makes the VRF devices?** The draft has the lab make them and
-   bgp4rd check them. bgp4rd could make them itself, which a config
-   change would then cover.
-3. **`network-mode: container:`** makes pe1 two nodes in routescope.
+2. **Who makes the VRF devices and the GRE tunnels?** The draft has the
+   lab make both and bgp4rd check them. bgp4rd could make them itself,
+   which a config change would then cover.
+3. **GRE's MTU.** GRE and one label add 28 octets (112 against 84 in
+   the capture). containerlab's links are 9500 (measured on isis4r-sr
+   and frr-sr), so 1500-octet packets from a CE fit; the draft keeps
+   9500. A lab that lowers its core links lowers the CE links by 28.
+4. **`network-mode: container:`** makes pe1 two nodes in routescope.
    The alternative is one image with both daemons. The draft keeps two
    images.
-4. **Capability negotiation.** The draft sends VPN routes only to a
+5. **Capability negotiation.** The draft sends VPN routes only to a
    neighbor whose OPEN carried SAFI 128. That is the first family check
    bgp4rd makes; unicast stays as it is (it is sent to every neighbor
    today).

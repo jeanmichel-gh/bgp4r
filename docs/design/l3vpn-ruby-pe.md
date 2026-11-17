@@ -46,60 +46,37 @@ Measured on the lab VM, 2026-11-16 and 17.
   (`l3vpn-pe.md`, decision 3).
 - **ospfd installs plain IP routes.** In its own namespace, protocol
   `ospfv2` (89) (ospfv2 `docs/user-guide.md`). No labels.
-- **The kernel carries the VPN label over GRE.** In network namespaces,
-  ce1, pe1, p, pe2 and ce2, with p routing IP only, no MPLS at all, and
-  a GRE tunnel between the PEs' loopbacks:
-
-  ```
-  pe1# ip link add gre-pe2 type gre local 10.255.0.1 remote 10.255.0.2 ttl 64
-  pe1# sysctl -w net.mpls.conf.gre-pe2.input=1
-  pe1# ip route add vrf A 192.168.2.0/24 encap mpls 2001 dev gre-pe2
-  pe2# ip -f mpls route add 2001 dev A
-  ```
-
-  The ping from ce1 to ce2 passed both ways. tcpdump on p:
-
-  ```
-  10.255.0.1 > 10.255.0.2: GREv0, Flags [none], length 92
-      MPLS (label 2001, tc 0, [S], ttl 63)
-      IP 192.168.1.2 > 192.168.2.2: ICMP echo request
-  ```
+- **The kernel carries the VPN label both ways.** Two labels across an
+  SR core, and one label inside GRE across a core with no MPLS, both
+  measured in network namespaces (`l3vpn-pe.md`, "What exists").
 
 ## The design
 
-### Two transports, chosen per PE
+### The transport for each core
 
-`l3vpn-pe.md`'s decision 3 reads the transport from the kernel's route
-to the BGP next hop. This spec names that `kernel` and adds `gre`:
+`l3vpn-pe.md`'s decision 3 gives bgp4rd two transports, chosen per
+remote PE: `mpls`, the IGP's labels and then the VPN label, and `gre`,
+the VPN label alone inside a GRE tunnel between the PEs' loopbacks.
+Each lab here uses the one its core allows:
+
+| Core | Transport | Why |
+| --- | --- | --- |
+| isisd | `mpls` | isisd puts its SR label on the route to the far PE |
+| ospfd | `gre` | ospfd's routes carry no labels until SR in OSPF (P7) |
+
+In the OSPF lab each PE has one GRE device toward the other, made by
+the lab, with MPLS input on:
 
 ```yaml
 l3vpn:
   labels: { start: 24000, size: 1000 }
-  transport: gre                  # or kernel, the default
-  tunnels:                        # with gre: the device toward each PE
-    10.255.0.2: gre-pe2
+  transport: gre                  # every remote PE over GRE here
+  tunnels:
+    10.255.0.2: { gre: gre-pe2 }
 ```
 
-- **`kernel`**: the labels on the IGP's route to the next hop, then the
-  VPN label: `encap mpls 18004/24001 via GW dev D`. For an isisd core.
-- **`gre`**: the VPN label alone, out of the tunnel to the next hop:
-  `encap mpls 24001 dev gre-pe2`. For an ospfd core, or any core
-  without labels. The tunnel's outer packets follow the IGP's routes
-  between the loopbacks, so a core reroute needs nothing from bgp4rd.
-
-With `gre`, a VPN route whose next hop has no tunnel, or whose tunnel
-is down, is unusable, as with no route under `kernel`.
-
-On the egress PE nothing changes: the label route `ip -f mpls route
-add L dev VRF` pops the VPN label whichever way it came, once the
-tunnel has `net.mpls.conf.gre-X.input=1`.
-
-### Who makes the tunnels
-
-The lab, as it makes the VRF devices (`l3vpn-pe.md`, open question 2):
-one GRE device per remote PE, between loopbacks, with MPLS input on.
-bgp4rd checks each configured tunnel exists and is up, and says so when
-it is not.
+The tunnel's outer packets follow ospfd's routes between the loopbacks,
+so a core reroute needs nothing from bgp4rd.
 
 ### The IGP's part
 
@@ -109,7 +86,7 @@ loopback, the BGP next hop: isisd with its Node-SID, ospfd as a plain
 for themselves into the IGP routing tables of the backbone".
 
 When ospfd gains SR (routescope P7), an OSPF core can switch to
-`kernel`, and its labs keep the same shape.
+`mpls`, and its lab keeps the same shape.
 
 ### The CEs
 
@@ -132,7 +109,7 @@ Two labs in bgp4r's `routescope/labs/`, one per IGP, the same shape:
 
 - **`l3vpn-ruby-isis`**: pe1, p1, p2 and pe2 run isisd with SR, each
   with its own SRGB so a label from the wrong block would show. pe1 and
-  pe2 add bgp4rd beside isisd. Transport `kernel`.
+  pe2 add bgp4rd beside isisd. Transport `mpls`.
 - **`l3vpn-ruby-ospf`**: the same with ospfd, and GRE between pe1 and
   pe2. Transport `gre`.
 - VRF A joins the `a` CEs, VRF B the `b` CEs, on the same addresses,
@@ -141,20 +118,18 @@ Two labs in bgp4r's `routescope/labs/`, one per IGP, the same shape:
 
 ## Pull requests
 
-After `l3vpn-pe.md`'s pull requests 1 to 3:
+After `l3vpn-pe.md`'s pull requests 1 to 3, which bring both
+transports:
 
-1. **The `gre` transport in bgp4rd.** The `transport` and `tunnels`
-   keys, the tunnel check, the VRF route out of a tunnel, `show.vrf`
-   naming the tunnel.
-2. **`l3vpn-ruby-isis`**, with Linux CEs, its ABOUT.md and a scenario.
-3. **`l3vpn-ruby-ospf`**, the same.
-4. **bgp4rd CEs** in both labs, after `l3vpn-pe.md`'s pull request 7.
+1. **`l3vpn-ruby-isis`**, with Linux CEs, its ABOUT.md and a scenario.
+2. **`l3vpn-ruby-ospf`**, the same, with its GRE tunnels.
+3. **bgp4rd CEs** in both labs, after `l3vpn-pe.md`'s pull request 7.
 
 ## Tests
 
-- Unit: the VRF route argv for each transport, the tunnel check (a
-  missing device, a device down), a next hop with no tunnel.
-- Lab: the gate below, as each lab's scenario.
+- Unit: none of its own; the transports' tests are in `l3vpn-pe.md`.
+- Lab: the gate below, as each lab's scenario. The OSPF lab is the
+  `gre` transport's gate.
 
 ## Gate
 
@@ -182,12 +157,5 @@ On each lab:
 
 1. **Two labs, or one with a choice of IGP?** The draft has two, so
    each is plain to read and its scenario fixed.
-2. **Tunnels by the lab or by bgp4rd?** The draft has the lab make
-   them, as it makes the VRFs.
-3. **MTU.** GRE and one label add 28 octets (112 against 84 in the
-   capture above). containerlab makes its links with MTU 9500 (measured
-   on isis4r-sr and frr-sr), so a CE sending 1500-octet packets fits
-   with room to spare; an 8000-octet ping crossed isis4r-sr on labels.
-   The draft keeps containerlab's 9500 on every link. Only a lab that
-   lowers the core links (`mtu:` on a link) would need the CE links
-   lowered by 28 too.
+2. **MTU, and who makes the tunnels:** both are `l3vpn-pe.md`'s open
+   questions now, since the `gre` transport is there.
