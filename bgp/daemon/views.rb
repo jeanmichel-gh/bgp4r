@@ -217,6 +217,12 @@ module BGP
         rows_page(@speaker.vrf_route_rows(params['vrf'] || params[:vrf]), params)
       end
 
+      # The label of each VRF that sends its routes, and whether the
+      # kernel has its label route, which pops it into the VRF.
+      def vpn_labels(params = {})
+        rows_page(@speaker.vpn_label_rows, params)
+      end
+
       # The last lines this daemon logged, oldest first.
       #
       # `count` is how many, clamped. `kept` is how many the ring holds

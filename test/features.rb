@@ -311,9 +311,9 @@ module Features
 
     'vrfs' => {
       :area  => 'routing',
-      :about => "A PE's VRFs: import by Route Target, the mpls and gre transports, VRF routes in the kernel",
-      :rfc   => 'RFC 4364 sections 4.3.1, 4.3.2 and 5',
-      :unit  => %w[rib/vrf_test rib/vpn_transport_test rib/vrf_fib_test rib/l3vpn_test daemon/vrf_sync_test],
+      :about => "A PE's VRFs: import by Route Target, the mpls and gre transports, VRF routes in the kernel, export with a label per VRF",
+      :rfc   => 'RFC 4364 sections 4.3.1, 4.3.2 and 5; RFC 8277 section 2.4',
+      :unit  => %w[rib/vrf_test rib/vpn_transport_test rib/vrf_fib_test rib/l3vpn_test daemon/vrf_sync_test daemon/vpn_exporter_test],
     },
 
     'export' => {

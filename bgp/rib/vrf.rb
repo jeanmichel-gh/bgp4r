@@ -93,6 +93,12 @@ module BGP
       def imports?(route_targets)
         !(Array(route_targets) & import).empty?
       end
+
+      # A VRF sends its routes when it has an RD and Export Targets
+      # (pull request 3); one with neither only imports.
+      def exports?
+        !rd.nil? && !export.empty?
+      end
     end
 
     # The keys a VRF's entry may have; any other is refused, by name.

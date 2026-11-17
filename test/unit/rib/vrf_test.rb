@@ -52,6 +52,14 @@ class TestBgpRibVrf < Test::Unit::TestCase
     assert(!v.imports?([]))
   end
 
+  # Section 4.3.2: a VRF sends its routes only with an RD to put on them
+  # and Export Targets to carry.
+  def test_exports_needs_an_rd_and_export_targets
+    assert(list({ 'name' => 'A', 'table' => 100, 'rd' => '65000:1', 'export' => ['65000:100'] }).first.exports?)
+    assert(!list({ 'name' => 'A', 'table' => 100, 'export' => ['65000:100'] }).first.exports?)
+    assert(!list({ 'name' => 'A', 'table' => 100, 'rd' => '65000:1' }).first.exports?)
+  end
+
   def test_what_is_refused
     assert_equal('vrf A: unknown key(s) imprt: use one of name, table, rd, import, export, prefixes',
                  refused({ 'name' => 'A', 'table' => 100, 'imprt' => ['65000:1'] }))
