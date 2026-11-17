@@ -487,6 +487,44 @@ class TestBgpNeighbor < Test::Unit::TestCase
     }
   end
 
+  # `stop` closes the socket, and the session's own reader, blocked in
+  # recv, takes that as `IOError: stream closed in another thread` and
+  # reports `:ev_conn_reset`. So **every** stop leaves a reset event from
+  # the session it ended in the event queue, measured in 600 of 600 loopback
+  # iterations. Handled while the session is still Idle it is a stop of
+  # nothing; handled after the next `start` has built a session, it stops
+  # that one. That is the `test_start_stop_start_again` failure in CI on
+  # Ruby 4.0: "Disable old state OpenSent new state Idle" with no peer
+  # involved, then "session went Idle before Established".
+  #
+  # **Forced rather than raced**: the event thread is held on the stale
+  # event until the second session has been built and its OPEN sent.
+  def test_a_reset_from_the_session_stop_ended_does_not_stop_the_next_one
+    Timeout::timeout(20) {
+      port = start_free_server
+      @c = Neighbor.new(4, 100, 180, '0.0.0.2', '127.0.0.1', '127.0.0.1')
+      held, built, once = Queue.new, Queue.new, [true]
+      @c.define_singleton_method(:dispatch_event) do |ev, *a|
+        if ev == :ev_conn_reset and once.pop
+          held.push(:holding)
+          built.pop
+        end
+        super(ev, *a)
+      end
+      assert @c.start(:port=> port, :timeout=> 10), @c.last_error.to_s
+      @c.stop
+      assert_equal :holding, held.pop, 'stop left no reset event, so this tested nothing'
+      @s.stop
+      @c.define_singleton_method(:send_open) do |*a|
+        super(*a)
+        built.push(:built)
+      end
+      assert @c.start(:port=> port, :timeout=> 10), @c.last_error.to_s
+      assert @c.is_established?
+      @c.close
+    }
+  end
+
   def test_start_stop_start_again
     Timeout::timeout(6) {
       port = start_free_server
