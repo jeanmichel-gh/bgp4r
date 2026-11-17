@@ -184,7 +184,10 @@ On each lab:
    each is plain to read and its scenario fixed.
 2. **Tunnels by the lab or by bgp4rd?** The draft has the lab make
    them, as it makes the VRFs.
-3. **MTU.** GRE and one label add 28 octets. The lab's veth links are
-   1500, so a 1500-octet packet from a CE would be fragmented or
-   dropped in the OSPF lab. The draft leaves the MTU at 1500 and pings
-   with the default size; a scenario could set the CE links lower.
+3. **MTU.** GRE and one label add 28 octets (112 against 84 in the
+   capture above). containerlab makes its links with MTU 9500 (measured
+   on isis4r-sr and frr-sr), so a CE sending 1500-octet packets fits
+   with room to spare; an 8000-octet ping crossed isis4r-sr on labels.
+   The draft keeps containerlab's 9500 on every link. Only a lab that
+   lowers the core links (`mtu:` on a link) would need the CE links
+   lowered by 28 too.
