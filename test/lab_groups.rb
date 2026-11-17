@@ -137,6 +137,7 @@ module LabGroups
       link_state_frr_test
       mcast_vpn_frr_test
       rib_router_frr_test
+      vpn_frr_test
     ],
 
     # Needs **both** gobgpd and FRR's bgpd, which is why it is a group

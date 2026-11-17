@@ -519,6 +519,19 @@ neighbors:
 - Interop: bgp4rd and FRR 10.2.1 exchange VPNv4 routes, each reading
   the other's RD, RTs and label (`show bgp ipv4 vpn` on FRR, `show.vpn`
   on bgp4rd).
+  **Built in pull request 4** as `test/functional/lab/vpn_frr_test.rb`,
+  in CI's `lab frr` group, against FRR 10.5.1, which ubuntu-latest
+  installs. FRR runs there with no zebra and so no VRF; it sends VPN
+  routes from its static form, `network P rd RD label L route-map M`,
+  with the Route Target set by the route-map. Measured on 2026-11-17:
+  FRR read the RD, label, Route Target and next hop of the UPDATEs
+  `VpnExporter` builds, kept one prefix under two RDs as two routes,
+  and withdrew one RD's route on our withdrawal, whose label field its
+  log shows as 524288, the 0x800000 Compatibility value. bgp4rd's
+  `VpnTable` read FRR's two routes back with their RDs (an AS one and
+  an IPv4 one), labels and Route Targets. `test/coverage_matrix.rb`
+  vouches `'vpn'` as `:both` for FRR. A `network` whose route-map is
+  defined after it originated nothing.
 - Lab: the gate below, as a scenario.
 
 ## Gate

@@ -307,6 +307,7 @@ module Features
       :rfc   => 'RFC 4364 sections 4.1 and 4.3',
       :unit  => %w[rib/vpn_route_test rib/vpn_table_test],
       :functional => %w[vpn_daemon_test],
+      :lab   => %w[vpn_frr_test],
     },
 
     'vrfs' => {

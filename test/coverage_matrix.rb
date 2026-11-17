@@ -123,7 +123,11 @@ module CoverageMatrix
     # is the VPN flow spec shape again.
     'bgp-ls-vpn'   => { :gobgp => :absence, :frr => :absence,
                         :doc => 'docs/bgp-ls.md' },
-    'vpn'          => { :gobgp => :none,    :frr => :none },
+    # FRR reads the UPDATEs bgp4rd's VpnExporter builds (RD, label,
+    # Route Target, next hop, a withdrawal per RD) and sends its own
+    # static VPN routes, which bgp4rd's VpnTable reads back.
+    'vpn'          => { :gobgp => :none,    :frr => :both,
+                        :doc => 'docs/design/l3vpn-pe.md' },
     'vpn-multicast' => { :gobgp => :none,   :frr => :none },
     'rt-constrain' => { :gobgp => :send,    :frr => :none,
                         :doc => 'docs/flow-spec.md' },
@@ -145,6 +149,7 @@ module CoverageMatrix
     'rt_constrain' => %w[rt-constrain],
     'mcast_vpn'    => %w[mcast-vpn],
     'link_state'   => %w[bgp-ls bgp-ls-vpn],
+    'vpn'          => %w[vpn],
   }.freeze
 
   # Lab tests against a router that are **not** about one address
