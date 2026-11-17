@@ -1,0 +1,50 @@
+# A scenario for routescope's Scenarios panel (docs/scenarios.md):
+# bgp4r docs/design/l3vpn-pe.md's gate, the parts a scenario can check.
+# ABOUT.md has the rest: the labels on the wire, read with tcpdump on
+# p1, and that ce1a's packets never reach ce2b, which has its address.
+name: Gate
+description: >-
+  IS-IS with SR comes up and pe1 reaches pe2 on p1's label. The iBGP
+  VPNv4 session between bgp4rd and FRR comes up, and each customer site
+  reaches the far one in its own VRF, on the same addresses. The p1 to
+  pe2 link fails: pe1 reaches pe2 through p2, on p2's label, and the
+  sites still reach each other. The link comes back, and so does the
+  path.
+capture: [p1, p2]
+timeout: 240
+
+steps:
+  - expect: { isis_adjacencies: { node: p1, level: 2, up: 2 } }
+    within: 60
+  - expect: { isis_route: { node: pe1, prefix: 10.255.0.3/32, label: 17003 } }
+    within: 60
+  - expect: { bgp_session: { node: pe1-bgp, peer: 10.255.0.3, state: established } }
+    within: 60
+  - expect: { ping: { node: ce1a, to: 192.168.2.2 } }
+    within: 30
+  - expect: { ping: { node: ce1b, to: 192.168.2.2 } }
+    within: 10
+  - expect: { ping: { node: ce2a, to: 192.168.1.2 } }
+  - expect: { ping: { node: ce2b, to: 192.168.1.2 } }
+
+  - mark: p1 to pe2 link down
+  - interface: p1:eth2
+    state: down
+  - expect: { isis_route: { node: pe1, prefix: 10.255.0.3/32, label: 19003 } }
+    within: 30
+  - expect: { ping: { node: ce1a, to: 192.168.2.2 } }
+    within: 20
+    measure: failover
+  - expect: { ping: { node: ce1b, to: 192.168.2.2 } }
+    within: 10
+
+  - mark: p1 to pe2 link up
+  - interface: p1:eth2
+    state: up
+  - expect: { isis_route: { node: pe1, prefix: 10.255.0.3/32, label: 17003 } }
+    within: 30
+  - expect: { ping: { node: ce1a, to: 192.168.2.2 } }
+    within: 20
+    measure: restore
+  - expect: { ping: { node: ce1b, to: 192.168.2.2 } }
+    within: 10

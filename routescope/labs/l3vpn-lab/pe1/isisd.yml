@@ -1,0 +1,15 @@
+system_id: 0000.0000.0001
+hostname: pe1
+areas: [49.0001]
+level: 2
+metric_style: wide
+minimum_lsp_interval: 1
+forwarding: true
+segment_routing:
+  srgb: [{ start: 16000, size: 8000 }]
+  srlb: { start: 15000, size: 1000 }
+prefixes:
+  - { prefix: 10.255.0.1/32, metric: 0, sid: 1 }
+interfaces:
+  - { name: eth1, ip_addresses: [10.0.12.1], metric: 10, hello_interval: 1, hello_multiplier: 3 }
+  - { name: eth2, ip_addresses: [10.0.14.1], metric: 20, hello_interval: 1, hello_multiplier: 3 }

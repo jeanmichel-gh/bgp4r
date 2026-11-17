@@ -745,6 +745,7 @@ to make one of them is routescope's command, on the VM:
 routescope-labs install bgp4r/bgp4r-lab
 routescope-labs install bgp4r/fwd-lab
 routescope-labs install bgp4r/rr-lab
+routescope-labs install bgp4r/l3vpn-lab
 ```
 
 It keeps the lab's upstream files on one branch and local edits on

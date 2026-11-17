@@ -4,7 +4,7 @@ Run bgp4r speakers in containers and test what they say to each other.
 
 Each node runs the same program, `lab/speaker.rb`, driven by its own YAML file. A topology is a folder with a `compose.yml` and one YAML per node. To build a new topology, copy a folder and edit the YAML.
 
-**The labs for the routescope console are not here.** They are containerlab labs in `routescope/labs/` at the repository root (`bgp4r-lab`, `fwd-lab`, `rr-lab`), the path every protocol repository keeps its routescope labs in. Make one on the VM with routescope's command:
+**The labs for the routescope console are not here.** They are containerlab labs in `routescope/labs/` at the repository root (`bgp4r-lab`, `fwd-lab`, `rr-lab`, `l3vpn-lab`), the path every protocol repository keeps its routescope labs in. Make one on the VM with routescope's command:
 
 ```
 routescope-labs install bgp4r/bgp4r-lab

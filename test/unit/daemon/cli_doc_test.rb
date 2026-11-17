@@ -65,7 +65,8 @@ class TestBgp4rCliDoc < Test::Unit::TestCase
       assert_match(%r{^ && ln -s /app/exe/bgp4r-cli /usr/local/bin/cli$}, text, f)
       assert_match(/^ENV BGP4R_SOCKET=#{Regexp.escape(SOCKET)}$/, text, f)
     end
-    %w[rr-lab/rr-lab.clab.yml bgp4r-lab/bgp4r-lab.clab.yml fwd-lab/fwd-lab.clab.yml].each do |t|
+    %w[rr-lab/rr-lab.clab.yml bgp4r-lab/bgp4r-lab.clab.yml fwd-lab/fwd-lab.clab.yml
+       l3vpn-lab/l3vpn-lab.clab.yml].each do |t|
       cmds = read("routescope/labs/#{t}").lines.grep(/cmd: exe\/bgp4rd /)
       assert_not_empty cmds, t
       cmds.each { |c| assert_include c, "-s #{SOCKET}", t }
