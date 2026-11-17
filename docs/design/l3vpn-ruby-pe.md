@@ -1,6 +1,6 @@
 # A PE of our own daemons: bgp4rd with isisd or ospfd
 
-Status: draft, for the owner's review. No code yet. It goes with
+Status: approved by the owner 2026-11-17. No code yet. It goes with
 `docs/design/l3vpn-pe.md`, the L3VPN PE in bgp4rd, and needs its pull
 requests 1 to 3 (7 for a bgp4rd CE).
 

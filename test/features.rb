@@ -301,6 +301,14 @@ module Features
       :functional => %w[rib_feed_test],
     },
 
+    'vpn-table' => {
+      :area  => 'routing',
+      :about => 'The VPN-IPv4 table: SAFI 128 routes received, keyed on RD and prefix, best path per key',
+      :rfc   => 'RFC 4364 sections 4.1 and 4.3',
+      :unit  => %w[rib/vpn_route_test rib/vpn_table_test],
+      :functional => %w[vpn_daemon_test],
+    },
+
     'export' => {
       :area  => 'routing',
       :about => 'The export rules, Adj-RIB-Out, UPDATE building and the MRAI timer',

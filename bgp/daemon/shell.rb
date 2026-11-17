@@ -90,6 +90,9 @@ module BGP
               kw('advertised-routes', 'what went to PEER, and what did not and why', :advertised)
             ])
           ]),
+          kw('vpnv4', 'the VPN-IPv4 routes received, by Route Distinguisher', :vpnv4, [
+            kw('unicast', 'the IOS form', :vpnv4, [kw('all', 'the IOS form', :vpnv4)])
+          ]),
           arg(:prefix, 'PREFIX', 'one prefix, in detail', :routes)
         ])
       end
@@ -552,6 +555,38 @@ module BGP
                         r['remote'] || r['prefix'], r['metric'], node).sub(/ +\n\z/, "\n")
         end
         out
+      end
+
+      # `show bgp vpnv4`, the rows of `show.vpn` under one heading per
+      # Route Distinguisher, as IOS groups them, with each route's labels
+      # and Route Targets on its line. Every page is read.
+      def vpnv4(_args, _words)
+        rows, offset = [], 0
+        loop do
+          page = @client.call('show.vpn', 'offset' => offset)
+          rows.concat(Array(page['rows']))
+          offset = page['next_offset'] or break
+        end
+        return "No VPN-IPv4 routes.\n" if rows.empty?
+        out = +''
+        out << format("%d VPN-IPv4 route(s)\n", rows.size)
+        out << "Status codes: * valid, > best\n\n"
+        line = "%-3s %-18s %-15s %-6s %-10s %-14s %s\n"
+        out << format(line, '', 'Network', 'Next Hop', 'LocPrf', 'Labels', 'Route Targets', 'Path')
+        rows.group_by { |r| r['rd'] }.each do |rd, list|
+          out << "Route Distinguisher: #{rd}\n"
+          list.each do |r|
+            out << format(line, r['best'] ? '*>' : '*', r['prefix'], r['next_hop'] || '-', r['local_pref'] || '',
+                          Array(r['labels']).join('/'), Array(r['route_targets']).join(' '),
+                          [r['as_path'] == 'empty' ? nil : r['as_path'], origin_code(r['origin'])].compact.join(' '))
+          end
+        end
+        out
+      end
+
+      # RFC 4271 section 5.1.1: i IGP, e EGP, ? INCOMPLETE.
+      def origin_code(origin)
+        { 0 => 'i', 1 => 'e', 2 => '?' }.fetch(origin, '?')
       end
 
       # RFC 9552 section 5.2, Table 2: 1 and 2 are IS-IS's levels, 3 is

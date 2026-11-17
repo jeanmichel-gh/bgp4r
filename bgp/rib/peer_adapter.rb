@@ -21,6 +21,7 @@
 #++
 
 require 'bgp/rib/route'
+require 'bgp/rib/vpn_route'
 
 module BGP
   module Rib
@@ -98,6 +99,57 @@ module BGP
         Array(mp.nlris).each { |ls| yield ls if ls.is_a?(BGP::Link_state) }
       end
       private_class_method :each_link_state
+
+      # VPN-IPv4, RFC 4364 section 4.3.4: "If the Address Family Identifier
+      # (AFI) field is set to 1, and the Subsequent Address Family
+      # Identifier (SAFI) field is set to 128, the NLRI is an MPLS-labeled
+      # VPN-IPv4 address."
+      #
+      # **It does not go in the table either**, for the reason MP_SAFIS
+      # gives: the key is an RD and a prefix. `BGP::Rib::VpnTable` keeps
+      # these routes, docs/design/l3vpn-pe.md's decision 1, option A. IPv6
+      # VPNs, AFI 2 / SAFI 128 (RFC 4659), are that spec's pull request 5.
+      VPN = [IANA::AFI::IPv4, IANA::SAFI::MPLS_VPN_UNICAST].freeze
+
+      # What one UPDATE asks a VPN table to do, withdrawals first, as
+      # `operations` orders them:
+      #
+      #   [[:withdraw, rd, prefix, path_id],
+      #    [:announce, VpnRoute]]
+      #
+      # rd is the Route Distinguisher as text, "65000:1". A withdrawal's
+      # label field is RFC 8277 section 2.4's Compatibility field, which
+      # "MUST be ignored" on receipt, so it is. peer is the Rib::Peer the
+      # session's OPEN names. Any other family gives nothing.
+      def self.vpn_operations(update, peer)
+        pa = update.path_attribute
+        return [] unless pa
+        ops = []
+        each_vpn(pa, BGP::Mp_unreach) { |h| ops << [:withdraw, rd_text(h[:rd]), h[:prefix], h[:path_id]] }
+        each_vpn(pa, BGP::Mp_reach) do |h|
+          labels = h.key?(:labels) ? Array(h[:labels]) : Array(h[:label])
+          route = Route.new(h[:prefix], pa, peer, :path_id => h[:path_id])
+          ops << [:announce, VpnRoute.new(rd_text(h[:rd]), labels, route)]
+        end
+        ops
+      end
+
+      # [65000, 1] or ["10.255.0.3", 7], RFC 4364 section 4.2's
+      # Administrator and Assigned Number, as "65000:1".
+      def self.rd_text(rd)
+        Array(rd).join(':')
+      end
+
+      def self.each_vpn(pa, klass)
+        return unless pa.has?(klass)
+        mp = pa[klass]
+        return unless [mp.afi, mp.safi] == VPN
+        Array(mp.nlris).each do |n|
+          h = n.to_hash
+          yield h if h[:rd] && h[:prefix]
+        end
+      end
+      private_class_method :each_vpn
 
       attr_reader :neighbor, :sink
 

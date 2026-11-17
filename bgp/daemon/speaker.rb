@@ -593,6 +593,8 @@ module BGP
           # BGP-LS goes in a table of its own, outside the RIB. See
           # bgp/daemon/link_state_table.rb.
           ls_feed = @speaker.link_state.attach(n)
+          # VPN-IPv4 too, in a table of its own: bgp/rib/vpn_table.rb.
+          vpn_feed = @speaker.vpn.attach(n)
           n.start(:session => sock, :timeout => @config.fetch('open_timeout', 30))
           if n.is_established?
             @recorder.established!
@@ -620,6 +622,7 @@ module BGP
             # runs.
             @speaker.rib&.detach(n)
             @speaker.link_state.detach(n, ls_feed) if ls_feed
+            @speaker.vpn.detach(n, vpn_feed) if vpn_feed
             n.close
           end
         end
@@ -704,6 +707,10 @@ module BGP
       # bgp/daemon/link_state_producer.rb.
       attr_reader :link_state, :link_state_producer
 
+      # The VPN-IPv4 routes received, AFI 1 / SAFI 128, outside the RIB:
+      # docs/design/l3vpn-pe.md, and bgp/rib/vpn_table.rb.
+      attr_reader :vpn
+
       # The configuration this speaker was built from, which
       # `BGP::Daemon::Candidate` reads as the running one and `reconfigure`
       # replaces.
@@ -755,6 +762,8 @@ module BGP
         @fib = config['fib']
         check_reflector_clients
         @link_state = LinkStateTable.new
+        @vpn = BGP::Rib::VpnTable.new(local_as: @my_as, router_id: @router_id,
+                                      cluster_id: decision_options[:cluster_id])
         if config['link_state']
           @link_state_producer = LinkStateProducer.new(self, config['link_state'], :logger => @logger)
           on_established { |p| @link_state_producer.session_up(p) }
@@ -1172,6 +1181,11 @@ module BGP
       # with peer nil, then the ones it received.
       def link_state_rows
         (@link_state_producer ? @link_state_producer.rows : []) + @link_state.rows
+      end
+
+      # `show.vpn`: the VPN-IPv4 routes received, one row each.
+      def vpn_rows
+        @vpn.rows
       end
 
       def state
