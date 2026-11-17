@@ -674,6 +674,20 @@ Each later, with its own spec:
 - VPN multicast (SAFI 129), EVPN (P5), SRv6 services (P6).
 - Labeled unicast, SAFI 4.
 - LDP: P2 needs none (routescope `docs/protocol-coverage.md`).
+- **IPv6 transport for VPN-IPv6** (RFC 4659 section 3.2.1.1): a core
+  carrying the PEs' IPv6 loopbacks with SR labels, so a PE sends its
+  IPv6 loopback as the next hop and not an IPv4-mapped one. Pull request
+  5 marks such a next hop unreachable (decision 6). It is the way to an
+  `l3vpn-lab` where IPv6 crosses both ways with FRR as the far PE.
+  Measured with pull request 5, 2026-11-17: FRR 10.2.1 receives
+  bgp4rd's VPN-IPv6 routes but marks them `r` in `show ipv6 route vrf
+  A`, its zebra trying the IPv4 gateway the kernel refuses; it sends
+  Cease 6/0 to an OPEN offering VPN-IPv6 over IPv4 when it has no global
+  IPv6 address. Not checked: whether isis4r and FRR's IS-IS install
+  label routes for IPv6 Prefix-SIDs. Measure that first, then write a
+  decision 7. bgp4rd's own part is small: resolve the IPv6 next hop
+  with `ip -6 route get`, whose answer already carries the labels and a
+  link-local gateway.
 
 ## Open questions
 
