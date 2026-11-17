@@ -77,6 +77,7 @@ module BGP
       @mutex = Mutex.new
       @state_cv = ConditionVariable.new
       @lifecycle = Mutex.new
+      @session_id = 0
       @eventQ = Queue.new
       @event_thread = event_dispatch
     end
@@ -354,7 +355,11 @@ module BGP
     end
 
     # Handles one event from the queue. Called on the event thread only.
-    def dispatch_event(ev, type=nil, m=nil)
+    #
+    # session is the number of the session the event came from, which
+    # SessionTap adds, or nil for an event handed to update directly, which
+    # is taken to be about the current session.
+    def dispatch_event(ev, type=nil, m=nil, session=nil)
       case ev
       when :ev_msg
         begin
@@ -386,13 +391,54 @@ module BGP
         changed and notify_observers(msg)
       when :ev_conn_reset
         log(:warn, "#{type}")
-        stop
+        stop_session(session)
       when :ev_holdtime_expire
         log(:warn, "Holdtime expire: #{type}")
-        stop
-        changed and notify_observers(BGP::Notification.code_to_s(4))
+        stop_session(session) and
+          changed and notify_observers(BGP::Notification.code_to_s(4))
       else
         log(:error, "unexpected event #{ev}")
+      end
+    end
+
+    # Stops the session numbered session, and nothing else: answers false
+    # when that session has already ended.
+    #
+    # **A reset is reported by the session it ended, and `stop` causes
+    # one.** `stop` closes the socket, and the reader blocked in recv takes
+    # that as `IOError: stream closed in another thread` and reports
+    # `:ev_conn_reset`. Measured on 2026-11-17: 600 of 600 loopback stops
+    # left one in the event queue. Handled while the Neighbor is still Idle
+    # it stops nothing; handled after the next `start` has built a session,
+    # a plain `stop` ended **that** session, and `start` answered "session
+    # went Idle before Established". CI met it on Ruby 4.0 in
+    # `test_start_stop_start_again`, and
+    # `test_a_reset_from_the_session_stop_ended_does_not_stop_the_next_one`
+    # forces it.
+    #
+    # The comparison is inside the lock because `stop` renumbers inside
+    # it: a check before taking the lock could pass for the old session
+    # while a stop and a start ran, and the stop then land on the new one,
+    # which is the same race one step later.
+    def stop_session(session)
+      sync_lifecycle do
+        if session and session != @session_id
+          log_info "reset from session #{session} ignored, it has ended; session #{@session_id} is #{@state}"
+          return false
+        end
+        stop
+        true
+      end
+    end
+
+    # One session's IO threads report to the Neighbor through this, so each
+    # event says which session it came from. See stop_session.
+    class SessionTap
+      def initialize(neighbor, session)
+        @neighbor, @session = neighbor, session
+      end
+      def update(ev, type=nil, m=nil)
+        @neighbor.update(ev, type, m, @session)
       end
     end
 
@@ -574,6 +620,10 @@ module BGP
     # the reason `start_session`'s comment gives.
     def stop
       sync_lifecycle do
+        # What this session's threads report from here on is about a
+        # session that has ended, including the reset that closing its
+        # socket below makes its reader report. See stop_session.
+        @session_id += 1
         # Closing the output queue wakes any caller waiting in send_message
         # on a full one, and drain_output then lets the writer get what is
         # already queued onto the socket before the next line takes the
@@ -709,8 +759,11 @@ module BGP
     end
     
     def init_io
-      @in = BGP::IO::Input.new(@socket, holdtime, self)
-      @out = BGP::IO::Output.new(@socket, @holdtime, self)
+      # The number stop has not ended yet. Only stop sets Idle and both
+      # callers of this one start from Idle, so it needs no bump of its own.
+      tap = SessionTap.new(self, @session_id)
+      @in = BGP::IO::Input.new(@socket, holdtime, tap)
+      @out = BGP::IO::Output.new(@socket, @holdtime, tap)
       # Both threads log, so both follow this session's logger. Set here
       # rather than passed, for the reason BGP::IO::Output records: the
       # constructor takes its observers as a splat.
