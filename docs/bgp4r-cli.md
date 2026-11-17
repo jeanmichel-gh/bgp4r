@@ -103,6 +103,8 @@ or a file prints the usage, as it always did. Use `-c` in a script.
 | `show bgp PREFIX` | the same, for one prefix |
 | `show fib` | what the daemon installed in the kernel table, what it skipped and why, and what the kernel refused |
 | `show link-state` | BGP-LS routes: what this daemon sent as a Producer, and what it received, one line per route |
+| `show bgp vpnv4` | the VPN-IPv4 routes received, under one heading per Route Distinguisher, with labels and Route Targets |
+| `show bgp vpnv4 unicast`, `show bgp vpnv4 unicast all` | the same, in IOS's words |
 | `show configuration` | the running configuration, as set lines |
 | `show configuration candidate` | the candidate configuration, as set lines |
 | `show bgp neighbors` | every neighbor, in detail: every field `show.peers` answers |
@@ -126,6 +128,7 @@ They answer the same:
 | `show ip bgp`, `show ip bgp summary`, `show ip bgp PREFIX` | `show bgp`, and the same words after it |
 | `show ip bgp neighbors`, `show ip bgp neighbors PEER` | the same |
 | `show ip bgp neighbors PEER received-routes`, `show ip bgp neighbors PEER advertised-routes` | the same |
+| `show ip bgp vpnv4`, `show ip bgp vpnv4 unicast`, `show ip bgp vpnv4 unicast all` | the same |
 | `clear ip bgp PEER`, `clear ip bgp PEER soft in` | `clear bgp`, and the same words after it |
 
 `--style junos` or `--style iosxr` prints `show bgp` in those styles.
@@ -150,6 +153,7 @@ one. `prefix` reads one prefix instead of a page.
 | `show.adj_out` | what went to one peer, and under `skipped` what did not and why | `peer` (required), `prefix`, `offset`, `limit` |
 | `show.fib` | what the daemon put in the kernel table, and what the kernel refused | `prefix`, `offset`, `limit` |
 | `show.link_state` | BGP-LS routes, one row per route: sent as a Producer (`peer` null), and received per peer | `offset`, `limit` |
+| `show.vpn` | VPN-IPv4 routes received, one row per route: `rd`, `prefix`, `path_id`, `peer`, `next_hop`, `labels`, `route_targets`, `as_path`, `origin`, `local_pref`, `med`, `best`, `reason`, `since` | `offset`, `limit` |
 | `show.log` | the daemon's last log lines, oldest first | `count`, default 100 |
 | `show.text` | what `-c 'show bgp'` prints, as one JSON string | `style`, `prefix` |
 | `show.configuration` | the configuration as set lines | `candidate`, `format` |

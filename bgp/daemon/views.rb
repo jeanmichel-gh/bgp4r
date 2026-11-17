@@ -188,6 +188,17 @@ module BGP
         envelope(rows[offset, limit].to_a, rows.size, offset, limit, nxt < rows.size ? nxt : nil)
       end
 
+      # The VPN-IPv4 routes received (AFI 1 / SAFI 128), one row per
+      # route, one page of them, sorted by RD, then prefix, then peer.
+      # Outside the RIB, so outside its lock: see bgp/rib/vpn_table.rb for
+      # the row. docs/design/l3vpn-pe.md, pull request 1.
+      def vpn(params = {})
+        rows = @speaker.vpn_rows
+        offset, limit = window(params)
+        nxt = offset + limit
+        envelope(rows[offset, limit].to_a, rows.size, offset, limit, nxt < rows.size ? nxt : nil)
+      end
+
       # The last lines this daemon logged, oldest first.
       #
       # `count` is how many, clamped. `kept` is how many the ring holds

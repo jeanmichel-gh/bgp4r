@@ -1,6 +1,7 @@
 # L3VPN PE in bgp4rd
 
-Status: draft, for the owner's review. No code yet. The open questions
+Status: approved by the owner 2026-11-17. Pull request 1, the VPN table
+and receiving, built the same day. The open questions
 at the end keep the answers this document gives until the owner changes
 them.
 

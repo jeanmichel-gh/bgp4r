@@ -188,6 +188,76 @@ class TestBgpRibPeerAdapter < Test::Unit::TestCase
     assert_equal([[1, 4]], @adapter.unread_families(u))
   end
 
+  # ---- VPN-IPv4, AFI 1 / SAFI 128 (RFC 4364 section 4.3.4) ----------
+
+  def vpn_peer
+    BGP::Rib::Peer.new(:address => '10.255.0.3', :remote_as => 65000,
+                       :router_id => '10.255.0.3', :local_as => 65000)
+  end
+
+  # Built, encoded and parsed back, so what is read is what a session
+  # would have received.
+  def wire(*attrs)
+    BGP::Update.new(BGP::Update.new(BGP::Path_attribute.new(*attrs)).encode)
+  end
+
+  def vpn_reach(*nlris)
+    BGP::Mp_reach.new(:safi => 128, :nexthop => ['10.255.0.3'], :nlris => nlris)
+  end
+
+  def test_a_vpn_route_is_its_rd_its_prefix_and_its_labels
+    u = wire(BGP::Origin.new(0), BGP::As_path.new, BGP::Local_pref.new(100),
+             vpn_reach({ :prefix => '192.168.2.0/30', :rd => [65000, 1], :label => 24001 },
+                       { :prefix => '192.168.2.0/30', :rd => ['10.255.0.3', 7], :label => [24002, 24003] }),
+             BGP::Extended_communities.new(BGP::Route_target.new(65000, 100)))
+    ops = BGP::Rib::PeerAdapter.vpn_operations(u, vpn_peer)
+    assert_equal([:announce, :announce], ops.collect(&:first))
+    a, b = ops.collect(&:last)
+    assert_equal(['65000:1', '192.168.2.0/30', [24001]], [a.rd, a.prefix, a.labels])
+    assert_equal(['10.255.0.3:7', [24002, 24003]], [b.rd, b.labels], 'a type 1 RD, and a stack of two')
+    assert_equal('10.255.0.3', a.route.next_hop, 'the next hop, read past its RD of 0 (section 4.3.2)')
+    assert_equal(['65000:100'], a.route_targets)
+    assert_equal(100, a.route.local_pref)
+  end
+
+  # RFC 8277 section 2.4: the Compatibility field "MUST be ignored" on
+  # receipt; the withdrawal names the RD and the prefix.
+  def test_a_vpn_withdrawal_names_the_rd_and_the_prefix
+    u = wire(BGP::Mp_unreach.new(:safi => 128, :nlris => [{ :prefix => '192.168.2.0/30', :rd => [65000, 1],
+                                                           :compatibility => '800000' }]))
+    assert_equal([[:withdraw, '65000:1', '192.168.2.0/30', nil]],
+                 BGP::Rib::PeerAdapter.vpn_operations(u, vpn_peer))
+  end
+
+  def test_vpn_withdrawals_come_before_announcements
+    u = wire(BGP::Origin.new(0), BGP::As_path.new,
+             BGP::Mp_unreach.new(:safi => 128, :nlris => [{ :prefix => '10.1.0.0/16', :rd => [65000, 1],
+                                                           :compatibility => '800000' }]),
+             vpn_reach({ :prefix => '10.2.0.0/16', :rd => [65000, 1], :label => 24001 }))
+    assert_equal([:withdraw, :announce], BGP::Rib::PeerAdapter.vpn_operations(u, vpn_peer).collect(&:first))
+  end
+
+  # Unicast, labeled unicast (SAFI 4) and IPv6 VPN (AFI 2, the spec's
+  # pull request 5) are not VPN-IPv4.
+  def test_other_families_are_not_vpn_routes
+    unicast = BGP::Update.new(path_attribute, BGP::Nlri.new('10.0.0.0/8'))
+    labeled = wire(BGP::Origin.new(0), BGP::Mp_reach.new(:afi => 1, :safi => 4, :nexthop => ['10.0.0.1'],
+                                                         :nlris => [{ :prefix => '10.1.0.0/16', :label => 101 }]))
+    v6 = wire(BGP::Origin.new(0), BGP::Mp_reach.new(:afi => 2, :safi => 128, :nexthop => ['2001:db8::1'],
+                                                    :nlris => [{ :prefix => '2001:db8:1::/48', :rd => [65000, 1],
+                                                                 :label => 24001 }]))
+    [unicast, labeled, v6].each { |u| assert_equal([], BGP::Rib::PeerAdapter.vpn_operations(u, vpn_peer)) }
+  end
+
+  # The unicast table still takes none of it.
+  def test_a_vpn_route_is_still_not_a_unicast_operation
+    peer_opened
+    u = wire(BGP::Origin.new(0), BGP::As_path.new,
+             vpn_reach({ :prefix => '192.168.2.0/30', :rd => [65000, 1], :label => 24001 }))
+    assert_equal([], @adapter.operations(u))
+    assert_equal([[1, 128]], @adapter.unread_families(u))
+  end
+
   def test_an_unread_family_in_mp_unreach_is_reported_too
     peer_opened
     pa = BGP::Path_attribute.new(

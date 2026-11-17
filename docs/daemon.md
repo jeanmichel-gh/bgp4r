@@ -590,6 +590,7 @@ below.
 | `show.adj_out` | what was sent to one peer, and what was skipped | built |
 | `show.fib` | what the daemon believes is in the kernel table, and what failed | built |
 | `show.link_state` | BGP-LS routes: sent as a Producer, and received per peer | built |
+| `show.vpn` | the VPN-IPv4 routes received (AFI 1 / SAFI 128), one row each: RD, prefix, peer, next hop, labels, Route Targets, best | built |
 | `show.log` | the last N lines | built |
 | `events.subscribe`, `events.unsubscribe` | a stream, one event per line | built |
 | `peer.clear`, `peer.stop`, `peer.start` | one session | built |
@@ -1922,3 +1923,12 @@ and the Path Identifier, and a flow spec rule or an EVPN route is not a
 prefix. The daemon holds IPv4 and IPv6 unicast; every other family bgp4r
 speaks is on the wire only. That is the recorded decision and the lab
 labels say `bgp`, not the family.
+
+Two families have a table of their own beside the RIB, outside it:
+BGP-LS (`bgp/daemon/link_state_table.rb`) and, since
+`docs/design/l3vpn-pe.md`'s pull request 1, VPN-IPv4, AFI 1 / SAFI 128
+(`bgp/rib/vpn_table.rb`). The VPN table keys a route on its Route
+Distinguisher and prefix and runs the unicast decision process per key.
+It is filled only on a session whose two OPENs carried that family (RFC
+4364 section 4.3.4), and `show.vpn` reads it. No VRF uses it yet; that is
+the spec's pull request 2.
