@@ -59,6 +59,7 @@ class FwdLabNetnsTest < Test::Unit::TestCase
   LINKS = TOPOLOGY['topology']['links'].collect { |l| l['endpoints'] }
 
   A_LO = '10.255.0.1'
+  C_LO = '10.255.0.3'
   D_LO = '10.255.0.4'
   DIRECT = '10.200.4.2'   # d on the b to d link
   VIA_C = '10.200.2.2'    # c on the b to c link
@@ -182,6 +183,12 @@ class FwdLabNetnsTest < Test::Unit::TestCase
     wait_for('a to learn d\'s loopback', 60) { next_hop('a', D_LO) == '10.200.1.2' }
     wait_for('b to prefer the direct link to d', 30) { next_hop('b', D_LO) == DIRECT }
     wait_for('d to prefer the direct link back to a', 30) { next_hop('d', A_LO) == '10.200.4.1' }
+    # c's loopback too, because test_2 reads it. b learns it two ways, from
+    # c and through d, and the waits above say nothing about b's session
+    # to c: when b's dial to c lands after its dial to d, which a retry
+    # interval decides, b briefly routes c through d, and test_2 read that
+    # twice in CI. Forced by holding b's eth2 down until here.
+    wait_for('b to reach c\'s loopback directly', 30) { next_hop('b', C_LO) == VIA_C }
     assert_direct('the direct link')
   end
 
