@@ -53,6 +53,7 @@ class TestBgpDaemonVpnExporter < Test::Unit::TestCase
       @sent.flat_map do |u|
         u = BGP::Update.new(u.encode) # on the wire and back
         BGP::Rib::PeerAdapter.vpn_operations(u, peer).collect do |op, *a|
+          # IPv4 and IPv6 alike; the test reads the family off the prefix.
           next [op, *a.first(2)] if op == :withdraw
           v = a.first
           [op, v.rd, v.prefix, v.labels, v.route_targets, v.route.next_hop]
@@ -63,10 +64,11 @@ class TestBgpDaemonVpnExporter < Test::Unit::TestCase
 
   Speaker = Struct.new(:peers, :my_as, :local_address)
 
-  def session_info(vpn)
-    cap = BGP::OPT_PARM::CAP::Mbgp.new(1, vpn ? 128 : 1)
-    BGP::Neighbor::Capabilities.new(BGP::Open.new(4, 65000, 180, '10.255.0.1', cap),
-                                    BGP::Open.new(4, 65000, 180, '10.255.0.3', cap))
+  def session_info(vpn, vpn6: false)
+    caps = [BGP::OPT_PARM::CAP::Mbgp.new(1, vpn ? 128 : 1)]
+    caps << BGP::OPT_PARM::CAP::Mbgp.new(2, 128) if vpn6
+    BGP::Neighbor::Capabilities.new(BGP::Open.new(4, 65000, 180, '10.255.0.1', *caps),
+                                    BGP::Open.new(4, 65000, 180, '10.255.0.3', *caps))
   end
 
   def setup
@@ -160,6 +162,43 @@ class TestBgpDaemonVpnExporter < Test::Unit::TestCase
     exporter.refresh([a1])
     assert_equal([[:info, 'l3vpn: 2 VPN route(s) to announce, 0 to withdraw'],
                   [:info, 'l3vpn: 0 VPN route(s) to announce, 1 to withdraw']], log)
+  end
+
+  # --- IPv6, pull request 5 ----------------------------------------------
+
+  def a6 ; Export.new('A', '65000:1', '2001:db8:1::/64', 24000, ['65000:100']) ; end
+
+  # RFC 4659 section 3.2.1.2: our IPv4 address, IPv4-mapped, as next
+  # hop; AFI 2 in its own UPDATE beside the IPv4 one.
+  def test_an_ipv6_prefix_goes_as_afi_2_with_a_mapped_next_hop
+    @pe2.session_info = session_info(true, vpn6: true)
+    @exporter.refresh([a1, a6])
+    assert_equal([[:announce, '65000:1', '192.168.1.0/30', [24000], ['65000:100'], '10.255.0.1'],
+                  [:announce, '65000:1', '2001:db8:1::/64', [24000], ['65000:100'], '::ffff:10.255.0.1']],
+                 @pe2.operations)
+    assert_equal([1, 2], @pe2.sent.collect { |u| u.path_attribute[BGP::Mp_reach].afi })
+    nh = @pe2.sent.last.path_attribute[BGP::Mp_reach].encode.unpack1('H*')
+    assert_match(/000280 18 0{16} 0{20}ffff0aff0001/x, nh, 'AFI 2, SAFI 128, length 24: RD 0, then ::ffff:10.255.0.1')
+  end
+
+  # Section 3.4: a session that did not negotiate AFI 2 gets none of it.
+  def test_ipv6_goes_only_where_it_was_negotiated
+    @exporter.refresh([a1, a6])
+    assert_equal(['192.168.1.0/30'], @pe2.operations.collect { |o| o[2] })
+    v6only = FakePeer.new('10.255.0.5', 65000, BGP::Neighbor::Capabilities.new(
+      BGP::Open.new(4, 65000, 180, '10.255.0.1', BGP::OPT_PARM::CAP::Mbgp.new(2, 128)),
+      BGP::Open.new(4, 65000, 180, '10.255.0.5', BGP::OPT_PARM::CAP::Mbgp.new(2, 128))))
+    @exporter.session_up(v6only)
+    assert_equal(['2001:db8:1::/64'], v6only.operations.collect { |o| o[2] })
+  end
+
+  def test_an_ipv6_withdrawal_is_afi_2
+    @pe2.session_info = session_info(true, vpn6: true)
+    @exporter.refresh([a1, a6])
+    @pe2.sent.clear
+    @exporter.refresh([a1])
+    assert_equal([[:withdraw, '65000:1', '2001:db8:1::/64']], @pe2.operations)
+    assert_equal(2, @pe2.sent.first.path_attribute[BGP::Mp_unreach].afi)
   end
 
   def test_with_no_local_address_the_sessions_address_is_the_next_hop

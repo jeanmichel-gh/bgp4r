@@ -2053,7 +2053,7 @@ that moves a phase.
 | irb console | Done | – |
 | Route reflection | Items 1 to 5 done, with two gaps | Item 6, `client_to_client: false`, only if asked for. Item 3 lacks the text form. Item 4 lacks the FRR 10.5.1 run |
 | BGP-LS lab | Phases 1 and 3 done | Phase 2, a Propagator, not started; needs its own spec |
-| L3VPN PE (routescope's P2) | Specs approved 2026-11-17, `docs/design/l3vpn-pe.md` and `l3vpn-ruby-pe.md`; PRs 1 to 4 of 7 built: the VPN table, then VRFs, import and both transports, then export and labels, then `l3vpn-lab` with FRR as the other PE and its gate passing | Seven pull requests for the PE, from the VPN table to PE to CE eBGP; four for the labs of our own daemons |
+| L3VPN PE (routescope's P2) | Specs approved 2026-11-17, `docs/design/l3vpn-pe.md` and `l3vpn-ruby-pe.md`; PRs 1 to 5 of 7 built: the VPN table, then VRFs, import and both transports, then export and labels, then `l3vpn-lab` with FRR as the other PE and its gate passing, then VPN-IPv6 (RFC 4659) over the IPv4 core | Seven pull requests for the PE, from the VPN table to PE to CE eBGP; four for the labs of our own daemons |
 
 **Left, outside the tables above:**
 

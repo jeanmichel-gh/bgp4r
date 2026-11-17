@@ -61,6 +61,17 @@ class TestBgpRibVrfFib < Test::Unit::TestCase
     assert_equal('ip -j route show vrf A proto kernel scope link', @fib.connected_argv('A').join(' '))
   end
 
+  # Pull request 5: flush needs -6, replace takes the family from the
+  # prefix (measured), so an IPv6 route is the same form, its gateway a
+  # link-local.
+  def test_ipv6_forms
+    assert_equal('ip -6 route flush vrf A proto bgp', @fib.flush6_argv('A').join(' '))
+    assert_equal('ip -6 -j route show vrf A proto kernel', @fib.connected6_argv('A').join(' '))
+    hop = Hop.new('mpls', [17003], 'fe80::a8c1:abff:fef2:d683', 'eth1', nil, 'eui-64')
+    assert_equal('ip route replace vrf A 2001:db8:2::/64 encap mpls 17003/16 via fe80::a8c1:abff:fef2:d683 dev eth1 proto bgp',
+                 @fib.install_argv('A', '2001:db8:2::/64', [17003, 16], hop).join(' '))
+  end
+
   # With no runner a real process runs, and its exit status is read.
   def test_with_no_runner_the_command_runs
     assert_equal(0, BGP::Rib::VrfFib.new(bin: 'true').run(%w[true]).status)

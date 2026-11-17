@@ -39,6 +39,13 @@ module BGP
     # whose two OPENs carried AFI 1 / SAFI 128 (section 4.3.4). A session
     # that did not gets none. A route reflector's work is pull request 6.
     #
+    # **IPv6, pull request 5.** A VRF's IPv6 prefixes go as AFI 2 / SAFI
+    # 128, under the same RD, label and Route Targets, to the sessions
+    # that negotiated that family (RFC 4659 section 3.4). The next hop is
+    # local_address IPv4-mapped, with RD 0: section 3.2.1.2, "an
+    # IPv4-mapped IPv6 address containing the IPv4 address of the
+    # advertising BGP speaker".
+    #
     # LinkStateProducer's shape: keep what was sent; on each refresh send
     # the new and changed routes and withdraw the gone ones; send a
     # session that comes up the whole set. A withdrawal carries RFC 8277
@@ -67,17 +74,15 @@ module BGP
           changed.each { |e| @sent[e.key] = Sent.new(e, at) }
           unless changed.empty? && gone.empty?
             log(:info, "l3vpn: #{changed.size} VPN route(s) to announce, #{gone.size} to withdraw")
-            eligible.each { |p| send_to(p, changed, gone) }
+            @speaker.peers.each { |p| send_to(p, changed, gone) }
           end
           [changed, gone]
         end
       end
 
-      # A session came up: send it every route, if it takes VPN-IPv4.
+      # A session came up: send it every route of the families it takes.
       def session_up(peer)
-        @lock.synchronize do
-          send_to(peer, @sent.values.collect(&:export), []) if eligible?(peer)
-        end
+        @lock.synchronize { send_to(peer, @sent.values.collect(&:export), []) }
       end
 
       def size ; @lock.synchronize { @sent.size } ; end
@@ -99,17 +104,21 @@ module BGP
       # The UPDATEs for one peer: the withdrawals, then one MP_REACH_NLRI
       # per VRF, since its Route Targets apply to every NLRI beside them.
       # Public for the tests, which read what a peer would be sent.
+      #
+      # One UPDATE carries one MP_REACH_NLRI, so IPv4 and IPv6 go apart.
       def updates(peer, announced, withdrawn)
         list = []
-        withdrawn.each_slice(PER_UPDATE) do |c|
-          nlris = c.collect { |e| { :prefix => e.prefix, :rd => rd(e.rd), :compatibility => '800000' } }
-          list << BGP::Update.new(BGP::Path_attribute.new(BGP::Mp_unreach.new(:safi => 128, :nlris => nlris)))
+        withdrawn.group_by { |e| afi(e) }.each do |afi, es|
+          es.each_slice(PER_UPDATE) do |c|
+            nlris = c.collect { |e| { :prefix => e.prefix, :rd => rd(e.rd), :compatibility => '800000' } }
+            list << BGP::Update.new(BGP::Path_attribute.new(BGP::Mp_unreach.new(:afi => afi, :safi => 128, :nlris => nlris)))
+          end
         end
-        nh = next_hop(peer)
-        announced.group_by(&:vrf).each_value do |es|
+        announced.group_by { |e| [e.vrf, afi(e)] }.each do |(_, afi), es|
+          nh = next_hop(peer, afi)
           es.each_slice(PER_UPDATE) do |c|
             nlris = c.collect { |e| { :prefix => e.prefix, :rd => rd(e.rd), :label => e.label } }
-            list << BGP::Update.new(path_attribute(peer, nh, nlris, c.first.route_targets))
+            list << BGP::Update.new(path_attribute(peer, afi, nh, nlris, c.first.route_targets))
           end
         end
         list
@@ -117,15 +126,21 @@ module BGP
 
       private
 
-      def eligible
-        @speaker.peers.select { |p| eligible?(p) }
+      # The VPN families an established session negotiated, as AFIs.
+      def afis(peer)
+        return [] unless peer.established?
+        BGP::Rib::VpnTable.families(peer.session_info).collect(&:first)
       end
 
-      def eligible?(peer)
-        peer.established? && BGP::Rib::VpnTable.negotiated?(peer.session_info)
-      end
+      def afi(export) ; export.prefix.include?(':') ? 2 : 1 ; end
 
+      # What one session takes of these: only its negotiated families.
       def send_to(peer, announced, withdrawn)
+        ok = afis(peer)
+        return if ok.empty?
+        announced = announced.select { |e| ok.include?(afi(e)) }
+        withdrawn = withdrawn.select { |e| ok.include?(afi(e)) }
+        return if announced.empty? && withdrawn.empty?
         updates(peer, announced, withdrawn).each { |u| peer.send_message(u) }
       rescue StandardError => e
         log(:warn, "l3vpn: sending to #{peer.address}: #{e.class}: #{e.message}")
@@ -133,19 +148,22 @@ module BGP
 
       # RFC 4271 section 5.1.2: empty AS_PATH toward an internal peer, our
       # AS toward an external one; LOCAL_PREF to an internal peer only.
-      def path_attribute(peer, nh, nlris, route_targets)
+      def path_attribute(peer, afi, nh, nlris, route_targets)
         attrs = [BGP::Origin.new(0), BGP::As_path.new(*(peer.ebgp? ? [@speaker.my_as] : []))]
         attrs << BGP::Local_pref.new(100) unless peer.ebgp?
-        attrs << BGP::Mp_reach.new(:safi => 128, :nexthop => [nh], :nlris => nlris)
+        attrs << BGP::Mp_reach.new(:afi => afi, :safi => 128, :nexthop => [nh], :nlris => nlris)
         rts = route_targets.collect { |t| BGP::Route_target.new(*rd(t)) }
         attrs << BGP::Extended_communities.new(*rts) unless rts.empty?
         BGP::Path_attribute.new(*attrs)
       end
 
       # The PE's own address: local_address, its loopback, which the IGP
-      # carries and the far PE has a label to; else this session's.
-      def next_hop(peer)
-        @speaker.local_address || peer.local_ip
+      # carries and the far PE has a label to; else this session's. For
+      # AFI 2 an IPv4 address is IPv4-mapped (RFC 4659 section 3.2.1.2);
+      # the codec puts RD 0 before it.
+      def next_hop(peer, afi = 1)
+        nh = (@speaker.local_address || peer.local_ip).to_s
+        afi == 2 && !nh.include?(':') ? "::ffff:#{nh}" : nh
       end
 
       def next_hop_text

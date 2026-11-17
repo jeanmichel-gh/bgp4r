@@ -107,9 +107,15 @@ module BGP
       #
       # **It does not go in the table either**, for the reason MP_SAFIS
       # gives: the key is an RD and a prefix. `BGP::Rib::VpnTable` keeps
-      # these routes, docs/design/l3vpn-pe.md's decision 1, option A. IPv6
-      # VPNs, AFI 2 / SAFI 128 (RFC 4659), are that spec's pull request 5.
+      # these routes, docs/design/l3vpn-pe.md's decision 1, option A.
       VPN = [IANA::AFI::IPv4, IANA::SAFI::MPLS_VPN_UNICAST].freeze
+
+      # VPN-IPv6, RFC 4659 section 3.2: "AFI: 2; for IPv6", "SAFI: 128;
+      # for MPLS labeled VPN-IPv6". The same table keeps both: an RD and a
+      # prefix, which says its family. The spec's pull request 5.
+      VPN6 = [IANA::AFI::IPv6, IANA::SAFI::MPLS_VPN_UNICAST].freeze
+
+      VPN_FAMILIES = [VPN, VPN6].freeze
 
       # What one UPDATE asks a VPN table to do, withdrawals first, as
       # `operations` orders them:
@@ -120,13 +126,15 @@ module BGP
       # rd is the Route Distinguisher as text, "65000:1". A withdrawal's
       # label field is RFC 8277 section 2.4's Compatibility field, which
       # "MUST be ignored" on receipt, so it is. peer is the Rib::Peer the
-      # session's OPEN names. Any other family gives nothing.
-      def self.vpn_operations(update, peer)
+      # session's OPEN names. families: the VPN families to read, of
+      # VPN_FAMILIES; the session's negotiated ones. Any other family
+      # gives nothing.
+      def self.vpn_operations(update, peer, families: VPN_FAMILIES)
         pa = update.path_attribute
         return [] unless pa
         ops = []
-        each_vpn(pa, BGP::Mp_unreach) { |h| ops << [:withdraw, rd_text(h[:rd]), h[:prefix], h[:path_id]] }
-        each_vpn(pa, BGP::Mp_reach) do |h|
+        each_vpn(pa, BGP::Mp_unreach, families) { |h| ops << [:withdraw, rd_text(h[:rd]), h[:prefix], h[:path_id]] }
+        each_vpn(pa, BGP::Mp_reach, families) do |h|
           labels = h.key?(:labels) ? Array(h[:labels]) : Array(h[:label])
           route = Route.new(h[:prefix], pa, peer, :path_id => h[:path_id])
           ops << [:announce, VpnRoute.new(rd_text(h[:rd]), labels, route)]
@@ -140,10 +148,10 @@ module BGP
         Array(rd).join(':')
       end
 
-      def self.each_vpn(pa, klass)
+      def self.each_vpn(pa, klass, families)
         return unless pa.has?(klass)
         mp = pa[klass]
-        return unless [mp.afi, mp.safi] == VPN
+        return unless families.include?([mp.afi, mp.safi])
         Array(mp.nlris).each do |n|
           h = n.to_hash
           yield h if h[:rd] && h[:prefix]

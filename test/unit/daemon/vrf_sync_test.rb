@@ -30,7 +30,7 @@ class TestBgpDaemonVrfSync < Test::Unit::TestCase
   # made slow, to pile pokes up behind it, or to raise once.
   class FakeL3vpn
     attr_reader :calls
-    attr_accessor :slow, :raise_once
+    attr_accessor :slow, :raise_once, :waiting
 
     def initialize ; @calls = [] ; @lock = Mutex.new ; end
     def start ; record(:start) ; end
@@ -46,6 +46,7 @@ class TestBgpDaemonVrfSync < Test::Unit::TestCase
     end
 
     def syncs ; @lock.synchronize { @calls.count(:sync) } ; end
+    def waiting? ; @waiting ; end
     def record(c) ; @lock.synchronize { @calls << c } ; self ; end
   end
 
@@ -90,6 +91,21 @@ class TestBgpDaemonVrfSync < Test::Unit::TestCase
     @sync.poke
     assert(wait_for { seen.size == 2 })
     assert_equal([:start, :sync], seen)
+    @sync.stop
+  end
+
+  # Pull request 5: while a route waits for a MAC address, the sync runs
+  # again unpoked; once nothing waits, it stops.
+  def test_a_route_waiting_for_a_mac_is_tried_again
+    @sync = BGP::Daemon::VrfSync.new(@l3vpn, monitor: false, retry_after: 0.1)
+    @l3vpn.waiting = true
+    @sync.start
+    assert(wait_for { @l3vpn.syncs >= 3 }, 'syncs with no poke')
+    @l3vpn.waiting = false
+    sleep 0.3
+    n = @l3vpn.syncs
+    sleep 0.4
+    assert_equal(n, @l3vpn.syncs, 'and no more once nothing waits')
     @sync.stop
   end
 

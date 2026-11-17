@@ -110,8 +110,8 @@ Deciding and advertising routes.
 | Feature | unit | func | lab | What |
 |---|---:|---:|---:|---|
 | `rib` | 7 | 1 | 0 | Adj-RIB-In, the decision process and the Loc-RIB |
-| `vpn-table` | 2 | 1 | 1 | The VPN-IPv4 table: SAFI 128 routes received, keyed on RD and prefix, best path per key |
-| `vrfs` | 6 | 0 | 0 | A PE's VRFs: import by Route Target, the mpls and gre transports, VRF routes in the kernel, export with a label per VRF |
+| `vpn-table` | 2 | 1 | 1 | The VPN table: VPN-IPv4 and VPN-IPv6 routes received (SAFI 128), keyed on RD and prefix, best path per key |
+| `vrfs` | 6 | 0 | 0 | A PE's VRFs: import by Route Target, the mpls and gre transports, VRF routes in the kernel, export with a label per VRF, IPv6 over an IPv4 core |
 | `export` | 5 | 1 | 5 | The export rules, Adj-RIB-Out, UPDATE building and the MRAI timer |
 | `fib` | 3 | 0 | 3 | Putting the Loc-RIB in a forwarding table, and packets following it |
 | `show` | 2 | 0 | 0 | The three vendor styles, and the same state as plain data |
@@ -609,7 +609,7 @@ ruby test/run_feature.rb vpn
 
 ### `vpn-table`
 
-The VPN-IPv4 table: SAFI 128 routes received, keyed on RD and prefix, best path per key.
+The VPN table: VPN-IPv4 and VPN-IPv6 routes received (SAFI 128), keyed on RD and prefix, best path per key.
 
 - RFC 4364 sections 4.1 and 4.3
 - 2 unit files, 1 functional
@@ -622,9 +622,9 @@ ruby test/run_feature.rb vpn-table
 
 ### `vrfs`
 
-A PE's VRFs: import by Route Target, the mpls and gre transports, VRF routes in the kernel, export with a label per VRF.
+A PE's VRFs: import by Route Target, the mpls and gre transports, VRF routes in the kernel, export with a label per VRF, IPv6 over an IPv4 core.
 
-- RFC 4364 sections 4.3.1, 4.3.2 and 5; RFC 8277 section 2.4
+- RFC 4364 sections 4.3.1, 4.3.2 and 5; RFC 8277 section 2.4; RFC 4659 sections 3.2 and 4
 - 6 unit files
 
 ```

@@ -2,8 +2,8 @@
 
 Status: approved by the owner 2026-11-17. Pull requests 1, the VPN
 table, 2, VRFs and both transports, 3, export and labels, and 4, the
-lab and the interop test, built the same day. The gate passed on the
-VM, through routescope. The open questions
+lab and the interop test, and 5, VPN-IPv6 over the IPv4 core, built
+the same day. The gate passed on the VM, through routescope. The open questions
 at the end keep the answers this document gives until the owner changes
 them.
 
@@ -290,7 +290,7 @@ configured; the lab's CEs need only a default route. Pull request 7
 adds routes learned from a CE by eBGP inside the VRF, so a CE can be a
 bgp4rd too ("PE to CE by eBGP", below).
 
-### 6. IPv6 VRF routes over an IPv4 core: the neighbor's link-local (draft, pull request 5)
+### 6. IPv6 VRF routes over an IPv4 core: the neighbor's link-local (approved 2026-11-17, pull request 5)
 
 RFC 4659 section 3.2.1.2: over an IPv4 transport, the BGP next hop is
 "an IPv4-mapped IPv6 address containing the IPv4 address of the
@@ -343,6 +343,31 @@ the neighbor never answers its Neighbor Solicitation, so traffic
 drops. show.vrf names the gateway and which rule gave it, so a reader
 can see it. An option is a third rule, a probe: one ping to ff02::1
 on the device fills the table with every neighbor's real address.
+
+**Built in pull request 5, and measured on `l3vpn-lab`, 2026-11-17:**
+
+- pe1 installed pe2's IPv6 subnet in both VRFs as `encap mpls 17003/19
+  via fe80::a8c1:abff:fe93:d7c0 dev eth1`, p1's link-local, with nothing
+  set by hand. With p1's eth2 down it moved to `19003/19` through p2's,
+  and back. p1 saw `17003` over `19` on an IPv6 packet.
+- **A sync can come before the ARP entry.** On a fresh deploy the first
+  sync found no ARP entry for p1, a moment before BGP's own traffic made
+  one, and nothing changed in the routing table to start another. So a
+  route waiting for its gateway's MAC makes VrfSync sync again every 5
+  seconds until it is installed.
+- **FRR 10.2.1 receives bgp4rd's VPN-IPv6 routes but cannot install
+  them.** `show bgp ipv6 vpn` lists them with next hop
+  `::ffff:10.255.0.1`, labels 24000 and 24001; `show ipv6 route vrf A`
+  marks them `r`, since zebra tries the IPv4 gateway the kernel refuses.
+  The route added on pe2 by hand through p1's link-local made the ping
+  cross both ways, the reply popped by bgp4rd's 24000.
+- **FRR needs a global IPv6 address to run VPN-IPv6 over IPv4.** With
+  none it answers an OPEN offering AFI 2 / SAFI 128 with Cease 6/0, and
+  with one it sends that address as the VPN next hop, whatever `nexthop
+  vpn export` says. The lab gives pe2's loopback `::ffff:10.255.0.3`, so
+  FRR sends the mapped next hop section 3.2.1.2 asks for.
+- FRR's bgpd without zebra, as CI runs it, refuses AFI 2 on an IPv4
+  session the same way, so `vpn_frr_test.rb` has no VPN-IPv6 case.
 
 A next hop that is a real IPv6 address, not IPv4-mapped, needs an IPv6
 transport (section 3.2.1.1). bgp4rd marks it unreachable, with that

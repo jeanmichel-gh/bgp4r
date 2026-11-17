@@ -38,12 +38,22 @@ module BGP
     #   prints plain text, not JSON, with iproute2 6.19 (measured), and
     #   the sync reads each next hop again anyway.
     #
+    # * a few seconds after a sync that left a route waiting for its
+    #   gateway's MAC address (Rib::L3vpn#waiting?, pull request 5). An
+    #   IPv6 route needs it, and an ARP entry appears with no route change
+    #   to say so: measured on l3vpn-lab, the first sync after a deploy
+    #   found none, a moment before BGP's own traffic made one.
+    #
     # Pokes that arrive while a sync runs make one more sync, not one each.
     # The sync's own commands are route changes too, so they poke it
     # again; the next sync finds nothing to send and the loop settles.
     class VrfSync
 
-      def initialize(l3vpn, logger: nil, bin: 'ip', monitor: true)
+      # Seconds before another sync while a route waits for a MAC address.
+      RETRY = 5
+
+      def initialize(l3vpn, logger: nil, bin: 'ip', monitor: true, retry_after: RETRY)
+        @retry_after = retry_after
         @l3vpn = l3vpn
         @logger = logger
         @bin = bin
@@ -88,7 +98,7 @@ module BGP
 
       def work
         loop do
-          job = @queue.pop
+          job = waiting? ? (@queue.pop(timeout: @retry_after) || :sync) : @queue.pop
           jobs = [job]
           jobs << @queue.pop until @queue.empty?
           break if jobs.include?(:stop)
@@ -98,6 +108,10 @@ module BGP
       rescue StandardError => e
         @logger&.call(:error, "vrf sync: #{e.class}: #{e.message}")
         retry
+      end
+
+      def waiting?
+        @l3vpn.respond_to?(:waiting?) && @l3vpn.waiting?
       end
 
       def watch
