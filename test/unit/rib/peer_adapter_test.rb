@@ -243,10 +243,21 @@ class TestBgpRibPeerAdapter < Test::Unit::TestCase
     unicast = BGP::Update.new(path_attribute, BGP::Nlri.new('10.0.0.0/8'))
     labeled = wire(BGP::Origin.new(0), BGP::Mp_reach.new(:afi => 1, :safi => 4, :nexthop => ['10.0.0.1'],
                                                          :nlris => [{ :prefix => '10.1.0.0/16', :label => 101 }]))
-    v6 = wire(BGP::Origin.new(0), BGP::Mp_reach.new(:afi => 2, :safi => 128, :nexthop => ['2001:db8::1'],
+    [unicast, labeled].each { |u| assert_equal([], BGP::Rib::PeerAdapter.vpn_operations(u, vpn_peer)) }
+  end
+
+  # RFC 4659 section 3.2, pull request 5: AFI 2 is a VPN family too, with
+  # the PE's IPv4 address as an IPv4-mapped next hop (section 3.2.1.2).
+  # It is read only when the session negotiated it.
+  def test_a_vpn_ipv6_route_is_read_when_its_family_is
+    v6 = wire(BGP::Origin.new(0), BGP::Mp_reach.new(:afi => 2, :safi => 128, :nexthop => ['::ffff:10.255.0.3'],
                                                     :nlris => [{ :prefix => '2001:db8:1::/48', :rd => [65000, 1],
-                                                                 :label => 24001 }]))
-    [unicast, labeled, v6].each { |u| assert_equal([], BGP::Rib::PeerAdapter.vpn_operations(u, vpn_peer)) }
+                                                                 :label => 24001 }]),
+              BGP::Extended_communities.new(BGP::Route_target.new(65000, 100)))
+    op, v = BGP::Rib::PeerAdapter.vpn_operations(v6, vpn_peer).first
+    assert_equal([:announce, '65000:1', '2001:db8:1::/48', [24001], ['65000:100'], '::ffff:10.255.0.3'],
+                 [op, v.rd, v.prefix, v.labels, v.route_targets, v.route.next_hop])
+    assert_equal([], BGP::Rib::PeerAdapter.vpn_operations(v6, vpn_peer, families: [BGP::Rib::PeerAdapter::VPN]))
   end
 
   # The unicast table still takes none of it.

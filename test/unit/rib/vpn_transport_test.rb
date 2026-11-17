@@ -126,4 +126,19 @@ class TestBgpRibVpnTransport < Test::Unit::TestCase
     e = assert_raise(ArgumentError) { BGP::Rib::VpnTransport.from_config({ 'tunnels' => { '10.255.0.3' => 'gre-pe2' } }) }
     assert_equal('l3vpn: tunnels: 10.255.0.3: name the device, { gre: DEVICE }', e.message)
   end
+
+  # --- IPv6, pull request 5: decision 6 -----------------------------------
+
+  def test_a_mapped_next_hop_is_its_ipv4_address
+    assert_equal('10.255.0.3', BGP::Rib::VpnTransport.unmap('::ffff:10.255.0.3'))
+    assert_equal('10.255.0.3', BGP::Rib::VpnTransport.unmap('10.255.0.3'))
+    assert_nil(BGP::Rib::VpnTransport.unmap('2001:db8::3'))
+  end
+
+  # Measured on l3vpn-lab: p1's eth1 and p2's eth1, MAC to link-local.
+  def test_eui_64_from_a_mac
+    assert_equal('fe80::a8c1:abff:fef2:d683', BGP::Rib::VpnTransport.eui64('aa:c1:ab:f2:d6:83'))
+    assert_equal('fe80::a8c1:abff:fec6:25b7', BGP::Rib::VpnTransport.eui64('aa:c1:ab:c6:25:b7'))
+    assert_equal('fe80::ff:fe00:1', BGP::Rib::VpnTransport.eui64('02:00:00:00:00:01'), 'the bit flipped back to 0')
+  end
 end

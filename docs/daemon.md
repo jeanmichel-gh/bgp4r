@@ -414,6 +414,24 @@ unusable, or whose label route the kernel refused, sends nothing, since
 a label nothing pops would drop the far PE's traffic; `show.vpn_labels`
 says why. An exporting VRF with no `labels` block stops bgp4rd at start.
 
+**IPv6 VPNs** (RFC 4659, pull request 5). A session whose OPENs both
+carry `mbgp_ipv6_mpls_vpn_unicast` exchanges VPN-IPv6 routes, AFI 2 /
+SAFI 128, into the same VPN table and VRFs. A VRF sends its IPv6
+connected prefixes (not `fe80::/64`) and IPv6 `prefixes` with the same
+RD, label and Route Targets; the next hop is `local_address`
+IPv4-mapped, `::ffff:10.255.0.1`, as section 3.2.1.2 asks over an IPv4
+core. A received route's mapped next hop is resolved as the IPv4 one.
+**The kernel will not install an IPv6 route with an IPv4 gateway**, so
+bgp4rd sends it to the same neighbor's IPv6 link-local:
+`ip route replace vrf A 2001:db8:2::/64 encap mpls 17003/19 via
+fe80::a8c1:abff:fe93:d7c0 dev eth1 proto bgp`. The link-local is the
+IPv6 neighbor entry with the IPv4 gateway's MAC, else the EUI-64
+address made from it; `show.vrf`'s `gateway_from` says which. Until the
+gateway's MAC is in the ARP table the route waits, and the VRFs are
+synced again every 5 seconds. A next hop that is a real IPv6 address
+needs an IPv6 transport, which bgp4rd does not have: the route is
+unreachable and the row says so. `docs/design/l3vpn-pe.md`, decision 6.
+
 **A table is always on, which `lab/speaker.rb` differs from.** `rib`
 defaults to true here, because a daemon is a router by definition and
 `show.routes` has to answer; in the lab speaker a table has to be asked
@@ -635,7 +653,7 @@ below.
 | `show.adj_out` | what was sent to one peer, and what was skipped | built |
 | `show.fib` | what the daemon believes is in the kernel table, and what failed | built |
 | `show.link_state` | BGP-LS routes: sent as a Producer, and received per peer | built |
-| `show.vpn` | the VPN-IPv4 routes received (AFI 1 / SAFI 128), one row each: RD, prefix, peer, next hop, labels, Route Targets, best; and those this PE sends, with peer null, reason `local` and their `vrf` | built |
+| `show.vpn` | the VPN-IPv4 and VPN-IPv6 routes received (AFI 1 and 2 / SAFI 128), one row each: RD, prefix, peer, next hop, labels, Route Targets, best; and those this PE sends, with peer null, reason `local` and their `vrf` | built |
 | `show.vpn_labels` | each exporting VRF's label: label, VRF, the action, installed or why not | built |
 | `show.vrfs` | the VRFs: name, table, RD, Route Targets, the device's state, routes imported and installed | built |
 | `show.vrf` | each VRF's imported routes: what is pushed, where it goes, installed or why not; `vrf` picks one | built |
@@ -1981,4 +1999,6 @@ It is filled only on a session whose two OPENs carried that family (RFC
 4364 section 4.3.4), and `show.vpn` reads it. Since pull request 2, VRFs
 import from it (`bgp/rib/l3vpn.rb`), into kernel tables of their own.
 Since pull request 3, VRFs send their own routes
-(`bgp/daemon/vpn_exporter.rb`).
+(`bgp/daemon/vpn_exporter.rb`). Since pull request 5 the table holds
+VPN-IPv6 too, AFI 2 / SAFI 128 (RFC 4659), read on a session only when
+that family was negotiated.

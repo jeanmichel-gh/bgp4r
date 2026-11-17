@@ -34,12 +34,15 @@ The SRLBs are all 15000 to 15999.
 
 | VRF | RD | Route Target | pe1's label (bgp4rd) | pe2's label (FRR) |
 |---|---|---|---|---|
-| A | 65000:1 | 65000:100 | 24000 | 16 |
-| B | 65000:2 | 65000:200 | 24001 | 17 |
+| A | 65000:1 | 65000:100 | 24000 | 16 (first deploy) |
+| B | 65000:2 | 65000:200 | 24001 | 17 (first deploy) |
 
 bgp4rd's labels come from its `l3vpn: labels:` block, 24000 and up, in
 VRF order. FRR's come from its own label manager (`label vpn export
-auto`): 16 and 17 on this lab, measured, not configured.
+auto`): 16 and 17 on the first deploy, before the VRFs carried IPv6.
+FRR gives one per VRF and family, in the order it starts them, so they
+change from one deploy to the next (17, 16, 19 and 18 on a later one).
+bgp4rd's one label per VRF serves both families.
 
 ## What happens to a packet
 
@@ -113,8 +116,38 @@ routescope-labs install bgp4r/l3vpn-lab
 and start it from routescope's Labs panel, or here: `sudo containerlab
 deploy -t l3vpn-lab.clab.yml`.
 
+## IPv6
+
+Both VRFs carry IPv6 too, as VPN-IPv6 (RFC 4659) over the same IPv4
+core: 2001:db8:1::/64 at pe1 and 2001:db8:2::/64 at pe2, `::1` the PE
+and `::2` the CE. Measured on 2026-11-17:
+
+- bgp4rd installs pe2's IPv6 subnet in each VRF with the same transport
+  label and FRR's IPv6 VPN label, through p1's IPv6 link-local, since
+  the kernel takes no IPv4 gateway for an IPv6 route
+  (`docs/design/l3vpn-pe.md`, decision 6):
+  `2001:db8:2::/64 encap mpls 17003/19 via fe80::a8c1:abff:fe93:d7c0 dev eth1`.
+  With p1's eth2 down it moves to `19003/19` through p2's link-local,
+  and back.
+- p1 sees `MPLS (label 17003) (label 19, [S]) IP6 2001:db8:1::2 >
+  2001:db8:2::2`, and ce2a receives the echo request.
+- **The reply does not come back, and that is FRR.** pe2 shows bgp4rd's
+  routes in `show bgp ipv6 vpn`, labels 24000 and 24001, next hop
+  `::ffff:10.255.0.1`, but cannot install them: `show ipv6 route vrf A`
+  marks them `r`, because zebra tries the IPv4 gateway the kernel
+  refuses. With that one route added on pe2 by hand through p1's
+  link-local, `ip -6 route replace vrf A 2001:db8:1::/64 encap mpls
+  17001/24000 via fe80::... dev eth1`, the ping crosses both ways and
+  the reply arrives at pe1 as `24000` alone.
+- pe2's loopback carries `::ffff:10.255.0.3`. Without a global IPv6
+  address FRR answers an OPEN offering VPN-IPv6 over IPv4 with Cease
+  6/0, and with one it sends that address as the next hop. The mapped
+  one is what RFC 4659 section 3.2.1.2 asks for.
+
 ## What it does not have yet
 
 - **PE to CE routing.** The CEs have a default route; each PE sends its
   connected CE subnet. eBGP from a CE is pull request 7.
 - **Per-prefix labels.** One label per VRF on both PEs.
+- **IPv6 from pe2's side.** FRR 10.2.1 does not install IPv6 VPN routes
+  over an IPv4 next hop (above).

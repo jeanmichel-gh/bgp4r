@@ -135,7 +135,7 @@ class BGP_Daemon_Shell_Test < Test::Unit::TestCase
                  run_line('clear bgp bob').error)
     assert_equal('"clear bgp 10.0.0.0/8" is not a command, and "10.0.0.0/8" is not an address. ' \
                  'After "clear bgp" comes PEER', run_line('clear bgp 10.0.0.0/8').error)
-    assert_match(/"nonsense" is not a prefix\. After "show bgp" comes summary, neighbors, vpnv4, PREFIX/,
+    assert_match(/"nonsense" is not a prefix\. After "show bgp" comes summary, neighbors, vpnv4, vpnv6, PREFIX/,
                  run_line('show bgp nonsense').error)
     assert_equal([], @client.calls)
     run_line('show bgp 2001:db8::/32')
@@ -193,8 +193,9 @@ class BGP_Daemon_Shell_Test < Test::Unit::TestCase
     assert_match(/^  PREFIX +one prefix, in detail$/, text)
     assert_match(/^  neighbors +every neighbor, in detail$/, text)
     assert_match(/^  vpnv4 +the VPN-IPv4 routes received, by Route Distinguisher$/, text)
+    assert_match(/^  vpnv6 +the VPN-IPv6 routes received, by Route Distinguisher$/, text)
     assert_match(/^  <cr> +run it$/, text)
-    assert_equal(5, text.lines.size)
+    assert_equal(6, text.lines.size)
     assert_no_match(/<cr>/, run_line('clear bgp ?').text, 'clear bgp alone is not a command')
   end
 
@@ -228,7 +229,7 @@ class BGP_Daemon_Shell_Test < Test::Unit::TestCase
     assert_equal(%w[show], @shell.completions('', 's'))
     assert_equal(%w[show clear enable disable monitor config help exit quit], @shell.completions('', ''))
     assert_equal(%w[configuration], @shell.completions('sh ', 'c'))
-    assert_equal(%w[summary neighbors vpnv4], @shell.completions('show bgp ', ''), 'a prefix is not completed')
+    assert_equal(%w[summary neighbors vpnv4 vpnv6], @shell.completions('show bgp ', ''), 'a prefix is not completed')
   end
 
   def test_tab_completes_peers_from_the_daemon

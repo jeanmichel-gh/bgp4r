@@ -14,6 +14,8 @@
 # between the PEs' loopbacks. VRF A joins ce1a and ce2a, VRF B ce1b and
 # ce2b, on the same addresses: 192.168.1.0/24 at pe1, 192.168.2.0/24 at
 # pe2. RD 65000:1 and RT 65000:100 for A, 65000:2 and 65000:200 for B.
+# IPv6 too, as VPN-IPv6 (RFC 4659) over the same IPv4 core:
+# 2001:db8:1::/64 at pe1, 2001:db8:2::/64 at pe2, in both VRFs.
 #
 # pe1 is two containers in one network namespace: pe1 runs isisd and
 # owns the interfaces and the VRF devices, pe1-bgp runs bgp4rd beside it.
@@ -39,7 +41,9 @@ topology:
         ip link add A type vrf table 100; ip link set A up; ip link set eth3 master A;
         ip link add B type vrf table 200; ip link set B up; ip link set eth4 master B;
         ip addr add 192.168.1.1/24 dev eth3; ip addr add 192.168.1.1/24 dev eth4;
-        echo 1 > /proc/sys/net/ipv4/ip_forward; echo 100000 > /proc/sys/net/mpls/platform_labels;
+        ip -6 addr add 2001:db8:1::1/64 dev eth3; ip -6 addr add 2001:db8:1::1/64 dev eth4;
+        echo 1 > /proc/sys/net/ipv4/ip_forward; echo 1 > /proc/sys/net/ipv6/conf/all/forwarding;
+        echo 100000 > /proc/sys/net/mpls/platform_labels;
         exec isisd -c /etc/isis4r/isisd.yml -l -"
     # --- PE 1: the BGP half, in pe1's namespace ----------------------
     pe1-bgp:
@@ -81,8 +85,14 @@ topology:
       exec:
         - sh -c "ip route del default dev eth0 2>/dev/null || true"
         - sysctl -qw net.mpls.platform_labels=100000 net.mpls.conf.eth1.input=1 net.mpls.conf.eth2.input=1
-        - sh -c "ip link add A type vrf table 100; ip link set A up; ip link set eth3 master A; ip addr add 192.168.2.1/24 dev eth3"
-        - sh -c "ip link add B type vrf table 200; ip link set B up; ip link set eth4 master B; ip addr add 192.168.2.1/24 dev eth4"
+        - sysctl -qw net.ipv6.conf.all.forwarding=1
+        # FRR sends Cease 6/0 to a peer that offers VPN-IPv6 over IPv4
+        # unless it has a global IPv6 address of its own, and that
+        # address becomes the next hop it sends. Its IPv4 loopback,
+        # IPv4-mapped, is the next hop RFC 4659 section 3.2.1.2 asks for.
+        - ip -6 addr add ::ffff:10.255.0.3/128 dev lo
+        - sh -c "ip link add A type vrf table 100; ip link set A up; ip link set eth3 master A; ip addr add 192.168.2.1/24 dev eth3; ip -6 addr add 2001:db8:2::1/64 dev eth3"
+        - sh -c "ip link add B type vrf table 200; ip link set B up; ip link set eth4 master B; ip addr add 192.168.2.1/24 dev eth4; ip -6 addr add 2001:db8:2::1/64 dev eth4"
     # --- The customer sites: plain Linux, a default route to the PE --
     ce1a:
       kind: linux
@@ -90,28 +100,32 @@ topology:
       labels: { routescope.kind: linux }
       entrypoint: sleep
       cmd: infinity
-      exec: ["ip addr add 192.168.1.2/24 dev eth1", "ip route replace default via 192.168.1.1"]
+      exec: ["ip addr add 192.168.1.2/24 dev eth1", "ip route replace default via 192.168.1.1",
+             "ip -6 addr add 2001:db8:1::2/64 dev eth1", "ip -6 route replace default via 2001:db8:1::1"]
     ce1b:
       kind: linux
       image: isis4r:latest
       labels: { routescope.kind: linux }
       entrypoint: sleep
       cmd: infinity
-      exec: ["ip addr add 192.168.1.2/24 dev eth1", "ip route replace default via 192.168.1.1"]
+      exec: ["ip addr add 192.168.1.2/24 dev eth1", "ip route replace default via 192.168.1.1",
+             "ip -6 addr add 2001:db8:1::2/64 dev eth1", "ip -6 route replace default via 2001:db8:1::1"]
     ce2a:
       kind: linux
       image: isis4r:latest
       labels: { routescope.kind: linux }
       entrypoint: sleep
       cmd: infinity
-      exec: ["ip addr add 192.168.2.2/24 dev eth1", "ip route replace default via 192.168.2.1"]
+      exec: ["ip addr add 192.168.2.2/24 dev eth1", "ip route replace default via 192.168.2.1",
+             "ip -6 addr add 2001:db8:2::2/64 dev eth1", "ip -6 route replace default via 2001:db8:2::1"]
     ce2b:
       kind: linux
       image: isis4r:latest
       labels: { routescope.kind: linux }
       entrypoint: sleep
       cmd: infinity
-      exec: ["ip addr add 192.168.2.2/24 dev eth1", "ip route replace default via 192.168.2.1"]
+      exec: ["ip addr add 192.168.2.2/24 dev eth1", "ip route replace default via 192.168.2.1",
+             "ip -6 addr add 2001:db8:2::2/64 dev eth1", "ip -6 route replace default via 2001:db8:2::1"]
 
   links:
     - endpoints: ["pe1:eth1", "p1:eth1"]

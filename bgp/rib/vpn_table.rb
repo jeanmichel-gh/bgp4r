@@ -30,7 +30,9 @@ module BGP
   module Rib
 
     # The VPN-IPv4 routes a speaker received, AFI 1 / SAFI 128 (RFC 4364
-    # section 4.3.4), in a table of their own beside the unicast RIB.
+    # section 4.3.4), in a table of their own beside the unicast RIB, and
+    # since pull request 5 the VPN-IPv6 ones, AFI 2 / SAFI 128 (RFC 4659),
+    # each family read only on a session that negotiated it.
     #
     # docs/design/l3vpn-pe.md, decision 1, option A. A VPN route is keyed
     # on its Route Distinguisher and prefix: RFC 4364 section 4.1, "Since
@@ -80,18 +82,24 @@ module BGP
       end
 
       # True when both OPENs of a session carried the Multiprotocol
-      # capability for AFI 1 / SAFI 128 (RFC 4760 section 8).
-      def self.negotiated?(session_info)
+      # capability for family, AFI 1 / SAFI 128 by default (RFC 4760
+      # section 8; RFC 4659 section 3.4 for AFI 2).
+      def self.negotiated?(session_info, family = PeerAdapter::VPN)
         return false unless session_info
-        [session_info.speaker, session_info.peer].all? { |open| vpn?(open) }
+        [session_info.speaker, session_info.peer].all? { |open| vpn?(open, family) }
       end
 
-      def self.vpn?(open)
+      # The VPN families a session negotiated, of PeerAdapter::VPN_FAMILIES.
+      def self.families(session_info)
+        PeerAdapter::VPN_FAMILIES.select { |f| negotiated?(session_info, f) }
+      end
+
+      def self.vpn?(open, family)
         return false unless open
         Array(open.opt_parms).flat_map { |p|
           p.respond_to?(:capabilities) ? Array(p.capabilities) : [p]
         }.any? { |c|
-          c.is_a?(BGP::OPT_PARM::CAP::Mbgp) && [c.afi, c.safi] == PeerAdapter::VPN
+          c.is_a?(BGP::OPT_PARM::CAP::Mbgp) && [c.afi, c.safi] == family
         }
       end
       private_class_method :vpn?
@@ -216,9 +224,10 @@ module BGP
 
         def update(msg)
           return unless msg.is_a?(BGP::Update)
-          return unless VpnTable.negotiated?(@neighbor.session_info)
+          families = VpnTable.families(@neighbor.session_info)
+          return if families.empty?
           peer = self.peer or return
-          ops = PeerAdapter.vpn_operations(msg, peer)
+          ops = PeerAdapter.vpn_operations(msg, peer, families: families)
           @table.apply(@neighbor.remote_addr, ops) unless ops.empty?
         end
 

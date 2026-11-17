@@ -109,7 +109,7 @@ module BGP
 
       # Removes what an earlier bgp4rd left in each VRF, then fills them.
       def start
-        @vrfs.each { |v| @fib.run(@fib.flush_argv(v.name)) if device_error(v).nil? }
+        @vrfs.each { |v| flush(v) if device_error(v).nil? }
         @fib.run(@fib.label_flush_argv) unless @labels.empty?
         sync!
         self
@@ -118,7 +118,7 @@ module BGP
       # Removes every route this put in the VRFs (proto bgp only).
       def stop
         @lock.synchronize do
-          @vrfs.each { |v| @fib.run(@fib.flush_argv(v.name)) if @devices[v.name].nil? }
+          @vrfs.each { |v| flush(v) if @devices[v.name].nil? }
           @fib.run(@fib.label_flush_argv) unless @labels.empty?
           @installed.clear
           @label_installed.clear
@@ -132,7 +132,7 @@ module BGP
         @lock.synchronize do
           @syncs += 1
           hops = {}
-          hop = ->(nh) { hops[nh.to_s] ||= @transport.resolve(nh) }
+          hop = ->(nh, v6) { hops[[nh.to_s, v6]] ||= @transport.resolve(nh, ipv6: v6) }
           @vrfs.each do |v|
             @devices[v.name] = device_error(v)
             want, rows = wanted(v, winners, hop)
@@ -172,6 +172,14 @@ module BGP
 
       def syncs ; @lock.synchronize { @syncs } ; end
 
+      # True when a route is not installed only because its gateway's MAC
+      # is not known yet (VpnTransport::NO_ARP): VrfSync tries again soon.
+      def waiting?
+        @lock.synchronize do
+          @rows.values.flatten.any? { |r| r['error'].to_s.start_with?(VpnTransport::NO_ARP) }
+        end
+      end
+
       # The VPN routes this PE sends, every exporting VRF's, as Export.
       # A VRF whose device is unusable, or whose label route the kernel
       # refused, sends nothing: a label nothing pops would drop traffic.
@@ -207,18 +215,22 @@ module BGP
 
       # [{ prefix => Want }, rows] for one VRF.
       def wanted(v, winners, hop)
-        decision = Decision.new(local_as: @local_as, router_id: @router_id,
-                                resolver: ->(nh) { hop.call(nh).ok? ? 0 : nil })
+        decisions = [false, true].to_h do |v6|
+          [v6, Decision.new(local_as: @local_as, router_id: @router_id,
+                            resolver: ->(nh) { hop.call(nh, v6).ok? ? 0 : nil })]
+        end
         want = {}
         rows = []
         winners.select { |w| v.imports?(w.route_targets) }.group_by(&:prefix).each do |prefix, list|
-          result = decision.best(list.collect(&:route))
+          v6 = prefix.include?(':')
+          result = decisions[v6].best(list.collect(&:route))
           chosen = result.best && list.find { |w| w.route.equal?(result.best) }
           w = chosen || list.first
-          h = hop.call(w.route.next_hop)
+          h = hop.call(w.route.next_hop, v6)
           row = { 'vrf' => v.name, 'prefix' => prefix, 'rd' => w.rd, 'peer' => w.peer.address,
                   'next_hop' => w.route.next_hop, 'vpn_labels' => w.labels, 'transport' => h.transport,
                   'transport_labels' => h.labels, 'gateway' => h.gateway, 'dev' => h.dev,
+                  'gateway_from' => h.gateway_from,
                   'candidates' => list.size, 'installed' => false, 'error' => nil }
           if chosen
             stack = Array(h.labels) + w.labels
@@ -255,14 +267,34 @@ module BGP
         @exports[v.name] = prefixes.collect { |p| Export.new(v.name, v.rd, p, label, v.export) }
       end
 
-      # The VRF's connected prefixes, from its table.
+      # The VRF's connected prefixes, from its table, IPv4 then IPv6. The
+      # IPv6 answer lists link-local, anycast and multicast routes too
+      # (VrfFib#connected6_argv); only unicast ones outside fe80::/10 are
+      # the VRF's own.
       def connected(v)
         require 'json' # here, as View#json does: see vpn_transport.rb
-        r = @fib.run(@fib.connected_argv(v.name))
-        return [] unless r.ok?
-        JSON.parse(r.output).filter_map { |route| route['dst'] && normalize(route['dst']) }
+        v4 = read_routes(@fib.connected_argv(v.name))
+        v6 = read_routes(@fib.connected6_argv(v.name)).reject do |r|
+          r['type'] || LINK_LOCAL.include?(IPAddr.new(r['dst'].to_s.split('/').first))
+        end
+        (v4 + v6).filter_map { |route| route['dst'] && normalize(route['dst']) }
+      rescue IPAddr::Error
+        []
+      end
+
+      LINK_LOCAL = IPAddr.new('fe80::/10')
+
+      def read_routes(argv)
+        r = @fib.run(argv)
+        r.ok? ? Array(JSON.parse(r.output)) : []
       rescue JSON::ParserError
         []
+      end
+
+      # What this put in a VRF, both families (proto bgp only).
+      def flush(v)
+        @fib.run(@fib.flush_argv(v.name))
+        @fib.run(@fib.flush6_argv(v.name))
       end
 
       def normalize(dst)

@@ -136,6 +136,16 @@ class TestBgpRibVpnTable < Test::Unit::TestCase
     assert(!BGP::Rib::VpnTable.negotiated?(nil))
   end
 
+  # RFC 4659 section 3.4: AFI 2 is negotiated on its own.
+  def test_each_vpn_family_is_negotiated_on_its_own
+    both = [BGP::OPT_PARM::CAP::Mbgp.new(1, 128), BGP::OPT_PARM::CAP::Mbgp.new(2, 128)]
+    si = BGP::Neighbor::Capabilities.new(BGP::Open.new(4, 65000, 180, '10.255.0.1', *both),
+                                         BGP::Open.new(4, 65000, 180, '10.255.0.3', both.last))
+    assert_equal([[2, 128]], BGP::Rib::VpnTable.families(si))
+    assert(!BGP::Rib::VpnTable.negotiated?(si))
+    assert(BGP::Rib::VpnTable.negotiated?(si, BGP::Rib::PeerAdapter::VPN6))
+  end
+
   # A Neighbor stand-in with what attach and its feed use.
   class FakeNeighbor
     attr_accessor :session_info

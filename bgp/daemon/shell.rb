@@ -93,6 +93,9 @@ module BGP
           kw('vpnv4', 'the VPN-IPv4 routes received, by Route Distinguisher', :vpnv4, [
             kw('unicast', 'the IOS form', :vpnv4, [kw('all', 'the IOS form', :vpnv4)])
           ]),
+          kw('vpnv6', 'the VPN-IPv6 routes received, by Route Distinguisher', :vpnv6, [
+            kw('unicast', 'the IOS form', :vpnv6, [kw('all', 'the IOS form', :vpnv6)])
+          ]),
           arg(:prefix, 'PREFIX', 'one prefix, in detail', :routes)
         ])
       end
@@ -560,21 +563,27 @@ module BGP
         out
       end
 
-      # `show bgp vpnv4`, the rows of `show.vpn` under one heading per
+      # `show bgp vpnv4`, the IPv4 rows of `show.vpn` under one heading per
       # Route Distinguisher, as IOS groups them, with each route's labels
       # and Route Targets on its line. Every page is read.
-      def vpnv4(_args, _words)
+      def vpnv4(_args, _words) ; vpn_table('VPN-IPv4', false) ; end
+
+      # `show bgp vpnv6`, its IPv6 rows (RFC 4659), the same way.
+      def vpnv6(_args, _words) ; vpn_table('VPN-IPv6', true) ; end
+
+      def vpn_table(name, ipv6)
         rows, offset = [], 0
         loop do
           page = @client.call('show.vpn', 'offset' => offset)
           rows.concat(Array(page['rows']))
           offset = page['next_offset'] or break
         end
-        return "No VPN-IPv4 routes.\n" if rows.empty?
+        rows = rows.select { |r| r['prefix'].to_s.include?(':') == ipv6 }
+        return "No #{name} routes.\n" if rows.empty?
         out = +''
-        out << format("%d VPN-IPv4 route(s)\n", rows.size)
+        out << format("%d #{name} route(s)\n", rows.size)
         out << "Status codes: * valid, > best\n\n"
-        line = "%-3s %-18s %-15s %-6s %-10s %-14s %s\n"
+        line = ipv6 ? "%-3s %-24s %-18s %-6s %-10s %-14s %s\n" : "%-3s %-18s %-15s %-6s %-10s %-14s %s\n"
         out << format(line, '', 'Network', 'Next Hop', 'LocPrf', 'Labels', 'Route Targets', 'Path')
         rows.group_by { |r| r['rd'] }.each do |rd, list|
           out << "Route Distinguisher: #{rd}\n"

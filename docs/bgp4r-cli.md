@@ -105,6 +105,8 @@ or a file prints the usage, as it always did. Use `-c` in a script.
 | `show link-state` | BGP-LS routes: what this daemon sent as a Producer, and what it received, one line per route |
 | `show bgp vpnv4` | the VPN-IPv4 routes received, under one heading per Route Distinguisher, with labels and Route Targets |
 | `show bgp vpnv4 unicast`, `show bgp vpnv4 unicast all` | the same, in IOS's words |
+| `show bgp vpnv6` | the VPN-IPv6 routes (RFC 4659), the same way; a next hop over IPv4 shows as `::ffff:` and the PE's address |
+| `show bgp vpnv6 unicast`, `show bgp vpnv6 unicast all` | the same, in IOS's words |
 | `show vrf` | the VRFs, one line each: table, RD, Import Targets, routes imported and installed, the device's state |
 | `show vrf NAME` | one VRF's routes: the labels pushed (transport, then VPN), via and device, installed or why not |
 | `show configuration` | the running configuration, as set lines |
@@ -131,6 +133,7 @@ They answer the same:
 | `show ip bgp neighbors`, `show ip bgp neighbors PEER` | the same |
 | `show ip bgp neighbors PEER received-routes`, `show ip bgp neighbors PEER advertised-routes` | the same |
 | `show ip bgp vpnv4`, `show ip bgp vpnv4 unicast`, `show ip bgp vpnv4 unicast all` | the same |
+| `show ip bgp vpnv6`, `show ip bgp vpnv6 unicast`, `show ip bgp vpnv6 unicast all` | the same |
 | `clear ip bgp PEER`, `clear ip bgp PEER soft in` | `clear bgp`, and the same words after it |
 
 `--style junos` or `--style iosxr` prints `show bgp` in those styles.

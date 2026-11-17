@@ -40,6 +40,13 @@ module BGP
     #   ip route del vrf A P proto bgp
     #   ip route flush vrf A proto bgp
     #
+    # An IPv6 route takes the same forms, its gateway the neighbor's
+    # link-local (decision 6): `replace` and `del` take the family from
+    # the prefix, `flush` does not, and needs -6 (measured, iproute2 6.19):
+    #
+    #   ip route replace vrf A 2001:db8:2::/64 encap mpls T/L via fe80::.. dev D proto bgp
+    #   ip -6 route flush vrf A proto bgp
+    #
     # T is the transport's labels and L the VPN label, top first. A route
     # in VRF A may leave on a device outside it, which is how the VPN
     # route reaches the core. replace on another label stack changes it
@@ -70,6 +77,11 @@ module BGP
         [@bin, 'route', 'flush', 'vrf', vrf, 'proto', PROTO]
       end
 
+      # `ip route flush` leaves IPv6 routes alone (measured).
+      def flush6_argv(vrf)
+        [@bin, '-6', 'route', 'flush', 'vrf', vrf, 'proto', PROTO]
+      end
+
       # The label route a VRF's label pops into the VRF, for a lookup there
       # (RFC 4364 section 4.3.2, one label per VRF): measured with
       # iproute2 6.19, it reads back as {"dst":"24001","dev":"A"}. The
@@ -91,6 +103,14 @@ module BGP
       # [{"dst":"192.168.1.0/30","dev":"eth1",...}].
       def connected_argv(vrf)
         [@bin, '-j', 'route', 'show', 'vrf', vrf, 'proto', 'kernel', 'scope', 'link']
+      end
+
+      # Its IPv6 ones. The answer also lists fe80::/64 and anycast and
+      # multicast routes, as {"type":"anycast",...}; L3vpn keeps the
+      # unicast ones that are not link-local (measured):
+      # [{"dst":"2001:db8:1::/64","dev":"eth3","metric":256,...}].
+      def connected6_argv(vrf)
+        [@bin, '-6', '-j', 'route', 'show', 'vrf', vrf, 'proto', 'kernel']
       end
 
       # The VRF device: `ip -j -d link show dev NAME` answers its kind and

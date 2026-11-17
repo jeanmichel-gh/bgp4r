@@ -157,4 +157,11 @@ class VpnFrrTest < Test::Unit::TestCase
     assert_equal([['10.0.0.2:7', '10.9.0.0/16', [3002], ['65000:301'], '127.0.0.2', 100, true],
                   ['65000:9', '10.9.0.0/16', [3001], ['65000:300'], '127.0.0.2', 100, true]], rows)
   end
+
+  # **No VPN-IPv6 case here, and that is measured.** FRR 10.5.1's bgpd
+  # without zebra refuses AFI 2 on an IPv4 session: it logs "No local
+  # IPv6 address, and zebra does not support V6 routing with v4
+  # nexthops" and sends Cease 6/0, as LabHelper::Frr says of IPv6
+  # unicast. VPN-IPv6 against FRR is checked on l3vpn-lab, where FRR runs
+  # with zebra (docs/design/l3vpn-pe.md, pull request 5).
 end

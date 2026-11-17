@@ -34,7 +34,7 @@ class TestBgpRibL3vpn < Test::Unit::TestCase
   # bgp4rd installs, by VRF. Any command can be told to fail.
   class Kernel
     attr_reader :sent, :routes, :labels
-    attr_accessor :devices, :next_hops, :refuse, :connected
+    attr_accessor :devices, :next_hops, :refuse, :connected, :connected6, :arp, :neighbors6
 
     def initialize
       @sent = []
@@ -47,6 +47,11 @@ class TestBgpRibL3vpn < Test::Unit::TestCase
         '10.255.0.4' => '[{"dst":"10.255.0.4","encap":{"encap_type":"mpls","dst":"17004"},"gateway":"10.0.12.2","dev":"eth2","flags":[]}]'
       }
       @refuse = nil
+      # IPv6, pull request 5: what `ip -6 -j route show vrf A proto kernel`
+      # answered on l3vpn-lab's pe1, link-local and anycast included.
+      @connected6 = { 'A' => [], 'B' => [] }
+      @arp = { %w[10.0.12.2 eth2] => 'aa:c1:ab:f2:d6:83' }
+      @neighbors6 = { 'eth2' => [] }
     end
 
     def call(argv)
@@ -68,8 +73,23 @@ class TestBgpRibL3vpn < Test::Unit::TestCase
         @routes[vrf].delete(prefix)
         result(argv, 0, '')
       in ['route', 'flush', 'vrf', vrf, *]
-        @routes[vrf].clear
+        @routes[vrf].delete_if { |prefix, _| !prefix.include?(':') }
         result(argv, 0, '')
+      in ['-6', 'route', 'flush', 'vrf', vrf, *]
+        @routes[vrf].delete_if { |prefix, _| prefix.include?(':') }
+        result(argv, 0, '')
+      in ['-6', '-j', 'route', 'show', 'vrf', vrf, 'proto', 'kernel']
+        rows = @connected6.fetch(vrf, []).flat_map do |d|
+          [{ 'type' => 'anycast', 'dst' => d.split('/').first, 'dev' => 'eth3' }, { 'dst' => d, 'dev' => 'eth3' }]
+        end
+        rows += [{ 'type' => 'anycast', 'dst' => 'fe80::', 'dev' => 'eth3' }, { 'dst' => 'fe80::/64', 'dev' => 'eth3' },
+                 { 'type' => 'multicast', 'dst' => 'ff00::/8', 'dev' => 'eth3' }]
+        result(argv, 0, JSON.generate(rows))
+      in ['-j', 'neigh', 'show', gw, 'dev', dev]
+        mac = @arp[[gw, dev]]
+        result(argv, 0, JSON.generate(mac ? [{ 'dst' => gw, 'lladdr' => mac, 'state' => ['REACHABLE'] }] : []))
+      in ['-6', '-j', 'neigh', 'show', 'dev', dev]
+        result(argv, 0, JSON.generate(@neighbors6.fetch(dev, [])))
       in ['-f', 'mpls', 'route', 'replace', label, 'dev', vrf, 'proto', 'bgp']
         @labels[label.to_i] = vrf
         result(argv, 0, '')
@@ -92,6 +112,81 @@ class TestBgpRibL3vpn < Test::Unit::TestCase
     @table = BGP::Rib::VpnTable.new(local_as: 65000, router_id: '10.255.0.1')
     @vrfs = BGP::Rib::Vrf.list([{ 'name' => 'A', 'table' => 100, 'import' => ['65000:100'] },
                                 { 'name' => 'B', 'table' => 200, 'import' => ['65000:200'] }])
+  end
+
+  # --- IPv6, pull request 5 ----------------------------------------------
+
+  # RFC 4659 section 3.2.1.2: pe2's IPv4 address, IPv4-mapped.
+  def announce6(prefix, rd: [65000, 1], label: 24101, rt: [65000, 100], nh: '::ffff:10.255.0.3')
+    u = BGP::Update.new(BGP::Update.new(BGP::Path_attribute.new(
+      BGP::Origin.new(0), BGP::As_path.new, BGP::Local_pref.new(100),
+      BGP::Mp_reach.new(:afi => 2, :safi => 128, :nexthop => [nh], :nlris => [{ :prefix => prefix, :rd => rd, :label => label }]),
+      BGP::Extended_communities.new(BGP::Route_target.new(*rt)))).encode)
+    @table.apply('10.255.0.3', BGP::Rib::PeerAdapter.vpn_operations(u, peer('10.255.0.3')))
+  end
+
+  # Decision 6: the kernel takes no IPv4 gateway for an IPv6 route, so
+  # the gateway is that neighbor's link-local, made from its MAC when no
+  # IPv6 neighbor entry has it.
+  def test_an_ipv6_route_goes_to_the_gateways_link_local
+    announce6('2001:db8:2::/64')
+    l = l3vpn.start
+    assert_equal('encap mpls 17003/24101 via fe80::a8c1:abff:fef2:d683 dev eth2 proto bgp',
+                 @kernel.routes['A']['2001:db8:2::/64'])
+    r = l.rows('A').first
+    assert_equal(['::ffff:10.255.0.3', [17003], 'fe80::a8c1:abff:fef2:d683', 'eui-64', true],
+                 r.values_at('next_hop', 'transport_labels', 'gateway', 'gateway_from', 'installed'))
+  end
+
+  def test_the_neighbor_table_wins_over_eui_64
+    @kernel.neighbors6['eth2'] = [{ 'dst' => '2001:db8:ff::2', 'lladdr' => 'aa:c1:ab:f2:d6:83' },
+                                  { 'dst' => 'fe80::1234', 'lladdr' => 'aa:c1:ab:f2:d6:83' }]
+    announce6('2001:db8:2::/64')
+    l = l3vpn.start
+    assert_equal(['fe80::1234', 'neighbor'], l.rows('A').first.values_at('gateway', 'gateway_from'),
+                 'the link-local entry with the MAC, not the global one')
+  end
+
+  def test_with_no_arp_entry_an_ipv6_route_waits
+    @kernel.arp.clear
+    announce6('2001:db8:2::/64')
+    l = l3vpn.start
+    assert_equal({}, @kernel.routes['A'])
+    assert_equal('no ARP entry for 10.0.12.2 on eth2: an IPv6 route needs its MAC', l.rows('A').first['error'])
+    assert(l.waiting?)
+    @kernel.arp[%w[10.0.12.2 eth2]] = 'aa:c1:ab:f2:d6:83'
+    l.sync!
+    assert(!l.waiting?)
+    assert_equal(['2001:db8:2::/64'], @kernel.routes['A'].keys)
+  end
+
+  # Section 3.2.1.1: a real IPv6 next hop needs an IPv6 transport.
+  def test_an_ipv6_next_hop_is_unreachable
+    announce6('2001:db8:2::/64', nh: '2001:db8::3')
+    l = l3vpn.start
+    assert_equal({}, @kernel.routes['A'])
+    assert_match(/\A2001:db8::3 is an IPv6 next hop: it needs an IPv6 transport/, l.rows('A').first['error'])
+  end
+
+  # The IPv4 route to the same PE keeps its IPv4 gateway beside it, and
+  # each flush takes its own family.
+  def test_both_families_in_one_vrf
+    announce('10.255.0.3', [65000, 1], '192.168.2.0/30', 24001, [65000, 100])
+    announce6('2001:db8:2::/64')
+    l = l3vpn.start
+    assert_equal(['192.168.2.0/30', '2001:db8:2::/64'], @kernel.routes['A'].keys.sort)
+    assert_match(/via 10\.0\.12\.2 dev eth2/, @kernel.routes['A']['192.168.2.0/30'])
+    l.stop
+    assert_equal({}, @kernel.routes['A'])
+    assert_includes(@kernel.sent, 'ip -6 route flush vrf A proto bgp')
+  end
+
+  def test_a_vrf_sends_its_ipv6_connected_prefixes_not_link_local
+    exporting
+    @kernel.connected6['A'] = ['2001:db8:1::/64']
+    l = l3vpn(labels: LABELS).start
+    assert_equal(['172.16.1.0/24', '192.168.1.0/30', '2001:db8:1::/64'], l.exports.collect(&:prefix).sort_by { |p| [p.include?(':') ? 1 : 0, p] })
+    assert_equal([24000], l.exports.collect(&:label).uniq, 'one label per VRF, both families')
   end
 
   def l3vpn(transport: {}, labels: nil, logger: nil)
