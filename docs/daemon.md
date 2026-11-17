@@ -370,19 +370,20 @@ the BGP-LS routes it receives, in a table of their own outside the RIB.
 sent, and `docs/bgp-ls-howto.md` explains why.
 
 **VRFs, a PE's half of an L3VPN** (`docs/design/l3vpn-pe.md`, pull
-request 2). With a `vrfs:` block, bgp4rd imports the VPN-IPv4 routes it
-receives into each VRF by Route Target, and installs the winners in the
-VRF's kernel table:
+requests 2 and 3). With a `vrfs:` block, bgp4rd imports the VPN-IPv4
+routes it receives into each VRF by Route Target, installs the winners
+in the VRF's kernel table, and sends the VRF's own routes:
 
 ```yaml
 vrfs:
   - name: A                        # the kernel VRF device, made by the lab
     table: 100                     # its table; bgp4rd checks the device has it
-    rd: 65000:1                    # rd, export and prefixes: pull request 3
+    rd: 65000:1                    # with export: the VRF sends its routes
     import: [65000:100]            # Import Targets, RFC 4364 section 4.3.1
-    export: [65000:100]
-    prefixes: [192.168.1.0/24]
+    export: [65000:100]            # Export Targets, sent as Route Targets
+    prefixes: [172.16.1.0/24]      # sent beside the VRF's connected prefixes
 l3vpn:
+  labels: { start: 24000, size: 1000 }   # one per exporting VRF, in order
   transport: mpls                  # the default: the IGP's labels to the next hop
   tunnels:                         # or GRE toward these PEs
     10.255.0.9: { gre: gre-pe9 }
@@ -398,6 +399,20 @@ routes change, and the VRFs follow the IGP. Routes go in with `proto
 bgp`; at start and stop bgp4rd flushes its own and nothing else. A VRF
 whose device is missing, or not on its table, gets nothing, and
 `show.vrfs` says why. `vrfs` and `l3vpn` are read once, at start.
+
+A VRF with an `rd` and `export` targets sends its routes (RFC 4364
+section 4.3.2): its connected prefixes, read from its table (`ip -j
+route show vrf A proto kernel scope link`), and its `prefixes`. It gets
+one label from the `labels` block, and bgp4rd pops it into the VRF for a
+lookup there: `ip -f mpls route replace 24000 dev A proto bgp`. The
+routes go to every Established session whose two OPENs carried AFI 1 /
+SAFI 128, with no Route Target filtering at the sender: next hop
+`local_address` (else the session's own address), the VRF's RD and
+label, its Export Targets as Route Targets. A gone route is withdrawn
+with RFC 8277's Compatibility field, 0x800000. A VRF whose device is
+unusable, or whose label route the kernel refused, sends nothing, since
+a label nothing pops would drop the far PE's traffic; `show.vpn_labels`
+says why. An exporting VRF with no `labels` block stops bgp4rd at start.
 
 **A table is always on, which `lab/speaker.rb` differs from.** `rib`
 defaults to true here, because a daemon is a router by definition and
@@ -620,7 +635,8 @@ below.
 | `show.adj_out` | what was sent to one peer, and what was skipped | built |
 | `show.fib` | what the daemon believes is in the kernel table, and what failed | built |
 | `show.link_state` | BGP-LS routes: sent as a Producer, and received per peer | built |
-| `show.vpn` | the VPN-IPv4 routes received (AFI 1 / SAFI 128), one row each: RD, prefix, peer, next hop, labels, Route Targets, best | built |
+| `show.vpn` | the VPN-IPv4 routes received (AFI 1 / SAFI 128), one row each: RD, prefix, peer, next hop, labels, Route Targets, best; and those this PE sends, with peer null, reason `local` and their `vrf` | built |
+| `show.vpn_labels` | each exporting VRF's label: label, VRF, the action, installed or why not | built |
 | `show.vrfs` | the VRFs: name, table, RD, Route Targets, the device's state, routes imported and installed | built |
 | `show.vrf` | each VRF's imported routes: what is pushed, where it goes, installed or why not; `vrf` picks one | built |
 | `show.log` | the last N lines | built |
@@ -1964,3 +1980,5 @@ Distinguisher and prefix and runs the unicast decision process per key.
 It is filled only on a session whose two OPENs carried that family (RFC
 4364 section 4.3.4), and `show.vpn` reads it. Since pull request 2, VRFs
 import from it (`bgp/rib/l3vpn.rb`), into kernel tables of their own.
+Since pull request 3, VRFs send their own routes
+(`bgp/daemon/vpn_exporter.rb`).

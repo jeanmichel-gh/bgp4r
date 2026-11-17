@@ -52,6 +52,15 @@ class TestBgpRibVrfFib < Test::Unit::TestCase
     assert_equal('ip -j -d link show dev A', @fib.link_argv('A').join(' '))
   end
 
+  # Pull request 3: the VRF's label popped into it, and its connected
+  # prefixes read back.
+  def test_the_label_route_and_the_connected_prefixes
+    assert_equal('ip -f mpls route replace 24000 dev A proto bgp', @fib.label_argv(24000, 'A').join(' '))
+    assert_equal('ip -f mpls route del 24000 proto bgp', @fib.label_remove_argv(24000).join(' '))
+    assert_equal('ip -f mpls route flush proto bgp', @fib.label_flush_argv.join(' '))
+    assert_equal('ip -j route show vrf A proto kernel scope link', @fib.connected_argv('A').join(' '))
+  end
+
   # With no runner a real process runs, and its exit status is read.
   def test_with_no_runner_the_command_runs
     assert_equal(0, BGP::Rib::VrfFib.new(bin: 'true').run(%w[true]).status)

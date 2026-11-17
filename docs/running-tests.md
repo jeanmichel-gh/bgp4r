@@ -19,7 +19,7 @@ amounts. Measured 2026-11-03:
 
 | Tier | What it needs | Files | Time | Command |
 |---|---|---:|---|---|
-| unit | Ruby | 171 | 21s | `ruby test/run_unit.rb` |
+| unit | Ruby | 172 | 21s | `ruby test/run_unit.rb` |
 | functional | a loopback socket | 19 | 18s | one file at a time, below |
 | lab | gobgpd, FRR, Docker or root | 34 | 10s to 400s per group | `ruby test/run_lab.rb GROUP` |
 
@@ -111,7 +111,7 @@ Deciding and advertising routes.
 |---|---:|---:|---:|---|
 | `rib` | 7 | 1 | 0 | Adj-RIB-In, the decision process and the Loc-RIB |
 | `vpn-table` | 2 | 1 | 0 | The VPN-IPv4 table: SAFI 128 routes received, keyed on RD and prefix, best path per key |
-| `vrfs` | 5 | 0 | 0 | A PE's VRFs: import by Route Target, the mpls and gre transports, VRF routes in the kernel |
+| `vrfs` | 6 | 0 | 0 | A PE's VRFs: import by Route Target, the mpls and gre transports, VRF routes in the kernel, export with a label per VRF |
 | `export` | 5 | 1 | 5 | The export rules, Adj-RIB-Out, UPDATE building and the MRAI timer |
 | `fib` | 3 | 0 | 3 | Putting the Loc-RIB in a forwarding table, and packets following it |
 | `show` | 2 | 0 | 0 | The three vendor styles, and the same state as plain data |
@@ -620,10 +620,10 @@ ruby test/run_feature.rb vpn-table
 
 ### `vrfs`
 
-A PE's VRFs: import by Route Target, the mpls and gre transports, VRF routes in the kernel.
+A PE's VRFs: import by Route Target, the mpls and gre transports, VRF routes in the kernel, export with a label per VRF.
 
-- RFC 4364 sections 4.3.1, 4.3.2 and 5
-- 5 unit files
+- RFC 4364 sections 4.3.1, 4.3.2 and 5; RFC 8277 section 2.4
+- 6 unit files
 
 ```
 ruby test/run_feature.rb vrfs
@@ -875,5 +875,5 @@ test file has to be tagged before the suite is green again, which is
 the same arrangement `test/unit/lab_groups_test.rb` has with the CI
 matrix.
 
-224 of 224 test files are tagged. The
+225 of 225 test files are tagged. The
 remainder, if any, is what the guard names.

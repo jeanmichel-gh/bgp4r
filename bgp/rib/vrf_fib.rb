@@ -70,6 +70,29 @@ module BGP
         [@bin, 'route', 'flush', 'vrf', vrf, 'proto', PROTO]
       end
 
+      # The label route a VRF's label pops into the VRF, for a lookup there
+      # (RFC 4364 section 4.3.2, one label per VRF): measured with
+      # iproute2 6.19, it reads back as {"dst":"24001","dev":"A"}. The
+      # flush with proto bgp removes only these: isisd's label routes,
+      # proto isis, stay.
+      def label_argv(label, vrf)
+        [@bin, '-f', 'mpls', 'route', 'replace', label.to_s, 'dev', vrf, 'proto', PROTO]
+      end
+
+      def label_remove_argv(label)
+        [@bin, '-f', 'mpls', 'route', 'del', label.to_s, 'proto', PROTO]
+      end
+
+      def label_flush_argv
+        [@bin, '-f', 'mpls', 'route', 'flush', 'proto', PROTO]
+      end
+
+      # A VRF's connected prefixes, which it sends as VPN routes:
+      # [{"dst":"192.168.1.0/30","dev":"eth1",...}].
+      def connected_argv(vrf)
+        [@bin, '-j', 'route', 'show', 'vrf', vrf, 'proto', 'kernel', 'scope', 'link']
+      end
+
       # The VRF device: `ip -j -d link show dev NAME` answers its kind and
       # table, {"info_kind":"vrf","info_data":{"table":100}}.
       def link_argv(vrf)

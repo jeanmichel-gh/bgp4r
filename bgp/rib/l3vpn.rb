@@ -47,15 +47,48 @@ module BGP
     # not a VRF on the configured table, gets nothing, and show.vrfs says
     # why: the lab makes the device (open question 2).
     #
+    # **Export** (pull request 3). A VRF with an RD and Export Targets
+    # sends its routes: its connected prefixes, read from its table, and
+    # its configured `prefixes`. It gets one label, from the l3vpn:
+    # labels block in VRF order, and a label route popping it into the
+    # VRF, for a lookup there: section 4.3.2, "One may choose to have a
+    # single label for an entire VRF". `exports` lists the VPN routes a
+    # Daemon::VpnExporter sends.
+    #
     # sync! does all of it, and is what a change to the VPN table, a
     # change to the kernel's routes, or a test calls.
     class L3vpn
 
       Want = Struct.new(:vpn_route, :hop, :stack, :argv)
 
-      attr_reader :vrfs, :transport
+      # One VPN route this PE sends: section 4.3.2, its own address as
+      # next hop (added by the exporter), the VRF's RD, label and Export
+      # Targets.
+      Export = Struct.new(:vrf, :rd, :prefix, :label, :route_targets) do
+        def key ; [rd, prefix] ; end
+      end
 
-      def initialize(vpn_table:, vrfs:, transport:, local_as:, router_id:, fib: VrfFib.new, logger: nil)
+      attr_reader :vrfs, :transport, :labels
+
+      # labels: the l3vpn: labels block, { 'start' =>, 'size' => }, or nil
+      # when no VRF exports.
+      def self.labels(vrfs, block)
+        exporting = vrfs.select(&:exports?)
+        return {} if exporting.empty?
+        unless block.is_a?(Hash) && block['start'] && block['size']
+          raise ArgumentError, "l3vpn: labels: { start:, size: } is required: VRF #{exporting.first.name} exports"
+        end
+        start, size = Integer(block['start']), Integer(block['size'])
+        unless start >= 16 && start + size - 1 <= 0xfffff
+          raise ArgumentError, "l3vpn: labels: #{start} to #{start + size - 1} is not 16 to 1048575 (RFC 3032)"
+        end
+        if exporting.size > size
+          raise ArgumentError, "l3vpn: labels: #{size} label(s) for #{exporting.size} exporting VRFs"
+        end
+        exporting.each_with_index.to_h { |v, i| [v.name, start + i] }
+      end
+
+      def initialize(vpn_table:, vrfs:, transport:, local_as:, router_id:, labels: nil, fib: VrfFib.new, logger: nil)
         @vpn_table = vpn_table
         @vrfs = vrfs
         @transport = transport
@@ -67,12 +100,17 @@ module BGP
         @installed = Hash.new { |h, k| h[k] = {} } # vrf name => { prefix => argv }
         @rows = {}                                  # vrf name => [row]
         @devices = {}                               # vrf name => nil, or why it is unusable
+        @labels = L3vpn.labels(vrfs, labels)        # vrf name => its label
+        @label_installed = {}                       # label => true when the kernel has it
+        @label_errors = {}                          # label => why not
+        @exports = {}                               # vrf name => [Export]
         @syncs = 0
       end
 
       # Removes what an earlier bgp4rd left in each VRF, then fills them.
       def start
         @vrfs.each { |v| @fib.run(@fib.flush_argv(v.name)) if device_error(v).nil? }
+        @fib.run(@fib.label_flush_argv) unless @labels.empty?
         sync!
         self
       end
@@ -81,7 +119,9 @@ module BGP
       def stop
         @lock.synchronize do
           @vrfs.each { |v| @fib.run(@fib.flush_argv(v.name)) if @devices[v.name].nil? }
+          @fib.run(@fib.label_flush_argv) unless @labels.empty?
           @installed.clear
+          @label_installed.clear
         end
         self
       end
@@ -103,6 +143,7 @@ module BGP
               apply(v, want, rows)
             end
             @rows[v.name] = rows
+            export(v)
           end
         end
         self
@@ -130,6 +171,23 @@ module BGP
       end
 
       def syncs ; @lock.synchronize { @syncs } ; end
+
+      # The VPN routes this PE sends, every exporting VRF's, as Export.
+      # A VRF whose device is unusable, or whose label route the kernel
+      # refused, sends nothing: a label nothing pops would drop traffic.
+      def exports
+        @lock.synchronize { @exports.values.flatten.sort_by { |e| [e.rd, prefix_order(e.prefix)] } }
+      end
+
+      # show.vpn_labels: one row per VRF label.
+      def label_rows
+        @lock.synchronize do
+          @labels.collect do |vrf, label|
+            { 'label' => label, 'vrf' => vrf, 'action' => 'pop, then look up in the VRF',
+              'installed' => @label_installed.key?(label), 'error' => @label_errors[label] }
+          end
+        end
+      end
 
       private
 
@@ -173,6 +231,45 @@ module BGP
         [want, rows.sort_by { |r| prefix_order(r['prefix']) }]
       end
 
+      # The VRF's label route, and the VPN routes it sends. Lock held.
+      def export(v)
+        label = @labels[v.name]
+        return @exports.delete(v.name) unless label
+        if @devices[v.name]
+          @fib.run(@fib.label_remove_argv(label)) if @label_installed.delete(label)
+          @label_errors[label] = @devices[v.name]
+          return @exports.delete(v.name)
+        end
+        unless @label_installed[label]
+          r = @fib.run(@fib.label_argv(label, v.name))
+          if r.ok?
+            @label_installed[label] = true
+            @label_errors.delete(label)
+          else
+            @label_errors[label] = "the kernel refused it: #{r.output.strip}"
+            log(:warn, "vrf #{v.name}: #{r}")
+            return @exports.delete(v.name)
+          end
+        end
+        prefixes = (connected(v) + v.prefixes).uniq
+        @exports[v.name] = prefixes.collect { |p| Export.new(v.name, v.rd, p, label, v.export) }
+      end
+
+      # The VRF's connected prefixes, from its table.
+      def connected(v)
+        require 'json' # here, as View#json does: see vpn_transport.rb
+        r = @fib.run(@fib.connected_argv(v.name))
+        return [] unless r.ok?
+        JSON.parse(r.output).filter_map { |route| route['dst'] && normalize(route['dst']) }
+      rescue JSON::ParserError
+        []
+      end
+
+      def normalize(dst)
+        ip = IPAddr.new(dst)
+        "#{ip}/#{ip.prefix}"
+      end
+
       # Sends the kernel what differs, and marks each row.
       def apply(v, want, rows)
         have = @installed[v.name]
@@ -203,7 +300,7 @@ module BGP
       end
 
       def log(level, msg)
-        @logger&.public_send(level, msg)
+        @logger&.call(level, msg)
       end
     end
 

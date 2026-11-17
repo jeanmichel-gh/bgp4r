@@ -69,6 +69,7 @@ require 'bgp/daemon/hand'
 require 'bgp/daemon/link_state_table'
 require 'bgp/daemon/link_state_producer'
 require 'bgp/daemon/vrf_sync'
+require 'bgp/daemon/vpn_exporter'
 require 'socket'
 require 'thread'
 
@@ -716,7 +717,11 @@ module BGP
       # nil with no vrfs: block (bgp/rib/l3vpn.rb, pull request 2).
       attr_reader :l3vpn
 
-      # The l3vpn: block's keys. labels is pull request 3's.
+      # What this PE sends of its VRFs, or nil when no VRF exports
+      # (bgp/daemon/vpn_exporter.rb, pull request 3).
+      attr_reader :vpn_exporter
+
+      # The l3vpn: block's keys.
       L3VPN_KEYS = %w[labels transport tunnels].freeze
 
       # The configuration this speaker was built from, which
@@ -1194,9 +1199,15 @@ module BGP
         (@link_state_producer ? @link_state_producer.rows : []) + @link_state.rows
       end
 
-      # `show.vpn`: the VPN-IPv4 routes received, one row each.
+      # `show.vpn`: the VPN-IPv4 routes this PE sends, with peer nil, then
+      # the ones it received, one row each.
       def vpn_rows
-        @vpn.rows
+        (@vpn_exporter ? @vpn_exporter.rows : []) + @vpn.rows
+      end
+
+      # `show.vpn_labels`: the label of each exporting VRF.
+      def vpn_label_rows
+        @l3vpn ? @l3vpn.label_rows : []
       end
 
       # `show.vrfs` and `show.vrf`: none without a vrfs: block.
@@ -1222,9 +1233,13 @@ module BGP
         transport = BGP::Rib::VpnTransport.from_config(l3vpn)
         return if list.empty?
         @l3vpn = BGP::Rib::L3vpn.new(vpn_table: @vpn, vrfs: list, transport: transport, local_as: @my_as,
-                                     router_id: @router_id, logger: @logger)
+                                     router_id: @router_id, labels: l3vpn['labels'], logger: @logger)
         @vrf_sync = VrfSync.new(@l3vpn, logger: @logger)
         @vpn.on_change { @vrf_sync.poke }
+        return if @l3vpn.labels.empty?
+        @vpn_exporter = VpnExporter.new(self, logger: @logger)
+        @vrf_sync.after_sync { @vpn_exporter.refresh(@l3vpn.exports) }
+        on_established { |p| @vpn_exporter.session_up(p) }
       end
 
       def state

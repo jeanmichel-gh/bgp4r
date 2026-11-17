@@ -161,10 +161,42 @@ class BGP_Vpn_Daemon_Functional_Test < Test::Unit::TestCase
     assert_match(/^ +192\.168\.2\.0\/30 +10\.255\.0\.3 /, shell.execute("show vrf #{VRF}").text)
   end
 
+  # Pull request 3: an exporting VRF gets its label. With no VRF device
+  # here it sends nothing, and show.vpn_labels says why: a label nothing
+  # pops would drop the far PE's traffic. The lab test sends for real.
+  def test_an_exporting_vrf_without_its_device_sends_nothing
+    daemon(['as4_byte', 'mbgp_ipv4_mpls_vpn_unicast'],
+           'vrfs' => [{ 'name' => VRF, 'table' => 4242, 'rd' => '65000:1', 'import' => ['65000:100'],
+                        'export' => ['65000:100'], 'prefixes' => ['172.16.1.0/24'] }],
+           'l3vpn' => { 'labels' => { 'start' => 24_000, 'size' => 100 } })
+    got = []
+    peer
+    @peer.add_observer(Class.new { define_method(:update) { |m| got << m if m.is_a?(BGP::Update) } }.new)
+    wait_for('the label row') { call('show.vpn_labels')['total'] == 1 }
+    r = call('show.vpn_labels')['rows'].first
+    assert_equal([24_000, VRF, false], r.values_at('label', 'vrf', 'installed'))
+    assert_match(/\Ano VRF device #{VRF}: /, r['error'])
+    sleep 1
+    assert_equal([], got.select { |u| u.path_attribute&.has?(BGP::Mp_reach) })
+    assert_equal(0, call('show.vpn')['total'])
+  end
+
+  def test_an_exporting_vrf_needs_a_label_block
+    err = StringIO.new
+    @server = BGP::Daemon::Server.new(StringIO.new, err)
+    config = BGP::Daemon::Server.with_defaults(
+      { 'as' => 65_000, 'router_id' => '10.255.0.1', 'state_file' => File.join(@dir, 'state.json'),
+        'neighbors' => [], 'vrfs' => [{ 'name' => VRF, 'table' => 4242, 'rd' => '65000:1', 'export' => ['65000:100'] }] })
+    assert_nil(@server.build(config, :socket => File.join(@dir, 'bgp4rd.sock')))
+    assert_match(/l3vpn: labels: \{ start:, size: \} is required: VRF #{VRF} exports/, err.string)
+    @server = nil
+  end
+
   def test_no_vrfs_no_rows
     daemon(['as4_byte', 'mbgp_ipv4_mpls_vpn_unicast'])
     assert_equal(0, call('show.vrfs')['total'])
     assert_equal(0, call('show.vrf')['total'])
+    assert_equal(0, call('show.vpn_labels')['total'])
   end
 
   def test_show_bgp_vpnv4_in_the_cli

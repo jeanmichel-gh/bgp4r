@@ -21,8 +21,6 @@
 #++
 
 require 'test/unit'
-require 'stringio'
-require 'logger'
 require 'bgp/daemon'
 
 # BGP:: names are written out in full here, see Conventions in CLAUDE.md.
@@ -84,14 +82,26 @@ class TestBgpDaemonVrfSync < Test::Unit::TestCase
     @sync.stop
   end
 
+  # The exporter reads the VRFs after start and after every sync.
+  def test_after_sync_runs_after_start_and_each_sync
+    seen = []
+    @sync.after_sync { seen << @l3vpn.calls.last }
+    @sync.start
+    @sync.poke
+    assert(wait_for { seen.size == 2 })
+    assert_equal([:start, :sync], seen)
+    @sync.stop
+  end
+
   # A sync that raises is logged and the next poke still syncs.
   def test_a_failed_sync_does_not_stop_the_thread
-    log = StringIO.new
-    @sync = BGP::Daemon::VrfSync.new(@l3vpn, monitor: false, logger: Logger.new(log))
+    log = []
+    # The speaker's logger: a ->(level, message), not a Logger.
+    @sync = BGP::Daemon::VrfSync.new(@l3vpn, monitor: false, logger: ->(level, msg) { log << [level, msg] })
     @l3vpn.raise_once = true
     @sync.start
     @sync.poke
-    assert(wait_for { log.string.include?('vrf sync: RuntimeError: a sync that failed') })
+    assert(wait_for { log.include?([:error, 'vrf sync: RuntimeError: a sync that failed']) })
     @sync.poke
     assert(wait_for { @l3vpn.syncs == 1 })
     @sync.stop

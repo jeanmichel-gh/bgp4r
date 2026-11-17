@@ -49,10 +49,19 @@ module BGP
         @bin = bin
         @monitor = monitor
         @queue = Queue.new
+        @after = []
+      end
+
+      # Calls block after every sync, on the sync's thread: how the VPN
+      # exporter learns what to send (pull request 3).
+      def after_sync(&block)
+        @after << block
+        self
       end
 
       def start
         @l3vpn.start
+        @after.each(&:call)
         @worker = Thread.new { work }
         @watcher = Thread.new { watch } if @monitor
         self
@@ -84,9 +93,10 @@ module BGP
           jobs << @queue.pop until @queue.empty?
           break if jobs.include?(:stop)
           @l3vpn.sync!
+          @after.each(&:call)
         end
       rescue StandardError => e
-        @logger&.error("vrf sync: #{e.class}: #{e.message}")
+        @logger&.call(:error, "vrf sync: #{e.class}: #{e.message}")
         retry
       end
 
@@ -95,7 +105,7 @@ module BGP
         @pid = io.pid
         io.each_line { poke }
       rescue SystemCallError => e
-        @logger&.error("vrf sync: ip monitor route: #{e.message}")
+        @logger&.call(:error, "vrf sync: ip monitor route: #{e.message}")
       end
     end
 

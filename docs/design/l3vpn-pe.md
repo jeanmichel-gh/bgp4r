@@ -1,7 +1,8 @@
 # L3VPN PE in bgp4rd
 
 Status: approved by the owner 2026-11-17. Pull requests 1, the VPN
-table, and 2, VRFs and both transports, built the same day. The open questions
+table, 2, VRFs and both transports, and 3, export and labels, built the
+same day. The open questions
 at the end keep the answers this document gives until the owner changes
 them.
 

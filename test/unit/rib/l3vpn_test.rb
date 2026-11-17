@@ -33,12 +33,14 @@ class TestBgpRibL3vpn < Test::Unit::TestCase
   # A kernel stand-in: VRF devices, routes to next hops, and the routes
   # bgp4rd installs, by VRF. Any command can be told to fail.
   class Kernel
-    attr_reader :sent, :routes
-    attr_accessor :devices, :next_hops, :refuse
+    attr_reader :sent, :routes, :labels
+    attr_accessor :devices, :next_hops, :refuse, :connected
 
     def initialize
       @sent = []
       @routes = Hash.new { |h, k| h[k] = {} }
+      @labels = {}
+      @connected = { 'A' => ['192.168.1.0/30'], 'B' => [] }
       @devices = { 'A' => 100, 'B' => 200 }
       @next_hops = {
         '10.255.0.3' => '[{"dst":"10.255.0.3","encap":{"encap_type":"mpls","dst":"17003"},"gateway":"10.0.12.2","dev":"eth2","flags":[]}]',
@@ -68,6 +70,17 @@ class TestBgpRibL3vpn < Test::Unit::TestCase
       in ['route', 'flush', 'vrf', vrf, *]
         @routes[vrf].clear
         result(argv, 0, '')
+      in ['-f', 'mpls', 'route', 'replace', label, 'dev', vrf, 'proto', 'bgp']
+        @labels[label.to_i] = vrf
+        result(argv, 0, '')
+      in ['-f', 'mpls', 'route', 'del', label, *]
+        @labels.delete(label.to_i)
+        result(argv, 0, '')
+      in ['-f', 'mpls', 'route', 'flush', *]
+        @labels.clear
+        result(argv, 0, '')
+      in ['-j', 'route', 'show', 'vrf', vrf, 'proto', 'kernel', 'scope', 'link']
+        result(argv, 0, JSON.generate(@connected.fetch(vrf, []).collect { |d| { 'dst' => d, 'dev' => 'eth1' } }))
       end
     end
 
@@ -81,10 +94,84 @@ class TestBgpRibL3vpn < Test::Unit::TestCase
                                 { 'name' => 'B', 'table' => 200, 'import' => ['65000:200'] }])
   end
 
-  def l3vpn(transport: {})
+  def l3vpn(transport: {}, labels: nil, logger: nil)
     BGP::Rib::L3vpn.new(vpn_table: @table, vrfs: @vrfs, local_as: 65000, router_id: '10.255.0.1',
                         transport: BGP::Rib::VpnTransport.from_config(transport, runner: @kernel),
-                        fib: BGP::Rib::VrfFib.new(runner: @kernel))
+                        fib: BGP::Rib::VrfFib.new(runner: @kernel), labels: labels, logger: logger)
+  end
+
+  # --- export, pull request 3 ---------------------------------------------
+
+  LABELS = { 'start' => 24000, 'size' => 1000 }.freeze
+
+  def exporting
+    @vrfs = BGP::Rib::Vrf.list([
+      { 'name' => 'A', 'table' => 100, 'rd' => '65000:1', 'import' => ['65000:100'], 'export' => ['65000:100'],
+        'prefixes' => ['172.16.1.0/24'] },
+      { 'name' => 'C', 'table' => 300, 'import' => ['65000:300'] },
+      { 'name' => 'B', 'table' => 200, 'rd' => '65000:2', 'import' => ['65000:200'], 'export' => ['65000:200'] }])
+    @kernel.devices['C'] = 300
+  end
+
+  # Section 4.3.2: one label per VRF, from the block, in VRF order; a VRF
+  # with no RD and no Export Targets only imports and gets none.
+  def test_each_exporting_vrf_gets_a_label_and_its_label_route
+    exporting
+    l = l3vpn(labels: LABELS).start
+    assert_equal({ 'A' => 24000, 'B' => 24001 }, l.labels)
+    assert_equal({ 24000 => 'A', 24001 => 'B' }, @kernel.labels)
+    assert_includes(@kernel.sent, 'ip -f mpls route flush proto bgp', 'what an earlier bgp4rd left goes first')
+    assert_equal([[24000, 'A', true, nil], [24001, 'B', true, nil]],
+                 l.label_rows.collect { |r| r.values_at('label', 'vrf', 'installed', 'error') })
+  end
+
+  def test_a_vrf_sends_its_connected_and_its_configured_prefixes
+    exporting
+    l = l3vpn(labels: LABELS).start
+    assert_equal([['A', '65000:1', '172.16.1.0/24', 24000, ['65000:100']],
+                  ['A', '65000:1', '192.168.1.0/30', 24000, ['65000:100']]],
+                 l.exports.collect(&:to_a))
+  end
+
+  def test_an_unusable_device_takes_its_label_and_its_routes
+    exporting
+    l = l3vpn(labels: LABELS).start
+    @kernel.devices.delete('A')
+    l.sync!
+    assert_equal({ 24001 => 'B' }, @kernel.labels)
+    assert_equal([], l.exports, 'B has no prefixes; A cannot send without its label')
+    assert_match(/\Ano VRF device A/, l.label_rows.first['error'])
+  end
+
+  # A label nothing pops would drop the far PE's traffic: send nothing.
+  def test_a_refused_label_route_sends_nothing
+    exporting
+    @kernel.refuse = '-f mpls route replace 24000'
+    log = []
+    l = l3vpn(labels: LABELS, logger: ->(level, msg) { log << [level, msg] }).start
+    assert_equal([:warn], log.collect(&:first).uniq, "the speaker's ->(level, message)")
+    assert_equal([], l.exports)
+    assert_equal([false, 'the kernel refused it: RTNETLINK answers: Invalid argument'],
+                 l.label_rows.first.values_at('installed', 'error'))
+  end
+
+  def test_stop_flushes_the_label_routes
+    exporting
+    l = l3vpn(labels: LABELS).start
+    l.stop
+    assert_equal({}, @kernel.labels)
+  end
+
+  def test_the_labels_block_is_checked
+    exporting
+    e = assert_raise(ArgumentError) { l3vpn }
+    assert_equal('l3vpn: labels: { start:, size: } is required: VRF A exports', e.message)
+    e = assert_raise(ArgumentError) { l3vpn(labels: { 'start' => 24000, 'size' => 1 }) }
+    assert_equal('l3vpn: labels: 1 label(s) for 2 exporting VRFs', e.message)
+    e = assert_raise(ArgumentError) { l3vpn(labels: { 'start' => 3, 'size' => 10 }) }
+    assert_equal('l3vpn: labels: 3 to 12 is not 16 to 1048575 (RFC 3032)', e.message)
+    @vrfs = BGP::Rib::Vrf.list([{ 'name' => 'A', 'table' => 100, 'import' => ['65000:100'] }])
+    assert_equal({}, l3vpn.labels, 'no VRF exports, no block needed')
   end
 
   def peer(address)
