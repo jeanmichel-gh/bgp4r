@@ -113,6 +113,37 @@ module BGP
         [@bin, '-6', '-j', 'route', 'show', 'vrf', vrf, 'proto', 'kernel']
       end
 
+      # What bgp4rd has in a VRF, read back at each sync: the kernel, not a
+      # record of what was sent, is what is installed. Measured, iproute2
+      # 6.19: [{"dst":"192.168.2.0/24","encap":{"encap_type":"mpls",
+      # "dst":"17003/16"},"gateway":"10.0.12.2","dev":"eth1",...}]; a host
+      # route's dst has no length ("10.9.9.9").
+      def installed_argv(vrf)
+        [@bin, '-j', 'route', 'show', 'vrf', vrf, 'proto', PROTO]
+      end
+
+      def installed6_argv(vrf)
+        [@bin, '-6', '-j', 'route', 'show', 'vrf', vrf, 'proto', PROTO]
+      end
+
+      # bgp4rd's label routes: [{"dst":"24001","dev":"B",...}].
+      def labels_argv
+        [@bin, '-j', '-f', 'mpls', 'route', 'show', 'proto', PROTO]
+      end
+
+      # [labels, gateway, dev] of a route this sends, from its argv, to
+      # compare with kernel_signature of what the kernel holds.
+      def self.signature(argv)
+        at = ->(word) { (i = argv.index(word)) && argv[i + 1] }
+        [at.call('mpls'), at.call('via'), at.call('dev')]
+      end
+
+      # The same, of one route `ip -j route show` answered.
+      def self.kernel_signature(route)
+        encap = route['encap'] || {}
+        [encap['encap_type'] == 'mpls' ? encap['dst'].to_s : nil, route['gateway'], route['dev']]
+      end
+
       # The VRF device: `ip -j -d link show dev NAME` answers its kind and
       # table, {"info_kind":"vrf","info_data":{"table":100}}.
       def link_argv(vrf)

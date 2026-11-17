@@ -398,7 +398,11 @@ process passes over it. `ip monitor route` tells bgp4rd when the kernel's
 routes change, and the VRFs follow the IGP. Routes go in with `proto
 bgp`; at start and stop bgp4rd flushes its own and nothing else. A VRF
 whose device is missing, or not on its table, gets nothing, and
-`show.vrfs` says why. `vrfs` and `l3vpn` are read once, at start.
+`show.vrfs` says why. What is installed is read from the kernel at each
+sync (`ip -j route show vrf A proto bgp`, both families, and the bgp
+label routes), so a route removed or changed by hand is put back by the
+sync its change starts: on `l3vpn-lab`, a flush of VRF A, a deleted
+label and a changed label stack were all back within 0.1 s. `vrfs` and `l3vpn` are read once, at start.
 
 A VRF with an `rd` and `export` targets sends its routes (RFC 4364
 section 4.3.2): its connected prefixes, read from its table (`ip -j

@@ -75,6 +75,12 @@ class TestBgpRibL3vpn < Test::Unit::TestCase
       in ['route', 'flush', 'vrf', vrf, *]
         @routes[vrf].delete_if { |prefix, _| !prefix.include?(':') }
         result(argv, 0, '')
+      in ['-j', 'route', 'show', 'vrf', vrf, 'proto', 'bgp']
+        result(argv, 0, JSON.generate(kernel_rows(vrf, false)))
+      in ['-6', '-j', 'route', 'show', 'vrf', vrf, 'proto', 'bgp']
+        result(argv, 0, JSON.generate(kernel_rows(vrf, true)))
+      in ['-j', '-f', 'mpls', 'route', 'show', 'proto', 'bgp']
+        result(argv, 0, JSON.generate(@labels.collect { |l, vrf| { 'dst' => l.to_s, 'dev' => vrf, 'flags' => [] } }))
       in ['-6', 'route', 'flush', 'vrf', vrf, *]
         @routes[vrf].delete_if { |prefix, _| prefix.include?(':') }
         result(argv, 0, '')
@@ -105,6 +111,20 @@ class TestBgpRibL3vpn < Test::Unit::TestCase
     end
 
     def result(argv, status, out) ; BGP::Rib::Fib::IpRoute::Result.new(argv, status, out) ; end
+
+    # The VRF's routes as `ip -j route show vrf V proto bgp` answers them,
+    # from what was installed: "encap mpls 17003/24001 via GW dev D proto
+    # bgp". A host route's dst has no length, as the kernel prints it.
+    def kernel_rows(vrf, v6)
+      @routes[vrf].select { |prefix, _| prefix.include?(':') == v6 }.collect do |prefix, rest|
+        w = rest.split
+        at = ->(word) { (i = w.index(word)) && w[i + 1] }
+        dst = prefix.end_with?('/32', '/128') ? prefix.split('/').first : prefix
+        row = { 'dst' => dst, 'encap' => { 'encap_type' => 'mpls', 'dst' => at.call('mpls') }, 'dev' => at.call('dev'), 'flags' => [] }
+        row['gateway'] = at.call('via') if at.call('via')
+        row
+      end
+    end
   end
 
   def setup
@@ -344,6 +364,53 @@ class TestBgpRibL3vpn < Test::Unit::TestCase
     l.sync!
     assert_equal(['ip route del vrf A 192.168.2.0/30 proto bgp'], @kernel.sent[n..])
     assert_equal({}, @kernel.routes['A'])
+  end
+
+  # --- what is installed is the kernel's ----------------------------------
+
+  # Found on l3vpn-lab: `ip route flush vrf A proto bgp` by hand left VRF
+  # A empty until bgp4rd restarted. The sync its removal starts puts it
+  # back, and the one after sends nothing.
+  def test_a_route_removed_by_hand_is_put_back
+    announce('10.255.0.3', [65000, 1], '192.168.2.0/30', 24001, [65000, 100])
+    announce6('2001:db8:2::/64')
+    l = l3vpn.start
+    @kernel.routes['A'].clear
+    l.sync!
+    assert_equal(['192.168.2.0/30', '2001:db8:2::/64'], @kernel.routes['A'].keys.sort)
+    assert(l.rows('A').all? { |r| r['installed'] })
+    n = @kernel.sent.size
+    l.sync!
+    assert_equal(n, @kernel.sent.size, 'then nothing: the read-back matches what was sent')
+  end
+
+  def test_a_route_changed_by_hand_is_replaced
+    announce('10.255.0.3', [65000, 1], '192.168.2.0/30', 24001, [65000, 100])
+    l = l3vpn.start
+    @kernel.routes['A']['192.168.2.0/30'] = 'encap mpls 99/24001 via 10.0.12.2 dev eth2 proto bgp'
+    l.sync!
+    assert_equal('encap mpls 17003/24001 via 10.0.12.2 dev eth2 proto bgp', @kernel.routes['A']['192.168.2.0/30'])
+  end
+
+  def test_a_label_route_removed_by_hand_is_put_back
+    exporting
+    l = l3vpn(labels: LABELS).start
+    @kernel.labels.delete(24000)
+    l.sync!
+    assert_equal({ 24000 => 'A', 24001 => 'B' }, @kernel.labels)
+    n = @kernel.sent.size
+    l.sync!
+    assert_equal(n, @kernel.sent.size)
+  end
+
+  # The kernel prints a host route's dst with no length: still the same
+  # route, so a quiet sync sends nothing.
+  def test_a_host_route_reads_back_as_itself
+    announce('10.255.0.3', [65000, 1], '10.9.9.9/32', 24001, [65000, 100])
+    l = l3vpn.start
+    n = @kernel.sent.size
+    l.sync!
+    assert_equal(n, @kernel.sent.size)
   end
 
   # The IGP moved: the transport label changes, and the route is replaced.
