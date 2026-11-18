@@ -31,4 +31,5 @@
 require 'bgp/capture/pcap'
 require 'bgp/capture/dissect'
 require 'bgp/capture/stream'
+require 'bgp/capture/sessions'
 require 'bgp/capture/cli'

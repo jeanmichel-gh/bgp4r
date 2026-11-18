@@ -88,10 +88,20 @@ module BGP
         end
       end
 
-      Result = Struct.new(:summary, :length, :fields, :errors, :decoded, :decoded_error) do
+      # as_octets is 2 or 4, the AS number size an UPDATE was read with,
+      # and as_octets_from says how it was chosen: 'open' from the
+      # session's two OPENs, 'session' given by the caller, 'guess' when
+      # neither knew. Both are nil for any other message.
+      Result = Struct.new(:summary, :length, :fields, :errors, :decoded, :decoded_error,
+                          :as_octets, :as_octets_from) do
         def to_h
           { :summary => summary, :length => length,
-            :fields => fields.collect { |f| f.to_h }, :errors => errors }.tap { |h| h[:decoded] = decoded if decoded; h[:decoded_error] = decoded_error if decoded_error }
+            :fields => fields.collect { |f| f.to_h }, :errors => errors }.tap { |h|
+            h[:decoded] = decoded if decoded
+            h[:decoded_error] = decoded_error if decoded_error
+            h[:as_octets] = as_octets if as_octets
+            h[:as_octets_from] = as_octets_from if as_octets_from
+          }
         end
       end
 
@@ -146,8 +156,14 @@ module BGP
         Segments.new(bytes.b).run(link)
       end
 
-      def self.message(octets)
-        Messages.new(octets.b).run
+      # as4byte is the session's AS number size, RFC 6793 section 3: true
+      # when both OPENs carried the 4-octet AS capability, false when one
+      # did not, nil when the OPENs were not seen. An UPDATE does not say
+      # which, so nil tries 4 octets and then 2 and keeps the reading with
+      # fewer findings, and the result says it guessed. from is what the
+      # result reports as the source of a size that was given.
+      def self.message(octets, as4byte: nil, from: 'session')
+        Messages.new(octets.b, as4byte, from).run
       end
 
       # Reads the octets of a captured frame down to the TCP payload. It
@@ -302,16 +318,18 @@ module BGP
       # offsets are from the message's first octet.
       class Messages
 
-        def initialize(octets)
+        def initialize(octets, as4byte = nil, from = 'session')
           @b = octets
           @errors = []
+          @as4byte, @from = as4byte, from
         end
 
         def run
           fields = []
           summary = header(fields)
           decode
-          Result.new(summary, @b.bytesize, fields.compact, @errors, @decoded, @decoded_error)
+          Result.new(summary, @b.bytesize, fields.compact, @errors, @decoded, @decoded_error,
+                     @as_octets, @as_octets_from)
         end
 
         private
@@ -336,9 +354,11 @@ module BGP
         # because a captured message is arbitrary octets and no reason to
         # stop reading a capture.
         def decode
-          msg = Message.factory(@b.dup.is_packed)
+          msg = read_message
           begin
-            @decoded = msg.to_s
+            # An Update prints by encoding itself again, and it does not
+            # keep the session it was read with, so it is given it here.
+            @decoded = @info ? msg.to_s(@info) : msg.to_s
           rescue StandardError => error
             @decoded_error = "bgp4r could not print this message: #{error.class}: #{error.message}"
           end
@@ -351,6 +371,33 @@ module BGP
           end
         rescue StandardError => e
           @errors << "bgp4r could not decode this message: #{e.class}: #{e.message}"
+        end
+
+        # The message, read with the session's AS number size when it is
+        # an UPDATE. Only an UPDATE carries AS numbers whose size the
+        # session decides; an OPEN's are fixed by RFC 4271 and RFC 6793.
+        def read_message
+          return Message.factory(@b.dup.is_packed) unless @b.getbyte(18) == Message::UPDATE
+          unless @as4byte.nil?
+            @as_octets, @as_octets_from = (@as4byte ? 4 : 2), @from
+            @info = Update::Info.new(@as4byte)
+            return Message.factory(@b.dup.is_packed, @info)
+          end
+          @info = Update::Info.new(true)
+          four = Message.factory(@b.dup.is_packed, @info)
+          @as_octets, @as_octets_from = 4, 'guess'
+          return four if findings(four) == 0
+          two = Message.factory(@b.dup.is_packed, Update::Info.new(false))
+          return four unless findings(two) < findings(four)
+          @as_octets, @info = 2, Update::Info.new(false)
+          two
+        end
+
+        def findings(msg)
+          pa = msg.path_attribute
+          pa ? pa.errors.size : 0
+        rescue StandardError
+          Float::INFINITY
         end
 
         def room?(off, len, what)
