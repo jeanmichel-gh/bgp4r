@@ -63,13 +63,11 @@ module Features
   LAB        = 'test/functional/lab'
 
   # A test file that must never be run, with the reason. `run_feature.rb`
-  # refuses it by name rather than leaving a comment to be ignored:
-  # CLAUDE.md and the CI workflow each say not to run this one, and
-  # neither can stop anybody.
-  NEVER = {
-    'functional/live_feed_test' =>
-      'connects to a public feed that no longer answers and hangs forever',
-  }.freeze
+  # refuses it by name rather than leaving a comment to be ignored.
+  # Empty since functional/live_feed_test.rb, which hung on a public feed
+  # that no longer answers, was removed. An entry names a file that
+  # exists; test/unit/features_test.rb checks it.
+  NEVER = {}.freeze
 
   # The areas, in the order the document prints them. An area is a
   # heading and nothing more: the features do the work.
@@ -447,18 +445,6 @@ module Features
       :about => 'The injected logger, the process log and the log level',
       :unit  => %w[logging_test],
       :lab   => %w[log_level_test],
-    },
-
-    # One file, and it earns a feature of its own because of its twin.
-    # `bgp/misc/live_feed.rb` is a client for a public feed that no
-    # longer answers. The unit test runs happily, since it never dials;
-    # the functional one hangs forever and is in NEVER above. Keeping the
-    # pair under one name is what makes that asymmetry visible instead of
-    # being a comment in two other files.
-    'live-feed' => {
-      :area  => 'programs',
-      :about => 'The client for an old public BGP feed, whose functional twin must never run',
-      :unit  => %w[misc/live_feed_test],
     },
 
     # ---- contracts --------------------------------------------------

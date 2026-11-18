@@ -19,8 +19,8 @@ amounts. Measured 2026-11-03:
 
 | Tier | What it needs | Files | Time | Command |
 |---|---|---:|---|---|
-| unit | Ruby | 172 | 21s | `ruby test/run_unit.rb` |
-| functional | a loopback socket | 19 | 18s | one file at a time, below |
+| unit | Ruby | 171 | 21s | `ruby test/run_unit.rb` |
+| functional | a loopback socket | 18 | 18s | one file at a time, below |
 | lab | gobgpd, FRR, Docker or root | 35 | 10s to 400s per group | `ruby test/run_lab.rb GROUP` |
 
 **The first two tiers together are under a minute and need nothing
@@ -33,19 +33,13 @@ binary and no Docker.
 ruby test/run_unit.rb                       # the whole unit suite
 ruby -I. test/unit/path_attributes/origin_test.rb   # one unit file
 ruby test/run_unit.rb && for f in test/functional/*_test.rb; do \
-  [ "$f" = test/functional/live_feed_test.rb ] || ruby -I. "$f"; done
+  ruby -I. "$f"; done
 ```
 
 `-I.` is needed for a single file and not for `run_unit.rb`, which
 sets the load path itself. **Run a file you changed both ways**, on
 its own and in the suite: a missing `require` passes in the suite
 and fails alone, and a top-level `include` does the opposite.
-
-### The one file to never run
-
-`test/functional/live_feed_test.rb` connects to a public feed that no longer answers and hangs forever.
-
-`run_feature.rb` refuses it by name. Nothing stops `ruby -I.` on it.
 
 ## By feature
 
@@ -140,7 +134,6 @@ The four executables.
 | `speaker` | 1 | 0 | 6 | lab/speaker.rb and the five topologies under lab/topologies |
 | `events` | 2 | 0 | 0 | The structured event stream both programs serve |
 | `logging` | 1 | 0 | 1 | The injected logger, the process log and the log level |
-| `live-feed` | 1 | 0 | 0 | The client for an old public BGP feed, whose functional twin must never run |
 
 ### contracts
 
@@ -383,16 +376,6 @@ Labelled unicast, SAFI 4, and the label stack.
 
 ```
 ruby test/run_feature.rb labelled
-```
-
-### `live-feed`
-
-The client for an old public BGP feed, whose functional twin must never run.
-
-- 1 unit file
-
-```
-ruby test/run_feature.rb live-feed
 ```
 
 ### `logging`
@@ -877,5 +860,5 @@ test file has to be tagged before the suite is green again, which is
 the same arrangement `test/unit/lab_groups_test.rb` has with the CI
 matrix.
 
-226 of 226 test files are tagged. The
+224 of 224 test files are tagged. The
 remainder, if any, is what the guard names.

@@ -111,7 +111,6 @@ jobs:
       - name: Lab speaker over loopback
         run: bundle exec ruby -I. test/functional/lab/speaker_test.rb
         timeout-minutes: 3
-      # Never run test/functional/live_feed_test.rb: its feed is gone.
 
   # The same suites inside the Docker image, so the Dockerfile is tested too.
   docker:
