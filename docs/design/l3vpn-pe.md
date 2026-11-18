@@ -569,6 +569,52 @@ first two at boot; routescope's `tools/vm-update.sh` adds `vrf` to
 routescope's views come in its own spec, after PR 2, when `show.vrfs`
 and `show.vrf` exist.
 
+## A VPN route reflector (pull request 6)
+
+RFC 4364 section 4.3.3: "Rather than having a complete IBGP mesh among
+the PEs, it is advantageous to make use of BGP Route Reflectors". Of its
+two ways to share VPN routes among reflectors, the second fits one
+reflector: it "accepts all the routes received from all of its clients
+(PEs)", with no Route Target filter. bgp4rd's VPN table already keeps
+every route it receives, whatever its Route Targets ("Who filters: the
+receiver"), so what is missing is sending them on.
+
+**The rules are RFC 4456's, and already in `Rib::Export`.** Section 6:
+a route from a non-client goes to every client, a route from a client to
+every client and non-client. Section 8: the reflector adds ORIGINATOR_ID
+if there is none and prepends its CLUSTER_ID to CLUSTER_LIST, and the
+decision process already drops a route carrying our BGP Identifier as
+ORIGINATOR_ID or our CLUSTER_ID in CLUSTER_LIST (`originator_id_loop`,
+`cluster_list_loop`). `Export#for(route, peer)` answers the refusal
+(`back_to_sender`, `non_client_to_non_client`, ...) or a copy of the
+route's attributes with those two added and MP_REACH_NLRI taken out.
+
+The design:
+
+1. **On** when the speaker reflects unicast: `export: { route_reflector:
+   true }`, or any neighbor with `route_reflector_client: true`, with the
+   same `clients` and `cluster_id`. No new key.
+2. **`Daemon::VpnReflector`.** For each [RD, prefix] the VPN table
+   chose, and each established internal session that negotiated the
+   route's family (AFI 1 or 2, SAFI 128) and is not a CE: `Export#for`
+   decides, and the UPDATE carries its attributes plus an MP_REACH_NLRI
+   with the route's own next hop, RD and labels. RFC 4271 section 5.1.3:
+   the next hop of a route sent to an internal peer is not changed, so
+   the label the far PE gave still points at it. External VPN peers
+   (inter-AS) are out of scope.
+3. **The difference only**, kept per peer as VpnExporter keeps it: a
+   route gone or no longer chosen is withdrawn with the Compatibility
+   field, and a session coming up gets everything. It runs on a thread
+   of its own, poked by the VPN table, so a session's dispatch thread
+   never waits on another session's send.
+4. A reflector may be a PE too: its own VRFs' routes still go out
+   through VpnExporter, under its own RDs.
+
+**The lab.** `l3vpn-lab` gets `p1-bgp`, a bgp4rd in p1's namespace on
+10.255.0.2, reflecting for pe1 (bgp4rd) and pe2 (FRR), its two clients,
+which no longer peer with each other. So FRR reads routes reflected by
+bgp4rd, and bgp4rd routes reflected from FRR.
+
 ## PE to CE by eBGP (pull request 7)
 
 RFC 4364 section 7 lists four ways a PE learns a site's routes, and
