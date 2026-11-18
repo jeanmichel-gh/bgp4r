@@ -4,8 +4,8 @@
 # p1, and that ce1a's packets never reach ce2b, which has its address.
 name: Gate
 description: >-
-  IS-IS with SR comes up and pe1 reaches pe2 on p1's label. The iBGP
-  VPNv4 session between bgp4rd and FRR comes up, the CEs of VRF A come
+  IS-IS with SR comes up and pe1 reaches pe2 on p1's label. Both PEs'
+  iBGP VPN sessions to p1-bgp, the route reflector, come up, the CEs of VRF A come
   up by eBGP with AS override, and each customer site reaches the far
   one in its own VRF, on the same addresses. The p1 to
   pe2 link fails: pe1 reaches pe2 through p2, on p2's label, and the
@@ -19,7 +19,11 @@ steps:
     within: 60
   - expect: { isis_route: { node: pe1, prefix: 10.255.0.3/32, label: 17003 } }
     within: 60
-  - expect: { bgp_session: { node: pe1-bgp, peer: 10.255.0.3, state: established } }
+  # Both PEs peer with p1-bgp, the VPN route reflector (bgp4r pull
+  # request 6), and not with each other.
+  - expect: { bgp_session: { node: p1-bgp, peer: 10.255.0.1, state: established } }
+    within: 60
+  - expect: { bgp_session: { node: p1-bgp, peer: 10.255.0.3, state: established } }
     within: 60
   # The CEs, by eBGP in VRF A (bgp4r pull request 7): each site reaches
   # the other's, and each PE replaced the sites' one ASN by its own.

@@ -352,6 +352,16 @@ class BGP_Daemon_Speaker_Test < Test::Unit::TestCase
     assert_equal('A', s.peers.first.vrf)
   end
 
+  # Pull request 6: a speaker that reflects unicast reflects VPN routes,
+  # by a client flag or by export: route_reflector; one that does not,
+  # does not.
+  def test_a_route_reflector_reflects_vpn_routes_too
+    pe = { 'address' => '10.255.0.1', 'as' => 65_000 }
+    assert_nil(speaker('neighbors' => [pe]).vpn_reflector)
+    assert_not_nil(speaker('neighbors' => [pe.merge('route_reflector_client' => true)]).vpn_reflector)
+    assert_not_nil(speaker('neighbors' => [pe], 'export' => { 'route_reflector' => true }).vpn_reflector)
+  end
+
   def test_every_listed_key_is_accepted
     config = { 'address' => '10.0.0.2', 'as' => 65_001, 'capabilities' => [],
                'connect' => false, 'description' => 'd', 'hold_time' => 30,

@@ -301,9 +301,9 @@ module Features
 
     'vpn-table' => {
       :area  => 'routing',
-      :about => 'The VPN table: VPN-IPv4 and VPN-IPv6 routes received (SAFI 128), keyed on RD and prefix, best path per key',
+      :about => 'The VPN table: VPN-IPv4 and VPN-IPv6 routes received (SAFI 128), keyed on RD and prefix, best path per key, reflected between PEs',
       :rfc   => 'RFC 4364 sections 4.1 and 4.3',
-      :unit  => %w[rib/vpn_route_test rib/vpn_table_test],
+      :unit  => %w[rib/vpn_route_test rib/vpn_table_test daemon/vpn_reflector_test],
       :functional => %w[vpn_daemon_test],
       :lab   => %w[vpn_frr_test],
     },

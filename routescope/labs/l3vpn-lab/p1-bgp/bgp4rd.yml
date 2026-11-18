@@ -1,0 +1,14 @@
+# p1's BGP half: a VPN route reflector for pe1 (bgp4rd) and pe2 (FRR),
+# its two clients, which do not peer with each other (bgp4r
+# docs/design/l3vpn-pe.md, pull request 6). It keeps every VPN route,
+# whatever its Route Targets, and has no VRF of its own. Both PEs dial
+# its loopback, which IS-IS carries.
+router_id: 10.255.0.2
+as: 65000
+local_address: 10.255.0.2
+log_level: info
+neighbors:
+  - { address: 10.255.0.1, as: 65000, description: pe1, hold_time: 30, route_reflector_client: true,
+      capabilities: [as4_byte, route_refresh, mbgp_ipv4_mpls_vpn_unicast, mbgp_ipv6_mpls_vpn_unicast] }
+  - { address: 10.255.0.3, as: 65000, description: pe2, hold_time: 30, route_reflector_client: true,
+      capabilities: [as4_byte, route_refresh, mbgp_ipv4_mpls_vpn_unicast, mbgp_ipv6_mpls_vpn_unicast] }

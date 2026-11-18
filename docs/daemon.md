@@ -448,6 +448,19 @@ synced again every 5 seconds. A next hop that is a real IPv6 address
 needs an IPv6 transport, which bgp4rd does not have: the route is
 unreachable and the row says so. `docs/design/l3vpn-pe.md`, decision 6.
 
+**A VPN route reflector** (RFC 4364 section 4.3.3, pull request 6). A
+speaker that reflects unicast, by a neighbor's `route_reflector_client:
+true` or `export: { route_reflector: true }`, reflects VPN routes too,
+with the same clients and `cluster_id`. Each [RD, prefix] the VPN table
+chose goes to every established internal session that negotiated its
+family, by RFC 4456's rules (`Rib::Export#for`): a client's route to
+everyone but the sender, a non-client's to clients only, ORIGINATOR_ID
+added and our CLUSTER_ID prepended. Its next hop, RD and labels go as
+they came. Every Route Target is kept: no filter at the reflector. On
+`l3vpn-lab`, p1-bgp reflects for pe1 (bgp4rd) and pe2 (FRR).
+`show bgp summary` counts unicast only, so a VPN reflector's prefix
+columns read 0.
+
 **CEs by eBGP** (RFC 4364 section 7, pull request 7). A neighbor with
 `vrf:` is a CE in that VRF:
 

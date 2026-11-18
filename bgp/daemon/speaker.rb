@@ -71,6 +71,7 @@ require 'bgp/daemon/link_state_producer'
 require 'bgp/daemon/vrf_sync'
 require 'bgp/daemon/vpn_exporter'
 require 'bgp/daemon/vrf_ce_exporter'
+require 'bgp/daemon/vpn_reflector'
 require 'socket'
 require 'thread'
 
@@ -773,6 +774,10 @@ module BGP
       # no CE neighbor (pull request 7).
       attr_reader :ce_table, :vrf_ce_exporter
 
+      # What reflects VPN routes between PEs, or nil when this speaker is
+      # not a route reflector (bgp/daemon/vpn_reflector.rb, pull request 6).
+      attr_reader :vpn_reflector
+
       # The l3vpn: block's keys.
       L3VPN_KEYS = %w[labels transport tunnels].freeze
 
@@ -830,6 +835,7 @@ module BGP
         @vpn = BGP::Rib::VpnTable.new(local_as: @my_as, router_id: @router_id,
                                       cluster_id: decision_options[:cluster_id])
         build_l3vpn(config['vrfs'], config['l3vpn'])
+        build_vpn_reflector
         if config['link_state']
           @link_state_producer = LinkStateProducer.new(self, config['link_state'], :logger => @logger)
           on_established { |p| @link_state_producer.session_up(p) }
@@ -955,6 +961,7 @@ module BGP
       def start
         start_rib
         @vrf_sync&.start
+        @vpn_reflector&.start
         @server = listen if @peers.any? { |p| !p.active? && !p.vrf }
         # tcp_l3mdev_accept is 0, so a CE dialling in reaches only a
         # listener bound to its VRF (pull request 7, measured).
@@ -972,6 +979,7 @@ module BGP
         @peers.each(&:stop)
         stop_rib
         @vrf_sync&.stop
+        @vpn_reflector&.stop
         self
       end
 
@@ -1278,6 +1286,20 @@ module BGP
       # vrfs: and l3vpn:, read and checked once, at start: a change needs a
       # restart (Candidate's RESTART_DEFAULT). With no vrfs the PE part is
       # off, whatever l3vpn says.
+      # docs/design/l3vpn-pe.md, pull request 6: a speaker that reflects
+      # unicast reflects VPN routes too, with the same clients and
+      # CLUSTER_ID, through an Export of its own.
+      def build_vpn_reflector
+        e = @export.is_a?(Hash) ? @export : {}
+        return unless !reflector_clients.empty? || e['route_reflector'] == true
+        clients = reflector_clients.empty? ? e['clients'] : reflector_clients
+        export = BGP::Rib::Export.new(:local_as => @my_as, :router_id => @router_id, :route_reflector => true,
+                                      :clients => clients, :cluster_id => e['cluster_id'])
+        @vpn_reflector = VpnReflector.new(self, @vpn, export, logger: @logger)
+        @vpn.on_change { @vpn_reflector.poke }
+        on_established { |p| @vpn_reflector.session_up(p) }
+      end
+
       def build_l3vpn(vrfs, l3vpn)
         l3vpn ||= {}
         raise ArgumentError, 'l3vpn: is a mapping' unless l3vpn.is_a?(Hash)
