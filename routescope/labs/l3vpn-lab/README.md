@@ -134,13 +134,15 @@ takes ce2a with `as-override` and `soo 65000:22`. Measured on
 - `ping -I 172.16.1.1 172.16.2.1` from ce1a crosses p1 as `17003/18`,
   and the reply as `24000`, popped into VRF A and sent to ce1a.
 
-**ce2a needs a bgp4rd fix to forward.** FRR sends ce2a its own link,
-192.168.2.0/24, and ce2a's bgp4rd installs that over its connected
-route; then 192.168.2.1 is a gateway only through itself, and the
-kernel refuses ce2a's routes to pe1's side ("Nexthop has invalid
-gateway"). pe1 never sends a CE its own link, so ce1a does not meet it.
-A bgp4rd FIB that leaves a connected route alone fixes it; until then
-the gate's CE ping and ce2a's pings fail.
+**ce2a needs bgp4r #346 to forward.** FRR sends ce2a its own link,
+192.168.2.0/24. Before #346, ce2a's bgp4rd installed that over its
+connected route; then 192.168.2.1 was a gateway only through itself,
+and the kernel refused ce2a's routes to pe1's side ("Nexthop has invalid
+gateway"). pe1 never sends a CE its own link, so ce1a did not meet it.
+With #346 the FIB leaves a connected route alone, and ce2a's `show fib`
+lists `192.168.2.0/24 connected`. With both, the gate scenario passed
+through routescope on 2026-11-18, CE steps included: failover 1.0 s,
+restore 2.5 s.
 
 ## IPv6
 
