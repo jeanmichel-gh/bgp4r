@@ -3,7 +3,8 @@
 Status: approved by the owner 2026-11-17. Pull requests 1, the VPN
 table, 2, VRFs and both transports, 3, export and labels, and 4, the
 lab and the interop test, and 5, VPN-IPv6 over the IPv4 core, built
-the same day; 7, PE to CE by eBGP, on 2026-11-18. The gate passed on the VM, through routescope. The open questions
+the same day; 7, PE to CE by eBGP, and 6, a VPN route reflector, on
+2026-11-18. The gate passed on the VM, through routescope. The open questions
 at the end keep the answers this document gives until the owner changes
 them.
 

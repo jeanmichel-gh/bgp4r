@@ -11,7 +11,8 @@
 #                        p2 (FRR, SRGB 19000)
 #
 # AS 65000, IS-IS level 2 with SR-MPLS. iBGP VPNv4 (AFI 1, SAFI 128)
-# between the PEs' loopbacks. VRF A joins ce1a and ce2a, VRF B ce1b and
+# from each PE's loopback to p1-bgp, a bgp4rd in p1's namespace that
+# reflects VPN routes between them (bgp4r pull request 6). VRF A joins ce1a and ce2a, VRF B ce1b and
 # ce2b, on the same addresses: 192.168.1.0/24 at pe1, 192.168.2.0/24 at
 # pe2. RD 65000:1 and RT 65000:100 for A, 65000:2 and 65000:200 for B.
 # ce1a and ce2a run bgp4rd in AS 65101, one ASN for every site: each
@@ -70,6 +71,14 @@ topology:
         ip addr add 10.255.0.2/32 dev lo; ip route del default dev eth0 2>/dev/null;
         echo 1 > /proc/sys/net/ipv4/ip_forward; echo 100000 > /proc/sys/net/mpls/platform_labels;
         exec isisd -c /etc/isis4r/isisd.yml -l -"
+    # --- p1's BGP half: the VPN route reflector, in p1's namespace ----
+    p1-bgp:
+      kind: linux
+      image: bgp4r-lab:latest
+      network-mode: container:p1
+      labels: { routescope.kind: bgp4r, routescope.protocols: bgp }
+      binds: [p1-bgp/bgp4rd.yml:/etc/bgp4r/bgp4rd.yml]
+      cmd: exe/bgp4rd -f /etc/bgp4r/bgp4rd.yml -s /run/bgp4r/bgp4rd.sock -l -
     # frr.conf has the addresses too; FRR can miss them on links wired
     # after it starts. The default route Docker gives is removed.
     p2:

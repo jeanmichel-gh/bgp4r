@@ -24,6 +24,7 @@ IS-IS core with SR-MPLS. It is the lab of `docs/design/l3vpn-pe.md`
 | `pe1` | isis4r; makes VRFs A (table 100) and B (table 200) | 10.255.0.1, 1 | eth1 10.0.12.1/30, eth2 10.0.14.1/30, eth3 192.168.1.1/24 in A, eth4 192.168.1.1/24 in B |
 | `pe1-bgp` | `bgp4rd`, in pe1's namespace | | |
 | `p1` | isis4r | 10.255.0.2, 2 | eth1 10.0.12.2/30, eth2 10.0.23.1/30 |
+| `p1-bgp` | `bgp4rd`, in p1's namespace: the VPN route reflector for pe1 and pe2 | | |
 | `p2` | FRR 10.2.1, IS-IS | 10.255.0.4, 4 | eth1 10.0.14.2/30, eth2 10.0.34.1/30 |
 | `pe2` | FRR 10.2.1, IS-IS and bgpd; VRFs A and B made at start | 10.255.0.3, 3 | eth1 10.0.23.2/30, eth2 10.0.34.2/30, eth3 192.168.2.1/24 in A, eth4 192.168.2.1/24 in B |
 | `ce1a`, `ce1b` | Linux, default route to pe1 | | eth1 192.168.1.2/24 |
@@ -115,6 +116,20 @@ routescope-labs install bgp4r/l3vpn-lab
 
 and start it from routescope's Labs panel, or here: `sudo containerlab
 deploy -t l3vpn-lab.clab.yml`.
+
+## The route reflector
+
+pe1 and pe2 do not peer with each other: each peers with `p1-bgp`, a
+bgp4rd in p1's namespace on 10.255.0.2 that reflects VPN routes for both
+(bgp4r pull request 6). It has no VRF and keeps every route, whatever
+its Route Targets. Measured on 2026-11-18:
+
+- pe2 (FRR) holds ce1a's site `from 10.255.0.2 (10.255.0.1)`, with
+  `Originator: 10.255.0.1, Cluster list: 10.255.0.2`, next hop pe1's
+  loopback and label 24000, as pe1 sent it.
+- pe1 installs FRR's routes, reflected the same way, with FRR's labels.
+- A prefix added to pe1's VRF A reached FRR through the reflector, and
+  went when it was removed.
 
 ## The CEs of VRF A, by eBGP
 

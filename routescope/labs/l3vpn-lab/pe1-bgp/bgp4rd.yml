@@ -1,11 +1,11 @@
-# pe1's BGP half: iBGP VPNv4 to pe2 (FRR) between loopbacks, and VRFs A
-# and B. The VRF devices are made by pe1's start command.
+# pe1's BGP half: iBGP VPNv4 from its loopback to p1-bgp, the VPN route
+# reflector, and VRFs A and B. The VRF devices are made by pe1's start command.
 router_id: 10.255.0.1
 as: 65000
 local_address: 10.255.0.1
 log_level: info
 neighbors:
-  - { address: 10.255.0.3, as: 65000, description: pe2, hold_time: 30, connect: true,
+  - { address: 10.255.0.2, as: 65000, description: p1-bgp, hold_time: 30, connect: true,
       capabilities: [as4_byte, route_refresh, mbgp_ipv4_mpls_vpn_unicast, mbgp_ipv6_mpls_vpn_unicast] }
   # ce1a, by eBGP inside VRF A (pull request 7). It dials in, so pe1
   # listens in VRF A. Its AS, 65101, is every site's: as_override.
