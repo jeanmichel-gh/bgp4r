@@ -339,13 +339,28 @@ class BGP_Daemon_Speaker_Test < Test::Unit::TestCase
     BGP::Daemon::Peer::KEYS.each { |k| assert_match(/\b#{k}\b/, e.message) }
   end
 
+  # Pull request 7: a CE neighbor's VRF has to be one of the vrfs.
+  def test_a_ce_neighbors_vrf_must_be_configured
+    ce = { 'address' => '192.168.1.2', 'as' => 65_101, 'vrf' => 'B' }
+    e = assert_raise(ArgumentError) do
+      speaker('neighbors' => [ce], 'vrfs' => [{ 'name' => 'A', 'table' => 100, 'import' => ['65000:100'] }])
+    end
+    assert_equal('neighbor 192.168.1.2: vrf B is not in vrfs:', e.message)
+    s = speaker('neighbors' => [ce.merge('vrf' => 'A')], 'vrfs' => [{ 'name' => 'A', 'table' => 100, 'import' => ['65000:100'] }])
+    assert_not_nil(s.ce_table)
+    assert_not_nil(s.vrf_ce_exporter)
+    assert_equal('A', s.peers.first.vrf)
+  end
+
   def test_every_listed_key_is_accepted
     config = { 'address' => '10.0.0.2', 'as' => 65_001, 'capabilities' => [],
                'connect' => false, 'description' => 'd', 'hold_time' => 30,
                'open_timeout' => 5, 'port' => 179, 'record' => 'routes', 'retry' => 2,
-               'route_reflector_client' => false }
+               'route_reflector_client' => false, 'vrf' => 'A', 'as_override' => true, 'soo' => '65000:11' }
     assert_equal(BGP::Daemon::Peer::KEYS.sort, config.keys.sort, 'the case covers every key')
-    assert_nothing_raised { speaker('neighbors' => [config]) }
+    assert_nothing_raised do
+      speaker('neighbors' => [config], 'vrfs' => [{ 'name' => 'A', 'table' => 100, 'import' => ['65000:100'] }])
+    end
   end
 
   # A commit reaches a running Peer through reconfigure, so the same

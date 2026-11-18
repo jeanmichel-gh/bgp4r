@@ -138,6 +138,21 @@ module BGP
         [at.call('mpls'), at.call('via'), at.call('dev')]
       end
 
+      # True when the kernel's route, its kernel_signature, is the one argv
+      # sent. The device counts only when argv named one: a CE route is
+      # sent with its gateway alone, and the kernel picks the device.
+      def self.same?(argv, kernel)
+        return false unless kernel
+        labels, via, dev = signature(argv)
+        labels == kernel[0] && via == kernel[1] && (dev.nil? || dev == kernel[2])
+      end
+
+      # A CE's route in its VRF (pull request 7): its gateway is the CE,
+      # on a link inside the VRF, so no label and no device.
+      def ce_install_argv(vrf, prefix, gateway)
+        [@bin, 'route', 'replace', 'vrf', vrf, prefix, 'via', gateway, 'proto', PROTO]
+      end
+
       # The same, of one route `ip -j route show` answered.
       def self.kernel_signature(route)
         encap = route['encap'] || {}

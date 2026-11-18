@@ -310,9 +310,10 @@ module Features
 
     'vrfs' => {
       :area  => 'routing',
-      :about => "A PE's VRFs: import by Route Target, the mpls and gre transports, VRF routes in the kernel, export with a label per VRF, IPv6 over an IPv4 core",
-      :rfc   => 'RFC 4364 sections 4.3.1, 4.3.2 and 5; RFC 8277 section 2.4; RFC 4659 sections 3.2 and 4',
-      :unit  => %w[rib/vrf_test rib/vpn_transport_test rib/vrf_fib_test rib/l3vpn_test daemon/vrf_sync_test daemon/vpn_exporter_test],
+      :about => "A PE's VRFs: import by Route Target, the mpls and gre transports, VRF routes in the kernel, export with a label per VRF, IPv6 over an IPv4 core, CEs by eBGP",
+      :rfc   => 'RFC 4364 sections 4.3.1, 4.3.2, 5 and 7; RFC 8277 section 2.4; RFC 4659 sections 3.2 and 4; RFC 4360 section 5',
+      :unit  => %w[rib/vrf_test rib/vpn_transport_test rib/vrf_fib_test rib/l3vpn_test daemon/vrf_sync_test daemon/vpn_exporter_test
+                   rib/vrf_ce_table_test daemon/vrf_ce_exporter_test],
     },
 
     'export' => {

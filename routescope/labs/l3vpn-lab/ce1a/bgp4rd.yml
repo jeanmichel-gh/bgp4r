@@ -1,0 +1,16 @@
+# ce1a, a customer's router in VRF A, AS 65101: it tells pe1 about its
+# site, 172.16.1.0/24, and installs what pe1 sends it. Every site of
+# the customer uses AS 65101, so pe1 replaces 65101 by its own AS in
+# what it sends here (as_override): RFC 4364 section 7.
+router_id: 172.16.1.1
+as: 65101
+log_level: info
+neighbors:
+  - { address: 192.168.1.1, as: 65000, description: pe1, hold_time: 30, connect: true }
+originate:
+  - prefixes: [172.16.1.0/24]
+# The next hop toward pe1 is this session's own address.
+export: {}
+# Table 254 is the kernel's main table, the one it forwards from.
+fib:
+  table: 254

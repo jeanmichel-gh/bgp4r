@@ -116,6 +116,34 @@ routescope-labs install bgp4r/l3vpn-lab
 and start it from routescope's Labs panel, or here: `sudo containerlab
 deploy -t l3vpn-lab.clab.yml`.
 
+## The CEs of VRF A, by eBGP
+
+ce1a and ce2a run bgp4rd in AS 65101, one ASN for every site, each with
+its site on its loopback: 172.16.1.1/24 and 172.16.2.1/24. Each dials
+its PE inside VRF A. pe1 takes ce1a as a neighbor with `vrf: A`,
+`as_override` and `soo: "65000:11"` (bgp4r pull request 7); FRR's pe2
+takes ce2a with `as-override` and `soo 65000:22`. Measured on
+2026-11-18:
+
+- ce1a has `172.16.2.0/24` from pe1 with AS_PATH `65000 65000`, and
+  ce2a has `172.16.1.0/24` from FRR the same: each PE put its AS where
+  the far site's 65101 was, so the CE does not drop it as a loop.
+- pe1 installs ce1a's site in VRF A, `172.16.1.0/24 via 192.168.1.2 dev
+  eth3 proto bgp`, and sends it as a VPN route: FRR shows it with AS_PATH
+  `65101`, `RT:65000:100 SoO:65000:11`, label 24000.
+- `ping -I 172.16.1.1 172.16.2.1` from ce1a crosses p1 as `17003/18`,
+  and the reply as `24000`, popped into VRF A and sent to ce1a.
+
+**ce2a needs bgp4r #346 to forward.** FRR sends ce2a its own link,
+192.168.2.0/24. Before #346, ce2a's bgp4rd installed that over its
+connected route; then 192.168.2.1 was a gateway only through itself,
+and the kernel refused ce2a's routes to pe1's side ("Nexthop has invalid
+gateway"). pe1 never sends a CE its own link, so ce1a did not meet it.
+With #346 the FIB leaves a connected route alone, and ce2a's `show fib`
+lists `192.168.2.0/24 connected`. With both, the gate scenario passed
+through routescope on 2026-11-18, CE steps included: failover 1.0 s,
+restore 2.5 s.
+
 ## IPv6
 
 Both VRFs carry IPv6 too, as VPN-IPv6 (RFC 4659) over the same IPv4

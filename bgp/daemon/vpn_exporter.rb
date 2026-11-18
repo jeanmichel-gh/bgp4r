@@ -114,11 +114,13 @@ module BGP
             list << BGP::Update.new(BGP::Path_attribute.new(BGP::Mp_unreach.new(:afi => afi, :safi => 128, :nlris => nlris)))
           end
         end
-        announced.group_by { |e| [e.vrf, afi(e)] }.each do |(_, afi), es|
+        # A CE's routes (pull request 7) carry their own AS_PATH, ORIGIN
+        # and Site of Origin, so they group by those too.
+        announced.group_by { |e| [e.vrf, afi(e), e.as_path, e.origin, e.soo] }.each do |(_, afi), es|
           nh = next_hop(peer, afi)
           es.each_slice(PER_UPDATE) do |c|
             nlris = c.collect { |e| { :prefix => e.prefix, :rd => rd(e.rd), :label => e.label } }
-            list << BGP::Update.new(path_attribute(peer, afi, nh, nlris, c.first.route_targets))
+            list << BGP::Update.new(path_attribute(peer, afi, nh, nlris, c.first))
           end
         end
         list
@@ -148,11 +150,18 @@ module BGP
 
       # RFC 4271 section 5.1.2: empty AS_PATH toward an internal peer, our
       # AS toward an external one; LOCAL_PREF to an internal peer only.
-      def path_attribute(peer, afi, nh, nlris, route_targets)
-        attrs = [BGP::Origin.new(0), BGP::As_path.new(*(peer.ebgp? ? [@speaker.my_as] : []))]
+      #
+      # A CE route keeps the CE's AS_PATH and ORIGIN; ours are empty and
+      # IGP. Its Site of Origin rides beside the Route Targets as a Route
+      # Origin extended community (RFC 4360 section 5).
+      def path_attribute(peer, afi, nh, nlris, export)
+        path = Array(export.as_path)
+        path = [@speaker.my_as] + path if peer.ebgp?
+        attrs = [BGP::Origin.new(export.origin || 0), BGP::As_path.new(*path)]
         attrs << BGP::Local_pref.new(100) unless peer.ebgp?
         attrs << BGP::Mp_reach.new(:afi => afi, :safi => 128, :nexthop => [nh], :nlris => nlris)
-        rts = route_targets.collect { |t| BGP::Route_target.new(*rd(t)) }
+        rts = export.route_targets.collect { |t| BGP::Route_target.new(*rd(t)) }
+        rts << BGP::Route_origin.new(*rd(export.soo)) if export.soo
         attrs << BGP::Extended_communities.new(*rts) unless rts.empty?
         BGP::Path_attribute.new(*attrs)
       end
