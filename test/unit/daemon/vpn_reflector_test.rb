@@ -99,6 +99,16 @@ class TestBgpDaemonVpnReflector < Test::Unit::TestCase
     assert_equal([], @pe1.sent, 'not back to the PE that sent it')
   end
 
+  # Per peer and per family, for show.peers.
+  def test_sent_counts_are_per_peer_and_per_family
+    receive('10.255.0.1', '192.168.1.0/24', rd: [65000, 1], label: 24000)
+    receive('10.255.0.1', '2001:db8:1::/64', rd: [65000, 1], label: 24000, afi: 2, nh: '::ffff:10.255.0.1')
+    @rr.refresh
+    assert_equal({ 'vpn-ipv4' => 1, 'vpn-ipv6' => 1 }, @rr.sent_counts('10.255.0.3'))
+    assert_equal({ 'vpn-ipv4' => 1 }, @rr.sent_counts('10.255.0.9'))
+    assert_equal({}, @rr.sent_counts('10.255.0.1'))
+  end
+
   # A non-client's route goes to clients only.
   def test_a_non_clients_route_goes_to_clients_only
     receive('10.255.0.9', '192.168.9.0/24', rd: [65000, 9], label: 24900)

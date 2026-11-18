@@ -35,11 +35,14 @@ class TestBgpRibVpnTable < Test::Unit::TestCase
   end
 
   # One VPN route from address, as the session would have received it.
-  def vpn(address, rd, prefix, label, local_pref: 100, rts: [[65000, 100]])
+  def vpn(address, rd, prefix, label, local_pref: 100, rts: [[65000, 100]], soo: nil, attrs: [], afi: 1)
+    ecs = rts.collect { |g, l| BGP::Route_target.new(g, l) }
+    ecs << BGP::Route_origin.new(*soo) if soo
+    nh = afi == 2 ? "::ffff:#{address}" : address
     pa = BGP::Path_attribute.new(
       BGP::Origin.new(0), BGP::As_path.new, BGP::Local_pref.new(local_pref),
-      BGP::Mp_reach.new(:safi => 128, :nexthop => [address], :nlris => [{ :prefix => prefix, :rd => rd, :label => label }]),
-      BGP::Extended_communities.new(*rts.collect { |g, l| BGP::Route_target.new(g, l) }))
+      BGP::Mp_reach.new(:afi => afi, :safi => 128, :nexthop => [nh], :nlris => [{ :prefix => prefix, :rd => rd, :label => label }]),
+      BGP::Extended_communities.new(*ecs), *attrs)
     u = BGP::Update.new(BGP::Update.new(pa).encode)
     BGP::Rib::PeerAdapter.vpn_operations(u, peer(address))
   end
@@ -55,6 +58,34 @@ class TestBgpRibVpnTable < Test::Unit::TestCase
     assert_equal(['65000:1', '192.168.2.0/30', '10.255.0.3', '10.255.0.3', [24001], ['65000:100']],
                  r.values_at('rd', 'prefix', 'peer', 'next_hop', 'labels', 'route_targets'))
     assert_equal([true, 'only_route'], r.values_at('best', 'reason'))
+  end
+
+  # A route that was never reflected has no ORIGINATOR_ID and an empty
+  # CLUSTER_LIST, and no Site of Origin unless one was sent.
+  def test_a_row_without_reflection_or_site_of_origin
+    @t.apply('10.255.0.3', vpn('10.255.0.3', [65000, 1], '192.168.2.0/30', 24001))
+    assert_equal([nil, [], nil], @t.rows.first.values_at('originator_id', 'cluster_list', 'soo'))
+  end
+
+  # RFC 4456 section 8, as a PE behind a reflector receives a route, and
+  # RFC 4360 section 5's Route Origin, apart from the Route Targets.
+  def test_a_reflected_route_shows_its_originator_cluster_list_and_site_of_origin
+    attrs = [BGP::Originator_id.new('10.255.0.1'), BGP::Cluster_list.new('10.255.0.2')]
+    @t.apply('10.255.0.2', vpn('10.255.0.2', [65000, 1], '172.16.1.0/24', 24000, soo: [65000, 11], attrs: attrs))
+    r = @t.rows.first
+    assert_equal(['10.255.0.1', ['10.255.0.2'], '65000:11', ['65000:100']],
+                 r.values_at('originator_id', 'cluster_list', 'soo', 'route_targets'))
+  end
+
+  # Per peer and per family, for show.peers.
+  def test_counts_are_per_peer_and_per_family
+    @t.apply('10.255.0.3', vpn('10.255.0.3', [65000, 1], '192.168.2.0/30', 24001))
+    @t.apply('10.255.0.3', vpn('10.255.0.3', [65000, 1], '172.16.2.0/24', 24001))
+    @t.apply('10.255.0.3', vpn('10.255.0.3', [65000, 1], '2001:db8:2::/64', 24001, afi: 2))
+    @t.apply('10.255.0.4', vpn('10.255.0.4', [65000, 2], '192.168.4.0/30', 24002))
+    assert_equal({ 'vpn-ipv4' => 2, 'vpn-ipv6' => 1 }, @t.counts('10.255.0.3'))
+    assert_equal({ 'vpn-ipv4' => 1 }, @t.counts('10.255.0.4'))
+    assert_equal({}, @t.counts('10.255.0.9'))
   end
 
   # RFC 4364 section 4.1: one prefix under two RDs is two routes, never

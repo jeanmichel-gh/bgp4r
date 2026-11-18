@@ -454,6 +454,55 @@ class BGP_Daemon_Views_Test < Test::Unit::TestCase
     assert_match(/count/, e.message)
   end
 
+  # --- L3VPN: routescope's l3vpn-views spec, pull request 1 ------------
+
+  VRF_A = [{ 'name' => 'A', 'table' => 100, 'import' => ['65000:100'] }].freeze
+
+  # A unicast speaker's rows read as they always have.
+  def test_a_unicast_row_has_no_vrf_and_no_families
+    rows = views(loaded).peers
+    assert(rows.none? { |r| r.key?(:vrf) || r.key?(:families) })
+  end
+
+  # A CE's row names its VRF and counts IPv4 from the CE table and what
+  # went back to the CE, which the RIB's `received` does not see.
+  def test_a_ce_row_names_its_vrf_and_counts_ipv4
+    ce = { 'address' => '192.168.1.2', 'as' => 65_101, 'vrf' => 'A' }
+    s = speaker('neighbors' => [ce, NEIGHBORS.last], 'vrfs' => VRF_A)
+    from = BGP::Rib::Peer.new(:address => '192.168.1.2', :remote_as => 65_101,
+                              :router_id => '192.168.1.2', :local_as => 65_000)
+    s.ce_table.apply('A', '192.168.1.2', [[:announce, BGP::Rib::Route.new('172.16.1.0/24', pa, from)]])
+    rows = views(s).peers.to_h { |r| [r[:address], r] }
+    assert_equal('A', rows['192.168.1.2'][:vrf])
+    assert_equal([{ :family => 'ipv4', :received => 1, :sent => 0 }], rows['192.168.1.2'][:families])
+    assert_equal(false, rows['10.0.0.3'].key?(:vrf))
+    assert_equal(false, rows['10.0.0.3'].key?(:families), 'no session, so no VPN family negotiated')
+  end
+
+  # A session that negotiated VPN-IPv4 and VPN-IPv6 lists unicast, from
+  # the row, then each VPN family, received from the VPN table.
+  def test_a_vpn_session_counts_each_family
+    s = speaker('vrfs' => VRF_A)
+    pe = s.peers.last
+    caps = [BGP::OPT_PARM::CAP::Mbgp.new(1, 1), BGP::OPT_PARM::CAP::Mbgp.new(1, 128), BGP::OPT_PARM::CAP::Mbgp.new(2, 128)]
+    info = BGP::Neighbor::Capabilities.new(BGP::Open.new(4, 65_000, 180, '10.0.0.1', *caps),
+                                           BGP::Open.new(4, 65_000, 180, '10.0.0.3', *caps))
+    pe.define_singleton_method(:established?) { true }
+    pe.define_singleton_method(:session_info) { info }
+    from = BGP::Rib::Peer.new(:address => '10.0.0.3', :remote_as => 65_000, :router_id => '10.0.0.3', :local_as => 65_000)
+    vpa = BGP::Path_attribute.new(BGP::Origin.new(0), BGP::As_path.new, BGP::Local_pref.new(100),
+                                  BGP::Mp_reach.new(:safi => 128, :nexthop => ['10.0.0.3'],
+                                                    :nlris => [{ :prefix => '172.16.2.0/24', :rd => [65_000, 2], :label => 24_002 }]),
+                                  BGP::Extended_communities.new(BGP::Route_target.new(65_000, 100)))
+    u = BGP::Update.new(BGP::Update.new(vpa).encode)
+    s.vpn.apply('10.0.0.3', BGP::Rib::PeerAdapter.vpn_operations(u, from))
+    row = views(s).peers.find { |r| r[:address] == '10.0.0.3' }
+    assert_equal(false, row.key?(:vrf))
+    assert_equal([{ :family => 'unicast', :received => 0, :sent => nil },
+                  { :family => 'vpn-ipv4', :received => 1, :sent => 0 },
+                  { :family => 'vpn-ipv6', :received => 0, :sent => 0 }], row[:families])
+  end
+
   private
 
   def pa

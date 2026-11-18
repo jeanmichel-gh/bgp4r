@@ -122,6 +122,16 @@ module BGP
         end
       end
 
+      # How many routes one peer was sent, per family, as
+      # VpnTable#counts answers.
+      def sent_counts(peer_address)
+        @lock.synchronize do
+          (@sent[peer_address] || {}).each_value.with_object(Hash.new(0)) do |o, h|
+            h[o.afi == 2 ? 'vpn-ipv6' : 'vpn-ipv4'] += 1
+          end
+        end
+      end
+
       def size(peer_address = nil)
         @lock.synchronize { peer_address ? (@sent[peer_address] || {}).size : @sent.values.sum(&:size) }
       end

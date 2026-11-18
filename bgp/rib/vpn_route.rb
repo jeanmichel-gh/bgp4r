@@ -44,6 +44,15 @@ module BGP
           Array(rt.to_hash[:route_target]).join(':')
         }
       end
+
+      # The Site of Origin, the first Route Origin extended community (RFC
+      # 4364 section 7, RFC 4360 section 5), as "65000:11", or nil.
+      def soo
+        pa = route.path_attribute
+        return nil unless pa.has?(BGP::Extended_communities)
+        ro = pa[BGP::Extended_communities].find_all(BGP::Route_origin).first or return nil
+        Array(ro.to_hash[:route_origin]).join(':')
+      end
     end
 
   end

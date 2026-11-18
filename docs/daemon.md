@@ -704,7 +704,7 @@ below.
 | `show.adj_out` | what was sent to one peer, and what was skipped | built |
 | `show.fib` | what the daemon believes is in the kernel table, and what failed | built |
 | `show.link_state` | BGP-LS routes: sent as a Producer, and received per peer | built |
-| `show.vpn` | the VPN-IPv4 and VPN-IPv6 routes received (AFI 1 and 2 / SAFI 128), one row each: RD, prefix, peer, next hop, labels, Route Targets, best; and those this PE sends, with peer null, reason `local` and their `vrf` | built |
+| `show.vpn` | the VPN-IPv4 and VPN-IPv6 routes received (AFI 1 and 2 / SAFI 128), one row each: RD, prefix, peer, next hop, labels, Route Targets, Site of Origin (`soo`), `originator_id` and `cluster_list`, best; and those this PE sends, with peer null, reason `local` and their `vrf` | built |
 | `show.vpn_labels` | each exporting VRF's label: label, VRF, the action, installed or why not | built |
 | `show.vrfs` | the VRFs: name, table, RD, Route Targets, the device's state, routes imported and installed | built |
 | `show.vrf` | each VRF's imported routes: what is pushed, where it goes, installed or why not; `vrf` picks one | built |
@@ -1129,6 +1129,27 @@ by default. Both are false and null otherwise. A peer row gains
 `Export#client?`, so it says what the export rules decide. With
 `route_reflector: true` and no client list that is every internal
 peer, which is the single cluster case of section 6.
+
+**A CE's row, and a row whose session negotiated a VPN family, say
+more**, for routescope's L3VPN views (routescope
+`docs/design/l3vpn-views.md`, pull request 1). A CE neighbor's row
+gains `vrf`, its VRF's name. Both gain `families`, one entry per family
+with what was received and sent:
+
+```json
+"families": [ { "family": "unicast",  "received": 0, "sent": 0 },
+              { "family": "vpn-ipv4", "received": 4, "sent": 2 },
+              { "family": "vpn-ipv6", "received": 2, "sent": 1 } ]
+```
+
+A CE's session is IPv4 unicast in its VRF and outside the RIB, so its
+row's `received` stays 0, and its one entry, `ipv4`, counts the routes
+the CE sent into the VRF and those sent back to it. On a VPN session
+`unicast` repeats the row's `received` and `sent`, IPv4 and IPv6
+together as the RIB counts them, and each VPN family the session
+negotiated follows: received from the VPN table, sent by this PE's VRFs
+and by the reflector. A unicast speaker's rows have neither key, as
+they always had.
 
 **Every path row of every view carries `originator_id` and
 `cluster_list`**, RFC 4456 section 8, as it carries the three community

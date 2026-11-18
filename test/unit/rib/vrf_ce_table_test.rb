@@ -57,6 +57,17 @@ class TestBgpRibVrfCeTable < Test::Unit::TestCase
     assert_equal(1, @table.size('A'))
   end
 
+  # What one CE sent into one VRF, for show.peers.
+  def test_received_counts_one_ces_routes_in_one_vrf
+    announce('A', '192.168.1.2', '172.16.1.0/24')
+    announce('A', '192.168.1.2', '172.16.11.0/24')
+    announce('A', '192.168.3.2', '172.16.3.0/24')
+    assert_equal(2, @table.received('A', '192.168.1.2'))
+    assert_equal(1, @table.received('A', '192.168.3.2'))
+    assert_equal(0, @table.received('B', '192.168.1.2'))
+    assert_equal(3, @table.size, 'asking about B added nothing')
+  end
+
   # Two CEs of one VRF with one prefix: the decision process picks.
   def test_one_best_per_prefix_across_the_vrfs_ces
     announce('A', '192.168.1.2', '172.16.1.0/24', path: [65101, 65201])

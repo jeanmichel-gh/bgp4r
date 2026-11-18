@@ -78,6 +78,11 @@ module BGP
         @lock.synchronize { sync(peer, @sent[peer.address] = {}) }
       end
 
+      # How many routes the CE at address was sent.
+      def size(address)
+        @lock.synchronize { (@sent[address] || {}).size }
+      end
+
       # What peer is to be sent now, prefix => Out. Public for the tests.
       def routes_for(peer)
         my_as = @speaker.my_as

@@ -116,6 +116,11 @@ module BGP
         end
       end
 
+      # How many routes the CE at address sent into vrf.
+      def received(vrf, address)
+        @lock.synchronize { (@in.fetch(vrf, {})[address] || {}).size }
+      end
+
       def size(vrf = nil)
         @lock.synchronize do
           (vrf ? [@in[vrf]] : @in.values).sum { |by_ce| by_ce.values.sum(&:size) }
