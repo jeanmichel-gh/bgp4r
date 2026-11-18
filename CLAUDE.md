@@ -2749,14 +2749,18 @@ Neighbor ◀──UPDATE── Adj-RIB-Out (per peer) ◀───────�
           It is `proto` on the **flush** that protects a shared table, and
           `test_the_flush_leaves_a_route_bgp4r_did_not_put_there` fails
           without it. The `del` filter is kept because it costs nothing.
-        * **`replace` takes over a foreign route of the same prefix**,
-          which is the price of using it: it overwrites the route, marks
-          it `proto bgp`, and the flush on the way out then removes it. No
-          filter can prevent that, since by then the route is marked as
-          ours. So a table shared with another daemon is safe only where
-          the prefixes do not overlap, which is another reason `table:`
-          has no default. Measured and asserted in
-          `test_a_foreign_route_of_the_same_prefix_is_taken_over`.
+        * **A foreign route of the same prefix is left alone**, since
+          2026-11-18. `replace` would take it over: overwrite it, mark it
+          `proto bgp`, and let the flush on the way out remove it. That
+          was asserted as the price of using `replace` until a CE's
+          bgp4rd replaced its own connected route on `l3vpn-lab` and
+          could then reach nothing through its PE. Now FibInstaller reads
+          the table once per batch (`IpRoute#holders`) and skips a prefix
+          another program holds, as `connected` or `static route` in
+          `show.fib`. Asserted in
+          `test_a_foreign_route_of_the_same_prefix_is_left_alone`. The
+          next change for that prefix asks again; nothing watches the
+          kernel for the other route going away.
         * **It does not resolve a next hop.** A real router resolves the
           BGP next hop recursively against its IGP; bgp4r has no IGP, so
           the next hop goes to the kernel as it arrived and the kernel

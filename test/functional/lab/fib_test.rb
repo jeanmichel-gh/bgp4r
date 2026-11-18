@@ -262,17 +262,17 @@ class TestBgpRibFibNetns < Test::Unit::TestCase
     assert_match(%r{172\.16\.0\.0/16}, out, 'and the static one is still there')
   end
 
-  # The price of using replace, asserted rather than left to be discovered.
+  # A foreign route of a prefix bgp4r also has is left alone.
   #
-  # Linux holds one route per prefix in a table whatever the proto, so a
-  # foreign route of a prefix bgp4r also has is taken over: replace
-  # overwrites it and marks it proto bgp, and the flush on the way out then
-  # removes it. No proto filter can prevent that, because by then the route
-  # is marked as ours.
-  #
-  # So a table shared with another daemon is safe only where the prefixes
-  # do not overlap. This is why table: has no default.
-  def test_a_foreign_route_of_the_same_prefix_is_taken_over
+  # Linux holds one route per prefix in a table whatever the proto, so
+  # `ip route replace` would overwrite the foreign route and mark it proto
+  # bgp, and the flush on the way out would then remove it. That was the
+  # price of using replace, asserted here until 2026-11-18. The installer
+  # now reads the table first and skips a prefix another program holds
+  # (FibInstaller#apply), found when a CE's bgp4rd replaced its connected
+  # route on l3vpn-lab. So the foreign route keeps its next hop and its
+  # proto, and outlives the flush.
+  def test_a_foreign_route_of_the_same_prefix_is_left_alone
     assert(sh('ip', '-n', NETNS, 'route', 'add', '198.51.100.0/24',
               'via', NEXT_HOP, 'table', TABLE.to_s, 'proto', 'static'))
     assert(!sh('ip', '-n', NETNS, 'route', 'add', '198.51.100.0/24',
@@ -281,12 +281,13 @@ class TestBgpRibFibNetns < Test::Unit::TestCase
     install
     @rib.announce(route('198.51.100.0/24', OTHER_NEXT_HOP))
     @rib.drain
-    assert_equal({ '198.51.100.0/24' => OTHER_NEXT_HOP }, kernel_routes,
-                 'it is ours now, proto bgp')
+    assert_equal({}, kernel_routes, 'nothing of ours')
+    assert_equal({ '198.51.100.0/24' => :'static route' }, @rib.fib.skipped)
     @rib.uninstall
     out = ::IO.popen(['ip', '-n', NETNS, 'route', 'show', 'table', TABLE.to_s],
                      :err => [:child, :out]) { |io| io.read }
-    assert_equal('', out.strip, 'and the flush took it with ours')
+    assert_match(%r{\A198\.51\.100\.0/24 via #{Regexp.escape(NEXT_HOP)} .*proto static}, out.strip,
+                 'the static route outlived the flush, its next hop unchanged')
   end
 
   # The namespace is the isolation, so the host's own table of the same

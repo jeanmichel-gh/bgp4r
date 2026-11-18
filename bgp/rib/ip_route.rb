@@ -139,6 +139,43 @@ module BGP
 
         # Runs one operation, and the three commands above, each answering
         # a Result. This is the only part of the FIB side that is not pure.
+        # The command listing the whole table, every protocol:
+        # `ip -j route show table 254`. Measured, iproute2 6.19: a
+        # connected route says "protocol":"kernel", bgp4rd's
+        # "protocol":"bgp", a static one added by hand has no protocol
+        # key, and a host route's dst has no length ("10.9.9.9").
+        def table_argv_all(ipv6: false)
+          base_argv(ipv6) + ['-j', 'route', 'show'] + table_argv
+        end
+
+        # Every prefix another program holds in the table, both families:
+        # prefix => its protocol, 'kernel' for a connected route and
+        # 'static' for one with no protocol. One read per batch of
+        # changes (FibInstaller#run_changes), not one per route.
+        def holders
+          require 'json' # here, as View#json does: see vpn_transport.rb
+          [false, true].each_with_object({}) do |v6, out|
+            r = execute(table_argv_all(:ipv6 => v6))
+            next unless r.ok?
+            JSON.parse(r.output).each do |route|
+              next if route['protocol'] == @proto || route['type'] || route['dst'].to_s.empty?
+              out[self.class.prefix_of(route['dst'])] ||= (route['protocol'] || 'static')
+            end
+          end
+        rescue JSON::ParserError
+          {}
+        end
+
+        # "10.9.9.9" as "10.9.9.9/32", "default" as "0.0.0.0/0": a dst
+        # as the Loc-RIB names the prefix.
+        def self.prefix_of(dst)
+          return dst.include?(':') ? '::/0' : '0.0.0.0/0' if dst == 'default'
+          ip = IPAddr.new(dst)
+          "#{ip}/#{ip.prefix}"
+        rescue IPAddr::Error
+          dst
+        end
+
         def run(op) ; execute(argv(op)) ; end
         def show(ipv6: false) ; execute(show_argv(:ipv6 => ipv6)) ; end
         def flush(ipv6: false) ; execute(flush_argv(:ipv6 => ipv6)) ; end

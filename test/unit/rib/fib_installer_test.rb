@@ -45,11 +45,18 @@ class TestBgpRibFibInstaller < Test::Unit::TestCase
     # can let a prefix start failing and then succeed.
     attr_reader :refuse
 
+    # held: prefix => the protocol of a route another program has for it
+    # in the table, what IpRoute#holders answers.
+    attr_reader :held
+
     def initialize(refuse: [])
       @ran = []
       @flushes = []
       @refuse = refuse
+      @held = {}
     end
+
+    def holders ; @held.dup ; end
 
     def run(op)
       @ran << op
@@ -131,6 +138,36 @@ class TestBgpRibFibInstaller < Test::Unit::TestCase
     assert_equal('192.0.2.0/24', @backend.ran.first.prefix)
     assert_equal('10.0.0.2', @rib.fib['192.0.2.0/24'])
     assert_equal({}, @rib.fib_installer.failed)
+  end
+
+  # Found on l3vpn-lab: a PE sent a CE its own link, and the CE's bgp4rd
+  # replaced the connected route with it. Then the PE's address was a
+  # gateway only through itself, and the kernel refused every route
+  # through it. A route another protocol holds is left alone.
+  def test_a_connected_route_is_left_alone
+    @rib.install(:backend => @backend)
+    @backend.held['192.168.2.0/24'] = 'kernel'
+    @backend.held['10.9.0.0/16'] = 'static'
+    @rib.announce(route('192.168.2.0/24', '192.168.2.1'))
+    @rib.announce(route('10.9.0.0/16'))
+    @rib.announce(route('10.1.0.0/16'))
+    @rib.drain
+    assert_equal(['10.1.0.0/16'], @backend.ran.collect(&:prefix))
+    assert_equal({ '192.168.2.0/24' => :connected, '10.9.0.0/16' => :'static route' }, @rib.fib.skipped)
+    assert_nil(@rib.fib['192.168.2.0/24'])
+  end
+
+  # When the other route is gone, the next change for the prefix installs it.
+  def test_once_the_other_route_is_gone_it_installs
+    @rib.install(:backend => @backend)
+    @backend.held['192.168.2.0/24'] = 'kernel'
+    @rib.announce(route('192.168.2.0/24', '192.168.2.1'))
+    @rib.drain
+    @backend.held.clear
+    @rib.announce(route('192.168.2.0/24', '192.168.2.9'))
+    @rib.drain
+    assert_equal(['192.168.2.0/24'], @backend.ran.collect(&:prefix))
+    assert_equal({}, @rib.fib.skipped)
   end
 
   def test_a_withdrawn_route_leaves_it

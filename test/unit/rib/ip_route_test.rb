@@ -238,4 +238,32 @@ class TestBgpRibIpRoute < Test::Unit::TestCase
                                             :dev => 'veth0').to_s)
   end
 
+
+  # --- what another program holds ----------------------------------------
+
+  # The table read once, both families. What `ip -j route show table 254`
+  # answered on l3vpn-lab's ce1a (iproute2 6.19): a connected route, one
+  # of ours, and a static one added by hand, which has no protocol.
+  def test_holders_are_every_prefix_another_program_has
+    v4 = '[{"dst":"192.168.1.0/24","dev":"eth1","protocol":"kernel","scope":"link","prefsrc":"192.168.1.2","flags":[]},' \
+         '{"dst":"172.16.2.0/24","gateway":"192.168.1.1","dev":"eth1","protocol":"bgp","flags":[]},' \
+         '{"dst":"10.9.9.9","gateway":"192.168.1.1","dev":"eth1","flags":[]},' \
+         '{"dst":"default","gateway":"172.20.20.1","dev":"eth0","flags":[]}]'
+    v6 = '[{"dst":"2001:db8:1::/64","dev":"eth1","protocol":"kernel","metric":256,"flags":[],"pref":"medium"},' \
+         '{"type":"multicast","dst":"ff00::/8","dev":"eth1","protocol":"kernel","flags":[]}]'
+    seen = []
+    runner = lambda do |argv|
+      seen << argv.join(' ')
+      BGP::Rib::Fib::IpRoute::Result.new(argv, 0, argv.include?('-6') ? v6 : v4)
+    end
+    ip = BGP::Rib::Fib::IpRoute.new(:table => 254, :runner => runner)
+    assert_equal({ '192.168.1.0/24' => 'kernel', '10.9.9.9/32' => 'static', '0.0.0.0/0' => 'static',
+                   '2001:db8:1::/64' => 'kernel' }, ip.holders)
+    assert_equal(['ip -j route show table 254', 'ip -6 -j route show table 254'], seen)
+  end
+
+  def test_holders_with_a_table_that_cannot_be_read_is_none
+    runner = ->(argv) { BGP::Rib::Fib::IpRoute::Result.new(argv, 2, 'Error') }
+    assert_equal({}, BGP::Rib::Fib::IpRoute.new(:table => 254, :runner => runner).holders)
+  end
 end
