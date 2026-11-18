@@ -117,7 +117,9 @@ module BGP
       # been replaced goes to the replacement and not to this.
       def run_changes(changes)
         return unless started?
-        changes.each { |change| apply(@fib.plan(change)) }
+        ops = changes.collect { |change| @fib.plan(change) }
+        held = ops.any? { |op| op&.install? } && @backend.respond_to?(:holders) ? @backend.holders : {}
+        ops.each { |op| apply(op, held) }
       end
 
       # One operation: run it, then record it.
@@ -132,8 +134,26 @@ module BGP
       # which is the outcome it wanted. Either the kernel removed it or it
       # was not there, and in both cases this must stop believing it is
       # installed or it will never try again. The failure is still recorded.
-      def apply(op)
+      #
+      # **A route another program holds is left alone.** `ip route replace`
+      # takes the kernel's own route for the prefix too: a connected one,
+      # a static one, an IGP's. A CE that hears its own link from its PE
+      # then has its connected route replaced by a BGP route via the PE,
+      # the PE's address becomes a gateway only through itself, and the
+      # kernel refuses every route via it ("Nexthop has invalid gateway").
+      # Found on l3vpn-lab, 2026-11-18. So before an install the backend
+      # says who holds which prefix (IpRoute#holders, read once per batch);
+      # held by another protocol, it is skipped, as :connected for a
+      # connected route.
+      # A route is preferred over BGP's the way a router prefers a
+      # connected or static route. The next change for the prefix asks
+      # again, so it installs once the other route is gone.
+      def apply(op, held = {})
         return nil if op.nil?
+        if op.install? && (who = held[op.prefix])
+          @fib.skip(op.prefix, who == 'kernel' ? :connected : :"#{who} route")
+          return nil
+        end
         result = @backend.run(op)
         if result.ok?
           @lock.synchronize { @failed.delete(op.prefix) }

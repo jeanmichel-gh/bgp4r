@@ -287,7 +287,19 @@ mark:                              # added to routes made by hand; see route.ori
   large_communities: ['65000:1:1']
 ```
 
-Seven notes on it.
+Eight notes on it.
+
+`fib:` installs each best route with `ip route replace`, **except over a
+route another program holds.** A connected route, a static one or an
+IGP's for the same prefix in that table is left alone, and `show.fib`
+lists the prefix as skipped, `connected` or `static route`, as a router
+prefers a connected or static route to BGP. The table is read once per
+batch of changes (`ip -j route show table T`, both families). Found on
+`l3vpn-lab`: FRR sent a CE its own link, the CE's bgp4rd replaced the
+connected route with it, and the PE's address became a gateway only
+through itself, so the kernel refused every route via it. The next
+change for a skipped prefix asks again, so it is installed once the
+other route is gone.
 
 `capabilities` takes `add_path` as `(send_recv, afi, safi)`, matching
 `CAP::Add_path#add`, so `[3, 1, 1]` is IPv4 unicast both ways. Three

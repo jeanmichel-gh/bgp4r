@@ -148,6 +148,15 @@ module BGP
       # silently never reached the forwarding table is the hardest kind of
       # bug to see from outside, which is why Router#skipped exists too.
       def skipped ; @skipped.dup ; end
+
+      # Records that prefix was not installed, and why: a route another
+      # program holds (FibInstaller#apply). What was installed for it is
+      # not ours any more, since the kernel holds the other one.
+      def skip(prefix, reason)
+        @installed.delete(prefix)
+        note_skip(prefix, reason)
+        self
+      end
       def clear_skipped ; @skipped.clear ; self ; end
 
       def to_s
