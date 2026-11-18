@@ -1,3 +1,8 @@
+---
+title: Route reflection with bgp4rd (RFC 4456)
+tags: [bgp]
+role: main
+---
 # rr-lab
 
 Nine nodes and four BGP implementations, built to exercise route reflection, RFC 4456. `rr1`, a `bgp4rd` in AS 65100, reflects for cluster 1.1.1.1. Its clients are an FRR (`c1`), a BIRD (`c2`), a GoBGP (`c3`), a second `bgp4rd` (`dual`) and the injector `inj-c`. Its non-clients are the injector `inj-n` and `rr2`, an FRR reflecting for cluster 2.2.2.2 with `dual` as its client. `inj-e` in AS 65200 is its one external peer.

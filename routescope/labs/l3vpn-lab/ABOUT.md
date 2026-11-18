@@ -1,3 +1,8 @@
+---
+title: L3VPN over SR-MPLS, bgp4rd and FRR as PEs
+tags: [l3vpn, mpls, sr]
+role: main
+---
 # l3vpn-lab
 
 An L3VPN across an SR-MPLS core, with `bgp4rd` as one PE and FRR as the other (RFC 4364). AS 65000 runs IS-IS level 2 with SR-MPLS. `pe1` is isis4r plus `bgp4rd` (`pe1-bgp`, in pe1's namespace). `pe2` is FRR. The core has two paths: `p1` (isis4r, metric 10) and `p2` (FRR, metric 20). The two PEs exchange VPN routes through `p1-bgp`, a bgp4rd in p1's namespace that reflects them (RFC 4456), each peering with it from its loopback.

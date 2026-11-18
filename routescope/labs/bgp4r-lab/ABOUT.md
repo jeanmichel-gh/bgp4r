@@ -1,3 +1,8 @@
+---
+title: bgp4rd fed by injectors, beside FRR, BIRD and GoBGP
+tags: [bgp]
+role: main
+---
 # bgp4r-lab
 
 Seven nodes and four BGP implementations. Two bgp4r injectors, `inj1` and `inj2`, both in AS 65010, feed `rtr`, a `bgp4rd` router in AS 65000. `rtr` passes its best paths to an FRR and BIRD AS, 65001, and to a GoBGP of its own, `g1` in AS 65002.
