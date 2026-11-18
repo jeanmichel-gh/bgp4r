@@ -1845,8 +1845,6 @@ ruby -I. test/unit/specimen_test.rb
 which matters for two entries and for nothing else; `bgp/specimen.rb`
 has which two and why.
 
-Do not run `test/functional/live_feed_test.rb`. It connects to a public feed that no longer answers and hangs forever.
-
 In Docker, on any Ruby version (the default is 3.4):
 ```
 docker build --target test --build-arg RUBY_VERSION=4.0 -t bgp4r-test .
@@ -2086,6 +2084,13 @@ holds the full note.
 * A change to documents alone may have its own pull request: CI no
   longer costs money (2026-11-15, the repository is public). A small
   note may still ride with a code change on the same topic.
+* **A live test against a current live source** (2026-11-18). The old
+  one, `test/functional/live_feed_test.rb`, read a public feed that no
+  longer answers and hung, so it was removed. Its client,
+  `bgp/misc/live_feed.rb`, and `examples/a_live_feed` are still in the
+  tree. Not designed yet: choose a public BGP source that answers
+  today, check what it sends, and give the test a timeout so a silent
+  source fails rather than hangs.
 
 ### Phase 0, before the RIB work resumes. Done
 

@@ -85,18 +85,21 @@ class TestFeatures < Test::Unit::TestCase
     assert_match(/unknown area/, e.message)
   end
 
-  # The one file that must never run is excluded from the tagging rule,
-  # and `run_feature.rb` refuses it by name. Both halves, because either
-  # alone would let it run.
-  def test_the_file_that_must_never_run_is_named_and_excluded
-    assert_equal(['functional/live_feed_test'], Features::NEVER.keys)
-    path = 'test/functional/live_feed_test.rb'
-    assert(File.exist?(path), 'the file this excludes is still there')
-    assert(Features.never?(path))
-    assert_equal([], Features.features_of(path),
-                 'a file that must never run must carry no feature either')
-    assert_match(/hangs forever/, Features.never_reason(path))
-    assert_equal(false, Features.untagged.include?(path))
+  # A file that must never run is excluded from the tagging rule, and
+  # `run_feature.rb` refuses it by name. Both halves, because either
+  # alone would let it run. NEVER is empty today, so this checks the
+  # rule for any entry, and that the refusal is still there.
+  def test_a_file_that_must_never_run_is_named_and_excluded
+    Features::NEVER.each do |key, reason|
+      path = "test/#{key}.rb"
+      assert(File.exist?(path), "NEVER names #{path}, which is gone")
+      assert(Features.never?(path))
+      assert_equal([], Features.features_of(path),
+                   'a file that must never run must carry no feature either')
+      assert_equal(reason, Features.never_reason(path))
+      assert_equal(false, Features.untagged.include?(path))
+    end
+    assert_equal(false, File.exist?('test/functional/live_feed_test.rb'))
     assert_match(/refusing/, File.read('test/run_feature.rb'))
   end
 

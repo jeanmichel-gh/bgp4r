@@ -102,7 +102,7 @@ module FeaturesDoc
       ruby test/run_unit.rb                       # the whole unit suite
       ruby -I. test/unit/path_attributes/origin_test.rb   # one unit file
       ruby test/run_unit.rb && for f in test/functional/*_test.rb; do \\
-        [ "$f" = test/functional/live_feed_test.rb ] || ruby -I. "$f"; done
+        ruby -I. "$f"; done
       ```
 
       `-I.` is needed for a single file and not for `run_unit.rb`, which
@@ -110,15 +110,16 @@ module FeaturesDoc
       its own and in the suite: a missing `require` passes in the suite
       and fails alone, and a top-level `include` does the opposite.
 
-      ### The one file to never run
-
     MD
-      .+ Features::NEVER.map { |k, v| "`test/#{k}.rb` #{v}.\n" }.join +
-    <<~MD
+      .+ never_run
+  end
 
-      `run_feature.rb` refuses it by name. Nothing stops `ruby -I.` on it.
-
-    MD
+  # Printed only when Features::NEVER names a file, which today it does not.
+  def never_run
+    return '' if Features::NEVER.empty?
+    "### The one file to never run\n\n" +
+      Features::NEVER.map { |k, v| "`test/#{k}.rb` #{v}.\n" }.join +
+      "\n`run_feature.rb` refuses it by name. Nothing stops `ruby -I.` on it.\n\n"
   end
 
   def feature_table
