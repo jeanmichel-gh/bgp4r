@@ -567,7 +567,8 @@ class LabRrLabTopologyTest < Test::Unit::TestCase
     %w[65100 65200 1.1.1.1 2.2.2.2].each { |x| assert_include about, x }
     words = %w[zero one two three four five six seven eight nine ten]
     assert_match(/\b#{words.fetch(scenario_files.size)} scenarios in `scenarios\/`/i, about)
-    first = about.split(/\n\s*\n/).map(&:strip).find { |b| !b.empty? && !b.start_with?('#') }
+    # As routescope's summary: past the front matter and any heading.
+    first = about.sub(/\A---\n.*?^---\n/m, '').split(/\n\s*\n/).map(&:strip).find { |b| !b.empty? && !b.start_with?('#') }
     assert_match(/\bNine nodes and four BGP implementations\b/, first)
   end
 

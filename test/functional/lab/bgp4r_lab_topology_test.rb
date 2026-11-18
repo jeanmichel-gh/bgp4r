@@ -700,7 +700,8 @@ class LabBgp4rLabTopologyTest < Test::Unit::TestCase
     count = Dir.glob(File.join(DIR, 'scenarios', '*.yml')).size
     words = %w[zero one two three four five six seven eight nine ten]
     assert_match(/\b#{words.fetch(count)} scenarios in `scenarios\/`/i, about, 'ABOUT.md states another scenario count')
-    first = about.split(/\n\s*\n/).map(&:strip).find { |b| !b.empty? && !b.start_with?('#') }
+    # As routescope's summary: past the front matter and any heading.
+    first = about.sub(/\A---\n.*?^---\n/m, '').split(/\n\s*\n/).map(&:strip).find { |b| !b.empty? && !b.start_with?('#') }
     assert_match(/\bSeven nodes and four BGP implementations\b/, first)
   end
 

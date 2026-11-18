@@ -1,3 +1,8 @@
+---
+title: Four bgp4rd routers forwarding over eBGP
+tags: [bgp]
+role: main
+---
 # fwd-lab
 
 Four `bgp4rd` routers, each in its own AS, peering eBGP, and installing what they learn in the kernel's main table so packets really cross them. `a` (AS 65001) pings `d` (AS 65004) from loopback 10.255.0.1 to 10.255.0.4. `b` (AS 65002) has two ways to reach `d`: the direct link, and through `c` (AS 65003).
