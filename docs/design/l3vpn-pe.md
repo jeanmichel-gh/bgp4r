@@ -606,7 +606,54 @@ neighbors:
     as: 65101
     vrf: A
     as_override: true
+    soo: "65000:11"           # Site of Origin, optional
 ```
+
+### The design, pull request 7
+
+Measured on `l3vpn-lab`'s pe1 (kernel 7.0), 2026-11-18, before writing
+it:
+
+- A TCP socket with `SO_BINDTODEVICE` set to the VRF device reaches a CE
+  in that VRF; an unbound one gets `ENETUNREACH`.
+- `net.ipv4.tcp_l3mdev_accept` is 0, so the speaker's one listener, on
+  0.0.0.0 in the default VRF, never sees a CE's connection. A listener
+  bound to the VRF device accepts it. So **each VRF with a passive CE
+  neighbor gets a listener of its own**, on the same port.
+
+The pieces:
+
+1. **The session.** A neighbor with `vrf:` dials with its socket bound
+   to the VRF device and no source address, so the kernel takes the
+   VRF interface's. Its session is attached to nothing global: not the
+   RIB, not the VPN table, not BGP-LS, and the speaker's `announce`
+   blocks are not sent to it. Its NEXT_HOP is its own address on that
+   socket.
+2. **The VRF's CE routes** (`Rib::VrfCeTable`). A `PeerAdapter` reads
+   the CE's unicast UPDATEs into a table per VRF, one decision per
+   prefix across that VRF's CEs, the CE's own Adj-RIB-In cleared when
+   its session ends (RFC 4271 section 6). The decision drops a route
+   whose AS_PATH holds our AS (`as_loop`).
+3. **Into the VRF's kernel table.** A CE route is installed as `ip route
+   replace vrf A P via CE proto bgp`. **A CE route wins over a VPN route
+   for the same prefix**, as an eBGP route wins over an iBGP one. The
+   read-back compares the gateway, and the device only when bgp4rd
+   named one.
+4. **Out as VPN routes.** The VRF's best CE routes join its connected
+   and configured prefixes in `exports`, carrying the CE's AS_PATH and
+   ORIGIN, and the neighbor's `soo:` as a Route Origin extended
+   community (RFC 4360 section 5) beside the Route Targets.
+5. **Back to the CE** (`Daemon::VrfCeExporter`). Each CE gets its VRF's
+   installed routes: the imported VPN routes and the other CEs' routes,
+   never its own (split horizon), and not a route whose Site of Origin
+   is its own `soo:`. Our AS is prepended. With `as_override`, each
+   occurrence of the CE's AS in the path is our AS first: RFC 4364
+   section 7's "it will be stripped out by the PE". IPv4 only: an IPv6
+   route to a CE needs an IPv6 next hop on that link, which comes later.
+   Sent after each VRF sync, the difference only, and all of it when the
+   session comes up.
+
+`show.vrf` lists a CE route with `transport` `ce` and `peer` the CE.
 
 ## Tests
 
