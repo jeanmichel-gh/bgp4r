@@ -158,6 +158,17 @@ module BGP
         end.sort_by { |r| [r['rd'], prefix_order(r['prefix']), r['peer'].to_s, r['path_id'].to_i] }
       end
 
+      # How many routes one peer sent, per family: { 'vpn-ipv4' => n,
+      # 'vpn-ipv6' => m }, a family with none left out. For the peer's
+      # `families` in `show.peers`.
+      def counts(peer)
+        @lock.synchronize do
+          (@in[peer] || {}).each_value.with_object(Hash.new(0)) do |e, h|
+            h[e.vpn_route.prefix.include?(':') ? 'vpn-ipv6' : 'vpn-ipv4'] += 1
+          end
+        end
+      end
+
       # Starts reading what neighbor receives: one call per session.
       def attach(neighbor)
         feed = Feed.new(self, neighbor)
@@ -203,8 +214,9 @@ module BGP
         result = @best[[v.rd, v.prefix]]
         { 'rd' => v.rd, 'prefix' => v.prefix, 'path_id' => v.path_id,
           'peer' => peer, 'next_hop' => r.next_hop, 'labels' => v.labels,
-          'route_targets' => v.route_targets, 'as_path' => r.as_path,
+          'route_targets' => v.route_targets, 'soo' => v.soo, 'as_path' => r.as_path,
           'origin' => r.origin, 'local_pref' => r.local_pref, 'med' => r.med,
+          'originator_id' => r.originator_id, 'cluster_list' => r.cluster_list,
           'best' => !result.nil? && result.best.equal?(r),
           'reason' => result && result.best.equal?(r) ? result.reason.to_s : (result && result.eliminated[r]).to_s,
           'since' => e.since.utc.strftime('%Y-%m-%dT%H:%M:%S.%LZ') }

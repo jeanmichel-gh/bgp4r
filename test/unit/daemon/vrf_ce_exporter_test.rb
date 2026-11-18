@@ -120,6 +120,14 @@ class TestBgpDaemonVrfCeExporter < Test::Unit::TestCase
     assert_equal([[:withdraw, '172.16.3.0/24']], @ce1.read)
   end
 
+  # How many routes a CE was sent, for show.peers.
+  def test_size_is_what_a_ce_was_sent
+    assert_equal(0, @exporter.size('192.168.1.2'))
+    @exporter.refresh
+    assert_equal(2, @exporter.size('192.168.1.2'))
+    assert_equal(0, @exporter.size('10.255.0.3'))
+  end
+
   # A CE that went down forgets what it was sent, so it gets all of it
   # when it is back.
   def test_a_ce_that_comes_back_gets_everything

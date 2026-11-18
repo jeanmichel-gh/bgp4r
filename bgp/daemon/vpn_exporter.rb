@@ -94,9 +94,23 @@ module BGP
           @sent.values.collect do |s|
             e = s.export
             { 'rd' => e.rd, 'prefix' => e.prefix, 'path_id' => nil, 'peer' => nil, 'next_hop' => nh,
-              'labels' => [e.label], 'route_targets' => e.route_targets, 'as_path' => 'empty', 'origin' => 0,
-              'local_pref' => 100, 'med' => nil, 'best' => true, 'reason' => 'local', 'vrf' => e.vrf,
+              'labels' => [e.label], 'route_targets' => e.route_targets, 'soo' => e.soo, 'as_path' => 'empty',
+              'origin' => 0, 'local_pref' => 100, 'med' => nil, 'originator_id' => nil, 'cluster_list' => [],
+              'best' => true, 'reason' => 'local', 'vrf' => e.vrf,
               'since' => s.since.utc.strftime('%Y-%m-%dT%H:%M:%S.%LZ') }
+          end
+        end
+      end
+
+      # How many routes peer was sent, per family, as VpnTable#counts
+      # answers: every route of a family the established session
+      # negotiated, since each goes to every such session.
+      def sent_counts(peer)
+        ok = afis(peer)
+        @lock.synchronize do
+          @sent.each_value.with_object(Hash.new(0)) do |s, h|
+            a = afi(s.export)
+            h[a == 2 ? 'vpn-ipv6' : 'vpn-ipv4'] += 1 if ok.include?(a)
           end
         end
       end

@@ -229,5 +229,23 @@ class TestBgpDaemonVpnExporter < Test::Unit::TestCase
                   ['65000:1', '192.168.1.0/30', nil, '10.255.0.1', [24000], 'local', 'A']],
                  rows.collect { |r| r.values_at('rd', 'prefix', 'peer', 'next_hop', 'labels', 'reason', 'vrf') })
     assert_equal(2, @exporter.size)
+    assert_equal([[nil, nil, []], [nil, nil, []]], rows.collect { |r| r.values_at('soo', 'originator_id', 'cluster_list') })
+  end
+
+  def test_a_ce_routes_row_carries_its_site_of_origin
+    ce = Export.new('A', '65000:1', '172.16.1.0/24', 24000, ['65000:100'], [65101], 2, '65000:11')
+    @exporter.refresh([ce])
+    assert_equal('65000:11', @exporter.rows.first['soo'])
+  end
+
+  # Per family, what each session was sent: a VRF's routes go to every
+  # established session that negotiated their family.
+  def test_sent_counts_are_per_family_and_per_session
+    @pe2.session_info = session_info(true, vpn6: true)
+    @exporter.refresh([a1, a2, a6])
+    assert_equal({ 'vpn-ipv4' => 2, 'vpn-ipv6' => 1 }, @exporter.sent_counts(@pe2))
+    assert_equal({}, @exporter.sent_counts(@plain))
+    @pe2.up = false
+    assert_equal({}, @exporter.sent_counts(@pe2))
   end
 end

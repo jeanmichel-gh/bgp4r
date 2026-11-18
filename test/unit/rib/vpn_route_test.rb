@@ -59,4 +59,14 @@ class TestBgpRibVpnRoute < Test::Unit::TestCase
     v = route(BGP::Route_origin.new(65000, 5), BGP::Route_target.new(65000, 100))
     assert_equal(['65000:100'], v.route_targets)
   end
+
+  # RFC 4364 section 7: "The Site of Origin attribute, if used, is
+  # encoded as a Route Origin Extended Community" (RFC 4360 section 5).
+  # Read apart from the Route Targets.
+  def test_the_site_of_origin_is_the_first_route_origin
+    v = route(BGP::Route_target.new(65000, 100), BGP::Route_origin.new(65000, 11), BGP::Route_origin.new(65000, 12))
+    assert_equal('65000:11', v.soo)
+    assert_nil(route(BGP::Route_target.new(65000, 100)).soo)
+    assert_nil(route.soo)
+  end
 end

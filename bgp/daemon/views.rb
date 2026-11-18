@@ -299,12 +299,51 @@ module BGP
           # something is. See bgp/daemon/hand.rb.
           hand = @speaker.hand.count(peer.address)
           row = row.merge(:hand => hand) unless hand.zero?
+          # A CE's VRF, and the counts of each family the session carries,
+          # present only on a CE's row or a session with a VPN family, so
+          # a unicast speaker's rows read as they always have.
+          # routescope's l3vpn-views spec, pull request 1.
+          row = row.merge(:vrf => peer.vrf) if peer.vrf
+          fams = families(peer, row)
+          row = row.merge(:families => fams) if fams
           # Whether this peer is a client of ours, RFC 4456 section 6,
           # present only on a reflector, as `hand` is present only when
           # there is some: a row on a speaker that reflects nothing reads
           # as it always has.
           reflector ? row.merge(:route_reflector_client => client?(peer)) : row
         end
+      end
+
+      # What one peer received and was sent, per family, or nil.
+      #
+      # A CE's session is IPv4 unicast in its VRF, outside the RIB, so its
+      # counts come from the CE table and what goes back to the CE: its
+      # `received` above, which is the RIB's, stays 0. A session that
+      # negotiated VPN-IPv4 or VPN-IPv6 lists `unicast`, which is the
+      # row's own `received` and `sent` (IPv4 and IPv6 together, as the
+      # RIB counts them), then each VPN family: received from the VPN
+      # table, sent by this PE's VRFs and by the reflector.
+      def families(peer, row)
+        return [ce_family(peer)] if peer.vrf
+        vpn = peer.established? ? BGP::Rib::VpnTable.families(peer.session_info) : []
+        return nil if vpn.empty?
+        received = @speaker.vpn ? @speaker.vpn.counts(peer.address) : {}
+        sent = Hash.new(0)
+        [@speaker.vpn_exporter && @speaker.vpn_exporter.sent_counts(peer),
+         @speaker.vpn_reflector && @speaker.vpn_reflector.sent_counts(peer.address)].compact.each do |h|
+          h.each { |name, n| sent[name] += n }
+        end
+        [{ :family => 'unicast', :received => row[:received], :sent => row[:sent] }] +
+          vpn.collect do |afi, _safi|
+            name = afi == 2 ? 'vpn-ipv6' : 'vpn-ipv4'
+            { :family => name, :received => received.fetch(name, 0), :sent => sent[name] }
+          end
+      end
+
+      def ce_family(peer)
+        ce, out = @speaker.ce_table, @speaker.vrf_ce_exporter
+        { :family => 'ipv4', :received => ce ? ce.received(peer.vrf, peer.address) : 0,
+          :sent => out ? out.size(peer.address) : 0 }
       end
 
       # The export rules when this speaker reflects, or nil.
