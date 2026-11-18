@@ -24,6 +24,7 @@ require 'bgp/version'
 require 'bgp/capture/pcap'
 require 'bgp/capture/dissect'
 require 'bgp/capture/stream'
+require 'bgp/capture/sessions'
 
 module BGP
   module Capture
@@ -549,12 +550,15 @@ See docs/daemon.md.
                                   :filter => opts[:file] ? nil : opts[:filter],
                                   :unit => 'message' })
         stream = Stream.new
+        sessions = Sessions.new
         seq = 0
         reader.each do |rec|
           seg = Dissect.segment(rec.data, :link => link)
           stream.push(seg).each do |msg|
             seq += 1
-            d = Dissect.message(msg.octets).to_h
+            sessions.saw(msg.flow, msg.octets)
+            as4 = sessions.as4byte(msg.flow)
+            d = Dissect.message(msg.octets, :as4byte => as4, :from => 'open').to_h
             d[:errors] = msg.errors + d[:errors]
             @out.puts JSON.generate({ :packet =>
               { :seq => seq, :time => rec.time.utc.iso8601(6), :flow => msg.flow,

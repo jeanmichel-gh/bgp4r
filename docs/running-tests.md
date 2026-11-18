@@ -19,7 +19,7 @@ amounts. Measured 2026-11-03:
 
 | Tier | What it needs | Files | Time | Command |
 |---|---|---:|---|---|
-| unit | Ruby | 174 | 21s | `ruby test/run_unit.rb` |
+| unit | Ruby | 175 | 21s | `ruby test/run_unit.rb` |
 | functional | a loopback socket | 18 | 18s | one file at a time, below |
 | lab | gobgpd, FRR, Docker or root | 35 | 10s to 400s per group | `ruby test/run_lab.rb GROUP` |
 
@@ -130,7 +130,7 @@ The four executables.
 | `routegen` | 2 | 1 | 3 | Generating many prefixes and packing them into UPDATEs |
 | `console` | 6 | 2 | 0 | An irb prompt on bgp4r: bgp4r console, routegen, sim and bgp4rd --interact |
 | `gen` | 18 | 1 | 2 | bgp/gen: UPDATEs and withdrawals from a spec, and what they meant |
-| `capture` | 4 | 0 | 0 | Reading BGP off a wire or a pcap file, and bgp4r lab new |
+| `capture` | 5 | 0 | 0 | Reading BGP off a wire or a pcap file, and bgp4r lab new |
 | `speaker` | 1 | 0 | 6 | lab/speaker.rb and the five topologies under lab/topologies |
 | `events` | 2 | 0 | 0 | The structured event stream both programs serve |
 | `logging` | 1 | 0 | 1 | The injected logger, the process log and the log level |
@@ -195,7 +195,7 @@ ruby test/run_feature.rb bgp-ls
 Reading BGP off a wire or a pcap file, and bgp4r lab new.
 
 - Read first: `docs/daemon.md`
-- 4 unit files
+- 5 unit files
 
 ```
 ruby test/run_feature.rb capture
@@ -860,5 +860,5 @@ test file has to be tagged before the suite is green again, which is
 the same arrangement `test/unit/lab_groups_test.rb` has with the CI
 matrix.
 
-227 of 227 test files are tagged. The
+228 of 228 test files are tagged. The
 remainder, if any, is what the guard names.

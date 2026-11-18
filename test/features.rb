@@ -423,7 +423,7 @@ module Features
       :about => 'Reading BGP off a wire or a pcap file, and bgp4r lab new',
       :doc   => 'docs/daemon.md',
       :unit  => %w[capture/pcap_test capture/stream_test capture/dissect_test
-                   capture/cli_test],
+                   capture/cli_test capture/as4_test],
     },
 
     'speaker' => {

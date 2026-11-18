@@ -1921,6 +1921,17 @@ checksum on every frame it sent, so verifying it would fill an ordinary
 lab capture with false errors. RFC 4271 gives a message no checksum of
 its own. The `check` key of ospfv2's field shape is carried and unused.
 
+**An UPDATE is read with its session's AS number size.** RFC 6793
+section 3: AS_PATH and AGGREGATOR carry 4-octet AS numbers when both
+OPENs of the session carried the 4-octet AS capability, and nothing in
+the UPDATE says which. `bgp/capture/sessions.rb` notes each connection's
+OPENs, both directions of one flow, and the UPDATE is read to match. A
+capture that started after the OPENs, which is how a console opens one
+on a lab that is already up, reads it with 4 octets, then 2, and keeps
+the reading with fewer findings, so a real fault is still reported. An
+UPDATE's `packet` line says which with two keys: `as_octets`, 2 or 4,
+and `as_octets_from`, `open` or `guess`.
+
 **Three kinds of entry land in the one `errors` list**, and the wording is
 what tells them apart, since the envelope has one channel: a finding from
 `validation.rb` says the sender got something wrong, and a decoder that
