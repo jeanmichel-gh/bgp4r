@@ -19,7 +19,7 @@ amounts. Measured 2026-11-03:
 
 | Tier | What it needs | Files | Time | Command |
 |---|---|---:|---|---|
-| unit | Ruby | 172 | 21s | `ruby test/run_unit.rb` |
+| unit | Ruby | 171 | 21s | `ruby test/run_unit.rb` |
 | functional | a loopback socket | 18 | 18s | one file at a time, below |
 | lab | gobgpd, FRR, Docker or root | 35 | 10s to 400s per group | `ruby test/run_lab.rb GROUP` |
 
@@ -134,7 +134,6 @@ The four executables.
 | `speaker` | 1 | 0 | 6 | lab/speaker.rb and the five topologies under lab/topologies |
 | `events` | 2 | 0 | 0 | The structured event stream both programs serve |
 | `logging` | 1 | 0 | 1 | The injected logger, the process log and the log level |
-| `live-feed` | 1 | 0 | 0 | The client for an old public BGP feed, which no longer answers |
 
 ### contracts
 
@@ -377,16 +376,6 @@ Labelled unicast, SAFI 4, and the label stack.
 
 ```
 ruby test/run_feature.rb labelled
-```
-
-### `live-feed`
-
-The client for an old public BGP feed, which no longer answers.
-
-- 1 unit file
-
-```
-ruby test/run_feature.rb live-feed
 ```
 
 ### `logging`
@@ -871,5 +860,5 @@ test file has to be tagged before the suite is green again, which is
 the same arrangement `test/unit/lab_groups_test.rb` has with the CI
 matrix.
 
-225 of 225 test files are tagged. The
+224 of 224 test files are tagged. The
 remainder, if any, is what the guard names.

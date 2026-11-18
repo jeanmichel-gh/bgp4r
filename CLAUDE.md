@@ -690,7 +690,7 @@ bgp/prompt.rb            `BGP::Prompt`, the parts of an irb prompt that do
                          without loading the injector**, and
                          test/unit/prompt_test.rb loads it alone in a child
                          to hold that
-bgp/misc/                extras: route_generator.rb (many prefixes packed in UPDATEs), live_feed.rb (a client for an old public BGP feed)
+bgp/misc/                extras: route_generator.rb (many prefixes packed in UPDATEs)
 exe/bgp4r                the umbrella command, with `capture`, `sim`,
                          `routegen`, `console`, `lab new` and `version`.
                          `sim`, `routegen` and `console`
@@ -2086,11 +2086,11 @@ holds the full note.
   note may still ride with a code change on the same topic.
 * **A live test against a current live source** (2026-11-18). The old
   one, `test/functional/live_feed_test.rb`, read a public feed that no
-  longer answers and hung, so it was removed. Its client,
-  `bgp/misc/live_feed.rb`, and `examples/a_live_feed` are still in the
-  tree. Not designed yet: choose a public BGP source that answers
-  today, check what it sends, and give the test a timeout so a silent
-  source fails rather than hangs.
+  longer answers and hung. It was removed with its client,
+  `bgp/misc/live_feed.rb`, and `examples/a_live_feed`. Not designed
+  yet: choose a public BGP source that answers today, check what it
+  sends, and give the test a timeout so a silent source fails rather
+  than hangs.
 
 ### Phase 0, before the RIB work resumes. Done
 

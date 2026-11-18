@@ -447,15 +447,6 @@ module Features
       :lab   => %w[log_level_test],
     },
 
-    # `bgp/misc/live_feed.rb` is a client for a public feed that no
-    # longer answers. Its unit test never dials, so it still runs. The
-    # functional test dialled the feed and hung, and was removed.
-    'live-feed' => {
-      :area  => 'programs',
-      :about => 'The client for an old public BGP feed, which no longer answers',
-      :unit  => %w[misc/live_feed_test],
-    },
-
     # ---- contracts --------------------------------------------------
 
     'contracts' => {
