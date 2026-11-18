@@ -14,6 +14,10 @@
 # between the PEs' loopbacks. VRF A joins ce1a and ce2a, VRF B ce1b and
 # ce2b, on the same addresses: 192.168.1.0/24 at pe1, 192.168.2.0/24 at
 # pe2. RD 65000:1 and RT 65000:100 for A, 65000:2 and 65000:200 for B.
+# ce1a and ce2a run bgp4rd in AS 65101, one ASN for every site: each
+# announces its site, 172.16.1.0/24 and 172.16.2.0/24, by eBGP to its PE
+# inside VRF A, and each PE replaces 65101 by 65000 in what it sends
+# back (AS override, RFC 4364 section 7). ce1b and ce2b are plain hosts.
 # IPv6 too, as VPN-IPv6 (RFC 4659) over the same IPv4 core:
 # 2001:db8:1::/64 at pe1, 2001:db8:2::/64 at pe2, in both VRFs.
 #
@@ -94,13 +98,14 @@ topology:
         - sh -c "ip link add A type vrf table 100; ip link set A up; ip link set eth3 master A; ip addr add 192.168.2.1/24 dev eth3; ip -6 addr add 2001:db8:2::1/64 dev eth3"
         - sh -c "ip link add B type vrf table 200; ip link set B up; ip link set eth4 master B; ip addr add 192.168.2.1/24 dev eth4; ip -6 addr add 2001:db8:2::1/64 dev eth4"
     # --- The customer sites: plain Linux, a default route to the PE --
+    # A CE that runs bgp4rd: eBGP to its PE inside VRF A (pull request 7).
     ce1a:
       kind: linux
-      image: isis4r:latest
-      labels: { routescope.kind: linux }
-      entrypoint: sleep
-      cmd: infinity
-      exec: ["ip addr add 192.168.1.2/24 dev eth1", "ip route replace default via 192.168.1.1",
+      image: bgp4r-lab:latest
+      labels: { routescope.kind: bgp4r, routescope.protocols: bgp }
+      binds: [ce1a/bgp4rd.yml:/etc/bgp4r/bgp4rd.yml]
+      cmd: exe/bgp4rd -f /etc/bgp4r/bgp4rd.yml -s /run/bgp4r/bgp4rd.sock -l -
+      exec: ["ip addr add 192.168.1.2/24 dev eth1", "ip addr add 172.16.1.1/24 dev lo",
              "ip -6 addr add 2001:db8:1::2/64 dev eth1", "ip -6 route replace default via 2001:db8:1::1"]
     ce1b:
       kind: linux
@@ -110,13 +115,14 @@ topology:
       cmd: infinity
       exec: ["ip addr add 192.168.1.2/24 dev eth1", "ip route replace default via 192.168.1.1",
              "ip -6 addr add 2001:db8:1::2/64 dev eth1", "ip -6 route replace default via 2001:db8:1::1"]
+    # A CE that runs bgp4rd: eBGP to its PE inside VRF A (pull request 7).
     ce2a:
       kind: linux
-      image: isis4r:latest
-      labels: { routescope.kind: linux }
-      entrypoint: sleep
-      cmd: infinity
-      exec: ["ip addr add 192.168.2.2/24 dev eth1", "ip route replace default via 192.168.2.1",
+      image: bgp4r-lab:latest
+      labels: { routescope.kind: bgp4r, routescope.protocols: bgp }
+      binds: [ce2a/bgp4rd.yml:/etc/bgp4r/bgp4rd.yml]
+      cmd: exe/bgp4rd -f /etc/bgp4r/bgp4rd.yml -s /run/bgp4r/bgp4rd.sock -l -
+      exec: ["ip addr add 192.168.2.2/24 dev eth1", "ip addr add 172.16.2.1/24 dev lo",
              "ip -6 addr add 2001:db8:2::2/64 dev eth1", "ip -6 route replace default via 2001:db8:2::1"]
     ce2b:
       kind: linux

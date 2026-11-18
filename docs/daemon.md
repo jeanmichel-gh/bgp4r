@@ -448,6 +448,28 @@ synced again every 5 seconds. A next hop that is a real IPv6 address
 needs an IPv6 transport, which bgp4rd does not have: the route is
 unreachable and the row says so. `docs/design/l3vpn-pe.md`, decision 6.
 
+**CEs by eBGP** (RFC 4364 section 7, pull request 7). A neighbor with
+`vrf:` is a CE in that VRF:
+
+```yaml
+neighbors:
+  - { address: 192.168.1.2, as: 65101, vrf: A, as_override: true, soo: "65000:11" }
+```
+
+Its session is bound to the VRF device (`SO_BINDTODEVICE`), dialled or
+accepted on a listener of that VRF's own, since a listener in the
+default VRF never sees it. It is attached to nothing global: not the
+RIB, the VPN table or BGP-LS, and the `announce` blocks are not sent to
+it. Its routes go into the VRF: installed as `ip route replace vrf A P
+via CE proto bgp`, winning over a VPN route for the same prefix, and
+sent as VPN routes with the CE's AS_PATH and ORIGIN and `soo:` as a
+Route Origin extended community. Each CE gets the VRF's installed
+routes back, IPv4 only, with our AS first: never its own routes, never
+one whose Site of Origin is its own, and with `as_override` its AS
+replaced by ours, so every site can use one ASN. `show.vrf` lists a CE
+route with `transport` `ce`. A `vrf:` that is not in `vrfs:` stops
+bgp4rd at start.
+
 **A table is always on, which `lab/speaker.rb` differs from.** `rib`
 defaults to true here, because a daemon is a router by definition and
 `show.routes` has to answer; in the lab speaker a table has to be asked

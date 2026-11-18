@@ -120,7 +120,10 @@ class TestBgpRibL3vpn < Test::Unit::TestCase
         w = rest.split
         at = ->(word) { (i = w.index(word)) && w[i + 1] }
         dst = prefix.end_with?('/32', '/128') ? prefix.split('/').first : prefix
-        row = { 'dst' => dst, 'encap' => { 'encap_type' => 'mpls', 'dst' => at.call('mpls') }, 'dev' => at.call('dev'), 'flags' => [] }
+        # A CE route is sent with its gateway alone; the kernel names the
+        # device on the VRF's link to it.
+        row = { 'dst' => dst, 'dev' => at.call('dev') || 'eth3', 'flags' => [] }
+        row['encap'] = { 'encap_type' => 'mpls', 'dst' => at.call('mpls') } if at.call('mpls')
         row['gateway'] = at.call('via') if at.call('via')
         row
       end
@@ -212,7 +215,78 @@ class TestBgpRibL3vpn < Test::Unit::TestCase
   def l3vpn(transport: {}, labels: nil, logger: nil)
     BGP::Rib::L3vpn.new(vpn_table: @table, vrfs: @vrfs, local_as: 65000, router_id: '10.255.0.1',
                         transport: BGP::Rib::VpnTransport.from_config(transport, runner: @kernel),
-                        fib: BGP::Rib::VrfFib.new(runner: @kernel), labels: labels, logger: logger)
+                        fib: BGP::Rib::VrfFib.new(runner: @kernel), labels: labels, logger: logger,
+                        ce_table: @ces)
+  end
+
+  # --- CEs, pull request 7 ------------------------------------------------
+
+  def ce_route(prefix, from: '192.168.1.2', path: [65101], origin: 0)
+    pa = BGP::Path_attribute.new(BGP::Origin.new(origin), BGP::As_path.new(*path), BGP::Next_hop.new(from))
+    BGP::Rib::Route.new(prefix, pa, BGP::Rib::Peer.new(:address => from, :remote_as => path.first,
+                                                       :router_id => from, :local_as => 65000))
+  end
+
+  def with_ces
+    @ces = BGP::Rib::VrfCeTable.new(local_as: 65000, router_id: '10.255.0.1')
+  end
+
+  def ce_announce(vrf, prefix, **opts)
+    r = ce_route(prefix, **opts)
+    @ces.apply(vrf, r.peer.address, [[:announce, r]])
+    @ces.site(r.peer.address, '65000:11')
+  end
+
+  def test_a_ce_route_is_installed_via_the_ce
+    with_ces
+    ce_announce('A', '172.16.1.0/24')
+    l = l3vpn.start
+    assert_equal('via 192.168.1.2 proto bgp', @kernel.routes['A']['172.16.1.0/24'])
+    r = l.rows('A').first
+    assert_equal(['ce', '192.168.1.2', '192.168.1.2', true], r.values_at('transport', 'peer', 'gateway', 'installed'))
+    n = @kernel.sent.size
+    l.sync!
+    assert_equal(n, @kernel.sent.size, 'the kernel named the device; still the same route')
+  end
+
+  # An eBGP route from the site wins over an iBGP VPN route to it.
+  def test_a_ce_route_wins_over_a_vpn_route
+    with_ces
+    announce('10.255.0.3', [65000, 1], '172.16.1.0/24', 24001, [65000, 100])
+    ce_announce('A', '172.16.1.0/24')
+    l = l3vpn.start
+    assert_equal('via 192.168.1.2 proto bgp', @kernel.routes['A']['172.16.1.0/24'])
+    assert_equal(['ce'], l.rows('A').collect { |r| r['transport'] })
+    assert_equal([['172.16.1.0/24', '192.168.1.2']], l.installed('A').collect { |i| [i.prefix, i.ce] })
+  end
+
+  # Step 4: out as a VPN route, with the CE's AS_PATH and ORIGIN and the
+  # neighbor's Site of Origin.
+  def test_a_ce_route_is_exported_with_its_path
+    exporting
+    with_ces
+    ce_announce('A', '172.16.7.0/24', path: [65101, 65201], origin: 2)
+    l = l3vpn(labels: LABELS).start
+    e = l.exports.find { |x| x.prefix == '172.16.7.0/24' }
+    assert_equal(['65000:1', 24000, [65101, 65201], 2, '65000:11'], [e.rd, e.label, e.as_path, e.origin, e.soo])
+  end
+
+  def test_a_ce_route_the_kernel_refused_is_not_exported
+    exporting
+    with_ces
+    ce_announce('A', '172.16.7.0/24')
+    @kernel.refuse = 'route replace vrf A 172.16.7.0/24'
+    l = l3vpn(labels: LABELS).start
+    assert_nil(l.exports.find { |x| x.prefix == '172.16.7.0/24' })
+    assert_equal([], l.installed('A').collect(&:prefix).grep('172.16.7.0/24'))
+  end
+
+  def test_the_vpn_routes_a_vrf_installed_are_listed_for_its_ces
+    with_ces
+    announce('10.255.0.3', [65000, 1], '192.168.2.0/30', 24001, [65000, 100])
+    l = l3vpn.start
+    i = l.installed('A').first
+    assert_equal(['192.168.2.0/30', nil, ''], [i.prefix, i.ce, i.route.as_path.sub('empty', '')])
   end
 
   # --- export, pull request 3 ---------------------------------------------
@@ -245,7 +319,8 @@ class TestBgpRibL3vpn < Test::Unit::TestCase
     l = l3vpn(labels: LABELS).start
     assert_equal([['A', '65000:1', '172.16.1.0/24', 24000, ['65000:100']],
                   ['A', '65000:1', '192.168.1.0/30', 24000, ['65000:100']]],
-                 l.exports.collect(&:to_a))
+                 l.exports.collect { |e| e.to_a.first(5) })
+    assert_equal([nil], l.exports.collect(&:as_path).uniq, 'ours: no CE path')
   end
 
   def test_an_unusable_device_takes_its_label_and_its_routes

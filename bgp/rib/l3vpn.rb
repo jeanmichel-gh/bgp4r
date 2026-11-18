@@ -70,9 +70,20 @@ module BGP
       # One VPN route this PE sends: section 4.3.2, its own address as
       # next hop (added by the exporter), the VRF's RD, label and Export
       # Targets.
-      Export = Struct.new(:vrf, :rd, :prefix, :label, :route_targets) do
+      #
+      # as_path and origin are a CE route's (pull request 7): the AS
+      # numbers, first is nearest, and its ORIGIN; nil for a connected or
+      # configured prefix, which is ours. soo is the CE neighbor's Site of
+      # Origin, "65000:11", or nil (RFC 4364 section 7).
+      Export = Struct.new(:vrf, :rd, :prefix, :label, :route_targets, :as_path, :origin, :soo) do
         def key ; [rd, prefix] ; end
       end
+
+      # One route a VRF has installed, for what is sent back to its CEs
+      # (Daemon::VrfCeExporter, pull request 7). route is the Rib::Route;
+      # ce the CE it came from, or nil for a VPN route; soo its Site of
+      # Origin, from the CE neighbor or the VPN route's Route Origin.
+      Installed = Struct.new(:prefix, :route, :ce, :soo)
 
       attr_reader :vrfs, :transport, :labels
 
@@ -94,8 +105,13 @@ module BGP
         exporting.each_with_index.to_h { |v, i| [v.name, start + i] }
       end
 
-      def initialize(vpn_table:, vrfs:, transport:, local_as:, router_id:, labels: nil, fib: VrfFib.new, logger: nil)
+      # ce_table: the CEs' routes, a VrfCeTable, or nil with no CE
+      # neighbor (pull request 7).
+      def initialize(vpn_table:, vrfs:, transport:, local_as:, router_id:, labels: nil, fib: VrfFib.new, logger: nil,
+                     ce_table: nil)
         @vpn_table = vpn_table
+        @ce_table = ce_table
+        @chosen = {}                                # vrf name => { prefix => Installed }
         @vrfs = vrfs
         @transport = transport
         @fib = fib
@@ -179,6 +195,12 @@ module BGP
 
       def syncs ; @lock.synchronize { @syncs } ; end
 
+      # The routes vrf has in the kernel, CE and VPN, as Installed: what
+      # its CEs are sent (pull request 7).
+      def installed(vrf)
+        @lock.synchronize { installed_unlocked(vrf.to_s) }
+      end
+
       # True when a route is not installed only because its gateway's MAC
       # is not known yet (VpnTransport::NO_ARP): VrfSync tries again soon.
       def waiting?
@@ -228,6 +250,7 @@ module BGP
         end
         want = {}
         rows = []
+        chosen_routes = {}
         winners.select { |w| v.imports?(w.route_targets) }.group_by(&:prefix).each do |prefix, list|
           v6 = prefix.include?(':')
           result = decisions[v6].best(list.collect(&:route))
@@ -242,12 +265,30 @@ module BGP
           if chosen
             stack = Array(h.labels) + w.labels
             want[prefix] = Want.new(w, h, stack, @fib.install_argv(v.name, prefix, stack, h))
+            chosen_routes[prefix] = Installed.new(prefix, w.route, nil, VrfCeTable.soo_of(w.route))
           else
             row['error'] = h.error || result.reason.to_s
           end
           rows << row
         end
+        ce_wanted(v, want, rows, chosen_routes)
+        @chosen[v.name] = chosen_routes
         [want, rows.sort_by { |r| prefix_order(r['prefix']) }]
+      end
+
+      # Pull request 7: the VRF's CE routes, which win over a VPN route for
+      # the same prefix, as an eBGP route over an iBGP one. Lock held.
+      def ce_wanted(v, want, rows, chosen_routes)
+        return unless @ce_table
+        @ce_table.best(v.name).each do |b|
+          rows.reject! { |r| r['prefix'] == b.prefix }
+          gw = b.route.next_hop.to_s
+          want[b.prefix] = Want.new(nil, nil, [], @fib.ce_install_argv(v.name, b.prefix, gw))
+          chosen_routes[b.prefix] = Installed.new(b.prefix, b.route, b.peer, b.soo)
+          rows << { 'vrf' => v.name, 'prefix' => b.prefix, 'rd' => nil, 'peer' => b.peer, 'next_hop' => gw,
+                    'vpn_labels' => [], 'transport' => 'ce', 'transport_labels' => [], 'gateway' => gw, 'dev' => nil,
+                    'gateway_from' => nil, 'candidates' => 1, 'installed' => false, 'error' => nil }
+        end
       end
 
       # The VRF's label route, and the VPN routes it sends. Lock held.
@@ -271,7 +312,17 @@ module BGP
           end
         end
         prefixes = (connected(v) + v.prefixes).uniq
-        @exports[v.name] = prefixes.collect { |p| Export.new(v.name, v.rd, p, label, v.export) }
+        own = prefixes.collect { |p| Export.new(v.name, v.rd, p, label, v.export) }
+        ces = installed_unlocked(v.name).select(&:ce).reject { |i| prefixes.include?(i.prefix) }.collect do |i|
+          Export.new(v.name, v.rd, i.prefix, label, v.export, VrfCeTable.as_numbers(i.route), i.route.origin, i.soo)
+        end
+        @exports[v.name] = own + ces
+      end
+
+      # What vrf has installed, CE and VPN routes, as Installed. Lock held.
+      def installed_unlocked(vrf)
+        ok = @rows.fetch(vrf, []).select { |r| r['installed'] }.collect { |r| r['prefix'] }
+        (@chosen[vrf] || {}).values_at(*ok).compact
       end
 
       # The VRF's connected prefixes, from its table, IPv4 then IPv6. The
@@ -313,7 +364,7 @@ module BGP
       def apply(v, want, rows)
         have = @installed[v.name]
         kernel = kernel_routes(v)
-        have.delete_if { |prefix, argv| kernel[prefix] != VrfFib.signature(argv) }
+        have.delete_if { |prefix, argv| !VrfFib.same?(argv, kernel[prefix]) }
         (have.keys - want.keys).each do |prefix|
           r = @fib.run(@fib.remove_argv(v.name, prefix))
           log(:warn, "vrf #{v.name}: #{r}") unless r.ok?

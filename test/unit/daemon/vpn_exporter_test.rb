@@ -201,6 +201,21 @@ class TestBgpDaemonVpnExporter < Test::Unit::TestCase
     assert_equal(2, @pe2.sent.first.path_attribute[BGP::Mp_unreach].afi)
   end
 
+  # --- CE routes, pull request 7 -----------------------------------------
+
+  # A CE's route keeps the CE's AS_PATH and ORIGIN, and its Site of Origin
+  # rides as a Route Origin beside the Route Targets (RFC 4360 section 5).
+  def test_a_ce_route_carries_its_path_origin_and_site_of_origin
+    ce = Export.new('A', '65000:1', '172.16.1.0/24', 24000, ['65000:100'], [65101], 2, '65000:11')
+    @exporter.refresh([a1, ce])
+    assert_equal(2, @pe2.sent.size, 'apart from the PE\'s own route, whose path is empty')
+    pa = @pe2.sent.last.path_attribute
+    assert_equal(['65101', 2], [pa[BGP::As_path].as_path.to_s, pa[BGP::Origin].to_i])
+    ecs = pa[BGP::Extended_communities]
+    assert_equal([[65000, 100]], ecs.find_all(BGP::Route_target).collect { |c| c.to_hash[:route_target] })
+    assert_equal([[65000, 11]], ecs.find_all(BGP::Route_origin).collect { |c| c.to_hash[:route_origin] })
+  end
+
   def test_with_no_local_address_the_sessions_address_is_the_next_hop
     @speaker.local_address = nil
     @exporter.refresh([a1])

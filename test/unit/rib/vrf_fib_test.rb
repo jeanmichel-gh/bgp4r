@@ -90,6 +90,20 @@ class TestBgpRibVrfFib < Test::Unit::TestCase
                  BGP::Rib::VrfFib.kernel_signature({ 'dst' => '192.168.2.0/24', 'encap' => { 'encap_type' => 'mpls', 'dst' => '24001' }, 'dev' => 'gre-pe2' }))
   end
 
+  # Pull request 7: a CE's route, its gateway alone; the kernel names the
+  # device, which is then not compared.
+  def test_a_ce_route_and_how_it_reads_back
+    argv = @fib.ce_install_argv('A', '172.16.1.0/24', '192.168.1.2')
+    assert_equal('ip route replace vrf A 172.16.1.0/24 via 192.168.1.2 proto bgp', argv.join(' '))
+    read = BGP::Rib::VrfFib.kernel_signature({ 'dst' => '172.16.1.0/24', 'gateway' => '192.168.1.2', 'dev' => 'eth3' })
+    assert(BGP::Rib::VrfFib.same?(argv, read))
+    assert(!BGP::Rib::VrfFib.same?(argv, [nil, '192.168.1.9', 'eth3']), 'another gateway')
+    assert(!BGP::Rib::VrfFib.same?(argv, ['17003', '192.168.1.2', 'eth3']), 'a label it did not send')
+    assert(!BGP::Rib::VrfFib.same?(argv, nil), 'not there')
+    mpls = @fib.install_argv('A', '192.168.2.0/24', [17003, 16], Hop.new('mpls', [17003], '10.0.12.2', 'eth1', nil))
+    assert(!BGP::Rib::VrfFib.same?(mpls, ['17003/16', '10.0.12.2', 'eth2']), 'a device it named counts')
+  end
+
   # With no runner a real process runs, and its exit status is read.
   def test_with_no_runner_the_command_runs
     assert_equal(0, BGP::Rib::VrfFib.new(bin: 'true').run(%w[true]).status)

@@ -70,6 +70,7 @@ require 'bgp/daemon/link_state_table'
 require 'bgp/daemon/link_state_producer'
 require 'bgp/daemon/vrf_sync'
 require 'bgp/daemon/vpn_exporter'
+require 'bgp/daemon/vrf_ce_exporter'
 require 'socket'
 require 'thread'
 
@@ -291,7 +292,8 @@ module BGP
       # nothing. `test_every_key_a_peer_reads_is_listed` holds this list
       # to the code, so a key read here and not listed fails the suite.
       KEYS = %w[address as capabilities connect description hold_time
-                open_timeout port record retry route_reflector_client].freeze
+                open_timeout port record retry route_reflector_client
+                vrf as_override soo].freeze
 
       # Raises ArgumentError naming every key `config` carries that no
       # code reads, and the keys there are.
@@ -373,6 +375,15 @@ module BGP
       # Speaker#check_reflector_clients.
       def route_reflector_client? ; @config['route_reflector_client'] == true ; end
       def active? ; @config.fetch('connect', false) ; end
+
+      # A CE neighbor (docs/design/l3vpn-pe.md, pull request 7): the VRF
+      # its session is bound to, or nil for a neighbor in the global
+      # table. as_override replaces the CE's AS in what it is sent by
+      # ours; soo is its Site of Origin, "65000:11", or nil.
+      def vrf ; @config['vrf']&.to_s ; end
+      def as_override ; @config['as_override'] == true ; end
+      def soo ; @config['soo']&.to_s ; end
+
       def state ; @neighbor ? @neighbor.state : 'Idle' ; end
       def established? ; @neighbor && @neighbor.is_established? ; end
 
@@ -389,8 +400,12 @@ module BGP
             wait_while_shutdown
             break if @speaker.stopping?
             begin
-              sock = Socket.tcp(@address, @config.fetch('port', 179),
-                                @speaker.local_address, connect_timeout: 5)
+              if vrf
+                sock = vrf_socket
+              else
+                sock = Socket.tcp(@address, @config.fetch('port', 179),
+                                  @speaker.local_address, connect_timeout: 5)
+              end
               run_session(sock)
             rescue SystemCallError, IOError, SocketError => e
               @recorder.error!("connect: #{e.message}")
@@ -398,6 +413,28 @@ module BGP
             backoff
           end
         end
+      end
+
+      # A CE's session: a TCP socket bound to the VRF device and no source
+      # address, so the kernel takes the VRF interface's. Measured on
+      # l3vpn-lab: unbound, the CE is unreachable (ENETUNREACH).
+      def vrf_socket
+        port = @config.fetch('port', 179)
+        family = @address.include?(':') ? :INET6 : :INET
+        s = Socket.new(family, :STREAM)
+        s.setsockopt(Socket::SOL_SOCKET, Socket::SO_BINDTODEVICE, vrf)
+        addr = Socket.sockaddr_in(port, @address)
+        if s.connect_nonblock(addr, exception: false) == :wait_writable
+          raise Errno::ETIMEDOUT, "connect to #{@address} in VRF #{vrf}" unless s.wait_writable(5)
+          begin
+            s.connect_nonblock(addr) # raises the connect's error, if it had one
+          rescue Errno::EISCONN
+          end
+        end
+        s
+      rescue SystemCallError
+        s&.close
+        raise
       end
 
       # Passive side: the speaker accepted a connection from this peer.
@@ -591,16 +628,23 @@ module BGP
           # means an adapter per session, so the ensure below detaches: an
           # adapter nobody detached is a peer whose routes stay in the table
           # after its session is gone.
-          @speaker.rib&.attach(n)
-          # BGP-LS goes in a table of its own, outside the RIB. See
-          # bgp/daemon/link_state_table.rb.
-          ls_feed = @speaker.link_state.attach(n)
-          # VPN-IPv4 too, in a table of its own: bgp/rib/vpn_table.rb.
-          vpn_feed = @speaker.vpn.attach(n)
+          # A CE's session (pull request 7) goes into its VRF's CE table
+          # and nothing global: not the RIB, BGP-LS or the VPN table, and
+          # the speaker's announce blocks are not its business.
+          if vrf
+            ce_feed = @speaker.ce_table.attach(n, vrf, soo: soo)
+          else
+            @speaker.rib&.attach(n)
+            # BGP-LS goes in a table of its own, outside the RIB. See
+            # bgp/daemon/link_state_table.rb.
+            ls_feed = @speaker.link_state.attach(n)
+            # VPN-IPv4 too, in a table of its own: bgp/rib/vpn_table.rb.
+            vpn_feed = @speaker.vpn.attach(n)
+          end
           n.start(:session => sock, :timeout => @config.fetch('open_timeout', 30))
           if n.is_established?
             @recorder.established!
-            announce(n, sock)
+            announce(n, sock) unless vrf
             @speaker.session_established(self)
             n.wait_for_state(:Idle)
           else
@@ -622,9 +666,10 @@ module BGP
             # a speaker reconnecting every retry seconds to a peer that is
             # down accumulates one adapter per attempt for as long as it
             # runs.
-            @speaker.rib&.detach(n)
+            @speaker.rib&.detach(n) unless vrf
             @speaker.link_state.detach(n, ls_feed) if ls_feed
             @speaker.vpn.detach(n, vpn_feed) if vpn_feed
+            @speaker.ce_table.detach(ce_feed) if ce_feed
             n.close
           end
         end
@@ -638,8 +683,11 @@ module BGP
       # Neighbor#start a socket, so local_addr is never used to dial, and a
       # container with one address then needs no local_address key to be a
       # transit router. export.next_hops still wins over both.
+      #
+      # A CE's session is in its VRF, where local_address, the loopback in
+      # the global table, is not: its local address is the socket's.
       def new_neighbor(sock=nil)
-        local = @speaker.local_address || (sock && sock.local_address.ip_address)
+        local = (vrf ? nil : @speaker.local_address) || (sock && sock.local_address.ip_address)
         n = BGP::Neighbor.new(:my_as => @speaker.my_as, :id => @speaker.router_id,
                               :holdtime => @config.fetch('hold_time', 90),
                               :remote_addr => @address, :local_addr => local,
@@ -720,6 +768,10 @@ module BGP
       # What this PE sends of its VRFs, or nil when no VRF exports
       # (bgp/daemon/vpn_exporter.rb, pull request 3).
       attr_reader :vpn_exporter
+
+      # The CEs' routes per VRF, and what goes back to the CEs, or nil with
+      # no CE neighbor (pull request 7).
+      attr_reader :ce_table, :vrf_ce_exporter
 
       # The l3vpn: block's keys.
       L3VPN_KEYS = %w[labels transport tunnels].freeze
@@ -903,7 +955,10 @@ module BGP
       def start
         start_rib
         @vrf_sync&.start
-        @server = listen if @peers.any? { |p| !p.active? }
+        @server = listen if @peers.any? { |p| !p.active? && !p.vrf }
+        # tcp_l3mdev_accept is 0, so a CE dialling in reaches only a
+        # listener bound to its VRF (pull request 7, measured).
+        @vrf_servers = @peers.select { |p| !p.active? && p.vrf }.collect(&:vrf).uniq.collect { |v| listen(v) }
         @peers.select(&:active?).each(&:run_active)
         @link_state_producer&.start
         self
@@ -913,6 +968,7 @@ module BGP
         @stopping = true
         @link_state_producer&.stop
         @server.close if @server
+        Array(@vrf_servers).each(&:close)
         @peers.each(&:stop)
         stop_rib
         @vrf_sync&.stop
@@ -1231,11 +1287,24 @@ module BGP
         end
         list = BGP::Rib::Vrf.list(vrfs)
         transport = BGP::Rib::VpnTransport.from_config(l3vpn)
+        ces = @peers.select(&:vrf)
+        ces.each do |p|
+          next if list.any? { |v| v.name == p.vrf }
+          raise ArgumentError, "neighbor #{p.address}: vrf #{p.vrf} is not in vrfs:"
+        end
         return if list.empty?
+        @ce_table = BGP::Rib::VrfCeTable.new(local_as: @my_as, router_id: @router_id) unless ces.empty?
         @l3vpn = BGP::Rib::L3vpn.new(vpn_table: @vpn, vrfs: list, transport: transport, local_as: @my_as,
-                                     router_id: @router_id, labels: l3vpn['labels'], logger: @logger)
+                                     router_id: @router_id, labels: l3vpn['labels'], logger: @logger,
+                                     ce_table: @ce_table)
         @vrf_sync = VrfSync.new(@l3vpn, logger: @logger)
         @vpn.on_change { @vrf_sync.poke }
+        if @ce_table
+          @ce_table.on_change { @vrf_sync.poke }
+          @vrf_ce_exporter = VrfCeExporter.new(self, @l3vpn, logger: @logger)
+          @vrf_sync.after_sync { @vrf_ce_exporter.refresh }
+          on_established { |p| @vrf_ce_exporter.session_up(p) }
+        end
         return if @l3vpn.labels.empty?
         @vpn_exporter = VpnExporter.new(self, logger: @logger)
         @vrf_sync.after_sync { @vpn_exporter.refresh(@l3vpn.exports) }
@@ -1362,13 +1431,17 @@ module BGP
       end
 
       # Accept sessions from passive peers, matched by source address.
-      def listen
-        server = TCPServer.new(@config.fetch('listen_address', '0.0.0.0'), @config.fetch('port', 179))
+      #
+      # vrf: a VRF's own listener, its socket bound to the VRF device, for
+      # its passive CE neighbors (pull request 7); nil for the global one.
+      def listen(vrf = nil)
+        server = vrf ? vrf_listener(vrf) : TCPServer.new(@config.fetch('listen_address', '0.0.0.0'), @config.fetch('port', 179))
         Thread.new do
           loop do
             sock = server.accept
+            sock = sock.first if sock.is_a?(Array) # Socket#accept answers [socket, addrinfo]
             ip = sock.remote_address.ip_address
-            peer = @peers.find { |p| !p.active? && p.address == ip }
+            peer = @peers.find { |p| !p.active? && p.vrf == vrf && p.address == ip }
             if peer
               peer.accept(sock)
             else
@@ -1380,6 +1453,15 @@ module BGP
           end
         end
         server
+      end
+
+      def vrf_listener(vrf)
+        s = Socket.new(:INET, :STREAM)
+        s.setsockopt(:SOCKET, :REUSEADDR, true)
+        s.setsockopt(Socket::SOL_SOCKET, Socket::SO_BINDTODEVICE, vrf)
+        s.bind(Socket.sockaddr_in(@config.fetch('port', 179), '0.0.0.0'))
+        s.listen(16)
+        s
       end
     end
 
