@@ -87,15 +87,19 @@ module BGP
 
       def size ; @lock.synchronize { @sent.size } ; end
 
-      # What this PE sent, as show.vpn rows with peer nil.
+      # What this PE sent, as show.vpn rows with peer nil. The AS_PATH
+      # and ORIGIN are the ones the UPDATE to an internal peer carries:
+      # a CE's, or empty and IGP. The text is As_path#as_path's, as in a
+      # received row.
       def rows
         nh = next_hop_text
         @lock.synchronize do
           @sent.values.collect do |s|
             e = s.export
             { 'rd' => e.rd, 'prefix' => e.prefix, 'path_id' => nil, 'peer' => nil, 'next_hop' => nh,
-              'labels' => [e.label], 'route_targets' => e.route_targets, 'soo' => e.soo, 'as_path' => 'empty',
-              'origin' => 0, 'local_pref' => 100, 'med' => nil, 'originator_id' => nil, 'cluster_list' => [],
+              'labels' => [e.label], 'route_targets' => e.route_targets, 'soo' => e.soo,
+              'as_path' => BGP::As_path.new(*Array(e.as_path)).as_path,
+              'origin' => e.origin || 0, 'local_pref' => 100, 'med' => nil, 'originator_id' => nil, 'cluster_list' => [],
               'best' => true, 'reason' => 'local', 'vrf' => e.vrf,
               'since' => s.since.utc.strftime('%Y-%m-%dT%H:%M:%S.%LZ') }
           end
