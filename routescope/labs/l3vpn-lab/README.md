@@ -75,7 +75,10 @@ With p1's eth2 down, pe1's route to pe2 becomes `encap mpls 19003 via
 10.0.14.2 dev eth2`, and bgp4rd moves every VRF route onto it
 (`19003/16`, `19003/17`) within the IGP's convergence. When the link
 comes back they move back to `17003`. Two runs of the gate scenario
-measured 2.6 s and 1.6 s to fail over, and 2.2 s to restore.
+measured 2.6 s and 1.6 s to fail over, and 2.2 s to restore. On
+2026-11-19 the gate read pe1-bgp's VRF route on 19003 1.2 s after the
+link went down, and pe2's on 19001 at 1.7 s, through routescope's
+`vrf_route`.
 
 ## Reading it by hand
 
@@ -101,7 +104,7 @@ docker exec clab-l3vpn-lab-p1 tcpdump -nn -i eth1 mpls
 
 | Scenario | What it checks |
 |---|---|
-| `gate` | IS-IS and the VPN session up, both VRFs reaching across in both directions, then p1 to pe2 down: pe1 on p2's label 19003 and the pings crossing again, then the link back |
+| `gate` | IS-IS and the VPN session up; each site's route in p1-bgp's VPN table, and installed in the far PE's VRF A on p1's label (17003 on pe1-bgp, 17001 on pe2); both VRFs reaching across in both directions; then p1 to pe2 down: pe1 on p2's label 19003, the VRF routes on 19003 and 19001, and the pings crossing again; then the link back |
 
 ## Running it
 
