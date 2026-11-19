@@ -238,6 +238,16 @@ class TestBgpDaemonVpnExporter < Test::Unit::TestCase
     assert_equal('65000:11', @exporter.rows.first['soo'])
   end
 
+  # The row says what the UPDATE carries: the CE's AS_PATH and ORIGIN, or
+  # an empty path and IGP for the PE's own route.
+  def test_a_rows_path_and_origin_are_what_the_update_carries
+    ce = Export.new('A', '65000:1', '172.16.1.0/24', 24000, ['65000:100'], [65101], 2, '65000:11')
+    @exporter.refresh([a1, ce])
+    rows = @exporter.rows.sort_by { |r| r['prefix'] }
+    assert_equal([['172.16.1.0/24', '65101', 2], ['192.168.1.0/30', 'empty', 0]],
+                 rows.collect { |r| r.values_at('prefix', 'as_path', 'origin') })
+  end
+
   # Per family, what each session was sent: a VRF's routes go to every
   # established session that negotiated their family.
   def test_sent_counts_are_per_family_and_per_session
