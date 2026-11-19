@@ -21,4 +21,4 @@ IPv6 rides the same VRFs as VPN-IPv6 (RFC 4659), 2001:db8:1::/64 and 2001:db8:2:
 
 ce1a and ce2a are CEs running bgp4rd in AS 65101 by eBGP inside VRF A. Each PE replaces 65101 by 65000 in what it sends them (AS override), so each site reaches the other's loopback, 172.16.1.1 and 172.16.2.1.
 
-`scenarios/gate.yml` checks the pings, the labels and the failover. README.md has the addresses, the images, and the tcpdump and vtysh commands to read the labels on the wire.
+`scenarios/gate.yml` checks the pings, the labels and the failover, and the VPN routes on the way: in p1-bgp's VPN table, and in each PE's VRF A with the far PE's transport label, through the failover too. README.md has the addresses, the images, and the tcpdump and vtysh commands to read the labels on the wire.

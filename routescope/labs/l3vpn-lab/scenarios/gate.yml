@@ -33,6 +33,21 @@ steps:
     within: 60
   - expect: { bgp_prefix: { node: ce2a, prefix: 172.16.1.0/24, next_hop: 192.168.2.1, as_path: '65000 65000' } }
     within: 30
+  # The VPN routes on their way (routescope's vrf_route and vpn_route,
+  # docs/l3vpn.md there). The reflector holds each site's route under
+  # VRF A's RD and Route Target; pe1-bgp takes pe2's with pe2 as its
+  # originator; each PE installs the far site's route in VRF A, on the
+  # far PE's loopback and p1's label for it. VPN labels change from one
+  # start to the next, so they are left out.
+  - expect: { vpn_route: { node: p1-bgp, rd: '65000:1', prefix: 172.16.1.0/24, next_hop: 10.255.0.1, route_target: '65000:100' } }
+    within: 30
+  - expect: { vpn_route: { node: p1-bgp, rd: '65000:1', prefix: 172.16.2.0/24, next_hop: 10.255.0.3, route_target: '65000:100' } }
+  - expect: { vpn_route: { node: pe1-bgp, rd: '65000:1', prefix: 172.16.2.0/24, originator_id: 10.255.0.3, best: true } }
+  - expect: { vrf_route: { node: pe1-bgp, vrf: A, prefix: 172.16.1.0/24, source: ce, next_hop: 192.168.1.2, state: installed } }
+  - expect: { vrf_route: { node: pe1-bgp, vrf: A, prefix: 172.16.2.0/24, source: vpn, next_hop: 10.255.0.3, out_label: 17003, state: installed } }
+    within: 30
+  - expect: { vrf_route: { node: pe2, vrf: A, prefix: 172.16.1.0/24, source: vpn, next_hop: 10.255.0.1, out_label: 17001, state: installed } }
+    within: 30
   - expect: { ping: { node: ce1a, from: 172.16.1.1, to: 172.16.2.1 } }
     within: 30
   - expect: { ping: { node: ce1a, to: 192.168.2.2 } }
@@ -47,6 +62,11 @@ steps:
     state: down
   - expect: { isis_route: { node: pe1, prefix: 10.255.0.3/32, label: 19003 } }
     within: 30
+  # bgp4rd re-reads the far PE's label at its next VRF sync.
+  - expect: { vrf_route: { node: pe1-bgp, vrf: A, prefix: 172.16.2.0/24, out_label: 19003, state: installed } }
+    within: 30
+  - expect: { vrf_route: { node: pe2, vrf: A, prefix: 172.16.1.0/24, out_label: 19001, state: installed } }
+    within: 30
   - expect: { ping: { node: ce1a, to: 192.168.2.2 } }
     within: 20
     measure: failover
@@ -57,6 +77,10 @@ steps:
   - interface: p1:eth2
     state: up
   - expect: { isis_route: { node: pe1, prefix: 10.255.0.3/32, label: 17003 } }
+    within: 30
+  - expect: { vrf_route: { node: pe1-bgp, vrf: A, prefix: 172.16.2.0/24, out_label: 17003, state: installed } }
+    within: 30
+  - expect: { vrf_route: { node: pe2, vrf: A, prefix: 172.16.1.0/24, out_label: 17001, state: installed } }
     within: 30
   - expect: { ping: { node: ce1a, to: 192.168.2.2 } }
     within: 20
