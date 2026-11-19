@@ -31,12 +31,14 @@
 name: l3vpn-lab
 
 topology:
+  # graph-level: the column each node is drawn in, left to right, on
+  # routescope's map and in clab2drawio. Guests take their host's.
   nodes:
     # --- PE 1: the IGP half owns the namespace and makes the VRFs ----
     pe1:
       kind: linux
       image: isis4r:latest
-      labels: { routescope.protocols: isis }
+      labels: { graph-level: 2, routescope.protocols: isis }
       binds: [pe1:/etc/isis4r]
       entrypoint: sh
       cmd: >-
@@ -62,7 +64,7 @@ topology:
     p1:
       kind: linux
       image: isis4r:latest
-      labels: { routescope.protocols: isis }
+      labels: { graph-level: 3, routescope.protocols: isis }
       binds: [p1:/etc/isis4r]
       entrypoint: sh
       cmd: >-
@@ -84,7 +86,7 @@ topology:
     p2:
       kind: linux
       image: quay.io/frrouting/frr:10.2.1
-      labels: { routescope.protocols: isis }
+      labels: { graph-level: 3, routescope.protocols: isis }
       binds: [p2:/etc/frr]
       exec:
         - sh -c "ip route del default dev eth0 2>/dev/null || true"
@@ -93,7 +95,7 @@ topology:
     pe2:
       kind: linux
       image: quay.io/frrouting/frr:10.2.1
-      labels: { routescope.protocols: "isis,bgp" }
+      labels: { graph-level: 4, routescope.protocols: "isis,bgp" }
       binds: [pe2:/etc/frr]
       exec:
         - sh -c "ip route del default dev eth0 2>/dev/null || true"
@@ -111,7 +113,7 @@ topology:
     ce1a:
       kind: linux
       image: bgp4r-lab:latest
-      labels: { routescope.kind: bgp4r, routescope.protocols: bgp }
+      labels: { graph-level: 1, routescope.kind: bgp4r, routescope.protocols: bgp }
       binds: [ce1a/bgp4rd.yml:/etc/bgp4r/bgp4rd.yml]
       cmd: exe/bgp4rd -f /etc/bgp4r/bgp4rd.yml -s /run/bgp4r/bgp4rd.sock -l -
       exec: ["ip addr add 192.168.1.2/24 dev eth1", "ip addr add 172.16.1.1/24 dev lo",
@@ -119,7 +121,7 @@ topology:
     ce1b:
       kind: linux
       image: isis4r:latest
-      labels: { routescope.kind: linux }
+      labels: { graph-level: 1, routescope.kind: linux }
       entrypoint: sleep
       cmd: infinity
       exec: ["ip addr add 192.168.1.2/24 dev eth1", "ip route replace default via 192.168.1.1",
@@ -128,7 +130,7 @@ topology:
     ce2a:
       kind: linux
       image: bgp4r-lab:latest
-      labels: { routescope.kind: bgp4r, routescope.protocols: bgp }
+      labels: { graph-level: 5, routescope.kind: bgp4r, routescope.protocols: bgp }
       binds: [ce2a/bgp4rd.yml:/etc/bgp4r/bgp4rd.yml]
       cmd: exe/bgp4rd -f /etc/bgp4r/bgp4rd.yml -s /run/bgp4r/bgp4rd.sock -l -
       exec: ["ip addr add 192.168.2.2/24 dev eth1", "ip addr add 172.16.2.1/24 dev lo",
@@ -136,7 +138,7 @@ topology:
     ce2b:
       kind: linux
       image: isis4r:latest
-      labels: { routescope.kind: linux }
+      labels: { graph-level: 5, routescope.kind: linux }
       entrypoint: sleep
       cmd: infinity
       exec: ["ip addr add 192.168.2.2/24 dev eth1", "ip route replace default via 192.168.2.1",
