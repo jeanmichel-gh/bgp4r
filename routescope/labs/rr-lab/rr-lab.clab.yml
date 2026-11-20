@@ -64,7 +64,6 @@ topology:
       cmd: exe/bgp4r-sim /lab/sim.yml -l -
       labels:
         routescope.kind: bgp4r-sim
-        routescope.build: Dockerfile.node
         routescope.protocols: bgp
       binds:
         - inj-c:/lab
@@ -77,7 +76,6 @@ topology:
       cmd: exe/bgp4r-sim /lab/sim.yml -l -
       labels:
         routescope.kind: bgp4r-sim
-        routescope.build: Dockerfile.node
         routescope.protocols: bgp
       binds:
         - inj-n:/lab
@@ -91,7 +89,6 @@ topology:
       cmd: exe/bgp4r-sim /lab/sim.yml -l -
       labels:
         routescope.kind: bgp4r-sim
-        routescope.build: Dockerfile.node
         routescope.protocols: bgp
       binds:
         - inj-e:/lab
@@ -105,7 +102,6 @@ topology:
       cmd: exe/bgp4rd -f /etc/bgp4r/bgp4rd.yml -s /run/bgp4r/bgp4rd.sock -l -
       labels:
         routescope.kind: bgp4r
-        routescope.build: Dockerfile.node
         routescope.protocols: bgp
       binds:
         - rr1/bgp4rd.yml:/etc/bgp4r/bgp4rd.yml
@@ -178,7 +174,6 @@ topology:
       cmd: exe/bgp4rd -f /etc/bgp4r/bgp4rd.yml -s /run/bgp4r/bgp4rd.sock -l -
       labels:
         routescope.kind: bgp4r
-        routescope.build: Dockerfile.node
         routescope.protocols: bgp
       binds:
         - dual/bgp4rd.yml:/etc/bgp4r/bgp4rd.yml

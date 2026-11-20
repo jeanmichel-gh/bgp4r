@@ -103,16 +103,18 @@ routescope's `bgp_best` condition reads.
 
 ## What it needs first
 
-Four images. **routescope builds the three local ones when it starts the
-lab**, from the `routescope.build` label on each node, so from a console
-there is nothing to do first. Each label names a Dockerfile in this
-folder and the folder is the build context, so a copy made by
-`routescope-labs install` builds as well as the checkout. `Dockerfile.node` fetches bgp4r from
-GitHub master and rebuilds only when master moves; its header says why it
-exists beside the root Dockerfile's `lab-node` stage.
+Four images. **`bgp4r-lab:latest` comes from a bgp4r checkout**, the
+root Dockerfile's `lab-node` stage, built before the lab starts. Build
+it from whichever branch you want to run: the lab runs whatever is on
+the host under that name, and nothing rebuilds it behind you.
 
-By hand, from a bgp4r checkout, which runs the checkout's code rather
-than master:
+**routescope builds the BIRD and GoBGP images when it starts the lab
+and they are missing**, from the `routescope.build` label on their
+nodes. Each label names a Dockerfile in this folder and the folder is
+the build context, so a copy made by `routescope-labs install` builds
+them as well as the checkout. To build one again, remove it.
+
+By hand, from a bgp4r checkout:
 
 ```
 docker build --target lab-node -t bgp4r-lab:latest .

@@ -154,14 +154,15 @@ class LabBgp4rLabTopologyTest < Test::Unit::TestCase
     end
   end
 
-  # routescope builds a lab's images when it starts the lab, from the
-  # `routescope.build` label: a Dockerfile in this folder, which is the
-  # build context. So every image with no registry in its name has one,
-  # the file is there, and nodes sharing an image share the recipe. An
-  # image from a registry, FRR's, is pulled and names none. A copy of
-  # this folder carries no bgp4r checkout, which is why the bgp4r nodes
-  # use Dockerfile.node and not the root Dockerfile's `lab-node` stage.
-  def test_every_local_image_names_a_dockerfile_in_this_folder
+  # routescope builds a lab's missing images when it starts the lab,
+  # from the `routescope.build` label: a Dockerfile in this folder, which
+  # is the build context. bgp4r-lab:latest names none: it is the root
+  # Dockerfile's `lab-node` stage, built from a checkout on any branch
+  # before the start, and one recipe per tag means no lab builds it
+  # another way. An image from a registry, FRR's, is pulled and names
+  # none either. Every other image has its file here, and nodes sharing
+  # an image share the recipe.
+  def test_every_local_image_but_bgp4rs_names_a_dockerfile_in_this_folder
     by_image = Hash.new { |h, k| h[k] = [] }
     nodes.each do |name, n|
       image = n['image'].to_s
@@ -170,28 +171,21 @@ class LabBgp4rLabTopologyTest < Test::Unit::TestCase
         assert_nil build, "#{name}: #{image} is pulled from a registry and needs no build"
         next
       end
+      if image == 'bgp4r-lab:latest'
+        assert_nil build, "#{name}: bgp4r-lab:latest is built from a checkout, not by the lab"
+        next
+      end
       assert build, "#{name}: #{image} is local and has no routescope.build label"
       assert_not_include build, '/', "#{name}: the Dockerfile is in this folder"
       assert File.file?(File.join(DIR, build)), "#{name}: #{build} is not in #{DIR}"
       by_image[image] << build
     end
     by_image.each { |image, builds| assert_equal 1, builds.uniq.size, "#{image} has two recipes: #{builds.uniq}" }
-    assert_equal %w[bgp4r-bird:latest bgp4r-gobgp:latest bgp4r-lab:latest], by_image.keys.sort
-    df = read('Dockerfile.node')
-    assert_match(/\A# syntax=docker\/dockerfile:1\n/, df, 'ADD of a git URL needs the BuildKit frontend line first')
-    assert_match(%r{^ADD https://github\.com/jeanmichel-gh/bgp4r\.git#\$\{BGP4R_REF\} /app$}, df)
-    # The git ADD was trusted to notice a new commit and a lab ran code
-    # from before #308. A remote URL is fetched on every build, so the
-    # commit's own answer goes first and every layer after it, the git
-    # ADD included, is rebuilt when the commit moves. And the image says
-    # which commit it holds, which is how a stale one is told from a
-    # container that was never recreated.
-    adds = df.lines.grep(/^ADD /)
-    assert_equal ['https://api.github.com/repos/jeanmichel-gh/bgp4r/commits/${BGP4R_REF}',
-                  'https://github.com/jeanmichel-gh/bgp4r.git#${BGP4R_REF}'],
-                 adds.collect { |l| l.split[1] }, 'the commit is fetched before the code'
-    assert_match(%r{^RUN ruby -rjson .*fetch\("sha"\)'.*\n\s+> /etc/bgp4r-revision$}, df)
-    assert_match(/^ENTRYPOINT \["ruby", "-I\/app"\]$/, df, 'the cmd lines are paths under /app')
+    assert_equal %w[bgp4r-bird:latest bgp4r-gobgp:latest], by_image.keys.sort
+    assert_false File.exist?(File.join(DIR, 'Dockerfile.node')), 'one recipe for bgp4r-lab:latest: the root Dockerfile'
+    root = File.read(File.expand_path('../../../Dockerfile', __dir__))
+    assert_match(/^FROM speaker AS lab-node$/, root)
+    assert_match(/^ENTRYPOINT \["ruby", "-I\/app"\]$/, root, 'the cmd lines are paths under /app')
   end
 
   # The links of the README's diagram, as ends rather than as a drawing.

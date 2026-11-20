@@ -48,7 +48,6 @@ topology:
       cmd: exe/bgp4rd -f /etc/bgp4r/bgp4rd.yml -s /run/bgp4r/bgp4rd.sock -l -
       labels:
         routescope.kind: bgp4r
-        routescope.build: Dockerfile.node
         routescope.protocols: bgp
       binds:
         - a/bgp4rd.yml:/etc/bgp4r/bgp4rd.yml
@@ -63,7 +62,6 @@ topology:
       cmd: exe/bgp4rd -f /etc/bgp4r/bgp4rd.yml -s /run/bgp4r/bgp4rd.sock -l -
       labels:
         routescope.kind: bgp4r
-        routescope.build: Dockerfile.node
         routescope.protocols: bgp
       binds:
         - b/bgp4rd.yml:/etc/bgp4r/bgp4rd.yml
@@ -80,7 +78,6 @@ topology:
       cmd: exe/bgp4rd -f /etc/bgp4r/bgp4rd.yml -s /run/bgp4r/bgp4rd.sock -l -
       labels:
         routescope.kind: bgp4r
-        routescope.build: Dockerfile.node
         routescope.protocols: bgp
       binds:
         - c/bgp4rd.yml:/etc/bgp4r/bgp4rd.yml
@@ -96,7 +93,6 @@ topology:
       cmd: exe/bgp4rd -f /etc/bgp4r/bgp4rd.yml -s /run/bgp4r/bgp4rd.sock -l -
       labels:
         routescope.kind: bgp4r
-        routescope.build: Dockerfile.node
         routescope.protocols: bgp
       binds:
         - d/bgp4rd.yml:/etc/bgp4r/bgp4rd.yml
