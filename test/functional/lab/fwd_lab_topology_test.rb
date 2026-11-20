@@ -46,7 +46,6 @@ require_relative 'routescope_vocabulary'
 class LabFwdLabTopologyTest < Test::Unit::TestCase
 
   DIR = File.expand_path('../../../routescope/labs/fwd-lab', __dir__)
-  SIBLING = File.expand_path('../../../routescope/labs/bgp4r-lab', __dir__)
   WORKFLOW = File.expand_path('../../../.github/workflows/capture.yml', __dir__)
 
   # node => [AS, loopback]
@@ -93,23 +92,19 @@ class LabFwdLabTopologyTest < Test::Unit::TestCase
     nodes.each do |name, n|
       assert_equal 'bgp4r', n['labels']['routescope.kind'], name
       assert_equal 'bgp', n['labels']['routescope.protocols'], name
-      assert_equal 'Dockerfile.node', n['labels']['routescope.build'], name
+      assert_nil n['labels']['routescope.build'], "#{name}: bgp4r-lab:latest is built from a checkout"
       assert_equal 'bgp4r-lab:latest', n['image'], name
       assert_equal "exe/bgp4rd -f /etc/bgp4r/bgp4rd.yml -s /run/bgp4r/bgp4rd.sock -l -", n['cmd'], name
       assert_equal ["#{name}/bgp4rd.yml:/etc/bgp4r/bgp4rd.yml"], n['binds'], name
     end
   end
 
-  # The image is bgp4r-lab's. routescope builds from this folder, so the
-  # copy must build the same image, ping and traceroute included.
-  def test_the_dockerfile_is_bgp4r_labs_with_ping_and_traceroute
-    instructions = ->(text) { text.lines.reject { |l| l =~ /\A\s*(#|\z)/ } }
-    assert_equal instructions.(read('Dockerfile.node', SIBLING)), instructions.(read('Dockerfile.node'))
-    assert_match(/^# A copy of \.\.\/bgp4r-lab\/Dockerfile\.node/, read('Dockerfile.node'))
+  # The image is the root Dockerfile's `lab-node` stage, built from a
+  # checkout; the pings need ping and traceroute in it.
+  def test_the_image_has_ping_and_traceroute
+    assert_false File.exist?(File.join(DIR, 'Dockerfile.node')), 'one recipe for bgp4r-lab:latest: the root Dockerfile'
     root = File.read(File.expand_path('../../../Dockerfile', __dir__))
-    [read('Dockerfile.node'), root[root.index('AS lab-node')..]].each do |t|
-      assert_match(/install -y --no-install-recommends iproute2 iputils-ping traceroute/, t)
-    end
+    assert_match(/install -y --no-install-recommends iproute2 iputils-ping traceroute/, root[root.index('AS lab-node')..])
   end
 
   # Both ends of a link in one /30, a loopback on lo, and forwarding on.

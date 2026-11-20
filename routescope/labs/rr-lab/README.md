@@ -112,11 +112,13 @@ scenarios replay the same octets.
 
 ## What it needs first
 
-The same four images as `../bgp4r-lab`, built the same way. routescope
-builds the three local ones when it starts the lab, from the
-`routescope.build` label on each node. The three Dockerfiles here are
-copies of that lab's, held to the same instructions by the topology
-test. By hand, from a bgp4r checkout:
+The same four images as `../bgp4r-lab`, built the same way.
+`bgp4r-lab:latest` comes from a bgp4r checkout, on any branch, built
+before the lab starts. routescope builds the BIRD and GoBGP images when
+it starts the lab and they are missing, from the `routescope.build`
+label on their nodes. The two Dockerfiles here are copies of that
+lab's, held to the same instructions by the topology test. By hand,
+from a bgp4r checkout:
 
 ```
 docker build --target lab-node -t bgp4r-lab:latest .

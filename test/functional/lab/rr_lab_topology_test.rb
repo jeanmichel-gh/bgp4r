@@ -146,12 +146,14 @@ class LabRrLabTopologyTest < Test::Unit::TestCase
     end
   end
 
-  # routescope builds local images from the lab's own folder, so every
-  # local image names a Dockerfile here. The three are copies of
-  # bgp4r-lab's and must stay the same instructions, or the two labs
-  # build different nodes under one tag. Comments may differ; the copy
-  # header says where the reasons are.
-  def test_every_local_image_names_a_dockerfile_that_matches_bgp4r_lab
+  # routescope builds a missing local image from the lab's own folder, so
+  # every local image but bgp4r-lab:latest names a Dockerfile here.
+  # bgp4r-lab:latest is the root Dockerfile's `lab-node` stage, built
+  # from a checkout. The two here are copies of bgp4r-lab's and must stay
+  # the same instructions, or the two labs build different nodes under
+  # one tag. Comments may differ; the copy header says where the reasons
+  # are.
+  def test_every_local_image_but_bgp4rs_names_a_dockerfile_that_matches_bgp4r_lab
     nodes.each do |name, n|
       image = n['image'].to_s
       build = (n['labels'] || {})['routescope.build']
@@ -159,17 +161,20 @@ class LabRrLabTopologyTest < Test::Unit::TestCase
         assert_nil build, "#{name}: #{image} is pulled and needs no build"
         next
       end
+      if image == 'bgp4r-lab:latest'
+        assert_nil build, "#{name}: bgp4r-lab:latest is built from a checkout, not by the lab"
+        next
+      end
       assert build, "#{name}: #{image} is local and has no routescope.build label"
       assert File.file?(File.join(DIR, build)), "#{name}: #{build} is not in #{DIR}"
     end
+    assert_false File.exist?(File.join(DIR, 'Dockerfile.node')), 'one recipe for bgp4r-lab:latest: the root Dockerfile'
     instructions = ->(text) { text.lines.reject { |l| l =~ /\A\s*(#|\z)/ } }
-    %w[Dockerfile.node Dockerfile.bird Dockerfile.gobgp].each do |f|
+    %w[Dockerfile.bird Dockerfile.gobgp].each do |f|
       assert_equal instructions.(read(f, SIBLING)), instructions.(read(f)),
                    "#{f} here and in bgp4r-lab build different images"
       assert_match(/^# A copy of \.\.\/bgp4r-lab\/#{Regexp.escape(f)}/, read(f))
     end
-    assert_match(/\A# syntax=docker\/dockerfile:1\n/, read('Dockerfile.node'),
-                 'ADD of a git URL needs the BuildKit frontend line first')
   end
 
   def test_the_links_are_the_nine_sessions_the_readme_draws

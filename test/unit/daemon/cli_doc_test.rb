@@ -56,15 +56,11 @@ class TestBgp4rCliDoc < Test::Unit::TestCase
   # Each image that runs bgp4rd in a containerlab lab has to make that
   # true, and the socket has to be the one the topologies pass to bgp4rd.
   def test_the_lab_images_put_the_client_on_the_path_and_the_socket_in_the_environment
-    images = ['Dockerfile', 'routescope/labs/rr-lab/Dockerfile.node', 'routescope/labs/bgp4r-lab/Dockerfile.node',
-              'routescope/labs/fwd-lab/Dockerfile.node']
-    images.each do |f|
-      text = read(f)
-      text = text[text.index('AS lab-node')..] if f == 'Dockerfile'
-      assert_match(%r{^RUN for c in bgp4r bgp4rd bgp4r-cli bgp4r-sim; do ln -s /app/exe/\$c /usr/local/bin/\$c; done \\$}, text, f)
-      assert_match(%r{^ && ln -s /app/exe/bgp4r-cli /usr/local/bin/cli$}, text, f)
-      assert_match(/^ENV BGP4R_SOCKET=#{Regexp.escape(SOCKET)}$/, text, f)
-    end
+    text = read('Dockerfile')
+    text = text[text.index('AS lab-node')..]
+    assert_match(%r{^RUN for c in bgp4r bgp4rd bgp4r-cli bgp4r-sim; do ln -s /app/exe/\$c /usr/local/bin/\$c; done \\$}, text)
+    assert_match(%r{^ && ln -s /app/exe/bgp4r-cli /usr/local/bin/cli$}, text)
+    assert_match(/^ENV BGP4R_SOCKET=#{Regexp.escape(SOCKET)}$/, text)
     %w[rr-lab/rr-lab.clab.yml bgp4r-lab/bgp4r-lab.clab.yml fwd-lab/fwd-lab.clab.yml
        l3vpn-lab/l3vpn-lab.clab.yml].each do |t|
       cmds = read("routescope/labs/#{t}").lines.grep(/cmd: exe\/bgp4rd /)

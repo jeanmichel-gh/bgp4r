@@ -1167,23 +1167,17 @@ routescope/labs/         the containerlab labs written for the routescope
                          `/run/bgp4r`, and `speaker` has neither
                          iproute2 nor root. The four Compose topologies
                          stay on `speaker` and are untouched.
-                         **routescope builds its local images when it
-                         starts the lab**, from a `routescope.build`
-                         label on each node naming a Dockerfile in the
-                         folder, which is the build context; so a copy
-                         made by `bgp4r lab new` builds too.
-                         `Dockerfile.node` is `lab-node` fetched from
-                         GitHub master with BuildKit's `ADD` of a git
-                         URL, which rebuilds only when master moves; CI
-                         keeps the root stage, since it tests the branch.
-                         **The git `ADD` alone was not trusted to see a
-                         new commit**: on 2026-11-06 a lab ran an
-                         injector from before #308. So GitHub's answer
-                         for the commit is fetched first, which a build
-                         always fetches, and the image keeps it in
-                         `/etc/bgp4r-revision` to compare against a
-                         running container, which keeps its old image
-                         until the lab is stopped and started.
+                         **`bgp4r-lab:latest` is the `lab-node` stage,
+                         built from a checkout on any branch** before
+                         the lab starts, by hand, by CI (which tests the
+                         branch) or by routescope's `vm-update.sh`. The
+                         labs name the image and run whatever is on the
+                         host under it; none builds it another way, so
+                         starting one lab never replaces the image
+                         another runs (2026-11-20). routescope
+                         builds the BIRD and GoBGP wrappers from their
+                         `routescope.build` label when the lab starts
+                         and they are missing.
                          Dockerfile.gobgp is a wrapper over
                          `${GOBGP_IMAGE}` for the same one reason
                          Dockerfile.bird exists, iproute2 for the

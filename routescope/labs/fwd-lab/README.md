@@ -132,6 +132,16 @@ Established, state is Idle". bgp4r-lab's `rtr` meets the same wait with
 `r1`. bgp4r #329 fixed it in bgp4rd: `Neighbor#start` now returns when
 the session falls back to Idle, so `b` dials again at once.
 
+## The image
+
+All four nodes run `bgp4r-lab:latest`, the root Dockerfile's
+`lab-node` stage. Build it from a bgp4r checkout, on any branch, before
+starting the lab; the lab runs whatever is on the host under that name:
+
+```
+docker build --target lab-node -t bgp4r-lab:latest .
+```
+
 ## By hand
 
 Make a copy, deploy it, and open a shell on a node:

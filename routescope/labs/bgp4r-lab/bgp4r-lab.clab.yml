@@ -55,11 +55,13 @@
 #   LAB=$PWD/routescope/labs/bgp4r-lab docker compose -f ~/routescope/compose.yml up -d
 #   sudo containerlab destroy -t routescope/labs/bgp4r-lab/bgp4r-lab.clab.yml
 #
-# Four images. routescope builds the three local ones itself when it
-# starts the lab, from the `routescope.build` label on each node: a
+# Four images. bgp4r-lab:latest is the root Dockerfile's `lab-node`
+# stage, built from a bgp4r checkout on any branch before the lab
+# starts: the lab runs whatever is on the host under that name.
+# routescope builds the BIRD and GoBGP ones when it starts the lab and
+# they are missing, from the `routescope.build` label on their nodes: a
 # Dockerfile in this folder, which is the build context. By hand, from a
-# bgp4r checkout, which runs the checkout rather than master (see
-# Dockerfile.node):
+# bgp4r checkout:
 #
 #   docker build --target lab-node -t bgp4r-lab:latest .
 #   docker build -f routescope/labs/bgp4r-lab/Dockerfile.bird \
@@ -118,7 +120,6 @@ topology:
       cmd: exe/bgp4r-sim /lab/sim.yml -l -
       labels:
         routescope.kind: bgp4r-sim
-        routescope.build: Dockerfile.node
         routescope.protocols: bgp
       binds:
         - inj1:/lab
@@ -131,7 +132,6 @@ topology:
       cmd: exe/bgp4r-sim /lab/sim.yml -l -
       labels:
         routescope.kind: bgp4r-sim
-        routescope.build: Dockerfile.node
         routescope.protocols: bgp
       binds:
         - inj2:/lab
@@ -152,7 +152,6 @@ topology:
       cmd: exe/bgp4rd -f /etc/bgp4r/bgp4rd.yml -s /run/bgp4r/bgp4rd.sock -l -
       labels:
         routescope.kind: bgp4r
-        routescope.build: Dockerfile.node
         routescope.protocols: bgp
       binds:
         - rtr/bgp4rd.yml:/etc/bgp4r/bgp4rd.yml
