@@ -39,6 +39,11 @@ jobs:
             experimental: true
     steps:
       - uses: actions/checkout@v6
+      # bfd4r is a path gem, ../bfd4r in the Gemfile, so it is checked
+      # out beside this repository, before Bundler reads the Gemfile.
+      # actions/checkout will not write outside the workspace, so git.
+      - name: bfd4r beside bgp4r
+        run: git clone -q --depth 1 https://github.com/jeanmichel-gh/bfd4r "$GITHUB_WORKSPACE/../bfd4r"
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: ${{ matrix.ruby }}
@@ -110,6 +115,9 @@ jobs:
         timeout-minutes: 2
       - name: Lab speaker over loopback
         run: bundle exec ruby -I. test/functional/lab/speaker_test.rb
+        timeout-minutes: 3
+      - name: Functional test (bfd true, against two real bfdd4r)
+        run: bundle exec ruby -I. test/functional/bfd_test.rb
         timeout-minutes: 3
 
   # The same suites inside the Docker image, so the Dockerfile is tested too.
@@ -205,6 +213,11 @@ jobs:
       GOBGP_VERSION: 3.23.0
     steps:
       - uses: actions/checkout@v6
+      # bfd4r is a path gem, ../bfd4r in the Gemfile, so it is checked
+      # out beside this repository, before Bundler reads the Gemfile.
+      # actions/checkout will not write outside the workspace, so git.
+      - name: bfd4r beside bgp4r
+        run: git clone -q --depth 1 https://github.com/jeanmichel-gh/bfd4r "$GITHUB_WORKSPACE/../bfd4r"
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: '3.4'

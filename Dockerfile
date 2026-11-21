@@ -23,11 +23,17 @@
 #   docker build --target test --build-arg RUBY_VERSION=4.0 -t bgp4r-test .
 #   docker run --rm bgp4r-test
 #
+# The lab-node stage takes bfd4r, a sibling checkout, as a named build
+# context, since the gem is not published (isis takes datalink-socket so):
+#
+#   docker build --target lab-node --build-context bfd4r=../bfd4r -t bgp4r-lab:latest .
+#
 # Stages:
 #   base         Ruby, the dev and test gems, the bgp4r source, a non-root user
 #   test         runs the unit suite (the default command)
 #   speaker      runs a bgp4r script, for labs: docker run bgp4r-speaker my_peer.rb
-#   lab-node     speaker plus iproute2, as root, for a containerlab node
+#   lab-node     speaker plus iproute2 and bfd4r, as root, for a containerlab
+#                node; it needs the bfd4r build context, below
 #   capture      the bgp4r command with tcpdump, for `bgp4r capture -i IFACE`
 #   gobgp-cli    the router image, only as a source for the gobgp binary
 #   conformance  speaker plus the gobgp client, for the fault matrix topology
@@ -49,6 +55,9 @@ WORKDIR /app
 # extension, and this image has no compiler. See the Gemfile.
 COPY Gemfile ./
 ENV BUNDLE_WITHOUT=console
+# bfd4r is not bundled here: Bundler would load its gemspec, which runs
+# git, and the image has none. lab-node puts it on RUBYLIB. See Gemfile.
+ENV BFD4R_ON_RUBYLIB=1
 RUN bundle install --jobs 4
 
 COPY . .
@@ -82,7 +91,7 @@ ENTRYPOINT ["ruby", "-I/app"]
 
 # The containerlab node image: the speaker stage plus iproute2, as root.
 #
-#   docker build --target lab-node -t bgp4r-lab:latest .
+#   docker build --target lab-node --build-context bfd4r=../bfd4r -t bgp4r-lab:latest .
 #
 # `routescope/labs/bgp4r-lab` is the one topology that needs it, and the
 # two things it adds are both things the `speaker` stage cannot be given
@@ -117,6 +126,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends iproute2 iputil
 RUN for c in bgp4r bgp4rd bgp4r-cli bgp4r-sim; do ln -s /app/exe/$c /usr/local/bin/$c; done \
  && ln -s /app/exe/bgp4r-cli /usr/local/bin/cli
 ENV BGP4R_SOCKET=/run/bgp4r/bgp4rd.sock
+
+# bfd4r, for `bfd: true` on a neighbor: bfdd4r, bfd4r-cli and
+# with-bfdd4r on PATH, and its root on RUBYLIB, which is its require
+# path, so bgp4rd can `require 'bfd/client'`. bfd4r has no runtime gem.
+#
+# **with-bfdd4r is the entrypoint**: it starts bfdd4r in the background,
+# again a second after it fails, and then execs what the node runs, so a
+# lab's `cmd: exe/bgp4rd ...` is unchanged. bfdd4r is one per network
+# namespace and a second one exits quietly. routescope's
+# docs/design/bfd-clients.md, "How bfdd4r starts in a container".
+COPY --from=bfd4r bfd/ /bfd4r/bfd/
+COPY --from=bfd4r bfd4r.rb /bfd4r/
+COPY --from=bfd4r exe/ /bfd4r/exe/
+ENV RUBYLIB=/bfd4r \
+    PATH=/bfd4r/exe:$PATH
+ENTRYPOINT ["with-bfdd4r", "ruby", "-I/app"]
 
 # The capture image. Its entrypoint is the bgp4r command, so the argv
 # routescope hard-codes works unchanged:

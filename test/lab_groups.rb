@@ -167,6 +167,7 @@ module LabGroups
     # CAP_NET_ADMIN and runs again under sudo. About 30s.
     'local' => %w[
       add_path_topology_test
+      bfd_frr_lab_topology_test
       bgp4r_lab_topology_test
       fib_test
       fwd_lab_netns_test

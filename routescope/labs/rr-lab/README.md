@@ -121,7 +121,7 @@ lab's, held to the same instructions by the topology test. By hand,
 from a bgp4r checkout:
 
 ```
-docker build --target lab-node -t bgp4r-lab:latest .
+docker build --target lab-node --build-context bfd4r=../bfd4r -t bgp4r-lab:latest .
 docker build -f routescope/labs/rr-lab/Dockerfile.bird \
              -t bgp4r-bird:latest routescope/labs/rr-lab
 docker build -f routescope/labs/rr-lab/Dockerfile.gobgp \

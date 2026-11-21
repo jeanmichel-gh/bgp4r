@@ -4,7 +4,7 @@ Guide for AI agents working on bgp4r. Read this before changing anything.
 
 ## What this is
 
-bgp4r is a pure Ruby library to build, parse and speak BGP-4 (RFC 4271 and many extensions). It is used to script BGP peers for testing and research. Its only runtime gem is `logger`, which ships with Ruby.
+bgp4r is a pure Ruby library to build, parse and speak BGP-4 (RFC 4271 and many extensions). It is used to script BGP peers for testing and research. Its runtime gems are `logger`, which ships with Ruby, and bfd4r, the owner's own BFD gem, brought in by path for `bgp4rd`'s `bfd: true` and loaded only when a neighbor asks for BFD.
 
 ## Layout
 
@@ -476,6 +476,22 @@ bgp/daemon/              `bgp4rd` the daemon and `bgp4r-cli` its client;
                          is that commit of that one key.
                          `test/helpers/fake_isisd.rb` is the isisd its
                          tests talk to
+                         bfd.rb `bfd: true` on a neighbor: a BFD session
+                         asked of bfdd4r through bfd4r's `BFD::Client`
+                         (client name `bgp4rd`), one hop only, read from
+                         `ip -j route get` with no `gateway`, and an
+                         Established session reset with Cease 6/10 when
+                         an Up BFD session fails. AdminDown never acts
+                         and a lost bfdd4r keeps every session (RFC 5882
+                         4.1, 4.2, 10.2; RFC 9384). The client and the
+                         `ip` runner are injected, `:bfd_client` and
+                         `:bfd_runner` on the Speaker; `bfd` is live in a
+                         commit. docs/bfd.md is the guide, and
+                         `test/helpers/fake_bfd_client.rb` the client the
+                         unit tests talk to. **`::IO.select`, not
+                         `IO.select`**: the first draft met the `BGP::IO`
+                         trap in Conventions, and only the functional
+                         test could see it, since the fake has no sockets
 bgp/sim/                 `bgp4r-sim` the route injector, and `bgp4r
                          routegen`; require 'bgp/sim', which bgp4r.rb
                          does not, the same arrangement bgp/daemon.rb and
@@ -514,7 +530,7 @@ bgp/sim/                 `bgp4r-sim` the route injector, and `bgp4r
                          what an injector honestly has
                          http.rb HTTP/1.1 over TCPServer, because
                          `webrick` is not available and the library
-                         keeps its one runtime gem. **The POST header
+                         takes no third-party gem. **The POST header
                          name is matched case insensitively**: measured
                          on 2026-11-02, `Net::HTTP` capitalises per
                          word, so the `X-BGP4R` routescope's driver
@@ -566,7 +582,7 @@ bgp/capture/             reading BGP off a wire; require 'bgp/capture', which
                          bgp4r.rb does not, the same arrangement bgp/rib.rb has
                          pcap.rb reads the classic pcap format off an IO a
                          record at a time, so it works on a live pipe, and no
-                         gem: the library has one runtime dependency and keeps
+                         gem: the library takes no third-party gem and keeps
                          it; dissect.rb reads a frame down to its TCP payload
                          (ethernet, VLAN, Linux cooked, IPv4 with options,
                          IPv6, TCP with options) and a BGP message down to its
@@ -1007,6 +1023,8 @@ test/functional/         tests that open real TCP sessions
                          say an HTTP request reaching the process puts
                          the octets another speaker reads
 test/helpers/            a small test BGP server
+                         fake_bfd_client.rb, BFD::Client's shape with no
+                         bfdd4r, so the unit suite needs no bfd4r
 lab/                     speakers in containers: lab/speaker.rb and lab/topologies/ (see lab/README.md)
                          lab/routescope is a symlink to routescope/labs/
                          for one release, since 2026-11-12, because
@@ -1065,6 +1083,22 @@ routescope/labs/         the containerlab labs written for the routescope
                          across both VRFs, fails the p1 to pe2 link and
                          checks pe1 moves to p2's label. Not deployed in
                          CI: it needs isis4r's image
+                         routescope/labs/bfd-frr-lab is **the interop
+                         check of `bfd: true`**, `role: interop` in its
+                         ABOUT.md: one bgp4rd with bfdd4r beside it and
+                         one FRR with bfdd, eBGP over one link. Its
+                         gate.sh checks BFD Up on both, then netem 100%
+                         on both ends and a reset in under a second with
+                         6/10 sent; CI deploys it and runs the gate. The
+                         bgp node starts bgp4rd once eth1 has its address,
+                         because the one hop check runs at start and
+                         `exec:` runs after the entrypoint. Measured on
+                         2026-11-21 on the owner's VM: 0.68 to 0.90 s, the 900 ms
+                         Detection Time, and bgp4rd's own share 2 to 7 ms
+                         after bfdd4r's detection, which the gate checks
+                         apart so a slow runner's clock cannot fail it
+                         for bfdd4r's timer; a sabotaged image that ignores
+                         the failure fails the gate
                          lab/speaker.rb is the **command line** now and nothing
                          else: the sessions, the configuration and the recording
                          moved into bgp/daemon/speaker.rb, because `bgp4rd`
@@ -1174,7 +1208,12 @@ routescope/labs/         the containerlab labs written for the routescope
                          labs name the image and run whatever is on the
                          host under it; none builds it another way, so
                          starting one lab never replaces the image
-                         another runs (2026-11-20). routescope
+                         another runs (2026-11-20). **Since
+                         2026-11-21 it needs bfd4r as a build context**,
+                         `--build-context bfd4r=../bfd4r`, and its
+                         entrypoint is `with-bfdd4r ruby -I/app`, so
+                         every lab on it has a bfdd4r beside its node;
+                         a lab with no `bfd: true` loses nothing. routescope
                          builds the BIRD and GoBGP wrappers from their
                          `routescope.build` label when the lab starts
                          and they are missing.
@@ -1652,6 +1691,18 @@ which is why it is the `reflector` lab group. 7 seconds:
 ruby -I. test/functional/lab/reflector_test.rb
 ```
 
+`bfd: true` against two real bfdd4r on 127.0.0.1 and 127.0.0.2, no
+root, and the only test that holds `test/helpers/fake_bfd_client.rb` to
+the real `BFD::Client`: a silent peer resets the session with Cease
+6/10, a peer's AdminDown and a lost bfdd4r do not. It needs bfd4r on the
+load path, which `bundle exec` gives from `../bfd4r`, or RUBYLIB. About
+40 seconds. The lab's files are held by its topology test, anywhere:
+```
+bundle exec ruby -I. test/functional/bfd_test.rb
+RUBYLIB=../bfd4r ruby -I. test/functional/bfd_test.rb
+ruby -I. test/functional/lab/bfd_frr_lab_topology_test.rb
+```
+
 `bgp4rd` over its real control socket, and the only test that can say
 the two halves of a line agree: every unit test on the server side reads
 a request a test wrote and every one on the client side reads an answer a
@@ -1851,7 +1902,7 @@ CI: `.github/workflows/test.yml` runs both suites on every push to master and ev
 
 `.github/workflows/capture.yml` is the one workflow that deploys a containerlab lab: it builds the `lab-node`, BIRD and GoBGP images, deploys `routescope/labs/bgp4r-lab`, `routescope/labs/rr-lab` and `routescope/labs/fwd-lab` in a job each, and runs each one's `capture.sh`, on demand and on a push that changes `routescope/labs/` or the Dockerfile. Its log is what routescope's BGP fixtures are cut from. **rr-lab's `capture.sh` also checks**: it prints one `CHECK ok` or `CHECK FAIL` line per RFC 4456 fact and fails the job when one fails, because the scenario language has no key for ORIGINATOR_ID or CLUSTER_LIST. **fwd-lab's does the same for forwarding**, because the scenario language has no ping step.
 
-Baseline on 2026-11-17: 3982 tests, 37799 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%, measured on 2026-11-06 and not since.
+Baseline on 2026-11-21: 4088 tests, 38056 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%, measured on 2026-11-06 and not since.
 
 **That coverage figure is 98.5% for the library and the rest is the two
 programs, not a gap anywhere else.** Measured the same run: with
@@ -1937,10 +1988,12 @@ There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Cove
 * **A log line in the library goes through `log(level, message)`, never through `Log`.** `bgp/logging.rb` is the mixin: `include BGP::Logging` and the object gains `log` and a settable `logger`, which is a plain callable `->(level, message)` and falls back to the process-wide `Log` when nothing set one. Writing `Log.warn` instead is a line a program cannot redirect, which is the whole of what that file fixes, and `test_no_other_library_file_logs_through_the_process_log` in `test/unit/logging_test.rb` fails the suite on a new one. An object that logs needs somewhere to take a logger from: a Hash option its constructor already reads, or the object that built it. The one exception in the tree is `Path_attribute#to_s`, which has no owner at all, and it is in that guard's allowed list with the reason beside it.
   * A **program** still configures `Log` directly, and that is a different thing: `Log.set_filename`, `Log.level` and `Log.create` are a process choosing its destination, and the two `Server` classes and `lab/speaker.rb` do exactly that, then hand `BGP::Logging.to_log` down. Do not reach for `Log.send(level, message)`: `Logging.write` is that dispatch, and a `send` of a Symbol onto `Log` reaches `Log.clear`, which deletes the log file.
   * **Filtering is the logger's, not `log`'s.** Every level reaches the callable, `:debug` included, as ospfv2's `ospfd` does in the lambda it builds. Dropping a line in both places would let it be dropped twice and enabled once.
-* Keep the library free of runtime gem dependencies. The one exception is `logger`: it ships with Ruby, but Ruby 4.0 made it a bundled gem, so `bgp4r.gemspec` and the `Gemfile` declare it.
+* Keep the library free of runtime gem dependencies: the standard library, and the owner's own gems, by path. Two today. `logger` ships with Ruby, but Ruby 4.0 made it a bundled gem, so `bgp4r.gemspec` and the `Gemfile` declare it. **bfd4r** is the owner's BFD gem, decided on 2026-11-21 (routescope `docs/design/bfd-clients.md`, question 1): the gemspec declares it, the `Gemfile` takes it from `../bfd4r` as isis takes datalink-socket, CI clones it there, and the Dockerfile's `lab-node` stage copies it from a named build context, `--build-context bfd4r=../bfd4r`, onto `RUBYLIB` and `PATH`. `bgp/daemon/bfd.rb` requires `bfd/client` only when a neighbor has `bfd: true`, so nothing else loads it. A third-party gem is still not an option.
+  * **The Docker image does not bundle bfd4r, and that is measured.** Bundler loads a path gem's gemspec, bfd4r's runs `git ls-files`, and the image has no git, so `bundle install` dies there (the `bgp4r.gemspec` entry below is the same fact). The base stage sets `BFD4R_ON_RUBYLIB`, the `Gemfile` skips the gem under it, and only `lab-node` carries bfd4r. So the `test` image has no bfd4r, and a unit test must not require it: the unit tests drive `Bfd` with `test/helpers/fake_bfd_client.rb`.
+  * When bfd4r is published, the path becomes a version in every repository at once (routescope `docs/design/lab-images.md`).
 * Before requiring a standard library, check that it is still a default gem. Ruby keeps moving libraries to bundled gems (`observer` in 3.4, `logger` in 4.0, **`base64` in 3.4**), and under Bundler those fail to load unless declared. Prefer a small built-in copy, as with `BGP::Observable`.
   * **This rule applies to test files too, and it was broken the day after it was written down.** `attr_set_gobgp_test.rb` required `base64` for one decode. It passed here on Ruby 3.3, where `base64` is still a default gem, and **failed CI on 3.4 before a single test ran**: `cannot load such file -- base64`, from `run_lab.rb`'s require loop, with the whole `gobgp-families` job red after 10 seconds. `ruby -e 'Gem::Specification.find_by_name("base64").default_gem?'` is the one line that answers the question, and it answers it per Ruby version, so the local answer is not the CI answer.
-  * **The replacement is core and needs no require**: `String#unpack1('m0')` is strict base64 decoding, which is what `Base64.strict_decode64` meant, and `'m'` is the lenient form. Reach for `pack`/`unpack` before a Gemfile entry; adding a gem for one decode in one test is the wrong trade when the library's whole point is having one runtime dependency.
+  * **The replacement is core and needs no require**: `String#unpack1('m0')` is strict base64 decoding, which is what `Base64.strict_decode64` meant, and `'m'` is the lenient form. Reach for `pack`/`unpack` before a Gemfile entry; adding a gem for one decode in one test is the wrong trade when the library takes no third-party runtime gem.
   * The failure mode is worth knowing because it is not a test failure. A bundled gem missing under Bundler kills the **require**, so the job dies before any test runs and the annotation names the requiring file rather than anything about the feature. A 10 second red job is almost always this shape.
 * Do not redefine methods of standard library classes. Newer versions may add the same method with different behavior (`IPAddr#+` in Ruby 4.0). Guard additions with `unless method_defined?`.
 * **`and` binds looser than `? :`, so `a and b ? c : d` is `a and (b ? c : d)`.** With `&&` it is `(a && b) ? c : d`, which is almost always what was meant. `bgp/capture/dissect.rb` shipped a one line method written with `and` that answered **nil** for every object with no children rather than the object itself, and nothing about the failure named a precedence: it showed as a tree of nils three calls away. The house style is `and` for control flow at the end of a statement and `&&` inside an expression, which is the usual Ruby advice and here has a scar behind it. When a condition feeds a ternary, parenthesise it and do not rely on either.
@@ -2045,6 +2098,7 @@ that moves a phase.
 | irb console | Done | – |
 | Route reflection | Items 1 to 5 done, with two gaps | Item 6, `client_to_client: false`, only if asked for. Item 3 lacks the text form. Item 4 lacks the FRR 10.5.1 run |
 | BGP-LS lab | Phases 1 and 3 done | Phase 2, a Propagator, not started; needs its own spec |
+| BFD (routescope's `docs/design/bfd-clients.md`, step 6d) | Built: bfd4r as a path dependency, `bfd: true` with Cease 6/10, `with-bfdd4r` as `lab-node`'s entrypoint, and `routescope/labs/bfd-frr-lab`, its gate passed on 2026-11-21 | Multihop BFD (RFC 5883), timers per neighbor, and BFD authentication (RFC 5882 10.2 encourages it), none asked for yet |
 | L3VPN PE (routescope's P2) | Specs approved 2026-11-17, `docs/design/l3vpn-pe.md` and `l3vpn-ruby-pe.md`; All 7 PRs built: the VPN table, then VRFs, import and both transports, then export and labels, then `l3vpn-lab` with FRR as the other PE and its gate passing, then VPN-IPv6 (RFC 4659) over the IPv4 core, then CEs by eBGP in a VRF with AS override and Site of Origin, then a VPN route reflector | Seven pull requests for the PE, from the VPN table to PE to CE eBGP; four for the labs of our own daemons |
 
 **Left, outside the tables above:**
@@ -2794,8 +2848,8 @@ Neighbor ◀──UPDATE── Adj-RIB-Out (per peer) ◀───────�
           is a default gem today, and Conventions says to check that before
           requiring one, because Ruby keeps moving these to bundled gems:
           `observer` went in 3.4 and `logger` in 4.0. `IO.popen` is core
-          and does the whole job in a line, so the library keeps its one
-          runtime gem. The argv Array form never reaches a shell.
+          and does the whole job in a line, so the library takes no
+          third-party gem. The argv Array form never reaches a shell.
         * **An install is committed only on success; a removal always.**
           `ip route del` exits 2 for a route the table does not have, so
           the commonest way a removal fails is that the route was already

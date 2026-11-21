@@ -366,7 +366,8 @@ class BGP_Daemon_Speaker_Test < Test::Unit::TestCase
     config = { 'address' => '10.0.0.2', 'as' => 65_001, 'capabilities' => [],
                'connect' => false, 'description' => 'd', 'hold_time' => 30,
                'open_timeout' => 5, 'port' => 179, 'record' => 'routes', 'retry' => 2,
-               'route_reflector_client' => false, 'vrf' => 'A', 'as_override' => true, 'soo' => '65000:11' }
+               'route_reflector_client' => false, 'vrf' => 'A', 'as_override' => true, 'soo' => '65000:11',
+               'bfd' => false }
     assert_equal(BGP::Daemon::Peer::KEYS.sort, config.keys.sort, 'the case covers every key')
     assert_nothing_raised do
       speaker('neighbors' => [config], 'vrfs' => [{ 'name' => 'A', 'table' => 100, 'import' => ['65000:100'] }])

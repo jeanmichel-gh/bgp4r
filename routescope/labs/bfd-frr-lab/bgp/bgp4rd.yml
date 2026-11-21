@@ -1,0 +1,23 @@
+# bgp, a bgp4rd in AS 65001 with one eBGP neighbor, frr, and a BFD
+# session to it: `bfd: true`. bgp4r's docs/bfd.md is the guide.
+#
+# bgp4rd asks bfdd4r, which with-bfdd4r started beside it, for a session
+# on the interface and from the address `ip -j route get 10.0.12.2`
+# answers, eth1 and 10.0.12.1. When that session goes from Up to Down
+# for any reason but an AdminDown, the BGP session is reset with a
+# Cease, subcode 10, BFD Down, and bgp4rd dials again after `retry`.
+router_id: 10.255.0.1
+as: 65001
+log_level: info
+
+neighbors:
+  - address: 10.0.12.2
+    as: 65002
+    description: frr
+    connect: true
+    retry: 2
+    hold_time: 9
+    bfd: true
+
+originate:
+  - prefixes: [10.255.0.1/32]
