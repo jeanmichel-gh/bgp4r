@@ -1400,7 +1400,7 @@ test/functional/lab/     lab tests: loopback speaker test and one Compose test p
 
 ## Running tests
 
-Ruby 3.3, 3.4 and 4.0 are supported and tested in CI. Tests use test-unit. The load path is the repo root, so pass `-I.` when you run a single file.
+Ruby 3.3, 3.4 and 4.0 are supported and tested in CI. `bgp4r.gemspec` requires 3.2 or later, the owner's floor of 2026-11-21 for every router that takes bfd4r, whose bfdd4r needs `Queue#pop(timeout:)`. bfd4r requires 3.2 too, since its #10 (`3ad0f14`), and its CI runs on 3.2; bgp4r's matrix starts at 3.3, so 3.2 is the floor and not a tested version here. Tests use test-unit. The load path is the repo root, so pass `-I.` when you run a single file.
 
 **`docs/running-tests.md` is the generated map of everything below**, by
 BGP feature rather than by file: which command runs what, what each tier

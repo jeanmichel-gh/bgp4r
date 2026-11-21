@@ -18,7 +18,9 @@ Gem::Specification.new do |s|
   # `bgp4r sim` so that a container command reads plainly.
   s.bindir = "exe"
   s.executables = ["bgp4r", "bgp4rd", "bgp4r-cli", "bgp4r-sim"]
-  s.required_ruby_version = Gem::Requirement.new(">= 1.8.6")
+  # 3.2, the owner's floor for every router that takes bfd4r (2026-11-21):
+  # bfdd4r's loop needs Queue#pop(timeout:), new in 3.2. CI tests 3.3 up.
+  s.required_ruby_version = Gem::Requirement.new(">= 3.2")
   s.required_rubygems_version = '>= 1.3.6'
   # logger ships with Ruby, but Ruby 4.0 made it a bundled gem, so it
   # must be declared.
