@@ -1093,8 +1093,11 @@ routescope/labs/         the containerlab labs written for the routescope
                          bgp node starts bgp4rd once eth1 has its address,
                          because the one hop check runs at start and
                          `exec:` runs after the entrypoint. Measured on
-                         2026-11-21 on the owner's VM: 0.81 to 0.90 s, the 900 ms
-                         Detection Time; a sabotaged image that ignores
+                         2026-11-21 on the owner's VM: 0.68 to 0.90 s, the 900 ms
+                         Detection Time, and bgp4rd's own share 2 to 7 ms
+                         after bfdd4r's detection, which the gate checks
+                         apart so a slow runner's clock cannot fail it
+                         for bfdd4r's timer; a sabotaged image that ignores
                          the failure fails the gate
                          lab/speaker.rb is the **command line** now and nothing
                          else: the sessions, the configuration and the recording

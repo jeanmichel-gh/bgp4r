@@ -110,6 +110,7 @@ class LabBfdFrrLabTopologyTest < Test::Unit::TestCase
     gate = read('gate.sh')
     assert_match(/grep -m1 'Cease 6\/10 BFD Down sent'/, gate)
     assert_match(/to_f < 1\.0/, gate)
+    assert_match(/check "bgp4rd: reset within 100 ms of bfdd4r's detection/, gate)
     assert_match(/tc qdisc replace dev eth1 root netem loss 100%/, gate)
     assert_match(/^exit "\$FAILED"$/, gate)
     # And that line is the one bgp/daemon/bfd.rb writes.

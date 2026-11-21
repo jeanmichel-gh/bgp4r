@@ -53,10 +53,18 @@ check "FRR: BGP session to 10.0.12.1 Established" frr_bgp_up
 # time on bgp4rd's own log line, both from this host's clock: docker logs
 # --timestamps stamps each line as the daemon wrote it.
 pids_b=$(docker inspect -f '{{.State.Pid}}' "$B"); pids_f=$(docker inspect -f '{{.State.Pid}}' "$F")
+#
+# **FRR's end first, and the clock starts when that command returns.**
+# bgp4rd's Detection Time runs from the last packet it received, so its
+# loss begins when FRR's egress drops, not when ours does. Started before
+# two sudo spawns, the clock read 1.003 s on a CI runner where bgp4rd's
+# reset came 2 ms after bfdd4r's own `up -> down`: the slack was the
+# tool's. The spawn is before the qdisc is in place and only the exit is
+# after, so this reads at most a few ms short.
 since=$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)
+sudo nsenter -t "$pids_f" -n tc qdisc replace dev eth1 root netem loss 100%
 t0=$(date +%s.%N)
 sudo nsenter -t "$pids_b" -n tc qdisc replace dev eth1 root netem loss 100%
-sudo nsenter -t "$pids_f" -n tc qdisc replace dev eth1 root netem loss 100%
 line=""
 for _ in $(seq 50); do
   line=$(docker logs --timestamps --since "$since" "$B" 2>&1 | grep -m1 'Cease 6/10 BFD Down sent')
@@ -64,12 +72,22 @@ for _ in $(seq 50); do
   sleep 0.1
 done
 echo "===== bgp log"; echo "${line:-no reset line}"; echo
+echo "===== bgp bfdd4r log, its own up -> down beside bgp4rd's reset"
+bline=$(docker exec "$B" grep 'up -> down (control_detection_time_expired)' /var/log/bfdd4r.log | tail -1)
+echo "${bline:-none}"; echo
+# What bgp4rd itself adds: from bfdd4r's detection to its reset line. The
+# rest of the second is BFD's own Detection Time, 900 ms at 300 ms x 3.
+gap=$(ruby -rtime -e 'a, b = ARGV; exit 1 if a.empty? || b.empty?
+  printf("%.3f", Time.iso8601(b.split.first).to_f - Time.iso8601(a.split.first).to_f)' "$bline" "$line")
+echo "bgp4rd reset ${gap:-never} s after bfdd4r's own up -> down"
 took=$(ruby -rtime -e 'l = ARGV[0]; exit 1 if l.empty?; printf("%.3f", Time.iso8601(l.split.first).to_f - ARGV[1].to_f)' "$line" "$t0")
 echo "reset ${took:-never} s after the loss began"
 under_a_second() { ruby -e 'exit(ARGV[0].to_f > 0 && ARGV[0].to_f < 1.0 ? 0 : 1)' "${took:-0}"; }
 reset_by_bfd() { peers | jq_rb 'p = d.find { |r| r["address"] == "10.0.12.2" }; p["last_error"].to_s.include?("BFD Down") && p["state"] != "established"'; }
 check "bgp4rd: Cease 6/10 BFD Down sent" test -n "$line"
 check "bgp4rd: reset in under a second (${took:-never} s)" under_a_second
+soon_after_bfd() { ruby -e 'exit(ARGV[0] != "" && ARGV[0].to_f >= 0 && ARGV[0].to_f < 0.1 ? 0 : 1)' "${gap:-}"; }
+check "bgp4rd: reset within 100 ms of bfdd4r's detection (${gap:-never} s)" soon_after_bfd
 check "bgp4rd: last error BFD Down, session not Established" reset_by_bfd
 show "bgp bgp4r-cli show.peers" peers
 show "frr show bfd peer 10.0.12.1" vt 'show bfd peer 10.0.12.1'

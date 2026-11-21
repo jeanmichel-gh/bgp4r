@@ -89,9 +89,10 @@ Other rows have no such key.
   bfdd4r on 127.0.0.1 and 127.0.0.2, with no root. It needs bfd4r on the
   load path, which `bundle exec` gives from `../bfd4r`.
 * `routescope/labs/bfd-frr-lab`: the interop check against FRR's bfdd,
-  deployed by CI. Measured on 2026-11-21: the BGP session reset 0.81 to
+  deployed by CI. Measured on 2026-11-21: the BGP session reset 0.68 to
   0.90 s after the link began losing every packet, with 6/10 sent, where
-  the hold time is 9 s.
+  the hold time is 9 s; bgp4rd's own share is 2 to 7 ms after bfdd4r
+  detects the failure, and the rest is BFD's 900 ms Detection Time.
 
 ## bfd4r as a dependency
 
