@@ -72,6 +72,7 @@ require 'bgp/daemon/vrf_sync'
 require 'bgp/daemon/vpn_exporter'
 require 'bgp/daemon/vrf_ce_exporter'
 require 'bgp/daemon/vpn_reflector'
+require 'bgp/daemon/bfd'
 require 'socket'
 require 'thread'
 
@@ -294,7 +295,7 @@ module BGP
       # to the code, so a key read here and not listed fails the suite.
       KEYS = %w[address as capabilities connect description hold_time
                 open_timeout port record retry route_reflector_client
-                vrf as_override soo].freeze
+                vrf as_override soo bfd].freeze
 
       # Raises ArgumentError naming every key `config` carries that no
       # code reads, and the keys there are.
@@ -376,6 +377,10 @@ module BGP
       # Speaker#check_reflector_clients.
       def route_reflector_client? ; @config['route_reflector_client'] == true ; end
       def active? ; @config.fetch('connect', false) ; end
+      # A BFD session to this neighbor, one hop away, beside BGP: see
+      # bgp/daemon/bfd.rb. Speaker#check_bfd refuses any other value than
+      # true or false.
+      def bfd? ; @config['bfd'] == true ; end
 
       # A CE neighbor (docs/design/l3vpn-pe.md, pull request 7): the VRF
       # its session is bound to, or nil for a neighbor in the global
@@ -559,6 +564,11 @@ module BGP
       ADMIN_SHUTDOWN = 2
       ADMIN_RESET = 4
       OTHER_CONFIG_CHANGE = 6
+      # RFC 9384 section 3: "When a BGP connection is terminated due to a
+      # BFD session going into the Down state, the BGP speaker SHOULD send
+      # a NOTIFICATION message with the error code "Cease" and the error
+      # subcode "BFD Down"", which IANA numbered 10.
+      BFD_DOWN = 10
 
       # A Cease with that subcode, when the session is up. True when one
       # was queued. `Neighbor#stop` waits for its writer, so a Cease sent
@@ -778,6 +788,9 @@ module BGP
       # not a route reflector (bgp/daemon/vpn_reflector.rb, pull request 6).
       attr_reader :vpn_reflector
 
+      # BFD for the neighbors with `bfd: true` (bgp/daemon/bfd.rb).
+      attr_reader :bfd
+
       # The l3vpn: block's keys.
       L3VPN_KEYS = %w[labels transport tunnels].freeze
 
@@ -804,6 +817,9 @@ module BGP
       # config key, because it is a Ruby callable and a node file is YAML:
       # `log_level` and `log` in the file are the file's business and this
       # is the program's.
+      #
+      # arg[:bfd_client] and arg[:bfd_runner] are Bfd's :client and
+      # :runner, so a test drives BFD with a fake bfdd4r and a fake `ip`.
       def initialize(config, arg = {})
         @logger = arg[:logger]
         @config = config
@@ -831,6 +847,9 @@ module BGP
         @export = config['export']
         @fib = config['fib']
         check_reflector_clients
+        @bfd = Bfd.new(self, :client => arg[:bfd_client], :runner => arg[:bfd_runner],
+                       :logger => @logger)
+        check_bfd
         @link_state = LinkStateTable.new
         @vpn = BGP::Rib::VpnTable.new(local_as: @my_as, router_id: @router_id,
                                       cluster_id: decision_options[:cluster_id])
@@ -968,11 +987,15 @@ module BGP
         @vrf_servers = @peers.select { |p| !p.active? && p.vrf }.collect(&:vrf).uniq.collect { |v| listen(v) }
         @peers.select(&:active?).each(&:run_active)
         @link_state_producer&.start
+        # BFD comes up beside BGP and not after it: the sessions are
+        # asked for now, whatever state BGP is in.
+        @bfd.start
         self
       end
 
       def stop
         @stopping = true
+        @bfd.stop
         @link_state_producer&.stop
         @server.close if @server
         Array(@vrf_servers).each(&:close)
@@ -1078,6 +1101,21 @@ module BGP
       # The addresses of the neighbors flagged `route_reflector_client`.
       def reflector_clients
         @peers.select(&:route_reflector_client?).map(&:address)
+      end
+
+      # Raises ArgumentError when a neighbor's `bfd` is anything but true
+      # or false, or when one with `bfd: true` is not one hop away, so
+      # bgp4rd does not start on a BFD session it cannot run. The one hop
+      # check asks the kernel, `ip -j route get`, which is why a
+      # containerlab node with `bfd: true` starts bgp4rd once its link
+      # addresses are there: `exec:` runs after the entrypoint.
+      def check_bfd
+        @peers.each do |p|
+          v = p.config['bfd']
+          next if v.nil? || v == true || v == false
+          raise ArgumentError, "neighbor #{p.address}: bfd is true or false, got #{v.inspect}"
+        end
+        @bfd.check(@peers)
       end
 
       # Refuses a `route_reflector_client` flag this speaker cannot act on.

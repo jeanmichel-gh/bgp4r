@@ -54,7 +54,7 @@ module BGP
     #
     # | Effect | Keys | What a commit does |
     # |---|---|---|
-    # | live | `log_level`, `originate`, `mark`, `link_state unreachable`, a neighbor's `description` | applies it, and nothing on the wire stops |
+    # | live | `log_level`, `originate`, `mark`, `link_state unreachable`, a neighbor's `description` and `bfd` | applies it, and nothing on the wire stops |
     # | bounce | a neighbor's `as`, `hold_time`, `capabilities`, `connect`, `port`, `retry` | ends that session and lets it come back |
     # | bounce all | `announce` | ends every session and lets them come back |
     # | restart | everything else | **refuses the commit**, naming the key |
@@ -147,7 +147,9 @@ module BGP
       NEIGHBOR_BOUNCE_KEYS = %w[as hold_time capabilities connect port retry].freeze
 
       # A neighbor's keys that take effect with no session change at all.
-      NEIGHBOR_LIVE_KEYS = %w[description].freeze
+      # `bfd` asks bfdd4r for a BFD session or lets go of one, and the BGP
+      # session is left alone either way (bgp/daemon/bfd.rb).
+      NEIGHBOR_LIVE_KEYS = %w[description bfd].freeze
 
       # Why a key cannot change while bgp4rd runs, by its first path
       # token. The mechanism, not the verdict: a later reader has to be
@@ -470,6 +472,7 @@ module BGP
           done.concat(apply_log_level)
           done.concat(apply_originate(originate))
           done.concat(apply_link_state)
+          done.concat(apply_bfd)
           done.concat(apply_bounces)
           done
         end
@@ -576,6 +579,32 @@ module BGP
           refuse_originate_with_no_table
           refuse_unreadable_mark
           refuse_unreachable_it_cannot_apply
+          refuse_bfd_it_cannot_run
+        end
+
+        # The paths that change a neighbor's `bfd`.
+        def bfd_paths
+          @paths.select { |p| p.first == 'neighbors' && p[2] == 'bfd' }
+        end
+
+        # A `bfd` that is not true or false, or `bfd: true` on a neighbor
+        # that is not one hop away, which `Speaker#check_bfd` refuses at
+        # start for the same reasons.
+        def refuse_bfd_it_cannot_run
+          bfd_paths.map { |p| p[1].to_s }.uniq.each do |address|
+            c = Array(@candidate['neighbors']).find { |n| n.is_a?(Hash) && n['address'].to_s == address }
+            next unless c
+            v = c['bfd']
+            if !(v.nil? || v == true || v == false)
+              @errors << "neighbor #{address}: bfd is true or false, got #{v.inspect}"
+            elsif v == true
+              begin
+                @speaker.bfd.hop(address)
+              rescue ArgumentError => e
+                @errors << e.message
+              end
+            end
+          end
         end
 
         # `link_state unreachable` is live only where a Producer reads
@@ -718,6 +747,15 @@ module BGP
           announced, withdrawn = @link_state_diff
           ["link_state unreachable is #{value} now: #{announced.size} BGP-LS route(s) sent, " \
            "#{withdrawn.size} withdrawn"]
+        end
+
+        # The BFD sessions the neighbors now want are asked for, and the
+        # others let go of. No BGP session is touched.
+        def apply_bfd
+          return [] if bfd_paths.empty?
+          added, dropped = @speaker.bfd.sync
+          added.map { |a| "a BFD session to #{a} is wanted now" } +
+            dropped.map { |a| "the BFD session to #{a} is no longer wanted" }
         end
 
         # **Stop then start, and not `clear`.** `Peer#clear` is an alias

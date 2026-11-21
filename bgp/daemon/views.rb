@@ -299,6 +299,10 @@ module BGP
           # something is. See bgp/daemon/hand.rb.
           hand = @speaker.hand.count(peer.address)
           row = row.merge(:hand => hand) unless hand.zero?
+          # The BFD session's state, present only on a neighbor with
+          # `bfd: true`: `up`, `down`, `init`, `admin_down`, or `unknown`
+          # while bfdd4r has not told one. See bgp/daemon/bfd.rb.
+          row = row.merge(:bfd => @speaker.bfd.state(peer.address) || 'unknown') if peer.bfd?
           # A CE's VRF, and the counts of each family the session carries,
           # present only on a CE's row or a session with a VPN family, so
           # a unicast speaker's rows read as they always have.
