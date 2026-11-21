@@ -6,7 +6,7 @@ name: Capture
 # routescope's BGP driver commands, to the job log. Runs on demand, and on
 # a push that changes the lab or this file.
 #
-# It is also the one place bgp4r-lab, rr-lab and fwd-lab are deployed
+# It is also the one place bgp4r-lab, rr-lab, fwd-lab and bfd-frr-lab are deployed
 # at all, so a lab that does not come up fails here first. One job per
 # lab, each on its own runner.
 on:
@@ -91,3 +91,30 @@ jobs:
         if: failure()
         run: |
           for n in a b c d; do echo "--- $n"; docker logs --tail 60 clab-fwd-lab-$n 2>&1 || true; done
+
+  # bfd-frr-lab, the interop check of bgp4rd's `bfd: true`: bgp4rd with
+  # bfdd4r beside it against FRR's bgpd and bfdd. Its gate.sh checks BFD
+  # Up on both ends, then loses every packet on the link and checks that
+  # bgp4rd resets the session in under a second with Cease 6/10, BFD
+  # Down, and fails the job when one check fails.
+  bfd-frr-lab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      # bfd4r, the lab-node image's build context: a sibling checkout.
+      - run: git clone -q --depth 1 https://github.com/jeanmichel-gh/bfd4r ../bfd4r
+      - name: containerlab and images
+        run: |
+          bash -c "$(curl -sL https://get.containerlab.dev)"
+          docker pull -q quay.io/frrouting/frr:10.2.1
+          docker build -q --target lab-node --build-context bfd4r=../bfd4r -t bgp4r-lab:latest .
+      - name: bfd-frr-lab up
+        run: sudo containerlab deploy -t routescope/labs/bfd-frr-lab/bfd-frr-lab.clab.yml
+      - name: gate
+        run: bash routescope/labs/bfd-frr-lab/gate.sh
+      - name: logs on failure
+        if: failure()
+        run: |
+          for n in bgp frr; do echo "--- $n"; docker logs --tail 80 clab-bfd-frr-lab-$n 2>&1 || true; done
+          docker exec clab-bfd-frr-lab-bgp cat /var/log/bfdd4r.log 2>&1 | tail -40 || true
