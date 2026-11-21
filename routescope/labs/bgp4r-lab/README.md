@@ -117,7 +117,7 @@ them as well as the checkout. To build one again, remove it.
 By hand, from a bgp4r checkout:
 
 ```
-docker build --target lab-node -t bgp4r-lab:latest .
+docker build --target lab-node --build-context bfd4r=../bfd4r -t bgp4r-lab:latest .
 docker build -f routescope/labs/bgp4r-lab/Dockerfile.bird \
              -t bgp4r-bird:latest routescope/labs/bgp4r-lab
 docker build -f routescope/labs/bgp4r-lab/Dockerfile.gobgp \

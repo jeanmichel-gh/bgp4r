@@ -139,7 +139,7 @@ All four nodes run `bgp4r-lab:latest`, the root Dockerfile's
 starting the lab; the lab runs whatever is on the host under that name:
 
 ```
-docker build --target lab-node -t bgp4r-lab:latest .
+docker build --target lab-node --build-context bfd4r=../bfd4r -t bgp4r-lab:latest .
 ```
 
 ## By hand

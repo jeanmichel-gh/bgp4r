@@ -91,7 +91,7 @@ ENTRYPOINT ["ruby", "-I/app"]
 
 # The containerlab node image: the speaker stage plus iproute2, as root.
 #
-#   docker build --target lab-node -t bgp4r-lab:latest .
+#   docker build --target lab-node --build-context bfd4r=../bfd4r -t bgp4r-lab:latest .
 #
 # `routescope/labs/bgp4r-lab` is the one topology that needs it, and the
 # two things it adds are both things the `speaker` stage cannot be given

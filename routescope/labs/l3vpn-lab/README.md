@@ -109,7 +109,7 @@ docker exec clab-l3vpn-lab-p1 tcpdump -nn -i eth1 mpls
 ## Running it
 
 Images: `isis4r:latest` (isis), `bgp4r-lab:latest` from this repository
-(`docker build --target lab-node -t bgp4r-lab:latest .`, with L3VPN pull
+(`docker build --target lab-node --build-context bfd4r=../bfd4r -t bgp4r-lab:latest .`, with L3VPN pull
 request 3 or later) and `quay.io/frrouting/frr:10.2.1`. The host needs
 the `vrf`, `mpls_router` and `mpls_iptunnel` modules.
 

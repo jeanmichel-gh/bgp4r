@@ -19,9 +19,9 @@ amounts. Measured 2026-11-03:
 
 | Tier | What it needs | Files | Time | Command |
 |---|---|---:|---|---|
-| unit | Ruby | 175 | 21s | `ruby test/run_unit.rb` |
-| functional | a loopback socket | 18 | 18s | one file at a time, below |
-| lab | gobgpd, FRR, Docker or root | 35 | 10s to 400s per group | `ruby test/run_lab.rb GROUP` |
+| unit | Ruby | 176 | 21s | `ruby test/run_unit.rb` |
+| functional | a loopback socket | 19 | 18s | one file at a time, below |
+| lab | gobgpd, FRR, Docker or root | 36 | 10s to 400s per group | `ruby test/run_lab.rb GROUP` |
 
 **The first two tiers together are under a minute and need nothing
 installed.** That is worth knowing before reaching for a lab test.
@@ -95,6 +95,7 @@ Getting a session up and keeping it.
 | `open` | 12 | 0 | 1 | OPEN, the optional parameters, and every capability |
 | `messages` | 5 | 0 | 0 | The common header, KEEPALIVE, UPDATE and NOTIFICATION |
 | `route-refresh` | 6 | 0 | 0 | ROUTE-REFRESH and outbound route filtering |
+| `bfd` | 1 | 1 | 1 | bfd: true on a neighbor: a BFD session from bfd4r, and Cease 6/10 when it fails |
 | `fsm` | 3 | 0 | 0 | The finite state machine, the TCP session and the two IO threads |
 
 ### routing
@@ -173,6 +174,20 @@ ATTR_SET, a path attribute set inside a path attribute.
 
 ```
 ruby test/run_feature.rb attr-set
+```
+
+### `bfd`
+
+bfd: true on a neighbor: a BFD session from bfd4r, and Cease 6/10 when it fails.
+
+- RFC 5882 sections 4.1, 4.2 and 10.2, RFC 9384
+- Read first: `docs/bfd.md`
+- 1 unit file, 1 functional
+- lab:
+  - `bfd_frr_lab_topology_test`
+
+```
+ruby test/run_feature.rb bfd
 ```
 
 ### `bgp-ls`
@@ -860,5 +875,5 @@ test file has to be tagged before the suite is green again, which is
 the same arrangement `test/unit/lab_groups_test.rb` has with the CI
 matrix.
 
-228 of 228 test files are tagged. The
+231 of 231 test files are tagged. The
 remainder, if any, is what the guard names.

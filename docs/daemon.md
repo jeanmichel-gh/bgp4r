@@ -159,9 +159,12 @@ container because Docker sets `net.ipv4.ip_unprivileged_port_start=0` in
 the container's own namespace. Installing routes needs `CAP_NET_ADMIN`
 and is off unless asked for.
 
-**One runtime gem.** `logger`. Nothing in the daemon may add a second,
-which rules out a web framework, a JSON gem and an event-machine. The
-socket server is `UNIXServer` and one thread per client, as ospfd's is.
+**One runtime gem, and the owner's own.** `logger`, and bfd4r, the
+owner's BFD gem, brought in by path for `bfd: true` (docs/bfd.md) and
+loaded only when a neighbor asks for BFD. Nothing in the daemon may add
+another, which rules out a web framework, a JSON gem and an
+event-machine. The socket server is `UNIXServer` and one thread per
+client, as ospfd's is.
 
 **It must not validate what it sends.** Conventions is explicit and the
 daemon does not get an exception. A deliberately wrong UPDATE is a test
@@ -254,6 +257,9 @@ neighbors:
   - address: 10.0.30.1
     as: 65000
     route_reflector_client: true   # RFC 4456 section 6; see below
+  - address: 10.0.12.2
+    as: 65002
+    bfd: true                      # a BFD session beside BGP; docs/bfd.md
 
 originate:
   - prefixes: [10.255.0.0/24]
@@ -287,7 +293,7 @@ mark:                              # added to routes made by hand; see route.ori
   large_communities: ['65000:1:1']
 ```
 
-Eight notes on it.
+Notes on it, one key or block each.
 
 `fib:` installs each best route with `ip route replace`, **except over a
 route another program holds.** A connected route, a static one or an
@@ -326,6 +332,12 @@ neighbors become `Export`'s client list. Four things are refused:
 Like every `export` key, it cannot change in a commit, because a
 replacement Router starts with an empty Adj-RIB-Out per peer.
 `bgp4r-sim` refuses it, since an injector holds no Loc-RIB.
+
+`bfd: true` on a neighbor asks bfdd4r for a BFD session to it, one hop
+away, and resets the BGP session with a Cease 6/10, BFD Down, when an Up
+BFD session fails. It is refused at start-up and in a commit when the
+neighbor is not one hop away, and a commit adds or removes it live,
+with no BGP reset. docs/bfd.md is the guide.
 
 `cluster_id` and `default_local_pref` are written under `export` and
 read by the decision process too. The first is the ID a reflector
@@ -1129,6 +1141,11 @@ by default. Both are false and null otherwise. A peer row gains
 `Export#client?`, so it says what the export rules decide. With
 `route_reflector: true` and no client list that is every internal
 peer, which is the single cluster case of section 6.
+
+**A neighbor with `bfd: true` says how its BFD session is**: its row
+gains `bfd`, `up`, `down`, `init` or `admin_down` as bfdd4r last told
+it, or `unknown` before it has told one and while bfdd4r is away. Other
+rows have no such key. docs/bfd.md.
 
 **A CE's row, and a row whose session negotiated a VPN family, say
 more**, for routescope's L3VPN views (routescope
