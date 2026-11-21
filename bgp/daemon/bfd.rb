@@ -227,7 +227,8 @@ module BGP
           until @stopping
             begin
               ios = @lock.synchronize { client.ios }
-              ios.empty? ? sleep(WAIT) : IO.select(ios, nil, nil, WAIT)
+              # ::IO, because IO inside module BGP is BGP::IO (CLAUDE.md).
+              ios.empty? ? sleep(WAIT) : ::IO.select(ios, nil, nil, WAIT)
               poll
             rescue IOError, SystemCallError
               # A socket the client closed under the select: the next
