@@ -1026,6 +1026,8 @@ test/helpers/            a small test BGP server
                          fake_bfd_client.rb, BFD::Client's shape with no
                          bfdd4r, so the unit suite needs no bfd4r
 lab/                     speakers in containers: lab/speaker.rb and lab/topologies/ (see lab/README.md)
+                         lab/bases.sh tags the base images a Dockerfile
+                         names before a build, so Docker Hub is not asked
                          lab/routescope is a symlink to routescope/labs/
                          for one release, since 2026-11-12, because
                          routescope's CI still reads that path

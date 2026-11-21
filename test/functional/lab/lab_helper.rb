@@ -58,7 +58,7 @@ module LabHelper
       @env = env.to_h { |k, v| [k.to_s, v.to_s] }
     end
 
-    def up ; compose('up', '--detach', '--build') ; end
+    def up ; bases ; compose('up', '--detach', '--build') ; end
     def down ; compose('down', '--volumes', '--remove-orphans', '--timeout', '5') ; end
 
     # For a topology whose point is one container running to completion:
@@ -66,6 +66,7 @@ module LabHelper
     # that service's exit status]. Never raises on a non-zero status, the
     # status is the answer.
     def up_until_exit(service, timeout: 900)
+      bases
       out, status = Timeout.timeout(timeout) do
         Open3.capture2e(@env, 'docker', 'compose', '-f', @file, 'up', '--build',
                         '--abort-on-container-exit', '--exit-code-from', service)
@@ -90,7 +91,20 @@ module LabHelper
       nil
     end
 
+    # The command that tags the base images of the Dockerfile every
+    # topology builds from, before "up --build" (lab/bases.sh). The
+    # fault matrix's GOBGP_IMAGE is a build arg too.
+    def bases_command
+      sets = ENV.to_h.merge(@env).slice('GOBGP_IMAGE').map { |k, v| "#{k}=#{v}" }
+      [File.join(ROOT, 'lab', 'bases.sh'), *sets, File.join(ROOT, 'Dockerfile')]
+    end
+
     private
+
+    def bases
+      out, status = Open3.capture2e(*bases_command)
+      raise "lab/bases.sh failed:\n#{out}" unless status.success?
+    end
 
     def compose(*args, check: true)
       out, status = Open3.capture2e(@env, 'docker', 'compose', '-f', @file, *args)
