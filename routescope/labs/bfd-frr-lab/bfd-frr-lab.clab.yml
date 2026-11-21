@@ -1,0 +1,59 @@
+# bfd-frr-lab: the interop check of bgp4rd's `bfd: true` against FRR.
+# One bgp4rd and one FRR router over eBGP on one link, each with a BFD
+# session to the other: bfdd4r beside bgp4rd, FRR's bfdd beside its
+# bgpd. routescope's docs/design/bfd-clients.md, step 6d.
+#
+#   node  AS     address on eth1
+#   bgp   65001  10.0.12.1/30   bgp4rd, bfd: true toward frr
+#   frr   65002  10.0.12.2/30   FRR 10.2.1, neighbor 10.0.12.1 bfd
+#
+# The gate, gate.sh: BFD Up on both and the BGP session Established;
+# then the link loses every packet (netem 100% on both ends), and
+# bgp4rd resets the session in under a second with a NOTIFICATION 6/10,
+# "BFD Down" (RFC 9384), where the hold time alone would take 9.
+#
+# **bgp starts bgp4rd once eth1 has its address, and that is not
+# decoration.** bgp4rd checks at start that a `bfd: true` neighbor is one
+# hop away, with `ip -j route get`, and `exec:` runs after the
+# entrypoint, so without the wait the address is not there yet, the
+# kernel answers through the management network's gateway, and bgp4rd
+# refuses to start. The entrypoint is the image's own, with-bfdd4r, so
+# bfdd4r runs beside it either way.
+#
+#   docker build --target lab-node --build-context bfd4r=../bfd4r -t bgp4r-lab:latest .
+#   sudo containerlab deploy -t routescope/labs/bfd-frr-lab/bfd-frr-lab.clab.yml
+#   LAB=bfd-frr-lab routescope/labs/bfd-frr-lab/gate.sh
+#   sudo containerlab destroy -t routescope/labs/bfd-frr-lab/bfd-frr-lab.clab.yml
+name: bfd-frr-lab
+
+topology:
+  nodes:
+
+    bgp:
+      kind: linux
+      image: bgp4r-lab:latest
+      entrypoint: with-bfdd4r
+      cmd: >-
+        sh -c "until ip -4 -o addr show dev eth1 2>/dev/null | grep -q 10.0.12.1/30; do sleep 0.2; done;
+        exec ruby -I/app /app/exe/bgp4rd -f /etc/bgp4r/bgp4rd.yml -s /run/bgp4r/bgp4rd.sock -l -"
+      labels:
+        routescope.kind: bgp4r
+        routescope.protocols: bgp,bfd
+      binds:
+        - bgp/bgp4rd.yml:/etc/bgp4r/bgp4rd.yml
+      exec:
+        - ip addr add 10.0.12.1/30 dev eth1
+
+    frr:
+      kind: linux
+      image: quay.io/frrouting/frr:10.2.1
+      labels:
+        routescope.kind: frr
+        routescope.protocols: bgp,bfd
+      binds:
+        - frr/daemons:/etc/frr/daemons
+        - frr/frr.conf:/etc/frr/frr.conf
+        - frr/vtysh.conf:/etc/frr/vtysh.conf
+
+  links:
+    - endpoints: ["bgp:eth1", "frr:eth1"]

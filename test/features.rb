@@ -280,6 +280,16 @@ module Features
                    orfs/prefix_orf_test],
     },
 
+    'bfd' => {
+      :area  => 'session',
+      :about => 'bfd: true on a neighbor: a BFD session from bfd4r, and Cease 6/10 when it fails',
+      :rfc   => 'RFC 5882 sections 4.1, 4.2 and 10.2, RFC 9384',
+      :doc   => 'docs/bfd.md',
+      :unit  => %w[daemon/bfd_test],
+      :functional => %w[bfd_test],
+      :lab   => %w[bfd_frr_lab_topology_test],
+    },
+
     'fsm' => {
       :area  => 'session',
       :about => 'The finite state machine, the TCP session and the two IO threads',

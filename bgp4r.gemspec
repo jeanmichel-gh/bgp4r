@@ -21,8 +21,12 @@ Gem::Specification.new do |s|
   s.required_ruby_version = Gem::Requirement.new(">= 1.8.6")
   s.required_rubygems_version = '>= 1.3.6'
   # logger ships with Ruby, but Ruby 4.0 made it a bundled gem, so it
-  # must be declared. It is the only runtime dependency.
+  # must be declared.
   s.add_dependency 'logger'
+  # bfd4r, the owner's own BFD gem, for bgp4rd's `bfd: true`
+  # (bgp/daemon/bfd.rb). Not published yet, so the Gemfile takes it by
+  # path. Required only when a neighbor asks for BFD.
+  s.add_dependency 'bfd4r'
   s.files =  `git ls-files -z`.split("\x0")
   s.test_files = `git ls-files test -z`.split("\x0")
   s.extra_rdoc_files = ["LICENSE.txt","README.rdoc"] + `git ls-files bgp -z`.split("\x0")
