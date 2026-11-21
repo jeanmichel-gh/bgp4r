@@ -440,7 +440,7 @@ module Features
       :area  => 'programs',
       :about => 'lab/speaker.rb and the five topologies under lab/topologies',
       :doc   => 'docs/routescope-labs.md',
-      :unit  => %w[lab_helper_test],
+      :unit  => %w[lab_helper_test lab_bases_test],
       :lab   => %w[speaker_test two_speakers_test add_path_topology_test
                    bgp4r_lab_topology_test rr_lab_topology_test fwd_lab_topology_test],
     },

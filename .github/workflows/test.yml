@@ -132,6 +132,9 @@ jobs:
         ruby: ['3.3', '3.4', '4.0']
     steps:
       - uses: actions/checkout@v6
+      # The base image tagged first, pulled with retries (lab/bases.sh).
+      - name: Base images
+        run: lab/bases.sh RUBY_VERSION=${{ matrix.ruby }} Dockerfile
       - name: Build the test image
         run: >
           docker build --target test

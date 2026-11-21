@@ -29,6 +29,7 @@ jobs:
         run: |
           bash -c "$(curl -sL https://get.containerlab.dev)"
           docker pull -q quay.io/frrouting/frr:10.2.1
+          lab/bases.sh Dockerfile routescope/labs/bgp4r-lab/Dockerfile.bird routescope/labs/bgp4r-lab/Dockerfile.gobgp
           docker build -q --target lab-node --build-context bfd4r=../bfd4r -t bgp4r-lab:latest .
           docker build -q -f routescope/labs/bgp4r-lab/Dockerfile.bird -t bgp4r-bird:latest routescope/labs/bgp4r-lab
           docker build -q -f routescope/labs/bgp4r-lab/Dockerfile.gobgp -t bgp4r-gobgp:latest routescope/labs/bgp4r-lab
@@ -57,6 +58,7 @@ jobs:
         run: |
           bash -c "$(curl -sL https://get.containerlab.dev)"
           docker pull -q quay.io/frrouting/frr:10.2.1
+          lab/bases.sh Dockerfile routescope/labs/rr-lab/Dockerfile.bird routescope/labs/rr-lab/Dockerfile.gobgp
           docker build -q --target lab-node --build-context bfd4r=../bfd4r -t bgp4r-lab:latest .
           docker build -q -f routescope/labs/rr-lab/Dockerfile.bird -t bgp4r-bird:latest routescope/labs/rr-lab
           docker build -q -f routescope/labs/rr-lab/Dockerfile.gobgp -t bgp4r-gobgp:latest routescope/labs/rr-lab
@@ -82,6 +84,7 @@ jobs:
       - name: containerlab and image
         run: |
           bash -c "$(curl -sL https://get.containerlab.dev)"
+          lab/bases.sh Dockerfile
           docker build -q --target lab-node --build-context bfd4r=../bfd4r -t bgp4r-lab:latest .
       - name: fwd-lab up
         run: sudo containerlab deploy -t routescope/labs/fwd-lab/fwd-lab.clab.yml
@@ -108,6 +111,7 @@ jobs:
         run: |
           bash -c "$(curl -sL https://get.containerlab.dev)"
           docker pull -q quay.io/frrouting/frr:10.2.1
+          lab/bases.sh Dockerfile
           docker build -q --target lab-node --build-context bfd4r=../bfd4r -t bgp4r-lab:latest .
       - name: bfd-frr-lab up
         run: sudo containerlab deploy -t routescope/labs/bfd-frr-lab/bfd-frr-lab.clab.yml
