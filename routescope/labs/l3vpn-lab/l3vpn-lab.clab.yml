@@ -32,8 +32,8 @@
 # owns the interfaces and the VRF devices, pe1-bgp runs bgp4rd beside it.
 #
 # Images: isis4r:latest (isis), bgp4r-lab:latest (this repository) and
-# FRR master, pinned by digest below for its BFD fix (ABOUT.md, "FRR
-# version"). The host needs the vrf, mpls_router and
+# quay.io/frrouting/frr:10.7.1; ABOUT.md, "FRR version, and what to
+# watch", says which FRR fix waits for a release. The host needs the vrf, mpls_router and
 # mpls_iptunnel modules. ABOUT.md says what to look at.
 name: l3vpn-lab
 
@@ -98,7 +98,7 @@ topology:
     # after it starts. The default route Docker gives is removed.
     p2:
       kind: linux
-      image: quay.io/frrouting/frr:master@sha256:4e4981ceb4471d1c88c69ca355abeba7c9f4a9743dfb1643ef6c3c38b34597ab
+      image: quay.io/frrouting/frr:10.7.1
       labels: { graph-level: 3, routescope.protocols: isis }
       binds: [p2:/etc/frr]
       exec:
@@ -107,7 +107,7 @@ topology:
     # --- PE 2: FRR, IS-IS with SR and bgpd's VPN ---------------------
     pe2:
       kind: linux
-      image: quay.io/frrouting/frr:master@sha256:4e4981ceb4471d1c88c69ca355abeba7c9f4a9743dfb1643ef6c3c38b34597ab
+      image: quay.io/frrouting/frr:10.7.1
       labels: { graph-level: 4, routescope.protocols: "isis,bgp" }
       binds: [pe2:/etc/frr]
       exec:

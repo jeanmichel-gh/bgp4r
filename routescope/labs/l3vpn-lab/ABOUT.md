@@ -20,7 +20,7 @@ It shows:
 - pe2 to ce2a losing every packet: BFD resets their eBGP session in about a second, not 30
 - the same on pe1 to ce1a, where pe1's end is in VRF A
 
-IPv6 rides the same VRFs as VPN-IPv6 (RFC 4659), 2001:db8:1::/64 and 2001:db8:2::/64. bgp4rd installs pe2's IPv6 routes through p1's IPv6 link-local and sends its own; FRR receives them but cannot install them over an IPv4 next hop (10.2.1, and the master build here), so IPv6 crosses one way only. README.md has the details.
+IPv6 rides the same VRFs as VPN-IPv6 (RFC 4659), 2001:db8:1::/64 and 2001:db8:2::/64. bgp4rd installs pe2's IPv6 routes through p1's IPv6 link-local and sends its own; FRR receives them but cannot install them over an IPv4 next hop (10.2.1, 10.7.1 and master, measured 2026-11-22), so IPv6 crosses one way only. README.md has the details.
 
 ce1a and ce2a are CEs running bgp4rd in AS 65101 by eBGP inside VRF A. Each PE replaces 65101 by 65000 in what it sends them (AS override), so each site reaches the other's loopback, 172.16.1.1 and 172.16.2.1.
 
@@ -32,30 +32,41 @@ p1 and pe2 run BFD on their link, at 300 ms x 3, a 900 ms detection time. p1's `
 
 The gate fails the link twice. First the link goes down: both ends lose carrier and see it at once. Then it keeps its carrier and loses every packet (routescope's `netem:` step at `loss: 100%`), as a bad optic or a switch in between would. Neither end sees that. BFD does, and both IS-IS routers drop the adjacency. Without BFD, IS-IS would wait out its hold time, 3 s here (hello 1 s x 3).
 
-Measured through routescope on ospflab on 2026-11-22, FRR master as below, two runs (recordings `20261122-052921-scenario-gate` and `20261122-053034-scenario-gate`):
+Measured through routescope on ospflab on 2026-11-22, FRR 10.7.1, two runs (recordings `20261122-192157-scenario-gate` and `20261122-192438-scenario-gate`). The VM's load average was 41 to 73 from other work, so these are slow; on FRR master earlier the same day, at a load near 10, `failover` was 1902 ms and `failover_loss` 3409 ms.
 
 | Measure | Run 1 | Run 2 |
 | --- | --- | --- |
-| Link down: pe1's route to pe2 on 19003 | 161 ms | 473 ms |
-| Packet loss: pe1's route to pe2 on 19003 | 880 ms | 1050 ms |
-| `failover`, link down | 1902 ms | 3126 ms |
-| `failover_loss`, packet loss | 3409 ms | 9078 ms |
-| `restore`, link up | 4135 ms | 5057 ms |
-| `restore_loss`, netem cleared | 5111 ms | 4666 ms |
+| Link down: pe1's route to pe2 on 19003 | 517 ms | 2687 ms |
+| Packet loss: pe1's route to pe2 on 19003 | 3505 ms | 529 ms |
+| `failover`, link down | 4870 ms | 11381 ms |
+| `failover_loss`, packet loss | 15251 ms | 11468 ms |
+| `restore`, link up | 4993 ms | 7589 ms |
+| `restore_loss`, netem cleared | 7916 ms | 11806 ms |
 
-The first two rows are the time from the action to the first check, the route that moved. The `failover` and `restore` measures run from the action to a ping that passes, and include the VRF checks the gate makes before it, about a second each. So they say that the sites reach each other again, not how fast the routers moved. In run 2 the two VRF checks after the loss took 3.7 and 3.1 s, against under 0.9 s in run 1, with the VM's load average near 20.
+The first two rows are the time from the action to the first check, the route that moved. The `failover` and `restore` measures run from the action to a ping that passes, and include the VRF checks the gate makes before it, about a second each. So they say that the sites reach each other again, not how fast the routers moved.
 
 ## BFD on a PE to CE session
 
-pe2 and ce2a run BFD on their eBGP session: `neighbor 192.168.2.2 bfd` in pe2's VRF A, and `bfd: true` on ce2a's neighbor. ce2a starts bgp4rd once eth1 has its address, since bgp4rd checks at start that pe2 is one hop away. A CE is single-homed, so loss on its link has no other path. The gate checks that the BFD session goes down and ce2a drops pe1's site, 172.16.1.0/24, within 5 s, where the hold time alone takes 30. It does not time the failover. In the two runs above, ce2a's BFD session was down 1070 and 840 ms after the loss began, and the route was gone 221 and 228 ms after that.
+pe2 and ce2a run BFD on their eBGP session: `neighbor 192.168.2.2 bfd` in pe2's VRF A, and `bfd: true` on ce2a's neighbor. ce2a starts bgp4rd once eth1 has its address, since bgp4rd checks at start that pe2 is one hop away. A CE is single-homed, so loss on its link has no other path. The gate checks that the BFD session goes down and ce2a drops pe1's site, 172.16.1.0/24, within 5 s, where the hold time alone takes 30. It does not time the failover. In the two runs above, ce2a's BFD session was down 1091 and 1436 ms after the loss began, and the route was gone 370 and 732 ms after that.
 
-pe1 and ce1a run BFD on their eBGP session too, and pe1's end is in VRF A (routescope `docs/design/bfd-vrf.md`). pe1 starts `isisd` under `with-bfdd4r`, and pe1-bgp's `bgp4rd` uses that `bfdd4r`, since they share a namespace. bgp4rd checks the hop in the neighbor's VRF, `ip route get 192.168.1.2 vrf A`, so pe1-bgp waits for eth3's address before it starts. pe1's `bfdd4r` receives on a socket bound to VRF A, `192.168.1.1%A:3784` in `ss`. The gate checks this session as pe2 to ce2a's. In the two runs above, ce1a's BFD session was down 826 and 2113 ms after the loss began, and the route from pe1, 172.16.2.0/24, was gone 168 and 239 ms after that. The checks poll, so these times include up to a poll's wait.
+pe1 and ce1a run BFD on their eBGP session too, and pe1's end is in VRF A (routescope `docs/design/bfd-vrf.md`). pe1 starts `isisd` under `with-bfdd4r`, and pe1-bgp's `bgp4rd` uses that `bfdd4r`, since they share a namespace. bgp4rd checks the hop in the neighbor's VRF, `ip route get 192.168.1.2 vrf A`, so pe1-bgp waits for eth3's address before it starts. pe1's `bfdd4r` receives on a socket bound to VRF A, `192.168.1.1%A:3784` in `ss`. The gate checks this session as pe2 to ce2a's. In the two runs above, ce1a's BFD session was down 1785 and 2600 ms after the loss began, and the route from pe1, 172.16.2.0/24, was gone 997 and 2180 ms after that. The checks poll, so these times include up to a poll's wait.
 
-## FRR version
+## FRR version, and what to watch
 
-p2 and pe2 run FRR master, pinned by digest: `quay.io/frrouting/frr:master@sha256:4e4981ce…`, which says `10.9.0-dev_git20261122`. No FRR release has the fix this lab needs yet. Until FRRouting/frr#24040 (merged 2026-11-14), bgpd registered a BFD session to a BGP neighbor before it knew its local address, and replaced it with a new one once BGP connected. The old session's last packet said Down, so a peer that keeps its session, as bfdd4r does, took it as a failure and reset BGP. That happened at some starts of this lab, when BFD came up before BGP. On FRR 10.2.1 pe2 then also reset its own session. With the master build, the session is made once, already keyed, and three starts of a two-node copy and a start of this lab showed no BFD flap.
+p2 and pe2 run FRR 10.7.1, the newest FRR release on 2026-11-22. FRR is here for interop, and an interop lab runs released images only: when no release has a fix, the lab waits for one (the owner's rule, 2026-11-22).
 
-FRR master also drops the `remoteLabel` JSON field for `remoteLabels` (FRRouting/frr#24296). routescope reads either from its pull request on that (routescope `claude/frr-remote-labels`); an older routescope shows pe2's VPN routes as different from the kernel, and the gate fails at pe2's VRF route.
+**Watch for FRRouting/frr#24040 in a release.** It is merged in FRR master on 2026-11-14 ("bgpd: register single-hop BFD sessions already keyed") and in no release yet: not in 10.7.1, nor in the stable/10.7 or stable/10.6 branches, checked on 2026-11-22. When a release has it, move p2 and pe2 to that release, run the gate twice, and drop this section's flap.
 
-Move to the first FRR release that has #24040 when there is one.
+What it fixes. FRR's bgpd registers its BFD session to a neighbor before it knows its own address (`local:0.0.0.0`), then replaces it once BGP connects. The old session's last packet says Down, Diagnostic 3, not AdminDown. So a peer that keeps one session per neighbor, as bfdd4r and BIRD do, takes it as a failure. When it comes after BGP is Established, the peer resets BGP: bgp4rd recovers in about 2 s (bgp4r #361); BIRD waits 60 s.
 
+What it does here, on 2026-11-22:
+
+| FRR | When FRR swaps the session | BGP reset at start |
+| --- | --- | --- |
+| 10.2.1 | at BGP Established | ce2a's session, in 1 start of 3; pe2 also sent a Cease 6/10 |
+| 10.7.1 | when BGP's TCP connects, before Established | none in the one start measured: ce2a's bgpd logs "the BGP session is Idle, nothing to reset" |
+| master | never: one session, keyed from the start | none |
+
+ce2a's BFD session still goes Up, Down, Up once at a start on 10.7.1, so the gate checks BFD only after that.
+
+A second FRR behaviour: bfdd sends the same Down, not AdminDown, from any session its last client deregisters, so `no neighbor X bfd` on an Established FRR peer resets the peer's BGP (measured against BIRD, 2026-11-22). It does not happen in the gate.

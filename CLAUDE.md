@@ -8681,6 +8681,20 @@ spec's pull request 5 is next, and `Fault::UNREACHABILITY` joins
 `Fault::CATALOG` once that lab has measured it. Its review notes on the
 drafts, six points, are kept in the spec for later.
 
+### l3vpn-lab's FRR waits for a release with FRRouting/frr#24040
+
+l3vpn-lab's FRR nodes, pe2 and p2, run FRR 10.7.1, a release, as every
+interop lab does (the owner's rule, 2026-11-22). FRR's bgpd replaces a
+neighbor's BFD session once BGP connects, and the old session's last
+packet says Down, so bfdd4r on ce2a goes Down once at a lab's start. On
+10.2.1 that reset ce2a's BGP session; on 10.7.1 it comes before BGP is
+Established and reset nothing in the start measured. FRR fixed it in
+master, #24040, merged 2026-11-14, in no release on 2026-11-22. **When
+an FRR release has #24040, move l3vpn-lab to it and run its gate
+twice.** The lab's `ABOUT.md`, "FRR version, and what to watch", has
+the measurements. bgp4r #361 makes bgpd recover from such a reset in
+about 2 s.
+
 ## Known issues to work on
 
 Found while fixing other bugs, not fixed yet. Verified against master on
