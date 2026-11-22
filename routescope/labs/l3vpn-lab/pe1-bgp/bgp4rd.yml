@@ -9,8 +9,10 @@ neighbors:
       capabilities: [as4_byte, route_refresh, mbgp_ipv4_mpls_vpn_unicast, mbgp_ipv6_mpls_vpn_unicast] }
   # ce1a, by eBGP inside VRF A (pull request 7). It dials in, so pe1
   # listens in VRF A. Its AS, 65101, is every site's: as_override.
+  # BFD to ce1a in VRF A: bgp4rd asks `ip route get 192.168.1.2 vrf A`,
+  # and pe1's bfdd4r binds port 3784 in VRF A (routescope docs/design/bfd-vrf.md).
   - { address: 192.168.1.2, as: 65101, description: ce1a, hold_time: 30, vrf: A,
-      as_override: true, soo: "65000:11" }
+      as_override: true, soo: "65000:11", bfd: true }
 vrfs:
   - { name: A, table: 100, rd: "65000:1", import: ["65000:100"], export: ["65000:100"] }
   - { name: B, table: 200, rd: "65000:2", import: ["65000:200"], export: ["65000:200"] }

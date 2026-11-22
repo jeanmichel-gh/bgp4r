@@ -133,7 +133,7 @@ steps:
   # bgp4rd, FRR's bfdd in VRF A on pe2. ce2a is single-homed, so loss on
   # its link has no other path: the gate checks that the session goes
   # down and ce2a drops pe1's site in seconds, not the 30 s hold, and
-  # does not time it. pe1 to ce1a has no BFD: ABOUT.md says why.
+  # does not time it.
   - expect: { bfd_session: { node: ce2a, peer: 192.168.2.1, interface: eth1, state: up } }
     within: 30
   - expect: { bfd_session: { node: pe2, peer: 192.168.2.2, state: up } }
@@ -153,4 +153,28 @@ steps:
   - expect: { bgp_prefix: { node: ce2a, prefix: 172.16.1.0/24, next_hop: 192.168.2.1, as_path: '65000 65000' } }
     within: 60
   - expect: { ping: { node: ce1a, from: 172.16.1.1, to: 172.16.2.1 } }
+    within: 30
+
+  # The same on pe1 to ce1a, where pe1's end is in VRF A: bfdd4r beside
+  # ce1a's bgp4rd, and pe1's bfdd4r, which pe1-bgp shares, in VRF A
+  # (routescope docs/design/bfd-vrf.md).
+  - expect: { bfd_session: { node: ce1a, peer: 192.168.1.1, interface: eth1, state: up } }
+    within: 30
+  - expect: { bfd_session: { node: pe1, peer: 192.168.1.2, interface: eth3, state: up } }
+    within: 30
+  - mark: ce1a to pe1 link loses every packet
+  - netem: ce1a:eth1
+    loss: 100%
+  - expect: { bfd_session: { node: ce1a, peer: 192.168.1.1, interface: eth1, state: down } }
+    within: 5
+  - expect: { bgp_prefix: { node: ce1a, prefix: 172.16.2.0/24, present: false } }
+    within: 5
+  - mark: ce1a to pe1 link clean again
+  - netem: ce1a:eth1
+    clear: true
+  - expect: { bfd_session: { node: ce1a, peer: 192.168.1.1, interface: eth1, state: up } }
+    within: 30
+  - expect: { bgp_prefix: { node: ce1a, prefix: 172.16.2.0/24, next_hop: 192.168.1.1, as_path: '65000 65000' } }
+    within: 60
+  - expect: { ping: { node: ce2a, from: 172.16.2.1, to: 172.16.1.1 } }
     within: 30

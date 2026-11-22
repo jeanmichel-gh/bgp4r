@@ -24,8 +24,9 @@
 #
 # BFD runs on p1 to pe2, 300 ms x 3: bfdd4r beside p1's isisd, FRR's
 # bfdd on pe2. The gate fails that link by loss as well as by carrier.
-# BFD runs on pe2 to ce2a too, beside their eBGP session. pe1 to ce1a
-# has none: BFD in a VRF is not in bgp4rd and bfdd4r yet (ABOUT.md).
+# BFD runs on both PE to CE sessions too, beside their eBGP: pe2 to
+# ce2a, and pe1 to ce1a, in VRF A on pe1 (routescope
+# docs/design/bfd-vrf.md).
 #
 # pe1 is two containers in one network namespace: pe1 runs isisd and
 # owns the interfaces and the VRF devices, pe1-bgp runs bgp4rd beside it.
@@ -56,15 +57,21 @@ topology:
         ip -6 addr add 2001:db8:1::1/64 dev eth3; ip -6 addr add 2001:db8:1::1/64 dev eth4;
         echo 1 > /proc/sys/net/ipv4/ip_forward; echo 1 > /proc/sys/net/ipv6/conf/all/forwarding;
         echo 100000 > /proc/sys/net/mpls/platform_labels;
-        exec isisd -c /etc/isis4r/isisd.yml -l -"
+        exec with-bfdd4r isisd -c /etc/isis4r/isisd.yml -l -"
     # --- PE 1: the BGP half, in pe1's namespace ----------------------
+    # It shares pe1's bfdd4r, which pe1 starts with with-bfdd4r. bfd: true
+    # on ce1a: bgp4rd checks at start that ce1a is one hop away in VRF A,
+    # so it waits for pe1's start command to give eth3 its address.
     pe1-bgp:
       kind: linux
       image: bgp4r-lab:latest
       network-mode: container:pe1
       labels: { routescope.kind: bgp4r, routescope.protocols: bgp }
       binds: [pe1-bgp/bgp4rd.yml:/etc/bgp4r/bgp4rd.yml]
-      cmd: exe/bgp4rd -f /etc/bgp4r/bgp4rd.yml -s /run/bgp4r/bgp4rd.sock -l -
+      entrypoint: sh
+      cmd: >-
+        -c "until ip -4 -o addr show dev eth3 2>/dev/null | grep -q 192.168.1.1/24; do sleep 0.2; done;
+        exec ruby -I/app /app/exe/bgp4rd -f /etc/bgp4r/bgp4rd.yml -s /run/bgp4r/bgp4rd.sock -l -"
     # --- The core ----------------------------------------------------
     p1:
       kind: linux
@@ -120,7 +127,12 @@ topology:
       image: bgp4r-lab:latest
       labels: { graph-level: 1, routescope.kind: bgp4r, routescope.protocols: bgp }
       binds: [ce1a/bgp4rd.yml:/etc/bgp4r/bgp4rd.yml]
-      cmd: exe/bgp4rd -f /etc/bgp4r/bgp4rd.yml -s /run/bgp4r/bgp4rd.sock -l -
+      # bfd: true toward pe1, as ce2a toward pe2: it waits for eth1's
+      # address, and with-bfdd4r starts bfdd4r.
+      entrypoint: with-bfdd4r
+      cmd: >-
+        sh -c "until ip -4 -o addr show dev eth1 2>/dev/null | grep -q 192.168.1.2/24; do sleep 0.2; done;
+        exec ruby -I/app /app/exe/bgp4rd -f /etc/bgp4r/bgp4rd.yml -s /run/bgp4r/bgp4rd.sock -l -"
       exec: ["ip addr add 192.168.1.2/24 dev eth1", "ip addr add 172.16.1.1/24 dev lo",
              "ip -6 addr add 2001:db8:1::2/64 dev eth1", "ip -6 route replace default via 2001:db8:1::1"]
     ce1b:
