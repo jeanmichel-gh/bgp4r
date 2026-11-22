@@ -585,7 +585,7 @@ ruby test/run_feature.rb unicast
 Unreachability Information: AFI 1 and 2 SAFI 81 and EVPN route type 254, the codecs and bgp4rd.
 
 - draft-tantsura-idr-unreachability-safi-06, draft-tantsura-bess-evpn-unreachability-02
-- Read first: `docs/design/unreachability.md`
+- Read first: `docs/unreachability.md`
 - 4 unit files, 2 functional
 
 ```

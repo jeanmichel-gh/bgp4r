@@ -766,6 +766,10 @@ docs/                    protocol-testing.md: using bgp4r to test a router
                          validation.rb, or before adding one of the missing
                          action communities. Its load bearing claims
                          are asserted by test/unit/flow_spec_doc_test.rb
+                         unreachability.md: the two Unreachability
+                         drafts, SAFI 81 and EVPN route type 254, on the
+                         wire, in bgp4rd and in bgp/gen, and why no
+                         router is tested against them
                          evpn.md: RFC 7432 and six more RFCs on the wire. Read it
                          before touching evpn_route.rb or evpn.rb, before adding a
                          route type or an EVPN extended community, before touching
@@ -2163,7 +2167,7 @@ that moves a phase.
 | BGP-LS lab | Phases 1 and 3 done | Phase 2, a Propagator, not started; needs its own spec |
 | BFD (routescope's `docs/design/bfd-clients.md`, step 6d) | Built: bfd4r as a path dependency, `bfd: true` with Cease 6/10, `with-bfdd4r` as `lab-node`'s entrypoint, and `routescope/labs/bfd-frr-lab`, its gate passed on 2026-11-21 | Multihop BFD (RFC 5883), timers per neighbor, and BFD authentication (RFC 5882 10.2 encourages it), none asked for yet |
 | L3VPN PE (routescope's P2) | Specs approved 2026-11-17, `docs/design/l3vpn-pe.md` and `l3vpn-ruby-pe.md`; All 7 PRs built: the VPN table, then VRFs, import and both transports, then export and labels, then `l3vpn-lab` with FRR as the other PE and its gate passing, then VPN-IPv6 (RFC 4659) over the IPv4 core, then CEs by eBGP in a VRF with AS override and Site of Origin, then a VPN route reflector | Seven pull requests for the PE, from the VPN table to PE to CE eBGP; four for the labs of our own daemons |
-| Unreachability Information (SAFI 81, EVPN route type 254) | Spec approved 2026-11-22, `docs/design/unreachability.md`; pull requests 1 to 4 of 5 built: the SAFI 81 and EVPN type 254 codecs, bgp4rd, route generation | Pull request 5, the lab against FRR, then propagation in a spec of its own |
+| Unreachability Information (SAFI 81, EVPN route type 254) | Spec approved 2026-11-22, `docs/design/unreachability.md`; Built, pull requests 1 to 4: the codecs, bgp4rd, route generation; `docs/unreachability.md` | Pull request 5, the lab against FRR, waits for an FRR release with SAFI 81 (the owner's decision, 2026-11-22), then propagation in a spec of its own |
 
 **Left, outside the tables above:**
 
@@ -8646,7 +8650,7 @@ five steps across three repositories. Status here is bgp4r's part.
 RFC 9086's peer SIDs are decoded and shown, not originated by bgp4rd
 (the owner's decision, question 1 of the design).
 
-### Unreachability Information, SAFI 81 and EVPN route type 254. Pull requests 1 to 4 of 5 built
+### Unreachability Information, SAFI 81 and EVPN route type 254. Built; its interop lab waits
 
 Asked for by the owner on 2026-11-22. Both drafts carry reports that a
 prefix is unreachable, without touching the RIB or the FIB. Measured
@@ -8668,10 +8672,14 @@ The spec is `docs/design/unreachability.md`, approved by the owner on
 2026-11-22. One question is open: FRR from master for the lab. It reads
 both drafts in full. bgp4rd first reports and collects, in a table
 outside the RIB as BGP-LS does, and propagates later under its own
-spec. The interop peer for SAFI 81 is FRR built from master
-(FRRouting/frr#21451, in no release yet). Nothing implements the EVPN
-type yet. Its review notes on the drafts, six points, are kept in
-the spec for later.
+spec. Built in bgp4r #369, #370, #371 and #373; `docs/unreachability.md`
+is the guide. **No interop lab, by the owner's decision (2026-11-22):
+FRR has SAFI 81 on master only (FRRouting/frr#21451), and a lab is not
+built against a router whose release lacks the feature.** Nothing
+implements the EVPN type. When an FRR release carries SAFI 81, the
+spec's pull request 5 is next, and `Fault::UNREACHABILITY` joins
+`Fault::CATALOG` once that lab has measured it. Its review notes on the
+drafts, six points, are kept in the spec for later.
 
 ## Known issues to work on
 
@@ -8683,7 +8691,7 @@ Smaller things:
 
 * **validation.rb walks a flow spec rule without knowing add-path was negotiated**, so a rule carrying an RFC 7911 Path Identifier is reported as malformed with a session reset. `Attr::Check.attribute` is handed the octets and the AS width and nothing about the session, so the four octets in front of the rule are read as its length and components. The rule itself decodes, since `Flow_spec` is told. Measured on 2026-11-04 while building phase 4c of `bgp/gen`:
   `ruby -I. -e 'require "bgp/gen"; i = Class.new(BGP::Update::Info) { def initialize ; super(true, :lenient) ; end ; def path_id?(*) ; true ; end }.new; u = BGP::Gen.new("family" => "flow_spec", "start" => "10.0.0.0/24", "count" => 1, "path_id" => 7).updates.first; p BGP::Update.new(u.encode(BGP::Update::Info.new(true)).is_packed, i).path_attribute.errors.collect(&:reason)'`
-  prints one finding, "flow spec NLRI with no component". EVPN has the same gap, measured in phase 4d: the four octets are read as a Route Type and a Length, and `test_the_receive_checks_do_not_know_add_path_yet` in `test/unit/gen/evpn_routes_test.rb` pins it. BGP-LS has it too, measured in phase 4g: the four octets are read as a Type and a Total NLRI Length, and `test/unit/gen/link_state_routes_test.rb` pins it. MCAST-VPN has it too, measured in phase 4f: the four octets are read as a Route Type and a Length, and `test/unit/gen/mcast_vpn_routes_test.rb` pins it. The fix threads the add-path answer per AFI and SAFI into the check, which is a signature change on a method many callers use, so it wants a decision. `test_the_receive_checks_do_not_know_add_path_yet` in `test/unit/gen/flow_rules_test.rb` pins it, and the property test in `test/unit/gen_test.rb` excludes the case with a comment saying so.
+  prints one finding, "flow spec NLRI with no component". EVPN has the same gap, measured in phase 4d: the four octets are read as a Route Type and a Length, and `test_the_receive_checks_do_not_know_add_path_yet` in `test/unit/gen/evpn_routes_test.rb` pins it. BGP-LS has it too, measured in phase 4g: the four octets are read as a Type and a Total NLRI Length, and `test/unit/gen/link_state_routes_test.rb` pins it. MCAST-VPN has it too, measured in phase 4f: the four octets are read as a Route Type and a Length, and `test/unit/gen/mcast_vpn_routes_test.rb` pins it. Unreachability, SAFI 81 and EVPN 254, has it too: the four octets are read as an NLRI Length, and the property test leaves both families out of its Path Identifier draws. The fix threads the add-path answer per AFI and SAFI into the check, which is a signature change on a method many callers use, so it wants a decision. `test_the_receive_checks_do_not_know_add_path_yet` in `test/unit/gen/flow_rules_test.rb` pins it, and the property test in `test/unit/gen_test.rb` excludes the case with a comment saying so.
 * **An extended community whose hash value is a scalar cannot be written as text through `CommunityKeys`**, so `traffic_marking:10` in an `extended_communities` list raises. `extended_community_hash` always makes a list, `{:traffic_marking=>[10]}`, and `Traffic_marking.new` wants the Integer. `origin_validation_state` and the other kinds built with `new(v)` rather than `new(*v)` have the same shape. Unwrapping a one value list is not the fix, since `mac_mobility` reads `v[0]` and would read bit 0 of an Integer. `bgp/gen`'s flow spec actions build their hashes directly for this reason.
   `ruby -I. -e 'require "bgp4r"; require "bgp/daemon/community_keys"; BGP::Daemon::CommunityKeys.community_attributes("extended_communities" => ["traffic_marking:10"])'`
 
