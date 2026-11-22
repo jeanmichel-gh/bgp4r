@@ -2102,7 +2102,7 @@ that moves a phase.
 | BGP-LS lab | Phases 1 and 3 done | Phase 2, a Propagator, not started; needs its own spec |
 | BFD (routescope's `docs/design/bfd-clients.md`, step 6d) | Built: bfd4r as a path dependency, `bfd: true` with Cease 6/10, `with-bfdd4r` as `lab-node`'s entrypoint, and `routescope/labs/bfd-frr-lab`, its gate passed on 2026-11-21 | Multihop BFD (RFC 5883), timers per neighbor, and BFD authentication (RFC 5882 10.2 encourages it), none asked for yet |
 | L3VPN PE (routescope's P2) | Specs approved 2026-11-17, `docs/design/l3vpn-pe.md` and `l3vpn-ruby-pe.md`; All 7 PRs built: the VPN table, then VRFs, import and both transports, then export and labels, then `l3vpn-lab` with FRR as the other PE and its gate passing, then VPN-IPv6 (RFC 4659) over the IPv4 core, then CEs by eBGP in a VRF with AS override and Site of Origin, then a VPN route reflector | Seven pull requests for the PE, from the VPN table to PE to CE eBGP; four for the labs of our own daemons |
-| Unreachability Information (SAFI 81, EVPN route type 254) | Not started; asked for 2026-11-22 | All of it, from a spec in `docs/design/` |
+| Unreachability Information (SAFI 81, EVPN route type 254) | Spec written 2026-11-22, `docs/design/unreachability.md`, awaiting approval | All of it: five pull requests, then propagation in a spec of its own |
 
 **Left, outside the tables above:**
 
@@ -8603,13 +8603,14 @@ prefix is unreachable, without touching the RIB or the FIB. Measured
   unassigned. A route of type 254 is an `Evpn::Unknown` today, replayed
   byte for byte.
 
-Before any code: a spec, `docs/design/unreachability.md`, built to
-routescope's `docs/design/protocol-conventions.md` (the codec four
-ways, `validation.rb`, the fault catalog, interop). It reads both
-drafts in full and settles what bgp4rd keeps (outside the RIB, as
-BGP-LS does, or in it), what `bgp/gen` generates, what the shell shows,
-and which peer to test against. No router we use is known to speak
-either one yet; the spec checks.
+The spec is `docs/design/unreachability.md`, written 2026-11-22 and
+waiting for the owner's approval, with five open questions. It reads
+both drafts in full. bgp4rd first reports and collects, in a table
+outside the RIB as BGP-LS does, and propagates later under its own
+spec. The interop peer for SAFI 81 is FRR built from master
+(FRRouting/frr#21451, in no release yet). Nothing implements the EVPN
+type yet. The spec lists six points in the drafts worth sending to
+their authors.
 
 ## Known issues to work on
 
