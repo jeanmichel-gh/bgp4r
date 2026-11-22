@@ -2077,6 +2077,42 @@ There is no coverage gem in the `Gemfile`. To measure, use Ruby's built-in `Cove
 * A plan that spans more than one session goes under "Where the work is going" as phases with their status, before the work starts. A plan that lives only in a chat is lost the moment the context is: the RIB plan below had to be recovered from a transcript because nothing in this file recorded it, or recorded that phase 1 was finished.
 * Keep this file true in the same pull request that makes it false. If your change fixes something under "Known issues to work on", delete that entry. If it adds or removes tests, update the baseline counts above. **Copy the baseline counts out of the run, never work them out.** Writing 22721 assertions and 97.8% while the measurement in the same command said 22701 and 97.7% took one session; arithmetic on top of a previous baseline is how a count drifts, and a wrong count here is indistinguishable from a real change in the suite. For the same reason the baseline line conflicts whenever two pull requests are open at once, which is normal and not worth avoiding: the one that merges second re-measures rather than resolving the numbers by hand. Nobody reconciles this file later, and a stale entry is worse than no entry: it sends the next reader after work that no longer exists. Both halves of this have already happened here, once to seven entries at once, and once to a fix that landed without removing its own entry.
 
+## Sharing ospflab with other sessions
+
+Many sessions work on ospflab at once, each on its own topic. These
+rules keep one from undoing another's work: rebuilding an image under a
+lab, stopping a gate halfway, editing a lab's files. The reasons are in
+routescope's `docs/design/shared-vm.md` (approved 2026-11-22).
+
+1. **An image tagged `:latest` is master.** `~/routescope/tools/vm-update.sh`
+   builds it from master; an image vm-update does not build (`vtep4r`
+   today) is built from its checkout in `~` on master. To run a branch or
+   a commit, build it from a worktree under its own tag, `NAME:SHORTSHA`,
+   and remove that tag when its runs are done. Never build `NAME:latest`
+   from a branch.
+2. **The checkouts in `~` stay on main or master.** vm-update pulls them.
+   Branch work happens in worktrees, never in `~/REPO`.
+3. **Do not edit `~/labs`.** To run a lab on another image or with other
+   files, `routescope-labs fork LAB NAME` copies it to `~/labs/local/NAME`
+   under a lab name of its own, so its containers do not collide with the
+   original's. Edit the copy, and `routescope-labs retire NAME` when done.
+4. **Take the VM's lock around what disturbs others**,
+   `~/routescope/tools/vm-lock` (routescope `docs/vm-lock.md`):
+   - `exclusive` to restart Docker or routescope, or to stop or redeploy
+     a lab you did not start. vm-update takes it itself.
+   - `shared` for a gate or a scenario run.
+
+   Run it as the VM's user, with `sudo` inside the command. It waits up
+   to 15 minutes; when it gives up (exit 75), ask the user before trying
+   again.
+5. **A gate's containers have the names of routescope's copy of its
+   lab**, `clab-LAB-NODE`. Until the gates run under a name of their own,
+   stop routescope's copy through routescope before a gate, and start it
+   again after, both under the lock.
+6. **A lab run outside routescope** (one only on a branch, deployed by
+   hand) is named in `~/vm-changes.md`, with the folder it came from.
+7. **Each entry in `~/vm-changes.md` names the session** that made it.
+
 ## Where the work is going
 
 A plan that spans more than one session lives here, as phases with their
