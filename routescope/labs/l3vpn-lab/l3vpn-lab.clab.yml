@@ -22,6 +22,9 @@
 # IPv6 too, as VPN-IPv6 (RFC 4659) over the same IPv4 core:
 # 2001:db8:1::/64 at pe1, 2001:db8:2::/64 at pe2, in both VRFs.
 #
+# BFD runs on p1 to pe2, 300 ms x 3: bfdd4r beside p1's isisd, FRR's
+# bfdd on pe2. The gate fails that link by loss as well as by carrier.
+#
 # pe1 is two containers in one network namespace: pe1 runs isisd and
 # owns the interfaces and the VRF devices, pe1-bgp runs bgp4rd beside it.
 #
