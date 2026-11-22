@@ -1,6 +1,6 @@
 # Unreachability Information: SAFI 81 and EVPN route type 254
 
-Status: **draft, for the owner's approval.** No code until it is approved.
+Status: **approved by the owner, 2026-11-22.** Not built yet.
 
 ## The problem
 
@@ -85,10 +85,14 @@ below are theirs.
 * No capability. A speaker that does not aggregate, re-advertising,
   MUST send only the first Reporter TLV (4.4).
 
-## What I found in the drafts
+## Review notes on the drafts
 
 Checked by hand and with a short script against the drafts' own
-examples. Worth sending to the authors; the owner decides (question 4).
+examples, on draft-tantsura-idr-unreachability-safi-06 and
+draft-tantsura-bess-evpn-unreachability-02. Kept here for later, to
+send to the authors or to check against the next revisions (the
+owner's decision, 2026-11-22). When a new revision comes out, check
+each point again and note here what it changed.
 
 1. **SAFI, sections 5.1 and 5.2 contradict.** 5.1's minimum NLRI Length
    in MP_REACH includes "at least 11 octets for one Reporter TLV", and
@@ -291,7 +295,17 @@ routescope's views are a spec in routescope.
   families and EVPN.
 * Interop: the lab above.
 
-## Open questions for the owner
+## The owner's answers, 2026-11-22
+
+The owner approved the spec as written. The recommendations stand:
+
+1. EVPN type 254 is a constant, with a comment that it is provisional.
+2. FRR from master: still open. Decide before pull request 5.
+3. The TBD2 capability is neither sent nor read until IANA assigns it.
+4. The review notes stay in this document for later.
+5. An NLRI with no reporter is treat-as-withdraw, as SAFI 5.2 says.
+
+The questions as they were asked:
 
 1. **EVPN type 254.** A constant, 254, with a comment that it is
    provisional, changed when IANA assigns one. Or a setting, so a
