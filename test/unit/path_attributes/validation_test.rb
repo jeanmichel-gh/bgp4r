@@ -1159,4 +1159,94 @@ class TestAttrCheck < Test::Unit::TestCase
     f.size == 1 ? f.first.reason : f.collect(&:reason)
   end
 
+
+  # ---- draft-tantsura-idr-unreachability-safi-06, SAFI 81 ---------------
+
+  # Section 3.6.1's NLRI, and one reporter of 11 octets (Identifier and
+  # AS only) for building the odd cases by hand.
+  UNREACH_NLRI = '001f18c00002010018c63364010000fde9010002000302000800000000675786d8'
+  BARE = '010008c63364010000fde9'
+
+  # An MP_REACH_NLRI, AFI 1, SAFI 81, Next Hop Length 0, around the NLRIs.
+  def unreach_reach(*nlris)
+    v = '0001' + '51' + '00' + '00' + nlris.join
+    '80 0e ' + format('%02x', v.size / 2) + v
+  end
+
+  def unreach_withdraw(*nlris)
+    v = '0001' + '51' + nlris.join
+    '80 0f ' + format('%02x', v.size / 2) + v
+  end
+
+  def nlri(prefix_hex, *tlvs)
+    body = prefix_hex + tlvs.join
+    format('%04x', body.size / 2) + body
+  end
+
+  def unreach_reasons(hex)
+    Attr::Check.attribute(b(hex), true).collect(&:reason)
+  end
+
+  def test_unreachability_section_3_6_1_has_no_findings
+    assert_equal [], check(unreach_reach(UNREACH_NLRI), true)
+    assert_equal [], check(unreach_withdraw('000418c00002'), true)
+  end
+
+  def test_unreachability_structural_errors_reset
+    assert_equal [[9, RESET]], check(unreach_reach('00ff18c00002'), true)
+    assert_equal [[9, RESET]], check(unreach_reach('00'), true)
+    assert_equal [[9, RESET]], check(unreach_reach(nlri('21c0000200', BARE)), true)
+    assert_equal [[9, RESET]], check(unreach_reach(nlri('18c000', '')), true)
+    assert_equal [[9, RESET]], check(unreach_reach('0000'), true)
+  end
+
+  # Section 5.2, and the owner's choice over 5.1's minimum.
+  def test_unreachability_no_reporter_is_treat_as_withdraw
+    assert_equal [[9, TAW]], check(unreach_reach(nlri('18c00002')), true)
+    assert_equal [[9, TAW]], check(unreach_withdraw(nlri('18c00002', BARE)), true)
+  end
+
+  # Section 5.3: a malformed reporter is discarded; with none left, the
+  # NLRI is treat-as-withdraw.
+  def test_unreachability_malformed_reporters
+    short = '010007c63364010000fd'
+    assert_equal [9, TAW], check(unreach_reach(nlri('18c00002', short)), true).first
+    findings = check(unreach_reach(nlri('18c00002', short, BARE)), true)
+    assert_equal [[nil, nil]], findings
+    assert_match(/below 8, discarded/, unreach_reasons(unreach_reach(nlri('18c00002', short, BARE))).first)
+  end
+
+  def test_unreachability_unknown_reporter_type_is_skipped
+    assert_equal [], check(unreach_reach(nlri('18c00002', '0700020000', BARE)), true)
+    assert_equal [[9, TAW]], check(unreach_reach(nlri('18c00002', '0700020000')), true)
+  end
+
+  def test_unreachability_duplicate_reporter_keeps_the_first
+    assert_match(/repeats, the first kept/,
+                 unreach_reasons(unreach_reach(nlri('18c00002', BARE, BARE))).first)
+  end
+
+  def test_unreachability_sub_tlv_errors_keep_the_reporter
+    over = '01000bc63364010000fde9' + '010009'
+    assert_match(/runs past its Reporter TLV/, unreach_reasons(unreach_reach(nlri('18c00002', over))).first)
+    wrong = '01000cc63364010000fde9' + '01000103'
+    assert_match(/must be 2/, unreach_reasons(unreach_reach(nlri('18c00002', wrong))).first)
+    twice = '010012c63364010000fde9' + '0100020003' + '0100020001'
+    assert_match(/repeats, the first kept/, unreach_reasons(unreach_reach(nlri('18c00002', twice))).first)
+  end
+
+  def test_unreachability_more_than_50_reporters
+    many = (1..51).collect { |i| '010008' + format('%08x', i) + '0000fde9' }
+    v = '0001' + '51' + '00' + '00' + nlri('18c00002', *many)
+    hex = '90 0e ' + format('%04x', v.size / 2) + v
+    assert_match(/51 Reporter TLVs, past 50/, unreach_reasons(hex).first)
+  end
+
+  # Every NLRI is read: a weak finding in the first does not hide a reset
+  # in the second.
+  def test_unreachability_the_strongest_finding_wins
+    assert_equal [[9, RESET]],
+                 check(unreach_reach(nlri('18c00002', BARE, BARE), nlri('21c0000200', BARE)), true)
+  end
+
 end

@@ -315,7 +315,9 @@ module BGP
                  mcast_vpn_finding(type, v.byteslice(nlri_at, n - nlri_at),
                                    v.unpack1('n'), v.getbyte(2), true) ||
                  link_state_finding(type, v.byteslice(nlri_at, n - nlri_at),
-                                    v.getbyte(2))
+                                    v.getbyte(2)) ||
+                 unreachability_finding(type, v.byteslice(nlri_at, n - nlri_at),
+                                        v.unpack1('n'), v.getbyte(2), true)
         when MP_UNREACH
           return Finding.new(type, 9, RESET, "length #{n}, AFI and SAFI need 3 (RFC 7606 section 7.11)") if n < 3
           return flow_spec_finding(type, v.byteslice(3, n - 3),
@@ -324,7 +326,9 @@ module BGP
                               v.unpack1('n'), v.getbyte(2), false) ||
                  mcast_vpn_finding(type, v.byteslice(3, n - 3),
                                    v.unpack1('n'), v.getbyte(2), false) ||
-                 link_state_finding(type, v.byteslice(3, n - 3), v.getbyte(2))
+                 link_state_finding(type, v.byteslice(3, n - 3), v.getbyte(2)) ||
+                 unreachability_finding(type, v.byteslice(3, n - 3),
+                                        v.unpack1('n'), v.getbyte(2), false)
         when ATTR_SET
           return attr_set_finding(type, v)
         when BGP_LS
@@ -1036,6 +1040,160 @@ module BGP
         else
           Finding.new(type, 1, DISCARD, "appears more than once, the first one counts (RFC 7606 section 3 (g))")
         end
+      end
+
+      # draft-tantsura-idr-unreachability-safi-06 section 5, the
+      # Unreachability Information NLRIs of SAFI 81, in its order:
+      # structural errors first (5.1), then the fields that are not the
+      # key (5.2), then the Reporter TLVs (5.3) and their sub-TLVs (5.4).
+      #
+      # Every NLRI is read and the strongest finding is answered, since
+      # one weak finding in the first NLRI must not hide a reset in the
+      # third. A finding whose action is nil is a TLV the draft has the
+      # receiver discard while it keeps the rest: worth reporting, not
+      # an action on the route.
+      #
+      # **An announcement with no Reporter TLV is treat-as-withdraw**, as
+      # 5.2 says. 5.1's minimum length counts one Reporter TLV, which
+      # would make it a session reset and leave 5.2's rule nothing to
+      # apply to. The owner chose 5.2 on 2026-11-22
+      # (docs/design/unreachability.md, "Review notes", item 1).
+      #
+      # Not here: section 7 item 5, a Reporter AS against the AS_PATH,
+      # which needs the AS_PATH and so the whole UPDATE.
+      def unreachability_finding(type, nlri, afi, safi, reach)
+        return nil unless safi == IANA::SAFI::UNREACHABILITY_INFORMATION
+        found = []
+        while nlri.size > 0
+          if nlri.size < ::BGP::Unreachability::FRAMING
+            found << Finding.new(type, 9, RESET,
+              "#{nlri.size} octet left, too few for an NLRI Length " \
+              '(draft-tantsura-idr-unreachability-safi section 5.1)')
+            break
+          end
+          len = nlri.unpack1('n')
+          if 2 + len > nlri.size
+            found << Finding.new(type, 9, RESET,
+              "NLRI Length #{len} runs past the attribute, #{nlri.size - 2} " \
+              'left (draft-tantsura-idr-unreachability-safi section 5.1)')
+            break
+          end
+          f = unreachability_nlri_finding(type, nlri.byteslice(2, len), afi, reach)
+          found.concat(f)
+          break if f.any? { |x| x.action == RESET }
+          nlri = nlri.byteslice(2 + len, nlri.size - 2 - len)
+        end
+        Attr.strongest(found) || found.first
+      end
+
+      # One NLRI's body, after its NLRI Length. Answers a list.
+      def unreachability_nlri_finding(type, body, afi, reach)
+        draft = 'draft-tantsura-idr-unreachability-safi section'
+        max = ::BGP::Unreachability::MAX_MLEN[afi]
+        if body.empty?
+          return [Finding.new(type, 9, RESET,
+            "NLRI Length 0, no Prefix Length (#{draft} 5.1)")]
+        end
+        mlen = body.getbyte(0)
+        if max.nil? or mlen > max
+          return [Finding.new(type, 9, RESET,
+            "Prefix Length #{mlen} outside 0-#{max || '?'} for AFI #{afi} (#{draft} 5.1)")]
+        end
+        key = 1 + (mlen + 7) / 8
+        if body.size < key
+          return [Finding.new(type, 9, RESET,
+            "NLRI Length #{body.size} below the #{key} octets of a /#{mlen} (#{draft} 5.1)")]
+        end
+        tlvs = body.byteslice(key, body.size - key)
+        unless reach
+          return [] if tlvs.empty?
+          return [Finding.new(type, 9, TAW,
+            "withdrawal of #{key} octets carries #{tlvs.size} more (#{draft} 5.2)")]
+        end
+        unreachability_reporters_finding(type, tlvs, draft)
+      end
+
+      # The Reporter TLVs of one announcement.
+      def unreachability_reporters_finding(type, tlvs, draft)
+        found, keys, good, malformed = [], {}, 0, 0
+        fixed = ::BGP::Unreachability::Reporter::FIXED
+        while tlvs.size > 0
+          if tlvs.size < 3
+            malformed += 1
+            found << Finding.new(type, nil, nil,
+              "#{tlvs.size} octets after the last Reporter TLV, discarded (#{draft} 5.3)")
+            break
+          end
+          t, len = tlvs.unpack('Cn')
+          if 3 + len > tlvs.size
+            malformed += 1 if t == ::BGP::Unreachability::Reporter::TYPE
+            found << Finding.new(type, nil, nil,
+              "TLV type #{t} Length #{len} runs past the NLRI, discarded (#{draft} 5.3)")
+            break
+          end
+          value = tlvs.byteslice(3, len)
+          tlvs = tlvs.byteslice(3 + len, tlvs.size - 3 - len)
+          next unless t == ::BGP::Unreachability::Reporter::TYPE
+          if len < fixed
+            malformed += 1
+            found << Finding.new(type, nil, nil,
+              "Reporter TLV Length #{len}, below #{fixed}, discarded (#{draft} 5.3)")
+            next
+          end
+          k = value.byteslice(0, fixed)
+          if keys[k]
+            found << Finding.new(type, nil, nil,
+              "Reporter #{IPAddr.new_ntoh(k.byteslice(0, 4))} AS#{k.unpack1('@4N')} " \
+              "repeats, the first kept (#{draft} 3.4)")
+            next
+          end
+          keys[k] = true
+          good += 1
+          found.concat(unreachability_sub_tlv_finding(type,
+                         value.byteslice(fixed, len - fixed), draft))
+        end
+        if good == 0
+          why = malformed > 0 ? "no well-formed Reporter TLV (#{draft} 5.3)" :
+                                "no Reporter TLV in an announcement (#{draft} 5.2)"
+          return [Finding.new(type, 9, TAW, why)] + found
+        end
+        if good > ::BGP::Unreachability::MAX_REPORTERS
+          found << Finding.new(type, nil, nil,
+            "#{good} Reporter TLVs, past #{::BGP::Unreachability::MAX_REPORTERS}, " \
+            "the excess discarded (#{draft} 4.8 and 5.3)")
+        end
+        found
+      end
+
+      # The sub-TLVs of one Reporter TLV, section 5.4. Each finding is a
+      # sub-TLV discarded or ignored; none acts on the route.
+      def unreachability_sub_tlv_finding(type, subs, draft)
+        found, seen = [], {}
+        while subs.size > 0
+          if subs.size < 3
+            found << Finding.new(type, nil, nil,
+              "#{subs.size} octets after the last sub-TLV, discarded (#{draft} 5.4)")
+            break
+          end
+          t, len = subs.unpack('Cn')
+          if 3 + len > subs.size
+            found << Finding.new(type, nil, nil,
+              "sub-TLV type #{t} Length #{len} runs past its Reporter TLV, " \
+              "discarded (#{draft} 5.4)")
+            break
+          end
+          want = { 1 => 2, 2 => 8 }[t]
+          if want and len != want
+            found << Finding.new(type, nil, nil,
+              "sub-TLV type #{t} Length #{len}, must be #{want}, discarded (#{draft} 3.5)")
+          elsif seen[t]
+            found << Finding.new(type, nil, nil,
+              "sub-TLV type #{t} repeats, the first kept (#{draft} 3.5)")
+          end
+          seen[t] = true
+          subs = subs.byteslice(3 + len, subs.size - 3 - len)
+        end
+        found
       end
 
       # **The BGP-LS checks sit last and not beside the families they

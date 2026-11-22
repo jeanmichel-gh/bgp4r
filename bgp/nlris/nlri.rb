@@ -256,6 +256,16 @@ module BGP
           # withdrawn means nothing here either, since there is no label
           # for RFC 8277 section 2.4 to replace.
           Link_state.new_ntop(s.is_packed, safi, path_id)
+        when IANA::SAFI::UNREACHABILITY_INFORMATION
+          # draft-tantsura-idr-unreachability-safi-06 section 3.2. The
+          # octets handed here are one whole NLRI, its NLRI Length
+          # included, because nlri_size asked the family how long it was.
+          #
+          # **The AFI is passed down**: it is the only thing that says
+          # whether the prefix is IPv4 or IPv6, since the prefix carries
+          # only the octets its length needs. withdrawn means nothing
+          # here: a withdrawal is the same NLRI without reporters.
+          Unreachability.new_ntop(s.is_packed, afi, path_id)
         else
           # **This raise is load bearing: do not return an object
           # instead.** Path_attribute#decode_attribute rescues

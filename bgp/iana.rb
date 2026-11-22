@@ -168,6 +168,12 @@ module IANA
     # two fully qualified, never as a bare BGP_LS.
     BGP_LS = 71
     BGP_LS_VPN = 72
+    # draft-tantsura-idr-unreachability-safi-06 section 8.1: "IANA has
+    # assigned a SAFI value ... applicable to AFI 1 (IPv4) and AFI 2
+    # (IPv6): Value: 81, Description: Unreachability Information".
+    # IANA's registry lists 81 as "Unreachability Information SAFI",
+    # citing revision -01 (read 2026-11-22).
+    UNREACHABILITY_INFORMATION = 81
     MPLS_VPN_UNICAST = 128
     MPLS_VPN_Multicast = 129
     ROUTE_TARGET_CONSTRAINTS = 132

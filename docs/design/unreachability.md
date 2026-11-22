@@ -286,6 +286,31 @@ sends them.
 Phase 2, propagation and aggregation, starts with its own spec.
 routescope's views are a spec in routescope.
 
+### As built
+
+Pull request 1, the SAFI 81 codec (2026-11-22). What changed from the
+design above:
+
+* **The findings have no names.** bgp4r's `Attr::Finding` is a subcode,
+  an action and a reason in words; the table's names are not in the
+  code. Each reason names its draft section instead. A Reporter TLV or
+  sub-TLV the draft has the receiver discard, while it keeps the rest,
+  is a finding with no action.
+* **`unreach_reporter_as_not_in_path` is not built here.** It needs the
+  AS_PATH, which a check of one attribute does not see. It moves to
+  pull request 3, with the daemon.
+* **The faults are a list of their own, `Fault::UNREACHABILITY`**, not
+  in `Fault::CATALOG`. `lab/fault_matrix.rb` sends every CATALOG case
+  to FRR and GoBGP and checks each against a measured table, and
+  neither router has been measured on SAFI 81. They join CATALOG in
+  pull request 5. `Fault.build` and `Fault.wire` take their names.
+* **Five faults, not ten.** The NLRI-level ones: a Length past the
+  attribute, a /33, no reporter, a reporter in a withdrawal, the one
+  reporter too short. The discards that keep the route are tested in
+  `validation_test.rb` and are not faults, since a router answers them
+  with nothing a test can see on the session.
+* The EVPN cases wait for pull request 2.
+
 ## Tests
 
 * Unit: every class four ways; the drafts' examples; the `to_hash`
