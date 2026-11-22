@@ -66,7 +66,12 @@ module BGP
               break unless @continue
               s.write obj.respond_to?(:encode) ? obj.encode : obj
             end
-          rescue IOError, Errno::ECONNRESET, Errno::EBADF => e
+          # Any failed write ends the session, EPIPE included: the peer
+          # closed, as FRR does right after a NOTIFICATION. SystemCallError
+          # holds ECONNRESET and EBADF, which were here, and EPIPE, which was
+          # not, and killed this thread without a word (l3vpn-lab,
+          # 2026-11-22).
+          rescue IOError, SystemCallError => e
             changed and notify_observers(:ev_conn_reset, e)
           ensure
             log(:debug, "Exiting #{Thread.current['name']}")
@@ -142,7 +147,12 @@ module BGP
                 @continue = false
               end
             end
-          rescue IOError, Errno::ECONNRESET, Errno::EBADF => e
+          # Any failed write ends the session, EPIPE included: the peer
+          # closed, as FRR does right after a NOTIFICATION. SystemCallError
+          # holds ECONNRESET and EBADF, which were here, and EPIPE, which was
+          # not, and killed this thread without a word (l3vpn-lab,
+          # 2026-11-22).
+          rescue IOError, SystemCallError => e
             changed and notify_observers(:ev_conn_reset, e)
           end
           log(:debug, "Exiting #{Thread.current['name']}")

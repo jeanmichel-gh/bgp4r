@@ -664,11 +664,21 @@ module BGP
     # The join is skipped on the writer's own thread, the way `close` skips
     # joining the event thread from inside it, so an observer that reaches
     # here cannot deadlock.
+    #
+    # **What killed the writer stays in the writer.** `Thread#join` raises
+    # the thread's exception in the joiner, so a writer that died took
+    # `stop` and the event thread with it: an EPIPE did, after a peer's
+    # Cease at Established (l3vpn-lab, 2026-11-22).
     def drain_output
       return unless defined?(@out) and @out
       @out.close
       t = @out.thread
       t.join(DRAIN_TIMEOUT) if t and Thread.current != t
+    rescue StandardError => e
+      # join raises what killed the writer. stop has to go on and reach
+      # Idle whatever it was, or the session is wedged for good and never
+      # dials again.
+      log_warn "writer thread ended with #{e.class}: #{e.message}"
     end
 
     # Stops the session if needed and ends the event thread for good.

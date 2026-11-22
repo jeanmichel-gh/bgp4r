@@ -136,6 +136,22 @@ class TestBgpIo < Test::Unit::TestCase
     assert_equal('', @theirs.read, 'exit should write nothing to the socket')
   end
 
+  # The peer closed, as FRR does right after it sends a NOTIFICATION, and
+  # the writer still had a KEEPALIVE to send: write raises EPIPE. Before
+  # the fix the writer thread died of it and told nobody, and the join in
+  # Neighbor#drain_output raised it again inside stop, so the session never
+  # went Idle and never dialled again (l3vpn-lab, 2026-11-22).
+  def test_a_broken_pipe_is_a_reset_and_ends_the_writer_quietly
+    @theirs.close
+    out = BGP::IO::Output.new(@ours, 30, @events)
+    out.start
+    out.enq BGP::Keepalive.new
+    ev, e = @events.next_event(2)
+    assert_equal(:ev_conn_reset, ev)
+    assert_kind_of(Errno::EPIPE, e)
+    assert_nothing_raised { assert(out.thread.join(2), 'the writer should end') }
+  end
+
   def test_input_reports_close_after_a_partial_message
     @input.start
     @theirs.write BGP::Keepalive.new.encode[0, 10]
