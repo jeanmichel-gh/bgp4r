@@ -111,11 +111,22 @@ across RFC 7432, RFC 9136 and RFC 9251, and its Table 2 adds three.
 | 9 | Per-Region I-PMSI A-D | RFC 9572 section 3.1 | yes |
 | 10 | S-PMSI A-D | RFC 9572 section 3.2 | yes |
 | 11 | Leaf A-D | RFC 9572 section 3.3 | yes |
+| 254 | IP Prefix Unreachability | draft-tantsura-bess-evpn-unreachability-02 section 3.3 | yes |
 
-**Route types 1 to 5 are implemented, which is the core set every EVPN
-implementation has; types 6 to 11 still read back as an `Evpn::Unknown`
-that replays byte for byte.** The "In bgp4r" column is checked against
-`Evpn::ROUTES` by the doc test, so it cannot drift.
+**All eleven are implemented.** A type outside the table reads back as
+an `Evpn::Unknown` that replays byte for byte. The "In bgp4r" column is
+checked against `Evpn::ROUTES` by the doc test, so it cannot drift.
+
+**Type 254 is not in the registry.** It is the IP Prefix
+Unreachability route of `draft-tantsura-bess-evpn-unreachability-02`,
+which says "TBD1"; 254 is the provisional on-wire value the owner was
+given on 2026-11-21. IANA's EVPN Route Types registry ends at 11. It is
+route type 5's fields with an Address Family octet after the Ethernet
+Tag ID, then Reporter TLVs, and it never reaches a RIB. The class is
+`Evpn::Ip_prefix_unreachability` in `bgp/nlris/evpn_unreachability.rb`;
+the design is `docs/design/unreachability.md`. **Its Length is one
+octet**, so the route holds at most 20 bare reporters, and `Evpn#encode`
+refuses a body past 255 octets rather than write its low octet.
 
 ### Types 1 and 4, the RD plus ESI pair
 

@@ -267,7 +267,7 @@ class TestFault < Test::Unit::TestCase
       assert finding, "#{e[:name]}: no finding"
       assert_equal e[:action], finding.action, "#{e[:name]} action"
       assert_equal e[:subcode], finding.subcode, "#{e[:name]} subcode"
-      assert_match(/^draft-tantsura-idr-unreachability-safi-06 section 5\.\d$/, e[:rfc])
+      assert_match(/^draft-tantsura-(idr-unreachability-safi-06 section 5|bess-evpn-unreachability-02 section 4\.11)\.\d$/, e[:rfc])
       assert_raise(Malformed_attribute, e[:name].to_s) do
         Path_attribute.new(Fault.wire(e[:name]).is_packed, :as4byte => true, :policy => :strict)
       end

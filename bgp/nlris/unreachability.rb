@@ -437,7 +437,7 @@ module BGP
       # their order, repeats and unknown types.
       def initialize(*args)
         @identifier, @as, @sub_tlvs, @tail = '0.0.0.0', 0, [], +''
-        @sub_registry = SUB_TLVS
+        @sub_registry = self.class.sub_registry
         arg = args[0]
         if arg.is_a?(String) and arg.is_packed?
           @sub_registry = args[1] if args[1].is_a?(Tlv::Registry)
@@ -460,6 +460,12 @@ module BGP
           raise ArgumentError, "a Reporter AS of #{@as} does not fit in 4 octets"
         end
         self
+      end
+
+      # The sub-TLV registry a reporter of this class reads against:
+      # section 8.4's for SAFI 81. Evpn_reporter answers the EVPN one.
+      def self.sub_registry
+        SUB_TLVS
       end
 
       # The sub-TLV registry this reporter reads against.
@@ -524,8 +530,10 @@ module BGP
         if v.has_key?(:sub_tlvs)
           @sub_tlvs = [v[:sub_tlvs]].flatten.compact.collect { |t| @sub_registry.build(t) }
         else
-          @sub_tlvs << Reason_code.new(v[:reason].to_i) if v.has_key?(:reason)
-          @sub_tlvs << Timestamp.new(v[:timestamp].to_i) if v.has_key?(:timestamp)
+          # The registry's own classes, so an EVPN reporter gets the EVPN
+          # Reason Code.
+          @sub_tlvs << @sub_registry[Reason_code::TYPE].new(v[:reason].to_i) if v.has_key?(:reason)
+          @sub_tlvs << @sub_registry[Timestamp::TYPE].new(v[:timestamp].to_i) if v.has_key?(:timestamp)
         end
         @tail = [v[:tail].to_s].pack('H*') if v[:tail]
       end

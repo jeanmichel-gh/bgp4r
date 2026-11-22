@@ -1334,6 +1334,33 @@ module ToHashCatalog
     BGP::Unreachability::Tlv::Unknown.new(:type => 255, :value => '0102', :length => 9)
   end
 
+  # draft-tantsura-bess-evpn-unreachability-02, route type 254
+  # (provisional). Every field set, the odd ones included: a prefix
+  # past its family, a gateway, a label and a tail, which section 3.3
+  # forbids and the codec keeps.
+  ENTRIES['BGP::Evpn::Ip_prefix_unreachability'] = entry(:ok, nil, nil) do
+    BGP::Evpn::Ip_prefix_unreachability.new(:rd => ['10.0.0.1', 1],
+      :esi => '00:11:22:33:44:55:66:77:88:99', :ethernet_tag_id => 7,
+      :ip_prefix => { :address_family => 1, :len => 40, :octets => 'c0000201' },
+      :gateway => '0a000001', :mpls_label => 16, :tail => 'ff',
+      :reporters => [{ :reporter => { :identifier => '10.0.0.2', :as => 1,
+                       :sub_tlvs => [{ :evi => 100 }, { :reason_code => 12 }] } }])
+  end
+
+  ENTRIES['BGP::Unreachability::Evpn_reporter'] = entry(:ok, nil, nil) do
+    BGP::Unreachability::Evpn_reporter.new(:identifier => '10.0.0.2', :as => 1,
+      :sub_tlvs => [{ :reason_code => 10 }, { :timestamp => 1 }, { :evi => 9 }],
+      :length => 40)
+  end
+
+  ENTRIES['BGP::Unreachability::Evpn_reason_code'] = entry(:ok, nil, nil) do
+    BGP::Unreachability::Evpn_reason_code.new(:reason_code => 11, :length => 3)
+  end
+
+  ENTRIES['BGP::Unreachability::Evi'] = entry(:ok, nil, nil) do
+    BGP::Unreachability::Evi.new(:evi => 100, :length => 6)
+  end
+
   # RFC 9552 section 5.2, an NLRI type bgp4r does not implement, which
   # in part 1 is all of them.
   ENTRIES['BGP::Link_state::Unknown'] = entry(:ok, nil, nil) do

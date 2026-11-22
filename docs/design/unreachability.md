@@ -309,7 +309,29 @@ design above:
   reporter too short. The discards that keep the route are tested in
   `validation_test.rb` and are not faults, since a router answers them
   with nothing a test can see on the session.
-* The EVPN cases wait for pull request 2.
+
+Pull request 2, the EVPN route type 254 codec (2026-11-22):
+
+* **`Evpn::Ip_prefix_unreachability`** in
+  `bgp/nlris/evpn_unreachability.rb`, registered in `Evpn::ROUTES` under
+  254. An Address Family other than 1 or 2 cannot be read as this
+  route, so `Evpn` keeps it as an `Evpn::Unknown`, which replays it.
+* **Two reporter classes, not one with a parameter.**
+  `Unreachability::Evpn_reporter` is `Reporter` reading against the
+  EVPN sub-TLV registry (`Evi` added), and `Evpn_reason_code` is
+  `Reason_code` with the EVPN names for 10 to 12. Same octets; only
+  the registry and the names differ.
+* **`Evpn#encode` refuses a body past 255 octets.** It wrote the low
+  octet of the Length and said nothing. Review note 3 is how far that
+  is: 21 bare reporters after IPv4's 32 octets.
+* The findings: 4.11.1's resets, 4.11.2's treat-as-withdraw for a
+  non-zero ESI, GW IP Address Length, GW IP Address or label and for
+  no reporter in an announcement, and the Reporter walk SAFI 81 uses,
+  with the EVPN draft's sections and the EVI's size. No Reporter TLV
+  limit: the one-octet Length is the limit.
+* Three faults joined `Fault::UNREACHABILITY`: an Address Family of 3,
+  a label of 16, no reporter.
+* `docs/evpn.md` gains a row for 254 in section 3's table.
 
 ## Tests
 

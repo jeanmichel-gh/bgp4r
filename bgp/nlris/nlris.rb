@@ -9,6 +9,8 @@
   flow_spec_component
   flow_spec
   evpn_route
+  unreachability
+  evpn_unreachability
   evpn
   mcast_vpn_route
   mcast_vpn
@@ -23,5 +25,4 @@
   link_state_link_attribute
   link_state_prefix_attribute
   link_state_sr
-  unreachability
 }.each { |n| require "bgp/nlris/#{n}" }
