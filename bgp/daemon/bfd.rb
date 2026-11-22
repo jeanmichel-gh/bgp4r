@@ -40,6 +40,11 @@ module BGP
     # * **One hop only.** `ip -j route get ADDRESS` must answer with no
     #   `gateway`, and its `dev` and `prefsrc` are the session's interface
     #   and local address. Multihop BFD (RFC 5883) is not here.
+    # * **In the neighbor's VRF.** A neighbor with `vrf: A` is asked of
+    #   VRF A's table, `ip -j route get ADDRESS vrf A`: its address is not
+    #   in the main table (routescope docs/design/bfd-vrf.md). bfdd4r
+    #   finds the VRF from the interface, so the session is asked for as
+    #   any other. Sessions stay keyed by address, as neighbors are.
     # * **What acts.** An Up session that went Down, `failure?`, on an
     #   Established peer: a Cease with subcode 10, "BFD Down" (RFC 9384
     #   section 3), then the session is cleared, and an active peer dials
@@ -87,19 +92,22 @@ module BGP
         @stopping = false
       end
 
-      # The interface and local address of the one hop to address, or an
-      # ArgumentError naming the neighbor. Asks the kernel every time: a
-      # commit is when the answer may have changed.
-      def hop(address)
+      # The interface and local address of the one hop to address, in
+      # vrf's table when it is given, or an ArgumentError naming the
+      # neighbor. Asks the kernel every time: a commit is when the answer
+      # may have changed.
+      def hop(address, vrf = nil)
         require 'json'
-        r = execute(['ip', '-j', 'route', 'get', address.to_s])
+        argv = ['ip', '-j', 'route', 'get', address.to_s]
+        argv += ['vrf', vrf.to_s] if vrf
+        r = execute(argv)
         route = r.ok? ? (JSON.parse(r.output).first rescue nil) : nil
         unless route.is_a?(Hash) && route['dev']
-          raise ArgumentError, "neighbor #{address}: #{NOT_ONE_HOP}: ip route get answers " \
+          raise ArgumentError, "neighbor #{address}#{vrf ? " in VRF #{vrf}" : ''}: #{NOT_ONE_HOP}: ip route get answers " \
                                "#{r.ok? ? 'no route' : r.output.to_s.strip}"
         end
         if route['gateway']
-          raise ArgumentError, "neighbor #{address}: #{NOT_ONE_HOP}: it is reached " \
+          raise ArgumentError, "neighbor #{address}#{vrf ? " in VRF #{vrf}" : ''}: #{NOT_ONE_HOP}: it is reached " \
                                "via #{route['gateway']} dev #{route['dev']}"
         end
         Hop.new(route['dev'], route['prefsrc'])
@@ -109,7 +117,7 @@ module BGP
       # Speaker runs when it is built, so bgp4rd will not start on a
       # neighbor it cannot run BFD to.
       def check(peers)
-        peers.select(&:bfd?).each { |p| hop(p.address) }
+        peers.select(&:bfd?).each { |p| hop(p.address, p.vrf) }
         self
       end
 
@@ -119,7 +127,7 @@ module BGP
       def sync
         wanted = @speaker.peers.select(&:bfd?).to_h { |p| [p.address, p] }
         added, dropped = [], []
-        hops = wanted.keys.reject { |a| @hops.key?(a) }.to_h { |a| [a, hop(a)] }
+        hops = wanted.keys.reject { |a| @hops.key?(a) }.to_h { |a| [a, hop(a, wanted[a].vrf)] }
         @lock.synchronize do
           (@hops.keys - wanted.keys).each do |a|
             h = @hops.delete(a)
