@@ -129,6 +129,10 @@ module CoverageMatrix
     'vpn'          => { :gobgp => :none,    :frr => :both,
                         :doc => 'docs/design/l3vpn-pe.md' },
     'vpn-multicast' => { :gobgp => :none,   :frr => :none },
+    # FRR has SAFI 81 on master only (FRRouting/frr#21451), and the lab
+    # that runs it is docs/design/unreachability.md pull request 5.
+    'unreachability' => { :gobgp => :none,  :frr => :none,
+                          :doc => 'docs/design/unreachability.md' },
     'rt-constrain' => { :gobgp => :send,    :frr => :none,
                         :doc => 'docs/flow-spec.md' },
     'flow-spec'    => { :gobgp => :send,    :frr => :send,
@@ -251,6 +255,7 @@ module CoverageMatrix
       # per family in bgp/specimen.rb rather than by reading this table.
       128 => 'vpn', 129 => 'vpn-multicast', 132 => 'rt-constrain',
       133 => 'flow-spec', 134 => 'flow-spec-vpn',
+      81 => 'unreachability',
     }.freeze
 
     def slug(safi) ; SLUGS[safi] ; end

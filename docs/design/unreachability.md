@@ -361,7 +361,28 @@ Pull request 3, bgp4rd (2026-11-22). In `bgp/daemon/unreachability.rb`:
 * The shell takes `show ip bgp ...` for each `show bgp ...` form, as it
   does for every other command.
 
-Not built, and the design said otherwise:
+Pull request 4, route generation and the simulator (2026-11-22):
+
+* **Two families, not one with a switch**: `unreachability` (SAFI 81)
+  and `evpn_unreachability` (EVPN 254), in
+  `bgp/gen/unreachability_routes.rb`, so `rd`, `vrfs` and
+  `route_target` belong to the EVPN one alone, as the spec checker
+  already arranges keys by family.
+* The keys: `reporters`, `reporter` (the first Identifier), and
+  `reporter_as`, `reason` and `timestamp` as values or patterns on the
+  route number. **No `timestamp` leaves the sub-TLV out**, so the same
+  spec gives the same octets, which bgp/gen promises.
+* **A withdrawal is sized by its own NLRI**, not the announcement's;
+  the generator's first-message measure caught it.
+* Two Specimen entries, `unreachability` and `evpn_unreachability`,
+  since BGP::Gen takes its family names from BGP::Specimen. MP_REACH
+  now takes and reads a next hop under SAFI 81, as under flow spec, so
+  the build gate knows the family; none is sent.
+* `bgp4r-sim` needed nothing of its own: the injector reads
+  `BGP::Gen::GENERATORS`. The console's `--families` offers
+  `unreachability` by both AFIs, one capability per AFI and SAFI.
+
+Not built, and the design said otherwise (pull request 3):
 
 * **Graceful Restart's stale marking.** The design said "as for other
   families"; bgp4rd marks nothing stale for any family yet, so a report

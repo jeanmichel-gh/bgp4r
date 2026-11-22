@@ -178,6 +178,9 @@ route key.
 | `mcast_vpn` (5) | `route_type`, 1 to 7; type 1: originator from `start`; type 2: Source AS from `start`; types 3 to 7: the Multicast Group from `start`, `source`, `originator` for 3 and 4, `leaf` for 4, `source_as` for 6 and 7; `rd`, `vrfs` and `route_target` as VPN; the AFI is the group's family, or `afi` for types 1 and 2 | route targets | The same NLRI. No lab router has the family, so the lab measures a discard. |
 | `bgp_ls`, `bgp_ls_vpn` (71, 72) | a **topology**: `count` nodes from the router ID `start`, a `topology` of `ring` or `grid` with `columns`, `prefixes` per node from `prefix_start`, `protocol_id`, `identifier`, `autonomous_system`; for 72 `rd`, `vrfs` and `route_target` as VPN | attribute 29: `igp_metric`, `admin_group`, `max_bandwidth` and `srlg` per link, `node_name` per node, `prefix_metric` per prefix | By NLRI. The VPN next hop is 12, 24 or 40 octets. |
 
+| `unreachability` (81) | prefix from `start`, AFI 1 or 2 by it; `reporters` Reporter TLVs per route, their Identifiers from `reporter` up; `reporter_as`, `reason` and `timestamp` per route | ORIGIN INCOMPLETE unless `attributes` says; no next hop | The prefix alone, with no reporters (draft-tantsura-idr-unreachability-safi-06 section 4.3.2). |
+| `evpn_unreachability` (25, 70) | route type 254 (provisional): as `unreachability`, under `rd`, `vrfs` and `route_target` as VPN, and `ethernet_tag`; `reporters` at most what fits the one-octet Length | as above, with the session's next hop | The key fields with no reporters (draft-tantsura-bess-evpn-unreachability-02 section 4.5.2). |
+
 BGP-LS is the one family where a generator means a graph rather than a
 range. It is also where generation is most useful: a router can be fed
 a large IGP topology that does not exist.
@@ -867,3 +870,31 @@ ring, a grid and a VPN topology over loopback;
 `test/unit/sim/injector_test.rb` sends one through the injector over
 eBGP; `test/functional/lab/gen_gobgp_test.rb` reads a ring and a grid
 back from GoBGP.
+
+**Unreachability**, docs/design/unreachability.md pull request 4.
+`unreachability` (SAFI 81) and `evpn_unreachability` (EVPN route type
+254, provisional), in `bgp/gen/unreachability_routes.rb`.
+
+* **A withdrawal is shorter than its announcement**, since it carries no
+  reporters, so these two size each withdrawal by its own NLRI. Unicast's
+  `withdrawals` sizes every item by the announcement, which is right for
+  the families whose withdrawal is the same NLRI and was wrong here: the
+  first message's measure caught it.
+* **With no `timestamp` the Timestamp sub-TLV is left out**, so a spec
+  gives the same octets every time, which section 2 asks of every
+  generator. The drafts make the sub-TLV a SHOULD.
+* **`expected` names no next hop for SAFI 81**, since none is sent,
+  whatever `attributes` or the session would give.
+* An EVPN spec is refused with more reporters than fit 255 octets: 8 for
+  IPv4 with a timestamp, 7 for IPv6, 13 for IPv4 without.
+* The property test runs 70 seeds now, five per family.
+* `bgp4r-sim` and its console take both by name with nothing of their
+  own: the injector reads `BGP::Gen::GENERATORS`, and `--families`
+  offers each Specimen family, so `unreachability` by both AFIs. Two
+  specimens now share 25/70, so the console offers one capability per
+  AFI and SAFI.
+
+Tests: `test/unit/gen/unreachability_routes_test.rb`; `test/unit/gen_test.rb`'s
+property test draws both; `test/functional/unreachability_gen_test.rb`
+sends both to a bgp4rd over loopback and reads them back from
+`show.unreachability`. No lab router has either family yet.

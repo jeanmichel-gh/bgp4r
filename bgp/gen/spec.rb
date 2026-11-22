@@ -60,6 +60,7 @@ module BGP
                 origin_as prefix_length default source_as
                 topology columns protocol_id identifier autonomous_system prefixes prefix_start
                 node_name igp_metric admin_group max_bandwidth srlg prefix_metric
+                reporters reporter reporter_as reason timestamp
                 seed group attributes].freeze
 
       # The keys that belong to some families only, and which. A spec
@@ -70,14 +71,15 @@ module BGP
       MVPN = %w[mcast_vpn].freeze
       RTC = %w[rt_constrain].freeze
       LS = %w[bgp_ls bgp_ls_vpn].freeze
-      RD = %w[vpn vpn_multicast flow_spec_vpn evpn bgp_ls_vpn mcast_vpn].freeze
+      UNREACH = %w[unreachability evpn_unreachability].freeze
+      RD = %w[vpn vpn_multicast flow_spec_vpn evpn bgp_ls_vpn mcast_vpn evpn_unreachability].freeze
       FAMILY_KEYS = { 'label' => %w[labelled vpn vpn_multicast evpn],
                       'rd' => RD, 'vrfs' => RD, 'route_target' => RD,
                       'source' => FLOW + EVPN + MVPN, 'protocol' => FLOW,
                       'destination_port' => FLOW, 'rate' => FLOW,
                       'redirect' => FLOW, 'marking' => FLOW,
                       'route_type' => EVPN + MVPN, 'ip' => EVPN, 'esi' => EVPN,
-                      'ethernet_tag' => EVPN, 'gateway' => EVPN,
+                      'ethernet_tag' => EVPN + %w[evpn_unreachability], 'gateway' => EVPN,
                       'mac_mobility' => EVPN, 'router_mac' => EVPN,
                       'pmsi_label' => EVPN, 'originator' => EVPN + MVPN,
                       'igmp_flags' => EVPN, 'max_response_time' => EVPN,
@@ -87,7 +89,15 @@ module BGP
                       'identifier' => LS, 'autonomous_system' => LS,
                       'prefixes' => LS, 'prefix_start' => LS, 'node_name' => LS,
                       'igp_metric' => LS, 'admin_group' => LS, 'max_bandwidth' => LS,
-                      'srlg' => LS, 'prefix_metric' => LS }.freeze
+                      'srlg' => LS, 'prefix_metric' => LS,
+                      'reporters' => UNREACH, 'reporter' => UNREACH, 'reporter_as' => UNREACH,
+                      'reason' => UNREACH, 'timestamp' => UNREACH }.freeze
+
+      # draft-tantsura-idr-unreachability-safi-06 sections 3.4 and 3.5:
+      # a 4-octet Reporter AS, a 2-octet Reason Code, an 8-octet
+      # Timestamp.
+      UNREACH_MAX = { 'reporter_as' => 0xffffffff, 'reason' => 0xffff,
+                      'timestamp' => 2**64 - 1 }.freeze
 
       # The BGP-LS keys that are patterns, with the largest value each
       # field holds. RFC 9552 section 5.3.2.4 gives the IGP metric 3
@@ -177,6 +187,11 @@ module BGP
         EVPN_MAX.each do |k, max|
           out[k] = value(s[k], k, :int, max, out['seed']) if s.key?(k)
         end
+        UNREACH_MAX.each do |k, max|
+          out[k] = value(s[k], k, :int, max, out['seed']) if s.key?(k)
+        end
+        out['reporters'] = integer(s, 'reporters', false, 1)
+        out['reporter'] = string(s, 'reporter', false)
         LS_MAX.each do |k, max|
           out[k] = value(s[k], k, :int, max, out['seed']) if s.key?(k)
         end
