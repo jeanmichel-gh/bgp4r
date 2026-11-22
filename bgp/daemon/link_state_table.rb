@@ -267,10 +267,15 @@ module BGP
       # 4-octet OSPF Router-ID prints as an address, an 8-octet OSPF
       # pseudonode as `DR:address` the way ospfd names it, and anything
       # else as hex.
+      #
+      # A BGP node (RFC 9086, Protocol-ID 7) has no IGP Router-ID. It is
+      # named by its Autonomous System and BGP Router-ID, `65002:10.0.0.2`:
+      # section 4.2 says "the <ASN, BGP Router-ID> tuple is globally
+      # unique". The BGP Router-ID alone when there is no AS.
       def self.node_id(descriptors)
         return nil unless descriptors
         rid = descriptors.sub_tlvs.find { |t| t.is_a?(BGP::Link_state::Tlv::Igp_router_id) }
-        return nil unless rid
+        return bgp_node_id(descriptors) unless rid
         v = rid.value
         case v.size
         when 6, 7
@@ -281,6 +286,14 @@ module BGP
         else v.unpack1('H*')
         end
       end
+
+      def self.bgp_node_id(descriptors)
+        bgp = descriptors.sub_tlvs.find { |t| t.is_a?(BGP::Link_state::Tlv::Bgp_router_id) }
+        return nil unless bgp
+        as = descriptors.sub_tlvs.find { |t| t.is_a?(BGP::Link_state::Tlv::Autonomous_system) }
+        as ? "#{as.value}:#{bgp.router_id}" : bgp.router_id
+      end
+      private_class_method :bgp_node_id
 
       # The `areas` text isisd uses, `49.0001`: the first octet, then two
       # octets per group. RFC 9552 section 5.3.1.2 gives the value as

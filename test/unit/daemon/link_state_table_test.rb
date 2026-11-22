@@ -325,4 +325,22 @@ class BGP_Daemon_LinkStateTable_Test < Test::Unit::TestCase
     end
     assert_raise(ArgumentError) { LST.flag_octet(['X'], LST::ADJ_SID_FLAGS) }
   end
+
+  # A BGP node, RFC 9086 section 4.2, is named by "the <ASN, BGP
+  # Router-ID> tuple", since it has no IGP Router-ID. GoBGP sends 512,
+  # 513, 516 and 517; the BGP-LS ID and the confederation member do not
+  # name it.
+  def test_a_bgp_node_is_named_by_its_as_and_bgp_router_id
+    n = BGP::Link_state.new(:link => { :protocol_id => 7, :identifier => 0,
+                                       :tlvs => [{ :local_node_descriptors => [{ :autonomous_system => 65002 },
+                                                                               { :bgp_ls_identifier => 0 },
+                                                                               { :bgp_router_id => '10.0.0.2' },
+                                                                               { :bgp_confederation_member => 65102 }] },
+                                                 { :remote_node_descriptors => [{ :bgp_router_id => '10.0.0.1' }] }] })
+    row = LST.row(n, nil, '10.2.0.1', Time.now)
+    assert_equal(['65002:10.0.0.2', '10.0.0.1'], [row['local'], row['remote']])
+    assert_nil(LST.node_id(BGP::Link_state::Tlv::Local_node_descriptors.new(
+                             BGP::Link_state::Tlv::Autonomous_system.new(65002))),
+               'an AS alone names nothing')
+  end
 end
