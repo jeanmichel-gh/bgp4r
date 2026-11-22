@@ -1752,6 +1752,9 @@ Producer's rows have `peer` null:
  "since": "2026-11-09T10:00:00.000Z"}
 ```
 
+A BGP node of RFC 9086, which has no IGP Router-ID, is `65002:10.0.0.2`,
+its Autonomous System and BGP Router-ID: section 4.2 calls that tuple
+"globally unique". Before, such a row had `local` and `remote` null.
 `local` and `remote` are spelled as isisd spells a node, or as ospfd
 does: a dotted quad, and `DR:address` for a pseudonode. `areas` is
 spelled as isisd spells an area, `49.0001`. `area` is the OSPF Area-ID
@@ -2009,15 +2012,21 @@ Measured on 2026-11-22 against the `gobgpd` and `gobgp` binaries of
 types for every TLV in section 13's table but 1100, read in its source
 (`pkg/packet/bgp/bgp.go`).
 
-| | GoBGP originates, bgp4r reads | bgp4r sends, GoBGP's RIB shows |
-|---|---|---|
-| 516, 517 | yes, as classes | yes, on both ends of the key |
-| 1034, 1036 | no client keyword | yes: flags, first label and first label plus size |
-| 1035 | yes, `sr-algorithm` on a node | yes, in base64 |
-| 1099 | yes, `sid-type adj`, flags and weight lost | the SID, flags and weight lost |
-| 1100 | no type | kept, not shown |
-| 1101, 1102, 1103 | 1101 and 1103; `adj` makes 1099, not 1102 | yes: flags by name, weight, SID |
-| 1158 | no client keyword | not shown: no prefix TLV is |
+Two layers are measured. The codec, with a bare `BGP::Neighbor` on our
+side. And bgp4rd itself, as a node file configures it: its Producer,
+fed the `show.topology` recorded from isis's isis4r-sr lab, and its
+`show.link_state` reading what GoBGP originates. That is step 4 of
+routescope's `docs/design/bgp-ls-sr.md`.
+
+| | GoBGP originates; bgp4rd's `show.link_state` | bgp4rd's Producer sends; GoBGP's RIB shows | GoBGP sends on to another peer |
+|---|---|---|---|
+| 516, 517 | read; the row names the node `65002:10.0.0.2` | yes, on both ends of the key | as received |
+| 1034, 1036 | no client keyword | yes, for all 14 nodes: I and V, first label and first label plus size | as received |
+| 1035 | `sr: {algorithms}`, from `sr-algorithm` on a node | yes, in base64 | as received |
+| 1099 | `adj_sids`, from `sid-type adj`, flags and weight lost | the SIDs of all 34 links; flags and weight shown as 0 | as received, flags and weight included |
+| 1100 | no type | not shown | as received: kept, not dropped, and the UPDATE taken |
+| 1101, 1102, 1103 | `peer_sids`, from 1101 and 1103; `adj` makes 1099, not 1102 | yes: flags by name, weight, SID | not measured |
+| 1158 | no client keyword | not shown: no prefix TLV is | as received |
 
 **The node descriptor order is fixed in 4.10.0.** GoBGP 3.23.0 sends
 512, 516, 513 (section 11). 4.10.0 sends 512, 513, 516, 517, the
@@ -2030,11 +2039,14 @@ does for 3.23.0. Each is asserted.
   adj v-flag weight 2` arrives at bgp4r as flags 0 and weight 0, and an
   Adjacency SID bgp4r sends with flags 0x30 and weight 5 shows as 0 and
   0 in GoBGP's RIB. Its decoder reads both fields; its API conversion,
-  `NewLsTLVAdjacencySID`, takes the SID alone.
+  `NewLsTLVAdjacencySID`, takes the SID alone. **Only its view loses
+  them**: the attribute GoBGP sends on to another peer carries 0x30, as
+  received.
 * **No prefix attribute TLV is shown.** A Prefix NLRI, IPv4 or IPv6,
   installs with its BGP-LS Attribute, and the RIB's `prefix` object is
-  empty: not the Prefix-SID, and not RFC 9552's own Prefix Metric. So
-  1158 is checked by the unit and functional tests only.
+  empty: not the Prefix-SID, and not RFC 9552's own Prefix Metric. Its
+  RIB cannot check 1158; what it sends on can, and it carries our
+  Prefix-SID octet for octet.
 * **It discards the attribute for a length it does not expect.** An
   Adjacency SID of 9 octets makes GoBGP discard the whole BGP-LS
   Attribute, with "Incorrect Adjacency SID length", and every other TLV
@@ -2042,8 +2054,24 @@ does for 3.23.0. Each is asserted.
   is correct" among the checks not to make. bgp4r reports nothing and
   keeps the octets as a `Tlv::Unknown`.
 
-**Where the two agree.** A SID/Label sub-TLV that runs past its 1034:
-bgp4r reports attribute discard, and GoBGP discards the attribute,
-keeps the route and keeps the session. A non-zero Reserved octet and an
-index in an SRGB: neither reports anything, and GoBGP reads the range.
+**GoBGP keeps what it cannot read and passes it on.** With a second
+peer behind GoBGP, every BGP-LS Attribute bgp4rd's Producer sent
+reaches it octet for octet: the LAN Adjacency SID GoBGP has no type
+for, the Adj-SID flags and the Prefix-SID its RIB does not show. RFC
+9552 section 5.1's keep-and-echo MUST, met by GoBGP.
+
+**Where the two agree: every SR TLV cut short is attribute discard.**
+bgp4r reports attribute discard (section 8's three SR findings), and
+GoBGP discards the attribute, keeps the route and keeps the session,
+and its log names the TLV:
+
+| Sent on purpose | bgp4r | GoBGP 4.10.0 |
+|---|---|---|
+| a 1161 sub-TLV whose Length runs past its 1034 | attribute discard | attribute discard, "LS TLV malformed" |
+| 1034 of one octet, no room for Reserved | attribute discard | attribute discard, "Incorrect SR Capabilities length" |
+| 1034 with 2 octets after its head, no range | attribute discard | attribute discard, "Malformed SR Capabilities TLV" |
+| 1036 with a range cut inside its sub-TLV | attribute discard | attribute discard, "Malformed SR Local Block TLV" |
+
+A non-zero Reserved octet and an index in an SRGB: neither reports
+anything, and GoBGP reads the range.
 

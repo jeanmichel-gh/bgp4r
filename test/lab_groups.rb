@@ -112,7 +112,8 @@ module LabGroups
     # job installs 4.10.0 the same way, so a file measured against 4
     # runs rather than omitting itself. `link_state_sr_gobgp_test` is
     # RFC 9085 and RFC 9086 in BGP-LS, which GoBGP 3 has no client
-    # grammar for. About 25s, measured on 2026-11-22.
+    # grammar for, at the codec and with bgp4rd itself (its Producer and
+    # its show.link_state). 39s, measured on 2026-11-22.
     'gobgp4' => %w[
       link_state_sr_gobgp_test
     ],

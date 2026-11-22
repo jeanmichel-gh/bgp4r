@@ -23,7 +23,13 @@
 require 'test/unit'
 require 'bgp4r'
 require 'socket'
+require 'stringio'
+require 'tmpdir'
+require 'fileutils'
+require 'json'
+require 'bgp/daemon'
 require './test/functional/lab/lab_helper'
+require './test/helpers/fake_isisd'
 
 # The Segment Routing TLVs of RFC 9085 and RFC 9086 in BGP-LS, against
 # GoBGP 4.10.0. `docs/bgp-ls.md` section 13 has the classes and section
@@ -107,11 +113,17 @@ class LinkStateSrGobgpTest < Test::Unit::TestCase
     end
     @listeners = []
     @routers = []
+    @daemons = []
   end
 
-  # Both lists are nil when setup omitted the case.
+  # The lists are nil when setup omitted the case.
   def teardown
     (@routers || []).each { |r| r.down }
+    (@daemons || []).each do |server, isisd, dir|
+      server.stop
+      isisd.stop if isisd
+      FileUtils.remove_entry(dir)
+    end
     (@listeners || []).each do |server, neighbor, thread|
       thread.kill if thread
       neighbor.close
@@ -430,4 +442,221 @@ class LinkStateSrGobgpTest < Test::Unit::TestCase
     end
   end
 
+  # --- bgp4rd on our side: the Producer and show.link_state (step 4) ------
+  #
+  # The cases above put a bare `BGP::Neighbor` on our side, so they test
+  # the codec. These run bgp4rd itself, as a node file configures it:
+  # its BGP-LS Producer reading a fake isisd, and its `show.link_state`.
+  # routescope's docs/design/bgp-ls-sr.md, step 4.
+
+  # The recorded level-2 show.topology of isis's isis4r-sr lab, which
+  # test/unit/daemon/link_state_producer_test.rb describes.
+  SR_TOPOLOGY = File.expand_path('../../fixtures/isisd/show_topology_sr_l2.json', __dir__)
+
+  BGP_LS_CAPS = ['as4_byte', { 'mbgp' => 'bgp_ls' }].freeze
+
+  def recorded
+    JSON.parse(File.read(SR_TOPOLOGY))
+  end
+
+  # bgp4rd listening on 127.0.0.1, with gobgpd at 127.0.0.2 as its one
+  # neighbor. With a topology, a fake isisd answers it at level 2 and
+  # bgp4rd's Producer sends to gobgpd. peer2 is a second neighbor of
+  # gobgpd's, as LabHelper::Gobgpd takes it. Answers [server, router].
+  def bgp4rd(topology = nil, peer2: nil)
+    dir = Dir.mktmpdir
+    isisd = topology && BGP::TestHelpers::FakeIsisd.new(2 => topology)
+    port = TCPServer.open('127.0.0.1', 0) { |t| t.addr[1] }
+    config = { 'as' => OUR_AS, 'router_id' => '10.0.0.1', 'listen_address' => '127.0.0.1',
+               'port' => port, 'state_file' => File.join(dir, 'state.json'),
+               'neighbors' => [{ 'address' => '127.0.0.2', 'as' => THEIR_AS, 'capabilities' => BGP_LS_CAPS }] }
+    config['link_state'] = { 'isisd' => isisd.path, 'levels' => [2], 'peers' => ['127.0.0.2'] } if isisd
+    err = StringIO.new
+    server = BGP::Daemon::Server.new(StringIO.new, err)
+    assert_not_nil(server.build(BGP::Daemon::Server.with_defaults(config),
+                                :socket => File.join(dir, 'api.sock')), "bgp4rd did not start: #{err.string}")
+    @daemons << [server, isisd, dir]
+    router = G.new(:local => '127.0.0.2', :as => THEIR_AS, :router_id => '10.0.0.2',
+                   :peer => '127.0.0.1', :peer_as => OUR_AS, :port => port,
+                   :families => [G::LS], :peer2 => peer2)
+    @routers << router
+    router.up
+    assert(wait_for { (p = server.speaker.peer('127.0.0.2')) && p.established? },
+           "bgp4rd and gobgpd to come up\n#{router.log}\n#{err.string}")
+    [server, router]
+  end
+
+  def show_link_state(server)
+    c = BGP::Daemon::Client.new(server.api.path)
+    c.call('show.link_state', 'limit' => 1000)['rows']
+  ensure
+    c.close if c
+  end
+
+  # The routes a topology gives: one Node NLRI per node, one Link NLRI
+  # per neighbor, one Prefix NLRI per IPv4 prefix.
+  def route_count(topology)
+    topology['nodes'].sum { |n| 1 + n['neighbors'].size + n['prefixes'].count { |p| !p['prefix'].include?(':') } }
+  end
+
+  # isisd's `0000.0000.0002.00` as GoBGP prints a node, `0000.0000.0002`,
+  # and a pseudonode's `0000.0000.0001.01` as `0000.0000.0001-01`.
+  def gobgp_node(id)
+    id.sub(/\.00\z/, '').sub(/\.(\h\h)\z/, '-\1')
+  end
+
+  # Ours to GoBGP: bgp4rd's Producer, fed the recorded show.topology,
+  # and GoBGP's RIB names back every node's SRGB, its I and V flags, its
+  # SRLB and its algorithms, and every link's Adj-SID, value for value.
+  # GoBGP prints a range as its first label and first label plus size.
+  #
+  # What GoBGP does not show, each asserted, as the codec cases found:
+  # an Adj-SID's flags and weight (it shows 0 and 0), and any prefix
+  # attribute TLV. The next case shows its octets are kept.
+  def test_the_producers_sr_reaches_gobgp_value_for_value
+    topo = recorded
+    _server, router = bgp4rd(topo)
+    want = route_count(topo)
+    assert(wait_for { (router.rib_family(G::LS) || {}).size == want },
+           "GoBGP to hold #{want} routes\n#{router.log}")
+    rib = router.rib_family(G::LS)
+    ls = lambda { |key| rib[key].first['attrs'].find { |a| a['type'] == 29 } }
+    nodes = links = 0
+    topo['nodes'].each do |n|
+      key = rib.keys.find { |k| k =~ /NODE \{ AS:0 BGP-LS ID:0 #{Regexp.escape(gobgp_node(n['id']))} ISIS-L2/ }
+      assert_not_nil(key, "GoBGP holds #{n['hostname']}'s Node NLRI")
+      sr = ls[key]['node']
+      blocks = lambda { |list| list.collect { |b| { 'begin' => b['start'], 'end' => b['start'] + b['size'] } } }
+      assert_equal({ 'ipv4_supported' => n['sr']['flags'].include?('I'),
+                     'ipv6_supported' => n['sr']['flags'].include?('V'),
+                     'ranges' => blocks[n['sr']['srgb']] }, sr['sr_capabilities'], n['hostname'])
+      assert_equal(blocks[n['sr']['srlb']], sr['sr_local_block']['ranges'], n['hostname'])
+      assert_equal(n['sr']['algorithms'], sr['sr_algorithms'].unpack1('m').bytes, n['hostname'])
+      nodes += 1
+      n['neighbors'].each do |nb|
+        key = rib.keys.find do |k|
+          k =~ /LOCAL_NODE: #{Regexp.escape(gobgp_node(n['id']))} REMOTE_NODE: #{Regexp.escape(gobgp_node(nb['id']))} /
+        end
+        assert_not_nil(key, "GoBGP holds #{n['hostname']} to #{nb['id']}")
+        link = ls[key]['link']
+        assert_equal(nb['adj_sids'].collect { |a| a['label'] }, link['sr_adjacency_sids'].collect { |a| a['sid'] })
+        assert_equal([[0, 0]], link['sr_adjacency_sids'].collect { |a| [a['flags'], a['weight']] }.uniq,
+                     'GoBGP 4.10.0 shows flags 0 and weight 0 whatever was sent')
+        links += 1
+      end
+    end
+    assert_equal([14, 34], [nodes, links], 'the recording, whole')
+    prefixes = rib.keys.grep(/PREFIXv4/).collect { |k| ls[k] }
+    assert_equal([{}], prefixes.collect { |a| a['prefix'] }.uniq, 'and no prefix TLV, the Prefix-SID included')
+  end
+
+  # GoBGP has no type for the LAN Adjacency SID (1100). It keeps it: the
+  # route installs, and the attribute GoBGP sends on to a second peer is
+  # octet for octet the one bgp4rd's Producer sent, 1100 included, and
+  # with the Adj-SID flags and the Prefix-SID its RIB does not show. So
+  # what GoBGP loses is in its API's view, not on the wire.
+  def test_gobgp_keeps_the_lan_adjacency_sid_and_sends_it_on
+    topo = recorded
+    topo['nodes'] = topo['nodes'].first(1)
+    topo['nodes'][0]['neighbors'] << { 'id' => '0000.0000.0001.01', 'metric' => 10, 'style' => 'wide',
+                                       'adj_sids' => [{ 'flags' => %w[V L], 'label' => 15_004 }],
+                                       'lan_adj_sids' => [{ 'neighbor' => '0000.0000.0009', 'flags' => %w[V L],
+                                                            'label' => 15_005 }] }
+    listener = TCPServer.new('127.0.0.3', 0)
+    n2 = BGP::Neighbor.new(4, 65_003, 180, '0.0.0.3', '127.0.0.3', '127.0.0.2')
+    n2.add_cap BGP::OPT_PARM::CAP::Mbgp.new(1, 1)
+    n2.add_cap BGP::OPT_PARM::CAP::Mbgp.new(AFI, SAFI)
+    updates = UpdateCatcher.new
+    n2.add_observer updates
+    thread = Thread.new do
+      begin
+        while (s = listener.accept)
+          n2.start_session(s)
+        end
+      rescue IOError, SystemCallError
+      end
+    end
+    @listeners << [listener, n2, thread]
+    _server, router = bgp4rd(topo, peer2: { :address => '127.0.0.3', :as => 65_003,
+                                            :port => listener.addr[1] })
+    want = route_count(topo)
+    sent = BGP::Daemon::LinkStateProducer.node_routes(topo['nodes'][0], 2, 0)
+                                         .to_h { |nlri, a| [nlri.encode, a.to_shex] }
+    got = {}
+    collected = wait_for do
+      while (u = updates.shift(0.1))
+        mp = u.path_attribute.find(BGP::Mp_reach)
+        a = u.path_attribute.find(BGP::Link_state_attribute)
+        mp.nlris.each { |l| got[l.encode] = a && a.to_shex } if mp
+      end
+      got.size == want
+    end
+    assert(collected, "the second peer to get #{want} routes, got #{got.size}\n#{router.log}")
+    assert_equal(sent, got, 'every BGP-LS Attribute as bgp4rd sent it')
+    lan = got.values.find { |h| h.include?('044c000d') }
+    assert_not_nil(lan, '1100 kept')
+    # 044c type, 000d length, 30 flags V and L, 00 weight, 0000
+    # reserved, 000000000009 the neighbor, 003a9d label 15005.
+    assert_include(lan, '044c000d' + '30000000' + '000000000009' + '003a9d')
+  end
+
+  # GoBGP to ours: GoBGP originates a Link NLRI with Protocol-ID 7, its
+  # BGP Router-ID (516) and confederation member (517), and a PeerNode
+  # SID (1101). bgp4rd's show.link_state decodes it into `peer_sids`,
+  # and names both nodes by their AS and BGP Router-ID (RFC 9086 section
+  # 4.2).
+  def test_a_peer_node_sid_from_gobgp_in_bgp4rds_show_link_state
+    server, router = bgp4rd
+    out, status = router.client_run(*%w[global rib add -a ls], *EPE_ARGS,
+                                    *%w[sid 24000 sid-type node v-flag l-flag weight 1])
+    assert(status.success?, out)
+    assert(wait_for { show_link_state(server).size == 1 }, "the row at bgp4rd\n#{router.log}")
+    row = show_link_state(server).first
+    assert_equal(['link', 7, '65002:10.0.0.2', '65001:10.0.0.1'],
+                 row.values_at('type', 'protocol_id', 'local', 'remote'))
+    assert_equal([{ 'type' => 'node', 'flags' => %w[V L], 'weight' => 1, 'label' => 24_000 }], row['peer_sids'])
+  end
+
+  # The other two RFC 9085 TLVs GoBGP's client can originate, read by
+  # bgp4rd's show.link_state: an Adjacency SID, which arrives with no
+  # flags (GoBGP's loss, measured above), and an SR Algorithm.
+  def test_an_adjacency_sid_and_an_sr_algorithm_from_gobgp_in_show_link_state
+    server, router = bgp4rd
+    router.client_run(*%w[global rib add -a ls link protocol 2 identifier 0
+                          local-igp-router-id 0000.0000.0001 remote-igp-router-id 0000.0000.0002
+                          sid 15000 sid-type adj v-flag l-flag])
+    router.client_run(*%w[global rib add -a ls node protocol 2 identifier 0
+                          local-igp-router-id 0000.0000.0001 sr-algorithm 0 1])
+    assert(wait_for { show_link_state(server).size == 2 }, "two rows at bgp4rd\n#{router.log}")
+    rows = show_link_state(server)
+    node = rows.find { |r| r['type'] == 'node' }
+    link = rows.find { |r| r['type'] == 'link' }
+    assert_equal({ 'algorithms' => [0, 1] }, node['sr'])
+    assert_equal([{ 'label' => 15_000 }], link['adj_sids'], 'the V and L asked for did not arrive')
+    assert_equal(['0000.0000.0001.00', '0000.0000.0002.00'], link.values_at('local', 'remote'))
+  end
+
+  # Negative: SR TLVs cut short, sent on purpose. bgp4r reports each as
+  # attribute discard (RFC 9552 section 8.2.2, docs/bgp-ls.md section 8),
+  # and GoBGP 4.10.0 does the same: the route installs without its
+  # BGP-LS Attribute, the session stays up, and its log names the TLV.
+  def test_sr_tlvs_cut_short_are_attribute_discard_at_both_ends
+    { '040a0001c0'               => 'Incorrect SR Capabilities length', # no room for Reserved
+      '040a0004c0000001'         => 'Malformed SR Capabilities TLV',    # 2 octets left, no range
+      '040c0009000000001f400489' => 'Malformed SR Local Block TLV',     # a range cut in its sub-TLV
+    }.each do |hex, gobgp_says|
+      tlvs = [T::Unknown.new(hex[0, 4].to_i(16), [hex[8..]].pack('H*')), T::Node_name.new('r1')]
+      ours = BGP::Attr::Check.attribute(BGP::Link_state_attribute.new(*tlvs).encode.is_packed)
+      assert_equal([:attribute_discard], ours.collect(&:action), hex)
+      n, router, _updates, drops = session
+      announce(n, NODE, tlvs)
+      assert(wait_for { only_route(router) }, "GoBGP to install it\n#{router.log}")
+      _key, attr = only_route(router)
+      assert_nil(attr, "#{hex}: GoBGP discarded the BGP-LS Attribute")
+      assert_match(/Some attributes were discarded.*#{gobgp_says}/, router.log, hex)
+      assert_equal([], drops, "#{hex}: and kept the session")
+      teardown
+      @routers, @listeners, @daemons = [], [], []
+    end
+  end
 end
