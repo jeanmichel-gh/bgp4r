@@ -33,6 +33,7 @@ require 'bgp/gen/evpn_routes'
 require 'bgp/gen/rt_constrain_routes'
 require 'bgp/gen/link_state_routes'
 require 'bgp/gen/mcast_vpn_routes'
+require 'bgp/gen/unreachability_routes'
 require 'bgp/gen/churn'
 
 module BGP
@@ -68,7 +69,9 @@ module BGP
                    'flow_spec' => Flow_rules, 'flow_spec_vpn' => Flow_rules_vpn,
                    'evpn' => Evpn_routes, 'rt_constrain' => Rt_constrain_routes,
                    'mcast_vpn' => Mcast_vpn_routes,
-                   'bgp_ls' => Link_state_routes, 'bgp_ls_vpn' => Link_state_vpn_routes }.freeze
+                   'bgp_ls' => Link_state_routes, 'bgp_ls_vpn' => Link_state_vpn_routes,
+                   'unreachability' => Unreachability_routes,
+                   'evpn_unreachability' => Evpn_unreachability_routes }.freeze
 
     attr_reader :spec, :family, :sender
 

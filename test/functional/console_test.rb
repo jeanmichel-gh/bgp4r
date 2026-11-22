@@ -615,7 +615,8 @@ class TestConsoleBackToBack < Test::Unit::TestCase
     back_to_back do |c|
       # A bgp4r receiver reads a family it did not negotiate, so a
       # specimen crossing does not say it was offered. The OPEN does.
-      every = BGP::Sim::ConsoleCommand.families.collect { |_, afi, safi| [afi, safi] }.sort
+      # One per AFI and SAFI: evpn and evpn_unreachability share 25/70.
+      every = BGP::Sim::ConsoleCommand.families.collect { |_, afi, safi| [afi, safi] }.uniq.sort
       assert_equal(every, families_heard(c.remote), 'the remote side heard every family')
       assert_equal(every, families_heard(c), 'and so did ours')
       BGP::Specimen.names.each do |name|

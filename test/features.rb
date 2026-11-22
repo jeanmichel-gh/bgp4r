@@ -143,8 +143,8 @@ module Features
       :rfc   => 'draft-tantsura-idr-unreachability-safi-06, draft-tantsura-bess-evpn-unreachability-02',
       :doc   => 'docs/design/unreachability.md',
       :unit  => %w[nlris/unreachability_test nlris/evpn_unreachability_test
-                   daemon/unreachability_test],
-      :functional => %w[unreachability_daemon_test],
+                   daemon/unreachability_test gen/unreachability_routes_test],
+      :functional => %w[unreachability_daemon_test unreachability_gen_test],
     },
 
     'mcast-vpn' => {

@@ -560,7 +560,10 @@ module BGP
         # Nothing here claims RFC 8950 applies to flowspec, so
         # ipv6_nexthop_length? is left alone and a length no address fits
         # behaves as it does for every other SAFI.
-        when 1,2,4,133,134
+        # SAFI 81 has no next hop (draft-tantsura-idr-unreachability-
+        # safi-06 Appendix B.1), so one that arrives is read as flow
+        # spec's is: AFI 1 or 2, by its length.
+        when 1,2,4,133,134,IANA::SAFI::UNREACHABILITY_INFORMATION
           case @afi
           when 1
             if ipv6_nh
@@ -790,7 +793,10 @@ module BGP
           # is what RFC 8950 asks for under SAFI 128 and 129 and is
           # wrong here.
           index.zero? ? ::BGP::const_get('Vpn') : ::BGP::const_get('Prefix')
-        when 133,134
+        when 133,134,IANA::SAFI::UNREACHABILITY_INFORMATION
+          # SAFI 81 is the same case: draft-tantsura-idr-unreachability-
+          # safi-06 Appendix B.1 sends Next Hop Length 0.
+          #
           # RFC 8955 section 4 wants the length set to 0, so a flowspec
           # MP_REACH is normally built with no :nexthop at all and encode
           # writes 0 on its own. One given anyway is honoured rather than

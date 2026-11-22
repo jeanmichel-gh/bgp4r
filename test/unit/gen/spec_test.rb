@@ -103,14 +103,15 @@ class TestBgpGenSpec < Test::Unit::TestCase
   # and not here, or the reverse, is seen.
   def test_the_family_keys
     flow = %w[flow_spec flow_spec_vpn]
-    rd = %w[vpn vpn_multicast flow_spec_vpn evpn bgp_ls_vpn mcast_vpn]
+    rd = %w[vpn vpn_multicast flow_spec_vpn evpn bgp_ls_vpn mcast_vpn evpn_unreachability]
+    un = %w[unreachability evpn_unreachability]
     evpn = %w[evpn]
     mvpn = %w[mcast_vpn]
     ls = %w[bgp_ls bgp_ls_vpn]
     assert_equal({ 'label' => %w[labelled vpn vpn_multicast evpn], 'rd' => rd, 'vrfs' => rd, 'route_target' => rd,
                    'source' => flow + evpn + mvpn, 'protocol' => flow, 'destination_port' => flow, 'rate' => flow,
                    'redirect' => flow, 'marking' => flow,
-                   'route_type' => evpn + mvpn, 'ip' => evpn, 'esi' => evpn, 'ethernet_tag' => evpn,
+                   'route_type' => evpn + mvpn, 'ip' => evpn, 'esi' => evpn, 'ethernet_tag' => evpn + %w[evpn_unreachability],
                    'gateway' => evpn, 'mac_mobility' => evpn, 'router_mac' => evpn,
                    'pmsi_label' => evpn, 'originator' => evpn + mvpn, 'igmp_flags' => evpn,
                    'max_response_time' => evpn, 'leaf' => evpn + mvpn, 'es_import' => evpn, 'esi_label' => evpn,
@@ -119,7 +120,9 @@ class TestBgpGenSpec < Test::Unit::TestCase
                    'topology' => ls, 'columns' => ls, 'protocol_id' => ls, 'identifier' => ls,
                    'autonomous_system' => ls, 'prefixes' => ls, 'prefix_start' => ls,
                    'node_name' => ls, 'igp_metric' => ls, 'admin_group' => ls,
-                   'max_bandwidth' => ls, 'srlg' => ls, 'prefix_metric' => ls }, S::FAMILY_KEYS)
+                   'max_bandwidth' => ls, 'srlg' => ls, 'prefix_metric' => ls,
+                   'reporters' => un, 'reporter' => un, 'reporter_as' => un, 'reason' => un,
+                   'timestamp' => un }, S::FAMILY_KEYS)
     assert_equal([], S::FAMILY_KEYS.keys - S::KEYS)
   end
 

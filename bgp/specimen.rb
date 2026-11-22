@@ -197,6 +197,15 @@ module BGP
       [:rt_constrain,   'RT-constrain, a 96-bit membership prefix', [1, 132],
         -> { Mp_reach.new(:afi => 1, :safi => 132, :nexthop => '10.0.0.1',
                           :nlris => [Rt_constrain.new(65000, [65000, 100])]) }],
+      # draft-tantsura-idr-unreachability-safi-06 section 3.6.1's example,
+      # with no next hop as its Appendix B.1.
+      [:unreachability, 'Unreachability Information, one prefix and one reporter', [1, 81],
+        -> { Mp_reach.new(:afi => 1, :safi => 81, :nlris => [Fault.unreach_nlri]) }],
+      # draft-tantsura-bess-evpn-unreachability-02 Appendix A Example 1,
+      # route type 254 (provisional).
+      [:evpn_unreachability, 'EVPN IP Prefix Unreachability, route type 254', [25, 70],
+        -> { Mp_reach.new(:afi => 25, :safi => 70, :nexthop => '10.0.0.1',
+                          :nlris => [Evpn.new(Fault.evpn_unreach_route)]) }],
       [:flow_spec,      'flow spec, a destination and a protocol', [1, 133],
         -> { Mp_reach.new(:afi => 1, :safi => 133,
                           :nlris => [{ :destination_prefix => '203.0.113.0/24',

@@ -96,7 +96,7 @@ TEXT
       # section 4 gives it AFI 1 only. EVPN and BGP-LS have one AFI each,
       # 25 and 16388, and the specimen list carries it.
       IPV6 = %i[unicast multicast labelled mcast_vpn vpn vpn_multicast
-                flow_spec flow_spec_vpn].freeze
+                flow_spec flow_spec_vpn unreachability].freeze
 
       # Every [name, afi, safi] --back-to-back can offer.
       def self.families
@@ -127,7 +127,10 @@ TEXT
             end
           end.uniq
         end
-        ['as4_byte', 'route_refresh'] + fams.collect { |_, afi, safi| { 'mbgp' => [afi, safi] } }
+        # One capability per [afi, safi]: two specimens may share one, as
+        # evpn and evpn_unreachability share 25/70.
+        ['as4_byte', 'route_refresh'] + fams.collect { |_, afi, safi| [afi, safi] }.uniq
+                                            .collect { |f| { 'mbgp' => f } }
       end
 
       attr_reader :console

@@ -48,11 +48,14 @@ class TestBgpGen < Test::Unit::TestCase
   # nine families, 27 and 36 seeds each left a flow spec key the corpus
   # test asks for undrawn, since the families moved to other seeds.
   # Phase 4g's two families made it 55, and 4f's one 60.
-  SEEDS = Integer(ENV.fetch('GEN_SEEDS', 60))
+  # The two Unreachability families made it 70.
+  SEEDS = Integer(ENV.fetch('GEN_SEEDS', 70))
 
   def test_the_generators_are_the_ones_built
     assert_equal(%w[unicast multicast labelled vpn vpn_multicast flow_spec flow_spec_vpn evpn rt_constrain
-                    mcast_vpn bgp_ls bgp_ls_vpn], BGP::Gen::GENERATORS.keys)
+                    mcast_vpn bgp_ls bgp_ls_vpn unreachability evpn_unreachability], BGP::Gen::GENERATORS.keys)
+    assert_equal(BGP::Gen::Unreachability_routes, BGP::Gen::GENERATORS['unreachability'])
+    assert_equal(BGP::Gen::Evpn_unreachability_routes, BGP::Gen::GENERATORS['evpn_unreachability'])
     assert_equal(BGP::Gen::Mcast_vpn_routes, BGP::Gen::GENERATORS['mcast_vpn'])
     assert_equal(BGP::Gen::Link_state_routes, BGP::Gen::GENERATORS['bgp_ls'])
     assert_equal(BGP::Gen::Link_state_vpn_routes, BGP::Gen::GENERATORS['bgp_ls_vpn'])
@@ -180,6 +183,7 @@ class TestBgpGen < Test::Unit::TestCase
     mcast_vpn(r, s, v6, n) if family == 'mcast_vpn'
     rt_constrain(r, s) if family == 'rt_constrain'
     link_state(r, s, v6) if LS.include?(family)
+    unreachability(r, s, family) if UNREACH.include?(family)
     if RD.include?(family)
       admin = [r.rand(65536), "192.0.2.#{r.rand(1..254)}", r.rand(65536..2**32 - 1)][r.rand(3)]
       s['rd'] = "#{admin}:#{r.rand(1000)}"
@@ -267,6 +271,19 @@ class TestBgpGen < Test::Unit::TestCase
     s['prefix_length'] = 96 if r.rand(4) == 0
   end
 
+  # docs/design/unreachability.md pull request 4: reporters, their AS,
+  # reason and timestamp, each sometimes a pattern. EVPN holds three
+  # reporters with a timestamp at most in an IPv6 route of 255 octets'
+  # room, so it draws fewer.
+  def unreachability(r, s, family)
+    s['reporters'] = r.rand(1..(family == 'evpn_unreachability' ? 3 : 8))
+    s['reporter'] = "198.51.100.#{r.rand(1..200)}" if r.rand(2) == 1
+    s['reporter_as'] = [r.rand(2**32), { 'step' => { 'start' => 64_512, 'by' => 1 } }][r.rand(2)] if r.rand(2) == 1
+    s['reason'] = [r.rand(65_536), { 'cycle' => [0, 3, 9] }][r.rand(2)] if r.rand(2) == 1
+    s['timestamp'] = [r.rand(2**40), { 'step' => { 'start' => 1_733_789_400, 'by' => 1 } }][r.rand(2)] if r.rand(2) == 1
+    s['ethernet_tag'] = r.rand(2**32) if family == 'evpn_unreachability' && r.rand(2) == 1
+  end
+
   # Phase 4g: a small topology, ring or grid, with prefixes sometimes and
   # each BGP-LS Attribute value sometimes, a value or a pattern. Small,
   # since a node is three routes and more with prefixes.
@@ -293,23 +310,25 @@ class TestBgpGen < Test::Unit::TestCase
   end
 
   FAMILIES = %w[unicast multicast labelled vpn vpn_multicast flow_spec flow_spec_vpn evpn rt_constrain
-                mcast_vpn bgp_ls bgp_ls_vpn]
+                mcast_vpn bgp_ls bgp_ls_vpn unreachability evpn_unreachability]
   LS = %w[bgp_ls bgp_ls_vpn]
+  UNREACH = %w[unreachability evpn_unreachability]
   LABELLED = %w[labelled vpn vpn_multicast]
   FLOW = %w[flow_spec flow_spec_vpn]
   VPN = %w[vpn vpn_multicast flow_spec_vpn]
   # The families with a Route Distinguisher, and the ones whose routes
   # differ in length so the packing test measures each.
-  RD = VPN + %w[evpn bgp_ls_vpn mcast_vpn]
-  MEASURED = FLOW + %w[evpn rt_constrain mcast_vpn] + LS
+  RD = VPN + %w[evpn bgp_ls_vpn mcast_vpn evpn_unreachability]
+  MEASURED = FLOW + %w[evpn rt_constrain mcast_vpn] + LS + UNREACH
   # The families whose NLRI validation.rb walks without knowing add-path,
   # which CLAUDE.md records under Known issues.
-  NO_PATH_ID = FLOW + %w[evpn mcast_vpn] + LS
+  NO_PATH_ID = FLOW + %w[evpn mcast_vpn] + LS + UNREACH
   EVPN_TYPES = (1..11).to_a
   MVPN_TYPES = (1..7).to_a
   SAFI = { 'unicast' => 1, 'multicast' => 2, 'labelled' => 4, 'vpn' => 128, 'vpn_multicast' => 129,
            'flow_spec' => 133, 'flow_spec_vpn' => 134, 'evpn' => 70, 'rt_constrain' => 132,
-           'mcast_vpn' => 5, 'bgp_ls' => 71, 'bgp_ls_vpn' => 72 }
+           'mcast_vpn' => 5, 'bgp_ls' => 71, 'bgp_ls_vpn' => 72,
+           'unreachability' => 81, 'evpn_unreachability' => 70 }
 
   # How many routes a spec makes: count, once per VRF, and the RT-constrain
   # default in front.
@@ -346,6 +365,13 @@ class TestBgpGen < Test::Unit::TestCase
     # A VPN route's key has its RD too, since every VRF carries the same
     # prefixes (RFC 4364 section 4.1).
     list.collect do |n|
+      # An Unreachability route's key is the drafts' key, without its
+      # reporters, which a withdrawal does not carry.
+      if n.is_a?(BGP::Evpn) && n.route.is_a?(BGP::Evpn::Ip_prefix_unreachability)
+        h = n.route.value_hash.reject { |k, _| k == :reporters }
+        next [{ :ip_prefix_unreachability => h }, n.path_id, nil]
+      end
+      next [{ :unreachability => n.prefix }, n.path_id, nil] if n.is_a?(BGP::Unreachability)
       # An EVPN route's whole hash, RD included, is its key here.
       next [n.to_hash, n.path_id, nil] if n.is_a?(BGP::Evpn)
       next [n.to_hash.reject { |k, _| k == :path_id }, n.path_id, nil] if n.is_a?(BGP::Mcast_vpn)
@@ -568,6 +594,8 @@ class TestBgpGen < Test::Unit::TestCase
   # left out because Gen and this would both spell them through
   # CommunityKeys, which would compare it with itself.
   def row_of(prefix, path_id, rd, pa)
+    return unreach_row_of(prefix, path_id, pa) if prefix.is_a?(Hash) &&
+                                                  (prefix.key?(:unreachability) || prefix.key?(:ip_prefix_unreachability))
     return evpn_row_of(prefix, path_id, pa) if prefix.is_a?(Hash) && pa[:mp_reach].safi == 70
     return mvpn_row_of(prefix, path_id, pa) if prefix.is_a?(Hash) && pa[:mp_reach].safi == 5
     return rtc_row_of(prefix, path_id, pa) if prefix.is_a?(Hash) && pa[:mp_reach].safi == 132
@@ -591,6 +619,40 @@ class TestBgpGen < Test::Unit::TestCase
     r['communities'] = pa[:communities].communities.split if pa[:communities]
     r['large_communities'] = pa[:large_communities].large_communities.split if pa[:large_communities]
     r
+  end
+
+  # An Unreachability row, SAFI 81 or EVPN 254, read off the NLRI that
+  # carries the key in this message.
+  def unreach_row_of(key, path_id, pa)
+    mp = pa[:mp_reach]
+    n = mp.nlris.find { |x| keys_of_one(x) == [key, path_id] }
+    route = n.is_a?(BGP::Evpn) ? n.route : n
+    rep = route.reporters
+    r = { 'prefix' => route.is_a?(BGP::Unreachability) ? route.prefix : route.ip_prefix,
+          'reporters' => rep.collect(&:identifier), 'reporter_as' => rep.first.as,
+          'reason' => rep.first.reason }
+    r['timestamp'] = rep.first.timestamp if rep.first.timestamp
+    r['path_id'] = path_id if path_id
+    if n.is_a?(BGP::Evpn)
+      r['rd'] = route.rd.to_s(false).sub('RD=', '')
+      r['ethernet_tag'] = route.ethernet_tag_id.value
+      r['next_hop'] = mp.nexthops
+    end
+    r['origin'] = pa[:origin].to_i
+    r['as_path'] = pa[:as_path].segments.flat_map(&:as)
+    r['med'] = pa[:multi_exit_disc].to_i if pa[:multi_exit_disc]
+    r['local_pref'] = pa[:local_pref].to_i if pa[:local_pref]
+    r['communities'] = pa[:communities].communities.split if pa[:communities]
+    r['large_communities'] = pa[:large_communities].large_communities.split if pa[:large_communities]
+    r
+  end
+
+  def keys_of_one(n)
+    if n.is_a?(BGP::Evpn)
+      [{ :ip_prefix_unreachability => n.route.value_hash.reject { |k, _| k == :reporters } }, n.path_id]
+    else
+      [{ :unreachability => n.prefix }, n.path_id]
+    end
   end
 
   # An RT-constrain row, read off the NLRI's own hash.
