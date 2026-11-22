@@ -73,8 +73,16 @@ module BGP
 
       # One route as a `show.link_state` row. peer is the address it came
       # from, or nil for a route this speaker sent.
+      #
+      # The SR keys of RFC 9085 and RFC 9086 (`sr_keys`) are in a row only
+      # when its attribute carries those TLVs, as isisd's `show.topology`
+      # gives them only when the LSPs do.
       def self.row(ls, attr, peer, since)
         n = ls.nlri
+        base_row(n, attr, peer, since).merge(sr_keys(n, attr))
+      end
+
+      def self.base_row(n, attr, peer, since)
         { 'peer'        => peer,
           'type'        => type(n),
           'protocol_id' => n.respond_to?(:protocol_id) ? n.protocol_id : nil,
@@ -91,6 +99,135 @@ module BGP
           'forwarding'  => (t = tlv(attr, 1156)) ? t.address.to_s : nil,
           'since'       => Recorder.iso(since) }
       end
+
+      private_class_method :base_row
+
+      # RFC 8667's flag letters, the first the most significant bit, as
+      # its figures draw them: SR-Capabilities `|I|V|` (section 3.1),
+      # Adj-SID and LAN-Adj-SID `|F|B|V|L|S|P|` (2.2.1, 2.2.2), Prefix-SID
+      # `|R|N|P|E|V|L|` (2.1). RFC 9085 says the NLRI's Protocol-ID decides
+      # how to read the flags (sections 2.2.1 and 2.3.1), so the letters
+      # are for IS-IS only. RFC 9086's Peering SIDs have their own,
+      # `|V|L|B|P|` (section 5, Figure 3).
+      SR_CAPABILITY_FLAGS = %w[I V].freeze
+      ADJ_SID_FLAGS       = %w[F B V L S P].freeze
+      PREFIX_SID_FLAGS    = %w[R N P E V L].freeze
+      PEER_SID_FLAGS      = %w[V L B P].freeze
+
+      # RFC 9552 section 5.2, Table 2: IS-IS Level 1 and Level 2.
+      ISIS = [1, 2].freeze
+
+      # The octet from letters, and the bits no letter names. An unknown
+      # letter is an ArgumentError naming the ones there are.
+      def self.flag_octet(letters, names, reserved = 0)
+        Array(letters).sum(0) do |l|
+          i = names.index(l.to_s.upcase) or
+            raise ArgumentError, "no #{l.inspect} flag in #{names.join}"
+          0x80 >> i
+        end | (Integer(reserved) & 0xff)
+      end
+
+      # The letters set in octet, in the RFC's order.
+      def self.flag_letters(octet, names)
+        names.each_with_index.select { |_, i| octet & (0x80 >> i) != 0 }.collect(&:first)
+      end
+
+      # The bits of octet no letter names.
+      def self.unnamed_bits(octet, names)
+        octet & ~names.each_index.sum { |i| 0x80 >> i } & 0xff
+      end
+
+      # The SR keys of one row, by isisd's spelling (isis docs/isisd.md,
+      # `show.topology`), so a collector's row and isisd's node read the
+      # same:
+      #
+      # * `sr` on a node: `srgb` from SR Capabilities (1034), `flags`, its
+      #   letters, `srlb` from SR Local Block (1036), `algorithms` from SR
+      #   Algorithm (1035). Each key only when its TLV is there.
+      # * `adj_sids` and `lan_adj_sids` on a link, from 1099 and 1100.
+      # * `prefix_sid` on a prefix, from the first 1158.
+      # * `peer_sids` on a link, from RFC 9086's 1101 to 1103, each with a
+      #   `type`: `node`, `adj` or `set`.
+      #
+      # A SID is `{flags, weight, label | index}` as isisd's hash is:
+      # `flags` the letters set, omitted when none, and `reserved` the
+      # bits no letter names, when any; `weight` when not 0; `label` the
+      # 20 bits, with `label_high` the 4 above them when not 0. Off IS-IS
+      # the flags are the octet as a number.
+      def self.sr_keys(n, attr)
+        return {} unless attr
+        pid = n.respond_to?(:protocol_id) ? n.protocol_id : nil
+        isis = ISIS.include?(pid)
+        out = {}
+        case type(n)
+        when 'node'
+          sr = sr_view(attr, isis)
+          out['sr'] = sr if sr
+        when 'link'
+          adj = attr.tlvs.grep(BGP::Link_state::Tlv::Adjacency_sid)
+          lan = attr.tlvs.grep(BGP::Link_state::Tlv::Lan_adjacency_sid)
+          peer = attr.tlvs.grep(BGP::Link_state::Tlv::Peer_sid)
+          out['adj_sids'] = adj.collect { |t| sid_view(t, isis ? ADJ_SID_FLAGS : nil) } unless adj.empty?
+          out['lan_adj_sids'] = lan.collect { |t| { 'neighbor' => t.neighbor }.merge(sid_view(t, isis ? ADJ_SID_FLAGS : nil)) } unless lan.empty?
+          out['peer_sids'] = peer.collect { |t| { 'type' => PEER_TYPES[t.type] }.merge(sid_view(t, PEER_SID_FLAGS)) } unless peer.empty?
+        when 'prefix'
+          t = attr.tlvs.grep(BGP::Link_state::Tlv::Prefix_sid).first
+          if t
+            v = sid_view(t, isis ? PREFIX_SID_FLAGS : nil)
+            out['prefix_sid'] = v.merge('algorithm' => t.algorithm)
+          end
+        end
+        out
+      end
+
+      # RFC 9086 section 5's three, by GoBGP's client words.
+      PEER_TYPES = { 1101 => 'node', 1102 => 'adj', 1103 => 'set' }.freeze
+
+      def self.sr_view(attr, isis)
+        cap  = attr.tlvs.grep(BGP::Link_state::Tlv::Sr_capabilities).first
+        srlb = attr.tlvs.grep(BGP::Link_state::Tlv::Sr_local_block).first
+        algo = attr.tlvs.grep(BGP::Link_state::Tlv::Sr_algorithm).first
+        return nil unless cap || srlb || algo
+        h = {}
+        if cap
+          h['srgb'] = blocks(cap)
+          h['flags'] = isis ? flag_letters(cap.flags, SR_CAPABILITY_FLAGS) : cap.flags
+        end
+        h['srlb'] = blocks(srlb) if srlb
+        h['algorithms'] = algo.values if algo
+        h
+      end
+
+      # A range TLV's ranges as [{start, size}], in the order sent. start
+      # is the first label, or the index when the sub-TLV is one, which
+      # RFC 9085 section 2.1.2 does not allow and a consumer may meet.
+      def self.blocks(t)
+        t.ranges.collect do |size, sub|
+          first = sub.respond_to?(:label?) ? (sub.label? ? sub.label : sub.index) : nil
+          { 'start' => first, 'size' => size }
+        end
+      end
+
+      def self.sid_view(t, names)
+        h = {}
+        if names
+          letters = flag_letters(t.flags, names)
+          h['flags'] = letters unless letters.empty?
+          rest = unnamed_bits(t.flags, names)
+          h['reserved'] = rest unless rest.zero?
+        else
+          h['flags'] = t.flags
+        end
+        h['weight'] = t.weight if t.respond_to?(:weight) && !t.weight.zero?
+        if t.label?
+          h['label'] = t.label
+          h['label_high'] = t.label_high_bits unless t.label_high_bits.zero?
+        else
+          h['index'] = t.index
+        end
+        h
+      end
+      private_class_method :sr_view, :blocks, :sid_view
 
       # Section 5.2.3.1's six names, in ospfd's spelling.
       ROUTE_TYPES = { 1 => 'intra', 2 => 'inter', 3 => 'external_1', 4 => 'external_2',

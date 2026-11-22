@@ -256,9 +256,16 @@ module BGP
       #   Not from TLV 132, which is the router's addresses and may hold
       #   none of its links' (RFC 1195 section 3.1).
       # * One Prefix NLRI per IPv4 prefix, with Prefix Metric (1155).
+      # * SR, RFC 9085, from isisd's SR keys (isis docs/isisd.md), only
+      #   when isisd gives them, so a node with no SR gets no SR TLV. Each
+      #   goes on the NLRI of the node that originated the IGP sub-TLV
+      #   (sections 2.1, 2.2 and 2.3), which is the node `show.topology`
+      #   lists it under. `sr_node_tlvs`, `adj_sid_tlvs`, `prefix_sid_tlv`.
       #
       # Left out: IPv6 prefixes, the link identifiers (258), the IPv6
-      # addresses (261, 262), and every TE and SR TLV.
+      # addresses (261, 262), every TE TLV, and RFC 9085's SRMS
+      # Preference, Range, Prefix Attribute Flags and Source Router ID,
+      # which isisd does not give.
       def self.node_routes(node, pid, identifier)
         local = { :local_node_descriptors => [{ :igp_router_id => router_id(node.fetch('id')) }] }
         routes = []
@@ -269,6 +276,7 @@ module BGP
         name = node['hostname'].to_s
         tlvs << T::Node_name.new(name) unless name.empty?
         Array(node['areas']).each { |a| tlvs << T::Isis_area_id.new(LinkStateTable.area_octets(a)) }
+        tlvs.concat(sr_node_tlvs(node['sr'])) if node['sr']
         routes << [BGP::Link_state.new(:node => head(pid, identifier, local)),
                    BGP::Link_state_attribute.new(*tlvs)]
         Array(node['neighbors']).each do |nb|
@@ -276,15 +284,90 @@ module BGP
           tlvs.concat(link_addresses(nb['interface_address'], nb['neighbor_address']))
           width = nb['style'] == 'narrow' ? 1 : 3
           routes << [BGP::Link_state.new(:link => head(pid, identifier, *tlvs)),
-                     BGP::Link_state_attribute.new(T::Igp_metric.new(Integer(nb.fetch('metric')), width))]
+                     BGP::Link_state_attribute.new(T::Igp_metric.new(Integer(nb.fetch('metric')), width),
+                                                   *adj_sid_tlvs(nb))]
         end
         Array(node['prefixes']).each do |pf|
           prefix = pf.fetch('prefix').to_s
           next if prefix.include?(':')
           routes << [BGP::Link_state.new(:ipv4_prefix => head(pid, identifier, local, { :ip_reachability => prefix })),
-                     BGP::Link_state_attribute.new(T::Prefix_metric.new(Integer(pf.fetch('metric', 0))))]
+                     BGP::Link_state_attribute.new(T::Prefix_metric.new(Integer(pf.fetch('metric', 0))),
+                                                   *prefix_sid_tlv(pf['prefix_sid']))]
         end
         routes
+      end
+
+      # A node's `sr` as RFC 9085's node attribute TLVs, in ascending type
+      # order, as section 5.1 of RFC 9552 asks of a sender:
+      #
+      # * SR Capabilities (1034, section 2.1.2) from `srgb` and `flags`,
+      #   each block a Range Size and a SID/Label sub-TLV (1161) holding
+      #   its first label. "only label encoding is valid" there, so the
+      #   3-octet form. None when `srgb` is empty: the TLV needs a range.
+      # * SR Algorithm (1035, section 2.1.3) from `algorithms`.
+      # * SR Local Block (1036, section 2.1.4) from `srlb`. RFC 8667
+      #   section 3.3 defines no flags for it, so 0.
+      def self.sr_node_tlvs(sr)
+        out = []
+        srgb = Array(sr['srgb'])
+        unless srgb.empty?
+          flags = LinkStateTable.flag_octet(sr['flags'], LinkStateTable::SR_CAPABILITY_FLAGS)
+          out << T::Sr_capabilities.new(flags, ranges(srgb))
+        end
+        algos = Array(sr['algorithms']).collect { |a| Integer(a) }
+        out << T::Sr_algorithm.new(algos) unless algos.empty?
+        srlb = Array(sr['srlb'])
+        out << T::Sr_local_block.new(0, ranges(srlb)) unless srlb.empty?
+        out
+      end
+
+      # [[size, first label]] from isisd's [{start, size}].
+      def self.ranges(blocks)
+        blocks.collect { |b| [Integer(b.fetch('size')), Integer(b.fetch('start'))] }
+      end
+
+      # A neighbor's `adj_sids` as Adjacency SID TLVs (1099, section
+      # 2.2.1) and its `lan_adj_sids` as LAN Adjacency SID TLVs (1100,
+      # section 2.2.2), on the Link NLRI toward that neighbor. The flags
+      # are RFC 8667's (sections 2.2.1 and 2.2.2), as isisd gives them.
+      def self.adj_sid_tlvs(nb)
+        adj = Array(nb['adj_sids']).filter_map do |a|
+          sid, width = sid_field(a)
+          next unless sid
+          T::Adjacency_sid.new(sid_flags(a, LinkStateTable::ADJ_SID_FLAGS),
+                               Integer(a.fetch('weight', 0)), sid, width)
+        end
+        lan = Array(nb['lan_adj_sids']).filter_map do |a|
+          sid, width = sid_field(a)
+          next unless sid && a['neighbor']
+          T::Lan_adjacency_sid.new(sid_flags(a, LinkStateTable::ADJ_SID_FLAGS),
+                                   Integer(a.fetch('weight', 0)), a['neighbor'].to_s, sid, width)
+        end
+        adj + lan
+      end
+
+      # A prefix's `prefix_sid` as a Prefix-SID TLV (1158, section 2.3.1),
+      # or none.
+      def self.prefix_sid_tlv(ps)
+        return [] unless ps
+        sid, width = sid_field(ps)
+        return [] unless sid
+        [T::Prefix_sid.new(sid_flags(ps, LinkStateTable::PREFIX_SID_FLAGS),
+                           Integer(ps.fetch('algorithm', 0)), sid, width)]
+      end
+
+      # [value, octets] from isisd's `index` (4 octets) or `label` (3, with
+      # `label_high` above its 20 bits), or nil when it gives neither.
+      def self.sid_field(h)
+        if h.key?('index')
+          [Integer(h['index']), 4]
+        elsif h.key?('label')
+          [Integer(h['label']) | (Integer(h.fetch('label_high', 0)) << 20), 3]
+        end
+      end
+
+      def self.sid_flags(h, names)
+        LinkStateTable.flag_octet(h['flags'], names, h.fetch('reserved', 0))
       end
 
       # The routes of one ospfd `show.topology` node (ospfv2

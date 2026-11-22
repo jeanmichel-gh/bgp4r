@@ -1,0 +1,1253 @@
+{
+  "level": 2,
+  "run": 19,
+  "nodes": [
+    {
+      "id": "0000.0000.0001.00",
+      "hostname": "f1",
+      "areas": [
+        "49.0001"
+      ],
+      "overload": false,
+      "attached": false,
+      "reachable": true,
+      "neighbors": [
+        {
+          "id": "0000.0000.0002.00",
+          "metric": 10,
+          "style": "wide",
+          "adj_sids": [
+            {
+              "flags": [
+                "V",
+                "L"
+              ],
+              "label": 15000
+            }
+          ]
+        }
+      ],
+      "prefixes": [
+        {
+          "prefix": "10.255.0.1/32",
+          "metric": 10,
+          "up_down": false,
+          "style": "wide",
+          "prefix_sid": {
+            "flags": [
+              "N"
+            ],
+            "algorithm": 0,
+            "index": 1
+          }
+        },
+        {
+          "prefix": "10.0.12.0/30",
+          "metric": 10,
+          "up_down": false,
+          "style": "wide"
+        }
+      ],
+      "interface_addresses": [
+        "10.255.0.1"
+      ],
+      "ipv6_interface_addresses": [
+
+      ],
+      "sr": {
+        "srgb": [
+          {
+            "start": 16000,
+            "size": 8000
+          }
+        ],
+        "flags": [
+          "I",
+          "V"
+        ],
+        "srlb": [
+          {
+            "start": 15000,
+            "size": 1000
+          }
+        ],
+        "algorithms": [
+          0
+        ]
+      }
+    },
+    {
+      "id": "0000.0000.0002.00",
+      "hostname": "r1",
+      "areas": [
+        "49.0001"
+      ],
+      "overload": false,
+      "attached": false,
+      "reachable": true,
+      "neighbors": [
+        {
+          "id": "0000.0000.0001.00",
+          "metric": 10,
+          "style": "wide",
+          "interface_address": "10.0.12.1",
+          "neighbor_address": "10.0.12.2",
+          "adj_sids": [
+            {
+              "flags": [
+                "V",
+                "L"
+              ],
+              "label": 15000
+            }
+          ]
+        },
+        {
+          "id": "0000.0000.0003.00",
+          "metric": 10,
+          "style": "wide",
+          "interface_address": "10.0.23.1",
+          "neighbor_address": "10.0.23.2",
+          "adj_sids": [
+            {
+              "flags": [
+                "V",
+                "L"
+              ],
+              "label": 15001
+            }
+          ]
+        }
+      ],
+      "prefixes": [
+        {
+          "prefix": "10.255.0.2/32",
+          "metric": 0,
+          "up_down": false,
+          "style": "wide",
+          "prefix_sid": {
+            "flags": [
+              "N"
+            ],
+            "algorithm": 0,
+            "index": 2
+          }
+        }
+      ],
+      "interface_addresses": [
+        "10.0.12.1",
+        "10.0.23.1"
+      ],
+      "ipv6_interface_addresses": [
+
+      ],
+      "sr": {
+        "srgb": [
+          {
+            "start": 17000,
+            "size": 8000
+          }
+        ],
+        "flags": [
+          "I"
+        ],
+        "srlb": [
+          {
+            "start": 15000,
+            "size": 1000
+          }
+        ],
+        "algorithms": [
+          0
+        ]
+      }
+    },
+    {
+      "id": "0000.0000.0003.00",
+      "hostname": "r2",
+      "areas": [
+        "49.0001"
+      ],
+      "overload": false,
+      "attached": false,
+      "reachable": true,
+      "neighbors": [
+        {
+          "id": "0000.0000.0002.00",
+          "metric": 10,
+          "style": "wide",
+          "interface_address": "10.0.23.2",
+          "neighbor_address": "10.0.23.1",
+          "adj_sids": [
+            {
+              "flags": [
+                "V",
+                "L"
+              ],
+              "label": 15002
+            }
+          ]
+        },
+        {
+          "id": "0000.0000.0004.00",
+          "metric": 10,
+          "style": "wide",
+          "interface_address": "10.0.34.1",
+          "neighbor_address": "10.0.34.2",
+          "adj_sids": [
+            {
+              "flags": [
+                "V",
+                "L"
+              ],
+              "label": 15000
+            }
+          ]
+        },
+        {
+          "id": "0000.0000.0009.00",
+          "metric": 10,
+          "style": "wide",
+          "interface_address": "10.0.35.1",
+          "neighbor_address": "10.0.35.2",
+          "adj_sids": [
+            {
+              "flags": [
+                "V",
+                "L"
+              ],
+              "label": 15001
+            }
+          ]
+        }
+      ],
+      "prefixes": [
+        {
+          "prefix": "10.255.0.3/32",
+          "metric": 0,
+          "up_down": false,
+          "style": "wide",
+          "prefix_sid": {
+            "flags": [
+              "N"
+            ],
+            "algorithm": 0,
+            "index": 3
+          }
+        }
+      ],
+      "interface_addresses": [
+        "10.0.23.2",
+        "10.0.34.1",
+        "10.0.35.1"
+      ],
+      "ipv6_interface_addresses": [
+
+      ],
+      "sr": {
+        "srgb": [
+          {
+            "start": 18000,
+            "size": 8000
+          }
+        ],
+        "flags": [
+          "I"
+        ],
+        "srlb": [
+          {
+            "start": 15000,
+            "size": 1000
+          }
+        ],
+        "algorithms": [
+          0
+        ]
+      }
+    },
+    {
+      "id": "0000.0000.0004.00",
+      "hostname": "f2",
+      "areas": [
+        "49.0001"
+      ],
+      "overload": false,
+      "attached": false,
+      "reachable": true,
+      "neighbors": [
+        {
+          "id": "0000.0000.0003.00",
+          "metric": 10,
+          "style": "wide",
+          "adj_sids": [
+            {
+              "flags": [
+                "V",
+                "L"
+              ],
+              "label": 15000
+            }
+          ]
+        }
+      ],
+      "prefixes": [
+        {
+          "prefix": "10.255.0.4/32",
+          "metric": 10,
+          "up_down": false,
+          "style": "wide",
+          "prefix_sid": {
+            "flags": [
+              "N"
+            ],
+            "algorithm": 0,
+            "index": 4
+          }
+        },
+        {
+          "prefix": "10.0.34.0/30",
+          "metric": 10,
+          "up_down": false,
+          "style": "wide"
+        }
+      ],
+      "interface_addresses": [
+        "10.255.0.4"
+      ],
+      "ipv6_interface_addresses": [
+
+      ],
+      "sr": {
+        "srgb": [
+          {
+            "start": 16000,
+            "size": 8000
+          }
+        ],
+        "flags": [
+          "I",
+          "V"
+        ],
+        "srlb": [
+          {
+            "start": 15000,
+            "size": 1000
+          }
+        ],
+        "algorithms": [
+          0
+        ]
+      }
+    },
+    {
+      "id": "0000.0000.0009.00",
+      "hostname": "s1",
+      "areas": [
+        "49.0001"
+      ],
+      "overload": false,
+      "attached": false,
+      "reachable": true,
+      "neighbors": [
+        {
+          "id": "0000.0000.0003.00",
+          "metric": 10,
+          "style": "wide",
+          "interface_address": "10.0.35.2",
+          "neighbor_address": "10.0.35.1",
+          "adj_sids": [
+            {
+              "flags": [
+                "V",
+                "L"
+              ],
+              "label": 15001
+            }
+          ]
+        },
+        {
+          "id": "0000.0001.0101.00",
+          "metric": 10,
+          "style": "wide",
+          "adj_sids": [
+            {
+              "flags": [
+                "V",
+                "L"
+              ],
+              "label": 15000
+            }
+          ]
+        }
+      ],
+      "prefixes": [
+        {
+          "prefix": "10.255.0.9/32",
+          "metric": 0,
+          "up_down": false,
+          "style": "wide",
+          "prefix_sid": {
+            "flags": [
+              "N"
+            ],
+            "algorithm": 0,
+            "index": 9
+          }
+        }
+      ],
+      "interface_addresses": [
+        "10.0.35.2"
+      ],
+      "ipv6_interface_addresses": [
+
+      ],
+      "sr": {
+        "srgb": [
+          {
+            "start": 19000,
+            "size": 8000
+          }
+        ],
+        "flags": [
+          "I"
+        ],
+        "srlb": [
+          {
+            "start": 15000,
+            "size": 1000
+          }
+        ],
+        "algorithms": [
+          0
+        ]
+      }
+    },
+    {
+      "id": "0000.0001.0101.00",
+      "hostname": "r1c1",
+      "areas": [
+        "49.0001"
+      ],
+      "overload": false,
+      "attached": false,
+      "reachable": true,
+      "neighbors": [
+        {
+          "id": "0000.0001.0102.00",
+          "metric": 10,
+          "style": "wide",
+          "adj_sids": [
+            {
+              "flags": [
+                "V",
+                "L"
+              ],
+              "label": 15000
+            }
+          ]
+        },
+        {
+          "id": "0000.0001.0201.00",
+          "metric": 10,
+          "style": "wide",
+          "adj_sids": [
+            {
+              "flags": [
+                "V",
+                "L"
+              ],
+              "label": 15001
+            }
+          ]
+        },
+        {
+          "id": "0000.0000.0009.00",
+          "metric": 10,
+          "style": "wide",
+          "adj_sids": [
+            {
+              "flags": [
+                "V",
+                "L"
+              ],
+              "label": 15002
+            }
+          ]
+        }
+      ],
+      "prefixes": [
+        {
+          "prefix": "10.200.0.1/32",
+          "metric": 0,
+          "up_down": false,
+          "style": "wide",
+          "prefix_sid": {
+            "flags": [
+              "N"
+            ],
+            "algorithm": 0,
+            "index": 101
+          }
+        }
+      ],
+      "interface_addresses": [
+        "10.200.0.1"
+      ],
+      "ipv6_interface_addresses": [
+
+      ],
+      "sr": {
+        "srgb": [
+          {
+            "start": 16000,
+            "size": 8000
+          }
+        ],
+        "flags": [
+          "I"
+        ],
+        "srlb": [
+          {
+            "start": 15000,
+            "size": 1000
+          }
+        ],
+        "algorithms": [
+          0
+        ]
+      }
+    },
+    {
+      "id": "0000.0001.0102.00",
+      "hostname": "r1c2",
+      "areas": [
+        "49.0001"
+      ],
+      "overload": false,
+      "attached": false,
+      "reachable": true,
+      "neighbors": [
+        {
+          "id": "0000.0001.0101.00",
+          "metric": 10,
+          "style": "wide",
+          "adj_sids": [
+            {
+              "flags": [
+                "V",
+                "L"
+              ],
+              "label": 15000
+            }
+          ]
+        },
+        {
+          "id": "0000.0001.0103.00",
+          "metric": 10,
+          "style": "wide",
+          "adj_sids": [
+            {
+              "flags": [
+                "V",
+                "L"
+              ],
+              "label": 15001
+            }
+          ]
+        },
+        {
+          "id": "0000.0001.0202.00",
+          "metric": 10,
+          "style": "wide",
+          "adj_sids": [
+            {
+              "flags": [
+                "V",
+                "L"
+              ],
+              "label": 15002
+            }
+          ]
+        }
+      ],
+      "prefixes": [
+        {
+          "prefix": "10.200.0.2/32",
+          "metric": 0,
+          "up_down": false,
+          "style": "wide",
+          "prefix_sid": {
+            "flags": [
+              "N"
+            ],
+            "algorithm": 0,
+            "index": 102
+          }
+        }
+      ],
+      "interface_addresses": [
+        "10.200.0.2"
+      ],
+      "ipv6_interface_addresses": [
+
+      ],
+      "sr": {
+        "srgb": [
+          {
+            "start": 16000,
+            "size": 8000
+          }
+        ],
+        "flags": [
+          "I"
+        ],
+        "srlb": [
+          {
+            "start": 15000,
+            "size": 1000
+          }
+        ],
+        "algorithms": [
+          0
+        ]
+      }
+    },
+    {
+      "id": "0000.0001.0103.00",
+      "hostname": "r1c3",
+      "areas": [
+        "49.0001"
+      ],
+      "overload": false,
+      "attached": false,
+      "reachable": true,
+      "neighbors": [
+        {
+          "id": "0000.0001.0102.00",
+          "metric": 10,
+          "style": "wide",
+          "adj_sids": [
+            {
+              "flags": [
+                "V",
+                "L"
+              ],
+              "label": 15000
+            }
+          ]
+        },
+        {
+          "id": "0000.0001.0203.00",
+          "metric": 10,
+          "style": "wide",
+          "adj_sids": [
+            {
+              "flags": [
+                "V",
+                "L"
+              ],
+              "label": 15001
+            }
+          ]
+        }
+      ],
+      "prefixes": [
+        {
+          "prefix": "10.200.0.3/32",
+          "metric": 0,
+          "up_down": false,
+          "style": "wide",
+          "prefix_sid": {
+            "flags": [
+              "N"
+            ],
+            "algorithm": 0,
+            "index": 103
+          }
+        }
+      ],
+      "interface_addresses": [
+        "10.200.0.3"
+      ],
+      "ipv6_interface_addresses": [
+
+      ],
+      "sr": {
+        "srgb": [
+          {
+            "start": 16000,
+            "size": 8000
+          }
+        ],
+        "flags": [
+          "I"
+        ],
+        "srlb": [
+          {
+            "start": 15000,
+            "size": 1000
+          }
+        ],
+        "algorithms": [
+          0
+        ]
+      }
+    },
+    {
+      "id": "0000.0001.0201.00",
+      "hostname": "r2c1",
+      "areas": [
+        "49.0001"
+      ],
+      "overload": false,
+      "attached": false,
+      "reachable": true,
+      "neighbors": [
+        {
+          "id": "0000.0001.0101.00",
+          "metric": 10,
+          "style": "wide",
+          "adj_sids": [
+            {
+              "flags": [
+                "V",
+                "L"
+              ],
+              "label": 15000
+            }
+          ]
+        },
+        {
+          "id": "0000.0001.0202.00",
+          "metric": 10,
+          "style": "wide",
+          "adj_sids": [
+            {
+              "flags": [
+                "V",
+                "L"
+              ],
+              "label": 15001
+            }
+          ]
+        },
+        {
+          "id": "0000.0001.0301.00",
+          "metric": 10,
+          "style": "wide",
+          "adj_sids": [
+            {
+              "flags": [
+                "V",
+                "L"
+              ],
+              "label": 15002
+            }
+          ]
+        }
+      ],
+      "prefixes": [
+        {
+          "prefix": "10.200.0.4/32",
+          "metric": 0,
+          "up_down": false,
+          "style": "wide",
+          "prefix_sid": {
+            "flags": [
+              "N"
+            ],
+            "algorithm": 0,
+            "index": 104
+          }
+        }
+      ],
+      "interface_addresses": [
+        "10.200.0.4"
+      ],
+      "ipv6_interface_addresses": [
+
+      ],
+      "sr": {
+        "srgb": [
+          {
+            "start": 16000,
+            "size": 8000
+          }
+        ],
+        "flags": [
+          "I"
+        ],
+        "srlb": [
+          {
+            "start": 15000,
+            "size": 1000
+          }
+        ],
+        "algorithms": [
+          0
+        ]
+      }
+    },
+    {
+      "id": "0000.0001.0202.00",
+      "hostname": "r2c2",
+      "areas": [
+        "49.0001"
+      ],
+      "overload": false,
+      "attached": false,
+      "reachable": true,
+      "neighbors": [
+        {
+          "id": "0000.0001.0102.00",
+          "metric": 10,
+          "style": "wide",
+          "adj_sids": [
+            {
+              "flags": [
+                "V",
+                "L"
+              ],
+              "label": 15000
+            }
+          ]
+        },
+        {
+          "id": "0000.0001.0201.00",
+          "metric": 10,
+          "style": "wide",
+          "adj_sids": [
+            {
+              "flags": [
+                "V",
+                "L"
+              ],
+              "label": 15001
+            }
+          ]
+        },
+        {
+          "id": "0000.0001.0203.00",
+          "metric": 10,
+          "style": "wide",
+          "adj_sids": [
+            {
+              "flags": [
+                "V",
+                "L"
+              ],
+              "label": 15002
+            }
+          ]
+        },
+        {
+          "id": "0000.0001.0302.00",
+          "metric": 10,
+          "style": "wide",
+          "adj_sids": [
+            {
+              "flags": [
+                "V",
+                "L"
+              ],
+              "label": 15003
+            }
+          ]
+        }
+      ],
+      "prefixes": [
+        {
+          "prefix": "10.200.0.5/32",
+          "metric": 0,
+          "up_down": false,
+          "style": "wide",
+          "prefix_sid": {
+            "flags": [
+              "N"
+            ],
+            "algorithm": 0,
+            "index": 105
+          }
+        }
+      ],
+      "interface_addresses": [
+        "10.200.0.5"
+      ],
+      "ipv6_interface_addresses": [
+
+      ],
+      "sr": {
+        "srgb": [
+          {
+            "start": 16000,
+            "size": 8000
+          }
+        ],
+        "flags": [
+          "I"
+        ],
+        "srlb": [
+          {
+            "start": 15000,
+            "size": 1000
+          }
+        ],
+        "algorithms": [
+          0
+        ]
+      }
+    },
+    {
+      "id": "0000.0001.0203.00",
+      "hostname": "r2c3",
+      "areas": [
+        "49.0001"
+      ],
+      "overload": false,
+      "attached": false,
+      "reachable": true,
+      "neighbors": [
+        {
+          "id": "0000.0001.0103.00",
+          "metric": 10,
+          "style": "wide",
+          "adj_sids": [
+            {
+              "flags": [
+                "V",
+                "L"
+              ],
+              "label": 15000
+            }
+          ]
+        },
+        {
+          "id": "0000.0001.0202.00",
+          "metric": 10,
+          "style": "wide",
+          "adj_sids": [
+            {
+              "flags": [
+                "V",
+                "L"
+              ],
+              "label": 15001
+            }
+          ]
+        },
+        {
+          "id": "0000.0001.0303.00",
+          "metric": 10,
+          "style": "wide",
+          "adj_sids": [
+            {
+              "flags": [
+                "V",
+                "L"
+              ],
+              "label": 15002
+            }
+          ]
+        }
+      ],
+      "prefixes": [
+        {
+          "prefix": "10.200.0.6/32",
+          "metric": 0,
+          "up_down": false,
+          "style": "wide",
+          "prefix_sid": {
+            "flags": [
+              "N"
+            ],
+            "algorithm": 0,
+            "index": 106
+          }
+        }
+      ],
+      "interface_addresses": [
+        "10.200.0.6"
+      ],
+      "ipv6_interface_addresses": [
+
+      ],
+      "sr": {
+        "srgb": [
+          {
+            "start": 16000,
+            "size": 8000
+          }
+        ],
+        "flags": [
+          "I"
+        ],
+        "srlb": [
+          {
+            "start": 15000,
+            "size": 1000
+          }
+        ],
+        "algorithms": [
+          0
+        ]
+      }
+    },
+    {
+      "id": "0000.0001.0301.00",
+      "hostname": "r3c1",
+      "areas": [
+        "49.0001"
+      ],
+      "overload": false,
+      "attached": false,
+      "reachable": true,
+      "neighbors": [
+        {
+          "id": "0000.0001.0201.00",
+          "metric": 10,
+          "style": "wide",
+          "adj_sids": [
+            {
+              "flags": [
+                "V",
+                "L"
+              ],
+              "label": 15000
+            }
+          ]
+        },
+        {
+          "id": "0000.0001.0302.00",
+          "metric": 10,
+          "style": "wide",
+          "adj_sids": [
+            {
+              "flags": [
+                "V",
+                "L"
+              ],
+              "label": 15001
+            }
+          ]
+        }
+      ],
+      "prefixes": [
+        {
+          "prefix": "10.200.0.7/32",
+          "metric": 0,
+          "up_down": false,
+          "style": "wide",
+          "prefix_sid": {
+            "flags": [
+              "N"
+            ],
+            "algorithm": 0,
+            "index": 107
+          }
+        }
+      ],
+      "interface_addresses": [
+        "10.200.0.7"
+      ],
+      "ipv6_interface_addresses": [
+
+      ],
+      "sr": {
+        "srgb": [
+          {
+            "start": 16000,
+            "size": 8000
+          }
+        ],
+        "flags": [
+          "I"
+        ],
+        "srlb": [
+          {
+            "start": 15000,
+            "size": 1000
+          }
+        ],
+        "algorithms": [
+          0
+        ]
+      }
+    },
+    {
+      "id": "0000.0001.0302.00",
+      "hostname": "r3c2",
+      "areas": [
+        "49.0001"
+      ],
+      "overload": false,
+      "attached": false,
+      "reachable": true,
+      "neighbors": [
+        {
+          "id": "0000.0001.0202.00",
+          "metric": 10,
+          "style": "wide",
+          "adj_sids": [
+            {
+              "flags": [
+                "V",
+                "L"
+              ],
+              "label": 15000
+            }
+          ]
+        },
+        {
+          "id": "0000.0001.0301.00",
+          "metric": 10,
+          "style": "wide",
+          "adj_sids": [
+            {
+              "flags": [
+                "V",
+                "L"
+              ],
+              "label": 15001
+            }
+          ]
+        },
+        {
+          "id": "0000.0001.0303.00",
+          "metric": 10,
+          "style": "wide",
+          "adj_sids": [
+            {
+              "flags": [
+                "V",
+                "L"
+              ],
+              "label": 15002
+            }
+          ]
+        }
+      ],
+      "prefixes": [
+        {
+          "prefix": "10.200.0.8/32",
+          "metric": 0,
+          "up_down": false,
+          "style": "wide",
+          "prefix_sid": {
+            "flags": [
+              "N"
+            ],
+            "algorithm": 0,
+            "index": 108
+          }
+        }
+      ],
+      "interface_addresses": [
+        "10.200.0.8"
+      ],
+      "ipv6_interface_addresses": [
+
+      ],
+      "sr": {
+        "srgb": [
+          {
+            "start": 16000,
+            "size": 8000
+          }
+        ],
+        "flags": [
+          "I"
+        ],
+        "srlb": [
+          {
+            "start": 15000,
+            "size": 1000
+          }
+        ],
+        "algorithms": [
+          0
+        ]
+      }
+    },
+    {
+      "id": "0000.0001.0303.00",
+      "hostname": "r3c3",
+      "areas": [
+        "49.0001"
+      ],
+      "overload": false,
+      "attached": false,
+      "reachable": true,
+      "neighbors": [
+        {
+          "id": "0000.0001.0203.00",
+          "metric": 10,
+          "style": "wide",
+          "adj_sids": [
+            {
+              "flags": [
+                "V",
+                "L"
+              ],
+              "label": 15000
+            }
+          ]
+        },
+        {
+          "id": "0000.0001.0302.00",
+          "metric": 10,
+          "style": "wide",
+          "adj_sids": [
+            {
+              "flags": [
+                "V",
+                "L"
+              ],
+              "label": 15001
+            }
+          ]
+        }
+      ],
+      "prefixes": [
+        {
+          "prefix": "10.200.0.9/32",
+          "metric": 0,
+          "up_down": false,
+          "style": "wide",
+          "prefix_sid": {
+            "flags": [
+              "N"
+            ],
+            "algorithm": 0,
+            "index": 109
+          }
+        }
+      ],
+      "interface_addresses": [
+        "10.200.0.9"
+      ],
+      "ipv6_interface_addresses": [
+
+      ],
+      "sr": {
+        "srgb": [
+          {
+            "start": 21000,
+            "size": 8000
+          }
+        ],
+        "flags": [
+          "I"
+        ],
+        "srlb": [
+          {
+            "start": 15000,
+            "size": 1000
+          }
+        ],
+        "algorithms": [
+          0
+        ]
+      }
+    }
+  ]
+}

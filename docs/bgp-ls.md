@@ -1639,9 +1639,9 @@ node gives:
 
 | NLRI | Descriptors | BGP-LS Attribute |
 |---|---|---|
-| Node | IGP Router-ID (515) | Node Flag Bits (1024), Node Name (1026), IS-IS Area Identifier (1027) per area |
-| Link, per neighbor | local and remote IGP Router-ID | IGP Metric (1095) |
-| Prefix, per IPv4 prefix | local IGP Router-ID, IP Reachability (265) | Prefix Metric (1155) |
+| Node | IGP Router-ID (515) | Node Flag Bits (1024), Node Name (1026), IS-IS Area Identifier (1027) per area; with SR, SR Capabilities (1034), SR Algorithm (1035), SR Local Block (1036) |
+| Link, per neighbor | local and remote IGP Router-ID | IGP Metric (1095); with SR, an Adjacency SID (1099) per Adj-SID, a LAN Adjacency SID (1100) per LAN-Adj-SID |
+| Prefix, per IPv4 prefix | local IGP Router-ID, IP Reachability (265) | Prefix Metric (1155); with SR, Prefix-SID (1158) |
 
 * The Protocol-ID is the IS-IS level: 1 for Level 1 and 2 for Level 2,
   section 5.2's Table 2.
@@ -1664,9 +1664,24 @@ node gives:
   the Producer then rebuilds from the topology it last read and sends
   the difference at once.
 
+* **SR, RFC 9085**, from isisd's `sr`, `adj_sids`, `lan_adj_sids` and
+  `prefix_sid` (isis `docs/isisd.md`, `show.topology`), only when isisd
+  gives them, so a node with no SR gets no SR TLV and a topology
+  without SR sends the octets it did. Each TLV goes on the NLRI of the
+  node that originated the IGP sub-TLV, sections 2.1, 2.2 and 2.3,
+  which is the node isisd lists it under. An SRGB block is a Range Size
+  and a 3-octet SID/Label of its first label, since "only label
+  encoding is valid" there (section 2.1.2). The SR Local Block's flags
+  are 0: RFC 8667 section 3.3 defines none. The flag letters are RFC
+  8667's: `|I|V|` (section 3.1), `|F|B|V|L|S|P|` (2.2.1, 2.2.2),
+  `|R|N|P|E|V|L|` (2.1), the first letter 0x80. An SR change is a new
+  attribute for that one NLRI, sent alone. Routescope's
+  `docs/design/bgp-ls-sr.md` is the design; this is its step 3.
+
 Phase 1 leaves out the Link Local/Remote Identifiers (258), the
-interface addresses (259, 260), TE and SR TLVs, IPv6 prefixes and the
-AS sub-TLV. Two parallel links between one pair of nodes give one Link
+interface addresses (259, 260), TE TLVs, IPv6 prefixes and the AS
+sub-TLV, and RFC 9085's SRMS Preference, Range, Prefix Attribute
+Flags and Source Router ID, which isisd does not give. Two parallel links between one pair of nodes give one Link
 NLRI key, so the second overwrites the first.
 
 ### What the Producer sends for OSPFv2
@@ -1750,6 +1765,89 @@ for both sides, so a Producer and its collector answer the same rows,
 apart from `peer` and `since`. `test/functional/link_state_daemon_test.rb`
 checks that over loopback, and `link_state_ospf_daemon_test.rb` for
 ospfd.
+
+**The SR keys, in a row only when its attribute carries the TLVs**, by
+isisd's spelling, so a collector's row and isisd's node read the same
+and routescope compares them as they are:
+
+* `sr` on a node: `srgb` and `flags` from 1034, `srlb` from 1036,
+  `algorithms` from 1035, each key only when its TLV is there. A block
+  is `{start, size}`.
+* `adj_sids` and `lan_adj_sids` on a link, from 1099 and 1100; a LAN
+  one has the `neighbor` system ID.
+* `prefix_sid` on a prefix, from the first 1158, with `algorithm`.
+* `peer_sids` on a link, from RFC 9086's 1101, 1102 and 1103, each with
+  `type` `node`, `adj` or `set`, and the flags `|V|L|B|P|`.
+
+A SID is isisd's hash: `flags`, the letters set, left out when none;
+`reserved`, the flag bits no letter names, when any; `weight` when not
+0; `label`, its 20 bits, with `label_high` when the 4 above are set, or
+`index`. On an NLRI whose Protocol-ID is not IS-IS, RFC 9085's flags
+are the octet as a number, since the Protocol-ID says how to read them
+(sections 2.2.1 and 2.3.1). From the isis4r-sr lab, r1's rows:
+
+```json
+{
+  "type": "node",
+  "local": "0000.0000.0002.00",
+  "sr": {
+    "srgb": [
+      {
+        "start": 17000,
+        "size": 8000
+      }
+    ],
+    "flags": [
+      "I"
+    ],
+    "srlb": [
+      {
+        "start": 15000,
+        "size": 1000
+      }
+    ],
+    "algorithms": [
+      0
+    ]
+  }
+}
+```
+
+```json
+{
+  "type": "link",
+  "local": "0000.0000.0002.00",
+  "remote": "0000.0000.0001.00",
+  "adj_sids": [
+    {
+      "flags": [
+        "V",
+        "L"
+      ],
+      "label": 15000
+    }
+  ]
+}
+```
+
+```json
+{
+  "type": "prefix",
+  "local": "0000.0000.0002.00",
+  "prefix": "10.255.0.2/32",
+  "prefix_sid": {
+    "flags": [
+      "N"
+    ],
+    "index": 2,
+    "algorithm": 0
+  }
+}
+```
+
+The rows above leave out the keys every row has. The test of the
+Producer reads a recorded `show.topology` with SR, and the functional
+test `link_state_daemon_test.rb` carries it to a collector.
 
 `bgp4r-cli -c 'show link-state'` prints the Protocol-ID as `L1`, `L2` or
 `OSPF` in the column "Proto", the area in "Area", and an OSPF prefix's

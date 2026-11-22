@@ -145,4 +145,61 @@ class BGP_LinkState_Daemon_Functional_Test < Test::Unit::TestCase
     end
     same
   end
+
+  # --- SR, RFC 9085 (bgp-ls-sr step 3) --------------------------------------
+
+  # SR added to the topology the Producer reads reaches the collector:
+  # each SR TLV crosses the session and the collector's row gives back
+  # isisd's own values, as the Producer's row does.
+  def test_sr_reaches_the_collector_and_reads_back_as_isisd_gave_it
+    same
+    nodes = @isisd.topology[1]['nodes']
+    nodes[0]['sr'] = { 'srgb' => [{ 'start' => 16_000, 'size' => 8000 }], 'flags' => %w[I V],
+                       'srlb' => [{ 'start' => 15_000, 'size' => 1000 }], 'algorithms' => [0] }
+    nodes[0]['neighbors'][0]['adj_sids'] = [{ 'flags' => %w[V L], 'label' => 15_000 }]
+    nodes[0]['prefixes'][0]['prefix_sid'] = { 'flags' => ['N'], 'algorithm' => 0, 'index' => 1 }
+    @isisd.spf(1)
+    wait_for('the SR keys at the collector') do
+      show(@collector)['rows'].any? { |r| r['sr'] }
+    end
+    same
+    rows = show(@collector)['rows']
+    assert_equal(10, rows.size, 'the same NLRIs, none added or withdrawn')
+    r1 = rows.find { |r| r['type'] == 'node' && r['name'] == 'r1' }
+    assert_equal(nodes[0]['sr'], r1['sr'])
+    link = rows.find { |r| r['type'] == 'link' && r['local'] == R1 }
+    assert_equal(nodes[0]['neighbors'][0]['adj_sids'], link['adj_sids'])
+    pfx = rows.find { |r| r['prefix'] == '10.200.0.1/32' }
+    assert_equal(nodes[0]['prefixes'][0]['prefix_sid'], pfx['prefix_sid'])
+    assert_equal(1, rows.count { |r| r['sr'] }, 'only r1 has SR')
+  end
+
+  # A real show.topology with SR, recorded from isis4r-sr (see
+  # test/unit/daemon/link_state_producer_test.rb), played to the
+  # Producer: every node's `sr`, every link's `adj_sids` and every
+  # prefix's `prefix_sid` at the collector is isisd's.
+  def test_a_recorded_sr_topology_crosses_to_the_collector
+    require 'json'
+    recorded = JSON.parse(File.read(File.expand_path('../fixtures/isisd/show_topology_sr_l2.json', __dir__)))
+    same
+    @isisd.topology[1]['nodes'] = recorded['nodes']
+    @isisd.spf(1)
+    want = recorded['nodes'].sum { |n| 1 + n['neighbors'].size + n['prefixes'].count { |p| !p['prefix'].include?(':') } }
+    wait_for("#{want} routes at the collector") { show(@collector)['total'] == want }
+    same
+    rows = show(@collector)['rows']
+    recorded['nodes'].each do |n|
+      node = rows.find { |r| r['type'] == 'node' && r['local'] == n['id'] }
+      assert_equal(n['sr'], node['sr'], n['hostname'])
+      n['neighbors'].each do |nb|
+        link = rows.find { |r| r['type'] == 'link' && r['local'] == n['id'] && r['remote'] == nb['id'] }
+        assert_equal(nb['adj_sids'], link['adj_sids'], "#{n['hostname']} to #{nb['id']}")
+      end
+      n['prefixes'].each do |pf|
+        row = rows.find { |r| r['local'] == n['id'] && r['prefix'] == pf['prefix'] }
+        assert_equal(pf['prefix_sid'], row['prefix_sid'], pf['prefix'])
+      end
+    end
+    assert_equal(14, rows.count { |r| r['sr'] })
+  end
 end
