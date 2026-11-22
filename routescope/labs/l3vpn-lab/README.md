@@ -25,8 +25,8 @@ IS-IS core with SR-MPLS. It is the lab of `docs/design/l3vpn-pe.md`
 | `pe1-bgp` | `bgp4rd`, in pe1's namespace | | |
 | `p1` | isis4r | 10.255.0.2, 2 | eth1 10.0.12.2/30, eth2 10.0.23.1/30 |
 | `p1-bgp` | `bgp4rd`, in p1's namespace: the VPN route reflector for pe1 and pe2 | | |
-| `p2` | FRR 10.2.1, IS-IS | 10.255.0.4, 4 | eth1 10.0.14.2/30, eth2 10.0.34.1/30 |
-| `pe2` | FRR 10.2.1, IS-IS and bgpd; VRFs A and B made at start | 10.255.0.3, 3 | eth1 10.0.23.2/30, eth2 10.0.34.2/30, eth3 192.168.2.1/24 in A, eth4 192.168.2.1/24 in B |
+| `p2` | FRR master (ABOUT.md, "FRR version"), IS-IS | 10.255.0.4, 4 | eth1 10.0.14.2/30, eth2 10.0.34.1/30 |
+| `pe2` | FRR master, IS-IS, bgpd and bfdd; VRFs A and B made at start | 10.255.0.3, 3 | eth1 10.0.23.2/30, eth2 10.0.34.2/30, eth3 192.168.2.1/24 in A, eth4 192.168.2.1/24 in B |
 | `ce1a`, `ce1b` | Linux, default route to pe1 | | eth1 192.168.1.2/24 |
 | `ce2a`, `ce2b` | Linux, default route to pe2 | | eth1 192.168.2.2/24 |
 
@@ -110,7 +110,7 @@ docker exec clab-l3vpn-lab-p1 tcpdump -nn -i eth1 mpls
 
 Images: `isis4r:latest` (isis), `bgp4r-lab:latest` from this repository
 (`docker build --target lab-node --build-context bfd4r=../bfd4r -t bgp4r-lab:latest .`, with L3VPN pull
-request 3 or later) and `quay.io/frrouting/frr:10.2.1`. The host needs
+request 3 or later) and FRR master, pinned by digest in `l3vpn-lab.clab.yml`. The host needs
 the `vrf`, `mpls_router` and `mpls_iptunnel` modules.
 
 ```sh
@@ -195,5 +195,5 @@ and `::2` the CE. Measured on 2026-11-17:
 - **PE to CE routing.** The CEs have a default route; each PE sends its
   connected CE subnet. eBGP from a CE is pull request 7.
 - **Per-prefix labels.** One label per VRF on both PEs.
-- **IPv6 from pe2's side.** FRR 10.2.1 does not install IPv6 VPN routes
+- **IPv6 from pe2's side.** FRR, 10.2.1 and the master build here, does not install IPv6 VPN routes
   over an IPv4 next hop (above).
