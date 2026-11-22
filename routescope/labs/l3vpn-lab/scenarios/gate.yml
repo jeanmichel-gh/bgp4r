@@ -128,3 +128,29 @@ steps:
     measure: restore_loss
   - expect: { ping: { node: ce1b, to: 192.168.2.2 } }
     within: 10
+
+  # BFD on the PE to CE session of pe2 and ce2a: bfdd4r beside ce2a's
+  # bgp4rd, FRR's bfdd in VRF A on pe2. ce2a is single-homed, so loss on
+  # its link has no other path: the gate checks that the session goes
+  # down and ce2a drops pe1's site in seconds, not the 30 s hold, and
+  # does not time it. pe1 to ce1a has no BFD: ABOUT.md says why.
+  - expect: { bfd_session: { node: ce2a, peer: 192.168.2.1, interface: eth1, state: up } }
+    within: 30
+  - expect: { bfd_session: { node: pe2, peer: 192.168.2.2, state: up } }
+    within: 30
+  - mark: ce2a to pe2 link loses every packet
+  - netem: ce2a:eth1
+    loss: 100%
+  - expect: { bfd_session: { node: ce2a, peer: 192.168.2.1, interface: eth1, state: down } }
+    within: 5
+  - expect: { bgp_prefix: { node: ce2a, prefix: 172.16.1.0/24, present: false } }
+    within: 5
+  - mark: ce2a to pe2 link clean again
+  - netem: ce2a:eth1
+    clear: true
+  - expect: { bfd_session: { node: ce2a, peer: 192.168.2.1, interface: eth1, state: up } }
+    within: 30
+  - expect: { bgp_prefix: { node: ce2a, prefix: 172.16.1.0/24, next_hop: 192.168.2.1, as_path: '65000 65000' } }
+    within: 60
+  - expect: { ping: { node: ce1a, from: 172.16.1.1, to: 172.16.2.1 } }
+    within: 30

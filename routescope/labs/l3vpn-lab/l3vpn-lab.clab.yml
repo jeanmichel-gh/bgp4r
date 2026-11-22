@@ -135,7 +135,13 @@ topology:
       image: bgp4r-lab:latest
       labels: { graph-level: 5, routescope.kind: bgp4r, routescope.protocols: bgp }
       binds: [ce2a/bgp4rd.yml:/etc/bgp4r/bgp4rd.yml]
-      cmd: exe/bgp4rd -f /etc/bgp4r/bgp4rd.yml -s /run/bgp4r/bgp4rd.sock -l -
+      # bfd: true toward pe2. bgp4rd checks at start that pe2 is one hop
+      # away, and exec: runs after the entrypoint, so it waits for eth1's
+      # address. with-bfdd4r, the image's own entrypoint, starts bfdd4r.
+      entrypoint: with-bfdd4r
+      cmd: >-
+        sh -c "until ip -4 -o addr show dev eth1 2>/dev/null | grep -q 192.168.2.2/24; do sleep 0.2; done;
+        exec ruby -I/app /app/exe/bgp4rd -f /etc/bgp4r/bgp4rd.yml -s /run/bgp4r/bgp4rd.sock -l -"
       exec: ["ip addr add 192.168.2.2/24 dev eth1", "ip addr add 172.16.2.1/24 dev lo",
              "ip -6 addr add 2001:db8:2::2/64 dev eth1", "ip -6 route replace default via 2001:db8:2::1"]
     ce2b:
