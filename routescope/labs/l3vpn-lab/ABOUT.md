@@ -18,6 +18,7 @@ It shows:
 - the p1 to pe2 link failing: pe1's VRF routes move to 19003, p2's label for pe2, and the pings go through p2, then come back when the link does
 - the same link losing every packet while it keeps its carrier: BFD finds it, and the same failover follows
 - pe2 to ce2a losing every packet: BFD resets their eBGP session in about a second, not 30
+- the same on pe1 to ce1a, where pe1's end is in VRF A
 
 IPv6 rides the same VRFs as VPN-IPv6 (RFC 4659), 2001:db8:1::/64 and 2001:db8:2::/64. bgp4rd installs pe2's IPv6 routes through p1's IPv6 link-local and sends its own; FRR 10.2.1 receives them but cannot install them over an IPv4 next hop, so IPv6 crosses one way only. README.md has the details.
 
@@ -48,4 +49,4 @@ The first two rows are the time from the action to the first check, the route th
 
 pe2 and ce2a run BFD on their eBGP session: `neighbor 192.168.2.2 bfd` in pe2's VRF A, and `bfd: true` on ce2a's neighbor. ce2a starts bgp4rd once eth1 has its address, since bgp4rd checks at start that pe2 is one hop away. A CE is single-homed, so loss on its link has no other path. The gate checks that the BFD session goes down and ce2a drops pe1's site, 172.16.1.0/24, within 5 s, where the hold time alone takes 30. It does not time the failover. In the two runs above, ce2a's BFD session was down 880 and 979 ms after the loss began, and the route was gone 388 and 361 ms after that.
 
-pe1 to ce1a has no BFD. BFD in a VRF needs bgp4rd's one-hop check and bfdd4r's port 3784 receiver to know the VRF, and today neither does.
+pe1 and ce1a run BFD on their eBGP session too, and pe1's end is in VRF A (routescope `docs/design/bfd-vrf.md`). pe1 starts `isisd` under `with-bfdd4r`, and pe1-bgp's `bgp4rd` uses that `bfdd4r`, since they share a namespace. bgp4rd checks the hop in the neighbor's VRF, `ip route get 192.168.1.2 vrf A`, so pe1-bgp waits for eth3's address before it starts. pe1's `bfdd4r` receives on a socket bound to VRF A, `192.168.1.1%A:3784` in `ss`. The gate checks this session as pe2 to ce2a's. In two runs on 2026-11-22 (recordings `20261122-040421-scenario-gate` and `20261122-040523-scenario-gate`), ce1a's BFD session was down 702 and 1712 ms after the loss began, and the route from pe1, 172.16.2.0/24, was gone 856 and 1962 ms after it. The checks poll, so these times include up to a poll's wait.
