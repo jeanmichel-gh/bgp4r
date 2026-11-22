@@ -34,16 +34,25 @@ class BGP_Daemon_Bfd_Test < Test::Unit::TestCase
   Result = BGP::Rib::Fib::IpRoute::Result
 
   # `ip -j route get` as the kernel answers it: one hop away by default,
-  # through a gateway for the addresses in @via, no route for @none.
+  # through a gateway for the addresses in @via, no route for @none. An
+  # address in @in_vrf is only in that VRF's table, as a CE's address on a
+  # PE: the main table has no route to it, as pe1 in l3vpn-lab answered.
   def setup
     @via = {}
     @none = []
+    @in_vrf = {}
     @argvs = []
     @client = BGP::TestHelpers::FakeBfdClient.new
     @lines = []
     @runner = lambda do |argv|
       @argvs << argv
-      a = argv.last
+      a = argv[4]
+      vrf = argv[6]
+      if @in_vrf.key?(a)
+        next Result.new(argv, 2, 'RTNETLINK answers: Network is unreachable') unless vrf == @in_vrf[a]
+        next Result.new(argv, 0, JSON.generate([{ 'dst' => a, 'dev' => 'eth3', 'table' => '100',
+                                                  'prefsrc' => '192.168.1.1', 'flags' => [], 'uid' => 0 }]))
+      end
       next Result.new(argv, 2, 'RTNETLINK answers: Network is unreachable') if @none.include?(a)
       route = { 'dst' => a, 'dev' => 'eth1', 'prefsrc' => '10.0.12.1', 'flags' => [], 'uid' => 0 }
       route = route.merge('gateway' => @via[a], 'dev' => 'eth0', 'prefsrc' => '172.20.0.2') if @via[a]
@@ -59,8 +68,8 @@ class BGP_Daemon_Bfd_Test < Test::Unit::TestCase
     { 'as' => 65_001, 'router_id' => '10.0.0.1', 'neighbors' => neighbors }
   end
 
-  def speaker(neighbors)
-    @config = config(neighbors)
+  def speaker(neighbors, extra = {})
+    @config = config(neighbors).merge(extra)
     @speaker = BGP::Daemon::Speaker.new(@config, :bfd_client => @client, :bfd_runner => @runner,
                                         :logger => ->(level, msg) { @lines << [level, msg] })
   end
@@ -102,6 +111,34 @@ class BGP_Daemon_Bfd_Test < Test::Unit::TestCase
     speaker([])
     e = assert_raise(ArgumentError) { @speaker.bfd.hop('10.9.9.9') }
     assert_match(/\Aneighbor 10\.9\.9\.9: bfd needs a neighbor one hop away: .*unreachable/, e.message)
+  end
+
+  # ---- in a VRF (routescope docs/design/bfd-vrf.md) ----
+
+  # A CE's address is in its VRF's table, not the main one.
+  def test_a_vrf_neighbor_is_asked_of_its_vrf
+    @in_vrf['192.168.1.2'] = 'A'
+    speaker([])
+    h = @speaker.bfd.hop('192.168.1.2', 'A')
+    assert_equal(['eth3', '192.168.1.1'], [h.interface, h.local])
+    assert_equal(%w[ip -j route get 192.168.1.2 vrf A], @argvs.last)
+    e = assert_raise(ArgumentError) { @speaker.bfd.hop('192.168.1.2') }
+    assert_match(/unreachable/, e.message, 'the main table has no route to it')
+  end
+
+  def test_a_vrf_neighbor_with_bfd_starts_and_wants_its_session
+    @in_vrf['192.168.1.2'] = 'A'
+    speaker([{ 'address' => '192.168.1.2', 'as' => 65_101, 'vrf' => 'A', 'bfd' => true }],
+            'vrfs' => [{ 'name' => 'A', 'table' => 100, 'import' => ['65000:100'] }])
+    @speaker.bfd.start
+    assert_equal([[:want, 'eth3', '192.168.1.2', '192.168.1.1']], @client.calls)
+  end
+
+  def test_a_refusal_names_the_vrf
+    @none << '192.168.9.2'
+    speaker([])
+    e = assert_raise(ArgumentError) { @speaker.bfd.hop('192.168.9.2', 'A') }
+    assert_match(/\Aneighbor 192\.168\.9\.2 in VRF A: bfd needs a neighbor one hop away: /, e.message)
   end
 
   # ---- at start ----

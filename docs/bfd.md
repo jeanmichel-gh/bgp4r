@@ -41,6 +41,12 @@ containerlab node has bfdd4r without asking. Anywhere else, start
   5883, is not here yet. **In containerlab this means bgp4rd has to
   start after its link addresses exist**, since `exec:` runs after the
   entrypoint; `routescope/labs/bfd-frr-lab` shows the wait.
+* **In a VRF too.** For a neighbor with `vrf: A`, the check is
+  `ip -j route get ADDRESS vrf A`, since a CE's address is in its VRF's
+  table and not the main one. bfdd4r runs the session in the VRF of
+  its interface, from bfd4r #11 on (routescope
+  `docs/design/bfd-vrf.md`). A refusal names the VRF:
+  `neighbor X in VRF A: bfd needs a neighbor one hop away`.
 * **A failure resets an Established session.** When an Up BFD session
   goes Down, and the BGP session is Established, bgp4rd sends a
   NOTIFICATION Cease, subcode 10, "BFD Down" (RFC 9384 section 3), and
