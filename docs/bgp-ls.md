@@ -660,13 +660,12 @@ the finding that settled part 6's scope.
 **Every NLRI type and every TLV RFC 9552 defines is in**: the whole of
 sections 5.2.1, 5.2.2 and 5.2.3 for the descriptors, and the whole of
 section 5.3 for the attribute, which is code 29 with all three of its
-tables, 6, 8 and 10. Section 10 has them row by row. So what is left
-unimplemented in this family is every attribute TLV the **other** RFCs
-define, which the plan's measure deliberately excludes, and each of
-those reads back as its level's `Unknown` and replays byte for byte: a
-TLV type with no class as `Link_state::Tlv::Unknown` and an NLRI type
-with no class as `Link_state::Unknown`. The lab meets one on real
-traffic, TLV 1101 from RFC 9085; section 11 has it.
+tables, 6, 8 and 10. Section 10 has them row by row. Section 13 adds
+the Segment Routing TLVs of RFC 9085 and RFC 9086 that P4 of
+routescope's priorities needs. Every other RFC's TLV reads back as its
+level's `Unknown` and replays byte for byte: a TLV type with no class
+as `Link_state::Tlv::Unknown` and an NLRI type with no class as
+`Link_state::Unknown`.
 
 **The counts are discovered and not written here**, which is why the
 two tables above carry the "In bgp4r" column rather than a sentence:
@@ -824,6 +823,9 @@ bullet cell names both.
 | a Node Descriptor carrying a sub-TLV type twice | nlri 7 | nlri discard | sections 5.2.1.4 and 8.2.2 |
 | an NLRI whose TLVs are not in section 5.1 order | nlri 6 | nlri discard | sections 5.1 and 8.2.2 |
 | a next hop that is not 4, 16 or 32, or 12, 24 or 40 | nlri 5 | session reset | sections 5.5 and 8.2.2, RFC 7606 section 7.11 |
+| a TLV 1034 or 1036 too short for its Flags and Reserved | attr 3 | attribute discard | RFC 9085 sections 2.1.2 and 2.1.4 |
+| a remainder in TLV 1034 or 1036 too short for a range | attr 3 | attribute discard | RFC 9085 sections 2.1.2 and 2.1.4 |
+| a sub-TLV Length that runs past TLV 1034 or 1036 | attr 3 | attribute discard | RFC 9085 sections 2.1.2 and 2.1.4 |
 
 The Action column is what the check answers inside an NLRI. The two
 shared rows answer **attribute discard** when the same walk is reached
@@ -1497,14 +1499,15 @@ link descriptors of section 5.2.2, and the 4-octet next hop of section
 arithmetic**, which it looks like it should and does not; the last part
 of this section says why. It is also
 where the keep-and-echo MUST of section 5.1 meets real traffic: GoBGP
-sends sub-TLV **516**, the BGP Router Identifier of RFC 9086, which
-part 2 left out because Table 3 is RFC 9552's, and the NLRI still
-replays byte for byte with no protocol error and no coverage gap. The
-BGP-LS Attribute arrives too, and part 5a gave it a class: it parses
-into a `Link_state_attribute` carrying one TLV of type **1101**, the
-Adjacency SID of RFC 9085, which is in no table of RFC 9552 and so
-stays a `Tlv::Unknown` through parts 5b and 5c as well. Still neither
-an error nor a gap, which is the claim part 6 has to keep.
+sends sub-TLV **516**, the BGP Router-ID of RFC 9086 section 4.1. Part
+2 left it out because Table 3 is RFC 9552's, and the NLRI replayed byte
+for byte with no protocol error and no coverage gap. The BGP-LS
+Attribute arrives too, and part 5a gave it a class: it parses into a
+`Link_state_attribute` carrying one TLV of type **1101**, the PeerNode
+SID of RFC 9086 section 5. GoBGP originates BGP Egress Peer Engineering
+routes, Protocol-ID 7, not IGP SR. Both stayed `Tlv::Unknown` until
+section 13 gave them classes. Still neither an error nor a gap, which
+is the claim part 6 has to keep.
 
 **And the send direction**: GoBGP names our Autonomous System, BGP-LS
 Identifier, IGP Router-ID, Protocol-ID, the two IPv4 link addresses,
@@ -1574,8 +1577,10 @@ and 4 in the receive direction, since GoBGP will not originate them.
 wrong once.** Part 5a's version of this paragraph said GoBGP sends
 Table 8's TLVs, so part 5b would give the measurement more to say. It
 does not: measured again at part 5b-ii, the one TLV GoBGP puts in the
-attribute is **1101**, the Adjacency SID of RFC 9085, which is in no
-table of RFC 9552 and which no part of this plan implements. So
+attribute is **1101**, the PeerNode SID of RFC 9086 section 5, which
+is in no table of RFC 9552 and which no part of this plan implemented.
+Section 13 now does, and measures the SR TLVs against GoBGP 4.10.0 in
+both directions. So
 Table 8's thirteen classes landed and this measurement says exactly
 what it said before. A claim about what a router sends is a measurement
 like any other, and that one was an inference from the attribute being
@@ -1749,3 +1754,198 @@ ospfd.
 `bgp4r-cli -c 'show link-state'` prints the Protocol-ID as `L1`, `L2` or
 `OSPF` in the column "Proto", the area in "Area", and an OSPF prefix's
 route type first in "Node".
+
+## 13. Segment Routing, RFC 9085 and RFC 9086
+
+P4 of routescope's protocol priorities shows SR in BGP-LS: a node's
+SRGB and SRLB, an adjacency's SID and a prefix's SID, from RFC 9085,
+and the BGP Peering SIDs of RFC 9086. The design is routescope's
+`docs/design/bgp-ls-sr.md`. This section is its step 2, the codec. The
+classes are in `bgp/nlris/link_state_sr.rb`, and 516 and 517 in
+`link_state_descriptor.rb` with the other node descriptors. Every
+section number was read in the RFC text on 2026-11-22.
+
+The "In bgp4r" column is **discovered** from `Link_state::Tlv::REGISTRY`,
+as in sections 3b, 3c and 10. Each "no" row is a TLV of these two RFCs
+that P4 does not need; it reads as a `Tlv::Unknown`.
+
+| Code Point | Description | Where | Length | In bgp4r |
+|---|---|---|---|---|
+| 516 | BGP Router-ID, node descriptor | RFC 9086 section 4.1 | 4 | yes |
+| 517 | BGP Confederation Member, node descriptor | RFC 9086 section 4.1 | 4 | yes |
+| 1034 | SR Capabilities | RFC 9085 section 2.1.2 | 12 or more | yes |
+| 1035 | SR Algorithm | RFC 9085 section 2.1.3 | 1 to 256 | yes |
+| 1036 | SR Local Block | RFC 9085 section 2.1.4 | 12 or more | yes |
+| 1037 | SRMS Preference | RFC 9085 section 2.1.5 | 1 | no |
+| 1099 | Adjacency SID | RFC 9085 section 2.2.1 | 7 or 8 | yes |
+| 1100 | LAN Adjacency SID | RFC 9085 section 2.2.2 | 11 to 14 | yes |
+| 1101 | PeerNode SID | RFC 9086 section 5 | 7 or 8 | yes |
+| 1102 | PeerAdj SID | RFC 9086 section 5 | 7 or 8 | yes |
+| 1103 | PeerSet SID | RFC 9086 section 5 | 7 or 8 | yes |
+| 1158 | Prefix-SID | RFC 9085 section 2.3.1 | 7 or 8 | yes |
+| 1159 | Range | RFC 9085 section 2.3.5 | variable | no |
+| 1161 | SID/Label, a sub-TLV of 1034 and 1036 | RFC 9085 section 2.1.1 | 3 or 4 | yes |
+| 1170 | Prefix Attribute Flags | RFC 9085 section 2.3.2 | variable | no |
+| 1171 | Source Router Identifier | RFC 9085 section 2.3.3 | 4 or 16 | no |
+| 1172 | L2 Bundle Member Attributes | RFC 9085 section 2.2.3 | variable | no |
+| 1174 | Source OSPF Router-ID | RFC 9085 section 2.3.4 | 4 | no |
+
+### The shapes
+
+Three new bases serve these RFCs and no table of RFC 9552, so they live
+in `link_state_sr.rb` and not with the framing (section 2). The other
+classes take section 2's bases: 516 and 517 are `Opaque32`, and 1035 is
+`Int_list_tlv` with one-octet elements. 1161 is a class of its own.
+
+* **`Sid_tlv`**: Flags, one octet, two Reserved octets, then the
+  SID/Label/Index. Figure 7 and Figure 10 of RFC 9085 and Figure 2 of
+  RFC 9086 are this layout. The one octet is the Weight for 1099 and
+  for the Peering SIDs, and the Algorithm for 1158. 1100 is this head
+  with the neighbor before the SID.
+* **`Sr_range_tlv`**: Flags, Reserved, then ranges, each a 3-octet
+  Range Size and a 1161 sub-TLV. 1034 and 1036 have the same figure.
+* **`Peer_sid`**: `Sid_tlv` with RFC 9086's named flags, `|V|L|B|P|
+  Rsvd |` (Figure 3), for 1101, 1102 and 1103.
+
+**The length says label or index.** Three octets is a label, "the 20
+rightmost bits represent a label ... and the 4 leftmost bits are set to
+0", and four is an index or a SID (RFC 9085 section 2.1.1). The hash
+says which by its key, `:label` or `:index`. A 3-octet field is kept
+whole, so a label with its 4 high bits set replays.
+
+**The LAN Adjacency SID's length says which IGP.** "Neighbor ID: 6
+octets for IS-IS for the System ID, and 4 octets for OSPF", and "For
+IS-IS, it would be 13 or 14 octets ... For OSPF, it would be 11 or 12".
+So 11 is an OSPF neighbor and a label, 12 an OSPF neighbor and an
+index, 13 a system ID and a label, 14 a system ID and an index. The
+neighbor prints as `0000.0000.0002` or as a dotted quad.
+
+**The flags of RFC 9085's TLVs stay a number.** "The Protocol-ID of the
+BGP-LS Link NLRI is used to determine the underlying protocol
+specification for parsing these fields" (sections 2.2.1 and 2.3.1), and
+a TLV does not know its NLRI. RFC 9086's flags are BGP's own, so
+`Peer_sid` names them.
+
+**Reserved is kept and written back.** Every Reserved field here "MUST
+be set to 0 and ignored on receipt". The hash carries `:reserved` only
+when it is not 0, as the flag classes carry `:bits`.
+
+A hash, pretty printed:
+
+```json
+{
+  "sr_capabilities": {
+    "flags": 192,
+    "ranges": [
+      {
+        "size": 8000,
+        "sid_label": {
+          "label": 16000
+        }
+      }
+    ]
+  }
+}
+```
+
+```json
+{
+  "prefix_sid": {
+    "flags": 64,
+    "algorithm": 0,
+    "index": 5
+  }
+}
+```
+
+### What is checked, and what is not
+
+One check is added to `validation.rb`, in three findings (section 8's
+table). RFC 9085 section 4 says the syntactic checks of RFC 9552's
+fault management "now encompass the new BGP-LS Attribute TLVs". 1034
+and 1036 are recognized TLVs that carry sub-TLVs, so the attribute's
+third bullet, "the length of its sub-TLVs in the BGP-LS Attribute are
+valid", now walks their ranges. A sub-TLV it cannot locate is attribute
+discard.
+
+**The rest is the consumer's, by instruction.** RFC 9552 section 8.2.2
+lists "the length of a fixed-length TLV is correct" and "the values of
+TLV fields are valid or permissible" among the checks not to make. RFC
+9085 section 4 and RFC 9086 section 7 leave "the semantic or content
+checking" to the consumer. So the classes answer these as readers, and
+nothing reports them as errors. The owner chose this on 2026-11-22.
+
+| Rule | Where | Reader |
+|---|---|---|
+| a Reserved field is 0 | RFC 9085 sections 2.1.2, 2.1.4, 2.2.1, 2.2.2, 2.3.1; RFC 9086 section 5 | `reserved?` |
+| a SRGB or SRLB range starts at a label, 3 octets | RFC 9085 sections 2.1.2 and 2.1.4 | `Sr_range_tlv#labels?` |
+| a label's 4 high bits are 0 | RFC 9085 section 2.1.1 | `label_high_bits` |
+| a Peering SID's low four flag bits are 0 | RFC 9086 section 5 | `Peer_sid#undefined_bits` |
+
+A value of a width the class cannot read, such as an Adjacency SID of
+9 octets, is a `Tlv::Unknown` and replays. Nothing is reported, which
+is part 1's rule and section 8's "What is deliberately not checked".
+
+### What the tests cover
+
+* **Unit**, `test/unit/nlris/link_state_sr_test.rb`: each class built
+  four ways, its octets by hand from the RFC's figure, the readers, and
+  negative cases: a lying sub-TLV Length, a non-zero Reserved, a label
+  where an index is expected, and off-width values that fall back to
+  `Tlv::Unknown`, all built and replayed byte for byte. Each finding
+  of `link_state_range_finding` has a test named for it in
+  `validation_test.rb`. The `to_hash` catalog has an entry per class.
+* **Functional**, `test/functional/link_state_test.rb`: two bgp4r
+  speakers on loopback carry every SR TLV in the BGP-LS Attribute, and
+  a malformed 1034 is attribute discard at the receiver.
+* **Interop**, two files. `link_state_sr_gobgp_test.rb` runs against
+  GoBGP 4.10.0, in CI's `gobgp4` group, which installs that version.
+  `link_state_gobgp_test.rb` runs against GoBGP 3.23.0 and now reads
+  GoBGP's 516 and 1101 as classes.
+
+### What GoBGP 4.10.0 makes of them
+
+Measured on 2026-11-22 against the `gobgpd` and `gobgp` binaries of
+`jauderho/gobgp:v4.10.0`, and asserted by
+`test/functional/lab/link_state_sr_gobgp_test.rb`. GoBGP 4.10.0 has
+types for every TLV in section 13's table but 1100, read in its source
+(`pkg/packet/bgp/bgp.go`).
+
+| | GoBGP originates, bgp4r reads | bgp4r sends, GoBGP's RIB shows |
+|---|---|---|
+| 516, 517 | yes, as classes | yes, on both ends of the key |
+| 1034, 1036 | no client keyword | yes: flags, first label and first label plus size |
+| 1035 | yes, `sr-algorithm` on a node | yes, in base64 |
+| 1099 | yes, `sid-type adj`, flags and weight lost | the SID, flags and weight lost |
+| 1100 | no type | kept, not shown |
+| 1101, 1102, 1103 | 1101 and 1103; `adj` makes 1099, not 1102 | yes: flags by name, weight, SID |
+| 1158 | no client keyword | not shown: no prefix TLV is |
+
+**The node descriptor order is fixed in 4.10.0.** GoBGP 3.23.0 sends
+512, 516, 513 (section 11). 4.10.0 sends 512, 513, 516, 517, the
+ascending order section 5.2.1.4 asks for.
+
+**Three faults in GoBGP 4.10.0, recorded and not filed**, as section 11
+does for 3.23.0. Each is asserted.
+
+* **The Adjacency SID loses its flags and weight.** The client's `sid-type
+  adj v-flag weight 2` arrives at bgp4r as flags 0 and weight 0, and an
+  Adjacency SID bgp4r sends with flags 0x30 and weight 5 shows as 0 and
+  0 in GoBGP's RIB. Its decoder reads both fields; its API conversion,
+  `NewLsTLVAdjacencySID`, takes the SID alone.
+* **No prefix attribute TLV is shown.** A Prefix NLRI, IPv4 or IPv6,
+  installs with its BGP-LS Attribute, and the RIB's `prefix` object is
+  empty: not the Prefix-SID, and not RFC 9552's own Prefix Metric. So
+  1158 is checked by the unit and functional tests only.
+* **It discards the attribute for a length it does not expect.** An
+  Adjacency SID of 9 octets makes GoBGP discard the whole BGP-LS
+  Attribute, with "Incorrect Adjacency SID length", and every other TLV
+  in it goes too. Section 8.2.2 lists "the length of a fixed-length TLV
+  is correct" among the checks not to make. bgp4r reports nothing and
+  keeps the octets as a `Tlv::Unknown`.
+
+**Where the two agree.** A SID/Label sub-TLV that runs past its 1034:
+bgp4r reports attribute discard, and GoBGP discards the attribute,
+keeps the route and keeps the session. A non-zero Reserved octet and an
+index in an SRGB: neither reports anything, and GoBGP reads the range.
+

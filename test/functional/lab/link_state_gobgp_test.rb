@@ -48,9 +48,10 @@ require './test/functional/lab/lab_helper'
 # * **Receive.** The octets are GoBGP's, so the framing of section 5.2,
 #   the node and link descriptors of 5.2.1 and 5.2.2 and the next hop
 #   of 5.5 are read from something this reader did not write. It is also
-#   where the keep-and-echo MUST of section 5.1 meets real traffic:
-#   GoBGP sends sub-TLV 516, which is RFC 9086's and not in bgp4r, and
-#   the NLRI still replays byte for byte.
+#   where the keep-and-echo MUST of section 5.1 met real traffic:
+#   GoBGP sends sub-TLV 516, which is RFC 9086's, and the NLRI replayed
+#   byte for byte while bgp4r had no class for it. It has one now
+#   (docs/bgp-ls.md section 13), and the NLRI still replays.
 # * **Send.** GoBGP names our Autonomous System, BGP-LS Identifier, IGP
 #   Router-ID, Protocol-ID, link addresses, OSPF route type and prefix
 #   back, each from its own field.
@@ -173,9 +174,10 @@ class LinkStateGobgpTest < Test::Unit::TestCase
     @routers = []
   end
 
+  # Both lists are nil when setup omitted the case.
   def teardown
-    @routers.each { |r| r.down }
-    @listeners.each do |server, neighbor, thread|
+    (@routers || []).each { |r| r.down }
+    (@listeners || []).each do |server, neighbor, thread|
       thread.kill if thread
       neighbor.close
       server.close unless server.closed?
@@ -398,16 +400,14 @@ class LinkStateGobgpTest < Test::Unit::TestCase
                  'and so does the whole attribute, next hop included')
   end
 
-  # The one sub-TLV GoBGP sends that bgp4r does not implement, which is
-  # the keep-and-echo MUST of section 5.1 meeting real traffic rather
-  # than a test's own hex: "Unknown and unsupported types MUST be
-  # preserved and propagated within both the NLRI and the BGP-LS
-  # Attribute", and their presence "MUST NOT result in the NLRI or the
-  # BGP-LS Attribute being considered malformed".
-  #
-  # 516 is the BGP Router Identifier of RFC 9086 section 4.1, which part
-  # 2 left out because the four sub-TLVs of Table 3 are RFC 9552's.
-  def test_the_unimplemented_sub_tlv_is_kept_and_reported_as_no_error
+  # The one sub-TLV GoBGP sends that RFC 9552 does not define: 516, the
+  # BGP Router-ID of RFC 9086 section 4.1. Part 2 left it out, so this
+  # case was the keep-and-echo MUST of section 5.1 meeting real traffic,
+  # with 516 kept as a `Tlv::Unknown`. Section 13 gave it a class, so the
+  # case now reads it as one, from GoBGP's octets, and the replay and
+  # no-error assertions stay as they were. Keep-and-echo of a TLV with
+  # no class is still covered by `link_state_test.rb` with type 255.
+  def test_the_rfc_9086_sub_tlv_is_read_and_reported_as_no_error
     _n, router, updates, _drops, _notes = session
     router.client_run(*%w[global rib add -a ls link], *LINK_ARGS)
     got = updates.shift
@@ -427,11 +427,12 @@ class LinkStateGobgpTest < Test::Unit::TestCase
 
     local = ls.nlri.local_node_descriptors
     assert_equal([512, 516, 513], local.sub_tlvs.collect(&:type))
-    unknown = local.sub_tlvs.find { |t| t.type == 516 }
-    assert_instance_of(BGP::Link_state::Tlv::Unknown, unknown)
-    assert_equal('020400040a000002', unknown.to_shex,
-                 'kept whole, so the BGP Router-ID we asked for is still ' \
-                 'in the octets')
+    rid = local.sub_tlvs.find { |t| t.type == 516 }
+    assert_instance_of(BGP::Link_state::Tlv::Bgp_router_id, rid)
+    assert_equal('10.0.0.2', rid.router_id,
+                 'the BGP Router-ID we asked for')
+    assert_equal('020400040a000002', rid.to_shex,
+                 'and its octets are what arrived')
 
     assert_equal(0, got.path_attribute.errors.size,
                  'and no protocol error, which section 5.1 requires: ' \
@@ -505,18 +506,16 @@ class LinkStateGobgpTest < Test::Unit::TestCase
   # `Attr::Unknown` with no error and no gap, which was #116 working one
   # level up, and the comment here said part 5 would give it meaning.
   # It has: the attribute parses now, and what it carries is one TLV of
-  # type **1101**, the Adjacency SID of RFC 9085. Measured on
-  # 2026-11-01 against gobgpd 3.23.0.
+  # type **1101**, the PeerNode SID of RFC 9086 section 5. Measured on
+  # 2026-11-01 against gobgpd 3.23.0. This comment called it "the
+  # Adjacency SID of RFC 9085" until 2026-11-22; that is 1099.
   #
-  # **So this is the keep-and-echo MUST of section 5.1 met inside the
-  # attribute**, where the NLRI case above meets it in the descriptors:
-  # 1101 is not in RFC 9552's Table 18 at all, so no part of this plan
-  # will implement it and the example cannot expire. Parts 5b and 5c
-  # add Table 8's and Table 10's TLVs, and 1101 is in neither.
-  #
-  # What the case pins either way is that an attribute carrying a TLV
-  # bgp4r has no class for is not a protocol error, which is the claim
-  # part 6 has to keep rather than rediscover.
+  # It was a `Tlv::Unknown` until section 13 of docs/bgp-ls.md gave it a
+  # class, so the example expired, as one that "cannot expire" had
+  # before it. It now reads as a `Peer_node_sid`: GoBGP 3.23.0 sends the
+  # 8-octet index form, flags 0, weight 1, index 1000, for `sid 1000
+  # sid-type node weight 1`. GoBGP 4.10.0 sends the 7-octet label form
+  # (link_state_sr_gobgp_test.rb).
   def test_the_attribute_arrives_and_is_kept_without_being_an_error
     _n, router, updates, _drops, _notes = session
     router.client_run(*%w[global rib add -a ls link], *LINK_ARGS)
@@ -530,11 +529,13 @@ class LinkStateGobgpTest < Test::Unit::TestCase
     assert_instance_of(BGP::Link_state_attribute, attr29,
                        'part 5a gave code 29 a class of its own')
     assert_equal([1101], attr29.tlvs.collect { |t| t.type },
-                 "the Adjacency SID of RFC 9085, which is what GoBGP " \
+                 "the PeerNode SID of RFC 9086, which is what GoBGP " \
                  "sends for `sid 1000 sid-type node weight 1`\n#{router.log}")
-    assert_equal([BGP::Link_state::Tlv::Unknown],
-                 attr29.tlvs.collect { |t| t.class },
-                 'kept and echoed, since 1101 is in no table of RFC 9552')
+    sid = attr29.tlvs.first
+    assert_instance_of(BGP::Link_state::Tlv::Peer_node_sid, sid)
+    assert_equal([0, 1, 1000, false],
+                 [sid.flags, sid.weight, sid.index, sid.label?],
+                 'flags, weight and the 4-octet index GoBGP 3.23.0 sends')
     assert_equal(0, pa.errors.size,
                  'a TLV bgp4r cannot read is not the peer\'s fault, which ' \
                  'section 5.1 requires in so many words')

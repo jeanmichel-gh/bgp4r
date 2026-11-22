@@ -151,7 +151,7 @@ module Features
     'bgp-ls' => {
       :area  => 'families',
       :about => 'BGP-LS, AFI 16388 SAFI 71 and 72, the NLRI and every attribute TLV',
-      :rfc   => 'RFC 9552',
+      :rfc   => 'RFC 9552, RFC 9085, RFC 9086',
       :doc   => 'docs/bgp-ls.md',
       # The three attribute TLV files sit under nlris/ and belong to
       # path attribute 29. The directory is where the family lives, not
@@ -163,12 +163,14 @@ module Features
                    nlris/link_state_node_attribute_test
                    nlris/link_state_link_attribute_test
                    nlris/link_state_prefix_attribute_test
+                   nlris/link_state_sr_test
                    path_attributes/link_state_attribute_test
                    bgp_ls_doc_test
                    daemon/link_state_table_test daemon/link_state_producer_test
                    daemon/link_state_producer_ospf_test],
       :functional => %w[link_state_test link_state_daemon_test link_state_ospf_daemon_test],
-      :lab   => %w[link_state_gobgp_test link_state_frr_test],
+      :lab   => %w[link_state_gobgp_test link_state_sr_gobgp_test
+                   link_state_frr_test],
     },
 
     'add-path' => {
@@ -480,6 +482,7 @@ module Features
     'gobgp-matrix'  => 'gobgpd',
     'gobgp-families' => 'gobgpd',
     'gobgp-router'  => 'gobgpd',
+    'gobgp4'        => 'gobgpd 4',
     'frr'           => 'frr',
     'reflector'     => 'gobgpd and frr',
     'local'         => 'nothing',

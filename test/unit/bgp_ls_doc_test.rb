@@ -212,6 +212,20 @@ class BgpLsDocTest < Test::Unit::TestCase
   # them is visible. **A Hash cannot do this**, and that is the point:
   # `rows` collapses section 3c's two tables to 8 keys where they have 9
   # rows, because 263 is in both.
+  # Section 13's table, RFC 9085's and RFC 9086's code points.
+  def sr_table
+    rows(SR_SECTION)
+  end
+
+  SR_SECTION = '13. Segment Routing, RFC 9085 and RFC 9086'
+
+  # Every TLV code point the two RFCs define, read in their tables on
+  # 2026-11-22: RFC 9085 Tables 1, 2 and 4 of section 2, and RFC 9086
+  # Tables 4 and 5 of section 6.2.
+  RFC_9085_9086 = [1161, 1034, 1035, 1036, 1037, 1099, 1100, 1172,
+                   1158, 1159, 1170, 1171, 1174,
+                   516, 517, 1101, 1102, 1103].sort.freeze
+
   def tlv_row_pairs(heading)
     section(heading).lines.each_with_object([]) do |l, a|
       next unless l.start_with?('|')
@@ -430,11 +444,14 @@ class BgpLsDocTest < Test::Unit::TestCase
   # The section 3b table is read the same way section 3's is: a row
   # saying yes with no class behind it, and a class with a row saying
   # no, both fail.
+  #
+  # Section 13's table is read too: RFC 9085's and RFC 9086's classes
+  # are in the same registry.
   def test_the_tlv_table_says_yes_for_exactly_what_the_library_implements
     built = BGP::Link_state::Tlv::REGISTRY.keys.sort
-    said = tlv_table.select { |_, v| v == 'yes' }.keys.sort
+    said = tlv_table.merge(sr_table).select { |_, v| v == 'yes' }.keys.sort
     assert_equal(built, said,
-                 "#{DOC} sections 3b, 3c and 10 and Tlv::REGISTRY " \
+                 "#{DOC} sections 3b, 3c, 10 and 13 and Tlv::REGISTRY " \
                  "disagree about which TLV types are implemented: " \
                  "library #{built.inspect}, document #{said.inspect}")
   end
@@ -451,6 +468,14 @@ class BgpLsDocTest < Test::Unit::TestCase
     assert_equal(9, tlv_row_pairs('3c. The link and prefix descriptors').size)
     assert_equal(28, tlv_row_pairs('10. The attribute').size)
     assert_equal(43, tlv_rows_with_duplicates.size)
+  end
+
+  # Section 13 has a row for each code point of RFC 9085 and RFC 9086,
+  # once, and none of RFC 9552's.
+  def test_section_13_covers_rfc_9085_and_rfc_9086_once_over
+    assert_equal(18, tlv_row_pairs(SR_SECTION).size)
+    assert_equal(RFC_9085_9086, tlv_row_pairs(SR_SECTION).collect(&:first).sort)
+    assert_equal([], RFC_9085_9086 & TABLE_18)
   end
 
   # **The document's 43 rows cover Table 18's 39 code points exactly**,
@@ -885,7 +910,8 @@ class BgpLsDocTest < Test::Unit::TestCase
       !k.const_defined?(:TYPE)
     end.collect(&:to_s).sort
     assert_equal(%w[Addr_tlv Float32_tlv Int_list_tlv Node_descriptors
-                    Opaque32 Opaque_tlv Text_tlv],
+                    Opaque32 Opaque_tlv Peer_sid Sid_tlv Sr_range_tlv
+                    Text_tlv],
                  bases,
                  'the abstract TLV bases in the library')
     # **Two of the seven are not shared, and that is the line part 5b-i
@@ -895,7 +921,19 @@ class BgpLsDocTest < Test::Unit::TestCase
     # its own table and section 2 names neither. Each one's registered
     # subclasses are asserted below, so a third table reaching for one
     # fails here and says to move it.
-    single_table = %w[Float32_tlv Node_descriptors]
+    #
+    # The three bases of `link_state_sr.rb` serve RFC 9085 and RFC 9086
+    # and no table of RFC 9552, so section 2 names none of them.
+    single_table = %w[Float32_tlv Node_descriptors Peer_sid Sid_tlv
+                      Sr_range_tlv]
+    { 'Sid_tlv'      => [1099, 1100, 1101, 1102, 1103, 1158],
+      'Peer_sid'     => [1101, 1102, 1103],
+      'Sr_range_tlv' => [1034, 1036] }.each do |base, types|
+      k = BGP::Link_state::Tlv.const_get(base)
+      assert_equal(types,
+                   BGP::Link_state::Tlv::REGISTRY.select { |_, c| c < k }.keys.sort,
+                   "#{base} serves RFC 9085 and RFC 9086 and nothing else")
+    end
     assert_equal(said.sort, (bases - single_table).sort,
                  "#{DOC} section 2 names every shared base and nothing else")
     assert_equal([256, 257],
@@ -912,7 +950,8 @@ class BgpLsDocTest < Test::Unit::TestCase
     # the assertion that would send it back.
     serves = BGP::Link_state::Tlv::REGISTRY.select { |_, k|
       k < BGP::Link_state::Tlv::Int_list_tlv }.keys.sort
-    assert_equal([1096, 1153, 1154], serves)
+    # RFC 9085's SR Algorithm, 1035, is a third user, a list of octets.
+    assert_equal([1035, 1096, 1153, 1154], serves)
     assert(serves.any? { |t| t < 1152 } && serves.any? { |t| t >= 1152 },
            'Int_list_tlv is shared only while two tables use it')
     # **`PACK` and no `WIDTH`**, which is where each subclass states its
@@ -1171,7 +1210,7 @@ class BgpLsDocTest < Test::Unit::TestCase
   # the caller. The Action column gives the NLRI side, so the document
   # has to say that and the library has to agree.
   def test_the_shared_walk_answers_attribute_discard_from_the_attribute
-    shared = check_rows.select { |r| r[1].include?('attr') }
+    shared = check_rows.select { |r| r[1].include?('attr') and r[1].include?('nlri') }
     assert_equal(2, shared.size,
                  "#{DOC} section 8 should have two rows naming an attribute " \
                  'bullet, which are the walk the two levels share')
@@ -1236,6 +1275,9 @@ class BgpLsDocTest < Test::Unit::TestCase
       'sub-TLV type twice'              => ls_reach(ls_dup),
       'not in section 5.1 order'        => ls_reach(ls_swap),
       'next hop that is not'            => ls_reach(one, 71, '050000000000'),
+      'too short for its Flags'         => ls_attr('040a0001c0'),
+      'too short for a range'           => ls_attr('040a0004c0000001'),
+      'runs past TLV 1034'              => ls_attr('040a000cc000001f4004890009003e80'),
     }
     assert_equal(check_rows.size, probes.size,
                  'one probe per row of section 8')
@@ -1509,8 +1551,11 @@ class BgpLsDocTest < Test::Unit::TestCase
     # agreed with each other. Tied to the observation now, which is
     # what the paragraph above this method asks for: the lab files
     # exist and are in a CI group.
-    assert_equal(2, LabGroups.present.count { |f| f =~ /\Alink_state_\w+_test\z/ },
-                 'the two BGP-LS lab files are on disk')
+    # Section 13 added a third, the SR TLVs against GoBGP 4.
+    assert_equal(%w[link_state_frr_test link_state_gobgp_test
+                    link_state_sr_gobgp_test],
+                 LabGroups.present.grep(/\Alink_state_\w+_test\z/),
+                 'the three BGP-LS lab files are on disk')
     assert_equal('done', status[7],
                  'the lab is measured, so part 7 is done')
   end
@@ -1562,6 +1607,11 @@ class BgpLsDocTest < Test::Unit::TestCase
 
   # An MP_REACH around one Link-State NLRI: AFI 16388, the SAFI, a next
   # hop and the reserved octet (RFC 4760 section 3).
+  # A BGP-LS Attribute, code 29, holding the TLV octets given.
+  def ls_attr(tlvs)
+    '801d' + format('%02x', tlvs.size / 2) + tlvs
+  end
+
   def ls_reach(nlri, safi = IANA::SAFI::BGP_LS, nh = '040a000001')
     v = '4004' + format('%02x', safi) + nh + '00' + nlri
     '800e' + format('%02x', v.size / 2) + v

@@ -21,6 +21,8 @@
 #++
 
 require 'bgp/path_attributes/attribute'
+# The SR range TLVs whose sub-TLVs the BGP-LS Attribute check walks.
+require 'bgp/nlris/link_state_sr'
 
 module BGP
 
@@ -1244,14 +1246,16 @@ module BGP
       # BGP-LS Attribute. The framing octet counts and the sub-TLV
       # descent are the library's, so neither can drift from the classes.
       #
-      # **"when the TLV is recognized" has exactly two cases in the
-      # NLRI and none in the attribute.** The Node Descriptor TLVs, 256
-      # and 257, are the only recognized TLVs in this family that carry
-      # sub-TLVs, and no attribute TLV of RFC 9552's three tables carries
-      # any. So the descent below is reachable only from an NLRI, and the
-      # attribute half of that clause has no case to run on. An
-      # unrecognized TLV's value is opaque and is not descended into,
-      # which is what "when the TLV is recognized" says.
+      # **"when the TLV is recognized" has two cases in the NLRI and
+      # two in the attribute.** In the NLRI they are the Node Descriptor
+      # TLVs, 256 and 257. In the attribute they are RFC 9085's SR
+      # Capabilities, 1034, and SR Local Block, 1036, whose ranges each
+      # carry a SID/Label sub-TLV. No attribute TLV of RFC 9552's own
+      # tables carries any. RFC 9085 section 4 says "the malformed
+      # attribute tests for syntactic checks in the Fault Management
+      # section of [RFC7752] now encompass the new BGP-LS Attribute
+      # TLVs". An unrecognized TLV's value is opaque and is not
+      # descended into, which is what "when the TLV is recognized" says.
       def link_state_tlv_finding(type, where, tlvs, nlri)
         action = nlri ? NLRI_DISCARD : DISCARD
         f = ::BGP::Link_state::FRAMING
@@ -1275,6 +1279,10 @@ module BGP
                 link_state_duplicate_finding(type, t, tlvs.byteslice(i + f, len))
             return g if g
           end
+          if !nlri and sr_range_tlv?(t)
+            g = link_state_range_finding(type, t, tlvs.byteslice(i + f, len))
+            return g if g
+          end
           i += f + len
         end
         nil
@@ -1285,6 +1293,64 @@ module BGP
       def node_descriptor?(t)
         t == ::BGP::Link_state::Tlv::Local_node_descriptors.type or
           t == ::BGP::Link_state::Tlv::Remote_node_descriptors.type
+      end
+
+      # The two attribute TLVs whose sub-TLVs the attribute's third
+      # bullet reaches into, taken from the classes.
+      def sr_range_tlv?(t)
+        t == ::BGP::Link_state::Tlv::Sr_capabilities.type or
+          t == ::BGP::Link_state::Tlv::Sr_local_block.type
+      end
+
+      # The attribute's third bullet, inside TLV 1034 or 1036: "the
+      # length of its sub-TLVs in the BGP-LS Attribute are valid". RFC
+      # 9085 sections 2.1.2 and 2.1.4 give one layout: Flags and
+      # Reserved, one octet each, then ranges of "Range Size: 3 octets"
+      # and a SID/Label TLV "used as a sub-TLV". So a sub-TLV is found by
+      # walking the ranges, and three things stop the walk: no room for
+      # Flags and Reserved, a remainder too short for a Range Size and a
+      # sub-TLV's Type and Length, and a sub-TLV Length that runs past
+      # its TLV. Each leaves the sub-TLVs unlocatable, so each is
+      # syntactic. Attribute discard, as for every attribute finding.
+      #
+      # **What is not checked here, by instruction.** That the sub-TLV
+      # is 1161, that it is 3 octets ("only label encoding is valid"),
+      # the 12-octet minimum, and the Reserved octet. RFC 9552 section
+      # 8.2.2 lists "the length of a fixed-length TLV is correct or the
+      # length of a variable length TLV is valid or permissible" and
+      # "the values of TLV fields are valid or permissible" among the
+      # checks not to make, and RFC 9085 section 4 leaves "the semantic
+      # or content checking" to the consumer. The classes answer those
+      # as readers: `Sr_range_tlv#labels?` and `#reserved?`.
+      def link_state_range_finding(type, t, value)
+        sec = t == ::BGP::Link_state::Tlv::Sr_capabilities.type ? '2.1.2' : '2.1.4'
+        head = ::BGP::Link_state::Tlv::Sr_range_tlv::HEAD
+        size = ::BGP::Link_state::Tlv::Sr_range_tlv::SIZE_WIDTH
+        f = ::BGP::Link_state::FRAMING
+        if value.size < head
+          return Finding.new(type, 9, DISCARD,
+            "TLV type #{t} has #{value.size} octets, too few for its Flags " \
+            "and Reserved (RFC 9085 section #{sec}, RFC 9552 section 8.2.2)")
+        end
+        i = head
+        while i < value.size
+          if value.size - i < size + f
+            return Finding.new(type, 9, DISCARD,
+              "#{value.size - i} octets left in TLV type #{t}, too few for a " \
+              'Range Size and a sub-TLV Type and Length ' \
+              "(RFC 9085 section #{sec}, RFC 9552 section 8.2.2)")
+          end
+          st  = value.byteslice(i + size, 2).unpack1('n')
+          len = value.byteslice(i + size + 2, 2).unpack1('n')
+          if i + size + f + len > value.size
+            return Finding.new(type, 9, DISCARD,
+              "sub-TLV type #{st} of #{len} octets runs past TLV type #{t}, " \
+              "#{value.size - i - size - f} left " \
+              "(RFC 9085 section #{sec}, RFC 9552 section 8.2.2)")
+          end
+          i += size + f + len
+        end
+        nil
       end
 
       # Bullet 7: "For NLRIs carrying either a Local or Remote Node

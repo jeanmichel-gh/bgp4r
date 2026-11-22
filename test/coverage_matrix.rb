@@ -149,6 +149,8 @@ module CoverageMatrix
     'rt_constrain' => %w[rt-constrain],
     'mcast_vpn'    => %w[mcast-vpn],
     'link_state'   => %w[bgp-ls bgp-ls-vpn],
+    # RFC 9085 and RFC 9086 in BGP-LS, against GoBGP 4. SAFI 71 only.
+    'link_state_sr' => %w[bgp-ls],
     'vpn'          => %w[vpn],
   }.freeze
 

@@ -196,6 +196,11 @@ jobs:
             gobgp: true
           - group: gobgp-router
             gobgp: true
+          # GoBGP 4, for the files measured against it. Every other gobgp
+          # group takes GOBGP_VERSION below, 3.23.0.
+          - group: gobgp4
+            gobgp: true
+            gobgp_version: 4.10.0
           - group: frr
             frr: true
           # The one group that needs both routers: bgp4rd as a route
@@ -213,7 +218,7 @@ jobs:
       # they do not answer alike: GoBGP 3 resets on the attr_overrun case
       # where RFC 7606 section 4 makes treat-as-withdraw a MUST, and GoBGP
       # 4 fixed it. See GOBGP_3 in test/functional/lab/fault_matrix_scenario.rb.
-      GOBGP_VERSION: 3.23.0
+      GOBGP_VERSION: ${{ matrix.gobgp_version || '3.23.0' }}
     steps:
       - uses: actions/checkout@v6
       # bfd4r is a path gem, ../bfd4r in the Gemfile, so it is checked

@@ -22,4 +22,5 @@
   link_state_node_attribute
   link_state_link_attribute
   link_state_prefix_attribute
+  link_state_sr
 }.each { |n| require "bgp/nlris/#{n}" }

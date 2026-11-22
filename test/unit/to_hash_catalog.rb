@@ -1656,6 +1656,72 @@ module ToHashCatalog
         .new(:opaque_prefix_attribute => 'deadbeef')
     end
 
+  # The SR TLVs of RFC 9085 and RFC 9086, `link_state_sr.rb`, and the
+  # two node descriptors of RFC 9086 section 4.1. Each recipe that has
+  # a Reserved field sets it, and a label recipe sets the 4 high bits
+  # RFC 9085 section 2.1.1 says are 0, since the hash must carry both.
+  # Those can only arrive by parsing, so the recipes parse.
+  ENTRIES['BGP::Link_state::Tlv::Bgp_router_id'] = entry(:ok, nil, nil) do
+    BGP::Link_state::Tlv::Bgp_router_id.new('192.0.2.1')
+  end
+
+  ENTRIES['BGP::Link_state::Tlv::Bgp_confederation_member'] =
+    entry(:ok, nil, nil) do
+      BGP::Link_state::Tlv::Bgp_confederation_member.new(65001)
+    end
+
+  ENTRIES['BGP::Link_state::Tlv::Sid_label'] = entry(:ok, nil, nil) do
+    BGP::Link_state::Tlv::Sid_label.new(['f03e80'].pack('H*').is_packed)
+  end
+
+  # Reserved set, a label range, an index range, and a sub-TLV whose
+  # Length lies, which is the field a thin recipe would miss.
+  ENTRIES['BGP::Link_state::Tlv::Sr_capabilities'] = entry(:ok, nil, nil) do
+    BGP::Link_state::Tlv::Sr_capabilities.new(
+      ['c001' '001f40' '04890003003e80' '00000a' '0489000500000007'].join
+        .then { |h| [h].pack('H*').is_packed })
+  end
+
+  ENTRIES['BGP::Link_state::Tlv::Sr_local_block'] = entry(:ok, nil, nil) do
+    BGP::Link_state::Tlv::Sr_local_block.new(
+      ['0002' '0003e8' '04890003003a98'].join
+        .then { |h| [h].pack('H*').is_packed })
+  end
+
+  ENTRIES['BGP::Link_state::Tlv::Sr_algorithm'] = entry(:ok, nil, nil) do
+    BGP::Link_state::Tlv::Sr_algorithm.new(0, 1, 128)
+  end
+
+  ENTRIES['BGP::Link_state::Tlv::Adjacency_sid'] = entry(:ok, nil, nil) do
+    BGP::Link_state::Tlv::Adjacency_sid.new(
+      ['3005abcd' 'f05dc1'].join.then { |h| [h].pack('H*').is_packed })
+  end
+
+  ENTRIES['BGP::Link_state::Tlv::Lan_adjacency_sid'] = entry(:ok, nil, nil) do
+    BGP::Link_state::Tlv::Lan_adjacency_sid.new(
+      ['30050001' '000000000002' '00000007'].join
+        .then { |h| [h].pack('H*').is_packed })
+  end
+
+  ENTRIES['BGP::Link_state::Tlv::Prefix_sid'] = entry(:ok, nil, nil) do
+    BGP::Link_state::Tlv::Prefix_sid.new(
+      ['40800001' '00000005'].join.then { |h| [h].pack('H*').is_packed })
+  end
+
+  # The four low flag bits RFC 9086 section 5 reserves are set.
+  ENTRIES['BGP::Link_state::Tlv::Peer_node_sid'] = entry(:ok, nil, nil) do
+    BGP::Link_state::Tlv::Peer_node_sid.new(
+      ['cf0a0001' '005dc0'].join.then { |h| [h].pack('H*').is_packed })
+  end
+
+  ENTRIES['BGP::Link_state::Tlv::Peer_adj_sid'] = entry(:ok, nil, nil) do
+    BGP::Link_state::Tlv::Peer_adj_sid.new(0xd0, 2, 24010)
+  end
+
+  ENTRIES['BGP::Link_state::Tlv::Peer_set_sid'] = entry(:ok, nil, nil) do
+    BGP::Link_state::Tlv::Peer_set_sid.new(0x00, 3, 9, 4)
+  end
+
   # Classes with no entry, each with the reason. An abstract base with no
   # sensible instance belongs here; a class merely awkward to build does
   # not.
@@ -1700,6 +1766,19 @@ module ToHashCatalog
       'subclasses are the type numbers. It defines no TYPE or AFI, so ' \
       'type and afi both raise NameError. Ipv4_prefix and Ipv6_prefix ' \
       'are measured.',
+    'BGP::Link_state::Tlv::Sid_tlv' =>
+      'an abstract base, as Opaque32 is: it holds the Flags, the one ' \
+      'octet, Reserved and the SID of RFC 9085 and RFC 9086, and has ' \
+      'no TYPE, HASH_KEY or SECOND. Adjacency_sid, Lan_adjacency_sid, ' \
+      'Prefix_sid and the three Peering SIDs are measured.',
+    'BGP::Link_state::Tlv::Peer_sid' =>
+      'an abstract base, as Sid_tlv is: RFC 9086 section 5 gives the ' \
+      'three Peering SIDs one format, so it has no TYPE or HASH_KEY. ' \
+      'Peer_node_sid, Peer_adj_sid and Peer_set_sid are measured.',
+    'BGP::Link_state::Tlv::Sr_range_tlv' =>
+      'an abstract base, as Opaque32 is: RFC 9085 sections 2.1.2 and ' \
+      '2.1.4 give one layout, so it has no TYPE, HASH_KEY or LABEL. ' \
+      'Sr_capabilities and Sr_local_block are measured.',
     'BGP::Link_state::Tlv::Opaque32' =>
       'an abstract base with no sensible instance. It supplies WIDTH ' \
       'and nothing else, so type and hash_key read a TYPE and a ' \
