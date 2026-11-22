@@ -103,6 +103,9 @@ or a file prints the usage, as it always did. Use `-c` in a script.
 | `show bgp PREFIX` | the same, for one prefix |
 | `show fib` | what the daemon installed in the kernel table, what it skipped and why, and what the kernel refused |
 | `show link-state` | BGP-LS routes: what this daemon sent as a Producer, and what it received, one line per route |
+| `show bgp ipv4 unreachability`, `show bgp ipv4 unreachability PREFIX` | Unreachability reports, SAFI 81: what this daemon reports, and what it received, one block per prefix with its reporters |
+| `show bgp ipv6 unreachability`, `show bgp ipv6 unreachability PREFIX` | the same, for IPv6 |
+| `show bgp l2vpn evpn unreachability`, `show bgp l2vpn evpn unreachability PREFIX` | the same, for EVPN route type 254, with RD and Ethernet Tag |
 | `show bgp vpnv4` | the VPN-IPv4 routes received, under one heading per Route Distinguisher, with labels and Route Targets |
 | `show bgp vpnv4 unicast`, `show bgp vpnv4 unicast all` | the same, in IOS's words |
 | `show bgp vpnv6` | the VPN-IPv6 routes (RFC 4659), the same way; a next hop over IPv4 shows as `::ffff:` and the PE's address |
@@ -134,6 +137,9 @@ They answer the same:
 | `show ip bgp neighbors PEER received-routes`, `show ip bgp neighbors PEER advertised-routes` | the same |
 | `show ip bgp vpnv4`, `show ip bgp vpnv4 unicast`, `show ip bgp vpnv4 unicast all` | the same |
 | `show ip bgp vpnv6`, `show ip bgp vpnv6 unicast`, `show ip bgp vpnv6 unicast all` | the same |
+| `show ip bgp ipv4 unreachability`, `show ip bgp ipv4 unreachability PREFIX` | the same |
+| `show ip bgp ipv6 unreachability`, `show ip bgp ipv6 unreachability PREFIX` | the same |
+| `show ip bgp l2vpn evpn unreachability`, `show ip bgp l2vpn evpn unreachability PREFIX` | the same |
 | `clear ip bgp PEER`, `clear ip bgp PEER soft in` | `clear bgp`, and the same words after it |
 
 `--style junos` or `--style iosxr` prints `show bgp` in those styles.
@@ -158,6 +164,7 @@ one. `prefix` reads one prefix instead of a page.
 | `show.adj_out` | what went to one peer, and under `skipped` what did not and why | `peer` (required), `prefix`, `offset`, `limit` |
 | `show.fib` | what the daemon put in the kernel table, and what the kernel refused | `prefix`, `offset`, `limit` |
 | `show.link_state` | BGP-LS routes, one row per route: sent as a Producer (`peer` null), and received per peer | `offset`, `limit` |
+| `show.unreachability` | Unreachability reports, one row per prefix: `peer` (null for what this daemon reports), `family` (`ipv4`, `ipv6`, `evpn`), `prefix`, for EVPN `rd`, `ethernet_tag`, `route_targets`, then `reporters` (`identifier`, `as`, `reason`, `reason_name`, `timestamp`, `evi`), `as_path`, `reporter_as_not_in_path`, `since` | `family`, `prefix`, `offset`, `limit` |
 | `show.vrfs` | the VRFs, one row each: `name`, `table`, `rd`, `import`, `export`, `device`, `error`, `routes`, `installed` | `offset`, `limit` |
 | `show.vrf` | each VRF's imported routes: `vrf`, `prefix`, `rd`, `peer`, `next_hop`, `vpn_labels`, `transport`, `transport_labels`, `gateway`, `dev`, `candidates`, `installed`, `error` | `vrf`, `offset`, `limit` |
 | `show.vpn` | VPN-IPv4 routes received, one row per route: `rd`, `prefix`, `path_id`, `peer`, `next_hop`, `labels`, `route_targets`, `as_path`, `origin`, `local_pref`, `med`, `best`, `reason`, `since`; the routes this PE sends have `peer` null, `reason` `local` and a `vrf` | `offset`, `limit` |
@@ -208,6 +215,8 @@ Both read one page. Add `'{"limit":5000}'` after the method name for more.
 | `peer.replay` | sends octets as given, in hex | `peer`, `hex` |
 | `peer.resend` | sends the daemon's own answer for every prefix sent by hand | `peer` |
 | `link_state.unreachable` | sets the BGP-LS Producer's `unreachable` to `keep` or `withdraw`, as a commit of that one key | `unreachable` |
+| `unreach.report` | reports one prefix unreachable, SAFI 81 or with `evpn` route type 254, as a commit of the `unreachability` block; a timestamp left out is now | `prefix`, `reason` (a name such as `rpki_invalid`, or a number), `timestamp`, `evpn` (`rd`, `route_targets`, `ethernet_tag`, `evi`) |
+| `unreach.clear` | withdraws one report, as a commit | `prefix`, `evpn` (`rd`, `ethernet_tag`) |
 
 ```
 cli route.originate '{"prefixes":["10.255.0.0/24"],"med":50}'
@@ -215,6 +224,8 @@ cli route.withdraw '{"prefixes":["10.255.0.0/24"]}'
 cli peer.refresh '{"peer":"10.100.14.1"}'
 cli peer.fault '{"peer":"10.100.14.1","case":"origin_value","prefixes":["10.255.1.0/24"]}'
 cli link_state.unreachable '{"unreachable":"keep"}'
+cli unreach.report '{"prefix":"192.0.2.0/24","reason":"rpki_invalid"}'
+cli unreach.clear '{"prefix":"192.0.2.0/24"}'
 ```
 
 A send by hand is not written into the Adj-RIB-Out, since after it the

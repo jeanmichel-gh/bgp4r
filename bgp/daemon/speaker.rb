@@ -68,6 +68,7 @@ require 'bgp/daemon/community_keys'
 require 'bgp/daemon/hand'
 require 'bgp/daemon/link_state_table'
 require 'bgp/daemon/link_state_producer'
+require 'bgp/daemon/unreachability'
 require 'bgp/daemon/vrf_sync'
 require 'bgp/daemon/vpn_exporter'
 require 'bgp/daemon/vrf_ce_exporter'
@@ -649,6 +650,9 @@ module BGP
             # BGP-LS goes in a table of its own, outside the RIB. See
             # bgp/daemon/link_state_table.rb.
             ls_feed = @speaker.link_state.attach(n)
+            # Unreachability reports too, outside the RIB:
+            # bgp/daemon/unreachability.rb.
+            un_feed = @speaker.unreach.attach(n)
             # VPN-IPv4 too, in a table of its own: bgp/rib/vpn_table.rb.
             vpn_feed = @speaker.vpn.attach(n)
           end
@@ -679,6 +683,7 @@ module BGP
             # runs.
             @speaker.rib&.detach(n) unless vrf
             @speaker.link_state.detach(n, ls_feed) if ls_feed
+            @speaker.unreach.detach(n, un_feed) if un_feed
             @speaker.vpn.detach(n, vpn_feed) if vpn_feed
             @speaker.ce_table.detach(ce_feed) if ce_feed
             n.close
@@ -768,6 +773,11 @@ module BGP
       # bgp/daemon/link_state_producer.rb.
       attr_reader :link_state, :link_state_producer
 
+      # The Unreachability reports this speaker received, per peer, and
+      # the ones it makes from its `unreachability:` block. See
+      # bgp/daemon/unreachability.rb.
+      attr_reader :unreach, :unreach_originator
+
       # The VPN-IPv4 routes received, AFI 1 / SAFI 128, outside the RIB:
       # docs/design/l3vpn-pe.md, and bgp/rib/vpn_table.rb.
       attr_reader :vpn
@@ -851,6 +861,13 @@ module BGP
                        :logger => @logger)
         check_bfd
         @link_state = LinkStateTable.new
+        unreach_log = ->(level, msg) { log(level, msg) }
+        @unreach = UnreachTable.new(events: @events, logger: unreach_log)
+        @unreach_originator = UnreachOriginator.new(self, logger: unreach_log)
+        # Read now, so a bad entry stops bgp4rd at start as any bad key
+        # does, rather than at the first session.
+        @unreach_originator.refresh(config['unreachability'])
+        on_established { |p| @unreach_originator.session_up(p) }
         @vpn = BGP::Rib::VpnTable.new(local_as: @my_as, router_id: @router_id,
                                       cluster_id: decision_options[:cluster_id])
         build_l3vpn(config['vrfs'], config['l3vpn'])
@@ -1297,6 +1314,15 @@ module BGP
 
       # `show.link_state`: the routes this speaker sent as a Producer,
       # with peer nil, then the ones it received.
+      # `show.unreachability`: the reports this speaker makes, with `peer`
+      # null, then the ones it received, per peer, sorted by family,
+      # prefix and peer.
+      def unreachability_rows
+        rows = @unreach_originator.rows + @unreach.rows
+        order = %w[ipv4 ipv6 evpn]
+        rows.sort_by { |r| [order.index(r['family']).to_i, r['rd'].to_s, r['prefix'].to_s, r['peer'].to_s] }
+      end
+
       def link_state_rows
         (@link_state_producer ? @link_state_producer.rows : []) + @link_state.rows
       end
