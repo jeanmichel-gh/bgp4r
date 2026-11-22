@@ -92,10 +92,10 @@ below are theirs.
 
 Checked by hand and with a short script against the drafts' own
 examples, on draft-tantsura-idr-unreachability-safi-06 and
-draft-tantsura-bess-evpn-unreachability-02. Kept here for later, to
-send to the authors or to check against the next revisions (the
-owner's decision, 2026-11-22). When a new revision comes out, check
-each point again and note here what it changed.
+draft-tantsura-bess-evpn-unreachability-02. **Kept here for later
+use, and not sent to anyone** (the owner's decision, 2026-11-22). When
+a new revision comes out, check each point again and note here what it
+changed.
 
 1. **SAFI, sections 5.1 and 5.2 contradict.** 5.1's minimum NLRI Length
    in MP_REACH includes "at least 11 octets for one Reporter TLV", and
@@ -415,7 +415,7 @@ The owner approved the spec as written. The recommendations stand:
    exception is fine. Pull request 5 waits for an FRR release with SAFI
    81. Until then the faults stay out of `Fault::CATALOG`.
 3. The TBD2 capability is neither sent nor read until IANA assigns it.
-4. The review notes stay in this document for later.
+4. The review notes stay in this document for later. They are not sent.
 5. An NLRI with no reporter is treat-as-withdraw, as SAFI 5.2 says.
 
 The questions as they were asked:
