@@ -416,6 +416,22 @@ class TestBgpNeighbor < Test::Unit::TestCase
     n.close if n
   end
 
+  # A writer thread that died of an exception must not take stop with it:
+  # Thread#join raises the thread's exception in the joiner. Before the
+  # fix, an EPIPE from the writer came out of drain_output, so stop never
+  # closed the socket, never killed the keepalive thread and never set
+  # Idle, and the event thread that called it died too.
+  def test_a_writer_that_died_does_not_stop_stop
+    dead = Thread.new { Thread.current.report_on_exception = false ; raise Errno::EPIPE }
+    dead.join rescue nil
+    out = Struct.new(:thread) { def close ; end }.new(dead)
+    n = Neighbor.new(:my_as=> 100, :id=> '1.1.1.1')
+    n.instance_variable_set(:@out, out)
+    assert_nothing_raised { n.drain_output }
+  ensure
+    n.close if n
+  end
+
   # A session being built and a session being torn down are the same
   # object's state, so they have to exclude each other. `stop` ends with
   # `clean`, which kills both IO threads, and then `new_state :Idle`; a
