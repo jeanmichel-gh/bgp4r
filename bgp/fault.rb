@@ -99,8 +99,10 @@ module BGP
     ].freeze
 
     # The Unreachability Information cases of
-    # draft-tantsura-idr-unreachability-safi-06 section 5, in CATALOG's
-    # shape, the section where CATALOG has its RFC section.
+    # draft-tantsura-idr-unreachability-safi-06 section 5 and
+    # draft-tantsura-bess-evpn-unreachability-02 section 4.11, in
+    # CATALOG's shape, with the draft and section where CATALOG has its
+    # RFC section.
     #
     # **A list of their own, for now.** lab/fault_matrix.rb sends every
     # CATALOG case to FRR and GoBGP and checks each against a measured
@@ -109,19 +111,35 @@ module BGP
     # (docs/design/unreachability.md, pull request 5). `build` and `wire`
     # take their names already.
     UNREACHABILITY = [
-      [:unreach_nlri_length, 'NLRI Length past the attribute',  :session_reset, 9, '5.1',
+      [:unreach_nlri_length, 'NLRI Length past the attribute',  :session_reset, 9, 'draft-tantsura-idr-unreachability-safi-06 section 5.1',
         -> { Fault.unreach_reach(Fault.unreach_nlri.tap { |u| u.declared_len = 200 }) }],
-      [:unreach_prefix_length, 'IPv4 Prefix Length 33',         :session_reset, 9, '5.1',
+      [:unreach_prefix_length, 'IPv4 Prefix Length 33',         :session_reset, 9, 'draft-tantsura-idr-unreachability-safi-06 section 5.1',
         -> { Fault.unreach_reach(Unreachability.new(:afi => 1, :mlen => 33, :value => 'c000020000',
                                    :reporters => [Fault.unreach_reporter])) }],
-      [:unreach_no_reporter, 'announcement with no Reporter TLV', :treat_as_withdraw, 9, '5.2',
+      [:unreach_no_reporter, 'announcement with no Reporter TLV', :treat_as_withdraw, 9, 'draft-tantsura-idr-unreachability-safi-06 section 5.2',
         -> { Fault.unreach_reach(Unreachability.new('192.0.2.0/24')) }],
-      [:unreach_reporter_in_withdrawal, 'withdrawal with a Reporter TLV', :treat_as_withdraw, 9, '5.2',
+      [:unreach_reporter_in_withdrawal, 'withdrawal with a Reporter TLV', :treat_as_withdraw, 9, 'draft-tantsura-idr-unreachability-safi-06 section 5.2',
         -> { Mp_unreach.new(:afi => 1, :safi => IANA::SAFI::UNREACHABILITY_INFORMATION,
                             :nlris => [Fault.unreach_nlri]) }],
-      [:unreach_reporter_short, 'the one Reporter TLV is 7 octets', :treat_as_withdraw, 9, '5.3',
+      [:unreach_reporter_short, 'the one Reporter TLV is 7 octets', :treat_as_withdraw, 9, 'draft-tantsura-idr-unreachability-safi-06 section 5.3',
         -> { Fault.unreach_reach(Unreachability.new('192.0.2.0/24',
                Unreachability::Tlv::Unknown.new(1, ['c633640100fde9'].pack('H*')))) }],
+      # draft-tantsura-bess-evpn-unreachability-02, route type 254
+      # (provisional), from its Appendix A Example 1.
+      [:evpn_unreach_address_family, 'EVPN Address Family 3', :session_reset, 9,
+        'draft-tantsura-bess-evpn-unreachability-02 section 4.11.1',
+        -> { Fault.evpn_unreach_reach(Evpn::Unknown.new(254,
+               Fault.evpn_unreach_route.encode.tap { |s| s.setbyte(22, 3) })) }],
+      [:evpn_unreach_label, 'EVPN MPLS Label not zero', :treat_as_withdraw, 9,
+        'draft-tantsura-bess-evpn-unreachability-02 section 4.11.2',
+        -> { Fault.evpn_unreach_reach(Evpn::Ip_prefix_unreachability.new(
+               Fault.evpn_unreach_route.to_hash.tap { |h|
+                 h[:ip_prefix_unreachability][:mpls_label] = 16 })) }],
+      [:evpn_unreach_no_reporter, 'EVPN announcement with no Reporter TLV', :treat_as_withdraw, 9,
+        'draft-tantsura-bess-evpn-unreachability-02 section 4.11.2',
+        -> { Fault.evpn_unreach_reach(Evpn::Ip_prefix_unreachability.new(
+               Fault.evpn_unreach_route.to_hash.tap { |h|
+                 h[:ip_prefix_unreachability].delete(:reporters) })) }],
     ].freeze
 
     class << self
@@ -131,7 +149,7 @@ module BGP
         UNREACHABILITY.collect { |name, desc, action, subcode, section, build|
           { :name => name, :description => desc, :action => action,
             :subcode => subcode,
-            :rfc => "draft-tantsura-idr-unreachability-safi-06 section #{section}",
+            :rfc => section,
             :build => build, :ibgp => false }
         }
       end
@@ -146,6 +164,22 @@ module BGP
       # Section 3.6.1's example NLRI.
       def unreach_nlri
         Unreachability.new('192.0.2.0/24', unreach_reporter)
+      end
+
+      # The EVPN draft's Appendix A Example 1: 192.0.2.0/24, RD
+      # 198.51.100.1:100, one reporter with reason 4.
+      def evpn_unreach_route
+        Evpn::Ip_prefix_unreachability.new(:rd => ['198.51.100.1', 100],
+          :ip_prefix => '192.0.2.0/24',
+          :reporters => [{ :reporter => { :identifier => '198.51.100.1', :as => 65001,
+                                          :reason => 4 } }])
+      end
+
+      # One EVPN route in an MP_REACH_NLRI, AFI 25 SAFI 70, with the
+      # 4-octet next hop of the EVPN draft's Example 4.
+      def evpn_unreach_reach(route)
+        Mp_reach.new(:afi => IANA::AFI::L2VPN, :safi => IANA::SAFI::EVPN,
+                     :nexthop => '198.51.100.1', :nlris => [Evpn.new(route)])
       end
 
       # One NLRI in an MP_REACH_NLRI with no next hop, as Appendix B.1.

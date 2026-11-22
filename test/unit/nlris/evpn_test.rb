@@ -144,7 +144,7 @@ class EvpnTest < Test::Unit::TestCase
   # `test/unit/evpn_doc_test.rb` is what keeps it honest: it discovers
   # the classes the library defines rather than listing them.
   def test_an_unimplemented_route_type_reads_back_whole
-    assert_equal((1..11).to_a, BGP::Evpn::ROUTES.keys.sort)
+    assert_equal((1..11).to_a + [254], BGP::Evpn::ROUTES.keys.sort)
     (1..11).each do |t|
       n = BGP::Evpn.new(wire('%02x02aabb' % t))
       assert_instance_of(BGP::Evpn::Unknown, n.route)

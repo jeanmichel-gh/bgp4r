@@ -584,6 +584,8 @@ module BGP
           ip_prefix_route_finding(type, body, reach)
         when ::BGP::Evpn::Selective_multicast.type
           selective_multicast_finding(type, body, reach)
+        when ::BGP::Evpn::Ip_prefix_unreachability.type
+          evpn_unreachability_finding(type, body, reach)
         end
       end
 
@@ -1110,25 +1112,117 @@ module BGP
           return [Finding.new(type, 9, TAW,
             "withdrawal of #{key} octets carries #{tlvs.size} more (#{draft} 5.2)")]
         end
-        unreachability_reporters_finding(type, tlvs, draft)
+        unreachability_reporters_finding(type, tlvs, draft, SAFI_SECTIONS,
+                                         SAFI_SUB_SIZES,
+                                         ::BGP::Unreachability::MAX_REPORTERS)
+      end
+
+      # The sub-TLV sizes each draft fixes: Reason Code 2, Timestamp 8,
+      # and for EVPN the EVI, 4.
+      SAFI_SUB_SIZES = { 1 => 2, 2 => 8 }.freeze
+      EVPN_SUB_SIZES = { 1 => 2, 2 => 8, 3 => 4 }.freeze
+
+      # Where each draft says what the Reporter walk checks: a TLV
+      # discarded, a duplicate reporter, no reporter, the limit, a
+      # sub-TLV discarded, a sub-TLV repeated or of the wrong size.
+      SAFI_SECTIONS = { :tlv => '5.3', :dup => '3.4', :none => '5.2',
+                        :limit => '4.8 and 5.3', :sub => '5.4', :subdup => '3.5' }.freeze
+      EVPN_SECTIONS = { :tlv => '4.11.3', :dup => '3.5', :none => '4.11.2',
+                        :limit => '4.4', :sub => '4.11.4', :subdup => '3.6' }.freeze
+
+      # draft-tantsura-bess-evpn-unreachability-02 section 4.11, the IP
+      # Prefix Unreachability route, route type 254 (provisional). The
+      # body is what follows the Route Type and Length; evpn_finding has
+      # checked that the Length fits the attribute.
+      #
+      # 4.11.1 resets the session on a body too short for its fixed
+      # fields, an Address Family other than 1 or 2, or an IP Prefix
+      # Length past the family. The draft gives no minimum in numbers;
+      # section 3.3's fields give 32 octets for IPv4 and 44 for IPv6
+      # (review note 5 in docs/design/unreachability.md).
+      #
+      # 4.11.2 is treat-as-withdraw for a non-zero ESI, GW IP Address
+      # Length, GW IP Address or MPLS Label, and for no Reporter TLV. The
+      # draft states both for any route; the no-reporter rule is applied
+      # to an announcement only, since section 4.5.2 sends a withdrawal
+      # without Reporter TLVs.
+      #
+      # The Reporter TLVs then go through the walk SAFI 81's use, with
+      # the EVI's size. There is no Reporter TLV limit here: the
+      # one-octet Length holds at most 20 (review note 3).
+      #
+      # Every finding is answered as a list's strongest, as
+      # unreachability_finding does.
+      def evpn_unreachability_finding(type, body, reach)
+        draft = 'draft-tantsura-bess-evpn-unreachability section'
+        found = evpn_unreachability_findings(type, body, reach, draft)
+        Attr.strongest(found) || found.first
+      end
+
+      def evpn_unreachability_findings(type, body, reach, draft)
+        klass = ::BGP::Evpn::Ip_prefix_unreachability
+        af_at = 8 + 10 + 4
+        if body.size <= af_at
+          return [Finding.new(type, 9, RESET,
+            "IP Prefix Unreachability route of #{body.size} octets, " \
+            "too few for its Address Family (#{draft} 4.11.1)")]
+        end
+        af = body.getbyte(af_at)
+        fixed = klass.fixed_size(af)
+        if fixed.nil?
+          return [Finding.new(type, 9, RESET,
+            "Address Family #{af}, must be 1 or 2 (#{draft} 4.11.1)")]
+        end
+        if body.size < fixed
+          return [Finding.new(type, 9, RESET,
+            "IP Prefix Unreachability route of #{body.size} octets, " \
+            "below the #{fixed} its fields need (#{draft} 4.11.1)")]
+        end
+        plen = body.getbyte(af_at + 1)
+        if plen > klass::MAX_MLEN[af]
+          return [Finding.new(type, 9, RESET,
+            "IP Prefix Length #{plen}, past #{klass::MAX_MLEN[af]} for Address " \
+            "Family #{af} (#{draft} 4.11.1)")]
+        end
+        gw_at = af_at + 2 + klass::WIDTHS[af]
+        gw_len = body.getbyte(gw_at)
+        if body.size < fixed + gw_len
+          return [Finding.new(type, 9, RESET,
+            "GW IP Address Length #{gw_len} runs past the route (#{draft} 4.11.1)")]
+        end
+        found = []
+        label_at = gw_at + 1 + gw_len
+        { 'ESI' => [8, 10], 'GW IP Address Length' => [gw_at, 1],
+          'GW IP Address' => [gw_at + 1, gw_len],
+          'MPLS Label' => [label_at, 3] }.each do |name, (at, n)|
+          next unless nonzero?(body, at, n)
+          found << Finding.new(type, 9, TAW, "non-zero #{name} (#{draft} 4.11.2)")
+        end
+        tlvs = body.byteslice(label_at + 3, body.size - label_at - 3)
+        return found if not reach and tlvs.empty?
+        if reach
+          found.concat unreachability_reporters_finding(type, tlvs, draft,
+                                                         EVPN_SECTIONS, EVPN_SUB_SIZES, nil)
+        end
+        found
       end
 
       # The Reporter TLVs of one announcement.
-      def unreachability_reporters_finding(type, tlvs, draft)
+      def unreachability_reporters_finding(type, tlvs, draft, secs, sizes, max)
         found, keys, good, malformed = [], {}, 0, 0
         fixed = ::BGP::Unreachability::Reporter::FIXED
         while tlvs.size > 0
           if tlvs.size < 3
             malformed += 1
             found << Finding.new(type, nil, nil,
-              "#{tlvs.size} octets after the last Reporter TLV, discarded (#{draft} 5.3)")
+              "#{tlvs.size} octets after the last Reporter TLV, discarded (#{draft} #{secs[:tlv]})")
             break
           end
           t, len = tlvs.unpack('Cn')
           if 3 + len > tlvs.size
             malformed += 1 if t == ::BGP::Unreachability::Reporter::TYPE
             found << Finding.new(type, nil, nil,
-              "TLV type #{t} Length #{len} runs past the NLRI, discarded (#{draft} 5.3)")
+              "TLV type #{t} Length #{len} runs past the NLRI, discarded (#{draft} #{secs[:tlv]})")
             break
           end
           value = tlvs.byteslice(3, len)
@@ -1137,58 +1231,57 @@ module BGP
           if len < fixed
             malformed += 1
             found << Finding.new(type, nil, nil,
-              "Reporter TLV Length #{len}, below #{fixed}, discarded (#{draft} 5.3)")
+              "Reporter TLV Length #{len}, below #{fixed}, discarded (#{draft} #{secs[:tlv]})")
             next
           end
           k = value.byteslice(0, fixed)
           if keys[k]
             found << Finding.new(type, nil, nil,
               "Reporter #{IPAddr.new_ntoh(k.byteslice(0, 4))} AS#{k.unpack1('@4N')} " \
-              "repeats, the first kept (#{draft} 3.4)")
+              "repeats, the first kept (#{draft} #{secs[:dup]})")
             next
           end
           keys[k] = true
           good += 1
           found.concat(unreachability_sub_tlv_finding(type,
-                         value.byteslice(fixed, len - fixed), draft))
+                         value.byteslice(fixed, len - fixed), draft, secs, sizes))
         end
         if good == 0
-          why = malformed > 0 ? "no well-formed Reporter TLV (#{draft} 5.3)" :
-                                "no Reporter TLV in an announcement (#{draft} 5.2)"
+          why = malformed > 0 ? "no well-formed Reporter TLV (#{draft} #{secs[:tlv]})" :
+                                "no Reporter TLV in an announcement (#{draft} #{secs[:none]})"
           return [Finding.new(type, 9, TAW, why)] + found
         end
-        if good > ::BGP::Unreachability::MAX_REPORTERS
+        if max and good > max
           found << Finding.new(type, nil, nil,
-            "#{good} Reporter TLVs, past #{::BGP::Unreachability::MAX_REPORTERS}, " \
-            "the excess discarded (#{draft} 4.8 and 5.3)")
+            "#{good} Reporter TLVs, past #{max}, the excess discarded (#{draft} #{secs[:limit]})")
         end
         found
       end
 
       # The sub-TLVs of one Reporter TLV, section 5.4. Each finding is a
       # sub-TLV discarded or ignored; none acts on the route.
-      def unreachability_sub_tlv_finding(type, subs, draft)
+      def unreachability_sub_tlv_finding(type, subs, draft, secs, sizes)
         found, seen = [], {}
         while subs.size > 0
           if subs.size < 3
             found << Finding.new(type, nil, nil,
-              "#{subs.size} octets after the last sub-TLV, discarded (#{draft} 5.4)")
+              "#{subs.size} octets after the last sub-TLV, discarded (#{draft} #{secs[:sub]})")
             break
           end
           t, len = subs.unpack('Cn')
           if 3 + len > subs.size
             found << Finding.new(type, nil, nil,
               "sub-TLV type #{t} Length #{len} runs past its Reporter TLV, " \
-              "discarded (#{draft} 5.4)")
+              "discarded (#{draft} #{secs[:sub]})")
             break
           end
-          want = { 1 => 2, 2 => 8 }[t]
+          want = sizes[t]
           if want and len != want
             found << Finding.new(type, nil, nil,
-              "sub-TLV type #{t} Length #{len}, must be #{want}, discarded (#{draft} 3.5)")
+              "sub-TLV type #{t} Length #{len}, must be #{want}, discarded (#{draft} #{secs[:subdup]})")
           elsif seen[t]
             found << Finding.new(type, nil, nil,
-              "sub-TLV type #{t} repeats, the first kept (#{draft} 3.5)")
+              "sub-TLV type #{t} repeats, the first kept (#{draft} #{secs[:subdup]})")
           end
           seen[t] = true
           subs = subs.byteslice(3 + len, subs.size - 3 - len)

@@ -78,9 +78,10 @@ class EvpnDocTest < Test::Unit::TestCase
 
   # RFC 9572 section 3 Table 1 and Table 2 give eleven between them, so
   # the table has a row per type and no more.
+  # And one for 254, the provisional IP Prefix Unreachability route.
   def test_the_table_has_a_row_for_each_of_the_eleven_route_types
-    assert_equal((1..11).to_a, table.keys.sort,
-                 "#{DOC} section 3 must have one row per route type, 1 to 11")
+    assert_equal((1..11).to_a + [254], table.keys.sort,
+                 "#{DOC} section 3 must have one row per route type, 1 to 11 and 254")
   end
 
   # The discovery guard. Both directions fail: a class in the library

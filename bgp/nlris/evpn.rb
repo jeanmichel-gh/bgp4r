@@ -24,6 +24,7 @@ require 'bgp/common'
 require 'bgp/iana'
 require 'bgp/nlris/rd'
 require 'bgp/nlris/evpn_route'
+require 'bgp/nlris/evpn_unreachability'
 
 module BGP
 
@@ -112,6 +113,9 @@ module BGP
       Per_region_i_pmsi.type    => Per_region_i_pmsi,
       S_pmsi.type               => S_pmsi,
       Leaf_a_d.type             => Leaf_a_d,
+      # draft-tantsura-bess-evpn-unreachability-02. 254 is provisional;
+      # see the class.
+      Ip_prefix_unreachability.type => Ip_prefix_unreachability,
     }.freeze
 
     # Hash key back to class, for the hash build path. Unknown is in
@@ -188,6 +192,14 @@ module BGP
 
     def encode
       body = @route ? @route.encode : +''
+      # RFC 7432 section 7's Length is one octet. A longer body cannot be
+      # framed, and pack('C') would write its low octet and say nothing.
+      # The IP Prefix Unreachability route reaches this with nine
+      # reporters (docs/design/unreachability.md, review note 3).
+      if length > MAX_LEN
+        raise ArgumentError, "an EVPN route of #{length} octets does not fit " \
+                             "the one-octet Length, at most #{MAX_LEN}"
+      end
       s = [type.to_i, length, body].pack('CCa*')
       s = [@path_id].pack('N') + s if extended?
       s
