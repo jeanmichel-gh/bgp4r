@@ -491,4 +491,137 @@ class BGP_Daemon_LinkStateProducer_Test < Test::Unit::TestCase
     assert_equal('000000010101', BGP::Daemon::LinkStateProducer.router_id('0000.0001.0101.00'))
     assert_equal('00000001010201', BGP::Daemon::LinkStateProducer.router_id('0000.0001.0102.01'))
   end
+
+  # --- SR, RFC 9085, from isisd's show.topology ----------------------------
+
+  # A real level-2 answer, isisd with isis #118, recorded on 2026-11-22
+  # from r1 of isis's isis4r-sr lab (routescope's ~/labs/isis/isis4r-sr):
+  # 14 nodes, each with an SRGB, an SRLB, Adj-SIDs and a Prefix-SID.
+  SR_TOPOLOGY = File.expand_path('../../fixtures/isisd/show_topology_sr_l2.json', __dir__)
+
+  def recorded
+    require 'json'
+    JSON.parse(File.read(SR_TOPOLOGY))
+  end
+
+  P = BGP::Daemon::LinkStateProducer
+  LST = BGP::Daemon::LinkStateTable
+
+  # Every SR value isisd gives reaches its row unchanged: the Producer
+  # encodes isisd's keys into RFC 9085's TLVs, and the row decodes them
+  # back into isisd's keys. So `sr`, `adj_sids` and `prefix_sid` go in
+  # and come out the same, for every node of the recording.
+  def test_every_sr_value_of_a_recorded_topology_comes_back_in_its_row
+    topo = recorded
+    sr = adj = pfx = 0
+    topo['nodes'].each do |node|
+      rows = P.node_routes(node, 2, 0).collect { |ls, a| [ls, LST.row(ls, a, nil, Time.now)] }
+      node_row = rows.find { |_, r| r['type'] == 'node' }[1]
+      assert_equal(node['sr'], node_row['sr'], node['hostname'])
+      sr += 1
+      node['neighbors'].each do |nb|
+        rid = P.router_id(nb['id'])
+        _, r = rows.find { |ls, x| x['type'] == 'link' && ls.nlri.remote_node_descriptors.encode.include?([rid].pack('H*')) }
+        assert_equal(nb['adj_sids'], r['adj_sids'], "#{node['hostname']} to #{nb['id']}")
+        adj += Array(nb['adj_sids']).size
+      end
+      node['prefixes'].select { |p| p['prefix_sid'] }.each do |p|
+        _, r = rows.find { |_, x| x['prefix'] == p['prefix'] }
+        assert_equal(p['prefix_sid'], r['prefix_sid'], p['prefix'])
+        pfx += 1
+      end
+    end
+    assert_equal([14, 34, 14], [sr, adj, pfx], 'not vacuous: the recording\'s counts')
+  end
+
+  # r1's Node NLRI attribute, octet by octet, from RFC 9085's figures:
+  # SR Capabilities 040a, length 12, flags 0x80 (I), Reserved 0, Range
+  # Size 8000 (001f40), SID/Label 0489 length 3, label 17000 (004268);
+  # SR Algorithm 040b, length 1, algorithm 0; SR Local Block 040c,
+  # length 12, flags 0, Range Size 1000 (0003e8), label 15000 (003a98).
+  def test_a_recorded_nodes_sr_tlvs_octet_by_octet
+    r1 = recorded['nodes'].find { |n| n['hostname'] == 'r1' }
+    _, attr = P.node_routes(r1, 2, 0).first
+    assert_equal([1024, 1026, 1027, 1034, 1035, 1036], attr.tlvs.collect(&:type),
+                 'ascending, as RFC 9552 section 5.1 asks of a sender')
+    hex = attr.tlvs.select { |t| t.type >= 1034 }.collect(&:to_shex).join
+    assert_equal('040a000c' + '8000' + '001f40' + '04890003004268' +
+                 '040b0001' + '00' +
+                 '040c000c' + '0000' + '0003e8' + '04890003003a98', hex)
+  end
+
+  # Each TLV goes only on the NLRI of the node that originated the IGP
+  # sub-TLV (RFC 9085 sections 2.1, 2.2, 2.3): r1's Adj-SIDs are on the
+  # links whose local node is r1, and r1's Prefix-SID on its own prefix.
+  def test_each_sr_tlv_goes_on_the_nlri_of_its_own_node
+    r1 = recorded['nodes'].find { |n| n['hostname'] == 'r1' }
+    P.node_routes(r1, 2, 0).each do |ls, a|
+      assert_equal('0000.0000.0002.00', LST.node_id(ls.nlri.local_node_descriptors))
+      case LST.type(ls.nlri)
+      when 'node'   then assert_equal(3, a.tlvs.count { |t| [1034, 1035, 1036].include?(t.type) })
+      when 'link'   then assert_equal(1, a.tlvs.count { |t| t.type == 1099 })
+      when 'prefix' then assert_equal(1, a.tlvs.count { |t| t.type == 1158 })
+      end
+    end
+  end
+
+  # A node with no SR gets no SR TLV, so a topology without SR sends the
+  # same octets as before.
+  def test_a_node_without_sr_gets_no_sr_tlv
+    sr_types = [1034, 1035, 1036, 1099, 1100, 1158]
+    fixture[1]['nodes'].each do |n|
+      P.node_routes(n, 1, 0).each do |_, a|
+        assert_equal([], a.tlvs.collect(&:type) & sr_types)
+      end
+    end
+  end
+
+  # The recording has point-to-point links only, so a LAN Adj-SID is
+  # built here in isisd's spelling: `neighbor`, `flags`, `label`
+  # (isis lib/isis/subtlv/extended_is_reachability.rb, LanAdjSid#to_hash).
+  # Toward a pseudonode, with an index form and a weight beside it.
+  def test_lan_adj_sids_go_on_the_link_toward_the_pseudonode
+    n = node(R1, 'r1', [['0000.0001.0101.01', 10]], [])
+    n['neighbors'][0]['lan_adj_sids'] = [{ 'neighbor' => '0000.0001.0102', 'flags' => %w[V L], 'label' => 15001 },
+                                         { 'neighbor' => '0000.0001.0103', 'flags' => [], 'weight' => 2, 'index' => 7 }]
+    ls, a = P.node_routes(n, 1, 0).find { |l, _| LST.type(l.nlri) == 'link' }
+    assert_equal([1095, 1100, 1100], a.tlvs.collect(&:type))
+    assert_equal('044c000d' + '30000000' + '000000010102' + '003a99', a.tlvs[1].to_shex)
+    assert_equal('044c000e' + '00020000' + '000000010103' + '00000007', a.tlvs[2].to_shex)
+    assert_equal([{ 'neighbor' => '0000.0001.0102', 'flags' => %w[V L], 'label' => 15001 },
+                  { 'neighbor' => '0000.0001.0103', 'weight' => 2, 'index' => 7 }],
+                 LST.row(ls, a, nil, Time.now)['lan_adj_sids'])
+  end
+
+  # An SR change in isisd is a new attribute for that one NLRI: sent
+  # again, alone, with the NLRIs and their withdrawal as they were.
+  def test_an_sr_change_sends_only_the_route_it_changed
+    started
+    change do |nodes|
+      find('r2', nodes)['prefixes'][0]['prefix_sid'] = { 'flags' => ['N'], 'algorithm' => 0, 'index' => 2 }
+    end
+    assert_equal({ 'prefix' => 1 }, kinds(reached))
+    assert_equal([], unreached)
+    ls = reached.first
+    assert_equal({ 'flags' => ['N'], 'index' => 2, 'algorithm' => 0 },
+                 LST.row(ls, attribute_of(ls), nil, Time.now)['prefix_sid'])
+    change do |nodes|
+      find('r2', nodes)['prefixes'][0]['prefix_sid']['index'] = 20
+    end
+    assert_equal({ 'prefix' => 1 }, kinds(reached))
+    change do |nodes|
+      find('r2', nodes)['prefixes'][0].delete('prefix_sid')
+    end
+    assert_equal({ 'prefix' => 1 }, kinds(reached), 'and its removal is a new attribute too')
+    assert_equal([1155], attribute_of(reached.first).tlvs.collect(&:type))
+  end
+
+  # isisd giving a flag letter RFC 8667 does not name is a bad read, as
+  # any other malformed answer is: the Producer's thread logs it and
+  # tries again (`run` rescues ArgumentError).
+  def test_an_unknown_flag_letter_is_an_argument_error
+    n = node(R1, 'r1', [], ['10.200.0.1/32'])
+    n['prefixes'][0]['prefix_sid'] = { 'flags' => ['Q'], 'algorithm' => 0, 'index' => 1 }
+    assert_raise(ArgumentError) { P.node_routes(n, 1, 0) }
+  end
 end

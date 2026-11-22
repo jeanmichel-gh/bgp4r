@@ -1904,7 +1904,7 @@ CI: `.github/workflows/test.yml` runs both suites on every push to master and ev
 
 `.github/workflows/capture.yml` is the one workflow that deploys a containerlab lab: it builds the `lab-node`, BIRD and GoBGP images, deploys `routescope/labs/bgp4r-lab`, `routescope/labs/rr-lab` and `routescope/labs/fwd-lab` in a job each, and runs each one's `capture.sh`, on demand and on a push that changes `routescope/labs/` or the Dockerfile. Its log is what routescope's BGP fixtures are cut from. **rr-lab's `capture.sh` also checks**: it prints one `CHECK ok` or `CHECK FAIL` line per RFC 4456 fact and fails the job when one fails, because the scenario language has no key for ORIGINATOR_ID or CLUSTER_LIST. **fwd-lab's does the same for forwarding**, because the scenario language has no ping step.
 
-Baseline on 2026-11-22: 4139 tests, 38508 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%, measured on 2026-11-06 and not since.
+Baseline on 2026-11-22: 4152 tests, 38649 assertions, all passing. The assertion count fell from 33865 with phase 2 of `bgp/gen` and nothing was weakened: `test/unit/gen_test.rb` asserts once per generated feed now, with every faulty message named in the failure, where it asserted once per message. Line coverage of `bgp/` from the unit suite: 96.4%, measured on 2026-11-06 and not since.
 
 **That coverage figure is 98.5% for the library and the rest is the two
 programs, not a gap anywhere else.** Measured the same run: with
@@ -8551,7 +8551,7 @@ it.
    and `forwarding` in the row. The gate is routescope's `bgp-ls-ospf`
    lab against the real ospfd.
 
-### SR in BGP-LS, RFC 9085 and RFC 9086. Step 2 Done
+### SR in BGP-LS, RFC 9085 and RFC 9086. Steps 2 and 3 Done
 
 routescope's `docs/design/bgp-ls-sr.md` (P4, approved 2026-11-22) has
 five steps across three repositories. Status here is bgp4r's part.
@@ -8567,8 +8567,13 @@ five steps across three repositories. Status here is bgp4r's part.
    2026-11-22, since section 8.2.2 and RFC 9085 section 4 put them with
    the consumer. Interop against GoBGP 4.10.0 in a new CI group,
    `gobgp4`.
-3. **The Producer and `show.link_state`. Not started.** The SR TLVs from
-   isisd's new keys, and `sr`, `adj_sids` and `prefix_sid` in the row.
+3. **The Producer and `show.link_state`. Done** in the pull request
+   that wrote this (`docs/bgp-ls.md` section 12). RFC 9085's TLVs from
+   isisd's `sr`, `adj_sids`, `lan_adj_sids` and `prefix_sid` (isis
+   #118), each on its own node's NLRI, none without SR. The row gains
+   `sr`, `adj_sids`, `lan_adj_sids`, `prefix_sid` and `peer_sids`, by
+   isisd's spelling. Tested from a `show.topology` recorded from
+   isis4r-sr, and Producer to collector on loopback.
 4. GoBGP lab checks of the Producer's routes. Not started.
 5. routescope: the columns, the comparison and the bgp-ls-sr lab.
 

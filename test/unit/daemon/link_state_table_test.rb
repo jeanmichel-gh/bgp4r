@@ -242,4 +242,87 @@ class BGP_Daemon_LinkStateTable_Test < Test::Unit::TestCase
                                                       { :ip_reachability => '10.9.0.0/16' }))
     assert_equal(9, LST.route_type(n.nlri))
   end
+
+  # --- SR, RFC 9085 and RFC 9086 -----------------------------------------
+
+  # The keys are isisd's (isis docs/isisd.md, show.topology), so a
+  # collector's row and isisd's node read the same. The flag letters are
+  # RFC 8667's: I is 0x80 (section 3.1), V and L of an Adj-SID 0x20 and
+  # 0x10 (2.2.1), N of a Prefix-SID 0x40 (2.1).
+  def test_the_sr_keys_of_each_type
+    @t.announce('10.2.0.1', node, attr(T::Sr_capabilities.new(0x80, [[8000, 17000]]),
+                                       T::Sr_algorithm.new(0),
+                                       T::Sr_local_block.new(0, [[1000, 15000]])))
+    @t.announce('10.2.0.1', link, attr(T::Igp_metric.new(10), T::Adjacency_sid.new(0x30, 0, 15000),
+                                       T::Lan_adjacency_sid.new(0x30, 0, '0000.0001.0103', 15001)))
+    @t.announce('10.2.0.1', prefix, attr(T::Prefix_metric.new(0), T::Prefix_sid.new(0x40, 0, 2, 4)))
+    rows = @t.rows
+    assert_equal({ 'srgb' => [{ 'start' => 17000, 'size' => 8000 }], 'flags' => ['I'],
+                   'srlb' => [{ 'start' => 15000, 'size' => 1000 }], 'algorithms' => [0] },
+                 rows[0]['sr'])
+    assert_equal([{ 'flags' => %w[V L], 'label' => 15000 }], rows[1]['adj_sids'])
+    assert_equal([{ 'neighbor' => '0000.0001.0103', 'flags' => %w[V L], 'label' => 15001 }],
+                 rows[1]['lan_adj_sids'])
+    assert_equal({ 'flags' => ['N'], 'index' => 2, 'algorithm' => 0 }, rows[2]['prefix_sid'])
+  end
+
+  # A row without SR TLVs has no SR key, as isisd's node has none: the
+  # row shape of a topology without SR is what it was.
+  def test_a_row_without_sr_has_no_sr_key
+    @t.announce('10.2.0.1', node, attr(T::Node_name.new('r1')))
+    @t.announce('10.2.0.1', link, attr(T::Igp_metric.new(10)))
+    @t.announce('10.2.0.1', prefix, nil)
+    @t.rows.each do |r|
+      assert_equal([], r.keys & %w[sr adj_sids lan_adj_sids prefix_sid peer_sids], r['type'])
+    end
+  end
+
+  # isisd's rules: `weight` when not 0, `reserved` for the flag bits no
+  # letter names, `label_high` for the 4 bits above a label's 20. Flags
+  # none set: no `flags` key. Every value from octets, so nothing is lost.
+  def test_a_sid_row_keeps_weight_unnamed_bits_and_label_high
+    t = T::Adjacency_sid.new(['3305' + '0000' + 'f03a98'].pack('H*').is_packed)
+    @t.announce('10.2.0.1', link, attr(t, T::Adjacency_sid.new(0, 0, 7, 4)))
+    assert_equal([{ 'flags' => %w[V L], 'reserved' => 0x03, 'weight' => 5,
+                    'label' => 15000, 'label_high' => 0xf },
+                  { 'index' => 7 }], @t.rows.first['adj_sids'])
+  end
+
+  # RFC 9085 says the Protocol-ID decides how to read the flags, so off
+  # IS-IS they stay the octet.
+  def test_off_is_is_the_flags_are_a_number
+    n = BGP::Link_state.new(:ipv4_prefix => ospf_head(ospf_local('0.0.0.0', O2), { :ip_reachability => '10.9.0.0/16' }))
+    @t.announce('10.2.0.1', n, attr(T::Prefix_sid.new(0x40, 0, 2, 4)))
+    assert_equal({ 'flags' => 0x40, 'index' => 2, 'algorithm' => 0 }, @t.rows.first['prefix_sid'])
+  end
+
+  # RFC 9086 section 5 on a Protocol-ID 7 link: `peer_sids`, with the
+  # type by GoBGP's client word and the flags `|V|L|B|P|` (Figure 3).
+  def test_a_bgp_link_row_has_its_peer_sids
+    n = BGP::Link_state.new(:link => { :protocol_id => 7, :identifier => 0,
+                                       :tlvs => [{ :local_node_descriptors => [{ :autonomous_system => 65002 },
+                                                                               { :bgp_router_id => '10.0.0.2' }] },
+                                                 { :remote_node_descriptors => [{ :autonomous_system => 65001 },
+                                                                                { :bgp_router_id => '10.0.0.1' }] }] })
+    @t.announce('10.2.0.1', n, attr(T::Peer_node_sid.new(0xc0, 1, 24000), T::Peer_adj_sid.new(0x30, 0, 24001),
+                                    T::Peer_set_sid.new(0x80, 3, 9, 4)))
+    assert_equal([{ 'type' => 'node', 'flags' => %w[V L], 'weight' => 1, 'label' => 24000 },
+                  { 'type' => 'adj', 'flags' => %w[B P], 'label' => 24001 },
+                  { 'type' => 'set', 'flags' => %w[V], 'weight' => 3, 'index' => 9 }],
+                 @t.rows.first['peer_sids'])
+  end
+
+  # The letters and the octet, both ways, for each RFC 8667 figure.
+  def test_flag_letters_sit_where_the_figures_put_them
+    { LST::SR_CAPABILITY_FLAGS => { 'I' => 0x80, 'V' => 0x40 },
+      LST::ADJ_SID_FLAGS => { 'F' => 0x80, 'B' => 0x40, 'V' => 0x20, 'L' => 0x10, 'S' => 0x08, 'P' => 0x04 },
+      LST::PREFIX_SID_FLAGS => { 'R' => 0x80, 'N' => 0x40, 'P' => 0x20, 'E' => 0x10, 'V' => 0x08, 'L' => 0x04 },
+      LST::PEER_SID_FLAGS => { 'V' => 0x80, 'L' => 0x40, 'B' => 0x20, 'P' => 0x10 } }.each do |names, bits|
+      bits.each do |letter, bit|
+        assert_equal(bit, LST.flag_octet([letter], names), letter)
+        assert_equal([letter], LST.flag_letters(bit, names), letter)
+      end
+    end
+    assert_raise(ArgumentError) { LST.flag_octet(['X'], LST::ADJ_SID_FLAGS) }
+  end
 end
