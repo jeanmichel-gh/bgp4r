@@ -1,6 +1,9 @@
 # Unreachability Information: SAFI 81 and EVPN route type 254
 
-Status: **approved by the owner, 2026-11-22.** Not built yet.
+Status: **approved by the owner, 2026-11-22. Built**, pull requests 1
+to 4 (bgp4r #369, #370, #371, #373) and the guide, `docs/unreachability.md`.
+Pull request 5, the lab against FRR, is not built, by the owner's
+decision: no router in a release has the family.
 
 ## The problem
 
@@ -281,7 +284,9 @@ sends them.
    block, `unreach.*`, `show.unreachability`, the shell and events.
 4. `bgp/gen` and `bgp4r-sim`.
 5. The lab against FRR master, with its gate; `docs/unreachability.md`;
-   the README line.
+   the README line. **Not built** (the owner's answer to question 2): it
+   waits for an FRR release with SAFI 81. The guide went in on its own.
+   bgp4r's README has no list of families, so there is no line to add.
 
 Phase 2, propagation and aggregation, starts with its own spec.
 routescope's views are a spec in routescope.
@@ -405,7 +410,10 @@ Not built, and the design said otherwise (pull request 3):
 The owner approved the spec as written. The recommendations stand:
 
 1. EVPN type 254 is a constant, with a comment that it is provisional.
-2. FRR from master: still open. Decide before pull request 5.
+2. FRR from master: **no** (2026-11-22). No lab is built and no interop
+   test run against a router whose release lacks the feature; such an
+   exception is fine. Pull request 5 waits for an FRR release with SAFI
+   81. Until then the faults stay out of `Fault::CATALOG`.
 3. The TBD2 capability is neither sent nor read until IANA assigns it.
 4. The review notes stay in this document for later.
 5. An NLRI with no reporter is treat-as-withdraw, as SAFI 5.2 says.
