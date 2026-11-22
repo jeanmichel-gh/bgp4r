@@ -276,6 +276,57 @@ module BGP
       end
       register Igp_router_id
 
+      # Sub-TLV 516, RFC 9086 section 4.1: "BGP Router Identifier (BGP
+      # Router-ID): Type: 516, Length: 4 octets, Value: 4-octet unsigned
+      # non-zero integer representing the BGP Identifier as defined in
+      # [RFC6286]".
+      #
+      # It is printed as a dotted quad, as a BGP Identifier is, and takes
+      # either form. "Non-zero" binds the sender: zero builds and parses.
+      # Section 4.2 makes it mandatory with Protocol-ID 7, and section 7
+      # leaves that check to the consumer, as RFC 9552 section 8.2.2 does.
+      # GoBGP sends it on every route it originates (docs/bgp-ls.md,
+      # section 11).
+      class Bgp_router_id < Opaque32
+
+        TYPE = 516
+        HASH_KEY = :bgp_router_id
+        LABEL = 'BGP Router-ID'
+
+        def router_id
+          IPAddr.new(@value, Socket::AF_INET).to_s
+        end
+
+        def value_hash
+          router_id
+        end
+
+        def to_s
+          "#{self.class.label} #{router_id}"
+        end
+
+        private
+
+        def coerce(v)
+          return v.to_i if v.is_a?(Integer)
+          IPAddr.new(v.to_s).to_i
+        end
+
+      end
+      register Bgp_router_id
+
+      # Sub-TLV 517, RFC 9086 section 4.1: "Member-AS Number
+      # (Member-ASN): Type: 517, Length: 4 octets, Value: 4-octet unsigned
+      # non-zero integer representing the Member-AS Number [RFC5065]".
+      # IANA's name for it is "BGP Confederation Member" (section 6.2,
+      # Table 4).
+      class Bgp_confederation_member < Opaque32
+        TYPE = 517
+        HASH_KEY = :bgp_confederation_member
+        LABEL = 'Member-AS'
+      end
+      register Bgp_confederation_member
+
       # What TLV 256 and TLV 257 both are: a list of node descriptor
       # sub-TLVs and nothing else.
       #

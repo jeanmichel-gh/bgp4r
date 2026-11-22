@@ -22,6 +22,7 @@
 
 require 'bgp/path_attributes/attribute'
 require 'bgp/nlris/link_state_node_attribute'
+require 'bgp/nlris/link_state_sr'
 
 module BGP
 

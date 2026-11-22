@@ -990,6 +990,74 @@ class TestAttrCheck < Test::Unit::TestCase
                  reason(tail))
   end
 
+  # A BGP-LS Attribute holding the TLV octets given.
+  def ls_attr(tlvs)
+    '801d' + format('%02x', tlvs.size / 2) + tlvs
+  end
+
+  # The attribute's third bullet inside RFC 9085's TLV 1034 and 1036,
+  # whose ranges carry a SID/Label sub-TLV (sections 2.1.2 and 2.1.4).
+  # One test per finding of `link_state_range_finding`. Each is
+  # attribute discard.
+  #
+  # The Flags and Reserved octets: 1034 with one octet.
+  def test_an_sr_range_tlv_too_short_for_its_flags_and_reserved
+    hex = ls_attr('040a0001c0')
+    assert_equal [[9, DISCARD]], check(hex)
+    assert_match(/TLV type 1034 has 1 octets, too few for its Flags and Reserved/,
+                 reason(hex))
+    assert_match(/RFC 9085 section 2\.1\.2/, reason(hex))
+  end
+
+  # Two octets after Flags and Reserved: no room for a Range Size and a
+  # sub-TLV's Type and Length. 1036, so its own section is cited.
+  def test_an_sr_range_tlv_remainder_too_short_for_a_range
+    hex = ls_attr('040c0004c0000001')
+    assert_equal [[9, DISCARD]], check(hex)
+    assert_match(/2 octets left in TLV type 1036, too few for a Range Size/,
+                 reason(hex))
+    assert_match(/RFC 9085 section 2\.1\.4/, reason(hex))
+  end
+
+  # The 1161 sub-TLV says 9 octets where 3 arrived.
+  def test_an_sr_range_sub_tlv_that_runs_past_its_tlv
+    hex = ls_attr('040a000c' + 'c000' + '001f40' + '04890009003e80')
+    assert_equal [[9, DISCARD]], check(hex)
+    assert_match(/sub-TLV type 1161 of 9 octets runs past TLV type 1034, 3 left/,
+                 reason(hex))
+    # The second range is the one that overruns: the walk goes on.
+    two = ls_attr('040c0016' + '0000' + '0003e8' + '04890003003a98' +
+                  '000064' + '04890004003c8c')
+    assert_match(/sub-TLV type 1161 of 4 octets runs past TLV type 1036, 3 left/,
+                 reason(two))
+  end
+
+  # The SR TLVs with semantic faults, which RFC 9552 section 8.2.2 and
+  # RFC 9085 section 4 leave to the consumer: no finding. Reserved set,
+  # an index where a label is asked for, an Adjacency SID of 9 octets, a
+  # PeerNode SID with V clear, 1034 below its 12-octet minimum, and a
+  # sub-TLV that is not 1161.
+  def test_sr_tlvs_with_semantic_faults_have_no_findings
+    ['040a000c' + 'c0ff' + '001f40' + '04890003003e80',
+     '040a000d' + '0000' + '001f40' + '0489000400003e80',
+     '044b0009' + '300000000000000001',
+     '044d0007' + '0f000000' + '005dc0',
+     '040a00020000',
+     '040a000c' + '0000' + '000001' + 'fde80003010203',
+     '044c000a' + '00' * 10,
+    ].each { |tlvs| assert_equal [], check(ls_attr(tlvs)), tlvs }
+  end
+
+  # The walk is the attribute's: in an NLRI, 1034 is an unknown TLV and
+  # its value is opaque.
+  def test_the_sr_range_walk_is_the_attributes_only
+    bad = '040a0004c0000001'
+    nlri = self.class.nlri(LS::Tlv::Local_node_descriptors.new(self.class.as(65000)))
+    body = nlri[8..] + bad
+    hex = ls_reach('0001' + format('%04x', body.size / 2) + body)
+    assert_equal [], check(hex)
+  end
+
   # The second attribute bullet, "the syntactic correctness of the
   # Attributes (including the BGP-LS Attribute) have been verified as
   # per [RFC7606]", which for this family is one FLAGS entry: section

@@ -647,9 +647,10 @@ class LinkStateSessionTest < Test::Unit::TestCase
   # socket: "Unknown and unsupported types MUST be preserved and
   # propagated within both the NLRI and the BGP-LS Attribute", and their
   # presence "MUST NOT result in the NLRI or the BGP-LS Attribute being
-  # considered malformed". 1101 is the Adjacency SID of RFC 9085, which
-  # is what GoBGP really sends in this attribute and which no part of
-  # this plan implements, so the example cannot expire.
+  # considered malformed". This was 1101 until RFC 9086's PeerNode SID
+  # got a class (docs/bgp-ls.md section 13), so the example expired. It
+  # is 255 now: Table 17 of RFC 9552 reserves 0 to 255, "not to be
+  # allocated", so it cannot expire again.
   def test_an_unknown_tlv_inside_the_attribute_crosses_a_session
     session
     sent = BGP::Update.new(
@@ -663,7 +664,7 @@ class LinkStateSessionTest < Test::Unit::TestCase
                                                   :tlvs => [local] } }]),
         BGP::Link_state_attribute.new(
           BGP::Link_state::Tlv::Node_flag_bits.new(:overload),
-          BGP::Link_state::Tlv::Unknown.new(1101,
+          BGP::Link_state::Tlv::Unknown.new(255,
                                             ['0100000003e8'].pack('H*')))))
     got = crosses(sent)
     a = got.path_attribute.find(BGP::Link_state_attribute)
@@ -771,6 +772,127 @@ class LinkStateSessionTest < Test::Unit::TestCase
     assert_instance_of(BGP::Link_state, nlri)
     assert_equal(3, nlri.type)
     assert_instance_of(BGP::Link_state::Ipv4_prefix, nlri.nlri)
+  end
+
+  # --- RFC 9085 and RFC 9086, docs/bgp-ls.md section 13 ----------------
+
+  # Sends one NLRI with the given attribute TLVs and returns the
+  # attribute the server read.
+  def sr_crosses(nlri, tlvs, errors = 0)
+    sent = BGP::Update.new(
+      BGP::Path_attribute.new(
+        BGP::Origin.new(0),
+        BGP::As_path.new(CLIENT_AS),
+        BGP::Mp_reach.new(:safi => SAFI, :nexthop => ['10.0.0.1'],
+                          :nlris => [nlri]),
+        BGP::Link_state_attribute.new(*tlvs)))
+    got = crosses(sent, errors)
+    a = got.path_attribute.find(BGP::Link_state_attribute)
+    assert_not_nil(a, 'a Link_state_attribute, not an Attr::Unknown')
+    [a, got]
+  end
+
+  # RFC 9085 section 2.1: the node's SRGB, algorithms and SRLB, beside
+  # its Node NLRI. Each TLV reads back as its class.
+  def test_the_sr_node_attribute_tlvs_cross_a_session
+    session
+    t = BGP::Link_state::Tlv
+    a, = sr_crosses({ :node => { :protocol_id => 2, :identifier => 0,
+                                 :tlvs => [local] } },
+                    [t::Sr_capabilities.new(0xc0, [[8000, 16000]]),
+                     t::Sr_algorithm.new(0, 1),
+                     t::Sr_local_block.new(0, [[1000, 15000], [100, 15500]])])
+    assert_equal([t::Sr_capabilities, t::Sr_algorithm, t::Sr_local_block],
+                 a.tlvs.collect(&:class))
+    assert_equal([[8000, 16000]],
+                 a.tlv(1034).ranges.collect { |n, sub| [n, sub.label] })
+    assert_equal([0, 1], a.tlv(1035).values)
+    assert_equal([1000, 100], a.tlv(1036).ranges.collect(&:first))
+  end
+
+  # RFC 9085 section 2.2: an Adjacency SID and a LAN Adjacency SID
+  # beside a Link NLRI, one as a label and one as an index.
+  def test_the_sr_link_attribute_tlvs_cross_a_session
+    session
+    t = BGP::Link_state::Tlv
+    a, = sr_crosses({ :link => { :protocol_id => 2, :identifier => 0,
+                                 :tlvs => [local] } },
+                    [t::Adjacency_sid.new(0x30, 0, 24001),
+                     t::Lan_adjacency_sid.new(0x30, 0, '0000.0000.0002', 7, 4)])
+    assert_equal(24001, a.tlv(1099).label)
+    assert_equal('0000.0000.0002', a.tlv(1100).neighbor)
+    assert_equal(7, a.tlv(1100).index)
+  end
+
+  # RFC 9085 section 2.3.1, beside a Prefix NLRI.
+  def test_a_prefix_sid_crosses_a_session
+    session
+    a, = sr_crosses({ :ipv4_prefix => { :protocol_id => 2, :identifier => 0,
+                                        :tlvs => [local] } },
+                    [BGP::Link_state::Tlv::Prefix_sid.new(0x40, 0, 5, 4)])
+    assert_equal([0x40, 0, 5],
+                 [a.tlv(1158).flags, a.tlv(1158).algorithm, a.tlv(1158).index])
+  end
+
+  # RFC 9086: what GoBGP originates. Protocol-ID 7, node descriptors
+  # with 512 and 516 (section 4.2), and the three Peering SIDs on the
+  # Link NLRI (section 5).
+  def test_an_egress_peer_engineering_link_crosses_a_session
+    session
+    t = BGP::Link_state::Tlv
+    nlri = { :link => { :protocol_id => 7, :identifier => 0,
+                        :tlvs => [{ :local_node_descriptors =>
+                                    [{ :autonomous_system => 65000 },
+                                     { :bgp_router_id => '192.0.2.1' }] },
+                                  { :remote_node_descriptors =>
+                                    [{ :autonomous_system => 65001 },
+                                     { :bgp_router_id => '192.0.2.2' },
+                                     { :bgp_confederation_member => 65101 }] }] } }
+    a, got = sr_crosses(nlri, [t::Peer_node_sid.new(0xc0, 0, 24000),
+                               t::Peer_adj_sid.new(0xc0, 0, 24001),
+                               t::Peer_set_sid.new(0xc0, 0, 24002)])
+    assert_equal([24000, 24001, 24002], a.tlvs.collect(&:label))
+    assert(a.tlv(1101).value? && a.tlv(1101).local?)
+    link = mpr(got).nlris.first.nlri
+    remote = link.tlvs.find { |x| x.is_a?(t::Remote_node_descriptors) }
+    assert_equal([t::Autonomous_system, t::Bgp_router_id,
+                  t::Bgp_confederation_member],
+                 remote.sub_tlvs.collect(&:class))
+    assert_equal('192.0.2.2', remote.sub_tlvs[1].router_id)
+  end
+
+  # Negative: semantic faults cross with no error, as RFC 9552 section
+  # 8.2.2 and RFC 9085 section 4 ask. Reserved set, an index in an SRGB,
+  # and an Adjacency SID of 9 octets, which is kept as an Unknown.
+  def test_sr_tlvs_with_semantic_faults_cross_with_no_error
+    session
+    t = BGP::Link_state::Tlv
+    a, = sr_crosses({ :link => { :protocol_id => 2, :identifier => 0,
+                                 :tlvs => [local] } },
+                    [t::Sr_capabilities.new(:flags => 0, :reserved => 0xff,
+                       :ranges => [{ :size => 8000,
+                                     :sid_label => { :index => 16000 } }]),
+                     t::Adjacency_sid.new(:flags => 0x30, :weight => 0,
+                                          :reserved => 0xffff, :label => 24001),
+                     t::Unknown.new(1099, ['300000000000000001'].pack('H*'))])
+    assert(a.tlv(1034).reserved? && !a.tlv(1034).labels?)
+    assert(a.tlv(1099).reserved?)
+    assert_equal(t::Unknown, a.tlvs.last.class)
+  end
+
+  # Negative: a SID/Label sub-TLV whose Length runs past its 1034 is a
+  # syntactic error. It crosses byte for byte, and the server reports
+  # one finding, attribute discard.
+  def test_a_malformed_sr_capabilities_is_attribute_discard_across_a_session
+    session
+    bad = BGP::Link_state::Tlv::Sr_capabilities.new(
+      :flags => 0, :ranges => [{ :size => 8000, :length => 9,
+                                 :sid_label => { :label => 16000 } }])
+    _, got = sr_crosses({ :node => { :protocol_id => 2, :identifier => 0,
+                                     :tlvs => [local] } }, [bad], 1)
+    f = got.path_attribute.errors.first
+    assert_equal(:attribute_discard, f.action)
+    assert_match(/sub-TLV type 1161 of 9 octets runs past TLV type 1034/, f.reason)
   end
 
   # Not a test method: a helper, kept below every test and with no
