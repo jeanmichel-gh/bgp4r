@@ -22,6 +22,7 @@
 
 require 'bgp/daemon/config'
 require 'bgp/daemon/link_state_producer'
+require 'bgp/daemon/unreachability'
 require 'bgp/daemon/control'
 
 module BGP
@@ -54,7 +55,7 @@ module BGP
     #
     # | Effect | Keys | What a commit does |
     # |---|---|---|
-    # | live | `log_level`, `originate`, `mark`, `link_state unreachable`, a neighbor's `description` and `bfd` | applies it, and nothing on the wire stops |
+    # | live | `log_level`, `originate`, `mark`, `link_state unreachable`, `unreachability`, a neighbor's `description` and `bfd` | applies it, and nothing on the wire stops |
     # | bounce | a neighbor's `as`, `hold_time`, `capabilities`, `connect`, `port`, `retry` | ends that session and lets it come back |
     # | bounce all | `announce` | ends every session and lets them come back |
     # | restart | everything else | **refuses the commit**, naming the key |
@@ -380,6 +381,39 @@ module BGP
         end
       end
 
+      # `unreach.report`: one Unreachability report added or replaced,
+      # as one commit of the `unreachability` block, the way
+      # `link_state.unreachable` commits its key.
+      #
+      #   bgp4r-cli unreach.report '{"prefix":"192.0.2.0/24","reason":"rpki_invalid"}'
+      #   bgp4r-cli unreach.report '{"prefix":"192.0.2.0/24","evpn":{"rd":"10.0.0.1:1"}}'
+      #
+      # A timestamp left out is now, written into the configuration, so
+      # a rollback puts back the report as it was sent. Answers the
+      # report and how many were sent and withdrawn.
+      def unreach_report(params = {})
+        p = strings(params, %w[prefix reason timestamp evpn])
+        p['timestamp'] ||= Time.now.to_i
+        report = Unreach::Report.from_config(p)
+        unreach_commit("unreach.report #{report.prefix}") do |list|
+          list.reject { |h| Unreach::Report.from_config(h, 0).key == report.key } + [report.to_config]
+        end.merge(:report => report.to_config)
+      end
+
+      # `unreach.clear`: one report withdrawn, by prefix, and for EVPN by
+      # RD and Ethernet Tag as well.
+      #
+      #   bgp4r-cli unreach.clear '{"prefix":"192.0.2.0/24"}'
+      def unreach_clear(params = {})
+        p = strings(params, %w[prefix evpn])
+        key = Unreach::Report.from_config(p.merge('timestamp' => 0)).key
+        unreach_commit("unreach.clear #{p['prefix']}") do |list|
+          kept = list.reject { |h| Unreach::Report.from_config(h, 0).key == key }
+          raise ArgumentError, "no report of #{p['prefix']} to clear" if kept.size == list.size
+          kept
+        end
+      end
+
       # The running configuration, for a caller that wants the tree rather
       # than the text. A copy, so nothing outside can edit what the
       # speaker is running.
@@ -414,6 +448,26 @@ module BGP
 
       def log(level, message)
         @logger.call(level, "bgp4rd: #{message}") if @logger
+      end
+
+      # One commit of a new `unreachability` list, built from the running
+      # one, leaving the rest of the candidate alone.
+      def unreach_commit(comment)
+        @lock.synchronize do
+          target = Config.deep_copy(@running)
+          list = yield(Array(target['unreachability']))
+          if list.empty? then target.delete('unreachability') else target['unreachability'] = list end
+          plan = Plan.new(@speaker, @running, target)
+          raise ArgumentError, plan.errors.join('; ') unless plan.errors.empty?
+          unless plan.changes.empty?
+            plan.apply
+            record_tree(target, plan, comment)
+            if target['unreachability'] then @candidate['unreachability'] = Config.deep_copy(list)
+            else @candidate.delete('unreachability') end
+          end
+          announced, withdrawn = plan.unreachability_diff || [[], []]
+          { :announced => announced.size, :withdrawn => withdrawn.size }
+        end
       end
 
       # The parameters with String keys, refusing a name this does not
@@ -453,6 +507,10 @@ module BGP
         # has changed `link_state unreachable`; nil otherwise.
         attr_reader :link_state_diff
 
+        # [announced, withdrawn] reports, once `apply` has run with a
+        # change to `unreachability`; nil otherwise.
+        attr_reader :unreachability_diff
+
         def initialize(speaker, running, candidate)
           @speaker, @running, @candidate = speaker, running, candidate
           @changes = Config.compare(running, candidate)
@@ -472,6 +530,7 @@ module BGP
           done.concat(apply_log_level)
           done.concat(apply_originate(originate))
           done.concat(apply_link_state)
+          done.concat(apply_unreachability)
           done.concat(apply_bfd)
           done.concat(apply_bounces)
           done
@@ -507,6 +566,9 @@ module BGP
           # under the Producer's lock by `set_unreachable`, which
           # rebuilds from the topology it last read.
           return LIVE if path == %w[link_state unreachable]
+          # Read by `UnreachOriginator#refresh`, which sends what changed
+          # and withdraws what went (bgp/daemon/unreachability.rb).
+          return LIVE if path.first == 'unreachability'
           return BOUNCE_ALL if path.first == 'announce'
           if path.first == 'neighbors' && path.size >= 3
             return LIVE   if NEIGHBOR_LIVE_KEYS.include?(path[2])
@@ -579,7 +641,16 @@ module BGP
           refuse_originate_with_no_table
           refuse_unreadable_mark
           refuse_unreachable_it_cannot_apply
+          refuse_unreadable_unreachability
           refuse_bfd_it_cannot_run
+        end
+
+        # The same check bgp4rd makes when it reads the file.
+        def refuse_unreadable_unreachability
+          return if @paths.none? { |p| p.first == 'unreachability' }
+          Unreach.reports(@candidate['unreachability'], 0)
+        rescue ArgumentError, TypeError => e
+          @errors << "unreachability: #{e.message}"
         end
 
         # The paths that change a neighbor's `bfd`.
@@ -747,6 +818,13 @@ module BGP
           announced, withdrawn = @link_state_diff
           ["link_state unreachable is #{value} now: #{announced.size} BGP-LS route(s) sent, " \
            "#{withdrawn.size} withdrawn"]
+        end
+
+        def apply_unreachability
+          return [] if @live.none? { |p| p.first == 'unreachability' }
+          @unreachability_diff = @speaker.unreach_originator.refresh(@candidate['unreachability'])
+          announced, withdrawn = @unreachability_diff
+          ["unreachability: #{announced.size} report(s) sent, #{withdrawn.size} withdrawn"]
         end
 
         # The BFD sessions the neighbors now want are asked for, and the

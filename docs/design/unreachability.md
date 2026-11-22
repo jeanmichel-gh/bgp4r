@@ -333,6 +333,43 @@ Pull request 2, the EVPN route type 254 codec (2026-11-22):
   a label of 16, no reporter.
 * `docs/evpn.md` gains a row for 254 in section 3's table.
 
+Pull request 3, bgp4rd (2026-11-22). In `bgp/daemon/unreachability.rb`:
+
+* **`UnreachTable`** keeps what each peer sent, keyed by the drafts' NLRI
+  key, and drops a peer's reports when its session leaves Established.
+  It reads an UPDATE's own findings first: a session reset or AFI/SAFI
+  disable finding takes nothing from that UPDATE, and treat-as-withdraw
+  turns its announcements into withdrawals. Of the Reporter TLVs it
+  keeps type 1 only, the first of each (Identifier, AS), and at most 50
+  for SAFI 81.
+* **`UnreachOriginator`** sends the `unreachability:` block: ORIGIN
+  INCOMPLETE, our AS prepended toward an external peer, no next hop for
+  SAFI 81, ours and the Route Targets for EVPN.
+* **The reporter AS check is here**, moved from pull request 1. A row
+  names, in `reporter_as_not_in_path`, any reporter AS missing from the
+  UPDATE's AS_PATH (AS4_PATH preferred), and bgp4rd logs a warning. An
+  empty AS_PATH, an internal peer's, is not checked.
+* **`unreachability` is an ordinal list** in `Config`, as `announce` and
+  `originate` are: no one field keys an entry, since one prefix may be
+  reported in two RDs.
+* **A report with no timestamp keeps the one it was first sent with**,
+  while nothing else about it changes, so a commit of another key does
+  not send every report again. `unreach.report` writes now into the
+  configuration, so a rollback puts the report back as it was sent.
+* The event kind `unreachability`: `received` and `withdrawn` for what
+  arrives, `reported` and `cleared` for what this speaker sends.
+* The shell takes `show ip bgp ...` for each `show bgp ...` form, as it
+  does for every other command.
+
+Not built, and the design said otherwise:
+
+* **Graceful Restart's stale marking.** The design said "as for other
+  families"; bgp4rd marks nothing stale for any family yet, so a report
+  goes when its session does.
+* **AFI/SAFI disable.** bgp4rd ignores the reports of an UPDATE with a
+  structural error and keeps the session, under its default lenient
+  policy, rather than disabling the family for the rest of the session.
+
 ## Tests
 
 * Unit: every class four ways; the drafts' examples; the `to_hash`

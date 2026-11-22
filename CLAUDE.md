@@ -480,6 +480,13 @@ bgp/daemon/              `bgp4rd` the daemon and `bgp4r-cli` its client;
                          from sessions that negotiated 16388/71.
                          `LinkStateTable.row` is the `show.link_state` row
                          for both sides
+                         unreachability.rb Unreachability reports in
+                         bgp4rd: UnreachTable keeps what each peer sent,
+                         outside the RIB; UnreachOriginator sends the
+                         `unreachability:` block, live, with
+                         `unreach.report` and `unreach.clear` as commits;
+                         `show.unreachability` lists both. See
+                         docs/design/unreachability.md
                          link_state_producer.rb the BGP-LS Producer of a
                          `link_state:` block: reads isisd's
                          `show.topology` after each `spf` event, diffs,
@@ -2154,7 +2161,7 @@ that moves a phase.
 | BGP-LS lab | Phases 1 and 3 done | Phase 2, a Propagator, not started; needs its own spec |
 | BFD (routescope's `docs/design/bfd-clients.md`, step 6d) | Built: bfd4r as a path dependency, `bfd: true` with Cease 6/10, `with-bfdd4r` as `lab-node`'s entrypoint, and `routescope/labs/bfd-frr-lab`, its gate passed on 2026-11-21 | Multihop BFD (RFC 5883), timers per neighbor, and BFD authentication (RFC 5882 10.2 encourages it), none asked for yet |
 | L3VPN PE (routescope's P2) | Specs approved 2026-11-17, `docs/design/l3vpn-pe.md` and `l3vpn-ruby-pe.md`; All 7 PRs built: the VPN table, then VRFs, import and both transports, then export and labels, then `l3vpn-lab` with FRR as the other PE and its gate passing, then VPN-IPv6 (RFC 4659) over the IPv4 core, then CEs by eBGP in a VRF with AS override and Site of Origin, then a VPN route reflector | Seven pull requests for the PE, from the VPN table to PE to CE eBGP; four for the labs of our own daemons |
-| Unreachability Information (SAFI 81, EVPN route type 254) | Spec approved 2026-11-22, `docs/design/unreachability.md`; pull requests 1 and 2 of 5 built, the SAFI 81 and EVPN type 254 codecs | Pull requests 3 to 5, then propagation in a spec of its own |
+| Unreachability Information (SAFI 81, EVPN route type 254) | Spec approved 2026-11-22, `docs/design/unreachability.md`; pull requests 1 to 3 of 5 built: the SAFI 81 and EVPN type 254 codecs, and bgp4rd | Pull requests 4 and 5, then propagation in a spec of its own |
 
 **Left, outside the tables above:**
 
@@ -8637,7 +8644,7 @@ five steps across three repositories. Status here is bgp4r's part.
 RFC 9086's peer SIDs are decoded and shown, not originated by bgp4rd
 (the owner's decision, question 1 of the design).
 
-### Unreachability Information, SAFI 81 and EVPN route type 254. Pull requests 1 and 2 of 5 built
+### Unreachability Information, SAFI 81 and EVPN route type 254. Pull requests 1 to 3 of 5 built
 
 Asked for by the owner on 2026-11-22. Both drafts carry reports that a
 prefix is unreachable, without touching the RIB or the FIB. Measured

@@ -188,6 +188,19 @@ module BGP
         envelope(rows[offset, limit].to_a, rows.size, offset, limit, nxt < rows.size ? nxt : nil)
       end
 
+      # Unreachability reports, one row per prefix, one page of them: the
+      # ones this speaker makes, with `peer` null, then the ones it
+      # received, per peer. Outside the RIB: see
+      # bgp/daemon/unreachability.rb. `family` (ipv4, ipv6 or evpn) and
+      # `prefix` narrow it.
+      def unreachability(params = {})
+        p = (params || {}).to_h { |k, v| [k.to_s, v] }
+        rows = @speaker.unreachability_rows
+        rows = rows.select { |r| r['family'] == p['family'].to_s } if p['family']
+        rows = rows.select { |r| r['prefix'] == p['prefix'].to_s } if p['prefix']
+        rows_page(rows, p.slice('offset', 'limit'))
+      end
+
       # The VPN-IPv4 routes received (AFI 1 / SAFI 128), one row per
       # route, one page of them, sorted by RD, then prefix, then peer.
       # Outside the RIB, so outside its lock: see bgp/rib/vpn_table.rb for

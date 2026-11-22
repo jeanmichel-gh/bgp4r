@@ -162,7 +162,7 @@ module BGP
 
       # A list whose elements are objects with nothing to key them by, so
       # the key is the ordinal. See the grammar above for what that costs.
-      ORDINAL_LISTS = %w[announce originate].freeze
+      ORDINAL_LISTS = %w[announce originate unreachability].freeze
 
       # A list whose elements are a name and its arguments.
       ARGUMENT_LISTS = %w[capabilities].freeze

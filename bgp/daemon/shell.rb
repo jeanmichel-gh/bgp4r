@@ -90,6 +90,22 @@ module BGP
               kw('advertised-routes', 'what went to PEER, and what did not and why', :advertised)
             ])
           ]),
+          kw('ipv4', 'IPv4', nil, [
+            kw('unreachability', 'Unreachability reports, SAFI 81, sent and received', :unreach_ipv4, [
+              arg(:prefix, 'PREFIX', 'one prefix', :unreach_ipv4)
+            ])
+          ]),
+          kw('ipv6', 'IPv6', nil, [
+            kw('unreachability', 'Unreachability reports, SAFI 81, sent and received', :unreach_ipv6, [
+              arg(:prefix, 'PREFIX', 'one prefix', :unreach_ipv6)
+            ])
+          ]),
+          kw('l2vpn', 'L2VPN', nil, [
+            kw('evpn', 'EVPN', nil, [
+              kw('unreachability', 'Unreachability reports, EVPN route type 254, sent and received',
+                 :unreach_evpn, [arg(:prefix, 'PREFIX', 'one prefix', :unreach_evpn)])
+            ])
+          ]),
           kw('vpnv4', 'the VPN-IPv4 routes received, by Route Distinguisher', :vpnv4, [
             kw('unicast', 'the IOS form', :vpnv4, [kw('all', 'the IOS form', :vpnv4)])
           ]),
@@ -535,6 +551,42 @@ module BGP
         unless failed.empty?
           out << "\nRefused by the kernel:\n"
           failed.each { |r| out << format("%-20s %s\n", r['prefix'], r['error']) }
+        end
+        out
+      end
+
+      # `show bgp ipv4 unreachability [PREFIX]`, and ipv6, and `show bgp
+      # l2vpn evpn unreachability`: FRR's words. One block per prefix, its
+      # reporters under it, from `show.unreachability`. Every page is read.
+      def unreach_ipv4(args, _words) ; unreach_table('ipv4', args[:prefix]) ; end
+      def unreach_ipv6(args, _words) ; unreach_table('ipv6', args[:prefix]) ; end
+      def unreach_evpn(args, _words) ; unreach_table('evpn', args[:prefix]) ; end
+
+      def unreach_table(family, prefix)
+        rows, offset = [], 0
+        loop do
+          params = { 'offset' => offset, 'family' => family }
+          params['prefix'] = prefix if prefix
+          page = @client.call('show.unreachability', params)
+          rows.concat(Array(page['rows']))
+          offset = page['next_offset'] or break
+        end
+        return "No #{family} unreachability reports.\n" if rows.empty?
+        out = +format("%d #{family} unreachability report(s)\n\n", rows.size)
+        rows.each do |r|
+          where = r['peer'] ? "from #{r['peer']}" : 'reported by this speaker'
+          rd = r['rd'] ? "RD #{r['rd']} tag #{r['ethernet_tag']} " : ''
+          out << "#{rd}#{r['prefix']}, #{where}"
+          out << ", AS path #{r['as_path']}" unless r['as_path'].to_s.empty?
+          out << "\n"
+          Array(r['reporters']).each do |p|
+            out << format("  Reporter %-15s AS %-10s %s (%d)%s%s\n", p['identifier'], p['as'],
+                          p['reason_name'], p['reason'], p['timestamp'] ? " at #{p['timestamp']}" : '',
+                          p['evi'] ? " EVI #{p['evi']}" : '')
+          end
+          unless Array(r['reporter_as_not_in_path']).empty?
+            out << "  Reporter AS #{r['reporter_as_not_in_path'].join(', ')} is not in the AS path\n"
+          end
         end
         out
       end

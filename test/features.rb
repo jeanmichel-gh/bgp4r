@@ -139,9 +139,12 @@ module Features
 
     'unreachability' => {
       :area  => 'families',
-      :about => 'Unreachability Information: AFI 1 and 2 SAFI 81, and EVPN route type 254, the codecs',
+      :about => 'Unreachability Information: AFI 1 and 2 SAFI 81 and EVPN route type 254, the codecs and bgp4rd',
       :rfc   => 'draft-tantsura-idr-unreachability-safi-06, draft-tantsura-bess-evpn-unreachability-02',
-      :unit  => %w[nlris/unreachability_test nlris/evpn_unreachability_test],
+      :doc   => 'docs/design/unreachability.md',
+      :unit  => %w[nlris/unreachability_test nlris/evpn_unreachability_test
+                   daemon/unreachability_test],
+      :functional => %w[unreachability_daemon_test],
     },
 
     'mcast-vpn' => {

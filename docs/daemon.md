@@ -289,6 +289,14 @@ link_state:                        # a BGP-LS Producer; see below
   peers: [10.0.10.1]               # who gets BGP-LS; default none
   unreachable: withdraw            # or keep; the default is withdraw
 
+unreachability:                    # prefixes this bgp4rd reports unreachable; see below
+  - prefix: 192.0.2.0/24
+    reason: rpki_invalid           # a name or a number; Unspecified (0) when left out
+    timestamp: 1733789400          # Unix seconds; when first sent, when left out
+  - prefix: 198.51.100.0/24        # with evpn, EVPN route type 254
+    reason: vtep_unreachable
+    evpn: { rd: '10.255.0.1:100', route_targets: ['65000:100'], ethernet_tag: 0, evi: 100 }
+
 mark:                              # added to routes made by hand; see route.originate
   large_communities: ['65000:1:1']
 ```
@@ -392,6 +400,20 @@ commit, since the Producer is built once. If the socket closes, it tries again e
 the BGP-LS routes it receives, in a table of their own outside the RIB.
 `show.link_state` lists both. `docs/bgp-ls.md` section 12 has what is
 sent, and `docs/bgp-ls-howto.md` explains why.
+
+**`unreachability` reports prefixes unreachable**, without touching any
+RIB or FIB: draft-tantsura-idr-unreachability-safi-06 (SAFI 81, AFI 1 or
+2 by the prefix) and, with `evpn`, draft-tantsura-bess-evpn-unreachability-02
+(route type 254, provisional). The design is
+`docs/design/unreachability.md`. Each entry is sent, with this
+speaker's router ID and AS as its one Reporter TLV, ORIGIN INCOMPLETE,
+to every peer whose session negotiated the family: name
+`mbgp_ipv4_unreachability_information`,
+`mbgp_ipv6_unreachability_information` or `mbgp_l2vpn_evpn` in its
+`capabilities`. The block is live: a commit, a SIGHUP, `unreach.report`
+or `unreach.clear` sends what changed and withdraws what went. Every
+bgp4rd keeps the reports it receives in a table of their own, per peer,
+and `show.unreachability` lists both. It does not pass a report on.
 
 **VRFs, a PE's half of an L3VPN** (`docs/design/l3vpn-pe.md`, pull
 requests 2 and 3). With a `vrfs:` block, bgp4rd imports the VPN-IPv4
@@ -716,6 +738,7 @@ below.
 | `show.adj_out` | what was sent to one peer, and what was skipped | built |
 | `show.fib` | what the daemon believes is in the kernel table, and what failed | built |
 | `show.link_state` | BGP-LS routes: sent as a Producer, and received per peer | built |
+| `show.unreachability` | Unreachability reports, SAFI 81 and EVPN route type 254: those this speaker makes, and those received per peer, with their reporters | built |
 | `show.vpn` | the VPN-IPv4 and VPN-IPv6 routes received (AFI 1 and 2 / SAFI 128), one row each: RD, prefix, peer, next hop, labels, Route Targets, Site of Origin (`soo`), `originator_id` and `cluster_list`, best; and those this PE sends, with peer null, reason `local` and their `vrf` | built |
 | `show.vpn_labels` | each exporting VRF's label: label, VRF, the action, installed or why not | built |
 | `show.vrfs` | the VRFs: name, table, RD, Route Targets, the device's state, routes imported and installed | built |
@@ -728,6 +751,7 @@ below.
 | `peer.resend` | the daemon's own answer for each prefix a peer was sent by hand | built |
 | `route.originate`, `route.withdraw` | our own prefixes | built |
 | `link_state.unreachable` | the BGP-LS Producer's `unreachable`, `keep` or `withdraw`, as one commit | built |
+| `unreach.report`, `unreach.clear` | one Unreachability report added or withdrawn, as one commit of the `unreachability` block | built |
 | `show.configuration` | the running configuration, or the candidate | built |
 | `config.changed` | whether the candidate differs, as a **boolean** | built |
 | `config.compare` | what the candidate changes, as **lines** | built |
@@ -1034,7 +1058,7 @@ hoping:
 
 | Effect | Keys | What a commit does |
 |---|---|---|
-| live | `log_level`, `originate`, `mark`, `link_state unreachable`, a neighbor's `description` | applies it, and nothing on the wire stops |
+| live | `log_level`, `originate`, `mark`, `link_state unreachable`, `unreachability`, a neighbor's `description` | applies it, and nothing on the wire stops |
 | bounce | a neighbor's `as`, `hold_time`, `capabilities`, `connect`, `port`, `retry` | ends that session and lets it come back |
 | bounce all | `announce` | ends every session and lets them come back |
 | restart | everything else | **refuses the commit**, naming the key |

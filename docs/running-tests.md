@@ -19,8 +19,8 @@ amounts. Measured 2026-11-03:
 
 | Tier | What it needs | Files | Time | Command |
 |---|---|---:|---|---|
-| unit | Ruby | 180 | 21s | `ruby test/run_unit.rb` |
-| functional | a loopback socket | 19 | 18s | one file at a time, below |
+| unit | Ruby | 181 | 21s | `ruby test/run_unit.rb` |
+| functional | a loopback socket | 20 | 18s | one file at a time, below |
 | lab | gobgpd, FRR, Docker or root | 37 | 10s to 400s per group | `ruby test/run_lab.rb GROUP` |
 
 **The first two tiers together are under a minute and need nothing
@@ -69,7 +69,7 @@ What bgp4r can carry: one per NLRI family.
 | `flow-spec` | 3 | 1 | 2 | Flow specification rules, SAFI 133 and 134 |
 | `evpn` | 3 | 1 | 2 | EVPN, AFI 25 SAFI 70, all eleven route types |
 | `rt-constrain` | 1 | 1 | 1 | Route Target membership, AFI 1 SAFI 132 |
-| `unreachability` | 2 | 0 | 0 | Unreachability Information: AFI 1 and 2 SAFI 81, and EVPN route type 254, the codecs |
+| `unreachability` | 3 | 1 | 0 | Unreachability Information: AFI 1 and 2 SAFI 81 and EVPN route type 254, the codecs and bgp4rd |
 | `mcast-vpn` | 3 | 1 | 2 | MCAST-VPN, SAFI 5, all seven route types |
 | `bgp-ls` | 15 | 3 | 3 | BGP-LS, AFI 16388 SAFI 71 and 72, the NLRI and every attribute TLV |
 | `add-path` | 2 | 1 | 2 | Several paths to one prefix, and the Path Identifier |
@@ -582,10 +582,11 @@ ruby test/run_feature.rb unicast
 
 ### `unreachability`
 
-Unreachability Information: AFI 1 and 2 SAFI 81, and EVPN route type 254, the codecs.
+Unreachability Information: AFI 1 and 2 SAFI 81 and EVPN route type 254, the codecs and bgp4rd.
 
 - draft-tantsura-idr-unreachability-safi-06, draft-tantsura-bess-evpn-unreachability-02
-- 2 unit files
+- Read first: `docs/design/unreachability.md`
+- 3 unit files, 1 functional
 
 ```
 ruby test/run_feature.rb unreachability
@@ -888,5 +889,5 @@ test file has to be tagged before the suite is green again, which is
 the same arrangement `test/unit/lab_groups_test.rb` has with the CI
 matrix.
 
-236 of 236 test files are tagged. The
+238 of 238 test files are tagged. The
 remainder, if any, is what the guard names.
