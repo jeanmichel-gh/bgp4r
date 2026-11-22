@@ -72,7 +72,7 @@ topology:
         ip addr add 10.0.12.2/30 dev eth1; ip addr add 10.0.23.1/30 dev eth2;
         ip addr add 10.255.0.2/32 dev lo; ip route del default dev eth0 2>/dev/null;
         echo 1 > /proc/sys/net/ipv4/ip_forward; echo 100000 > /proc/sys/net/mpls/platform_labels;
-        exec isisd -c /etc/isis4r/isisd.yml -l -"
+        exec with-bfdd4r isisd -c /etc/isis4r/isisd.yml -l -"
     # --- p1's BGP half: the VPN route reflector, in p1's namespace ----
     p1-bgp:
       kind: linux

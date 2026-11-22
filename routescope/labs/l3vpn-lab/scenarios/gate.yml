@@ -12,7 +12,7 @@ description: >-
   sites still reach each other. The link comes back, and so does the
   path.
 capture: [p1, p2]
-timeout: 240
+timeout: 420
 
 steps:
   - expect: { isis_adjacencies: { node: p1, level: 2, up: 2 } }
@@ -85,5 +85,46 @@ steps:
   - expect: { ping: { node: ce1a, to: 192.168.2.2 } }
     within: 20
     measure: restore
+  - expect: { ping: { node: ce1b, to: 192.168.2.2 } }
+    within: 10
+
+  # The same failover, but the link keeps its carrier and loses every
+  # packet (netem), as a bad optic or a switch between them would.
+  # Neither end sees the link go down. BFD on p1 to pe2, 300 ms x 3,
+  # finds it, and both IS-IS routers drop the adjacency at once.
+  - expect: { bfd_session: { node: p1, peer: 10.0.23.2, interface: eth2, state: up } }
+    within: 30
+  - expect: { bfd_session: { node: pe2, peer: 10.0.23.1, state: up } }
+    within: 30
+  - mark: p1 to pe2 link loses every packet
+  - netem: p1:eth2
+    loss: 100%
+  - expect: { isis_route: { node: pe1, prefix: 10.255.0.3/32, label: 19003 } }
+    within: 30
+  - expect: { vrf_route: { node: pe1-bgp, vrf: A, prefix: 172.16.2.0/24, out_label: 19003, state: installed } }
+    within: 30
+  - expect: { vrf_route: { node: pe2, vrf: A, prefix: 172.16.1.0/24, out_label: 19001, state: installed } }
+    within: 30
+  - expect: { ping: { node: ce1a, to: 192.168.2.2 } }
+    within: 20
+    measure: failover_loss
+  - expect: { ping: { node: ce1b, to: 192.168.2.2 } }
+    within: 10
+  - expect: { bfd_session: { node: p1, peer: 10.0.23.2, interface: eth2, state: down } }
+
+  - mark: p1 to pe2 link clean again
+  - netem: p1:eth2
+    clear: true
+  - expect: { bfd_session: { node: p1, peer: 10.0.23.2, interface: eth2, state: up } }
+    within: 30
+  - expect: { isis_route: { node: pe1, prefix: 10.255.0.3/32, label: 17003 } }
+    within: 30
+  - expect: { vrf_route: { node: pe1-bgp, vrf: A, prefix: 172.16.2.0/24, out_label: 17003, state: installed } }
+    within: 30
+  - expect: { vrf_route: { node: pe2, vrf: A, prefix: 172.16.1.0/24, out_label: 17001, state: installed } }
+    within: 30
+  - expect: { ping: { node: ce1a, to: 192.168.2.2 } }
+    within: 20
+    measure: restore_loss
   - expect: { ping: { node: ce1b, to: 192.168.2.2 } }
     within: 10

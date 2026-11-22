@@ -12,4 +12,6 @@ prefixes:
   - { prefix: 10.255.0.2/32, metric: 0, sid: 2 }
 interfaces:
   - { name: eth1, ip_addresses: [10.0.12.2], metric: 10, hello_interval: 1, hello_multiplier: 3 }
-  - { name: eth2, ip_addresses: [10.0.23.1], metric: 10, hello_interval: 1, hello_multiplier: 3 }
+  # BFD toward pe2 (FRR's `isis bfd`), so a link that loses packets but
+  # keeps carrier fails in under a second, not the 3 s hold.
+  - { name: eth2, ip_addresses: [10.0.23.1], metric: 10, hello_interval: 1, hello_multiplier: 3, bfd: true }
