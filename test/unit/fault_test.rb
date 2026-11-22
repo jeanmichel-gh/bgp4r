@@ -256,4 +256,35 @@ class TestFault < Test::Unit::TestCase
     assert_equal :treat_as_withdraw, parsed.path_attribute.action
   end
 
+
+  # ---- Fault::UNREACHABILITY, SAFI 81 ------------------------------------
+
+  def test_unreachability_cases_match_their_findings
+    assert_equal Fault::UNREACHABILITY.size, Fault.unreachability_catalog.size
+    Fault.unreachability_catalog.each do |e|
+      pa = Path_attribute.new(Fault.wire(e[:name]).is_packed, :as4byte => true)
+      finding = Attr.strongest(pa.errors)
+      assert finding, "#{e[:name]}: no finding"
+      assert_equal e[:action], finding.action, "#{e[:name]} action"
+      assert_equal e[:subcode], finding.subcode, "#{e[:name]} subcode"
+      assert_match(/^draft-tantsura-idr-unreachability-safi-06 section 5\.\d$/, e[:rfc])
+      assert_raise(Malformed_attribute, e[:name].to_s) do
+        Path_attribute.new(Fault.wire(e[:name]).is_packed, :as4byte => true, :policy => :strict)
+      end
+    end
+  end
+
+  # Kept out of CATALOG until the lab measures FRR and GoBGP on them, so
+  # lab/fault_matrix.rb does not send them yet.
+  def test_unreachability_cases_are_not_in_the_matrix_catalog
+    names = Fault::UNREACHABILITY.collect(&:first)
+    assert_equal [], names & Fault.names
+    assert_equal names.size, names.uniq.size
+  end
+
+  def test_the_example_reach_has_no_finding
+    pa = Path_attribute.new(Fault.unreach_reach(Fault.unreach_nlri).encode.is_packed, :as4byte => true)
+    assert_equal [], pa.errors
+  end
+
 end

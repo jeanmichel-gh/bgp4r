@@ -98,7 +98,61 @@ module BGP
                Tunnel_encap::Egress_endpoint.new('10.0.0.1')).length!(4)) }],
     ].freeze
 
+    # The Unreachability Information cases of
+    # draft-tantsura-idr-unreachability-safi-06 section 5, in CATALOG's
+    # shape, the section where CATALOG has its RFC section.
+    #
+    # **A list of their own, for now.** lab/fault_matrix.rb sends every
+    # CATALOG case to FRR and GoBGP and checks each against a measured
+    # table. Neither router has been measured on SAFI 81 yet; FRR has it
+    # on master only. These join CATALOG once the lab measures them
+    # (docs/design/unreachability.md, pull request 5). `build` and `wire`
+    # take their names already.
+    UNREACHABILITY = [
+      [:unreach_nlri_length, 'NLRI Length past the attribute',  :session_reset, 9, '5.1',
+        -> { Fault.unreach_reach(Fault.unreach_nlri.tap { |u| u.declared_len = 200 }) }],
+      [:unreach_prefix_length, 'IPv4 Prefix Length 33',         :session_reset, 9, '5.1',
+        -> { Fault.unreach_reach(Unreachability.new(:afi => 1, :mlen => 33, :value => 'c000020000',
+                                   :reporters => [Fault.unreach_reporter])) }],
+      [:unreach_no_reporter, 'announcement with no Reporter TLV', :treat_as_withdraw, 9, '5.2',
+        -> { Fault.unreach_reach(Unreachability.new('192.0.2.0/24')) }],
+      [:unreach_reporter_in_withdrawal, 'withdrawal with a Reporter TLV', :treat_as_withdraw, 9, '5.2',
+        -> { Mp_unreach.new(:afi => 1, :safi => IANA::SAFI::UNREACHABILITY_INFORMATION,
+                            :nlris => [Fault.unreach_nlri]) }],
+      [:unreach_reporter_short, 'the one Reporter TLV is 7 octets', :treat_as_withdraw, 9, '5.3',
+        -> { Fault.unreach_reach(Unreachability.new('192.0.2.0/24',
+               Unreachability::Tlv::Unknown.new(1, ['c633640100fde9'].pack('H*')))) }],
+    ].freeze
+
     class << self
+
+      # UNREACHABILITY as Hashes, in `catalog`'s shape.
+      def unreachability_catalog
+        UNREACHABILITY.collect { |name, desc, action, subcode, section, build|
+          { :name => name, :description => desc, :action => action,
+            :subcode => subcode,
+            :rfc => "draft-tantsura-idr-unreachability-safi-06 section #{section}",
+            :build => build, :ibgp => false }
+        }
+      end
+
+      # Section 3.6.1's example reporter: 198.51.100.1, AS 65001, RPKI
+      # Invalid, 1733789400.
+      def unreach_reporter
+        Unreachability::Reporter.new('198.51.100.1', 65001,
+          Unreachability::Reason_code.new(3), Unreachability::Timestamp.new(1733789400))
+      end
+
+      # Section 3.6.1's example NLRI.
+      def unreach_nlri
+        Unreachability.new('192.0.2.0/24', unreach_reporter)
+      end
+
+      # One NLRI in an MP_REACH_NLRI with no next hop, as Appendix B.1.
+      def unreach_reach(nlri)
+        Mp_reach.new(:afi => nlri.afi, :safi => IANA::SAFI::UNREACHABILITY_INFORMATION,
+                     :nlris => [nlri])
+      end
 
       # The attribute's flags, type code and value octets, as encoded.
       def parts(attr)
@@ -176,7 +230,7 @@ module BGP
 
       # The faulty attribute named in the catalog.
       def build(name)
-        entry = CATALOG.find { |e| e[0] == name }
+        entry = (CATALOG + UNREACHABILITY).find { |e| e[0] == name }
         raise ArgumentError, "unknown fault #{name.inspect}, see Fault::CATALOG" unless entry
         entry[5].call
       end

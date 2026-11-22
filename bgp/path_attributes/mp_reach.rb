@@ -60,7 +60,8 @@ module BGP
          IANA::SAFI::EVPN,
          IANA::SAFI::ROUTE_TARGET_CONSTRAINTS,
          IANA::SAFI::MCAST_VPN,
-         IANA::SAFI::BGP_LS, IANA::SAFI::BGP_LS_VPN].include?(safi)
+         IANA::SAFI::BGP_LS, IANA::SAFI::BGP_LS_VPN,
+         IANA::SAFI::UNREACHABILITY_INFORMATION].include?(safi)
       case safi
       when 1,2
         pfx_klass = prefix_klass(afi, safi)
@@ -226,6 +227,16 @@ module BGP
           ls
         end
         @afi ||= IANA::AFI::BGP_LS
+      when IANA::SAFI::UNREACHABILITY_INFORMATION
+        # draft-tantsura-idr-unreachability-safi-06. The AFI is the
+        # prefix's, 1 or 2, unless the caller gave one.
+        @nlris = [h[:nlris]].flatten.compact.collect do |n|
+          next n if n.is_a?(Unreachability)
+          u = Unreachability.new(n)
+          u.path_id ||= @path_id
+          u
+        end
+        @afi ||= @nlris.empty? ? IANA::AFI::IPv4 : @nlris.first.afi
       else
         raise "SAFI #{safi} not implemented!"
       end
@@ -326,6 +337,11 @@ module BGP
           # nothing in the octets says whether those 8 octets are
           # there; it just does not have to reach this method.
           Link_state.nlri_size(s)
+        when IANA::SAFI::UNREACHABILITY_INFORMATION
+          # draft-tantsura-idr-unreachability-safi-06 section 3.2: a
+          # 2-octet NLRI Length that "excludes the NLRI Length field
+          # itself". So an NLRI is 2 + NLRI Length octets.
+          Unreachability.nlri_size(s)
         else
           (s.getbyte(0) + 7) / 8 + 1
         end

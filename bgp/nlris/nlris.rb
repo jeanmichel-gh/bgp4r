@@ -23,4 +23,5 @@
   link_state_link_attribute
   link_state_prefix_attribute
   link_state_sr
+  unreachability
 }.each { |n| require "bgp/nlris/#{n}" }

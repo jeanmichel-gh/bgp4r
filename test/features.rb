@@ -137,6 +137,13 @@ module Features
       :lab   => %w[rt_constrain_gobgp_test],
     },
 
+    'unreachability' => {
+      :area  => 'families',
+      :about => 'Unreachability Information, AFI 1 and 2 SAFI 81, the codec',
+      :rfc   => 'draft-tantsura-idr-unreachability-safi-06',
+      :unit  => %w[nlris/unreachability_test],
+    },
+
     'mcast-vpn' => {
       :area  => 'families',
       :about => 'MCAST-VPN, SAFI 5, all seven route types',

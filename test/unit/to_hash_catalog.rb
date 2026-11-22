@@ -1306,6 +1306,34 @@ module ToHashCatalog
       :type => 65000, :value => '00000a4c0102', :length => 9999)
   end
 
+  # draft-tantsura-idr-unreachability-safi-06, SAFI 81. The NLRI with
+  # a path ID, a reporter carrying both sub-TLVs, an unknown sub-TLV and
+  # a Length that lies, so each field a thin recipe would miss is set.
+  ENTRIES['BGP::Unreachability'] = entry(:ok, nil, nil) do
+    BGP::Unreachability.new(:path_id => 3, :prefix => '2001:db8::/32',
+      :reporters => [{ :reporter => { :identifier => '198.51.100.1', :as => 65001,
+        :sub_tlvs => [{ :reason_code => 9 }, { :timestamp => 1733789400 },
+                      { :unknown => { :type => 200, :value => 'ab' } }] } }])
+  end
+
+  ENTRIES['BGP::Unreachability::Reporter'] = entry(:ok, nil, nil) do
+    BGP::Unreachability::Reporter.new(:identifier => '198.51.100.2', :as => 70000,
+      :sub_tlvs => [{ :reason_code => 1 }, { :timestamp => 1733789410 }],
+      :tail => 'ffff', :length => 30)
+  end
+
+  ENTRIES['BGP::Unreachability::Reason_code'] = entry(:ok, nil, nil) do
+    BGP::Unreachability::Reason_code.new(:reason_code => 64536, :length => 5)
+  end
+
+  ENTRIES['BGP::Unreachability::Timestamp'] = entry(:ok, nil, nil) do
+    BGP::Unreachability::Timestamp.new(:timestamp => 1733789400)
+  end
+
+  ENTRIES['BGP::Unreachability::Tlv::Unknown'] = entry(:ok, nil, nil) do
+    BGP::Unreachability::Tlv::Unknown.new(:type => 255, :value => '0102', :length => 9)
+  end
+
   # RFC 9552 section 5.2, an NLRI type bgp4r does not implement, which
   # in part 1 is all of them.
   ENTRIES['BGP::Link_state::Unknown'] = entry(:ok, nil, nil) do
@@ -1861,6 +1889,11 @@ module ToHashCatalog
       'defines neither, and encode calls an encode_value it does not ' \
       'have. Unknown is measured, and the route types fill this in ' \
       'later parts.',
+    'BGP::Unreachability::Tlv' =>
+      'an abstract base with no sensible instance, as Link_state::Tlv ' \
+      'is. type and hash_key read self.class::TYPE and HASH_KEY and it ' \
+      'defines neither. Reporter, Reason_code, Timestamp and Unknown ' \
+      'are measured.',
     'BGP::Tunnel_encap::Int_sub_tlv' =>
       'an abstract base with no sensible instance. Its initialize and ' \
       'to_hash read self.class::TYPE, SIZE, NAME and KEY and it ' \
