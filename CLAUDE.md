@@ -2103,9 +2103,10 @@ routescope's `docs/design/shared-vm.md` (approved 2026-11-22).
 1. **An image tagged `:latest` is master.** `~/routescope/tools/vm-update.sh`
    builds it from master; an image vm-update does not build (`vtep4r`
    today) is built from its checkout in `~` on master. To run a branch or
-   a commit, build it from a worktree under its own tag, `NAME:SHORTSHA`,
-   and remove that tag when its runs are done. Never build `NAME:latest`
-   from a branch.
+   a commit, build it under its own tag, `NAME:SHORTSHA`, with
+   `~/routescope/tools/vm-build REPO REF --for PURPOSE`, and remove it with
+   `--rm` when its runs are done (routescope `docs/vm-build.md`). Never
+   build `NAME:latest` from a branch.
 2. **The checkouts in `~` stay on main or master.** vm-update pulls them.
    Branch work happens in worktrees, never in `~/REPO`.
 3. **Do not edit `~/labs`.** To run a lab on another image or with other
