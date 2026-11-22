@@ -24,6 +24,8 @@
 #
 # BFD runs on p1 to pe2, 300 ms x 3: bfdd4r beside p1's isisd, FRR's
 # bfdd on pe2. The gate fails that link by loss as well as by carrier.
+# BFD runs on pe2 to ce2a too, beside their eBGP session. pe1 to ce1a
+# has none: BFD in a VRF is not in bgp4rd and bfdd4r yet (ABOUT.md).
 #
 # pe1 is two containers in one network namespace: pe1 runs isisd and
 # owns the interfaces and the VRF devices, pe1-bgp runs bgp4rd beside it.
