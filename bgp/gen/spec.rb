@@ -55,7 +55,7 @@ module BGP
       # The top level keys a spec takes.
       KEYS = %w[family afi count per_update start path_id label rd vrfs route_target
                 source protocol destination_port rate redirect marking
-                route_type ip esi ethernet_tag gateway mac_mobility router_mac pmsi_label
+                route_type ip esi ethernet_tag gateway mac_mobility router_mac pmsi_label vni
                 originator igmp_flags max_response_time leaf es_import esi_label
                 origin_as prefix_length default source_as
                 topology columns protocol_id identifier autonomous_system prefixes prefix_start
@@ -81,7 +81,7 @@ module BGP
                       'route_type' => EVPN + MVPN, 'ip' => EVPN, 'esi' => EVPN,
                       'ethernet_tag' => EVPN + %w[evpn_unreachability], 'gateway' => EVPN,
                       'mac_mobility' => EVPN, 'router_mac' => EVPN,
-                      'pmsi_label' => EVPN, 'originator' => EVPN + MVPN,
+                      'pmsi_label' => EVPN, 'vni' => EVPN, 'originator' => EVPN + MVPN,
                       'igmp_flags' => EVPN, 'max_response_time' => EVPN,
                       'leaf' => EVPN + MVPN, 'es_import' => EVPN, 'esi_label' => EVPN,
                       'source_as' => MVPN, 'origin_as' => RTC, 'prefix_length' => RTC, 'default' => RTC,
@@ -113,9 +113,10 @@ module BGP
       # The EVPN keys that are integers, with the largest value each
       # field holds: an Ethernet Tag ID and a MAC Mobility sequence
       # number are 4 octets (RFC 7432 sections 7.2 and 7.7), and the
-      # PMSI Tunnel's label is a label (RFC 6514 section 5).
+      # PMSI Tunnel's label is a label (RFC 6514 section 5). A VNI is the
+      # whole 3-octet field (RFC 8365 section 5.1.3).
       EVPN_MAX = { 'ethernet_tag' => 0xffffffff, 'mac_mobility' => 0xffffffff,
-                   'pmsi_label' => 0xfffff, 'esi_label' => 0xfffff }.freeze
+                   'pmsi_label' => 0xfffff, 'esi_label' => 0xfffff, 'vni' => 0xffffff }.freeze
 
       # RFC 9251 section 9.1's IGMP flags, by the names bgp4r gives them.
       IGMP_FLAGS = %w[v1 v2 v3 ie].freeze

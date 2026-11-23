@@ -57,9 +57,11 @@ class TestBgpGenEvpnRoutes < Test::Unit::TestCase
            10 => { 'start' => '239.1.1.1', 'originator' => '192.0.2.1' },
            11 => { 'start' => '239.1.1.1', 'originator' => '192.0.2.1', 'leaf' => '192.0.2.9' } }
 
+  # A key given as nil is left out, so a test can drop one of BASE's.
   def gen(type, spec = {}, sender = nil)
     BGP::Gen.new({ 'family' => 'evpn', 'route_type' => type, 'count' => 3, 'rd' => '65000:1',
-                   'attributes' => { 'next_hop' => '192.0.2.1' } }.merge(BASE[type]).merge(spec), sender)
+                   'attributes' => { 'next_hop' => '192.0.2.1' } }.merge(BASE[type]).merge(spec)
+                   .reject { |_, v| v.nil? }, sender)
   end
 
   def parse(u, info = INFO)
@@ -107,6 +109,33 @@ class TestBgpGenEvpnRoutes < Test::Unit::TestCase
   def test_an_ipv6_ip_on_route_type_2
     r = routes(gen(2, 'ip' => '2001:db8::ffff').updates.first)
     assert_equal(%w[2001:db8::ffff 2001:db8::1:0 2001:db8::1:1], r.collect { |x| x[:ip] })
+  end
+
+  # RFC 8365 section 5.1.3: over VXLAN, "the entire 24-bit field is used
+  # to encode the VNI value", MPLS Label1 here. `label: 100` writes an
+  # MPLS label, 100 in the high 20 bits with the bottom of stack bit, and
+  # FRR 10.7.1 read VNI 1601 from it (routescope #299). `vni: 100` writes
+  # 000064.
+  def test_route_type_2_carries_a_vni_in_label1
+    u = gen(2, 'count' => 1, 'label' => nil, 'vni' => 100).updates.first
+    assert_match('0221' + '00' * 2 + 'fde800000001' + '00' * 10 + '00000000' +
+                 '30' + '001122000000' + '00' + '000064', u.to_shex)
+    g = gen(2, 'label' => nil, 'vni' => { 'step' => { 'start' => 0xfffffe, 'by' => 1 } }, 'count' => 2)
+    assert_equal(%w[fffffe ffffff], routes(g.updates.first).collect { |x|
+      l = x[:label1] ; format('%06x', (l[:label] << 4) | (l[:exp] << 1) | l.fetch(:bottom, 1))
+    })
+    assert_equal([0xfffffe, 0xffffff], g.expected.collect { |r| r['vni'] })
+    assert(g.expected.none? { |r| r.key?('label') })
+  end
+
+  # The same section: the label field of the PMSI Tunnel attribute of the
+  # IMET route carries the VNI, all 24 bits.
+  def test_route_type_3_carries_a_vni_in_the_pmsi_tunnel
+    g = gen(3, 'count' => 1, 'vni' => 100)
+    pm = parse(g.updates.first).path_attribute[:pmsi_tunnel]
+    assert_equal(100, pm.label_bits)
+    assert_equal({ 'tunnel_type' => 'ingress_replication', 'vni' => 100, 'identifier' => '10.0.0.1' },
+                 g.expected.first['pmsi'])
   end
 
   # RFC 7432 section 7.3: an RD, an Ethernet Tag ID and the Originating
@@ -257,6 +286,10 @@ class TestBgpGenEvpnRoutes < Test::Unit::TestCase
       [2, { 'pmsi_label' => 5 }] => /'pmsi_label' is for route type 3/,
       [2, { 'gateway' => '10.0.0.1' }] => /'gateway' is for route type 5/,
       [2, { 'label' => nil }] => /needs a label/,
+      [2, { 'vni' => 5 }] => /'label' or 'vni', not both/,
+      [3, { 'vni' => 5, 'pmsi_label' => 5 }] => /'pmsi_label' or 'vni', not both/,
+      [5, { 'vni' => 5 }] => /'vni' is for route type 2, 3 and not for 5/,
+      [2, { 'label' => nil, 'vni' => 2**24 }] => /vni/,
       [2, { 'afi' => 1 }] => /EVPN is AFI 25/,
       [2, { 'start' => '10.0.0.0/24' }] => /start is a MAC/,
       [2, { 'start' => 'ff:ff:ff:ff:ff:ff', 'count' => 2 }] => /run past ff:ff:ff:ff:ff:ff/,
