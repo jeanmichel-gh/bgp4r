@@ -137,7 +137,11 @@ module BGP
           begin
             while @continue
               begin
-                Timeout::timeout(h) do |_h| 
+                # The hold time is read again for each message, since the
+                # OPEN that lowers it arrives after this thread starts
+                # (RFC 4271 section 4.2). 0 is no hold timer: Timeout
+                # takes 0 and nil as no limit.
+                Timeout::timeout(@holdtime || h) do |_h|
                   message, _ = recv_msg(s)
                   break unless @continue
                   changed and notify_observers(:ev_msg, @type, message)
