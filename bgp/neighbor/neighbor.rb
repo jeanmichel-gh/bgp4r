@@ -888,7 +888,11 @@ module BGP
       @rmt_version  = peer_open.version
       @rmt_as       = peer_open.local_as
       @rmt_bgp_id   = peer_open.bgp_id
-      @out.holdtime = @in.holdtime = peer_open.holdtime if @holdtime > peer_open.holdtime
+      # RFC 4271 section 4.2: the session's Hold Time is the smaller of
+      # the two OPENs'. The hold timer and the keepalives run on it, not on
+      # the one this side offered.
+      @negotiated_holdtime = [@holdtime, peer_open.holdtime].min
+      @out.holdtime = @in.holdtime = @negotiated_holdtime
       
       case @state
       when :OpenSent
@@ -908,7 +912,12 @@ module BGP
         send_message(BGP::Keepalive.new)
         log_debug "SendKeepAlive state is #{@state}"
         new_state(:Established, 'RecvKeepAlive')
-        @keepalive_thread = Thread.new(@holdtime/3) do |h|
+        # Section 10: a KEEPALIVE every third of the Hold Time, and none
+        # when it is 0 (section 4.2).
+        hold = @negotiated_holdtime || @holdtime
+        return if hold.zero?
+
+        @keepalive_thread = Thread.new([hold / 3, 1].max) do |h|
           Thread.current['name'] = "BGP Keepalive interval:(#{h})"
           begin
             loop do

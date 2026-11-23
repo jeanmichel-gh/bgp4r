@@ -127,6 +127,70 @@ class TestBgpNeighbor < Test::Unit::TestCase
   rescue Timeout::Error
     assert false, "Timeout"
   end
+  # RFC 4271 section 4.2: the hold time is the smaller of the two in the
+  # OPENs, and section 10 sends a KEEPALIVE every third of it. The server
+  # offers 180 and the client 3, so the server keeps every 1 s. It used
+  # to keep every 60 s, a third of its own: FRR's datacenter defaults hold
+  # for 9 s and dropped a bgp4r-sim with 30 every 9 s (routescope #299).
+  def test_keepalives_follow_the_negotiated_hold_time
+    Timeout::timeout(8) {
+      port = start_server(0)
+      @c = Neighbor.new(4, 100, 3, '0.0.0.2', '127.0.0.1', '127.0.0.1')
+      keepalives = Catcher.new(Keepalive)
+      @c.start :port=> port
+      assert @s.wait_for_state(:Established, 2), "server did not reach Established"
+      sleep 0.5 # past the KEEPALIVE that answered the OPEN exchange
+      @c.add_observer keepalives
+      got = 2.times.map { keepalives.pop(2) }
+      assert got.all?, 'two KEEPALIVEs in 4 s with a negotiated hold time of 3'
+    }
+  end
+
+  # The hold timer runs on the negotiated hold time too. The client stops
+  # sending, and the server, which offered 180, expires it after 3 s. It
+  # used to wait the 180: the reader took its hold time when the session
+  # started, before the OPEN that lowered it.
+  def test_the_hold_timer_follows_the_negotiated_hold_time
+    Timeout::timeout(10) {
+      port = start_server(0)
+      @c = Neighbor.new(4, 100, 3, '0.0.0.2', '127.0.0.1', '127.0.0.1')
+      @c.start :port=> port
+      assert @s.wait_for_state(:Established, 2), "server did not reach Established"
+      # The server's own expiry, which it tells its observers: a client
+      # that heard no KEEPALIVE in 3 s would expire the session itself and
+      # take the server to Idle as well, which is how the bug passed a
+      # state check.
+      expired = Queue.new
+      watch = Object.new
+      watch.define_singleton_method(:update) { |*a| expired << Time.now if a.first == Notification.code_to_s(4) }
+      @s.add_observer watch
+      t0 = Time.now
+      @c.instance_variable_get(:@keepalive_thread).kill
+      at = Timeout.timeout(6) { expired.pop } rescue nil
+      assert at, 'the server should expire a silent peer after the negotiated 3 s'
+      assert_operator at - t0, :<, 4.5
+    }
+  end
+
+  # A hold time of 0 means neither keepalives nor a hold timer (section
+  # 4.2), and a keepalive every 0 s would be a busy loop.
+  def test_a_hold_time_of_zero_sends_no_keepalives
+    Timeout::timeout(6) {
+      port = start_server(0)
+      @c = Neighbor.new(4, 100, 0, '0.0.0.2', '127.0.0.1', '127.0.0.1')
+      keepalives = Catcher.new(Keepalive)
+      @c.start :port=> port
+      assert @s.wait_for_state(:Established, 2), "server did not reach Established"
+      # The KEEPALIVE that takes the server to Established lands just
+      # after the client got there: it is not one of the periodic ones.
+      sleep 0.5
+      @c.add_observer keepalives
+      assert_nil keepalives.pop(1.5), 'no KEEPALIVE with a hold time of 0'
+      assert_nil @s.instance_variable_get(:@keepalive_thread)
+      assert_equal 'Established', @s.state
+    }
+  end
+
   def test_start_no_blocking
     Timeout::timeout(4) {
       port = start_server(0)
