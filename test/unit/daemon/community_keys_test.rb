@@ -70,4 +70,43 @@ class TestBgpDaemonCommunityKeys < Test::Unit::TestCase
   def test_an_extended_community_without_a_value_is_refused
     assert_raise(ArgumentError) { K.extended_community_hash('65001') }
   end
+
+  # The text form a spec, a node file and the injector's API take. Each
+  # kind is built, written as text, read back and compared octet for
+  # octet. Before, the reader split every value on ':' and kept what was
+  # not an integer as a String: a one-value kind got a list and was
+  # refused (encapsulation, origin_validation_state), a MAC was cut in
+  # six, a float was refused, and "false" was a true sticky flag.
+  # routescope's evpn-vxlan-frr lab met the first (routescope #299).
+  ROUND_TRIPS = { color: 100, route_target: [65000, 7], route_origin: ['10.0.1.2', 10], source_as: 65000,
+                  link_bandwidth: 999_999_999, ospf_domain_id: '1.2.3.4', ospf_router_id: '1.2.3.4',
+                  bgp_data_collect: [100, 100], origin_validation_state: 1, encapsulation: 8,
+                  traffic_rate_bytes: [10, 1000.0], traffic_rate_packets: [10, 1000.0], redirect: [10, 100],
+                  mac_mobility: [5, false], es_import: 'aa:bb:cc:dd:ee:ff', router_mac: 'aa:bb:cc:dd:ee:ff' }.freeze
+
+  def test_each_kind_round_trips_through_its_text
+    ROUND_TRIPS.each do |kind, value|
+      ec = BGP::Extended_communities.new(:extended_communities => [{ kind => value }])
+      text = K.extended_community_text(ec.to_hash[:extended_communities].first)
+      back = BGP::Extended_communities.new(:extended_communities => [K.extended_community_hash(text)])
+      assert_equal ec.to_shex, back.to_shex, "#{kind}: #{text}"
+    end
+  end
+
+  def test_an_encapsulation_by_number_or_by_name
+    [8, 'vxlan'].each do |v|
+      a = K.community_attributes('extended_communities' => ["encapsulation:#{v}"]).first
+      assert_equal({ :encapsulation => :vxlan }, a.to_hash[:extended_communities].first, "encapsulation:#{v}")
+    end
+  end
+
+  def test_false_is_false
+    assert_equal({ :mac_mobility => [5, false] }, K.extended_community_hash('mac_mobility:5:false'))
+    assert_equal({ :mac_mobility => [5, true] }, K.extended_community_hash('mac_mobility:5:true'))
+  end
+
+  def test_a_mac_stays_whole
+    assert_equal({ :router_mac => 'aa:bb:cc:dd:ee:ff' }, K.extended_community_hash('router_mac:aa:bb:cc:dd:ee:ff'))
+  end
+
 end

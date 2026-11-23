@@ -61,12 +61,32 @@ module BGP
         out
       end
 
+      # The kinds whose hash value is one field, not a list. The text after
+      # the kind is that value whole, colons and all, so a MAC stays one.
+      ONE_VALUE = %w[origin_validation_state encapsulation es_import router_mac].freeze
+
       # 'route_target:65000:7' => {:route_target=>[65000, 7]}
+      # 'encapsulation:vxlan'  => {:encapsulation=>:vxlan}
       def extended_community_hash(text)
-        key, *vals = text.to_s.split(':')
+        key, rest = text.to_s.split(':', 2)
         raise ArgumentError, "an extended community is KIND:VALUE..., as route_target:65000:7, not #{text.inspect}" if
-          key.to_s.empty? || vals.empty?
-        { key.to_sym => vals.collect { |v| v =~ /\A\d+\z/ ? v.to_i : v } }
+          key.to_s.empty? || rest.to_s.empty?
+        return { key.to_sym => text_value(rest, key) } if ONE_VALUE.include?(key)
+
+        { key.to_sym => rest.split(':').collect { |v| text_value(v, key) } }
+      end
+
+      # One value of the text form, as its hash has it: an integer, a
+      # float (a bandwidth, a rate), true or false (a flag), a tunnel
+      # type's name, or the text.
+      def text_value(v, key)
+        case v
+        when /\A\d+\z/ then v.to_i
+        when /\A\d+\.\d+\z/ then v.to_f
+        when 'true' then true
+        when 'false' then false
+        else key == 'encapsulation' ? v.to_sym : v
+        end
       end
 
       # {:route_target=>[65000, 7]} => 'route_target:65000:7', the inverse.
