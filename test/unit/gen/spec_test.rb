@@ -113,7 +113,7 @@ class TestBgpGenSpec < Test::Unit::TestCase
                    'redirect' => flow, 'marking' => flow,
                    'route_type' => evpn + mvpn, 'ip' => evpn, 'esi' => evpn, 'ethernet_tag' => evpn + %w[evpn_unreachability],
                    'gateway' => evpn, 'mac_mobility' => evpn, 'router_mac' => evpn,
-                   'pmsi_label' => evpn, 'originator' => evpn + mvpn, 'igmp_flags' => evpn,
+                   'pmsi_label' => evpn, 'vni' => evpn, 'originator' => evpn + mvpn, 'igmp_flags' => evpn,
                    'max_response_time' => evpn, 'leaf' => evpn + mvpn, 'es_import' => evpn, 'esi_label' => evpn,
                    'source_as' => mvpn, 'origin_as' => %w[rt_constrain], 'prefix_length' => %w[rt_constrain],
                    'default' => %w[rt_constrain],

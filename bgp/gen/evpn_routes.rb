@@ -40,6 +40,13 @@ module BGP
     # * **3, Inclusive Multicast Ethernet Tag** (section 7.3): `start` is
     #   the Originating Router's IP Address, stepped by one, so a spec of
     #   N routes is N PEs. `pmsi_label` adds the PMSI Tunnel attribute.
+    # * **`vni`, for VXLAN, on types 2 and 3.** RFC 8365 section 5.1.3:
+    #   MPLS Label1 and the PMSI Tunnel's label field carry the VNI, and
+    #   "the entire 24-bit field is used to encode the VNI value". So
+    #   `vni`, a value or a pattern up to 2**24 - 1, is written as those
+    #   three octets, where `label` and `pmsi_label` are MPLS labels in
+    #   the high 20 bits. It stands in for `label` on type 2 and adds the
+    #   PMSI Tunnel on type 3, and goes with neither.
     # * **4, Ethernet Segment** (section 7.4): `start` is an ESI, stepped
     #   as for type 1, and `originator` the Originating Router's IP
     #   Address. `es_import: true` adds each route's ES-Import Route
@@ -107,7 +114,7 @@ module BGP
       # The keys that belong to some route types only.
       TYPE_KEYS = { 'ip' => [2], 'mac_mobility' => [2], 'esi' => [2, 5, 7, 8],
                     'label' => [1, 2, 5], 'router_mac' => [2, 5],
-                    'gateway' => [5], 'pmsi_label' => [3],
+                    'gateway' => [5], 'pmsi_label' => [3], 'vni' => [2, 3],
                     'ethernet_tag' => TYPES - [4, 11],
                     'originator' => [4] + GROUP_START, 'source' => GROUP_START,
                     'igmp_flags' => [6, 7, 8], 'max_response_time' => [8],
@@ -137,8 +144,13 @@ module BGP
           next if !spec.key?(k) || types.include?(@type)
           raise SpecError, "'#{k}' is for route type #{types.join(', ')} and not for #{@type}"
         end
+        { 2 => 'label', 3 => 'pmsi_label' }.each do |t, k|
+          raise SpecError, "a route type #{t} spec takes '#{k}' or 'vni', not both" if
+            @type == t && !spec[k].nil? && !spec['vni'].nil?
+        end
         REQUIRED.each do |k, types|
           next if spec.key?(k) || !types.include?(@type)
+          next if k == 'label' && @type == 2 && !spec['vni'].nil?
           raise SpecError, "an evpn route type #{@type} spec needs #{k == 'label' ? 'a label, a value or a pattern ' \
                            "from 0 to #{Spec::LABEL_MAX}" : "#{k == 'leaf' ? 'a leaf' : 'an originator'}, an address"}"
         end
@@ -149,6 +161,7 @@ module BGP
         @label = compile(spec, 'label', Spec::LABEL_MAX, seed)
         @tag = compile(spec, 'ethernet_tag', Spec::U32, seed)
         @pmsi = compile(spec, 'pmsi_label', Spec::LABEL_MAX, seed)
+        @vni = compile(spec, 'vni', Spec::EVPN_MAX['vni'], seed)
         @mobility = compile(spec, 'mac_mobility', Spec::U32, seed)
         @esi_label = compile(spec, 'esi_label', Spec::LABEL_MAX, seed)
         @es_import = spec['es_import'] == true
@@ -171,6 +184,17 @@ module BGP
       def slot(i) ; i % @count ; end
 
       def label(i) ; @label.at(i) ; end
+
+      # The VNI of route i, or nil.
+      def vni(i) ; @vni && @vni.at(i) ; end
+
+      # Type 2's MPLS Label1: the spec's label, or its VNI as the whole
+      # three octets, which Label writes as 20 bits of label, 3 of EXP
+      # and the bottom of stack bit.
+      def label1(i)
+        v = vni(i) or return label(i)
+        BGP::Label.new(:label => v >> 4, :exp => (v >> 1) & 7, :bottom => v & 1)
+      end
       def ethernet_tag(i) ; @tag ? @tag.at(i) : 0 ; end
 
       # Route type 2's MAC, as "00:11:22:33:44:55".
@@ -221,7 +245,7 @@ module BGP
         tag = ethernet_tag(i)
         case @type
         when 1 then e::Ethernet_ad.new(rd, esi(i), tag, label(i))
-        when 2 then e::Mac_ip_advertisement.new(rd, @esi, tag, mac(i), ip(i), label(i))
+        when 2 then e::Mac_ip_advertisement.new(rd, @esi, tag, mac(i), ip(i), label1(i))
         when 3 then e::Inclusive_multicast.new(rd, tag, originator(i))
         when 4 then e::Ethernet_segment.new(rd, esi(i), @originator)
         when 5 then e::Ip_prefix_route.new(rd, @esi, tag, prefix(i), gateway, label(i))
@@ -248,7 +272,7 @@ module BGP
           r['mac'] = mac(i)
           r['ip'] = ip(i) if @ip
           r['esi'] = @esi
-          r['label'] = label(i)
+          if @vni then r['vni'] = vni(i) else r['label'] = label(i) end
         when 3
           r['originator'] = originator(i)
         when 4
@@ -290,6 +314,8 @@ module BGP
         if @pmsi
           r['pmsi'] = { 'tunnel_type' => 'ingress_replication', 'label' => @pmsi.at(i),
                         'identifier' => originator(i) }
+        elsif type3_vni?
+          r['pmsi'] = { 'tunnel_type' => 'ingress_replication', 'vni' => vni(i), 'identifier' => originator(i) }
         end
         r
       end
@@ -300,7 +326,9 @@ module BGP
         spec[k] && Vary.compile(spec[k], k, :int, max: max, seed: seed)
       end
 
-      def per_route? ; @pmsi || @es_import ; end
+      def per_route? ; @pmsi || @es_import || type3_vni? ; end
+
+      def type3_vni? ; @vni && @type == 3 ; end
 
       def read_start(start)
         if ESI_START.include?(@type)
@@ -394,7 +422,8 @@ module BGP
                  .add(BGP::Extended_communities.new(:extended_communities => list + extra))
              end
         if (t = a['pmsi'])
-          pa.add(BGP::Pmsi_tunnel.new(:ingress_replication, t['identifier'], :label => t['label']))
+          label = t.key?('vni') ? { :label_bits => t['vni'] } : { :label => t['label'] }
+          pa.add(BGP::Pmsi_tunnel.new(:ingress_replication, t['identifier'], label))
         end
         pa
       end
