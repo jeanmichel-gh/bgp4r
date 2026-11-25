@@ -168,6 +168,7 @@ one. `prefix` reads one prefix instead of a page.
 | `show.vrfs` | the VRFs, one row each: `name`, `table`, `rd`, `import`, `export`, `device`, `error`, `routes`, `installed` | `offset`, `limit` |
 | `show.vrf` | each VRF's imported routes: `vrf`, `prefix`, `rd`, `peer`, `next_hop`, `vpn_labels`, `transport`, `transport_labels`, `gateway`, `dev`, `candidates`, `installed`, `error` | `vrf`, `offset`, `limit` |
 | `show.vpn` | VPN-IPv4 routes received, one row per route: `rd`, `prefix`, `path_id`, `peer`, `next_hop`, `labels`, `route_targets`, `as_path`, `origin`, `local_pref`, `med`, `best`, `reason`, `since`; the routes this PE sends have `peer` null, `reason` `local` and a `vrf` | `offset`, `limit` |
+| `show.evpn` | EVPN routes received, types 2 and 3, one row per path: `rd`, `route_type`, `eth_tag`, `mac`, `ip`, `originator`, `esi`, `vni`, `path_id`, `peer`, `next_hop`, `route_targets`, `encap`, `seq`, `sticky`, `pmsi`, `as_path`, `origin`, `local_pref`, `med`, `originator_id`, `cluster_list`, `best`, `reason`, `since` | `route_type`, `rd`, `mac`, `offset`, `limit` |
 | `show.vpn_labels` | each exporting VRF's label, one row each: `label`, `vrf`, `action`, `installed`, `error` | `offset`, `limit` |
 | `show.log` | the daemon's last log lines, oldest first | `count`, default 100 |
 | `show.text` | what `-c 'show bgp'` prints, as one JSON string | `style`, `prefix` |

@@ -655,6 +655,8 @@ module BGP
             un_feed = @speaker.unreach.attach(n)
             # VPN-IPv4 too, in a table of its own: bgp/rib/vpn_table.rb.
             vpn_feed = @speaker.vpn.attach(n)
+            # EVPN types 2 and 3 too: bgp/rib/evpn_table.rb.
+            evpn_feed = @speaker.evpn.attach(n)
           end
           n.start(:session => sock, :timeout => @config.fetch('open_timeout', 30))
           if n.is_established?
@@ -685,6 +687,7 @@ module BGP
             @speaker.link_state.detach(n, ls_feed) if ls_feed
             @speaker.unreach.detach(n, un_feed) if un_feed
             @speaker.vpn.detach(n, vpn_feed) if vpn_feed
+            @speaker.evpn.detach(n, evpn_feed) if evpn_feed
             @speaker.ce_table.detach(ce_feed) if ce_feed
             n.close
           end
@@ -782,6 +785,10 @@ module BGP
       # docs/design/l3vpn-pe.md, and bgp/rib/vpn_table.rb.
       attr_reader :vpn
 
+      # The EVPN routes received, types 2 and 3 of AFI 25 / SAFI 70,
+      # outside the RIB: docs/design/evpn.md, and bgp/rib/evpn_table.rb.
+      attr_reader :evpn
+
       # The PE's VRFs, filled from the VPN table and put in the kernel, or
       # nil with no vrfs: block (bgp/rib/l3vpn.rb, pull request 2).
       attr_reader :l3vpn
@@ -870,6 +877,8 @@ module BGP
         on_established { |p| @unreach_originator.session_up(p) }
         @vpn = BGP::Rib::VpnTable.new(local_as: @my_as, router_id: @router_id,
                                       cluster_id: decision_options[:cluster_id])
+        @evpn = BGP::Rib::EvpnTable.new(local_as: @my_as, router_id: @router_id,
+                                        cluster_id: decision_options[:cluster_id])
         build_l3vpn(config['vrfs'], config['l3vpn'])
         build_vpn_reflector
         if config['link_state']
@@ -1331,6 +1340,11 @@ module BGP
       # the ones it received, one row each.
       def vpn_rows
         (@vpn_exporter ? @vpn_exporter.rows : []) + @vpn.rows
+      end
+
+      # `show.evpn`: the EVPN routes received, one row each.
+      def evpn_rows
+        @evpn.rows
       end
 
       # `show.vpn_labels`: the label of each exporting VRF.

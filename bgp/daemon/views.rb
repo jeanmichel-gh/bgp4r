@@ -209,6 +209,19 @@ module BGP
         rows_page(@speaker.vpn_rows, params)
       end
 
+      # The EVPN routes received, types 2 and 3 (AFI 25 / SAFI 70), one
+      # row per path, one page of them. `route_type`, `rd` and `mac`
+      # narrow it. See bgp/rib/evpn_table.rb for the row;
+      # docs/design/evpn.md, pull request 1.
+      def evpn(params = {})
+        p = (params || {}).to_h { |k, v| [k.to_s, v] }
+        rows = @speaker.evpn_rows
+        rows = rows.select { |r| r['route_type'] == Integer(p['route_type']) } if p['route_type']
+        rows = rows.select { |r| r['rd'] == p['rd'].to_s } if p['rd']
+        rows = rows.select { |r| r['mac'] == p['mac'].to_s.downcase } if p['mac']
+        rows_page(rows, p.slice('offset', 'limit'))
+      end
+
       # One page of rows, as show.vpn and the VRF views answer them.
       def rows_page(rows, params)
         offset, limit = window(params)
@@ -343,7 +356,8 @@ module BGP
       def families(peer, row)
         return [ce_family(peer)] if peer.vrf
         vpn = peer.established? ? BGP::Rib::VpnTable.families(peer.session_info) : []
-        return nil if vpn.empty?
+        evpn = peer.established? && @speaker.evpn && BGP::Rib::EvpnTable.negotiated?(peer.session_info)
+        return nil if vpn.empty? && !evpn
         received = @speaker.vpn ? @speaker.vpn.counts(peer.address) : {}
         sent = Hash.new(0)
         [@speaker.vpn_exporter && @speaker.vpn_exporter.sent_counts(peer),
@@ -354,7 +368,16 @@ module BGP
           vpn.collect do |afi, _safi|
             name = afi == 2 ? 'vpn-ipv6' : 'vpn-ipv4'
             { :family => name, :received => received.fetch(name, 0), :sent => sent[name] }
-          end
+          end + (evpn ? [evpn_family(peer)] : [])
+      end
+
+      # EVPN: the routes held from the peer, types 2 and 3, and
+      # `other_types`, the routes of other types it announced, which the
+      # table does not keep (docs/design/evpn.md, decision 1). Nothing is
+      # sent yet: export is pull request 3.
+      def evpn_family(peer)
+        c = @speaker.evpn.counts(peer.address)
+        { :family => 'evpn', :received => c[:received], :sent => 0, :other_types => c[:other_types] }
       end
 
       def ce_family(peer)

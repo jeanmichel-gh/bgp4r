@@ -164,8 +164,10 @@ components, and for the same reason.
 **Route key processing is not implemented and is not a gap here.**
 Section 7.1 says the MPLS Label "is to be treated as a route attribute
 as opposed to being part of the route", and section 7.4 names the three
-fields that are part of its prefix. That distinction matters to a RIB,
-and no EVPN route goes in a RIB by the recorded decision.
+fields that are part of its prefix. That distinction matters to a
+table, and bgp4rd's EVPN table keeps types 2 and 3 only
+(`bgp/rib/evpn_table.rb`, `docs/design/evpn.md`), keyed as sections 7.2
+and 7.3 say.
 
 ### Types 2 and 3
 
@@ -545,8 +547,8 @@ than MUST.
 **Route key, for the record and not for implementing**: section 3.1 says
 "The RD, Ethernet Tag ID, IP prefix length, and IP prefix are part of
 the route key used by BGP to compare routes. The rest of the fields are
-not part of the route key." That matters to a RIB, and no EVPN route
-goes in one.
+not part of the route key." That matters to a table, and bgp4rd's EVPN
+table keeps types 2 and 3 only (`docs/design/evpn.md`, decision 1).
 
 ## 7. The extended communities
 
