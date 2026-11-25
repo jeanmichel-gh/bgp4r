@@ -19,7 +19,7 @@ amounts. Measured 2026-11-03:
 
 | Tier | What it needs | Files | Time | Command |
 |---|---|---:|---|---|
-| unit | Ruby | 190 | 21s | `ruby test/run_unit.rb` |
+| unit | Ruby | 191 | 21s | `ruby test/run_unit.rb` |
 | functional | a loopback socket | 26 | 18s | one file at a time, below |
 | lab | gobgpd, FRR, Docker or root | 40 | 10s to 400s per group | `ruby test/run_lab.rb GROUP` |
 
@@ -114,6 +114,7 @@ Deciding and advertising routes.
 | `evpn-table` | 1 | 1 | 0 | The EVPN table: types 2 and 3 received (AFI 25 SAFI 70), keyed on RD and RFC 7432 key fields, best path per key, show.evpn |
 | `macvrfs` | 2 | 1 | 0 | MAC-VRFs: one per VNI, import by Route Target, flood VTEPs from type 3 and remote MACs from type 2 written into vtep4rd, show.macvrfs and show.macvrf |
 | `evpn-export` | 2 | 1 | 0 | EVPN export: type 3 per MAC-VRF and type 2 per local MAC, MAC Mobility sequences, duplicate MACs, the hold on a lost vtep4rd, evpn.clear_duplicate |
+| `evpn-reflector` | 1 | 1 | 0 | EVPN route reflection: types 2 and 3 to clients with ORIGINATOR_ID and CLUSTER_LIST, next hop, labels and PMSI Tunnel kept |
 | `vrfs` | 8 | 0 | 0 | A PE's VRFs: import by Route Target, the mpls and gre transports, VRF routes in the kernel, export with a label per VRF, IPv6 over an IPv4 core, CEs by eBGP |
 | `export` | 5 | 1 | 5 | The export rules, Adj-RIB-Out, UPDATE building and the MRAI timer |
 | `fib` | 3 | 0 | 3 | Putting the Loc-RIB in a forwarding table, and packets following it |
@@ -321,6 +322,18 @@ EVPN export: type 3 per MAC-VRF and type 2 per local MAC, MAC Mobility sequences
 
 ```
 ruby test/run_feature.rb evpn-export
+```
+
+### `evpn-reflector`
+
+EVPN route reflection: types 2 and 3 to clients with ORIGINATOR_ID and CLUSTER_LIST, next hop, labels and PMSI Tunnel kept.
+
+- RFC 4456 sections 6 and 8; RFC 7432
+- Read first: `docs/design/evpn.md`
+- 1 unit file, 1 functional
+
+```
+ruby test/run_feature.rb evpn-reflector
 ```
 
 ### `evpn-table`
@@ -986,5 +999,5 @@ test file has to be tagged before the suite is green again, which is
 the same arrangement `test/unit/lab_groups_test.rb` has with the CI
 matrix.
 
-256 of 256 test files are tagged. The
+257 of 257 test files are tagged. The
 remainder, if any, is what the guard names.

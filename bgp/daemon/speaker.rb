@@ -75,6 +75,7 @@ require 'bgp/daemon/evpn_exporter'
 require 'bgp/daemon/vpn_exporter'
 require 'bgp/daemon/vrf_ce_exporter'
 require 'bgp/daemon/vpn_reflector'
+require 'bgp/daemon/evpn_reflector'
 require 'bgp/daemon/bfd'
 require 'bgp/daemon/gtsm'
 require 'bgp/daemon/tcp_auth'
@@ -873,6 +874,10 @@ module BGP
       # not a route reflector (bgp/daemon/vpn_reflector.rb, pull request 6).
       attr_reader :vpn_reflector
 
+      # The EvpnReflector, or nil when this speaker is not a route
+      # reflector (docs/design/evpn.md, pull request 4).
+      attr_reader :evpn_reflector
+
       # BFD for the neighbors with `bfd: true` (bgp/daemon/bfd.rb).
       attr_reader :bfd
 
@@ -1137,6 +1142,7 @@ module BGP
         start_rib
         @vrf_sync&.start
         @vpn_reflector&.start
+        @evpn_reflector&.start
         @evpn_sync&.start
         @vtep_events&.start
         @server = listen if @peers.any? { |p| !p.active? && !p.vrf }
@@ -1161,6 +1167,7 @@ module BGP
         stop_rib
         @vrf_sync&.stop
         @vpn_reflector&.stop
+        @evpn_reflector&.stop
         @vtep_events&.stop
         @evpn_sync&.stop
         @vtep_client&.close
@@ -1562,6 +1569,11 @@ module BGP
         @vpn_reflector = VpnReflector.new(self, @vpn, export, logger: @logger)
         @vpn.on_change { @vpn_reflector.poke }
         on_established { |p| @vpn_reflector.session_up(p) }
+        # docs/design/evpn.md, pull request 4: EVPN routes too, with the
+        # same clients and CLUSTER_ID.
+        @evpn_reflector = EvpnReflector.new(self, @evpn, export, logger: @logger)
+        @evpn.on_change { @evpn_reflector.poke }
+        on_established { |p| @evpn_reflector.session_up(p) }
       end
 
       # The keys of the evpn: block, docs/design/evpn.md, Configuration.
