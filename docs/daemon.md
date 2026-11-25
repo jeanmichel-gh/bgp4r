@@ -262,6 +262,7 @@ neighbors:
     bfd: true                      # a BFD session beside BGP; docs/bfd.md
     ttl_security: 1                # GTSM, RFC 5082: hops away; see below
     password: s3cret               # TCP MD5, RFC 2385; see below
+    end_of_rib: true               # RFC 4724 section 2; see below
 
 originate:
   - prefixes: [10.255.0.0/24]
@@ -397,6 +398,27 @@ The key is in `show.configuration`, both forms, as it is in the file,
 so a configuration sent back by `config.replace` keeps it. Masking it
 is the reader's job: the set line is `set neighbors ADDRESS password
 KEY`. No other answer carries it.
+
+`end_of_rib: true` on a neighbor sends the End-of-RIB marker of RFC
+4724 section 2 once its session's first table has gone: one per family
+the session negotiated, in the order of our OPEN, even when there was
+nothing to send. A family is negotiated when both OPENs list it as a
+Multiprotocol capability; an OPEN with none is IPv4 unicast. IPv4
+unicast's marker is the 23-octet UPDATE, any other family's an UPDATE
+with one empty MP_UNREACH_NLRI. It is off by default, since it changes
+the wire, and a commit applies it by bouncing the session.
+
+"First table" is everything bgp4rd sends when the session comes up:
+the `announce` blocks, the Loc-RIB through `export`, and what the VPN,
+BGP-LS and unreachability exporters and the VPN reflector send. The
+marker waits for the RIB's worker and the reflector's, up to 30 s each,
+and logs a warning if one took longer.
+
+**A marker received is recorded whatever `end_of_rib` says.** bgp4rd
+publishes a `session` event for it, with `data` `{"end_of_rib": {"afi":
+1, "safi": 1}}`, and keeps the families on the peer's row, below. A
+session that ends forgets them. FRR 10.5.1 sends one for IPv4 unicast
+after its first table with no graceful restart negotiated.
 
 `cluster_id` and `default_local_pref` are written under `export` and
 read by the decision process too. The first is the ID a reflector
@@ -1266,6 +1288,10 @@ key.
 
 **A neighbor with `password` says so, and not the key**: its row gains
 `auth`, `md5`. Other rows have no such key.
+
+**A session whose End-of-RIB has come says for which families**: its
+row gains `end_of_rib_received`, `[{"afi": 1, "safi": 1}]`, in the
+order they came. Other rows have no such key.
 
 **A CE's row, and a row whose session negotiated a VPN family, say
 more**, for routescope's L3VPN views (routescope

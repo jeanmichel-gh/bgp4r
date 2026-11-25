@@ -313,6 +313,22 @@ class BGP_Daemon_Candidate_Test < Test::Unit::TestCase
            errors.inspect)
   end
 
+  # end_of_rib is read when a session starts, so a bounce applies it.
+  def test_end_of_rib_bounces_the_session
+    @candidate.load('lines' => ['set neighbors 127.0.0.9 end_of_rib true'])
+    r = @candidate.commit('check' => true)
+    assert_equal(true, r[:ok], r.inspect)
+    assert(r[:warnings].any? { |w| w =~ /127\.0\.0\.9 will be bounced to pick up end_of_rib/ }, r.inspect)
+  end
+
+  # A value bgp4rd would refuse at start is refused here too, or the
+  # bounce would apply it as off.
+  def test_an_end_of_rib_that_is_not_true_or_false_is_refused
+    @candidate.load('lines' => ['set neighbors 127.0.0.9 end_of_rib yes'])
+    assert_equal(['neighbor 127.0.0.9: end_of_rib is true or false, got "yes"'],
+                 @candidate.commit('check' => true)[:errors])
+  end
+
   # The listener holds the keys from when bgp4rd starts, so a
   # neighbor's password is restart class with its own reason.
   def test_password_cannot_change_while_running

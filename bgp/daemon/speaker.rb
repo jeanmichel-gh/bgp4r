@@ -77,6 +77,7 @@ require 'bgp/daemon/vpn_reflector'
 require 'bgp/daemon/bfd'
 require 'bgp/daemon/gtsm'
 require 'bgp/daemon/tcp_auth'
+require 'bgp/daemon/end_of_rib'
 require 'socket'
 require 'thread'
 
@@ -146,6 +147,10 @@ module BGP
             @last_update_at = Time.now
             @first_update_at ||= @last_update_at
             @data['updates_received'] += 1
+            # RFC 4724 section 2's marker, one family at a time, in the
+            # order they came. BGP::Neighbor publishes the event.
+            eor = msg.end_of_rib
+            @data['end_of_rib_received'] |= [{ 'afi' => eor[0], 'safi' => eor[1] }] if eor
             routes? ? record_routes(msg) : count_routes(msg)
           when BGP::Notification
             @data['last_error'] = "notification: #{msg}"
@@ -239,6 +244,7 @@ module BGP
       def reset_session
         @data['received'] = {} if routes?
         @data['prefixes_received'] = 0
+        @data['end_of_rib_received'] = []
         @established_at = @first_update_at = @last_update_at = nil
         @first_prefix = @last_prefix = nil
       end
@@ -299,7 +305,7 @@ module BGP
       # to the code, so a key read here and not listed fails the suite.
       KEYS = %w[address as capabilities connect description hold_time
                 open_timeout port record retry route_reflector_client
-                vrf as_override soo bfd ttl_security password].freeze
+                vrf as_override soo bfd ttl_security password end_of_rib].freeze
 
       # Raises ArgumentError naming every key `config` carries that no
       # code reads, and the keys there are.
@@ -393,6 +399,9 @@ module BGP
       # with, or nil for none. See bgp/daemon/tcp_auth.rb.
       # Speaker#check_password refuses a key that is not 1 to 80 octets.
       def password ; @config['password']&.to_s ; end
+      # RFC 4724 section 2: send an End-of-RIB per negotiated family once
+      # the first table is sent. See bgp/daemon/end_of_rib.rb.
+      def end_of_rib? ; @config['end_of_rib'] == true ; end
 
       # A CE neighbor (docs/design/l3vpn-pe.md, pull request 7): the VRF
       # its session is bound to, or nil for a neighbor in the global
@@ -693,6 +702,7 @@ module BGP
             @recorder.established!
             announce(n, sock) unless vrf
             @speaker.session_established(self)
+            @speaker.send_end_of_rib(self) if end_of_rib?
             n.wait_for_state(:Idle)
           else
             @recorder.error!("session did not reach Established, state #{n.state}#{": #{n.last_error.message}" if n.last_error}")
@@ -904,6 +914,7 @@ module BGP
         check_bfd
         check_ttl_security
         check_password
+        @peers.each { |p| EndOfRib.check(p.config['end_of_rib'], p.address) }
         @link_state = LinkStateTable.new
         unreach_log = ->(level, msg) { log(level, msg) }
         @unreach = UnreachTable.new(events: @events, logger: unreach_log)
@@ -1025,6 +1036,35 @@ module BGP
           end
         end
       end
+
+      # The End-of-RIB markers to one peer, one per family its session
+      # negotiated, after the first table: RFC 4724 section 2, "upon
+      # completion of the initial update". Called on the session's own
+      # thread, once `announce` and every `on_established` block have run.
+      #
+      # **Two senders run behind on threads of their own**, so this waits
+      # for each before it sends. The Router's table goes out from the RIB
+      # feed's worker, which queued this session's [:session_up] when the
+      # session reached Established, so draining the feed waits for it. The
+      # VPN reflector sends on its next refresh, which `session_up` asked
+      # for, so draining its queue waits for that. Every other sender sends
+      # in its `on_established` block, which has returned.
+      #
+      # A family with nothing to send gets its marker too, as RFC 4724
+      # section 4 asks of a restarting speaker: "including the case when
+      # there is no update to send".
+      def send_end_of_rib(peer)
+        waited = [@rib && @rib.feed.drain(END_OF_RIB_WAIT), @vpn_reflector && @vpn_reflector.drain(END_OF_RIB_WAIT)]
+        log(:warn, "bgp4r: End-of-RIB to #{peer.address} sent before the first table was: a sender took over #{END_OF_RIB_WAIT}s") if waited.include?(false)
+        families = EndOfRib.families(peer.session_info)
+        families.each { |afi, safi| peer.send_message(EndOfRib.marker(afi, safi)) }
+        log(:info, "bgp4r: End-of-RIB sent to #{peer.address} for #{families.collect { |f| f.join('/') }.join(', ')}")
+      rescue NoSession => e
+        log(:info, "bgp4r: End-of-RIB to #{peer.address} not sent: #{e.message}")
+      end
+
+      # How long send_end_of_rib waits for a sender, in seconds.
+      END_OF_RIB_WAIT = 30
 
       # True when the node file asks for a table at all. rib: on its own
       # builds one that decides and prints and advertises nothing, which is

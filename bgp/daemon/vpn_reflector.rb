@@ -82,6 +82,16 @@ module BGP
         self
       end
 
+      # Waits until a refresh has run after this call, so whatever was
+      # asked for before it has been sent. true, or false when timeout
+      # seconds passed first. Speaker#send_end_of_rib needs it.
+      def drain(timeout)
+        return true unless @worker&.alive?
+        done = Queue.new
+        @queue << done
+        !done.pop(:timeout => timeout).nil?
+      end
+
       # A session came up: it gets everything, on the next refresh.
       def session_up(peer)
         @lock.synchronize { @sent.delete(peer.address) }
@@ -144,6 +154,7 @@ module BGP
           jobs << @queue.pop until @queue.empty?
           break if jobs.include?(:stop)
           refresh
+          jobs.grep(Queue).each { |q| q << true }
         end
       rescue StandardError => e
         log(:error, "vpn reflector: #{e.class}: #{e.message}")
