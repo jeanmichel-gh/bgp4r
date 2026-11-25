@@ -187,6 +187,30 @@ class TestDaemonUnreachability < Test::Unit::TestCase
     assert_equal(1, gone.size)
   end
 
+  # A route refresh for one family: that family's reports again, and
+  # none of the other.
+  def test_resend_sends_one_family_again
+    sp = FakeSpeaker.new
+    caps = [BGP::OPT_PARM::CAP::Mbgp.new(1, 81), BGP::OPT_PARM::CAP::Mbgp.new(25, 70)]
+    info = BGP::Neighbor::Capabilities.new(BGP::Open.new(4, 65_001, 180, '10.0.0.1', *caps),
+                                           BGP::Open.new(4, 65_002, 180, '10.0.0.2', *caps))
+    peer = Struct.new(:ebgp?, :local_ip, :session_info, :sent) do
+      def established? ; true ; end
+      def send_message(m) ; sent << m ; end
+    end.new(true, '10.0.0.1', info, [])
+    sp.peers << peer
+    o = D::UnreachOriginator.new(sp)
+    o.refresh([{ 'prefix' => '192.0.2.0/24', 'timestamp' => 1 },
+               { 'prefix' => '198.51.100.0/24', 'timestamp' => 1,
+                 'evpn' => { 'rd' => '10.0.0.1:1', 'route_targets' => ['65001:1'] } }], 1)
+    peer.sent.clear # refresh sent them to every peer already
+    o.session_up(peer)
+    assert_equal([[1, 81], [25, 70]], peer.sent.collect { |u| m = u.path_attribute[Mp_reach] ; [m.afi, m.safi] }.sort)
+    peer.sent.clear
+    o.resend(peer, [1, 81])
+    assert_equal([[1, 81]], peer.sent.collect { |u| m = u.path_attribute[Mp_reach] ; [m.afi, m.safi] })
+  end
+
   # SAFI 4.6: ORIGIN INCOMPLETE; Appendix B.1: no next hop. EVPN: its
   # Route Targets and our next hop.
   def test_the_updates_it_sends

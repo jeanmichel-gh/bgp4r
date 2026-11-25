@@ -140,6 +140,21 @@ class TestBgpDaemonVpnExporter < Test::Unit::TestCase
     assert_equal([], @plain.sent)
   end
 
+  # A route refresh for one VPN family: what was sent of that AFI, again,
+  # and nothing of the other.
+  def test_resend_sends_one_family_again
+    pe6 = FakePeer.new('10.255.0.6', 65000, session_info(true, vpn6: true))
+    ex = BGP::Daemon::VpnExporter.new(Speaker.new([pe6], 65000, '10.255.0.1'))
+    ex.refresh([a1, Export.new('A', '65000:1', '2001:db8:1::/48', 24002, ['65000:100'])])
+    assert_equal(2, pe6.operations.size, 'both families went out first')
+    pe6.sent.clear
+    ex.resend(pe6, 1)
+    assert_equal(['192.168.1.0/30'], pe6.operations.collect { |o| o[2] })
+    pe6.sent.clear
+    ex.resend(pe6, 2)
+    assert_equal(['2001:db8:1::/48'], pe6.operations.collect { |o| o[2] })
+  end
+
   # RFC 4271 section 5.1.2 and 5.1.5.
   def test_ibgp_and_ebgp_attributes
     @exporter.refresh([a1])

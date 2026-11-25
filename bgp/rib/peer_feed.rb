@@ -135,7 +135,7 @@ module BGP
         @count_lock.synchronize { SENDING.sum { |k| @kinds[k] } }
       end
 
-      SENDING = %i[advertise session_up session_down mrai resend].freeze
+      SENDING = %i[advertise session_up session_down mrai resend readvertise].freeze
 
       # Waits until everything queued before this call has been applied.
       # Returns true, or false if timeout seconds passed first. Tests need
@@ -226,6 +226,14 @@ module BGP
           # happens: the result, false for no session, or what was raised.
           begin
             work[3] << (@table.router&.resend(work[1], work[2]) || false)
+          rescue StandardError => e
+            work[3] << e
+            raise
+          end
+        when :readvertise
+          # `resend`'s answer and `resend`'s rule: the caller is waiting.
+          begin
+            work[3] << (@table.router&.readvertise(work[1], work[2]) || false)
           rescue StandardError => e
             work[3] << e
             raise

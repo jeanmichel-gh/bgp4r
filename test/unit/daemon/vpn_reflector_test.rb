@@ -176,6 +176,18 @@ class TestBgpDaemonVpnReflector < Test::Unit::TestCase
     assert_equal(true, @rr.drain(1), 'a stopped worker, nothing to wait for')
   end
 
+  # A route refresh for one VPN family: what the peer had of that AFI
+  # goes again on the next refresh, and nothing of the other.
+  def test_resend_sends_one_family_again
+    receive('10.255.0.1', '192.168.1.0/24', rd: [65000, 1], label: 24000)
+    receive('10.255.0.1', '2001:db8:1::/48', rd: [65000, 1], label: 24001, afi: 2, nh: '::ffff:10.255.0.1')
+    @rr.refresh
+    @pe2.sent.clear
+    @rr.resend(@pe2, 1)
+    @rr.refresh
+    assert_equal(['192.168.1.0/24'], @pe2.read.collect { |o| o[2] })
+  end
+
   # A CE in a VRF and an external peer get none of it.
   def test_ces_and_external_peers_get_nothing
     @nc.vrf = 'A'

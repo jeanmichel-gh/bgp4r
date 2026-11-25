@@ -1059,4 +1059,30 @@ class TestBgpRibRouter < Test::Unit::TestCase
     assert_nil(@rib.resend('10.0.0.2', ['10.1.0.0/16']))
   end
 
+  # RFC 2918 section 4's answer for one family: every prefix of that AFI
+  # in the peer's Adj-RIB-Out, again, and none of the other.
+  def test_readvertise_sends_one_family_of_the_adj_rib_out_again
+    n = neighbor
+    @rib.attach(n)
+    @rib.advertise(:next_hops => { 2 => '2011:aa::1' })
+    @rib.announce(route('10.1.0.0/16'))
+    @rib.announce(route('10.2.0.0/16'))
+    @rib.announce(v6_route)
+    assert(@rib.drain)
+    n.sent.clear
+    assert_equal({ :resent => %w[10.1.0.0/16 10.2.0.0/16], :withdrawn => [] }, @rib.readvertise('10.0.0.2', 1).tap { |r| r[:resent].sort! })
+    assert_equal(%w[10.1.0.0/16 10.2.0.0/16], n.sent.flat_map { |m| m.nlri ? m.nlri.to_ary : [] }.sort)
+    assert(n.sent.none? { |m| m.path_attribute && m.path_attribute.has?(BGP::Mp_reach) }, 'no IPv6')
+    n.sent.clear
+    assert_equal({ :resent => ['2011:1::/32'], :withdrawn => [] }, @rib.readvertise('10.0.0.2', 2))
+    assert_equal(1, n.sent.size)
+  end
+
+  def test_readvertise_with_no_router_or_no_session_answers_nil
+    assert_nil(@rib.readvertise('10.0.0.2', 1))
+    @rib.attach(neighbor(2, 65002, established: false))
+    @rib.advertise
+    assert_nil(@rib.readvertise('10.0.0.2', 1))
+  end
+
 end

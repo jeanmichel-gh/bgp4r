@@ -420,6 +420,120 @@ publishes a `session` event for it, with `data` `{"end_of_rib": {"afi":
 session that ends forgets them. FRR 10.5.1 sends one for IPv4 unicast
 after its first table with no graceful restart negotiated.
 
+**bgp4rd answers a route refresh** once a neighbor's `capabilities`
+list `route_refresh` or `enhanced_route_refresh`, since RFC 2918 section
+4 makes answering a "shall" once the capability went out. The answer
+is the Adj-RIB-Out of the family the request names, again: the
+`announce` blocks of that family, the Loc-RIB through `export` for
+unicast (a CE's VRF routes in a VRF), what the VPN exporter and
+reflector sent for VPN, the BGP-LS Producer's routes and the
+unreachability reports. A request for a family our OPEN did not carry
+is ignored and logged, and so is every request when our OPEN carried
+neither capability, which is what bgp4rd did before. An OPEN with no
+Multiprotocol capability carries IPv4 unicast.
+
+When the peer's OPEN carried `enhanced_route_refresh`, capability 70,
+the answer goes between a BoRR and an EoRR, RFC 7313 section 4. A
+second request waits for the first answer's EoRR. A request carrying
+ORF entries (RFC 5291) is not answered. Receiving a BoRR or an EoRR,
+and the stale routes they mark, is a later pull request
+(`docs/design/bgp-operations.md`, section 2).
+
+Every ROUTE-REFRESH message is counted both ways by subtype, and each
+one, and each answer, is a `refresh` event. Here a peer with capability
+70 asked for IPv4 unicast and then IPv6 unicast, which our OPEN did not
+carry; `time` is left out. The second request is read before the first
+answer's EoRR goes, since answers wait their turn:
+
+```json
+[
+  {
+    "seq": 5,
+    "level": "info",
+    "kind": "refresh",
+    "peer": "127.0.0.2",
+    "message": "Recv ROUTE-REFRESH normal AFI 1 SAFI 1",
+    "data": {
+      "direction": "receive",
+      "afi": 1,
+      "safi": 1,
+      "subtype": "normal"
+    }
+  },
+  {
+    "seq": 6,
+    "level": "info",
+    "kind": "refresh",
+    "peer": "127.0.0.2",
+    "message": "Send ROUTE-REFRESH borr AFI 1 SAFI 1",
+    "data": {
+      "direction": "send",
+      "afi": 1,
+      "safi": 1,
+      "subtype": "borr"
+    }
+  },
+  {
+    "seq": 7,
+    "level": "info",
+    "kind": "refresh",
+    "peer": "127.0.0.2",
+    "message": "Recv ROUTE-REFRESH normal AFI 2 SAFI 1",
+    "data": {
+      "direction": "receive",
+      "afi": 2,
+      "safi": 1,
+      "subtype": "normal"
+    }
+  },
+  {
+    "seq": 8,
+    "level": "info",
+    "kind": "refresh",
+    "peer": "127.0.0.2",
+    "message": "Send ROUTE-REFRESH eorr AFI 1 SAFI 1",
+    "data": {
+      "direction": "send",
+      "afi": 1,
+      "safi": 1,
+      "subtype": "eorr"
+    }
+  },
+  {
+    "seq": 9,
+    "level": "info",
+    "kind": "refresh",
+    "peer": "127.0.0.2",
+    "message": "route refresh for AFI 1 SAFI 1 answered, between BoRR and EoRR",
+    "data": {
+      "answered": {
+        "afi": 1,
+        "safi": 1
+      },
+      "enhanced": true
+    }
+  },
+  {
+    "seq": 10,
+    "level": "info",
+    "kind": "refresh",
+    "peer": "127.0.0.2",
+    "message": "route refresh for AFI 2 SAFI 1 ignored: we did not advertise AFI 2 SAFI 1",
+    "data": {
+      "ignored": {
+        "afi": 2,
+        "safi": 1
+      },
+      "reason": "we did not advertise AFI 2 SAFI 1"
+    }
+  }
+]
+```
+
+FRR 10.5.1 counts the same messages, every subtype together, in
+`messageStats.routeRefreshSent` and `routeRefreshRecv`, and the two
+agree.
+
 `cluster_id` and `default_local_pref` are written under `export` and
 read by the decision process too. The first is the ID a reflector
 prepends to a CLUSTER_LIST and the one whose presence makes a route
@@ -1056,7 +1170,8 @@ Reserved octet: 0 a normal request, 1 the beginning of a route refresh
 operation, 2 its end, 255 Reserved. `subtype` takes those numbers or the
 three names `BGP::Route_refresh` answers to, `normal`, `borr` and `eorr`,
 and any octet value encodes, so a router can be watched handling one the
-RFC does not define. **Nothing checks that the peer advertised capability
+RFC does not define. It is counted in the peer row's `refresh` and
+published as a `refresh` event, as an answer's messages are. **Nothing checks that the peer advertised capability
 2**, which is Conventions rather than an omission: a tool for testing the
 protocol has to be able to send a refresh to a speaker that never asked
 for one. What is refused is a session that is not Established, because
@@ -1292,6 +1407,23 @@ key.
 **A session whose End-of-RIB has come says for which families**: its
 row gains `end_of_rib_received`, `[{"afi": 1, "safi": 1}]`, in the
 order they came. Other rows have no such key.
+
+**A session that has read, sent or ignored a ROUTE-REFRESH says how
+many**: its row gains `refresh`,
+
+```json
+{
+  "received": {"normal": 1},
+  "sent": {"borr": 1, "eorr": 1},
+  "answered": 1,
+  "ignored": 0
+}
+```
+
+where `received` and `sent` count messages by subtype (`normal`,
+`borr`, `eorr`, and `other` for any other), and `answered` and
+`ignored` count requests. A new session starts at zero. Other rows have
+no such key.
 
 **A CE's row, and a row whose session negotiated a VPN family, say
 more**, for routescope's L3VPN views (routescope
