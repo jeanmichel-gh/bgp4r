@@ -134,11 +134,15 @@ module BGP
 
       # Every route held, one row each, for `show.evpn`: sorted by RD,
       # type and key, then peer, so two tables holding the same routes
-      # answer the same list.
+      # answer the same list. A block given each row's key answers more
+      # columns for it: the MAC-VRFs' (pull request 2).
       def rows
         @lock.synchronize do
           @in.flat_map { |peer, h| h.values.collect { |e| row(peer, e) } }
-        end.sort_by { |r| [*order(r['key']), r['peer'].to_s, r['path_id'].to_i] }.each { |r| r.delete('key') }
+        end.sort_by { |r| [*order(r['key']), r['peer'].to_s, r['path_id'].to_i] }.each do |r|
+          key = r.delete('key')
+          r.merge!(yield(key)) if block_given?
+        end
       end
 
       # Starts reading what neighbor receives: one call per session.

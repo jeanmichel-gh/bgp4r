@@ -92,7 +92,16 @@ module BGP
           :peers     => rows,
           :summary   => ((base && base[:summary]) || {}).merge(
                           :peers       => rows.size,
-                          :established => rows.count { |r| r[:state] == 'established' }) }
+                          :established => rows.count { |r| r[:state] == 'established' }) }.merge(evpn_status)
+      end
+
+      # With MAC-VRFs only: vtep4rd's socket and what stops a MAC-VRF, a
+      # VNI vtep4rd lacks or has in learn mode (docs/design/evpn.md,
+      # Configuration).
+      def evpn_status
+        m = @speaker.respond_to?(:macvrfs) && @speaker.macvrfs
+        return {} unless m
+        { :evpn => { :vtep => @speaker.vtep_path, :macvrfs => m.macvrfs.size, :errors => m.errors } }
       end
 
       # One row per configured neighbor: the session half from the
@@ -219,6 +228,27 @@ module BGP
         rows = rows.select { |r| r['route_type'] == Integer(p['route_type']) } if p['route_type']
         rows = rows.select { |r| r['rd'] == p['rd'].to_s } if p['rd']
         rows = rows.select { |r| r['mac'] == p['mac'].to_s.downcase } if p['mac']
+        rows_page(rows, p.slice('offset', 'limit'))
+      end
+
+      # The MAC-VRFs, one row each: VNI, RD, Route Targets, vtep4rd's
+      # state for the VNI, the flood VTEPs and how many MACs.
+      # bgp/rib/macvrfs.rb, docs/design/evpn.md pull request 2.
+      def macvrfs(params = {})
+        rows_page(@speaker.macvrf_rows, params)
+      end
+
+      # One MAC-VRF's MACs, `vni` required: the remote ones from type 2
+      # routes and the local ones vtep4rd learned on its ports.
+      def macvrf(params = {})
+        p = (params || {}).to_h { |k, v| [k.to_s, v] }
+        vni = Integer(p['vni'], exception: false)
+        raise ArgumentError, 'show.macvrf: vni is required, a number' unless vni
+        rows = @speaker.macvrf_mac_rows(vni)
+        unless rows
+          vnis = @speaker.macvrf_rows.collect { |r| r['vni'] }
+          raise ArgumentError, "show.macvrf: no MAC-VRF for VNI #{vni}; this bgp4rd has #{vnis.empty? ? 'none' : vnis.join(', ')}"
+        end
         rows_page(rows, p.slice('offset', 'limit'))
       end
 

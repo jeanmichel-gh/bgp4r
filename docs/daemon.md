@@ -517,6 +517,41 @@ replaced by ours, so every site can use one ASN. `show.vrf` lists a CE
 route with `transport` `ce`. A `vrf:` that is not in `vrfs:` stops
 bgp4rd at start.
 
+**MAC-VRFs, for EVPN over VXLAN** (`docs/design/evpn.md`, pull
+request 2). With a `macvrfs:` block, bgp4rd imports the EVPN routes it
+receives into one MAC-VRF per VNI and writes them into vtep4rd:
+
+```yaml
+local_address: 10.255.0.12           # the RD's default, else router_id
+evpn:
+  vtep: /run/vtep4r/vtep4rd.sock     # vtep4rd's socket, the default
+macvrfs:
+  - vni: 100
+    rd: 10.255.0.12:100              # the default is local_address:vni
+    import: [65000:100]              # the default is as:vni
+    export: [65000:100]              # the default is as:vni
+```
+
+A MAC-VRF imports the best path of each EVPN route that carries one of
+its import Route Targets. A type 3 route makes its PMSI Tunnel
+Identifier a flood VTEP (`vni.flood.add`). A type 2 route puts its MAC
+behind its next hop (`mac.add`, with the MAC Mobility sequence). Where
+routes under two RDs bring one MAC, a sticky MAC wins, then the higher
+sequence (compared as RFC 1982 serial numbers), then the lower address.
+A route is kept and not installed when its encapsulation is not VXLAN,
+its VNI is not the MAC-VRF's, its ESI is not zero, a type 3 route's
+tunnel is not Ingress Replication, or it is this VTEP's own;
+`show.evpn` says which as `invalid`.
+
+At each sync bgp4rd reads vtep4rd's flood list and MACs for the VNI
+and sends only the difference. It owns every flood VTEP and every MAC
+with `origin: api` in an `evpn` VNI, and deletes what no route asks
+for. It leaves alone a MAC vtep4rd learned on a port. It syncs when the
+EVPN table changes and every 10 seconds, so a vtep4rd that started late
+or restarted is filled again. A VNI vtep4rd lacks, or has in `learn`
+mode, gets nothing, and `show.status` gives the reason under `evpn`.
+Sending EVPN routes, MAC Mobility and duplicate MACs are pull request 3.
+
 **A table is always on, which `lab/speaker.rb` differs from.** `rib`
 defaults to true here, because a daemon is a router by definition and
 `show.routes` has to answer; in the lab speaker a table has to be asked
@@ -741,7 +776,9 @@ below.
 | `show.unreachability` | Unreachability reports, SAFI 81 and EVPN route type 254: those this speaker makes, and those received per peer, with their reporters | built |
 | `show.vpn` | the VPN-IPv4 and VPN-IPv6 routes received (AFI 1 and 2 / SAFI 128), one row each: RD, prefix, peer, next hop, labels, Route Targets, Site of Origin (`soo`), `originator_id` and `cluster_list`, best; and those this PE sends, with peer null, reason `local` and their `vrf` | built |
 | `show.vpn_labels` | each exporting VRF's label: label, VRF, the action, installed or why not | built |
-| `show.evpn` | the EVPN routes received, types 2 and 3 (AFI 25 / SAFI 70), one row per path: RD, type, key fields, originator, VNI, next hop, Route Targets, encapsulation, MAC Mobility, PMSI Tunnel, best; `route_type`, `rd` and `mac` narrow it. docs/design/evpn.md, pull request 1 | built |
+| `show.evpn` | the EVPN routes received, types 2 and 3 (AFI 25 / SAFI 70), one row per path: RD, type, key fields, originator, VNI, next hop, Route Targets, encapsulation, MAC Mobility, PMSI Tunnel, best; `route_type`, `rd` and `mac` narrow it. With MAC-VRFs, `imported` (their VNIs), `valid` and `invalid` (why not installed). docs/design/evpn.md, pull requests 1 and 2 | built |
+| `show.macvrfs` | the MAC-VRFs: VNI, RD, Route Targets, vtep4rd's state for the VNI, the flood VTEPs, the local and remote MAC counts. docs/design/evpn.md, pull request 2 | built |
+| `show.macvrf` | one MAC-VRF's MACs, `vni` required: the remote ones from type 2 routes, with their VTEP and sequence, and the local ones vtep4rd learned on its ports | built |
 | `show.vrfs` | the VRFs: name, table, RD, Route Targets, the device's state, routes imported and installed | built |
 | `show.vrf` | each VRF's imported routes: what is pushed, where it goes, installed or why not; `vrf` picks one | built |
 | `show.log` | the last N lines | built |

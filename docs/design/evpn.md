@@ -482,6 +482,43 @@ scenarios, and bgp4rd in lab 3, each with its own pull request.
   `Label#to_hash` leaves the bottom of stack bit out when it is 1, so a
   VNI read from the hash came out one less when it was odd.
 
+**Pull request 2.** `bgp/rib/macvrf.rb` and `bgp/rib/macvrfs.rb`,
+`bgp/daemon/evpn_sync.rb` (the vtep4rd client and the sync thread),
+`show.macvrfs`, `show.macvrf`, and `evpn` in `show.status`. What
+changed from the plan:
+
+- **bgp4rd reads vtep4rd at each sync** and sends only the difference,
+  as `l3vpn.rb` reads the kernel. It owns every flood VTEP and every
+  MAC with `origin: api` of an `evpn` VNI, and deletes those no route
+  asks for, so a bgp4rd restart clears what the one before it left. A
+  MAC vtep4rd learned on a port is left alone, route or no route, until
+  MAC Mobility decides (pull request 3).
+- **It syncs on each change of the EVPN table and every 10 seconds.**
+  The check "at start that vtep4rd has each VNI" is made at every sync,
+  so a vtep4rd that starts after bgp4rd, or restarts, is found and
+  filled. Its state per VNI is `ok`, `missing`, `mode` (not `evpn`),
+  `down` (no connection) or `error`.
+- **Section 15's choice among remote routes is here**, not in pull
+  request 3: with two RDs bringing one MAC, a sticky MAC, then the
+  higher sequence as an RFC 1982 serial number, then the lower next
+  hop. Something has to pick one MAC's VTEP as soon as routes are
+  imported. Pull request 3 adds the local MAC to the same choice.
+- **A fifth reason, `own`**: a type 2 route whose next hop, or a type 3
+  route whose tunnel, is this VTEP's address is not installed. bgp4rd
+  sends none yet; it guards against a reflector sending ours back.
+- **A type 3 route's tunnel is checked before its VNI**, since its VNI
+  is the PMSI Tunnel's label: a route with no PMSI Tunnel says `pmsi`,
+  not `vni`.
+- **`show.evpn`'s `reason` was taken**, by the decision process's
+  reason since pull request 1. Why a route is not installed is
+  `invalid`, with `valid` its absence and `imported` the VNIs of the
+  MAC-VRFs that import it. These three columns are there only with
+  `macvrfs:`.
+- **`evpn:` takes `vtep` only.** `duplicate` and `vtep_hold` come with
+  pull request 3, which uses them; until then they are refused by name.
+- `macvrfs` is keyed by `vni` in the set-line form of the configuration
+  (`bgp/daemon/config.rb`). A change to it needs a restart, as `vrfs`.
+
 ## Tests
 
 - Unit, one file per class: the table's key (one MAC with two IPs is

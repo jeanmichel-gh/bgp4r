@@ -82,6 +82,14 @@ class BGP_Daemon_Config_Test < Test::Unit::TestCase
     assert_equal([], C.changed_paths(config, config))
   end
 
+  # A MAC-VRF is keyed by its VNI (docs/design/evpn.md, pull request 2).
+  def test_macvrfs_are_keyed_by_their_vni
+    config = { 'macvrfs' => [{ 'vni' => 100, 'import' => ['65000:100', '65000:1'] }, { 'vni' => 200 }] }
+    lines = C.to_set(config)
+    assert_equal(['set macvrfs 100 import 65000:100', 'set macvrfs 100 import 65000:1', 'set macvrfs 200 {}'], lines)
+    assert_equal([100, 200], C.from_set(lines)['macvrfs'].collect { |m| m['vni'] })
+  end
+
   def test_a_keyed_list_keeps_the_key_it_was_keyed_by
     back = C.from_set(C.to_set(config))
     assert_equal(['10.0.10.1', '10.0.11.1'], back['neighbors'].map { |n| n['address'] })

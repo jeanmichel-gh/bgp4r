@@ -70,6 +70,7 @@ require 'bgp/daemon/link_state_table'
 require 'bgp/daemon/link_state_producer'
 require 'bgp/daemon/unreachability'
 require 'bgp/daemon/vrf_sync'
+require 'bgp/daemon/evpn_sync'
 require 'bgp/daemon/vpn_exporter'
 require 'bgp/daemon/vrf_ce_exporter'
 require 'bgp/daemon/vpn_reflector'
@@ -789,6 +790,11 @@ module BGP
       # outside the RIB: docs/design/evpn.md, and bgp/rib/evpn_table.rb.
       attr_reader :evpn
 
+      # The MAC-VRFs, filled from the EVPN table and written into vtep4rd,
+      # or nil with no macvrfs: block (bgp/rib/macvrfs.rb,
+      # docs/design/evpn.md pull request 2).
+      attr_reader :macvrfs
+
       # The PE's VRFs, filled from the VPN table and put in the kernel, or
       # nil with no vrfs: block (bgp/rib/l3vpn.rb, pull request 2).
       attr_reader :l3vpn
@@ -881,6 +887,7 @@ module BGP
                                         cluster_id: decision_options[:cluster_id])
         build_l3vpn(config['vrfs'], config['l3vpn'])
         build_vpn_reflector
+        build_evpn(config['macvrfs'], config['evpn'], arg[:vtep_client])
         if config['link_state']
           @link_state_producer = LinkStateProducer.new(self, config['link_state'], :logger => @logger)
           on_established { |p| @link_state_producer.session_up(p) }
@@ -1007,6 +1014,7 @@ module BGP
         start_rib
         @vrf_sync&.start
         @vpn_reflector&.start
+        @evpn_sync&.start
         @server = listen if @peers.any? { |p| !p.active? && !p.vrf }
         # tcp_l3mdev_accept is 0, so a CE dialling in reaches only a
         # listener bound to its VRF (pull request 7, measured).
@@ -1029,6 +1037,8 @@ module BGP
         stop_rib
         @vrf_sync&.stop
         @vpn_reflector&.stop
+        @evpn_sync&.stop
+        @vtep_client&.close
         self
       end
 
@@ -1342,9 +1352,27 @@ module BGP
         (@vpn_exporter ? @vpn_exporter.rows : []) + @vpn.rows
       end
 
-      # `show.evpn`: the EVPN routes received, one row each.
+      # `show.evpn`: the EVPN routes received, one row each. With
+      # MAC-VRFs, each row also says which import it and why one does not
+      # install it (pull request 2).
       def evpn_rows
-        @evpn.rows
+        return @evpn.rows unless @macvrfs
+        @evpn.rows { |key| st = @macvrfs.route_state(key); st.merge('valid' => st['invalid'].nil?) }
+      end
+
+      # vtep4rd's socket, for show.status.
+      def vtep_path
+        @vtep_client.respond_to?(:path) ? @vtep_client.path : nil
+      end
+
+      # `show.macvrfs`: one row per MAC-VRF.
+      def macvrf_rows
+        @macvrfs ? @macvrfs.rows : []
+      end
+
+      # `show.macvrf`: one MAC-VRF's MACs, or nil for a VNI with none.
+      def macvrf_mac_rows(vni)
+        @macvrfs && @macvrfs.mac_rows(vni)
       end
 
       # `show.vpn_labels`: the label of each exporting VRF.
@@ -1376,6 +1404,29 @@ module BGP
         @vpn_reflector = VpnReflector.new(self, @vpn, export, logger: @logger)
         @vpn.on_change { @vpn_reflector.poke }
         on_established { |p| @vpn_reflector.session_up(p) }
+      end
+
+      # The keys of the evpn: block, docs/design/evpn.md, Configuration.
+      # `duplicate` and `vtep_hold` come with export, pull request 3.
+      EVPN_KEYS = %w[vtep].freeze
+
+      # MAC-VRFs: docs/design/evpn.md, pull request 2. vtep_client is a
+      # test's stand-in for vtep4rd's socket.
+      def build_evpn(macvrfs, evpn, vtep_client)
+        evpn ||= {}
+        raise ArgumentError, 'evpn: is a mapping' unless evpn.is_a?(Hash)
+        unknown = evpn.keys - EVPN_KEYS
+        unless unknown.empty?
+          raise ArgumentError, "evpn: unknown key(s) #{unknown.join(', ')}: use one of #{EVPN_KEYS.join(', ')}"
+        end
+        address = @local_address || @router_id
+        list = BGP::Rib::Macvrf.list(macvrfs, address: address, as: @my_as)
+        return if list.empty?
+        @vtep_client = vtep_client || VtepClient.new(evpn.fetch('vtep', VtepClient::SOCKET))
+        @macvrfs = BGP::Rib::Macvrfs.new(table: @evpn, macvrfs: list, vtep: @vtep_client, address: address,
+                                         logger: @logger)
+        @evpn_sync = EvpnSync.new(@macvrfs, logger: @logger)
+        @evpn.on_change { @evpn_sync.poke }
       end
 
       def build_l3vpn(vrfs, l3vpn)
