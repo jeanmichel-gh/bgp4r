@@ -705,13 +705,16 @@ route with `transport` `ce`. A `vrf:` that is not in `vrfs:` stops
 bgp4rd at start.
 
 **MAC-VRFs, for EVPN over VXLAN** (`docs/design/evpn.md`, pull
-request 2). With a `macvrfs:` block, bgp4rd imports the EVPN routes it
-receives into one MAC-VRF per VNI and writes them into vtep4rd:
+requests 2 and 3). With a `macvrfs:` block, bgp4rd imports the EVPN
+routes it receives into one MAC-VRF per VNI, writes them into vtep4rd,
+and sends routes for the MACs vtep4rd learns:
 
 ```yaml
 local_address: 10.255.0.12           # the RD's default, else router_id
 evpn:
   vtep: /run/vtep4r/vtep4rd.sock     # vtep4rd's socket, the default
+  duplicate: { moves: 5, seconds: 180 }   # RFC 7432 section 15.1's N and M
+  vtep_hold: 30                      # seconds a lost vtep4rd's routes are kept
 macvrfs:
   - vni: 100
     rd: 10.255.0.12:100              # the default is local_address:vni
@@ -733,11 +736,38 @@ tunnel is not Ingress Replication, or it is this VTEP's own;
 At each sync bgp4rd reads vtep4rd's flood list and MACs for the VNI
 and sends only the difference. It owns every flood VTEP and every MAC
 with `origin: api` in an `evpn` VNI, and deletes what no route asks
-for. It leaves alone a MAC vtep4rd learned on a port. It syncs when the
-EVPN table changes and every 10 seconds, so a vtep4rd that started late
-or restarted is filled again. A VNI vtep4rd lacks, or has in `learn`
-mode, gets nothing, and `show.status` gives the reason under `evpn`.
-Sending EVPN routes, MAC Mobility and duplicate MACs are pull request 3.
+for. It syncs when the EVPN table changes, when vtep4rd sends a `mac`
+event (on a second connection, subscribed to `mac`), and every 10
+seconds, so a vtep4rd that started late or restarted is filled again.
+A VNI vtep4rd lacks, or has in `learn` mode, gets nothing, and
+`show.status` gives the reason under `evpn`.
+
+**What it sends.** For each MAC-VRF whose VNI vtep4rd has, a type 3
+route: Ingress Replication to `local_address`, the VNI as the PMSI
+Tunnel's label. For each MAC vtep4rd learned on a port, a type 2 route
+with no IP and the VNI in Label1. Both carry the export Route Targets
+and the Encapsulation community VXLAN, with `local_address` as next
+hop, to every session that negotiated L2VPN EVPN. `show.evpn` lists
+them with `peer` null and `reason` `local`, and `show.peers` counts
+them as `sent`.
+
+**MAC Mobility** (RFC 7432 section 15). Each MAC has one place: a port
+here, or one remote VTEP. A MAC first learned here is sent with no MAC
+Mobility community. A MAC learned here that a remote route holds is
+sent with that route's sequence plus one, wrapping at 2^32. A remote
+route with a higher sequence, or the same sequence from a lower
+address, takes the MAC away: bgp4rd withdraws its route and puts the
+MAC behind the remote VTEP in vtep4rd. A sticky remote MAC learned
+here stays remote, and an `evpn` event says so. Every change of place
+is an `evpn` event `moved`. `duplicate: moves` changes of place in
+`duplicate: seconds`, the last a local learn, mark the MAC duplicate:
+its route is withdrawn, routes for it are no longer processed, and
+`evpn.clear_duplicate` with `vni` and `mac` clears the mark (section
+15.1).
+
+**A lost vtep4rd.** bgp4rd keeps sending what vtep4rd last gave it for
+`vtep_hold` seconds, then withdraws it. A vtep4rd back within the hold
+is read again and only the difference is sent.
 
 **A table is always on, which `lab/speaker.rb` differs from.** `rib`
 defaults to true here, because a daemon is a router by definition and
@@ -976,6 +1006,7 @@ below.
 | `peer.resend` | the daemon's own answer for each prefix a peer was sent by hand | built |
 | `route.originate`, `route.withdraw` | our own prefixes | built |
 | `link_state.unreachable` | the BGP-LS Producer's `unreachable`, `keep` or `withdraw`, as one commit | built |
+| `evpn.clear_duplicate` | clears one MAC's duplicate mark (RFC 7432 section 15.1); `vni` and `mac`. docs/design/evpn.md, pull request 3 | built |
 | `unreach.report`, `unreach.clear` | one Unreachability report added or withdrawn, as one commit of the `unreachability` block | built |
 | `show.configuration` | the running configuration, or the candidate | built |
 | `config.changed` | whether the candidate differs, as a **boolean** | built |

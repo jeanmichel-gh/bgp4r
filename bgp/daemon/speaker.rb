@@ -71,6 +71,7 @@ require 'bgp/daemon/link_state_producer'
 require 'bgp/daemon/unreachability'
 require 'bgp/daemon/vrf_sync'
 require 'bgp/daemon/evpn_sync'
+require 'bgp/daemon/evpn_exporter'
 require 'bgp/daemon/vpn_exporter'
 require 'bgp/daemon/vrf_ce_exporter'
 require 'bgp/daemon/vpn_reflector'
@@ -852,6 +853,10 @@ module BGP
       # docs/design/evpn.md pull request 2).
       attr_reader :macvrfs
 
+      # What this PE sends of EVPN, or nil with no macvrfs: block
+      # (bgp/daemon/evpn_exporter.rb, pull request 3).
+      attr_reader :evpn_exporter
+
       # The PE's VRFs, filled from the VPN table and put in the kernel, or
       # nil with no vrfs: block (bgp/rib/l3vpn.rb, pull request 2).
       attr_reader :l3vpn
@@ -1133,6 +1138,7 @@ module BGP
         @vrf_sync&.start
         @vpn_reflector&.start
         @evpn_sync&.start
+        @vtep_events&.start
         @server = listen if @peers.any? { |p| !p.active? && !p.vrf }
         # tcp_l3mdev_accept is 0, so a CE dialling in reaches only a
         # listener bound to its VRF (pull request 7, measured).
@@ -1155,6 +1161,7 @@ module BGP
         stop_rib
         @vrf_sync&.stop
         @vpn_reflector&.stop
+        @vtep_events&.stop
         @evpn_sync&.stop
         @vtep_client&.close
         self
@@ -1507,7 +1514,8 @@ module BGP
       # install it (pull request 2).
       def evpn_rows
         return @evpn.rows unless @macvrfs
-        @evpn.rows { |key| st = @macvrfs.route_state(key); st.merge('valid' => st['invalid'].nil?) }
+        @evpn_exporter.rows +
+          @evpn.rows { |key| st = @macvrfs.route_state(key); st.merge('valid' => st['invalid'].nil?) }
       end
 
       # vtep4rd's socket, for show.status.
@@ -1557,8 +1565,8 @@ module BGP
       end
 
       # The keys of the evpn: block, docs/design/evpn.md, Configuration.
-      # `duplicate` and `vtep_hold` come with export, pull request 3.
-      EVPN_KEYS = %w[vtep].freeze
+      EVPN_KEYS = %w[vtep duplicate vtep_hold].freeze
+      DUPLICATE_KEYS = %w[moves seconds].freeze
 
       # MAC-VRFs: docs/design/evpn.md, pull request 2. vtep_client is a
       # test's stand-in for vtep4rd's socket.
@@ -1572,11 +1580,35 @@ module BGP
         address = @local_address || @router_id
         list = BGP::Rib::Macvrf.list(macvrfs, address: address, as: @my_as)
         return if list.empty?
-        @vtep_client = vtep_client || VtepClient.new(evpn.fetch('vtep', VtepClient::SOCKET))
-        @macvrfs = BGP::Rib::Macvrfs.new(table: @evpn, macvrfs: list, vtep: @vtep_client, address: address,
-                                         logger: @logger)
+        dup = evpn['duplicate'] || {}
+        raise ArgumentError, 'evpn: duplicate: is a mapping' unless dup.is_a?(Hash)
+        unknown = dup.keys - DUPLICATE_KEYS
+        unless unknown.empty?
+          raise ArgumentError, "evpn: duplicate: unknown key(s) #{unknown.join(', ')}: use one of #{DUPLICATE_KEYS.join(', ')}"
+        end
+        positive = lambda do |v, default, what|
+          n = v.nil? ? default : Integer(v, exception: false)
+          raise ArgumentError, "evpn: #{what}: #{v.inspect} is not a positive number" unless n && n.positive?
+          n
+        end
+        path = evpn.fetch('vtep', VtepClient::SOCKET)
+        @vtep_client = vtep_client || VtepClient.new(path)
+        @macvrfs = BGP::Rib::Macvrfs.new(
+          table: @evpn, macvrfs: list, vtep: @vtep_client, address: address, logger: @logger, events: @events,
+          moves: positive.call(dup['moves'], BGP::Rib::Macvrfs::MOVES, 'duplicate: moves'),
+          seconds: positive.call(dup['seconds'], BGP::Rib::Macvrfs::SECONDS, 'duplicate: seconds'),
+          hold: positive.call(evpn['vtep_hold'], BGP::Rib::Macvrfs::HOLD, 'vtep_hold'))
         @evpn_sync = EvpnSync.new(@macvrfs, logger: @logger)
         @evpn.on_change { @evpn_sync.poke }
+        @vtep_events = VtepEvents.new(path, @evpn_sync, logger: @logger) unless vtep_client
+        @evpn_exporter = EvpnExporter.new(self, logger: @logger)
+        @evpn_sync.after_sync { @evpn_exporter.refresh(@macvrfs.exports) }
+        on_established { |p| @evpn_exporter.session_up(p) }
+      end
+
+      # Pokes the MAC-VRFs' sync: after evpn.clear_duplicate.
+      def evpn_poke
+        @evpn_sync&.poke
       end
 
       def build_l3vpn(vrfs, l3vpn)

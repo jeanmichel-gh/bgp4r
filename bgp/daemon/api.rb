@@ -143,6 +143,7 @@ module BGP
         'peer.resend'     => ->(a, p) { a.control.peer_resend(p) },
         'route.originate' => ->(a, p) { a.control.route_originate(p) },
         'route.withdraw'  => ->(a, p) { a.control.route_withdraw(p) },
+        'evpn.clear_duplicate' => ->(a, p) { a.control.evpn_clear_duplicate(p) },
         'link_state.unreachable' => ->(a, p) { a.candidate.link_state_unreachable(p) },
         'unreach.report'  => ->(a, p) { a.candidate.unreach_report(p) },
         'unreach.clear'   => ->(a, p) { a.candidate.unreach_clear(p) },

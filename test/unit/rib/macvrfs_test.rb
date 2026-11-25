@@ -48,6 +48,10 @@ class TestBgpRibMacvrfs < Test::Unit::TestCase
       @orders = []
     end
 
+    def age(vni, mac)
+      @vnis[vni]['macs'].delete(mac)
+    end
+
     def learn(vni, mac, port)
       @vnis[vni]['macs'][mac] = { 'mac' => mac, 'type' => 'local', 'port' => port, 'vtep' => nil,
                                   'origin' => 'learned', 'seq' => 0, 'moves' => 0 }
@@ -84,6 +88,8 @@ class TestBgpRibMacvrfs < Test::Unit::TestCase
   end
 
   def setup
+    @now = Time.utc(2026, 11, 25, 12)
+    @events = BGP::Events.new
     @t = BGP::Rib::EvpnTable.new(local_as: 65000, router_id: L1)
     @vtep = FakeVtep.new(100 => 'evpn', 200 => 'evpn')
     @m = macvrfs([{ 'vni' => 100 }, { 'vni' => 200 }])
@@ -91,7 +97,17 @@ class TestBgpRibMacvrfs < Test::Unit::TestCase
 
   def macvrfs(config)
     list = BGP::Rib::Macvrf.list(config, address: L1, as: 65000)
-    BGP::Rib::Macvrfs.new(table: @t, macvrfs: list, vtep: @vtep, address: L1)
+    BGP::Rib::Macvrfs.new(table: @t, macvrfs: list, vtep: @vtep, address: L1, events: @events,
+                          clock: -> { @now })
+  end
+
+  # What this PE sends: [type, mac, seq] per MAC-VRF 100 route.
+  def sent(vni = 100)
+    @m.exports.select { |e| e.vni == vni }.collect { |e| [e.route_type, e.mac, e.seq] }
+  end
+
+  def evpn_events(type)
+    @events.since.select { |e| e.kind == :evpn && e.data['type'] == type }
   end
 
   def peer(address)
@@ -252,16 +268,149 @@ class TestBgpRibMacvrfs < Test::Unit::TestCase
     assert_equal([['mac.del', { 'vni' => 100, 'mac' => H1 }]], @vtep.orders)
   end
 
-  # A MAC vtep4rd learned on a port is left alone, route or no route:
-  # who wins is MAC Mobility, pull request 3.
-  def test_a_local_mac_is_left_alone
-    @vtep.learn(100, H2, 'eth1')
-    send_routes(L2, [type2([L2, 100], H2)])
+  # A MAC vtep4rd learned on a port, with no route for it: advertised
+  # "for the first time [...] with no MAC Mobility extended community",
+  # and the type 3 route beside it (Exporting, steps 1 and 2).
+  def test_a_local_mac_is_advertised
+    @vtep.learn(100, H1, 'eth1')
     @m.sync!
-    assert_equal([], @vtep.orders)
-    assert_equal([[H2, 'local', nil, 'eth1'], [H2, 'remote', L2, nil]],
-                 @m.mac_rows(100).collect { |r| r.values_at('mac', 'place', 'vtep', 'port') })
+    assert_equal([[3, nil, nil], [2, H1, nil]], sent)
+    e = @m.exports.find { |x| x.route_type == 2 }
+    assert_equal([100, "#{L1}:100", ['65000:100']], [e.vni, e.rd, e.route_targets])
+    assert_equal([[H1, 'local', nil, 'eth1']], @m.mac_rows(100).collect { |r| r.values_at('mac', 'place', 'vtep', 'port') })
     assert_equal(1, @m.rows.first['macs_local'])
+    @vtep.age(100, H1)
+    @m.sync!
+    assert_equal([[3, nil, nil]], sent, 'aged: withdrawn')
+  end
+
+  # Section 15: a remote MAC learned locally is advertised with the
+  # remote sequence plus one, 0 for a route with no community; vtep4rd
+  # keeps the port, and no order is sent.
+  def test_a_remote_mac_learned_here_is_advertised_one_higher
+    send_routes(L2, [type2([L2, 100], H2)])
+    @vtep.learn(100, H2, 'eth1')
+    @vtep.orders.clear
+    @m.sync!
+    assert_equal([[3, nil, nil], [2, H2, 1]], sent)
+    assert_equal([], @vtep.orders)
+    send_routes(L2, [type2([L2, 100], H2)], ecs: ecs(seq: 7))
+    assert_equal([[3, nil, nil]], sent, 'a higher sequence elsewhere: ours withdrawn')
+    assert_equal(['mac.add', { 'vni' => 100, 'mac' => H2, 'vtep' => L2, 'seq' => 7 }], @vtep.orders.last)
+    assert_equal([['moved', 'local', L2]], evpn_events('moved').last(1).collect { |e| e.data.values_at('type', 'from', 'to') })
+  end
+
+  # "If two (or more) PEs advertise the same MAC address with the same
+  # sequence number [...] the PE with the lowest IP address" wins, and the
+  # originator that lost "will withdraw the route".
+  def test_the_same_sequence_and_the_lower_address
+    @vtep.learn(100, H2, 'eth1')
+    @m.sync!
+    assert_equal([2, H2, nil], sent.last)
+    send_routes(L2, [type2([L2, 100], H2)])
+    assert_equal([2, H2, nil], sent.last, 'L1 is lower than L2: ours stays')
+    send_routes('10.255.0.9', [type2(['10.255.0.9', 100], H2)])
+    assert_equal([[3, nil, nil]], sent, '10.255.0.9 is lower: ours goes')
+    assert_equal(['mac.add', { 'vni' => 100, 'mac' => H2, 'vtep' => '10.255.0.9', 'seq' => 0 }], @vtep.orders.last)
+  end
+
+  # RFC 1982: one more than 4294967295 is 0.
+  def test_the_sequence_sent_wraps
+    send_routes(L2, [type2([L2, 100], H2)], ecs: ecs(seq: 0xffffffff))
+    @vtep.learn(100, H2, 'eth1')
+    @m.sync!
+    assert_equal([2, H2, 0], sent.last)
+  end
+
+  # Section 7.7 and 15.2: a sticky MAC cannot move. Learned here, it is
+  # put back behind its VTEP, and the operator is told once.
+  def test_a_sticky_mac_learned_here
+    send_routes(L2, [type2([L2, 100], H2)], ecs: ecs(seq: 0, sticky: true))
+    @vtep.learn(100, H2, 'eth1')
+    @vtep.orders.clear
+    @m.sync!
+    @m.sync!
+    assert_equal([[3, nil, nil]], sent)
+    assert_equal([['mac.add', { 'vni' => 100, 'mac' => H2, 'vtep' => L2, 'seq' => 0 }]], @vtep.orders)
+    assert_equal(1, evpn_events('sticky').size)
+  end
+
+  # Section 15.1: five moves in 180 s, the last a local learn, mark the
+  # MAC duplicate. Its route is withdrawn and its routes no longer
+  # processed, until evpn.clear_duplicate.
+  def test_five_moves_in_180_seconds_mark_a_duplicate
+    seq = 0
+    move_here = lambda do
+      @now += 10
+      @vtep.learn(100, H2, 'eth1')
+      @m.sync!
+    end
+    move_away = lambda do
+      @now += 10
+      seq += 2
+      send_routes(L2, [type2([L2, 100], H2)], ecs: ecs(seq: seq))
+    end
+    send_routes(L2, [type2([L2, 100], H2)])
+    move_here.call # 1
+    move_away.call # 2
+    move_here.call # 3
+    move_away.call # 4
+    assert_equal([], evpn_events('duplicate'))
+    move_here.call # 5
+    assert_equal(1, evpn_events('duplicate').size)
+    assert_equal([[3, nil, nil]], sent, 'withdrawn')
+    row = @m.mac_rows(100).find { |r| r['mac'] == H2 }
+    assert_equal([true, 5], row.values_at('duplicate', 'moves'))
+    assert_equal(1, @m.rows.first['duplicates'])
+    @vtep.orders.clear
+    move_away.call
+    assert_equal([], @vtep.orders, 'routes for it are not processed')
+    assert_equal([[3, nil, nil]], sent, 'nor is it sent again')
+    e = assert_raise(ArgumentError) { @m.clear_duplicate(100, H1) }
+    assert_equal("vni 100: #{H1} is not marked duplicate", e.message)
+    assert_equal({ 'vni' => 100, 'mac' => H2, 'cleared' => true }, @m.clear_duplicate(100, H2.upcase))
+    @m.sync!
+    assert_equal([2, H2, seq + 1], sent.last, 'cleared, and still on eth1: advertised again, one higher')
+    assert_equal(0, @m.rows.first['duplicates'])
+  end
+
+  # Moves further apart than 180 s are no duplicate.
+  def test_slow_moves_are_no_duplicate
+    seq = 0
+    send_routes(L2, [type2([L2, 100], H2)])
+    6.times do
+      @now += 60
+      @vtep.learn(100, H2, 'eth1')
+      @m.sync!
+      @now += 60
+      seq += 2
+      send_routes(L2, [type2([L2, 100], H2)], ecs: ecs(seq: seq))
+    end
+    assert_equal([], evpn_events('duplicate'))
+  end
+
+  # Exporting, step 6: vtep4rd lost, its routes are kept for the hold,
+  # 30 s, then withdrawn. A VNI vtep4rd lacks sends nothing.
+  def test_the_hold_on_a_lost_vtep4rd
+    @vtep.learn(100, H1, 'eth1')
+    @m.sync!
+    @vtep.down = true
+    @now += 20
+    @m.sync!
+    assert_equal([[3, nil, nil], [2, H1, nil]], sent)
+    @now += 15
+    @m.sync!
+    assert_equal([], sent)
+    @vtep.down = false
+    @m.sync!
+    assert_equal([[3, nil, nil], [2, H1, nil]], sent)
+  end
+
+  def test_a_vni_vtep4rd_lacks_sends_nothing
+    @vtep = FakeVtep.new(200 => 'learn')
+    @m = macvrfs([{ 'vni' => 100 }, { 'vni' => 200 }])
+    @m.sync!
+    assert_equal([], @m.exports)
   end
 
   # Configuration: a VNI vtep4rd lacks, or has in learn mode, gets

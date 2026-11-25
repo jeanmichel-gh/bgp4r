@@ -432,7 +432,8 @@ module BGP
       # sent yet: export is pull request 3.
       def evpn_family(peer)
         c = @speaker.evpn.counts(peer.address)
-        { :family => 'evpn', :received => c[:received], :sent => 0, :other_types => c[:other_types] }
+        sent = @speaker.respond_to?(:evpn_exporter) && @speaker.evpn_exporter ? @speaker.evpn_exporter.sent_count(peer) : 0
+        { :family => 'evpn', :received => c[:received], :sent => sent, :other_types => c[:other_types] }
       end
 
       def ce_family(peer)

@@ -387,6 +387,15 @@ module Features
       :functional => %w[evpn_daemon_test],
     },
 
+    'evpn-export' => {
+      :area  => 'routing',
+      :about => 'EVPN export: type 3 per MAC-VRF and type 2 per local MAC, MAC Mobility sequences, duplicate MACs, the hold on a lost vtep4rd, evpn.clear_duplicate',
+      :rfc   => 'RFC 7432 sections 7.7, 9.2.1, 11.2, 15, 15.1, 15.2; RFC 8365 section 5.1.3',
+      :doc   => 'docs/design/evpn.md',
+      :unit  => %w[daemon/evpn_exporter_test rib/macvrfs_test],
+      :functional => %w[evpn_daemon_test],
+    },
+
     'vrfs' => {
       :area  => 'routing',
       :about => "A PE's VRFs: import by Route Target, the mpls and gre transports, VRF routes in the kernel, export with a label per VRF, IPv6 over an IPv4 core, CEs by eBGP",

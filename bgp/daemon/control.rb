@@ -220,6 +220,19 @@ module BGP
       # what it returned**, because an empty change list is ambiguous: a
       # prefix another peer also advertises can be withdrawn by us and
       # leave the Loc-RIB unchanged, since that peer's route then wins.
+      # RFC 7432 section 15.1's "corrective action [...] by the operator":
+      # clears one MAC's duplicate mark, so the MAC-VRF handles it again
+      # (docs/design/evpn.md, pull request 3). `vni` and `mac` are needed.
+      def evpn_clear_duplicate(params = {})
+        p = strings(params, %w[vni mac])
+        m = @speaker.macvrfs or raise ArgumentError, 'evpn.clear_duplicate: this bgp4rd has no macvrfs'
+        vni = Integer(p['vni'], exception: false) or raise ArgumentError, 'evpn.clear_duplicate: vni is required, a number'
+        raise ArgumentError, 'evpn.clear_duplicate: mac is required' if p['mac'].to_s.empty?
+        r = m.clear_duplicate(vni, p['mac'])
+        @speaker.evpn_poke
+        r
+      end
+
       def route_withdraw(params = {})
         p = strings(params, WITHDRAW_KEYS)
         rib = table!

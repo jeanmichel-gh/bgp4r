@@ -213,6 +213,7 @@ Both read one page. Add `'{"limit":5000}'` after the method name for more.
 | `peer.refresh` | sends a ROUTE-REFRESH, RFC 2918, with the RFC 7313 subtypes | `peer`, `afi`, `safi`, `subtype` |
 | `route.originate` | announces prefixes of our own | `prefix` or `prefixes`, `origin`, `as_path`, `med`, `local_pref`, `communities`, `extended_communities`, `large_communities`, `path_id` |
 | `route.withdraw` | withdraws prefixes we announced | `prefix` or `prefixes`, `path_id` |
+| `evpn.clear_duplicate` | clears one MAC's duplicate mark (RFC 7432 section 15.1), so its MAC-VRF handles it again: `vni`, `mac`, `cleared` | `vni`, `mac` |
 | `peer.specimen` | sends one valid UPDATE by hand, from `BGP::Specimen` | `peer`, `name`, `prefix` or `prefixes`, `next_hop` |
 | `peer.fault` | sends one malformed UPDATE by hand, from `BGP::Fault` | `peer`, `case`, `prefix` or `prefixes`, `next_hop` |
 | `peer.replay` | sends octets as given, in hex | `peer`, `hex` |
