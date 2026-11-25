@@ -445,7 +445,12 @@ See docs/daemon.md.
              system('git', '-C', dir, 'config', 'user.email', 'lab@configs', :out => File::NULL, :err => File::NULL) &&
              system('git', '-C', dir, 'add', '-A', :out => File::NULL, :err => File::NULL)
         return 'git: not available, the lab folder has no history' unless ok
-        if system('git', '-C', dir, 'commit', '-q', '-m',
+        # No automatic maintenance: from git 2.47 a commit starts `git
+        # maintenance run --auto --detach`, whose child goes on working in
+        # the new folder, holding `.git/objects/maintenance.lock`, after
+        # the commit has returned. One commit has nothing to maintain, and
+        # a folder removed at once (a test's) met that lock vanishing.
+        if system('git', '-c', 'maintenance.auto=false', '-C', dir, 'commit', '-q', '-m',
                   "Lab created from bgp4r #{name}",
                   :out => File::NULL, :err => File::NULL)
           'git: repository created with a first commit'
