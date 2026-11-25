@@ -1,7 +1,7 @@
 # EVPN in bgp4rd, VXLAN first
 
-Status: draft, 2026-11-25, waiting for the owner's approval and answers
-to the open questions at the end.
+Status: draft, 2026-11-25. The owner answered its six questions the
+same day (at the end); it waits for the owner's approval.
 
 This is P5 in routescope's `docs/protocol-coverage.md`: "EVPN in
 bgp4rd. MAC-VRF and an EVPN RIB, VXLAN first". routescope's
@@ -178,6 +178,16 @@ It keeps types 2 and 3. A route of another type is counted per peer,
 shown in `show.peers`, and not kept. Type 254 stays in the
 `UnreachTable`, as today.
 
+One table holds both types, not one table per type (the owner,
+2026-11-25):
+- The types share the RD, RT import, the session's feed, a peer's
+  routes going when its session does, reflection and `show.evpn`. One
+  table does each once.
+- One UPDATE can carry several types; one table takes it whole.
+- A later type (1, 4 or 5) adds a key and what it installs.
+- The cost: rows differ in shape (a type 3 route has no MAC), and what
+  a route installs depends on its type. MAC Mobility is type 2's alone.
+
 ### 2. One MAC-VRF per VNI, configured
 
 RFC 8365 section 5.1.2 has two options. The draft takes option 1, "A
@@ -279,14 +289,23 @@ has `evpn:` with no `macvrfs:`.
 6. **The VNI must match.** A type 2 or 3 route whose VNI is not the
    MAC-VRF's is kept and not installed, with the reason `vni`. vtep4rd
    sends every frame of a bridge domain with its own VNI, so installing
-   it would send frames the far VTEP drops.
-7. **The encapsulation.** RFC 8365 section 5.1.3 has the Encapsulation
-   community "included with all EVPN routes", and says "if the BGP
-   Encapsulation Extended Community is not present, then either MPLS
-   encapsulation or a statically configured encapsulation is assumed".
-   The draft installs a route that says VXLAN or says nothing, since
-   this bgp4rd speaks VXLAN only, and keeps one that names another
-   encapsulation with the reason `encapsulation`.
+   it would send frames the far VTEP drops. This holds for global VNIs,
+   which the labs use. RFC 8365 section 5.1.3 also allows "locally
+   assigned VNIs", where two VTEPs give one broadcast domain different
+   VNIs and the RT joins them; that needs vtep4rd to send with each
+   VTEP's VNI, and is out of scope.
+7. **The encapsulation must say VXLAN.** RFC 8365 section 5.1.3 has
+   the Encapsulation community "included with all EVPN routes", and
+   says "if the BGP Encapsulation Extended Community is not present,
+   then either MPLS encapsulation or a statically configured
+   encapsulation is assumed". A route with none may come from a PE
+   that expects MPLS, and its label field is then an MPLS label, not a
+   VNI. So bgp4rd installs only a route whose Encapsulation community
+   names VXLAN (tunnel type 8). A route with none, or with another, is
+   kept and not installed, with the reason `encapsulation` (the owner,
+   2026-11-25: no VXLAN to a router that expects MPLS). FRR's leaves
+   send `ET:8` on both types (lab 3's fixtures), and the injector's
+   routes carry `encapsulation:vxlan` since bgp4r #378.
 8. A non-zero ESI is a multihomed segment. RFC 7432 section 9.2.2 then
    asks for the Ethernet A-D per ES routes before installing. The draft
    keeps such a route and does not install it, with the reason `esi`.
@@ -340,7 +359,8 @@ route and every local MAC:
   own if it lost.
 - **Wraparound.** "an implementation MUST handle scenarios in which
   sequence number wraparound occurs". The draft compares sequences as
-  32-bit serial numbers, RFC 1982 section 3.2. Open question 4.
+  32-bit serial numbers, RFC 1982 section 3.2. FRR's rule is not
+  measured; lab 3 gains a scenario that does (Labs, below).
 - **Sticky.** A route with the sticky flag (section 7.7, "the MAC
   address is static and cannot move") always wins. A local learn of
   such a MAC is logged, as section 15.2 asks: "the PE MUST alert the
@@ -391,8 +411,12 @@ One pull request in vtep4r, step 0 below, before bgp4rd's pull request
    decides, and may put the remote VTEP back with `mac.add` if it loses.
 2. **A `moved` event carries the old place, and an `aged` event its
    port.**
-3. **In `evpn` mode, a static `flood:` is refused** by the config check,
-   so a lab cannot mix the two. Open question 3.
+3. **In `evpn` mode, a static `flood:` is refused** by the config check.
+   vtep4rd keeps one flood list per VNI (`bridge_domain.rb:48`), for
+   the file's VTEPs and the API's alike. Mixed, a type 3 withdrawal
+   would remove a VTEP the file named, a static VTEP would be flooded
+   to whatever EVPN says, and the gate's "from type 3 routes alone"
+   could pass with EVPN doing nothing.
 
 ## Labs
 
@@ -400,14 +424,18 @@ One pull request in vtep4r, step 0 below, before bgp4rd's pull request
 plus a bgp4rd beside each leaf's vtep4rd and one on s1 as the
 reflector. The VNIs are `mode: evpn`, with no `flood:`.
 
-vtep4rd's socket is a file. `network-mode: container:` shares the
-network namespace and not the file system, so each leaf's two
-containers share `/run/vtep4r` through a bind mount of a folder in the
-lab. Open question 2.
+Each daemon has its container, and a leaf's containers share its
+network (`network-mode: container:`), as isisd and vtep4rd do today
+(the owner, 2026-11-25). vtep4rd's socket is a file, and that mode
+shares the network namespace, not the file system. So a leaf's vtep4rd
+and bgp4rd containers both mount one folder of the lab at
+`/run/vtep4r`.
 
 **Lab 3, `evpn-vxlan-frr`**: l2 becomes vtep4rd with bgp4rd, and s1
 bgp4rd as the reflector. l1 stays FRR with the kernel's VXLAN. That is
-the interop check.
+the interop check. It gains a scenario for the sequence's wraparound:
+the injector claims a MAC at 4294967295, then at 0, and the scenario
+records which FRR keeps and which bgp4rd keeps.
 
 ## Pull requests
 
@@ -480,6 +508,8 @@ Each later, with its own spec if asked for:
   It needs vtep4rd to keep IP bindings and answer ARP.
 - Type 5, IP prefixes (RFC 9136), and routing between VNIs (RFC 9135).
 - More than one VNI per EVI, the VLAN-Aware Bundle Service.
+- Locally assigned VNIs (RFC 8365 section 5.1.3), which need vtep4rd
+  to send with each far VTEP's VNI.
 - RT auto-derivation from the VNI (RFC 8365 section 5.1.2.1).
 - EVPN over MPLS, the second half of P5.
 - The kernel's VXLAN as bgp4rd's data plane.
@@ -487,22 +517,19 @@ Each later, with its own spec if asked for:
 - The Default Gateway community (RFC 7432 section 10.1): it goes with
   routing, so with type 5.
 
-## Open questions
+## Questions, answered
 
-1. **Decision 1.** A table of its own, as L3VPN did, or the start of a
-   RIB keyed on any NLRI? The draft takes a table of its own.
-2. **One container or two per leaf?** The draft keeps vtep4rd and
-   bgp4rd in two containers sharing the socket's folder by a bind
-   mount, as the lab has isisd and vtep4rd in two. One image with both
-   daemons is the other way.
-3. **Refuse a static `flood:` in `evpn` mode?** The draft refuses it in
-   vtep4r. Keeping it would let a lab test EVPN beside a static VTEP.
-4. **Wraparound.** RFC 7432 does not say how to compare across a wrap.
-   The draft uses RFC 1982's serial number arithmetic. FRR's rule is
-   not measured; it can be, with the injector, in lab 3.
-5. **A route with no Encapsulation community.** The draft installs it,
-   since bgp4rd speaks only VXLAN. Strict reading would refuse it as
-   MPLS. FRR installed bgp4r's routes without it in lab 3.
-6. **A VNI that does not match.** The draft does not install it. FRR
-   imported routes labelled 1601 into VNI 100 by their RT (lab 3's
-   `ABOUT.md`).
+The owner answered all six on 2026-11-25.
+
+1. **Decision 1.** A table of its own, as L3VPN did, and one table for
+   every type it keeps, not one per type.
+2. **Containers.** One per daemon, sharing the leaf's network and
+   vtep4rd's socket folder (Labs).
+3. **A static `flood:` in `evpn` mode** is refused in vtep4r (What
+   vtep4r needs first, item 3).
+4. **Wraparound.** RFC 1982 section 3.2, and a lab 3 scenario that
+   measures FRR's rule.
+5. **A route with no Encapsulation community** is not installed: no
+   VXLAN to a router that may expect MPLS (Receiving, step 7).
+6. **A VNI that does not match** is not installed. Locally assigned
+   VNIs are out of scope (Receiving, step 6).
