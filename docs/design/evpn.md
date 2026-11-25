@@ -1,7 +1,7 @@
 # EVPN in bgp4rd, VXLAN first
 
-Status: draft, 2026-11-25. The owner answered its six questions the
-same day (at the end); it waits for the owner's approval.
+Status: approved by the owner, 2026-11-25, with the answers to its six
+questions at the end. Pull request 0, in vtep4r, is under way.
 
 This is P5 in routescope's `docs/protocol-coverage.md`: "EVPN in
 bgp4rd. MAC-VRF and an EVPN RIB, VXLAN first". routescope's
