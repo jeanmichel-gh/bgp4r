@@ -428,11 +428,13 @@ module BGP
 
       # EVPN: the routes held from the peer, types 2 and 3, and
       # `other_types`, the routes of other types it announced, which the
-      # table does not keep (docs/design/evpn.md, decision 1). Nothing is
-      # sent yet: export is pull request 3.
+      # table does not keep (docs/design/evpn.md, decision 1). `sent`
+      # counts this PE's own routes (pull request 3) and the routes it
+      # reflected (pull request 4).
       def evpn_family(peer)
         c = @speaker.evpn.counts(peer.address)
         sent = @speaker.respond_to?(:evpn_exporter) && @speaker.evpn_exporter ? @speaker.evpn_exporter.sent_count(peer) : 0
+        sent += @speaker.evpn_reflector.size(peer.address) if @speaker.respond_to?(:evpn_reflector) && @speaker.evpn_reflector
         { :family => 'evpn', :received => c[:received], :sent => sent, :other_types => c[:other_types] }
       end
 

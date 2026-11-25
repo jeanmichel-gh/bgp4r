@@ -682,6 +682,16 @@ they came. Every Route Target is kept: no filter at the reflector. On
 `show bgp summary` counts unicast only, so a VPN reflector's prefix
 columns read 0.
 
+**An EVPN route reflector** (`docs/design/evpn.md`, pull request 4). The
+same speaker reflects EVPN routes too, types 2 and 3, by the same rules
+and with the same clients and `cluster_id`. The EVPN table keeps every
+route, whatever its Route Targets, so the reflector needs no
+`macvrfs:`. Each key's best path goes on with its next hop, RD, labels,
+PMSI Tunnel and communities as they came, so a leaf floods to and sends
+to the leaf that sent the route. It goes without a Path Identifier, and
+only to internal sessions that negotiated L2VPN EVPN. `show.peers`
+counts what was reflected in the `evpn` family's `sent`.
+
 **CEs by eBGP** (RFC 4364 section 7, pull request 7). A neighbor with
 `vrf:` is a CE in that VRF:
 

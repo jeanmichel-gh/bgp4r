@@ -362,6 +362,14 @@ class BGP_Daemon_Speaker_Test < Test::Unit::TestCase
     assert_not_nil(speaker('neighbors' => [pe], 'export' => { 'route_reflector' => true }).vpn_reflector)
   end
 
+  # docs/design/evpn.md, pull request 4: and EVPN routes, the same way.
+  def test_a_route_reflector_reflects_evpn_routes_too
+    pe = { 'address' => '10.255.0.1', 'as' => 65_000 }
+    assert_nil(speaker('neighbors' => [pe]).evpn_reflector)
+    assert_not_nil(speaker('neighbors' => [pe.merge('route_reflector_client' => true)]).evpn_reflector)
+    assert_not_nil(speaker('neighbors' => [pe], 'export' => { 'route_reflector' => true }).evpn_reflector)
+  end
+
   def test_every_listed_key_is_accepted
     config = { 'address' => '10.0.0.2', 'as' => 65_001, 'capabilities' => [],
                'connect' => false, 'description' => 'd', 'hold_time' => 30,

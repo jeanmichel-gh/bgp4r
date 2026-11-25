@@ -554,6 +554,22 @@ changed from the plan:
 - `evpn` events in bgp4rd's stream: `moved`, `duplicate`, `cleared` and
   `sticky`, with `vni` and `mac`.
 
+**Pull request 4.** `bgp/daemon/evpn_reflector.rb`, built beside the
+VPN reflector, with its `Export`: the same clients and `cluster_id`.
+What changed from the plan:
+
+- **The NLRI goes on without its Path Identifier.** Nothing here
+  negotiates ADD-PATH for EVPN, so a route that came with one is sent on
+  without it, as the winner of its key.
+- **One UPDATE per route**, as the VPN reflector sends, since each route
+  keeps the attributes it came with.
+- **Only types 2 and 3 are reflected**, since the table keeps no other.
+  A route of another type is counted in `other_types` and goes nowhere.
+- External peers and CEs in a VRF get nothing, as from the VPN
+  reflector.
+- `show.peers`' `sent` for `evpn` adds what was reflected to a peer to
+  what this PE sent of its own.
+
 ## Tests
 
 - Unit, one file per class: the table's key (one MAC with two IPs is

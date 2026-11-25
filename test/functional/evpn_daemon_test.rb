@@ -382,4 +382,47 @@ class BGP_Evpn_Daemon_Functional_Test < Test::Unit::TestCase
     e = assert_raise(BGP::Daemon::Client::Error) { call('evpn.clear_duplicate', 'mac' => '02:00:00:00:01:01') }
     assert_match('vni is required', e.message)
   end
+
+  # docs/design/evpn.md, pull request 4. bgp4rd as s1, the reflector,
+  # with two clients: l1 dials in on 127.0.0.1 and l2 on 127.0.0.2. What
+  # l1 sends reaches l2 with RFC 4456's ORIGINATOR_ID and CLUSTER_LIST,
+  # and l1's own next hop and PMSI Tunnel, so l2 floods to l1 itself.
+  def test_a_reflector_sends_one_leafs_routes_to_the_other
+    l2_listener = TCPServer.new('127.0.0.2', PORT + 1)
+    leaf = ->(port) { { 'address' => port == PORT ? '127.0.0.1' : '127.0.0.2', 'as' => 65_000, 'connect' => true,
+                        'port' => port, 'retry' => 1, 'route_reflector_client' => true,
+                        'capabilities' => %w[as4_byte mbgp_l2vpn_evpn] } }
+    daemon(%w[as4_byte mbgp_l2vpn_evpn], 'neighbors' => [leaf.(PORT), leaf.(PORT + 1)])
+    peer
+    l1 = @peer
+    sock = l2_listener.accept
+    l2 = @l2 = BGP::Neighbor.new(:my_as => 65_000, :id => '10.0.9.3', :remote_addr => '127.0.0.2', :local_addr => '127.0.0.2')
+    l2.capability :as4_byte
+    l2.capability :mbgp_l2vpn_evpn
+    got = Queue.new
+    l2.add_observer(Class.new { define_method(:update) { |m| got << m if m.is_a?(BGP::Update) } }.new)
+    Thread.new { l2.start(:session => sock, :timeout => 10) }
+    wait_for('l2 to come up') { l2.is_established? }
+
+    send_spec(spec(3, '10.0.9.2'))
+    send_spec(spec(2, '02:00:00:99:00:00', 2))
+    @got = got
+    wait_sent('l1\'s routes at l2', [[3, nil, nil], [2, '02:00:00:99:00:00', nil], [2, '02:00:00:99:00:01', nil]])
+    imet = @all_updates.find { |u| u.path_attribute[BGP::Mp_reach].nlris.first.route.is_a?(BGP::Evpn::Inclusive_multicast) }
+    s1 = BGP::Rib::Peer.new(:address => '127.0.0.2', :remote_as => 65_000, :router_id => '10.255.0.12', :local_as => 65_000)
+    _, v = BGP::Rib::PeerAdapter.evpn_operations(imet, s1).first
+    r = v.route
+    assert_equal(['10.0.9.2', '10.0.9.2', ['10.255.0.12'], 100, ['65000:100'], 'VXLAN',
+                  { 'type' => 'ingress_replication', 'id' => '10.0.9.2' }],
+                 [r.next_hop, r.originator_id, r.cluster_list, v.vni, v.route_targets, v.encap, v.pmsi_row])
+    families = call('show.peers').to_h { |p| [p['address'], p['families'].find { |f| f['family'] == 'evpn' }] }
+    assert_equal([3, 0], families['127.0.0.1'].values_at('received', 'sent'))
+    assert_equal([0, 3], families['127.0.0.2'].values_at('received', 'sent'))
+
+    send_spec(spec(2, '02:00:00:99:00:00', 2), withdraw: true)
+    wait_sent('the withdrawals at l2', [[:withdrawn, 2, '02:00:00:99:00:00'], [:withdrawn, 2, '02:00:00:99:00:01']])
+  ensure
+    @l2&.close
+    l2_listener&.close
+  end
 end

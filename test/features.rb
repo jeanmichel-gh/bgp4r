@@ -396,6 +396,15 @@ module Features
       :functional => %w[evpn_daemon_test],
     },
 
+    'evpn-reflector' => {
+      :area  => 'routing',
+      :about => 'EVPN route reflection: types 2 and 3 to clients with ORIGINATOR_ID and CLUSTER_LIST, next hop, labels and PMSI Tunnel kept',
+      :rfc   => 'RFC 4456 sections 6 and 8; RFC 7432',
+      :doc   => 'docs/design/evpn.md',
+      :unit  => %w[daemon/evpn_reflector_test],
+      :functional => %w[evpn_daemon_test],
+    },
+
     'vrfs' => {
       :area  => 'routing',
       :about => "A PE's VRFs: import by Route Target, the mpls and gre transports, VRF routes in the kernel, export with a label per VRF, IPv6 over an IPv4 core, CEs by eBGP",
