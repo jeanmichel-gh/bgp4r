@@ -260,6 +260,7 @@ neighbors:
   - address: 10.0.12.2
     as: 65002
     bfd: true                      # a BFD session beside BGP; docs/bfd.md
+    ttl_security: 1                # GTSM, RFC 5082: hops away; see below
 
 originate:
   - prefixes: [10.255.0.0/24]
@@ -346,6 +347,31 @@ away, and resets the BGP session with a Cease 6/10, BFD Down, when an Up
 BFD session fails. It is refused at start-up and in a commit when the
 neighbor is not one hop away, and a commit adds or removes it live,
 with no BGP reset. docs/bfd.md is the guide.
+
+`ttl_security: HOPS` on a neighbor is GTSM, RFC 5082. Its session
+sends at TTL 255 and drops what arrives below 256 - HOPS, so 1 is a
+directly connected peer and takes 255. HOPS is 1 to 254; anything else
+is refused at start. The kernel does the dropping (`IP_MINTTL`, or
+`IPV6_MINHOPCOUNT` for IPv6) and counts it in `/proc/net/netstat` as
+`TCPMinTTLDrop`. The peer must do the same, or its packets arrive below
+the minimum, or ours fail its own: FRR's is `neighbor X ttl-security
+hops N`. It cannot change in a commit, since the listener's minimum is
+set when bgp4rd starts.
+
+An active neighbor's SYN already goes at 255. Passive neighbors share
+one listener (one per VRF), which works like this, and
+`docs/design/bgp-operations.md` section 5 says why:
+
+- The listener sends at 255 when any of its peers has `ttl_security`,
+  since its SYN-ACK goes with the listener's TTL.
+- It drops a SYN below a minimum only when **every** passive peer on it
+  has `ttl_security`, and then at the loosest: peers at 1 and 3 hops
+  give 253. One peer without it means no minimum on the listener, since
+  that peer's SYN arrives at its sender's default TTL.
+- Each accepted connection is set to its own peer's minimum before its
+  OPEN is read, or to none for a peer without `ttl_security`. So a
+  1-hop peer whose packets arrive at 254 may complete the handshake, but
+  its OPEN is dropped, and the session never reaches Established.
 
 `cluster_id` and `default_local_pref` are written under `export` and
 read by the decision process too. The first is the ID a reflector
@@ -1208,6 +1234,10 @@ peer, which is the single cluster case of section 6.
 gains `bfd`, `up`, `down`, `init` or `admin_down` as bfdd4r last told
 it, or `unknown` before it has told one and while bfdd4r is away. Other
 rows have no such key. docs/bfd.md.
+
+**A neighbor with `ttl_security` says so**: its row gains
+`ttl_security`, `{"hops": 1, "min_ttl": 255}`. Other rows have no such
+key.
 
 **A CE's row, and a row whose session negotiated a VPN family, say
 more**, for routescope's L3VPN views (routescope
