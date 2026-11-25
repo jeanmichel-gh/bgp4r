@@ -219,4 +219,23 @@ class TestBgpRibVpnTable < Test::Unit::TestCase
     n.receive(update([65000, 1], '192.168.2.0/30', 24001))
     assert_equal(0, @t.size)
   end
+
+  # RFC 7313 section 4 for VPN-IPv4 and VPN-IPv6: one AFI marked, the
+  # row says so, an announcement clears it, and the EoRR removes the rest.
+  def test_stale_routes
+    @t.apply('10.255.0.3', vpn('10.255.0.3', [65000, 1], '192.168.2.0/30', 24001))
+    @t.apply('10.255.0.3', vpn('10.255.0.3', [65000, 1], '192.168.3.0/30', 24001))
+    @t.apply('10.255.0.3', vpn('10.255.0.3', [65000, 1], '2001:db8:2::/64', 24001, afi: 2))
+    assert_equal(2, @t.mark_stale('10.255.0.3', 1))
+    assert_equal(2, @t.stale_size('10.255.0.3'))
+    assert_equal({ '192.168.2.0/30' => 'refresh', '192.168.3.0/30' => 'refresh', '2001:db8:2::/64' => nil },
+                 @t.rows.to_h { |r| [r['prefix'], r['stale']] })
+    assert_equal('refresh', @t.stale('10.255.0.3', '65000:1', '192.168.2.0/30'))
+    assert_equal([nil, nil], [@t.stale('10.255.0.3', '65000:1', '2001:db8:2::/64'), @t.stale('10.255.0.3', '65000:9', '192.168.2.0/30')],
+                 'another prefix, another RD')
+    @t.apply('10.255.0.3', vpn('10.255.0.3', [65000, 1], '192.168.2.0/30', 24001))
+    assert_equal(1, @t.purge_stale('10.255.0.3', 1))
+    assert_equal(%w[192.168.2.0/30 2001:db8:2::/64], @t.rows.collect { |r| r['prefix'] })
+    assert_nil(@t.best('65000:1', '192.168.3.0/30'), 'decided again')
+  end
 end

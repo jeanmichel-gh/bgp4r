@@ -308,7 +308,8 @@ module BGP
       # to the code, so a key read here and not listed fails the suite.
       KEYS = %w[address as capabilities connect description hold_time
                 open_timeout port record retry route_reflector_client
-                vrf as_override soo bfd ttl_security password end_of_rib].freeze
+                vrf as_override soo bfd ttl_security password end_of_rib
+                refresh_stale_time].freeze
 
       # Raises ArgumentError naming every key `config` carries that no
       # code reads, and the keys there are.
@@ -943,6 +944,7 @@ module BGP
         check_ttl_security
         check_password
         @peers.each { |p| EndOfRib.check(p.config['end_of_rib'], p.address) }
+        @peers.each { |p| Refresh.check(p.config['refresh_stale_time'], p.address) }
         @link_state = LinkStateTable.new
         unreach_log = ->(level, msg) { log(level, msg) }
         @unreach = UnreachTable.new(events: @events, logger: unreach_log)
@@ -1122,6 +1124,42 @@ module BGP
 
       # How long send_end_of_rib waits for a sender, in seconds.
       END_OF_RIB_WAIT = 30
+
+      # A BoRR or an EoRR from peer, RFC 7313 section 4: action :mark
+      # marks the peer's routes of that family stale, :purge removes what
+      # is still stale. Each family goes to the table that holds it, as
+      # resend_family sends it. done is called once with how many routes
+      # were marked or removed. Unicast goes through the RIB's worker, in
+      # its place among the UPDATEs before and after it, so done may be
+      # called later, on that thread. A family no table holds calls done
+      # with nil.
+      def stale_family(peer, afi, safi, action, &done)
+        mark = action == :mark
+        address = peer.address
+        n = case [afi, safi]
+            when [1, 1], [2, 1]
+              if peer.vrf
+                @ce_table && (mark ? @ce_table.mark_stale(peer.vrf, address, afi) : @ce_table.purge_stale(peer.vrf, address, afi))
+              elsif @rib
+                @rib.feed << [:stale, address, afi, action, done]
+                return
+              end
+            when [1, 128], [2, 128]
+              mark ? @vpn.mark_stale(address, afi) : @vpn.purge_stale(address, afi)
+            when BGP::Rib::PeerAdapter::EVPN
+              # Types 2 and 3 in the EVPN table, type 254 in the
+              # unreachability table: one family, two tables.
+              (mark ? @evpn.mark_stale(address) : @evpn.purge_stale(address)) +
+                (mark ? @unreach.mark_stale(address, [afi, safi]) : @unreach.purge_stale(address, [afi, safi]))
+            when [IANA::AFI::BGP_LS, IANA::SAFI::BGP_LS]
+              mark ? @link_state.mark_stale(address) : @link_state.purge_stale(address)
+            else
+              if Unreach::FAMILIES.include?([afi, safi])
+                mark ? @unreach.mark_stale(address, [afi, safi]) : @unreach.purge_stale(address, [afi, safi])
+              end
+            end
+        done&.call(n)
+      end
 
       # True when the node file asks for a table at all. rib: on its own
       # builds one that decides and prints and advertises nothing, which is
@@ -1550,8 +1588,28 @@ module BGP
         @l3vpn ? @l3vpn.vrf_rows : []
       end
 
+      # How many of peer's routes are marked stale now, in every table.
+      def stale_size(peer)
+        address = peer.address
+        n = @vpn.stale_size(address) + @evpn.stale_size(address) + @link_state.stale_size(address) + @unreach.stale_size(address)
+        n += peer.vrf ? @ce_table&.stale_size(peer.vrf, address).to_i : @rib&.stale_size(address).to_i
+        n
+      end
+
+      # Each row gains `stale` while the route it came from is marked: a
+      # CE's in the CE table, a VPN route's in the VPN table. The rows are
+      # built when the VRFs sync and a mark changes no decision, so the
+      # mark is read here, as the rows are asked for.
       def vrf_route_rows(vrf = nil)
-        @l3vpn ? @l3vpn.rows(vrf) : []
+        return [] unless @l3vpn
+        @l3vpn.rows(vrf).collect do |r|
+          why = if r['transport'] == 'ce'
+                  @ce_table&.stale(r['vrf'], r['peer'], r['prefix'])
+                elsif r['rd'] && r['peer']
+                  @vpn.stale(r['peer'], r['rd'], r['prefix'])
+                end
+          why ? r.merge('stale' => why) : r
+        end
       end
 
       # vrfs: and l3vpn:, read and checked once, at start: a change needs a

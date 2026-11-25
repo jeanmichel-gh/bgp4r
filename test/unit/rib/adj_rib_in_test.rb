@@ -94,4 +94,31 @@ class TestBgpRibAdjRibIn < Test::Unit::TestCase
   def test_route_from_another_peer_is_refused
     assert_raise(ArgumentError) { @rib.announce(route('10.1.0.0/16', peer: OTHER)) }
   end
+
+  # RFC 7313 section 4: a BoRR marks routes stale; one announced again,
+  # or withdrawn, loses its mark; the EoRR removes what is still marked.
+  def test_the_stale_mark
+    %w[10.1.0.0/16 10.2.0.0/16 10.3.0.0/16].each { |p| @rib.announce(route(p)) }
+    assert_equal(2, @rib.mark_stale('refresh') { |r| r.prefix != '10.3.0.0/16' })
+    assert_equal(['refresh', 'refresh', nil], %w[10.1.0.0/16 10.2.0.0/16 10.3.0.0/16].collect { |p| @rib.stale(p) })
+    @rib.announce(route('10.1.0.0/16', med: 5))
+    assert_nil(@rib.stale('10.1.0.0/16'), 'announced again, fresh')
+    assert_equal(1, @rib.stale_size)
+    gone = @rib.purge_stale { true }
+    assert_equal(['10.2.0.0/16'], gone.collect(&:prefix))
+    assert_equal(%w[10.1.0.0/16 10.3.0.0/16], @rib.prefixes.sort)
+    assert_equal(0, @rib.stale_size)
+  end
+
+  def test_withdraw_and_flush_take_the_mark
+    @rib.announce(route('10.1.0.0/16'))
+    @rib.announce(route('10.2.0.0/16'))
+    @rib.mark_stale('refresh') { true }
+    @rib.withdraw('10.1.0.0/16')
+    assert_equal(1, @rib.stale_size)
+    @rib.announce(route('10.1.0.0/16'))
+    assert_nil(@rib.stale('10.1.0.0/16'), 'back fresh, not stale from before')
+    @rib.flush
+    assert_equal(0, @rib.stale_size)
+  end
 end

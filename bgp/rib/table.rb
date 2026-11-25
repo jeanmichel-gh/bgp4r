@@ -199,6 +199,45 @@ module BGP
         end
       end
 
+      # Marks stale the routes of one address family from the peer at
+      # address, as a BoRR asks (RFC 7313 section 4). afi picks IPv4 or IPv6
+      # by the prefix, since the table keeps both and keys a route by its
+      # prefix alone. The decision does not look at the mark (RFC 4724
+      # section 4.2). Returns how many were marked.
+      def mark_stale(address, afi, reason = 'refresh')
+        sync do
+          ribins_of(address).sum { |ribin| ribin.mark_stale(reason) { |r| Table.afi_of(r.prefix) == afi } }
+        end
+      end
+
+      # Removes what is still stale of that family from that peer, as an
+      # EoRR asks, and decides the prefixes again. Returns the routes
+      # removed; the Loc-RIB changes go to the listeners, as a withdrawal's
+      # do.
+      def purge_stale(address, afi)
+        sync do
+          gone = ribins_of(address).flat_map { |ribin| ribin.purge_stale { |r| Table.afi_of(r.prefix) == afi } }
+          gone.each { |r| set_imported(r.prefix, r.peer, r.path_id, nil) }
+          gone.map(&:prefix).uniq.each { |prefix| decide(prefix) }
+          gone
+        end
+      end
+
+      # How many routes from the peer at address are marked stale.
+      def stale_size(address)
+        sync { ribins_of(address).sum(&:stale_size) }
+      end
+
+      # The reason the route is marked stale, or nil.
+      def stale(peer, prefix, path_id = nil)
+        sync { @adj_in[peer]&.stale(prefix, path_id) }
+      end
+
+      # 1 for an IPv4 prefix, 2 for IPv6: the AFI, IANA's numbers.
+      def self.afi_of(prefix)
+        prefix.include?(':') ? IANA::AFI::IPv6 : IANA::AFI::IPv4
+      end
+
       # Runs import and the decision again for every route, for example
       # after the import block or the resolver changed what it returns.
       def refresh
@@ -401,6 +440,13 @@ module BGP
       def sync
         return yield if @lock.owned?
         @lock.synchronize { yield }
+      end
+
+      # The Adj-RIBs-In of the peer at address. One, but a peer that came
+      # back with another BGP Identifier is a second Peer until the first
+      # one's routes are flushed.
+      def ribins_of(address)
+        @adj_in.select { |peer, _| peer.address.to_s == address.to_s }.values
       end
 
       # RFC 4271 section 5.1.5: LOCAL_PREF received from an eBGP peer must be

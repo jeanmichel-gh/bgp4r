@@ -320,7 +320,7 @@ module BGP
     # marks nothing stale for any family yet.
     class UnreachTable
 
-      Entry = Struct.new(:fields, :since)
+      Entry = Struct.new(:fields, :since, :stale)
 
       def initialize(events: nil, logger: nil)
         @lock = Mutex.new
@@ -369,10 +369,39 @@ module BGP
         @lock.synchronize { peer ? (@routes[peer] || {}).size : @routes.values.sum(&:size) }
       end
 
+      # Marks stale the reports of one family from peer, as a BoRR asks
+      # (RFC 7313 section 4). The key's first element is the family.
+      # Returns how many were marked.
+      def mark_stale(peer, family, reason = 'refresh')
+        @lock.synchronize do
+          (@routes[peer] || {}).select { |k, _| k.first == family }.each_value { |e| e.stale = reason }.size
+        end
+      end
+
+      # How many reports from peer are marked stale.
+      def stale_size(peer)
+        @lock.synchronize { (@routes[peer] || {}).each_value.count(&:stale) }
+      end
+
+      # Removes the reports of that family still stale from peer, as an
+      # EoRR asks, each published as withdrawn. Returns how many went.
+      def purge_stale(peer, family)
+        gone = @lock.synchronize do
+          h = @routes[peer] or next []
+          keys = h.select { |k, e| k.first == family && e.stale }.keys
+          keys.collect { |k| delete(peer, k) }
+        end
+        gone.each { |e| publish(peer, :withdrawn, e.fields) }
+        gone.size
+      end
+
       def rows
         @lock.synchronize do
           @routes.flat_map do |peer, h|
-            h.values.collect { |e| { 'peer' => peer }.merge(e.fields).merge('since' => Recorder.iso(e.since)) }
+            h.values.collect do |e|
+              row = { 'peer' => peer }.merge(e.fields).merge('since' => Recorder.iso(e.since))
+              e.stale ? row.merge('stale' => e.stale) : row
+            end
           end
         end
       end

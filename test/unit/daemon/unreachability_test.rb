@@ -237,4 +237,26 @@ class TestDaemonUnreachability < Test::Unit::TestCase
     assert_equal(['0004' + '18c00002'], [w.first.path_attribute[Mp_unreach].nlris.first.to_shex])
   end
 
+  # RFC 7313 section 4 for the unreachability families: one family's
+  # reports, each removed one published as withdrawn.
+  def test_stale_reports
+    ev = BGP::Events.new
+    t = D::UnreachTable.new(events: ev)
+    sub = ev.subscribe
+    t.apply('10.0.0.1', R.operations(update(Unreachability.new('192.0.2.0/24', reporter('10.0.0.1', 65_001, 3))), [V4]))
+    t.apply('10.0.0.1', R.operations(update(Unreachability.new('198.51.100.0/24', reporter('10.0.0.1', 65_001, 3))), [V4]))
+    assert_equal(0, t.mark_stale('10.0.0.1', V6))
+    t.apply('10.0.0.1', R.operations(update(Unreachability.new('2001:db8::/32', reporter('10.0.0.1', 65_001, 3))), [V6]))
+    t.mark_stale('10.0.0.1', V6)
+    assert_equal(2, t.mark_stale('10.0.0.1', V4))
+    assert_equal(%w[refresh refresh refresh], t.rows.collect { |r| r['stale'] })
+    t.apply('10.0.0.1', R.operations(update(Unreachability.new('192.0.2.0/24', reporter('10.0.0.1', 65_001, 3))), [V4]))
+    assert_equal(2, t.stale_size('10.0.0.1'))
+    nil while sub.pop(:timeout => 0)
+    assert_equal(1, t.purge_stale('10.0.0.1', V4))
+    assert_equal([['192.0.2.0/24', nil], ['2001:db8::/32', 'refresh']], t.rows.collect { |r| [r['prefix'], r['stale']] })
+    got = []
+    while (e = sub.pop(:timeout => 0)) do got << e.data['event'] end
+    assert_equal(['withdrawn'], got)
+  end
 end

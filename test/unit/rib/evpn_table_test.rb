@@ -206,4 +206,17 @@ class TestBgpRibEvpnTable < Test::Unit::TestCase
     assert(!BGP::Rib::EvpnTable.negotiated?(si.new(open.(evpn), open.(v4))))
     assert(!BGP::Rib::EvpnTable.negotiated?(nil))
   end
+
+  # RFC 7313 section 4 for L2VPN EVPN: every route from the peer.
+  def test_stale_routes
+    @t.apply('10.255.0.12', ops('10.255.0.12', [type2(['10.255.0.12', 100], H1), type2(['10.255.0.12', 100], H2)]))
+    assert_equal(2, @t.mark_stale('10.255.0.12'))
+    assert_equal(%w[refresh refresh], @t.rows.collect { |r| r['stale'] })
+    @t.apply('10.255.0.12', ops('10.255.0.12', [type2(['10.255.0.12', 100], H1)]))
+    assert_equal(1, @t.stale_size('10.255.0.12'))
+    key = @t.winners.find { |w| w.mac == H2 }.decision_key
+    assert_equal(1, @t.purge_stale('10.255.0.12'))
+    assert_nil(@t.best(key), 'decided again')
+    assert_equal([[H1, nil]], @t.rows.collect { |r| [r['mac'], r['stale']] })
+  end
 end

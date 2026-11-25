@@ -34,7 +34,8 @@
 # request from FRR, and bgp4rd's answer is a BoRR, the routes and an
 # EoRR, since FRR advertises capability 70; `peer.refresh` is one
 # request from bgp4rd, and FRR answers between a BoRR and an EoRR only
-# when we advertised 70 too.
+# when we advertised 70 too. bgp4rd reads that BoRR and EoRR: FRR's
+# route is marked stale, sent again, and kept.
 #
 # BGP:: names are written out in full, see Conventions in CLAUDE.md.
 
@@ -122,6 +123,27 @@ class LabRouteRefreshFrrTest < Test::Unit::TestCase
     end
   end
 
+  # 2b: FRR's answer comes between a BoRR and an EoRR, so bgp4rd marks
+  # FRR's routes stale, FRR sends them again, and the EoRR removes
+  # nothing. RFC 7313 section 4, read from a real sender.
+  def test_frr_answer_is_marked_then_kept
+    start(ENHANCED)
+    marks = Queue.new
+    @server.speaker.events.on_event { |e| marks << e.data if e.kind == :refresh && (e.data[:stale] || e.data[:purged]) }
+    # Measured against 10.5.1: FRR sends our two routes back, AS_PATH
+    # "65002 65001", which the Adj-RIB-In keeps and the decision passes
+    # over, beside its own. All three are marked and all three come back.
+    wait_for('FRR\'s three routes') { adj_in.size == 3 }
+    @client.call('peer.refresh', 'peer' => FRR, 'afi' => 1, 'safi' => 1)
+    stale = marks.pop(:timeout => 10)
+    purged = marks.pop(:timeout => 10)
+    assert_equal({ :afi => 1, :safi => 1, :marked => 3, :seconds => 180 }, stale && stale[:stale])
+    assert_equal({ :purged => { :afi => 1, :safi => 1, :removed => 0 }, :reason => 'EoRR' }, purged)
+    assert_equal([['10.10.0.0/16', nil], ['10.11.0.0/16', nil], ['10.20.0.0/16', nil]],
+                 adj_in.collect { |r| [r['prefix'], r['stale']] })
+    assert_equal([0, []], refresh.values_at('stale', 'waiting'))
+  end
+
   private
 
   LOCAL = '127.0.0.1'
@@ -154,6 +176,7 @@ class LabRouteRefreshFrrTest < Test::Unit::TestCase
 
   def peer ; @client.call('show.peers').first ; end
   def refresh ; peer['refresh'] ; end
+  def adj_in ; @client.call('show.adj_in', 'peer' => FRR)['rows'] ; end
   def stats ; @router.neighbor(LOCAL)['messageStats'] ; end
 
   # What one side sent, the other read, every subtype together.

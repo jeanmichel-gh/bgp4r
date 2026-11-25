@@ -44,7 +44,7 @@ module BGP
     # so the two sides of a session answer the same row for one route.
     class LinkStateTable
 
-      Entry = Struct.new(:nlri, :attribute, :since)
+      Entry = Struct.new(:nlri, :attribute, :since, :stale)
 
       # The `type` of a row, and the order rows sort in.
       TYPES = %w[node link prefix].freeze
@@ -375,6 +375,29 @@ module BGP
         self
       end
 
+      # Marks stale every route from peer, as a BoRR for BGP-LS asks (RFC
+      # 7313 section 4). Returns how many were marked.
+      def mark_stale(peer, reason = 'refresh')
+        @lock.synchronize { (@routes[peer] || {}).each_value { |e| e.stale = reason }.size }
+      end
+
+      # How many routes from peer are marked stale.
+      def stale_size(peer)
+        @lock.synchronize { (@routes[peer] || {}).each_value.count(&:stale) }
+      end
+
+      # Removes what is still stale from peer, as an EoRR asks. Returns how
+      # many went.
+      def purge_stale(peer)
+        @lock.synchronize do
+          h = @routes[peer] or next 0
+          n = h.size
+          h.delete_if { |_, e| e.stale }
+          @routes.delete(peer) if h.empty?
+          n - h.size
+        end
+      end
+
       def size(peer = nil)
         @lock.synchronize do
           peer ? (@routes[peer] || {}).size : @routes.values.sum(&:size)
@@ -390,7 +413,10 @@ module BGP
         list = @lock.synchronize do
           @routes.flat_map { |peer, h| h.values.collect { |e| [peer, e] } }
         end
-        LinkStateTable.sort(list.collect { |peer, e| LinkStateTable.row(e.nlri, e.attribute, peer, e.since) })
+        LinkStateTable.sort(list.collect do |peer, e|
+          row = LinkStateTable.row(e.nlri, e.attribute, peer, e.since)
+          e.stale ? row.merge('stale' => e.stale) : row
+        end)
       end
 
       private

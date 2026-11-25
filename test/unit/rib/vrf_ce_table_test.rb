@@ -118,4 +118,24 @@ class TestBgpRibVrfCeTable < Test::Unit::TestCase
     assert_equal('65000:11', BGP::Rib::VrfCeTable.soo_of(with))
     assert_nil(BGP::Rib::VrfCeTable.soo_of(route('172.16.1.0/24', '192.168.1.2')))
   end
+
+  # RFC 7313 section 4 for a CE: one AFI of one CE in one VRF.
+  def test_stale_routes
+    announce('A', '192.168.1.2', '172.16.1.0/24')
+    announce('A', '192.168.1.2', '172.16.2.0/24')
+    announce('A', '192.168.1.3', '172.16.3.0/24')
+    assert_equal(2, @table.mark_stale('A', '192.168.1.2', 1))
+    assert_equal(0, @table.mark_stale('A', '192.168.1.2', 2), 'no IPv6 from it')
+    assert_equal('refresh', @table.stale('A', '192.168.1.2', '172.16.2.0/24'))
+    announce('A', '192.168.1.2', '172.16.1.0/24')
+    assert_nil(@table.stale('A', '192.168.1.2', '172.16.1.0/24'))
+    assert_equal(1, @table.stale_size('A', '192.168.1.2'))
+    assert_equal(1, @table.purge_stale('A', '192.168.1.2', 1))
+    assert_equal(%w[172.16.1.0/24 172.16.3.0/24], @table.best('A').collect(&:prefix))
+    @table.mark_stale('A', '192.168.1.3', 1)
+    assert_equal(0, @table.purge_stale('A', '192.168.1.2', 1), 'the other CE\'s marks are its own')
+    assert_equal([0, 1], [@table.stale_size('A', '192.168.1.2'), @table.stale_size('A', '192.168.1.3')])
+    @table.peer_down('A', '192.168.1.3')
+    assert_equal(0, @table.stale_size('A', '192.168.1.3'), 'a closed session leaves no mark')
+  end
 end

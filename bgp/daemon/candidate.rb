@@ -55,7 +55,7 @@ module BGP
     #
     # | Effect | Keys | What a commit does |
     # |---|---|---|
-    # | live | `log_level`, `originate`, `mark`, `link_state unreachable`, `unreachability`, a neighbor's `description` and `bfd` | applies it, and nothing on the wire stops |
+    # | live | `log_level`, `originate`, `mark`, `link_state unreachable`, `unreachability`, a neighbor's `description`, `bfd` and `refresh_stale_time` | applies it, and nothing on the wire stops |
     # | bounce | a neighbor's `as`, `hold_time`, `capabilities`, `connect`, `port`, `retry`, `end_of_rib` | ends that session and lets it come back |
     # | bounce all | `announce` | ends every session and lets them come back |
     # | restart | everything else | **refuses the commit**, naming the key |
@@ -150,7 +150,7 @@ module BGP
       # A neighbor's keys that take effect with no session change at all.
       # `bfd` asks bfdd4r for a BFD session or lets go of one, and the BGP
       # session is left alone either way (bgp/daemon/bfd.rb).
-      NEIGHBOR_LIVE_KEYS = %w[description bfd].freeze
+      NEIGHBOR_LIVE_KEYS = %w[description bfd refresh_stale_time].freeze
 
       # Why a key cannot change while bgp4rd runs, by its first path
       # token. The mechanism, not the verdict: a later reader has to be
@@ -644,6 +644,7 @@ module BGP
           end
           bounced_or_live_neighbors.each { |c| refuse_unbuildable_neighbor(c) }
           bounced_or_live_neighbors.each { |c| refuse_unreadable_end_of_rib(c) }
+          bounced_or_live_neighbors.each { |c| refuse_unreadable_refresh_stale_time(c) }
           refuse_originate_with_no_table
           refuse_unreadable_mark
           refuse_unreachable_it_cannot_apply
@@ -731,6 +732,15 @@ module BGP
         # at start. Without this a bounce would apply it as off.
         def refuse_unreadable_end_of_rib(config)
           EndOfRib.check(config['end_of_rib'], config['address'])
+        rescue ArgumentError => e
+          @errors << e.message
+        end
+
+        # A `refresh_stale_time` that is not a whole number of seconds from
+        # 1, which bgp4rd refuses at start. It is live: Refresh reads it at
+        # each BoRR.
+        def refuse_unreadable_refresh_stale_time(config)
+          Refresh.check(config['refresh_stale_time'], config['address'])
         rescue ArgumentError => e
           @errors << e.message
         end

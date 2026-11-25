@@ -366,6 +366,43 @@ class TestBgpRibTable < Test::Unit::TestCase
     assert_equal(1, @rib.loc_rib.size)
   end
 
+  # RFC 7313 section 4 on the table: a BoRR marks one AFI, the decision
+  # does not look at the mark, and the EoRR's removal is decided again.
+  def test_stale_routes_by_afi
+    @rib.announce(route(E1, '10.1.0.0/16'))
+    @rib.announce(route(E1, '2001:db8::/32'))
+    @rib.announce(route(E2, '10.1.0.0/16', as_path: [65003, 65009]))
+    assert_equal(1, @rib.mark_stale('10.0.0.2', 1))
+    assert_equal(['refresh', nil], [@rib.stale(E1, '10.1.0.0/16'), @rib.stale(E1, '2001:db8::/32')])
+    assert_equal(E1, @rib.best('10.1.0.0/16').peer, 'still best while stale (RFC 4724 section 4.2)')
+    assert_equal(1, @rib.stale_size('10.0.0.2'))
+    assert_equal(0, @rib.stale_size('10.0.0.3'))
+    gone = @rib.purge_stale('10.0.0.2', 1)
+    assert_equal(['10.1.0.0/16'], gone.collect(&:prefix))
+    assert_equal(E2, @rib.best('10.1.0.0/16').peer, 'decided again: the other path')
+    assert_not_nil(@rib.best('2001:db8::/32'), 'IPv6 was not marked, so it stays')
+  end
+
+  # An EoRR for one AFI leaves the other's stale routes alone.
+  def test_a_purge_of_one_afi_leaves_the_other_stale
+    @rib.announce(route(E1, '10.1.0.0/16'))
+    @rib.announce(route(E1, '2001:db8::/32'))
+    @rib.mark_stale('10.0.0.2', 1)
+    @rib.mark_stale('10.0.0.2', 2)
+    assert_equal(['10.1.0.0/16'], @rib.purge_stale('10.0.0.2', 1).collect(&:prefix))
+    assert_equal('refresh', @rib.stale(E1, '2001:db8::/32'))
+  end
+
+  def test_show_rows_say_stale
+    @rib.announce(route(E1, '10.1.0.0/16'))
+    @rib.mark_stale('10.0.0.2', 1)
+    view = @rib.view
+    assert_equal('refresh', view.rib('10.1.0.0/16').first[:paths].first[:stale])
+    assert_equal('refresh', view.adj_in('10.0.0.2').first[:stale])
+    @rib.announce(route(E1, '10.1.0.0/16', med: 3))
+    assert_equal(false, view.adj_in('10.0.0.2').first.key?(:stale), 'a fresh row has no key')
+  end
+
   private
 
   def model_check(seed, steps)

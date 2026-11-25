@@ -376,13 +376,17 @@ module BGP
           row = row.merge(:end_of_rib_received => eor.collect { |f| { :afi => f['afi'], :safi => f['safi'] } }) unless eor.nil? || eor.empty?
           # Route refresh, RFC 2918 and RFC 7313: the ROUTE-REFRESH messages
           # this session read and sent, by subtype (`normal`, `borr`,
-          # `eorr`, `other`), and the requests it answered and ignored.
-          # Present once there is one. bgp/daemon/refresh.rb.
+          # `eorr`, `other`), the requests it answered and ignored, how
+          # many of the peer's routes are stale now, after a BoRR, and the
+          # families waiting for their EoRR. Present once there is a
+          # message. bgp/daemon/refresh.rb.
           rr = peer.route_refresh.counts
           unless rr['received'].empty? && rr['sent'].empty? && rr['ignored'].zero?
             row = row.merge(:refresh => { :received => rr['received'].transform_keys(&:to_sym),
                                           :sent => rr['sent'].transform_keys(&:to_sym),
-                                          :answered => rr['answered'], :ignored => rr['ignored'] })
+                                          :answered => rr['answered'], :ignored => rr['ignored'],
+                                          :stale => @speaker.stale_size(peer),
+                                          :waiting => peer.route_refresh.waiting.collect { |a, s| { :afi => a, :safi => s } } })
           end
           # A CE's VRF, and the counts of each family the session carries,
           # present only on a CE's row or a session with a VPN family, so

@@ -263,6 +263,7 @@ neighbors:
     ttl_security: 1                # GTSM, RFC 5082: hops away; see below
     password: s3cret               # TCP MD5, RFC 2385; see below
     end_of_rib: true               # RFC 4724 section 2; see below
+    refresh_stale_time: 180        # RFC 7313 section 4's bound; see below
 
 originate:
   - prefixes: [10.255.0.0/24]
@@ -435,9 +436,104 @@ Multiprotocol capability carries IPv4 unicast.
 When the peer's OPEN carried `enhanced_route_refresh`, capability 70,
 the answer goes between a BoRR and an EoRR, RFC 7313 section 4. A
 second request waits for the first answer's EoRR. A request carrying
-ORF entries (RFC 5291) is not answered. Receiving a BoRR or an EoRR,
-and the stale routes they mark, is a later pull request
-(`docs/design/bgp-operations.md`, section 2).
+ORF entries (RFC 5291) is not answered.
+
+**bgp4rd reads a BoRR and an EoRR**, RFC 7313 section 4, from a peer
+whose OPEN carried capability 70. A BoRR marks every route of its
+family from that peer stale. A route the peer sends again is fresh, and
+the EoRR removes what is still stale and decides those prefixes again.
+The decision does not look at the mark, so a stale route stays best
+until it goes. Every table that holds a peer's routes keeps the mark:
+unicast in the RIB (a CE's in its VRF), VPN-IPv4 and VPN-IPv6, EVPN
+(types 2 and 3, and the unreachability reports of type 254), BGP-LS,
+and the unreachability families.
+
+`refresh_stale_time` on a neighbor bounds the wait, in whole seconds,
+180 by default (RFC 8538's stale timer, reused): with no EoRR by then,
+what is still stale goes. It is read at each BoRR, so a commit applies
+it to the next one. A BoRR or EoRR from a peer without capability 70 is
+ignored and logged, since section 4's procedures "are applicable only
+if a BGP speaker has received the "Enhanced Route Refresh Capability"
+from a peer". So is an EoRR with no BoRR before it, which section 4
+allows, and a subtype other than 0, 1 or 2, which section 5 requires.
+
+A BoRR or EoRR whose length after the header is not 4 ends the session
+with NOTIFICATION 7/1, "ROUTE-REFRESH Message Error, Invalid Message
+Length", its data the whole message (RFC 7313 section 5). From a peer
+without capability 70 it is logged and dropped.
+
+Graceful restart's rule, that a BoRR before the End-of-RIB is ignored,
+comes with the GR helper (`docs/design/bgp-operations.md`, section 3).
+
+A mark and a removal are `refresh` events too. The same peer, then its
+EoRR; `time` is left out:
+
+```json
+[
+  {
+    "seq": 5,
+    "level": "info",
+    "kind": "refresh",
+    "peer": "127.0.0.2",
+    "message": "Recv ROUTE-REFRESH borr AFI 1 SAFI 1",
+    "data": {
+      "direction": "receive",
+      "afi": 1,
+      "safi": 1,
+      "subtype": "borr"
+    }
+  },
+  {
+    "seq": 6,
+    "level": "info",
+    "kind": "refresh",
+    "peer": "127.0.0.2",
+    "message": "BoRR for AFI 1 SAFI 1: 3 marked stale, for at most 180 s",
+    "data": {
+      "stale": {
+        "afi": 1,
+        "safi": 1,
+        "marked": 3,
+        "seconds": 180
+      }
+    }
+  },
+  {
+    "seq": 7,
+    "level": "info",
+    "kind": "refresh",
+    "peer": "127.0.0.2",
+    "message": "Recv ROUTE-REFRESH eorr AFI 1 SAFI 1",
+    "data": {
+      "direction": "receive",
+      "afi": 1,
+      "safi": 1,
+      "subtype": "eorr"
+    }
+  },
+  {
+    "seq": 8,
+    "level": "info",
+    "kind": "refresh",
+    "peer": "127.0.0.2",
+    "message": "EoRR for AFI 1 SAFI 1: 2 still stale removed",
+    "data": {
+      "purged": {
+        "afi": 1,
+        "safi": 1,
+        "removed": 2
+      },
+      "reason": "EoRR"
+    }
+  }
+]
+```
+
+When `refresh_stale_time` runs out first, `reason` is
+`refresh_stale_time`. Against FRR 10.5.1, `peer.refresh` gets FRR's
+answer between a BoRR and an EoRR when bgp4rd advertised 70: FRR's
+routes, our own two sent back among them, are marked, all sent again,
+and none removed.
 
 Every ROUTE-REFRESH message is counted both ways by subtype, and each
 one, and each answer, is a `refresh` event. Here a peer with capability
@@ -1450,21 +1546,39 @@ row gains `end_of_rib_received`, `[{"afi": 1, "safi": 1}]`, in the
 order they came. Other rows have no such key.
 
 **A session that has read, sent or ignored a ROUTE-REFRESH says how
-many**: its row gains `refresh`,
+many**: its row gains `refresh`. Here a peer with capability 70 sent
+three routes, a BoRR, and one of them again, and its EoRR has not come:
 
 ```json
 {
-  "received": {"normal": 1},
-  "sent": {"borr": 1, "eorr": 1},
-  "answered": 1,
-  "ignored": 0
+  "received": {
+    "borr": 1
+  },
+  "sent": {},
+  "answered": 0,
+  "ignored": 0,
+  "stale": 2,
+  "waiting": [
+    {
+      "afi": 1,
+      "safi": 1
+    }
+  ]
 }
 ```
 
 where `received` and `sent` count messages by subtype (`normal`,
 `borr`, `eorr`, and `other` for any other), and `answered` and
-`ignored` count requests. A new session starts at zero. Other rows have
-no such key.
+`ignored` count requests. `stale` is how many of the peer's routes are
+marked stale now, in every table, and `waiting` the families whose
+BoRR came and whose EoRR has not, as `{"afi": 1, "safi": 1}`. A new
+session starts at zero. Other rows have no such key.
+
+**A route marked stale says so on its row**: `stale` is `refresh`
+while it waits for its EoRR, on the rows of `show.rib`, `show.adj_in`,
+`show.vpn`, `show.vrf`, `show.evpn`, `show.link_state` and
+`show.unreachability`. A fresh route's row has no such key.
+`restart` and `long_lived` are graceful restart's, later.
 
 **A CE's row, and a row whose session negotiated a VPN family, say
 more**, for routescope's L3VPN views (routescope
