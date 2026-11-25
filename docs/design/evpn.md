@@ -607,6 +607,9 @@ Each later, with its own spec if asked for:
   to send with each far VTEP's VNI.
 - RT auto-derivation from the VNI (RFC 8365 section 5.1.2.1).
 - EVPN over MPLS, the second half of P5.
+- EVPN over SRv6 (RFC 9252), with SRv6 services (P6). A route that
+  carries the SRv6 L2 Service TLV and no VXLAN Encapsulation community
+  is kept and not installed (Receiving, step 7).
 - The kernel's VXLAN as bgp4rd's data plane.
 - Route Target Constraint (RFC 4684) for EVPN.
 - The Default Gateway community (RFC 7432 section 10.1): it goes with
