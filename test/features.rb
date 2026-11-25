@@ -311,6 +311,16 @@ module Features
       :functional => %w[gtsm_test],
     },
 
+    'tcp-md5' => {
+      :area  => 'session',
+      :about => 'password on a neighbor: TCP MD5, every segment signed, a missing or wrong digest dropped',
+      :rfc   => 'RFC 2385 section 2',
+      :doc   => 'docs/daemon.md',
+      :unit  => %w[daemon/tcp_auth_test],
+      :functional => %w[tcp_auth_test],
+      :lab   => %w[md5_frr_test],
+    },
+
     'fsm' => {
       :area  => 'session',
       :about => 'The finite state machine, the TCP session and the two IO threads',

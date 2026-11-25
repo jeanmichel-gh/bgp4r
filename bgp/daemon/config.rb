@@ -70,9 +70,11 @@ module BGP
     # the key name. That matches `set ... key hunter2` and does **not**
     # match YAML's `key: hunter2`, because the colon is where the `\s+`
     # has to be. So a driver copying that regexp would leak a YAML
-    # secret. **It leaks nothing today**, measured rather than assumed:
-    # no key of bgp4rd's configuration is a secret, so nothing is masked
-    # in either rendering. It matters the day one is added.
+    # secret. **The first secret is a neighbor's `password`**, the TCP MD5
+    # key (bgp/daemon/tcp_auth.rb). Both renderings carry it as the file
+    # does, as ospfd's do, so `config.replace` can send a configuration
+    # back whole; the set line `set neighbors 10.0.10.1 password KEY` has
+    # the whitespace a driver's mask wants. Masking is the driver's.
     #
     # ## The grammar
     #

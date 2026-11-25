@@ -313,6 +313,26 @@ class BGP_Daemon_Candidate_Test < Test::Unit::TestCase
            errors.inspect)
   end
 
+  # The listener holds the keys from when bgp4rd starts, so a
+  # neighbor's password is restart class with its own reason.
+  def test_password_cannot_change_while_running
+    @candidate.load('lines' => ['set neighbors 127.0.0.9 password s3cret'])
+    errors = @candidate.commit('check' => true)[:errors]
+    assert(errors.any? { |e| e =~ /password cannot change while bgp4rd runs: the listener holds each passive peer's MD5 key/ },
+           errors.inspect)
+  end
+
+  # The key is in show.configuration as it is in the file, so a
+  # configuration read and sent back by config.replace keeps it. The set
+  # line has whitespace after `password`, which a driver's mask wants.
+  def test_the_key_round_trips_through_set_lines
+    @candidate.load('lines' => ['set neighbors 127.0.0.9 password s3cret'])
+    text = @candidate.configuration('format' => 'set', 'candidate' => true)
+    assert_match(/^set neighbors 127\.0\.0\.9 password s3cret$/, text)
+    @candidate.replace('lines' => text.lines)
+    assert_equal(text, @candidate.configuration('format' => 'set', 'candidate' => true))
+  end
+
   def test_a_log_level_no_logger_takes_is_refused
     @candidate.load('lines' => ['set log_level shouting'])
     assert_match(/log_level: log level "shouting"/,

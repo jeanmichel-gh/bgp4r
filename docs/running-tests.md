@@ -19,9 +19,9 @@ amounts. Measured 2026-11-03:
 
 | Tier | What it needs | Files | Time | Command |
 |---|---|---:|---|---|
-| unit | Ruby | 186 | 21s | `ruby test/run_unit.rb` |
-| functional | a loopback socket | 23 | 18s | one file at a time, below |
-| lab | gobgpd, FRR, Docker or root | 37 | 10s to 400s per group | `ruby test/run_lab.rb GROUP` |
+| unit | Ruby | 187 | 21s | `ruby test/run_unit.rb` |
+| functional | a loopback socket | 24 | 18s | one file at a time, below |
+| lab | gobgpd, FRR, Docker or root | 38 | 10s to 400s per group | `ruby test/run_lab.rb GROUP` |
 
 **The first two tiers together are under a minute and need nothing
 installed.** That is worth knowing before reaching for a lab test.
@@ -98,6 +98,7 @@ Getting a session up and keeping it.
 | `route-refresh` | 6 | 0 | 0 | ROUTE-REFRESH and outbound route filtering |
 | `bfd` | 1 | 1 | 1 | bfd: true on a neighbor: a BFD session from bfd4r, and Cease 6/10 when it fails |
 | `gtsm` | 1 | 1 | 0 | ttl_security on a neighbor: GTSM, sent at TTL 255, dropped below 256 - hops |
+| `tcp-md5` | 1 | 1 | 1 | password on a neighbor: TCP MD5, every segment signed, a missing or wrong digest dropped |
 | `fsm` | 3 | 0 | 0 | The finite state machine, the TCP session and the two IO threads |
 
 ### routing
@@ -597,6 +598,20 @@ lab/speaker.rb and the five topologies under lab/topologies.
 ruby test/run_feature.rb speaker
 ```
 
+### `tcp-md5`
+
+password on a neighbor: TCP MD5, every segment signed, a missing or wrong digest dropped.
+
+- RFC 2385 section 2
+- Read first: `docs/daemon.md`
+- 1 unit file, 1 functional
+- lab:
+  - `md5_frr_test`, needs frr
+
+```
+ruby test/run_feature.rb tcp-md5
+```
+
 ### `tunnel-encap`
 
 Tunnel encapsulation and the PMSI tunnel.
@@ -928,5 +943,5 @@ test file has to be tagged before the suite is green again, which is
 the same arrangement `test/unit/lab_groups_test.rb` has with the CI
 matrix.
 
-246 of 246 test files are tagged. The
+249 of 249 test files are tagged. The
 remainder, if any, is what the guard names.

@@ -76,6 +76,7 @@ require 'bgp/daemon/vrf_ce_exporter'
 require 'bgp/daemon/vpn_reflector'
 require 'bgp/daemon/bfd'
 require 'bgp/daemon/gtsm'
+require 'bgp/daemon/tcp_auth'
 require 'socket'
 require 'thread'
 
@@ -298,7 +299,7 @@ module BGP
       # to the code, so a key read here and not listed fails the suite.
       KEYS = %w[address as capabilities connect description hold_time
                 open_timeout port record retry route_reflector_client
-                vrf as_override soo bfd ttl_security].freeze
+                vrf as_override soo bfd ttl_security password].freeze
 
       # Raises ArgumentError naming every key `config` carries that no
       # code reads, and the keys there are.
@@ -388,6 +389,10 @@ module BGP
       # connected, or nil for none. See bgp/daemon/gtsm.rb.
       # Speaker#check_ttl_security refuses anything but 1 to 254.
       def ttl_security ; @config['ttl_security'] ; end
+      # TCP MD5, RFC 2385: the key this neighbor's segments are signed
+      # with, or nil for none. See bgp/daemon/tcp_auth.rb.
+      # Speaker#check_password refuses a key that is not 1 to 80 octets.
+      def password ; @config['password']&.to_s ; end
 
       # A CE neighbor (docs/design/l3vpn-pe.md, pull request 7): the VRF
       # its session is bound to, or nil for a neighbor in the global
@@ -413,7 +418,7 @@ module BGP
             wait_while_shutdown
             break if @speaker.stopping?
             begin
-              if vrf || ttl_security
+              if vrf || ttl_security || password
                 sock = dial_socket
               else
                 sock = Socket.tcp(@address, @config.fetch('port', 179),
@@ -437,6 +442,9 @@ module BGP
       # A GTSM session (`ttl_security`): its SYN must already go out at
       # TTL 255, or a peer with a minimum of 255 drops it. Outside a VRF
       # it binds `local_address`, as `Socket.tcp` does.
+      #
+      # An MD5 session (`password`): its SYN carries the digest already,
+      # so the key is set before `connect` too.
       def dial_socket
         port = @config.fetch('port', 179)
         family = @address.include?(':') ? :INET6 : :INET
@@ -447,6 +455,7 @@ module BGP
           s.bind(Addrinfo.tcp(@speaker.local_address, 0))
         end
         Gtsm.secure(s, Gtsm.minimum(ttl_security)) if ttl_security
+        TcpAuth.md5(s, @address, password) if password
         addr = Socket.sockaddr_in(port, @address)
         if s.connect_nonblock(addr, exception: false) == :wait_writable
           raise Errno::ETIMEDOUT, "connect to #{@address}#{" in VRF #{vrf}" if vrf}" unless s.wait_writable(5)
@@ -894,6 +903,7 @@ module BGP
                        :logger => @logger)
         check_bfd
         check_ttl_security
+        check_password
         @link_state = LinkStateTable.new
         unreach_log = ->(level, msg) { log(level, msg) }
         @unreach = UnreachTable.new(events: @events, logger: unreach_log)
@@ -1180,6 +1190,12 @@ module BGP
       # setting it would read some other way.
       def check_ttl_security
         @peers.each { |p| Gtsm.check(p.config['ttl_security'], p.address) }
+      end
+
+      # Raises ArgumentError when a neighbor's `password` is not a key of
+      # 1 to 80 octets, the kernel's limit. See TcpAuth.check.
+      def check_password
+        @peers.each { |p| TcpAuth.check(p.config['password'], p.address) }
       end
 
       # The passive peers the listener for `vrf` (nil the global one)
@@ -1637,6 +1653,10 @@ module BGP
         # GTSM: the SYN-ACK goes out with the listener's TTL, so it sends
         # at 255 as soon as one of its peers has `ttl_security`.
         Gtsm.secure(server, listener_minimum(vrf)) if gtsm_listener?(vrf)
+        # MD5: the listener holds each passive peer's key under its
+        # address, and a connection accepted from that address has it from
+        # the SYN on. A peer without `password` is not affected.
+        passive_peers(vrf).select(&:password).each { |p| TcpAuth.md5(server, p.address, p.password) }
         Thread.new do
           loop do
             sock = server.accept
