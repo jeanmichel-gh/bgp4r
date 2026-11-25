@@ -612,6 +612,18 @@ loopback, as uid 1000 and as root in the container:
   `IPV6_UNICAST_HOPS`.
 - `/proc/net/netstat` has `TCPMinTTLDrop`.
 
+Measured again while building it, the same way:
+
+- An accepted socket starts with its listener's minimum, and a minimum
+  set on it after `accept` holds: with the listener at 253, a client at
+  254 completes the handshake, and its data is dropped once the
+  accepted socket is set to 255.
+- The SYN-ACK goes out with the **listener's** TTL. A client whose own
+  minimum is 255 connects only when the listener sends at 255.
+- `IP_MINTTL` on a dual-stack IPv6 listener drops IPv4 clients below it.
+- `IP_TTL` and `IPV6_UNICAST_HOPS` set to -1 read back as 64, the
+  kernel's default.
+
 ### What to build
 
 ```yaml
@@ -621,36 +633,45 @@ loopback, as uid 1000 and as root in the container:
 - The minimum is 256 minus the hops. Set `IP_TTL` (or
   `IPV6_UNICAST_HOPS`) to 255 and `IP_MINTTL` (or `IPV6_MINHOPCOUNT`)
   to the minimum on the dialling socket before `connect`.
-- **One listener for all peers** (answer 7). Its minimum is the lowest
-  any GTSM peer on it needs: with `ttl_security: 1` on one peer and 3
-  on another, the listener takes 253. With no GTSM peer, it is not set.
-  As soon as a connection is accepted and matched to its peer, bgp4rd
-  sets that socket's minimum to the peer's own, and its TTL to 255,
-  before it reads the OPEN. A non-GTSM peer's socket gets 0.
+- **One listener for all peers** (answer 7). It sends at 255 when any
+  of its peers has `ttl_security`, since its SYN-ACK goes with its own
+  TTL. It drops a SYN below a minimum only when **every** passive peer
+  on it has `ttl_security`, and then at the loosest: with
+  `ttl_security: 1` on one peer and 3 on another, it takes 253. A
+  single peer without `ttl_security` means no minimum on the listener,
+  since that peer's SYN arrives at its sender's default TTL (64 on
+  Linux) and a minimum would drop it. As soon as a connection is
+  accepted and matched to its peer, bgp4rd sets that socket's minimum to
+  the peer's own, and its TTL to 255, before it reads the OPEN. A
+  non-GTSM peer's socket gets no minimum and the default TTL back.
+  (The first draft of this section took the GTSM peers' minimum alone,
+  which would have dropped every SYN from a passive peer without GTSM.
+  Building it found that.)
 - What that means, written down in `docs/daemon.md`:
   - The handshake (SYN and the ACK that completes it) is checked at the
-    listener's looser minimum. Every segment after the accept is
-    checked at the peer's own.
+    listener's looser minimum, or not at all on a listener with a
+    non-GTSM peer. Every segment after the accept is checked at the
+    peer's own.
   - A peer with `ttl_security: 1` whose packets arrive with TTL 254 or
     253 can complete the handshake when another peer allows 3 hops.
     Its first data segment is dropped (`TCPMinTTLDrop` grows) and no
-    OPEN arrives, so the session should end at bgp4rd's
-    `open_timeout`, never reaching Established. Pull request 5's
-    `gtsm_shared_listener` test checks this; it is not yet measured.
+    OPEN arrives, so the session never reaches Established. Measured,
+    and held by `test/functional/gtsm_test.rb`.
   - When every GTSM peer has the same hops, which is every lab today
     (`ttl_security: 1`), the listener and the peer's socket agree and
     nothing passes that should not.
   - The VRF listener is its own listener, with its own minimum from its
     own peers.
-- That a minimum set after `accept` holds for the accepted socket is
-  not yet measured (only the listener's was). Pull request 5 measures
-  it first, as a test; if it does not hold, the spec comes back to the
-  owner.
+- That a minimum set after `accept` holds is measured, above.
 
 ### Tests
 
 - Functional, loopback: the measurement above as a test. It needs no
-  privilege.
+  privilege. Built as `test/functional/gtsm_test.rb`: a peer at 255
+  comes up, one at 254 is never heard, the listener answers at 255 (and
+  at the default without GTSM, the control), the shared listener at 1
+  and 3 hops, a non-GTSM peer beside a GTSM one, and an active peer
+  dialling at 255 (and at the default without GTSM).
 - Interop: FRR 10.7.1's `neighbor X ttl-security hops 1` (measured in
   its bgpd), bgpd and bgp4rd on a veth pair in a lab.
 - A lab check that a peer two hops away with `ttl_security: 1` does
@@ -658,11 +679,16 @@ loopback, as uid 1000 and as root in the container:
 
 ### Behaviours
 
+GTSM came first in the build order (answer 1), before `bgp4r-sim` has
+its `/api/behaviour` path, which pull request 3 adds. Until then each
+case below is a functional test over loopback; pull request 3 makes
+them behaviours too.
+
 | Name | What the sim does | Expect | Section |
 | --- | --- | --- | --- |
 | `gtsm_low_ttl` | dials with TTL 254 | no session | 5082 3 |
 | `gtsm_ok` | dials with TTL 255 | session | 5082 3 |
-| `gtsm_shared_listener` | toward a bgp4rd with peers at 1 and 3 hops, dials as the 1-hop peer with TTL 253 | handshake completes, no OPEN read, session ends at `open_timeout`, `TCPMinTTLDrop` grows | 5082 3 |
+| `gtsm_shared_listener` | toward a bgp4rd with peers at 1 and 3 hops, dials as the 1-hop peer with TTL 254 | handshake completes, no OPEN read, no session, `TCPMinTTLDrop` grows | 5082 3 |
 
 ### routescope shows
 
@@ -1045,11 +1071,11 @@ and `CLAUDE.md`'s table.
 
 | Order | # | Pull request | Needs |
 | --- | --- | --- | --- |
-| 1 | 5 | GTSM, `ttl_security` | – |
+| 1 | 5 | GTSM, `ttl_security`; built | – |
 | 2 | 6a | TCP MD5, `password` | – |
 | 3 | 1 | End-of-RIB sent and received, `end_of_rib` | – |
 | 4 | 2 | Route refresh answered, enhanced refresh, the stale mark, `BGP::Fault::REFRESH` | 1 |
-| 5 | 3 | GR helper, RFC 8538, Hard Reset, `BGP::Fault::GR`, the first behaviours in `bgp4r-sim` | 2 |
+| 5 | 3 | GR helper, RFC 8538, Hard Reset, `BGP::Fault::GR`, the first behaviours in `bgp4r-sim`, GTSM's among them | 2 |
 | 6 | 7a | RTR codec, `BGP::Fault::RTR` | – |
 | 7 | 7b | `bgp4r-rtr`, the cache and injector | 7a |
 | 8 | 7c | Origin validation in bgp4rd, `rpki` | 7b |

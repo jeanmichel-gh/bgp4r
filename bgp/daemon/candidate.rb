@@ -185,6 +185,9 @@ module BGP
                                     'while bgp4rd runs: a replacement Router starts with an empty ' \
                                     'Adj-RIB-Out per peer, so a route the new rules refuse is never ' \
                                     'withdrawn from a peer that holds it',
+        'ttl_security' => 'the listener\'s minimum TTL is set once, when bgp4rd starts listening, ' \
+                          'from every passive peer\'s ttl_security, so one peer\'s change is not ' \
+                          'one session\'s (bgp/daemon/gtsm.rb)',
         'record' => 'the Recorder is built once, in Peer#initialize, and counts ' \
                     'established_count and flaps across sessions, so a bounce deliberately ' \
                     'leaves those alone and replacing it would reset them'

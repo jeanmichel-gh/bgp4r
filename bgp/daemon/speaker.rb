@@ -75,6 +75,7 @@ require 'bgp/daemon/vpn_exporter'
 require 'bgp/daemon/vrf_ce_exporter'
 require 'bgp/daemon/vpn_reflector'
 require 'bgp/daemon/bfd'
+require 'bgp/daemon/gtsm'
 require 'socket'
 require 'thread'
 
@@ -297,7 +298,7 @@ module BGP
       # to the code, so a key read here and not listed fails the suite.
       KEYS = %w[address as capabilities connect description hold_time
                 open_timeout port record retry route_reflector_client
-                vrf as_override soo bfd].freeze
+                vrf as_override soo bfd ttl_security].freeze
 
       # Raises ArgumentError naming every key `config` carries that no
       # code reads, and the keys there are.
@@ -383,6 +384,10 @@ module BGP
       # bgp/daemon/bfd.rb. Speaker#check_bfd refuses any other value than
       # true or false.
       def bfd? ; @config['bfd'] == true ; end
+      # GTSM, RFC 5082: the hops this neighbor is away, 1 for directly
+      # connected, or nil for none. See bgp/daemon/gtsm.rb.
+      # Speaker#check_ttl_security refuses anything but 1 to 254.
+      def ttl_security ; @config['ttl_security'] ; end
 
       # A CE neighbor (docs/design/l3vpn-pe.md, pull request 7): the VRF
       # its session is bound to, or nil for a neighbor in the global
@@ -408,8 +413,8 @@ module BGP
             wait_while_shutdown
             break if @speaker.stopping?
             begin
-              if vrf
-                sock = vrf_socket
+              if vrf || ttl_security
+                sock = dial_socket
               else
                 sock = Socket.tcp(@address, @config.fetch('port', 179),
                                   @speaker.local_address, connect_timeout: 5)
@@ -423,17 +428,28 @@ module BGP
         end
       end
 
+      # A socket set up before `connect`, which `Socket.tcp` cannot do.
+      #
       # A CE's session: a TCP socket bound to the VRF device and no source
       # address, so the kernel takes the VRF interface's. Measured on
       # l3vpn-lab: unbound, the CE is unreachable (ENETUNREACH).
-      def vrf_socket
+      #
+      # A GTSM session (`ttl_security`): its SYN must already go out at
+      # TTL 255, or a peer with a minimum of 255 drops it. Outside a VRF
+      # it binds `local_address`, as `Socket.tcp` does.
+      def dial_socket
         port = @config.fetch('port', 179)
         family = @address.include?(':') ? :INET6 : :INET
         s = Socket.new(family, :STREAM)
-        s.setsockopt(Socket::SOL_SOCKET, Socket::SO_BINDTODEVICE, vrf)
+        if vrf
+          s.setsockopt(Socket::SOL_SOCKET, Socket::SO_BINDTODEVICE, vrf)
+        elsif @speaker.local_address
+          s.bind(Addrinfo.tcp(@speaker.local_address, 0))
+        end
+        Gtsm.secure(s, Gtsm.minimum(ttl_security)) if ttl_security
         addr = Socket.sockaddr_in(port, @address)
         if s.connect_nonblock(addr, exception: false) == :wait_writable
-          raise Errno::ETIMEDOUT, "connect to #{@address} in VRF #{vrf}" unless s.wait_writable(5)
+          raise Errno::ETIMEDOUT, "connect to #{@address}#{" in VRF #{vrf}" if vrf}" unless s.wait_writable(5)
           begin
             s.connect_nonblock(addr) # raises the connect's error, if it had one
           rescue Errno::EISCONN
@@ -458,6 +474,10 @@ module BGP
           sock.close # one session per peer; keep the one we have
           return
         end
+        # GTSM: the listener checked the handshake at the lowest minimum
+        # any of its peers needs; from here on this peer's own holds, set
+        # before the OPEN is read. See Gtsm.accepted.
+        Gtsm.accepted(sock, ttl_security) if @speaker.gtsm_listener?(vrf)
         Thread.new { run_session(sock) }
       end
 
@@ -873,6 +893,7 @@ module BGP
         @bfd = Bfd.new(self, :client => arg[:bfd_client], :runner => arg[:bfd_runner],
                        :logger => @logger)
         check_bfd
+        check_ttl_security
         @link_state = LinkStateTable.new
         unreach_log = ->(level, msg) { log(level, msg) }
         @unreach = UnreachTable.new(events: @events, logger: unreach_log)
@@ -1152,6 +1173,32 @@ module BGP
           raise ArgumentError, "neighbor #{p.address}: bfd is true or false, got #{v.inspect}"
         end
         @bfd.check(@peers)
+      end
+
+      # Raises ArgumentError when a neighbor's `ttl_security` is not a
+      # number of hops from 1 to 254, so bgp4rd does not start on a GTSM
+      # setting it would read some other way.
+      def check_ttl_security
+        @peers.each { |p| Gtsm.check(p.config['ttl_security'], p.address) }
+      end
+
+      # The passive peers the listener for `vrf` (nil the global one)
+      # accepts for.
+      def passive_peers(vrf = nil)
+        @peers.select { |p| !p.active? && p.vrf == vrf }
+      end
+
+      # Whether one of those peers has `ttl_security`, so the listener
+      # sends at 255 and each accepted socket is set for its peer.
+      def gtsm_listener?(vrf = nil)
+        passive_peers(vrf).any?(&:ttl_security)
+      end
+
+      # The listener's minimum TTL, or nil: see Gtsm.listener_minimum.
+      # docs/design/bgp-operations.md, section 5, says why one listener
+      # serves every peer, and what that lets through.
+      def listener_minimum(vrf = nil)
+        Gtsm.listener_minimum(passive_peers(vrf).map(&:ttl_security))
       end
 
       # Refuses a `route_reflector_client` flag this speaker cannot act on.
@@ -1587,6 +1634,9 @@ module BGP
       # its passive CE neighbors (pull request 7); nil for the global one.
       def listen(vrf = nil)
         server = vrf ? vrf_listener(vrf) : TCPServer.new(@config.fetch('listen_address', '0.0.0.0'), @config.fetch('port', 179))
+        # GTSM: the SYN-ACK goes out with the listener's TTL, so it sends
+        # at 255 as soon as one of its peers has `ttl_security`.
+        Gtsm.secure(server, listener_minimum(vrf)) if gtsm_listener?(vrf)
         Thread.new do
           loop do
             sock = server.accept

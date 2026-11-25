@@ -302,6 +302,15 @@ module Features
       :lab   => %w[bfd_frr_lab_topology_test],
     },
 
+    'gtsm' => {
+      :area  => 'session',
+      :about => 'ttl_security on a neighbor: GTSM, sent at TTL 255, dropped below 256 - hops',
+      :rfc   => 'RFC 5082 section 3',
+      :doc   => 'docs/daemon.md',
+      :unit  => %w[daemon/gtsm_test],
+      :functional => %w[gtsm_test],
+    },
+
     'fsm' => {
       :area  => 'session',
       :about => 'The finite state machine, the TCP session and the two IO threads',

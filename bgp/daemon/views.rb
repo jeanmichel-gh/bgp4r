@@ -359,6 +359,13 @@ module BGP
           # `bfd: true`: `up`, `down`, `init`, `admin_down`, or `unknown`
           # while bfdd4r has not told one. See bgp/daemon/bfd.rb.
           row = row.merge(:bfd => @speaker.bfd.state(peer.address) || 'unknown') if peer.bfd?
+          # GTSM, present only on a neighbor with `ttl_security`: the hops
+          # it is away and the lowest TTL its packets may arrive with.
+          # See bgp/daemon/gtsm.rb.
+          if peer.ttl_security
+            row = row.merge(:ttl_security => { :hops => peer.ttl_security,
+                                               :min_ttl => BGP::Daemon::Gtsm.minimum(peer.ttl_security) })
+          end
           # A CE's VRF, and the counts of each family the session carries,
           # present only on a CE's row or a session with a VPN family, so
           # a unicast speaker's rows read as they always have.
