@@ -519,6 +519,41 @@ changed from the plan:
 - `macvrfs` is keyed by `vni` in the set-line form of the configuration
   (`bgp/daemon/config.rb`). A change to it needs a restart, as `vrfs`.
 
+**Pull request 3.** `bgp/daemon/evpn_exporter.rb`; in
+`bgp/rib/macvrfs.rb`, the place of each MAC, MAC Mobility, duplicates
+and the hold; `VtepEvents` in `bgp/daemon/evpn_sync.rb`;
+`evpn.clear_duplicate`; `duplicate` and `vtep_hold` in `evpn:`. What
+changed from the plan:
+
+- **vtep4rd's `mac` events are a trigger, and `show.macs` is the
+  record.** Each event pokes the sync, which reads `show.macs` as pull
+  request 2 does. So `learned`, `moved`, `aged` and `overflow` need no
+  handling of their own, and an event missed is a sync later, not a
+  wrong table.
+- **Every change of a MAC's place is a move**: to a port here, to a
+  remote VTEP, or from one VTEP to another. Section 15.1 names "N MAC
+  moves" and starts its timer at a local learn, so the mark is set when
+  the Nth move in M seconds is a local learn. A host flapping between
+  two leaves is marked on each of them.
+- **A duplicate MAC is left in vtep4rd as it is.** bgp4rd withdraws its
+  own route, and sends neither `mac.add` nor `mac.del` for it until the
+  mark is cleared. `show.macvrf` lists it, with `place` `none` when
+  vtep4rd no longer has it.
+- **A sticky remote MAC learned here** is put back behind its VTEP with
+  `mac.add`, which replaces the port's entry in vtep4rd, and an `evpn`
+  event `sticky` is sent once.
+- **A MAC first learned here after its remote route went** is sent with
+  the last remote sequence seen plus one, not with no community: section
+  15 asks for one "for which it had previously received" a route.
+- **The hold ends at a sync**, so within 10 seconds after `vtep_hold`. It
+  applies to a lost connection and an error, not to a VNI vtep4rd says it
+  lacks: that one stops sending at once.
+- **`local_address` should be set.** The type 3 route's originator and
+  PMSI identifier fall back to the router ID, and the next hop to the
+  session's own address, which may differ.
+- `evpn` events in bgp4rd's stream: `moved`, `duplicate`, `cleared` and
+  `sticky`, with `vni` and `mac`.
+
 ## Tests
 
 - Unit, one file per class: the table's key (one MAC with two IPs is

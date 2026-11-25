@@ -64,6 +64,7 @@ class BGP_Evpn_Daemon_Functional_Test < Test::Unit::TestCase
       @flood = []
       @macs = {}
       @lock = Mutex.new
+      @streams = []
       @server = UNIXServer.new(path)
       @clients = []
       @thread = Thread.new { loop { c = @server.accept; @clients << c; Thread.new(c) { |s| serve(s) } } }
@@ -77,9 +78,27 @@ class BGP_Evpn_Daemon_Functional_Test < Test::Unit::TestCase
       File.delete(@path) if File.exist?(@path)
     end
 
+    # A MAC heard on a port, and its `mac` event to every stream, as
+    # vtep4rd's MacTable#learn and its event (vtep4r #15).
+    def learn(mac, port)
+      @lock.synchronize do
+        was = @macs[mac]
+        @macs[mac] = { 'mac' => mac, 'type' => 'local', 'port' => port, 'origin' => 'learned', 'seq' => 0 }
+        data = { 'type' => was ? 'moved' : 'learned', 'vni' => 100, 'mac' => mac, 'port' => port }
+        data['from_vtep'] = was['vtep'] if was && was['vtep']
+        ev = JSON.generate('event' => { 'kind' => 'mac', 'data' => data })
+        @streams.each { |s| s.write("#{ev}\n") rescue nil }
+      end
+    end
+
     def serve(sock)
       while (line = sock.gets)
         req = JSON.parse(line)
+        if req['method'] == 'events.subscribe'
+          sock.write("#{JSON.generate('id' => req['id'], 'result' => { 'seq' => 0, 'replayed' => 0, 'kinds' => ['mac'] })}\n")
+          @lock.synchronize { @streams << sock }
+          next
+        end
         sock.write("#{JSON.generate('id' => req['id'], 'result' => answer(req['method'], req['params']))}\n")
       end
     rescue IOError, SystemCallError
@@ -117,12 +136,15 @@ class BGP_Evpn_Daemon_Functional_Test < Test::Unit::TestCase
                    "bgp4rd did not start: #{err.string}")
   end
 
-  def peer(evpn: true)
+  # watch: record what bgp4rd sends from the first UPDATE, since it
+  # sends its own EVPN routes as soon as the session is up.
+  def peer(evpn: true, watch: false)
     sock = @listener.accept
     @peer = BGP::Neighbor.new(:my_as => 65_000, :id => '10.0.9.2',
                               :remote_addr => '127.0.0.1', :local_addr => '127.0.0.1')
     @peer.capability :as4_byte
     @peer.capability :mbgp_l2vpn_evpn if evpn
+    watch_sent if watch
     Thread.new { @peer.start(:session => sock, :timeout => 10) }
     wait_for('the session to come up') { @peer.is_established? }
   end
@@ -230,7 +252,7 @@ class BGP_Evpn_Daemon_Functional_Test < Test::Unit::TestCase
                  row.values_at('vni', 'rd', 'import', 'vtep_state', 'flood', 'macs_remote'))
     macs = call('show.macvrf', 'vni' => 100)['rows']
     assert_equal([['02:00:00:99:00:00', 'remote', '10.0.9.2']], macs.first(1).collect { |r| r.values_at('mac', 'place', 'vtep') })
-    assert_equal([[100], true, nil], rows('route_type' => 3).first.values_at('imported', 'valid', 'invalid'))
+    assert_equal([[100], true, nil], rows('route_type' => 3).find { |r| r['peer'] }.values_at('imported', 'valid', 'invalid'))
     assert_equal({ 'vtep' => vtep_socket, 'macvrfs' => 1, 'errors' => [] }, call('show.status')['evpn'])
 
     send_spec(spec(2, '02:00:00:99:00:00', 3), withdraw: true)
@@ -281,5 +303,83 @@ class BGP_Evpn_Daemon_Functional_Test < Test::Unit::TestCase
     daemon(%w[as4_byte mbgp_l2vpn_evpn])
     assert_nil(call('show.status')['evpn'])
     assert_equal(0, call('show.macvrfs')['total'])
+  end
+
+  # The EVPN routes the library neighbor is sent: [type, mac, seq] for
+  # each announced, [:withdrawn, type, mac] for each withdrawn, and the
+  # UPDATEs themselves.
+  def watch_sent
+    @got = Queue.new
+    got = @got
+    @peer.add_observer(Class.new { define_method(:update) { |m| got << m if m.is_a?(BGP::Update) } }.new)
+  end
+
+  def sent_routes(updates)
+    updates.flat_map do |u|
+      pa = u.path_attribute
+      if pa.has?(BGP::Mp_reach) && pa[BGP::Mp_reach].afi == 25
+        mm = pa.has?(BGP::Extended_communities) && pa[BGP::Extended_communities].find_all(BGP::Mac_mobility).first
+        pa[BGP::Mp_reach].nlris.collect { |n| r = n.route; [r.is_a?(BGP::Evpn::Mac_ip_advertisement) ? 2 : 3, (r.mac.to_s if r.respond_to?(:mac)), mm ? mm.sequence : nil] }
+      elsif pa.has?(BGP::Mp_unreach) && pa[BGP::Mp_unreach].afi == 25
+        pa[BGP::Mp_unreach].nlris.collect { |n| r = n.route; [:withdrawn, r.is_a?(BGP::Evpn::Mac_ip_advertisement) ? 2 : 3, (r.mac.to_s if r.respond_to?(:mac))] }
+      else
+        []
+      end
+    end
+  end
+
+  def wait_sent(what, want)
+    seen = []
+    @all_updates ||= []
+    wait_for(what) do
+      @all_updates << @got.pop until @got.empty?
+      seen = sent_routes(@all_updates)
+      want.all? { |w| seen.include?(w) }
+    end
+  rescue Test::Unit::AssertionFailedError
+    flunk("#{what}: sent #{seen.inspect}")
+  end
+
+  # docs/design/evpn.md, pull request 3. A local MAC vtep4rd holds is
+  # sent as type 2 beside the MAC-VRF's type 3. A route with a higher
+  # sequence takes it away: ours is withdrawn and vtep4rd told. The host
+  # heard on the port again, vtep4rd's event brings ours back, one
+  # higher (RFC 7432 section 15).
+  def test_a_local_mac_is_sent_and_moves
+    h1 = '02:00:00:00:01:01'
+    @vtep = FakeVtep.new(vtep_socket)
+    @vtep.learn(h1, 'eth1')
+    macvrf_daemon
+    peer(watch: true)
+    wait_sent('type 3 and type 2', [[3, nil, nil], [2, h1, nil]])
+    u = @all_updates.find { |x| sent_routes([x]).include?([3, nil, nil]) }
+    pmsi = u.path_attribute[BGP::Pmsi_tunnel].to_hash[:pmsi_tunnel]
+    assert_equal(['ingress_replication', '10.255.0.12', 100], pmsi.values_at(:tunnel_type, :identifier, :label_bits).collect { |v| v.is_a?(Symbol) ? v.to_s : v })
+    assert_equal(['65000:100'], u.path_attribute[BGP::Extended_communities].find_all(BGP::Route_target).collect { |rt| Array(rt.to_hash[:route_target]).join(':') })
+    assert_equal(8, u.path_attribute[BGP::Extended_communities].find_all(BGP::Encapsulation).first.tunnel_type)
+    local = rows.select { |r| r['reason'] == 'local' }
+    assert_equal([[3, nil], [2, h1]], local.collect { |r| r.values_at('route_type', 'mac') }.sort_by { |t, _| -t })
+    evpn = call('show.peers').first['families'].find { |f| f['family'] == 'evpn' }
+    assert_equal(2, evpn['sent'])
+
+    s = spec(2, h1)
+    s['mac_mobility'] = 1
+    send_spec(s)
+    wait_sent('ours withdrawn', [[:withdrawn, 2, h1]])
+    wait_for('vtep4rd to put h1 behind 10.0.9.2') { (m = @vtep.macs[h1]) && m['vtep'] == '10.0.9.2' && m['seq'] == 1 }
+
+    @vtep.learn(h1, 'eth1')
+    wait_sent('ours back, sequence 2', [[2, h1, 2]])
+    moved = call('show.macvrf', 'vni' => 100)['rows'].find { |r| r['mac'] == h1 }
+    assert_equal(['local', 2, 2], moved.values_at('place', 'seq', 'moves'))
+  end
+
+  def test_clear_duplicate_over_the_api
+    @vtep = FakeVtep.new(vtep_socket)
+    macvrf_daemon
+    e = assert_raise(BGP::Daemon::Client::Error) { call('evpn.clear_duplicate', 'vni' => 100, 'mac' => '02:00:00:00:01:01') }
+    assert_match('vni 100: 02:00:00:00:01:01 is not marked duplicate', e.message)
+    e = assert_raise(BGP::Daemon::Client::Error) { call('evpn.clear_duplicate', 'mac' => '02:00:00:00:01:01') }
+    assert_match('vni is required', e.message)
   end
 end

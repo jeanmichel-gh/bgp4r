@@ -27,8 +27,7 @@ require 'bgp/rib/evpn_table'
 module BGP
   module Rib
 
-    # An EVPN PE's MAC-VRFs, filled from the EVPN table and written into
-    # vtep4rd: docs/design/evpn.md, pull request 2.
+    # An EVPN PE's MAC-VRFs: docs/design/evpn.md, pull requests 2 and 3.
     #
     # **Import.** A MAC-VRF takes the winner of every key in the EVPN table
     # whose Route Targets it imports (RFC 7432 section 7.10). An imported
@@ -39,55 +38,90 @@ module BGP
     #   8365 section 5.1.3: without it "either MPLS encapsulation or a
     #   statically configured encapsulation is assumed", and the label
     #   field is then not a VNI.
+    # * `pmsi`: a type 3 route with no PMSI Tunnel attribute of type
+    #   Ingress Replication. Checked before the VNI, which is its label.
     # * `vni`: the VNI is not the MAC-VRF's. vtep4rd sends a bridge
     #   domain's frames with its own VNI only.
     # * `esi`: a type 2 route with a non-zero ESI, a multihomed segment,
     #   which needs the Ethernet A-D routes first (section 9.2.2).
-    # * `pmsi`: a type 3 route with no PMSI Tunnel attribute of type
-    #   Ingress Replication.
-    # * `own`: a route whose next hop, or type 3 tunnel, is this VTEP.
+    # * `own`: a route whose next hop, or type 3 tunnel, is this VTEP:
+    #   ours, sent back by a reflector.
     #
     # **Type 3** gives a flood VTEP, the PMSI Tunnel Identifier, which RFC
     # 7432 section 11.2 sets "to a routable address of the PE". **Type 2**
     # gives a MAC behind its next hop, "the IPv4 or IPv6 address of the
-    # advertising PE" (section 9.2.1). Where routes under two RDs bring one
-    # MAC, section 15's rules pick one: see Macvrfs.prefer.
+    # advertising PE" (section 9.2.1).
+    #
+    # **One place per MAC** (decision 4): local, on one of vtep4rd's
+    # ports, or behind one remote VTEP. Among remote routes, sticky first,
+    # then the higher sequence, then the lower address: Macvrfs.prefer?.
+    # Between a local MAC and a remote route, RFC 7432 section 15 (see
+    # decide). bgp4rd tells vtep4rd the result; vtep4rd keeps it.
+    #
+    # **Export** (pull request 3). A MAC-VRF whose VNI vtep4rd has in
+    # `evpn` mode sends a type 3 route, and a type 2 route for each local
+    # MAC it holds: `exports`, which Daemon::EvpnExporter sends.
     #
     # **vtep4rd.** sync! reads what vtep4rd holds for each VNI (show.vnis,
-    # show.macs) and sends it the difference (vni.flood.add and .del,
-    # mac.add and .del). bgp4rd owns every flood VTEP of an `evpn` VNI,
-    # since vtep4rd refuses a static `flood:` there (vtep4r #15), and
-    # every MAC with `origin: api`: what it does not want, it deletes,
-    # whoever added it. A MAC vtep4rd learned on a port is left alone;
-    # who wins between it and a remote route is MAC Mobility, pull
-    # request 3. Reading vtep4rd at each sync, rather than remembering
-    # what was sent, puts back what a restarted vtep4rd lost.
-    #
-    # A VNI vtep4rd does not have, or has in `learn` mode, gets nothing,
-    # and `errors` says why: show.status.
+    # show.macs), decides, and sends it the difference. bgp4rd owns every
+    # flood VTEP of an `evpn` VNI and every MAC with `origin: api`: what it
+    # does not want, it deletes. A MAC vtep4rd learned on a port is
+    # replaced only by a remote route that wins. When vtep4rd cannot be
+    # reached, the last local MACs it gave are kept for `hold` seconds and
+    # then dropped, and their routes withdrawn (Exporting, step 6).
     #
     # vtep answers call(method, params) with the result, and raises on an
     # error answer or a lost connection: Daemon::VtepClient, or a
-    # recorder in a test.
+    # recorder in a test. events, when given, is the speaker's
+    # BGP::Events, for the `evpn` kind.
     class Macvrfs
 
-      # The MAC a MAC-VRF installs behind a remote VTEP. route is the
-      # EvpnRoute; since when this VTEP and sequence were chosen.
+      # A MAC behind a VTEP: a remote route, or this PE's own for a
+      # comparison. route is the EvpnRoute, nil for ours.
       Remote = Struct.new(:mac, :vtep, :seq, :sticky, :route, :since)
+
+      # A route this PE sends (Exporting, steps 1 and 2). type 3 has no
+      # mac; seq is nil for a type 2 route with no MAC Mobility community.
+      Export = Struct.new(:vni, :rd, :route_type, :mac, :seq, :route_targets) do
+        def key ; [rd, route_type, mac] ; end
+      end
+
+      # A local MAC this PE advertises: its sequence, nil for none, and
+      # since when.
+      Adv = Struct.new(:seq, :since)
 
       Plan = Struct.new(:flood, :macs, :reasons)
 
-      attr_reader :macvrfs, :address
+      KIND = BGP::Events.register_kind(:evpn)
+
+      # RFC 7432 section 15.1: "with a default value of M = 180" and "a
+      # default value of N = 5".
+      MOVES = 5
+      SECONDS = 180
+      # Exporting, step 6: evpn: vtep_hold, 30 s by default.
+      HOLD = 30
+
+      attr_reader :macvrfs, :address, :moves_limit, :seconds, :hold
 
       # address: this VTEP's address, local_address.
-      def initialize(table:, macvrfs:, vtep:, address:, logger: nil, clock: -> { Time.now })
+      def initialize(table:, macvrfs:, vtep:, address:, logger: nil, events: nil, clock: -> { Time.now },
+                     moves: MOVES, seconds: SECONDS, hold: HOLD)
         @table, @macvrfs, @vtep, @address = table, macvrfs, vtep, address
-        @logger, @clock = logger, clock
+        @logger, @events, @clock = logger, events, clock
+        @moves_limit, @seconds, @hold = moves, seconds, hold
         @lock = Mutex.new
-        @plans = {}     # vni => Plan
-        @state = {}     # vni => [vtep_state, error]
-        @seen = {}      # vni => { 'flood' => [...], 'local' => [rows] }
-        @since = {}     # [vni, mac] => [vtep, seq, Time]
+        @plans = {}        # vni => Plan
+        @state = {}        # vni => [vtep_state, error]
+        @seen = {}         # vni => { 'flood' => [...], 'local' => [rows] }
+        @installed = {}    # vni => { mac => Remote }, what vtep4rd is told
+        @since = {}        # [vni, mac] => [vtep, seq, Time]
+        @held = {}         # vni => [Time vtep4rd last answered, local rows]
+        @adv = {}          # [vni, mac] => Adv
+        @place = {}        # [vni, mac] => 'local' or a VTEP address
+        @moved = Hash.new { |h, k| h[k] = [] } # [vni, mac] => times it moved
+        @dup = {}          # [vni, mac] => Time marked duplicate
+        @last_remote = {}  # [vni, mac] => the last remote sequence seen
+        @alerted = {}      # [vni, mac] => true once a sticky MAC's local learn is logged
       end
 
       # RFC 1982 section 3.2, with SERIAL_BITS 32: true when sequence s1
@@ -110,15 +144,31 @@ module BGP
         IPAddr.new(a.vtep).to_i < IPAddr.new(b.vtep).to_i
       end
 
-      # Works out every MAC-VRF's flood VTEPs and remote MACs from the
-      # table, then sends vtep4rd the difference.
+      # Reads vtep4rd, decides every MAC-VRF's flood VTEPs and MACs, sends
+      # vtep4rd the difference, and works out what this PE exports.
       def sync!
         winners = @table.winners
-        plans = @macvrfs.to_h { |m| [m.vni, plan(m, winners)] }
-        @lock.synchronize { @plans = plans }
-        state, seen = push(plans)
-        @lock.synchronize { @state, @seen = state, seen }
+        now = @clock.call
+        vnis = begin
+          @vtep.call('show.vnis', {}).to_h { |r| [r['vni'], r] }
+        rescue StandardError => e
+          e
+        end
+        @lock.synchronize do
+          @macvrfs.each { |m| sync_vni(m, plan(m, winners, now), vnis, now) }
+        end
         self
+      end
+
+      # The routes this PE sends now (Exporting, steps 1 and 2).
+      def exports
+        @lock.synchronize do
+          @macvrfs.flat_map do |m|
+            next [] unless exporting?(m.vni)
+            [Export.new(m.vni, m.rd, 3, nil, nil, m.export)] +
+              @adv.select { |(v, _), _| v == m.vni }.collect { |(_, mac), a| Export.new(m.vni, m.rd, 2, mac, a.seq, m.export) }
+          end
+        end
       end
 
       # For show.evpn: the VNIs of the MAC-VRFs that import the route of
@@ -139,25 +189,34 @@ module BGP
             { 'vni' => m.vni, 'rd' => m.rd, 'import' => m.import, 'export' => m.export,
               'vtep_state' => st, 'error' => err, 'flood' => seen.fetch('flood', []),
               'macs_local' => seen.fetch('local', []).size,
-              'macs_remote' => (@plans[m.vni] ? @plans[m.vni].macs.size : 0), 'duplicates' => 0 }
+              'macs_remote' => @installed.fetch(m.vni, {}).size,
+              'duplicates' => @dup.count { |(v, _), _| v == m.vni } }
           end
         end
       end
 
-      # show.macvrf: one MAC-VRF's MACs, the remote ones this chose and the
-      # local ones vtep4rd learned on its ports. nil for an unknown VNI.
+      # show.macvrf: one MAC-VRF's MACs, the remote ones vtep4rd is told,
+      # the local ones it learned on its ports, and the duplicates. nil for
+      # an unknown VNI.
       def mac_rows(vni)
         @lock.synchronize do
           return nil unless @macvrfs.any? { |m| m.vni == vni }
-          remote = (@plans[vni] ? @plans[vni].macs.values : []).collect do |r|
-            { 'mac' => r.mac, 'place' => 'remote', 'vtep' => r.vtep, 'port' => nil, 'seq' => r.seq,
-              'sticky' => r.sticky, 'moves' => 0, 'duplicate' => false, 'since' => stamp(r.since) }
+          now = @clock.call
+          rows = @installed.fetch(vni, {}).values.collect do |r|
+            mac_row(vni, r.mac, 'remote', now, 'vtep' => r.vtep, 'seq' => r.seq, 'sticky' => r.sticky,
+                                                'since' => stamp(r.since))
           end
-          local = @seen.fetch(vni, {}).fetch('local', []).collect do |r|
-            { 'mac' => r['mac'], 'place' => 'local', 'vtep' => nil, 'port' => r['port'], 'seq' => r['seq'],
-              'sticky' => false, 'moves' => r['moves'], 'duplicate' => false, 'since' => nil }
+          @seen.fetch(vni, {}).fetch('local', []).each do |r|
+            mac = r['mac'].to_s.downcase
+            a = @adv[[vni, mac]]
+            rows << mac_row(vni, mac, 'local', now, 'port' => r['port'], 'seq' => a && a.seq,
+                                                    'since' => stamp(a && a.since))
           end
-          (remote + local).sort_by { |r| [r['mac'], r['place']] }
+          @dup.each_key do |(v, mac)|
+            next unless v == vni && rows.none? { |r| r['mac'] == mac }
+            rows << mac_row(vni, mac, 'none', now)
+          end
+          rows.sort_by { |r| [r['mac'], r['place']] }
         end
       end
 
@@ -168,11 +227,37 @@ module BGP
         end
       end
 
+      # evpn.clear_duplicate: section 15.1's "corrective action [...] by
+      # the operator". The MAC's moves are forgotten and the next sync
+      # handles it again. Raises ArgumentError when it is not marked.
+      def clear_duplicate(vni, mac)
+        mac = mac.to_s.downcase
+        @lock.synchronize do
+          raise ArgumentError, "vni #{vni}: #{mac} is not marked duplicate" unless @dup.delete([vni, mac])
+          @moved.delete([vni, mac])
+        end
+        publish(:info, "mac #{mac} vni #{vni}: duplicate mark cleared", 'type' => 'cleared', 'vni' => vni, 'mac' => mac)
+        { 'vni' => vni, 'mac' => mac, 'cleared' => true }
+      end
+
       private
 
-      def plan(m, winners)
+      def mac_row(vni, mac, place, now, extra = {})
+        key = [vni, mac]
+        { 'mac' => mac, 'place' => place, 'vtep' => nil, 'port' => nil, 'seq' => nil, 'sticky' => false,
+          'moves' => @moved[key].count { |t| now - t < @seconds }, 'duplicate' => @dup.key?(key),
+          'since' => nil }.merge(extra)
+      end
+
+      # Type 3 and the local MACs are sent while vtep4rd has the VNI, or
+      # was last heard to have it less than `hold` seconds ago.
+      def exporting?(vni)
+        st = @state.dig(vni, 0)
+        st == 'ok' || (%w[down error].include?(st) && @held[vni] && @clock.call - @held[vni][0] < @hold)
+      end
+
+      def plan(m, winners, now)
         flood, macs, reasons = [], {}, {}
-        now = @clock.call
         winners.each do |v|
           next unless [2, 3].include?(v.route_type) && m.imports?(v.route_targets)
           reason = invalid(v, m)
@@ -186,13 +271,7 @@ module BGP
             macs[v.mac] = r if macs[v.mac].nil? || Macvrfs.prefer?(r, macs[v.mac])
           end
         end
-        macs.each_value do |r|
-          was = @since[[m.vni, r.mac]]
-          @since[[m.vni, r.mac]] = was = [r.vtep, r.seq, now] unless was && was[0, 2] == [r.vtep, r.seq]
-          r.since = was[2]
-        end
-        @since.delete_if { |(vni, mac), _| vni == m.vni && !macs.key?(mac) }
-        Plan.new(flood.uniq.sort, macs, reasons)
+        @plans[m.vni] = Plan.new(flood.uniq.sort, macs, reasons)
       end
 
       def invalid(v, m)
@@ -206,54 +285,166 @@ module BGP
         nil
       end
 
-      def push(plans)
-        state, seen = {}, {}
-        begin
-          vnis = @vtep.call('show.vnis', {}).to_h { |r| [r['vni'], r] }
-        rescue StandardError => e
-          @macvrfs.each { |m| state[m.vni] = ['down', "vtep4rd: #{e.message}"] }
-          return [state, seen]
+      # One VNI: read, decide, send.
+      def sync_vni(m, plan, vnis, now)
+        if vnis.is_a?(Exception)
+          return lost(m, plan, now, 'down', "vtep4rd: #{vnis.message}")
         end
-        @macvrfs.each do |m|
-          row = vnis[m.vni]
-          if row.nil?
-            state[m.vni] = ['missing', 'vtep4rd has no such VNI']
-          elsif row['mode'].to_s != 'evpn'
-            state[m.vni] = ['mode', "vtep4rd has it in #{row['mode']} mode, not evpn"]
+        row = vnis[m.vni]
+        if row.nil?
+          return absent(m, plan, now, 'missing', 'vtep4rd has no such VNI')
+        elsif row['mode'].to_s != 'evpn'
+          return absent(m, plan, now, 'mode', "vtep4rd has it in #{row['mode']} mode, not evpn")
+        end
+        begin
+          macs = @vtep.call('show.macs', 'vni' => m.vni)
+          local = macs.select { |r| r['type'].to_s == 'local' }
+          api = macs.select { |r| r['origin'].to_s == 'api' }.to_h { |r| [r['mac'].to_s.downcase, r] }
+          install = decide(m, plan, local, now)
+          push(m, plan, Array(row['remote_vteps']).collect(&:to_s), api, install)
+          @held[m.vni] = [now, local]
+          @seen[m.vni] = { 'flood' => plan.flood, 'local' => local }
+          @state[m.vni] = ['ok', nil]
+        rescue StandardError => e
+          lost(m, plan, now, 'error', "vtep4rd: #{e.message}")
+        end
+      end
+
+      # vtep4rd cannot be reached: decide from the local MACs it last
+      # gave, for `hold` seconds, then from none. Nothing is sent to it.
+      def lost(m, plan, now, state, error)
+        @state[m.vni] = [state, error]
+        at, local = @held[m.vni]
+        local = [] unless at && now - at < @hold
+        decide(m, plan, local, now)
+        @seen[m.vni] = { 'flood' => [], 'local' => local }
+      end
+
+      # vtep4rd answers but has no evpn VNI: no local MAC, nothing held.
+      def absent(m, plan, now, state, error)
+        @state[m.vni] = [state, error]
+        @held.delete(m.vni)
+        decide(m, plan, [], now)
+        @seen[m.vni] = {}
+      end
+
+      # Every MAC's place, from the local MACs and the remote routes: RFC
+      # 7432 section 15. Fills @adv, what this PE advertises, and answers
+      # what vtep4rd is to hold behind remote VTEPs, { mac => Remote }.
+      def decide(m, plan, local, now)
+        vni = m.vni
+        ports = local.to_h { |r| [r['mac'].to_s.downcase, r['port']] }
+        install = {}
+        macs = (ports.keys + plan.macs.keys + @adv.keys.select { |v, _| v == vni }.collect(&:last)).uniq
+        macs.each do |mac|
+          key = [vni, mac]
+          # Section 15.1: "stop sending and processing any BGP MAC/IP
+          # Advertisement routes for that MAC address".
+          next if @dup.key?(key)
+          r = plan.macs[mac]
+          @last_remote[key] = r.seq if r
+          ours = @adv[key]
+          if ports.key?(mac)
+            if ours
+              me = Remote.new(mac, @address, ours.seq || 0, false)
+              if r && Macvrfs.prefer?(r, me)
+                # "A PE receiving a MAC/IP Advertisement route for a MAC
+                # address with [...] a higher sequence number than that
+                # which it had previously advertised withdraws its MAC/IP
+                # Advertisement route"; with the same sequence, the lowest
+                # IP address wins.
+                @adv.delete(key)
+                install[mac] = r
+                moved(key, r.vtep, now)
+              else
+                moved(key, 'local', now)
+              end
+            elsif r && r.sticky
+              # Section 15.2: "the PE MUST alert the operator".
+              unless @alerted[key]
+                @alerted[key] = true
+                publish(:warn, "mac #{mac} vni #{vni}: learned on #{ports[mac]}, but #{r.vtep} holds it sticky",
+                        'type' => 'sticky', 'vni' => vni, 'mac' => mac, 'port' => ports[mac], 'vtep' => r.vtep)
+              end
+              install[mac] = r
+              moved(key, r.vtep, now)
+            else
+              # "with a sequence number one greater than the sequence
+              # number in the MAC Mobility extended community attribute of
+              # the received MAC/IP Advertisement route", 0 when it had
+              # none; with none at all when advertised "for the first time".
+              base = r ? r.seq : @last_remote[key]
+              @adv[key] = Adv.new(base && (base + 1) & 0xffffffff, now)
+              moved(key, 'local', now)
+            end
           else
-            begin
-              seen[m.vni] = push_vni(m, plans[m.vni], row)
-              state[m.vni] = ['ok', nil]
-            rescue StandardError => e
-              state[m.vni] = ['error', "vtep4rd: #{e.message}"]
+            @adv.delete(key)
+            @alerted.delete(key)
+            if r
+              install[mac] = r
+              moved(key, r.vtep, now)
+            else
+              @place.delete(key)
             end
           end
         end
-        [state, seen]
+        install.each_value do |r|
+          was = @since[[vni, r.mac]]
+          @since[[vni, r.mac]] = was = [r.vtep, r.seq, now] unless was && was[0, 2] == [r.vtep, r.seq]
+          r.since = was[2]
+        end
+        @since.delete_if { |(v, mac), _| v == vni && !install.key?(mac) }
+        @installed[vni] = install
       end
 
-      # One VNI: the flood list, then the MACs.
-      def push_vni(m, plan, row)
-        have = Array(row['remote_vteps']).collect(&:to_s)
+      # Notes a MAC's place. A change of place is a move; N moves in M
+      # seconds, the last a local learn, is a duplicate (section 15.1: "a
+      # PE that detects a MAC mobility event via local learning starts an
+      # M-second timer [...] and if it detects N MAC moves before the
+      # timer expires [...] it concludes that a duplicate-MAC situation
+      # has occurred").
+      def moved(key, place, now)
+        was = @place[key]
+        @place[key] = place
+        return if was.nil? || was == place
+        vni, mac = key
+        times = @moved[key]
+        times << now
+        times.reject! { |t| now - t >= @seconds }
+        publish(:info, "mac #{mac} vni #{vni}: moved from #{was} to #{place}",
+                'type' => 'moved', 'vni' => vni, 'mac' => mac, 'from' => was, 'to' => place)
+        return unless place == 'local' && times.size >= @moves_limit
+        @dup[key] = now
+        @adv.delete(key)
+        publish(:warn, "mac #{mac} vni #{vni}: #{times.size} moves in #{@seconds} s, marked duplicate " \
+                       '(RFC 7432 section 15.1); evpn.clear_duplicate clears it',
+                'type' => 'duplicate', 'vni' => vni, 'mac' => mac, 'moves' => times.size)
+      end
+
+      # Sends vtep4rd the difference for one VNI: the flood list, then the
+      # MACs. A duplicate MAC is left as it is.
+      def push(m, plan, have, api, install)
         (plan.flood - have).each { |v| order('vni.flood.add', 'vni' => m.vni, 'vtep' => v) }
         (have - plan.flood).each { |v| order('vni.flood.del', 'vni' => m.vni, 'vtep' => v) }
-        macs = @vtep.call('show.macs', 'vni' => m.vni)
-        local = macs.select { |r| r['type'].to_s == 'local' }
-        api = macs.select { |r| r['origin'].to_s == 'api' }.to_h { |r| [r['mac'].to_s.downcase, r] }
-        mine = local.collect { |r| r['mac'].to_s.downcase }
-        plan.macs.each_value do |r|
-          next if mine.include?(r.mac)
+        install.each_value do |r|
           a = api[r.mac]
           next if a && a['vtep'].to_s == r.vtep && a['seq'].to_i == r.seq
           order('mac.add', 'vni' => m.vni, 'mac' => r.mac, 'vtep' => r.vtep, 'seq' => r.seq)
         end
-        (api.keys - plan.macs.keys).each { |mac| order('mac.del', 'vni' => m.vni, 'mac' => mac) }
-        { 'flood' => plan.flood, 'local' => local }
+        (api.keys - install.keys).each do |mac|
+          next if @dup.key?([m.vni, mac])
+          order('mac.del', 'vni' => m.vni, 'mac' => mac)
+        end
       end
 
       def order(method, params)
         @logger&.call(:debug, "evpn: #{method} #{params.collect { |k, v| "#{k} #{v}" }.join(' ')}")
         @vtep.call(method, params)
+      end
+
+      def publish(level, message, data)
+        @logger&.call(level, "evpn: #{message}")
+        @events&.publish(:kind => KIND, :level => level, :message => message, :data => data)
       end
 
       def stamp(t)
