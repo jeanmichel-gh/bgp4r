@@ -22,6 +22,7 @@
 
 require 'test/unit'
 require 'bgp4r'
+require 'bgp/daemon'
 require 'test/functional/lab/lab_helper'
 
 # bgp4r sends an EVPN route and FRR says what it made of it: the twin of
@@ -55,6 +56,11 @@ class EvpnFrrTest < Test::Unit::TestCase
   # 10.5.1 does not write: 9 tests, 55 assertions, all passing.
   MEASURED = (8..10).freeze
 
+  # The cases of docs/design/evpn.md, pull request 5, a bgp4rd leaf and
+  # FRR reading each other's types 2 and 3, were measured against 10.5.1
+  # only, on the owner's VM on 2026-11-25.
+  LEAF_MEASURED = (10..10).freeze
+
   # RFC 7432 section 5, a Type 0 ESI. FRR prints the ten octets as they
   # are, where GoBGP names the Type octet, so between them both readings
   # of the field are covered.
@@ -87,7 +93,7 @@ class EvpnFrrTest < Test::Unit::TestCase
   rescue IOError, SystemCallError
   end
 
-  def session
+  def session(more_peers: [])
     server = TCPServer.new('127.0.0.1', 0)
     n = BGP::Neighbor.new(4, OUR_AS, 180, '0.0.0.1', '127.0.0.2', '127.0.0.1')
     n.add_cap BGP::OPT_PARM::CAP::Mbgp.new(25, 70)
@@ -103,7 +109,7 @@ class EvpnFrrTest < Test::Unit::TestCase
     router = F.new(:local => '127.0.0.2', :as => THEIR_AS,
                    :router_id => '10.0.0.2', :peer => '127.0.0.1',
                    :peer_as => OUR_AS, :port => server.addr[1],
-                   :ipv6 => false, :families => [F::EVPN])
+                   :ipv6 => false, :families => [F::EVPN], :more_peers => more_peers)
     @routers << router
     router.up
     assert(wait_for { n.is_established? }, "the session came up\n#{router.log}")
@@ -329,6 +335,169 @@ class EvpnFrrTest < Test::Unit::TestCase
     announce(n, E::Inclusive_multicast.new([100, 200], 99, '10.0.0.99'))
     key, _path = installed(router)
     assert_equal('[3]:[99]:[32]:[10.0.0.99]', key)
+  end
+
+  # ---- A bgp4rd leaf and FRR: docs/design/evpn.md, pull request 5 ----
+  #
+  # **What bgp4r sends is built by bgp4rd's own exporter**,
+  # Daemon::EvpnExporter#updates, so FRR reads the UPDATEs a leaf sends.
+  # **What FRR sends is read by bgp4rd's own path**: the EVPN table's
+  # Feed, then the MAC-VRFs, which say what they would write into
+  # vtep4rd. The full leaf, vtep4rd and the data plane, is routescope's
+  # lab 3, `evpn-vxlan-frr`.
+  #
+  # **FRR does not originate types 2 and 3 here.** It learns its VNIs and
+  # MACs from zebra and the kernel's VXLAN, and these tests run bgpd
+  # alone, so it has none. So the routes FRR sends bgp4rd are ones it
+  # received from a leaf and passed on, on a second eBGP session: their
+  # attributes are FRR's encoding, read back by bgp4rd, and their NLRI
+  # are FRR's rebuild of them. What FRR itself puts in a type 3 route
+  # (its PMSI Tunnel, its RD, ET:8) is in routescope's lab 3 fixtures.
+
+  # The leaf: its VTEP address, an IP FRR accepts as a next hop (see
+  # F::NEXT_HOP), its MAC-VRF and its AS.
+  VTEP = F::NEXT_HOP
+  # An odd VNI over 4095, so Label1's bottom bit and its upper octet
+  # both carry part of it (RFC 8365 section 5.1.3).
+  VNI = 10_001
+  RD = "#{VTEP}:#{VNI}".freeze
+  RT = '65000:100'.freeze
+  HOST = '02:00:00:00:01:01'.freeze
+
+  LeafSession = Struct.new(:address) do
+    def ebgp? ; true ; end
+    def local_ip ; VTEP ; end
+  end
+  LeafSpeaker = Struct.new(:peers, :my_as, :local_address, :router_id)
+
+  def leaf_measured
+    omit("measured against FRR #{LEAF_MEASURED}") unless F.measured?(LEAF_MEASURED, F.major)
+  end
+
+  def exporter
+    BGP::Daemon::EvpnExporter.new(LeafSpeaker.new([], OUR_AS, VTEP, '10.0.0.1'))
+  end
+
+  # A leaf's type 3 for VNI and one local MAC, with MAC Mobility
+  # sequence seq, as Rib::Macvrfs#exports gives them.
+  def leaf_routes(seq: 3)
+    x = BGP::Rib::Macvrfs::Export
+    [x.new(VNI, RD, 3, nil, nil, [RT]), x.new(VNI, RD, 2, HOST, seq, [RT])]
+  end
+
+  # FRR's detailed view of one route, the path it chose. Its keys are
+  # FRR's: `vni` on a type 2 path, `pmsi` on a type 3.
+  def frr_detail(router, key)
+    path = nil
+    assert(wait_for do
+             rd = (router.vty_json('show bgp l2vpn evpn route detail json') || {})[RD]
+             path = rd && rd[key] && rd[key]['paths'].flatten.find { |p| p.dig('bestpath', 'overall') }
+           end, "FRR to hold #{key} under #{RD}\n#{router.log}")
+    path
+  end
+
+  # FRR reads the routes a bgp4rd leaf sends: RFC 7432 section 7.3 and
+  # 11.2 for type 3, with RFC 8365 section 5.1.3's VNI in the PMSI
+  # Tunnel's label; section 7.2 for type 2, the VNI in Label1 and section
+  # 7.7's sequence; RFC 8365 section 5.1.3's Encapsulation, ET:8, on both.
+  def test_frr_reads_what_a_bgp4rd_leaf_sends
+    leaf_measured
+    n, router = session
+    exporter.updates(LeafSession.new('127.0.0.2'), leaf_routes, []).each { |u| n.send_update(u) }
+
+    imet = frr_detail(router, "[3]:[0]:[32]:[#{VTEP}]")
+    assert_equal({ 'tunnelType' => 'Ingress Replication', 'label' => VNI }, imet['pmsi'])
+    assert_equal("RT:#{RT} ET:8", imet.dig('extendedCommunity', 'string'))
+    assert_equal([VTEP], imet['nexthops'].collect { |h| h['ip'] })
+    # The PMSI Tunnel's type as FRR read it off the wire: 6 is Ingress
+    # Replication (RFC 6514 section 5). The JSON does not give the
+    # tunnel identifier; this line is FRR's own account of the attribute.
+    assert_match(/rcvd UPDATE w\/ attr: nexthop #{Regexp.escape(VTEP)}, extcommunity RT:#{RT} ET:8, pmsi tnltype 6/,
+                 router.log.to_s)
+
+    mac = frr_detail(router, "[2]:[0]:[48]:[#{HOST}]")
+    assert_equal(VNI.to_s, mac['vni'], 'Label1 read as the whole 24-bit VNI')
+    assert_equal("RT:#{RT} ET:8 MM:3", mac.dig('extendedCommunity', 'string'))
+    assert_equal([VTEP], mac['nexthops'].collect { |h| h['ip'] })
+  end
+
+  # The leaf's sequence goes from 4294967295 to 0 and then it withdraws
+  # its MAC: FRR takes each as the leaf sends it. A route from the same
+  # peer replaces the one before whatever its sequence, so this says what
+  # FRR reads, not which of two leaves' sequences it prefers; that is lab
+  # 3's wraparound scenario (decision 4).
+  def test_frr_follows_a_bgp4rd_leafs_sequence_and_withdrawal
+    leaf_measured
+    n, router = session
+    leaf = LeafSession.new('127.0.0.2')
+    x = exporter
+    x.updates(leaf, leaf_routes(seq: 4_294_967_295), []).each { |u| n.send_update(u) }
+    key = "[2]:[0]:[48]:[#{HOST}]"
+    assert_equal("RT:#{RT} ET:8 MM:4294967295", frr_detail(router, key).dig('extendedCommunity', 'string'))
+    x.updates(leaf, [leaf_routes(seq: 0).last], []).each { |u| n.send_update(u) }
+    assert(wait_for { frr_detail(router, key).dig('extendedCommunity', 'string') == "RT:#{RT} ET:8 MM:0" },
+           "FRR to take sequence 0\n#{router.log}")
+    x.updates(leaf, [], [leaf_routes.last]).each { |u| n.send_update(u) }
+    assert(wait_for { router.evpn_count == 1 }, "FRR to drop the MAC and keep type 3\n#{router.log}")
+  end
+
+  # bgp4rd reads what FRR sends: a leaf's routes passed on by FRR to a
+  # second session, read by the EVPN table and imported by a MAC-VRF.
+  # Every reason a MAC-VRF refuses a route (encapsulation, pmsi, vni,
+  # esi) passes, so it would write the flood VTEP and the MAC into
+  # vtep4rd.
+  def test_bgp4rd_reads_the_evpn_routes_frr_sends
+    leaf_measured
+    server = TCPServer.new('127.0.0.3', 0)
+    b = BGP::Neighbor.new(4, 65003, 180, '10.0.0.3', '127.0.0.2', '127.0.0.3')
+    b.add_cap BGP::OPT_PARM::CAP::Mbgp.new(25, 70)
+    table = BGP::Rib::EvpnTable.new(local_as: 65003, router_id: '10.0.0.3')
+    table.attach(b)
+    thread = Thread.new do
+      begin
+        while (s = server.accept)
+          b.start_session(s)
+        end
+      rescue IOError, SystemCallError
+      end
+    end
+    @listeners << [server, b, thread]
+    n, router = session(more_peers: [{ address: '127.0.0.3', as: 65003, port: server.addr[1] }])
+    assert(wait_for { b.is_established? }, "the second session came up\n#{router.log}")
+    exporter.updates(LeafSession.new('127.0.0.2'), leaf_routes, []).each { |u| n.send_update(u) }
+
+    assert(wait_for { table.size == 2 }, "bgp4r to hold both routes from FRR, held #{table.size}\n#{router.log}")
+    rows = table.rows.collect do |r|
+      r.values_at('route_type', 'rd', 'mac', 'originator', 'vni', 'next_hop', 'route_targets', 'encap', 'seq', 'pmsi', 'as_path')
+    end
+    assert_equal([[2, RD, HOST, '10.0.0.2', VNI, VTEP, [RT], 'VXLAN', 3, nil, "65002 #{OUR_AS}"],
+                  [3, RD, nil, VTEP, VNI, VTEP, [RT], 'VXLAN', nil,
+                   { 'type' => 'ingress_replication', 'id' => VTEP }, "65002 #{OUR_AS}"]], rows)
+
+    vtep = Recorder.new
+    macvrfs = BGP::Rib::Macvrfs.new(table: table, vtep: vtep, address: '10.0.0.3',
+                                    macvrfs: BGP::Rib::Macvrf.list([{ 'vni' => VNI, 'import' => [RT] }],
+                                                                   address: '10.0.0.3', as: 65003))
+    macvrfs.sync!
+    assert_equal([['vni.flood.add', { 'vni' => VNI, 'vtep' => VTEP }],
+                  ['mac.add', { 'vni' => VNI, 'mac' => HOST, 'vtep' => VTEP, 'seq' => 3 }]],
+                 vtep.orders.sort_by(&:first).reverse)
+  end
+
+  # vtep4rd as the MAC-VRFs see it (vtep4r vxlan/daemon/api.rb): VNI
+  # in evpn mode, no MACs, and every order recorded.
+  class Recorder
+    attr_reader :orders
+
+    def initialize ; @orders = [] ; end
+
+    def call(method, params)
+      case method
+      when 'show.vnis' then [{ 'vni' => VNI, 'mode' => 'evpn', 'remote_vteps' => [] }]
+      when 'show.macs' then []
+      else @orders << [method, params] ; {}
+      end
+    end
   end
 
   # Nothing validates on the way out, per Conventions: a Length that

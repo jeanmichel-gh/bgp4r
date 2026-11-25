@@ -832,10 +832,16 @@ module LabHelper
     #           10.5.1 on 2026-11-04. A test that sends IPv6 unicast asks
     #           for it and runs on 8.x only.
     # password: a TCP MD5 key for the session, RFC 2385, or nil for none.
+    # more_peers: more sessions, each { address:, as:, port: }, dialled
+    #           the same way and activated in every family, so routes can
+    #           pass through this router from one peer to another. Empty
+    #           by default.
     def initialize(local: '127.0.0.2', as: 65002, router_id: '10.0.0.2',
                    peer: '127.0.0.1', peer_as: 65001, port: nil, ipv6: false,
-                   network: nil, families: [], vpn_networks: [], password: nil)
+                   network: nil, families: [], vpn_networks: [], password: nil,
+                   more_peers: [])
       @password = password
+      @more_peers = more_peers
       @local, @as, @router_id = local, as, router_id
       @peer, @peer_as, @ipv6 = peer, peer_as, ipv6
       @network = network
@@ -883,6 +889,12 @@ module LabHelper
                # matrix does, so keep coming back quickly.
                ' neighbor %s timers connect 2' % @peer]
       lines << ' neighbor %s password %s' % [@peer, @password] if @password
+      @more_peers.each do |m|
+        lines << ' neighbor %s remote-as %d' % [m[:address], m[:as]]
+        lines << ' neighbor %s port %d' % [m[:address], m[:port]]
+        lines << ' neighbor %s update-source %s' % [m[:address], @local]
+        lines << ' neighbor %s timers connect 2' % m[:address]
+      end
       lines << ' address-family ipv4 unicast'
       lines << '  network %s' % @network if @network
       lines << ' exit-address-family'
@@ -896,6 +908,7 @@ module LabHelper
       @families.each do |f|
         lines << ' address-family %s' % f
         lines << '  neighbor %s activate' % @peer
+        @more_peers.each { |m| lines << '  neighbor %s activate' % m[:address] }
         if f == VPN
           @vpn_networks.each_with_index do |v, i|
             lines << '  network %s rd %s label %d route-map VPN%d' % [v[:prefix], v[:rd], v[:label], i]

@@ -385,6 +385,8 @@ module Features
       :doc   => 'docs/design/evpn.md',
       :unit  => %w[rib/macvrf_test rib/macvrfs_test],
       :functional => %w[evpn_daemon_test],
+
+      :lab   => %w[evpn_frr_test],
     },
 
     'evpn-export' => {
@@ -394,6 +396,7 @@ module Features
       :doc   => 'docs/design/evpn.md',
       :unit  => %w[daemon/evpn_exporter_test rib/macvrfs_test],
       :functional => %w[evpn_daemon_test],
+      :lab   => %w[evpn_frr_test],
     },
 
     'evpn-reflector' => {

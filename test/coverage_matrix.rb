@@ -111,7 +111,12 @@ module CoverageMatrix
     'labelled'     => { :gobgp => :none,    :frr => :none },
     'mcast-vpn'    => { :gobgp => :absence, :frr => :absence,
                         :doc => 'docs/mcast-vpn.md' },
-    'evpn'         => { :gobgp => :send,    :frr => :send,
+    # FRR reads the UPDATEs bgp4rd's EvpnExporter builds (types 2 and 3,
+    # PMSI Tunnel, MAC Mobility, ET:8) and sends a leaf's routes on to a
+    # second session, which bgp4rd's EVPN table and MAC-VRFs read back:
+    # FRR's own encoding of them (docs/design/evpn.md, pull request 5).
+    # It does not originate types 2 and 3 without zebra.
+    'evpn'         => { :gobgp => :send,    :frr => :both,
                         :doc => 'docs/evpn.md' },
     'bgp-ls'       => { :gobgp => :both,    :frr => :absence,
                         :doc => 'docs/bgp-ls.md' },

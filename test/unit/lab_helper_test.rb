@@ -315,6 +315,26 @@ class LabHelperTest < Test::Unit::TestCase
     [plain, asked].compact.each { |r| FileUtils.rm_rf(r.dir) }
   end
 
+  # more_peers: a second session, dialled from the same address and
+  # activated in every family, so EVPN routes pass through bgpd from one
+  # peer to the other (evpn_frr_test.rb). None unless asked for.
+  def test_more_peers_are_dialled_and_activated_in_every_family
+    plain = F.new(:families => [F::EVPN])
+    more = F.new(:families => [F::EVPN], :more_peers => [{ address: '127.0.0.3', as: 65003, port: 17999 }])
+    assert_no_match(/127\.0\.0\.3/, plain.config)
+    c = more.config
+    [' neighbor 127.0.0.3 remote-as 65003', ' neighbor 127.0.0.3 port 17999',
+     ' neighbor 127.0.0.3 update-source 127.0.0.2', ' neighbor 127.0.0.3 timers connect 2'].each do |line|
+      assert(c.lines.collect(&:chomp).include?(line), line)
+    end
+    evpn = c[/ address-family l2vpn evpn\n(.*?) exit-address-family/m, 1]
+    assert_equal(['  neighbor 127.0.0.1 activate', '  neighbor 127.0.0.3 activate'], evpn.lines.collect(&:chomp))
+    assert_no_match(/127\.0\.0\.3/, c[/ address-family ipv4 unicast\n(.*?) exit-address-family/m, 1].to_s,
+                    'not in IPv4 unicast, which no test here asks for')
+  ensure
+    [plain, more].compact.each { |r| FileUtils.rm_rf(r.dir) }
+  end
+
   # A system zebra holds FRR 10's eBGP peers at "Waiting for NHT", so
   # bgpd is pointed at a zebra socket in its own folder, which nothing
   # creates.
