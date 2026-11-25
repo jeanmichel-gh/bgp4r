@@ -25,6 +25,7 @@ require 'stringio'
 require 'tmpdir'
 require 'fileutils'
 require 'socket'
+require 'json'
 require 'bgp/daemon'
 require 'bgp/gen/evpn_routes'
 require 'bgp/gen/sender'
@@ -45,18 +46,73 @@ class BGP_Evpn_Daemon_Functional_Test < Test::Unit::TestCase
   def teardown
     @peer.close if @peer
     @server.stop if @server
+    @vtep.stop if @vtep
   ensure
     @listener.close if @listener
     FileUtils.remove_entry(@dir) if @dir
   end
 
-  def daemon(caps)
+  # vtep4rd's socket as bgp4rd sees it (vtep4r vxlan/daemon/api.rb): JSON
+  # lines, show.vnis and show.macs answered from its tables, and every
+  # other request recorded and applied. One VNI, 100, in evpn mode.
+  class FakeVtep
+    attr_reader :orders, :flood, :macs
+
+    def initialize(path)
+      @path = path
+      @orders = Queue.new
+      @flood = []
+      @macs = {}
+      @lock = Mutex.new
+      @server = UNIXServer.new(path)
+      @clients = []
+      @thread = Thread.new { loop { c = @server.accept; @clients << c; Thread.new(c) { |s| serve(s) } } }
+    end
+
+    # As vtep4rd going away: its listener and every connection closed.
+    def stop
+      @thread.kill
+      @server.close
+      @clients.each { |c| c.close rescue nil }
+      File.delete(@path) if File.exist?(@path)
+    end
+
+    def serve(sock)
+      while (line = sock.gets)
+        req = JSON.parse(line)
+        sock.write("#{JSON.generate('id' => req['id'], 'result' => answer(req['method'], req['params']))}\n")
+      end
+    rescue IOError, SystemCallError
+      nil
+    end
+
+    def answer(method, p)
+      @lock.synchronize do
+        case method
+        when 'show.vnis' then [{ 'vni' => 100, 'mode' => 'evpn', 'remote_vteps' => @flood.dup }]
+        when 'show.macs' then @macs.values.collect(&:dup)
+        else
+          @orders << [method, p]
+          case method
+          when 'vni.flood.add' then @flood |= [p['vtep']]
+          when 'vni.flood.del' then @flood -= [p['vtep']]
+          when 'mac.add'
+            @macs[p['mac']] = { 'mac' => p['mac'], 'type' => 'remote', 'vtep' => p['vtep'], 'origin' => 'api', 'seq' => p['seq'] }
+          when 'mac.del' then @macs.delete(p['mac'])
+          end
+          {}
+        end
+      end
+    end
+  end
+
+  def daemon(caps, extra = {})
     err = StringIO.new
     @server = BGP::Daemon::Server.new(StringIO.new, err)
     config = BGP::Daemon::Server.with_defaults(
       { 'as' => 65_000, 'router_id' => '10.255.0.12', 'state_file' => File.join(@dir, 'state.json'),
         'neighbors' => [{ 'address' => '127.0.0.1', 'as' => 65_000, 'connect' => true, 'port' => PORT,
-                          'retry' => 1, 'description' => 's1', 'capabilities' => caps }] })
+                          'retry' => 1, 'description' => 's1', 'capabilities' => caps }] }.merge(extra))
     assert_not_nil(@server.build(config, :socket => File.join(@dir, 'bgp4rd.sock')),
                    "bgp4rd did not start: #{err.string}")
   end
@@ -145,5 +201,85 @@ class BGP_Evpn_Daemon_Functional_Test < Test::Unit::TestCase
     sleep 1
     assert_equal(0, call('show.evpn')['total'])
     assert_nil(call('show.peers').first['families'])
+  end
+
+  def vtep_socket
+    File.join(@dir, 'vtep4rd.sock')
+  end
+
+  def macvrf_daemon
+    daemon(%w[as4_byte mbgp_l2vpn_evpn],
+           'macvrfs' => [{ 'vni' => 100 }], 'evpn' => { 'vtep' => vtep_socket })
+  end
+
+  # docs/design/evpn.md, pull request 2: the routes lab 3's injector sends,
+  # imported into MAC-VRF 100 and written into vtep4rd. The type 3 route
+  # floods to 10.0.9.2, each type 2 route puts a MAC behind it, and a
+  # withdrawal takes them away.
+  def test_a_macvrf_writes_what_it_imports_into_vtep4rd
+    @vtep = FakeVtep.new(vtep_socket)
+    macvrf_daemon
+    peer
+    send_spec(spec(3, '10.0.9.2'))
+    send_spec(spec(2, '02:00:00:99:00:00', 3))
+    wait_for('the flood VTEP and three MACs') { @vtep.flood == ['10.0.9.2'] && @vtep.macs.size == 3 }
+    assert_equal({ 'mac' => '02:00:00:99:00:01', 'type' => 'remote', 'vtep' => '10.0.9.2', 'origin' => 'api', 'seq' => 0 },
+                 @vtep.macs['02:00:00:99:00:01'])
+    row = call('show.macvrfs')['rows'].first
+    assert_equal([100, '10.255.0.12:100', ['65000:100'], 'ok', ['10.0.9.2'], 3],
+                 row.values_at('vni', 'rd', 'import', 'vtep_state', 'flood', 'macs_remote'))
+    macs = call('show.macvrf', 'vni' => 100)['rows']
+    assert_equal([['02:00:00:99:00:00', 'remote', '10.0.9.2']], macs.first(1).collect { |r| r.values_at('mac', 'place', 'vtep') })
+    assert_equal([[100], true, nil], rows('route_type' => 3).first.values_at('imported', 'valid', 'invalid'))
+    assert_equal({ 'vtep' => vtep_socket, 'macvrfs' => 1, 'errors' => [] }, call('show.status')['evpn'])
+
+    send_spec(spec(2, '02:00:00:99:00:00', 3), withdraw: true)
+    wait_for('the MACs to go') { @vtep.macs.empty? }
+    @peer.close
+    @peer = nil
+    wait_for('the flood VTEP to go with the session') { @vtep.flood.empty? }
+  end
+
+  # A vtep4rd that is not there yet: show.status says so, and the next
+  # change after it comes finds it.
+  def test_a_vtep4rd_that_starts_later
+    macvrf_daemon
+    peer
+    send_spec(spec(3, '10.0.9.2'))
+    wait_for('the error') { call('show.status')['evpn']['errors'].any? }
+    assert_match(/\Avni 100: vtep4rd: .*No such file or directory/, call('show.status')['evpn']['errors'].first)
+    assert_equal('down', call('show.macvrfs')['rows'].first['vtep_state'])
+    @vtep = FakeVtep.new(vtep_socket)
+    send_spec(spec(2, '02:00:00:99:00:00'))
+    wait_for('both routes in vtep4rd') { @vtep.flood == ['10.0.9.2'] && @vtep.macs.size == 1 }
+    assert_equal([], call('show.status')['evpn']['errors'])
+  end
+
+  # A vtep4rd that restarts loses what bgp4rd wrote. The next sync finds
+  # the old connection dead, opens a new one and writes it all again.
+  def test_a_vtep4rd_that_restarts
+    @vtep = FakeVtep.new(vtep_socket)
+    macvrf_daemon
+    peer
+    send_spec(spec(3, '10.0.9.2'))
+    wait_for('the flood VTEP') { @vtep.flood == ['10.0.9.2'] }
+    @vtep.stop
+    @vtep = FakeVtep.new(vtep_socket)
+    send_spec(spec(2, '02:00:00:99:00:00'))
+    wait_for('the flood VTEP and the MAC, in the new vtep4rd', 5) { @vtep.flood == ['10.0.9.2'] && @vtep.macs.size == 1 }
+  end
+
+  def test_show_macvrf_wants_a_configured_vni
+    @vtep = FakeVtep.new(vtep_socket)
+    macvrf_daemon
+    e = assert_raise(BGP::Daemon::Client::Error) { call('show.macvrf', 'vni' => 200) }
+    assert_match('no MAC-VRF for VNI 200; this bgp4rd has 100', e.message)
+  end
+
+  # Hidden until configured: no evpn in show.status, no MAC-VRF columns.
+  def test_without_macvrfs
+    daemon(%w[as4_byte mbgp_l2vpn_evpn])
+    assert_nil(call('show.status')['evpn'])
+    assert_equal(0, call('show.macvrfs')['total'])
   end
 end

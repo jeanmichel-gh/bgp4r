@@ -126,6 +126,8 @@ module BGP
         'show.unreachability' => ->(a, p) { a.views.unreachability(p) },
         'show.vpn' => ->(a, p) { a.views.vpn(p) },
         'show.evpn' => ->(a, p) { a.views.evpn(p) },
+        'show.macvrfs' => ->(a, p) { a.views.macvrfs(p) },
+        'show.macvrf' => ->(a, p) { a.views.macvrf(p) },
         'show.vrfs' => ->(a, p) { a.views.vrfs(p) },
         'show.vrf' => ->(a, p) { a.views.vrf(p) },
         'show.vpn_labels' => ->(a, p) { a.views.vpn_labels(p) },

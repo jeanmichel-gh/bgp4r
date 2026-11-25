@@ -339,6 +339,15 @@ module Features
       :functional => %w[evpn_daemon_test],
     },
 
+    'macvrfs' => {
+      :area  => 'routing',
+      :about => 'MAC-VRFs: one per VNI, import by Route Target, flood VTEPs from type 3 and remote MACs from type 2 written into vtep4rd, show.macvrfs and show.macvrf',
+      :rfc   => 'RFC 7432 sections 7.10, 9.2.1, 11.2, 15; RFC 8365 sections 5.1.2, 5.1.3; RFC 1982 section 3.2',
+      :doc   => 'docs/design/evpn.md',
+      :unit  => %w[rib/macvrf_test rib/macvrfs_test],
+      :functional => %w[evpn_daemon_test],
+    },
+
     'vrfs' => {
       :area  => 'routing',
       :about => "A PE's VRFs: import by Route Target, the mpls and gre transports, VRF routes in the kernel, export with a label per VRF, IPv6 over an IPv4 core, CEs by eBGP",

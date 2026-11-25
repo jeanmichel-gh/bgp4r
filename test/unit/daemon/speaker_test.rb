@@ -512,6 +512,23 @@ class BGP_Daemon_Speaker_Test < Test::Unit::TestCase
     assert_equal(200, s.rib.decision.degree_of_preference(route))
   end
 
+  # docs/design/evpn.md, pull request 2: the MAC-VRFs are built from
+  # macvrfs:, their RD defaulting to local_address, else the router ID;
+  # evpn: takes only the keys it knows; and with no macvrfs: there are
+  # none, and no vtep4rd is dialled.
+  def test_macvrfs_and_the_evpn_block
+    assert_nil(speaker.macvrfs)
+    s = speaker('local_address' => '10.255.0.12', 'macvrfs' => [{ 'vni' => 100 }],
+                'evpn' => { 'vtep' => '/tmp/v.sock' })
+    assert_equal([[100, '10.255.0.12:100']], s.macvrfs.macvrfs.collect { |m| [m.vni, m.rd] })
+    assert_equal('/tmp/v.sock', s.vtep_path)
+    assert_equal('10.0.0.1:100', speaker('macvrfs' => [{ 'vni' => 100 }]).macvrfs.macvrfs.first.rd)
+    e = assert_raise(ArgumentError) { speaker('macvrfs' => [{ 'vni' => 100 }], 'evpn' => { 'duplicates' => 1 }) }
+    assert_equal('evpn: unknown key(s) duplicates: use one of vtep', e.message)
+    e = assert_raise(ArgumentError) { speaker('evpn' => 'x') }
+    assert_equal('evpn: is a mapping', e.message)
+  end
+
   private
 
   def speaker_with_logger(logger, extra = {})
