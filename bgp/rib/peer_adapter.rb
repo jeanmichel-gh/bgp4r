@@ -22,6 +22,7 @@
 
 require 'bgp/rib/route'
 require 'bgp/rib/vpn_route'
+require 'bgp/rib/evpn_path'
 
 module BGP
   module Rib
@@ -141,6 +142,57 @@ module BGP
         end
         ops
       end
+
+      # L2VPN EVPN, RFC 7432 section 7: "AFI of 25 (L2VPN) and SAFI of 70
+      # (EVPN)". **Not in the table either**: an EVPN route has no prefix.
+      # `BGP::Rib::EvpnTable` keeps types 2 and 3, docs/design/evpn.md's
+      # decision 1.
+      EVPN = [IANA::AFI::L2VPN, IANA::SAFI::EVPN].freeze
+
+      # The route types the EVPN table keeps: MAC/IP Advertisement and
+      # Inclusive Multicast Ethernet Tag, the two RFC 8365 section 7.1
+      # needs for an NVE whose hosts are single-homed.
+      EVPN_KEPT = [2, 3].freeze
+
+      # What one UPDATE asks the EVPN table to do, withdrawals first:
+      #
+      #   [[:withdraw, key],
+      #    [:announce, EvpnRoute],
+      #    [:other, route_type]]
+      #
+      # key is EvpnRoute#key, RD and the RFC 7432 key fields and the Path
+      # Identifier. :other is a route of a type the table does not keep,
+      # announced, so it can be counted. Type 254, the Unreachability
+      # route, is UnreachTable's and gives nothing here.
+      def self.evpn_operations(update, peer)
+        pa = update.path_attribute
+        return [] unless pa
+        ops = []
+        each_evpn(pa, BGP::Mp_unreach) do |n, type|
+          ops << [:withdraw, [*EvpnRoute.key_of(n), n.path_id]] if EVPN_KEPT.include?(type)
+        end
+        each_evpn(pa, BGP::Mp_reach) do |n, type|
+          if EVPN_KEPT.include?(type)
+            key = EvpnRoute.key_of(n)
+            ops << [:announce, EvpnRoute.new(n, EvpnPath.new(key.join(' '), pa, peer, :path_id => n.path_id))]
+          else
+            ops << [:other, type]
+          end
+        end
+        ops
+      end
+
+      def self.each_evpn(pa, klass)
+        return unless pa.has?(klass)
+        mp = pa[klass]
+        return unless [mp.afi, mp.safi] == EVPN
+        Array(mp.nlris).each do |n|
+          next unless n.is_a?(BGP::Evpn)
+          next if n.route.is_a?(BGP::Evpn::Ip_prefix_unreachability)
+          yield n, n.route.type
+        end
+      end
+      private_class_method :each_evpn
 
       # [65000, 1] or ["10.255.0.3", 7], RFC 4364 section 4.2's
       # Administrator and Assigned Number, as "65000:1".

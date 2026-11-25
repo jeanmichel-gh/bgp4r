@@ -330,6 +330,15 @@ module Features
       :lab   => %w[vpn_frr_test],
     },
 
+    'evpn-table' => {
+      :area  => 'routing',
+      :about => 'The EVPN table: types 2 and 3 received (AFI 25 SAFI 70), keyed on RD and RFC 7432 key fields, best path per key, show.evpn',
+      :rfc   => 'RFC 7432 sections 7.2, 7.3; RFC 8365 section 5.1.3',
+      :doc   => 'docs/design/evpn.md',
+      :unit  => %w[rib/evpn_table_test],
+      :functional => %w[evpn_daemon_test],
+    },
+
     'vrfs' => {
       :area  => 'routing',
       :about => "A PE's VRFs: import by Route Target, the mpls and gre transports, VRF routes in the kernel, export with a label per VRF, IPv6 over an IPv4 core, CEs by eBGP",

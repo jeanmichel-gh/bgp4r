@@ -86,6 +86,9 @@ jobs:
       - name: Functional test (an EVPN UPDATE over loopback)
         run: bundle exec ruby -I. test/functional/evpn_test.rb
         timeout-minutes: 2
+      - name: Functional test (bgp4rd's EVPN table, from the generator's routes)
+        run: bundle exec ruby -I. test/functional/evpn_daemon_test.rb
+        timeout-minutes: 2
       - name: Functional test (an RT-constrain UPDATE over loopback)
         run: bundle exec ruby -I. test/functional/rt_constrain_test.rb
         timeout-minutes: 2

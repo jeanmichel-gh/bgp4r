@@ -1,7 +1,8 @@
 # EVPN in bgp4rd, VXLAN first
 
 Status: approved by the owner, 2026-11-25, with the answers to its six
-questions at the end. Pull request 0, in vtep4r, is under way.
+questions at the end. Pull request 0 is vtep4r #15; pull request 1, the
+EVPN table, is built (its "As built" is below).
 
 This is P5 in routescope's `docs/protocol-coverage.md`: "EVPN in
 bgp4rd. MAC-VRF and an EVPN RIB, VXLAN first". routescope's
@@ -458,6 +459,28 @@ records which FRR keeps and which bgp4rd keeps.
 
 Then in routescope: the `Bgp4rd` driver's `evpn_routes`, lab 2 and its
 scenarios, and bgp4rd in lab 3, each with its own pull request.
+
+## As built
+
+**Pull request 1.** `bgp/rib/evpn_table.rb` and `bgp/rib/evpn_path.rb`,
+`PeerAdapter.evpn_operations`, `show.evpn`, and an `evpn` entry in
+`show.peers`' `families`. What changed from the plan:
+
+- `show.evpn`'s rows name the peer `peer`, as `show.vpn` does, where
+  routescope's `evpn_routes` says `from`, and have no `valid`: every
+  path held is valid until pull request 2 gives a reason not to install
+  one. routescope's driver maps the names. A row also carries `esi`,
+  `sticky`, `pmsi` and the path attributes `show.vpn` gives.
+- `seq` and `sticky` are given on type 2 rows only, and `pmsi` on type
+  3 rows only: one UPDATE can carry both types under one set of
+  attributes, and RFC 7432 ties MAC Mobility to type 2 (section 7.7)
+  and the PMSI Tunnel to type 3 (section 11.2).
+- The decision process needs a `Rib::Route`, which keys on an IP
+  prefix. `EvpnPath`, a subclass, keeps the EVPN key as text in its
+  place; `Decision` reads only the attributes and the peer.
+- Type 2's VNI is read from Label1's three octets as received.
+  `Label#to_hash` leaves the bottom of stack bit out when it is 1, so a
+  VNI read from the hash came out one less when it was odd.
 
 ## Tests
 

@@ -741,6 +741,7 @@ below.
 | `show.unreachability` | Unreachability reports, SAFI 81 and EVPN route type 254: those this speaker makes, and those received per peer, with their reporters | built |
 | `show.vpn` | the VPN-IPv4 and VPN-IPv6 routes received (AFI 1 and 2 / SAFI 128), one row each: RD, prefix, peer, next hop, labels, Route Targets, Site of Origin (`soo`), `originator_id` and `cluster_list`, best; and those this PE sends, with peer null, reason `local` and their `vrf` | built |
 | `show.vpn_labels` | each exporting VRF's label: label, VRF, the action, installed or why not | built |
+| `show.evpn` | the EVPN routes received, types 2 and 3 (AFI 25 / SAFI 70), one row per path: RD, type, key fields, originator, VNI, next hop, Route Targets, encapsulation, MAC Mobility, PMSI Tunnel, best; `route_type`, `rd` and `mac` narrow it. docs/design/evpn.md, pull request 1 | built |
 | `show.vrfs` | the VRFs: name, table, RD, Route Targets, the device's state, routes imported and installed | built |
 | `show.vrf` | each VRF's imported routes: what is pushed, where it goes, installed or why not; `vrf` picks one | built |
 | `show.log` | the last N lines | built |
@@ -1191,6 +1192,17 @@ together as the RIB counts them, and each VPN family the session
 negotiated follows: received from the VPN table, sent by this PE's VRFs
 and by the reflector. A unicast speaker's rows have neither key, as
 they always had.
+
+A session that negotiated L2VPN EVPN gains `families` too, with an
+`evpn` entry: `received` counts the type 2 and 3 routes held from the
+peer, and `other_types` the routes of other types it announced, which
+the EVPN table does not keep (docs/design/evpn.md, decision 1). `sent`
+is 0 until the speaker sends EVPN routes:
+
+```json
+"families": [ { "family": "unicast", "received": 0, "sent": 0 },
+              { "family": "evpn", "received": 3, "sent": 0, "other_types": 1 } ]
+```
 
 **Every path row of every view carries `originator_id` and
 `cluster_list`**, RFC 4456 section 8, as it carries the three community
@@ -2110,11 +2122,16 @@ work.
 
 **No new address family in a RIB.** `BGP::Rib::Route` keys on the prefix
 and the Path Identifier, and a flow spec rule or an EVPN route is not a
-prefix. The daemon holds IPv4 and IPv6 unicast; every other family bgp4r
-speaks is on the wire only. That is the recorded decision and the lab
-labels say `bgp`, not the family.
+prefix. The daemon's RIB holds IPv4 and IPv6 unicast. That is the
+recorded decision and the lab labels say `bgp`, not the family.
 
-Two families have a table of their own beside the RIB, outside it:
+Three families have a table of their own beside the RIB, outside it.
+**EVPN**, since `docs/design/evpn.md`'s pull request 1: types 2 and 3
+of AFI 25 / SAFI 70 (`bgp/rib/evpn_table.rb`), keyed on the RD and
+RFC 7432's key fields (sections 7.2 and 7.3), with the unicast decision
+process per key. It is filled only on a session whose two OPENs carried
+the family, routes of other types are counted and not kept, and
+`show.evpn` reads it. The other two:
 BGP-LS (`bgp/daemon/link_state_table.rb`) and, since
 `docs/design/l3vpn-pe.md`'s pull request 1, VPN-IPv4, AFI 1 / SAFI 128
 (`bgp/rib/vpn_table.rb`). The VPN table keys a route on its Route
