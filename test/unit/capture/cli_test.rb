@@ -575,6 +575,30 @@ class Capture_CLI_Test < Test::Unit::TestCase
     end
   end
 
+  # `git commit` starts `git maintenance run --auto --detach` (git 2.47
+  # on), whose detached child holds `.git/objects/maintenance.lock` after
+  # the commit has returned. A cleanup right after `lab new` could list
+  # that lock and then find it gone: Errno::ENOENT from the test above in
+  # CI, Ruby 4.0, 2026-11-23 (#377). A lab folder with one commit has
+  # nothing to maintain, so lab new starts no background git at all.
+  # GIT_TRACE names every git program run, the detached one included.
+  def test_lab_new_leaves_no_git_running_in_the_folder
+    omit 'git is not installed here' unless git?
+    Dir.mktmpdir('bgp4r-trace') do |t|
+      trace = File.join(t, 'trace')
+      before = ENV['GIT_TRACE']
+      ENV['GIT_TRACE'] = trace
+      begin
+        lab_new('bgp4r-lab') { |_dir, status| assert_equal(0, status) }
+      ensure
+        before ? ENV['GIT_TRACE'] = before : ENV.delete('GIT_TRACE')
+      end
+      log = File.read(trace)
+      assert_match(/built-in: git commit/, log, 'the trace saw no commit, so it proves nothing')
+      assert_no_match(/maintenance run/, log)
+    end
+  end
+
   def test_two_roots_are_read_and_the_first_wins_a_name_in_both
     Dir.mktmpdir('bgp4r-lab-root') do |t|
       a = File.join(t, 'a') ; b = File.join(t, 'b')
