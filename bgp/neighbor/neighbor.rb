@@ -991,7 +991,15 @@ module BGP
       end
     end
     
+    # The End-of-RIB marker of RFC 4724 section 2 is published as a
+    # :session event, with the family in its data, so a console can say
+    # which of the peer's tables are complete. Nothing in the library acts
+    # on it. Update#end_of_rib (bgp/messages/markers.rb) recognises it.
     def rcv_update(m)
+      afi, safi = m.end_of_rib
+      return unless afi
+      publish_event(:session, "End-of-RIB received for AFI #{afi} SAFI #{safi}",
+                    { :end_of_rib => { :afi => afi, :safi => safi } })
     end
     
     def to_s

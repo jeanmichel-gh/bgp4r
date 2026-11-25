@@ -140,6 +140,7 @@ module LabGroups
     'frr' => %w[
       capabilities_frr_test
       cease_frr_test
+      end_of_rib_frr_test
       evpn_frr_test
       fault_matrix_frr_test
       flow_spec_frr_test

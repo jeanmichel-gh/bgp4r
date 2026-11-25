@@ -302,6 +302,16 @@ module Features
       :lab   => %w[bfd_frr_lab_topology_test],
     },
 
+    'end-of-rib' => {
+      :area  => 'session',
+      :about => 'end_of_rib on a neighbor: a marker per negotiated family after the first table; received ones recorded',
+      :rfc   => 'RFC 4724 section 2',
+      :doc   => 'docs/daemon.md',
+      :unit  => %w[messages/markers_test daemon/end_of_rib_test daemon/vpn_reflector_test],
+      :functional => %w[end_of_rib_test],
+      :lab   => %w[end_of_rib_frr_test],
+    },
+
     'gtsm' => {
       :area  => 'session',
       :about => 'ttl_security on a neighbor: GTSM, sent at TTL 255, dropped below 256 - hops',

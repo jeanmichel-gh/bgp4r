@@ -31,4 +31,25 @@ class End_of_rib_markers_Test < Test::Unit::TestCase
     assert_match(/(ff){16}001d0200000006800f03000104/, Update.end_of_rib_marker(:afi=>1, :safi=>4).to_shex)
     assert_match(/(ff){16}001d0200000006800f03000180/, Update.end_of_rib_marker(:afi=>1, :safi=>128).to_shex)
   end
+
+  # RFC 4724 section 2's two shapes, read back from the wire.
+  def test_a_marker_says_its_family
+    assert_equal([1, 1], Update.new(Update.end_of_rib_marker.encode).end_of_rib)
+    assert_equal(23, Update.end_of_rib_marker.encode.bytesize, 'IPv4 unicast: the UPDATE of minimum length')
+    assert_equal([2, 1], Update.new(Update.end_of_rib_marker(:afi=>2, :safi=>1).encode).end_of_rib)
+    assert_equal([1, 128], Update.new(Update.end_of_rib_marker(:afi=>1, :safi=>128).encode).end_of_rib)
+  end
+
+  # Anything else is not one: routes, withdrawals, an MP_UNREACH_NLRI
+  # with routes, and an empty one beside another attribute.
+  def test_other_updates_are_not_markers
+    pa = Path_attribute.new(Origin.new(0), As_path.new, Next_hop.new('10.0.0.1'))
+    [Update.new(pa, Nlri.new('10.1.0.0/16')),
+     Update.new(Withdrawn.new('10.1.0.0/16')),
+     Update.new(Path_attribute.new(Mp_unreach.new(:afi=>2, :safi=>1, :nlris=>['2001:db8::/32']))),
+     Update.new(Path_attribute.new(Origin.new(0), Mp_unreach.new(:afi=>2, :safi=>1))),
+     Update.new(Path_attribute.new(Origin.new(0)))].each do |u|
+      assert_nil(Update.new(u.encode).end_of_rib, u.to_shex)
+    end
+  end
 end

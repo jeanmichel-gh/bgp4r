@@ -2,7 +2,7 @@
 
 Status: approved by the owner, 2026-11-25, with the answers to its
 eight questions in "Questions, answered" at the end. The sections below
-are written to them. No pull request is built yet.
+are written to them. "Pull requests" says which are built.
 
 This is P8 in routescope's `docs/protocol-coverage.md`: "BGP operations.
 Graceful restart and long-lived GR, answering route refresh, RPKI, BMP,
@@ -214,6 +214,47 @@ and, of its use outside GR:
   route of the first table and before any later change.
 - The same with nothing to send: the marker still goes (RFC 4724
   section 4, "including the case when there is no update to send").
+
+### As built (pull request 1)
+
+- `Update#end_of_rib` (`bgp/messages/markers.rb`) answers [afi, safi]
+  for the two shapes above and nil for anything else, an empty
+  MP_UNREACH_NLRI beside another attribute included.
+- `BGP::Neighbor#rcv_update` publishes the `session` event, so the
+  library has it too. The daemon's Recorder keeps
+  `end_of_rib_received`, reset with the session, and the peer row in
+  `show.peers` and `show.status` carries it once one has come.
+- `Speaker#send_end_of_rib` runs on the session's thread after
+  `announce` and every `on_established` block. Two senders run behind
+  on threads of their own, so it waits for each: it drains the RIB
+  feed, which queued the session's `[:session_up]` first, and
+  `VpnReflector#drain`, new, which waits for a refresh. The BGP-LS,
+  unreachability, VPN and CE exporters send inside their
+  `on_established` blocks. Each wait is capped at 30 s, with a warning.
+  So the markers come from one place, not from each exporter as the
+  first bullet above said: a family nothing sends gets its marker too,
+  and no exporter needs to know about the others.
+- Negotiated families: both OPENs list the Multiprotocol capability,
+  RFC 4760 section 8; an OPEN with none is IPv4 unicast.
+- `end_of_rib` is bounce class in a commit, and a value other than
+  true or false is refused at start and in a commit.
+- **Measured against FRR 10.5.1**, 2026-11-25: FRR sends End-of-RIB for
+  IPv4 unicast with no graceful restart negotiated, and bgp4rd records
+  it. FRR tracks a received one only under graceful restart
+  (`gracefulRestartInfo.endOfRibRecv` stays empty without it), so ours
+  shows as one more UPDATE in its `messageStats.updatesRecv`: 2 for one
+  route with `end_of_rib`, 1 without.
+- Tests: `test/unit/messages/markers_test.rb` (both shapes, and five
+  UPDATEs that are not markers), `test/unit/daemon/end_of_rib_test.rb`
+  (families, check, Recorder and row), the commit's bounce and refusal
+  in `candidate_test.rb`, `VpnReflector#drain` in
+  `vpn_reflector_test.rb`, `test/functional/end_of_rib_test.rb` (order
+  after the first table, nothing to send, negotiated families only, the
+  control, receipt as event and row), and
+  `test/functional/lab/end_of_rib_frr_test.rb` (both ways, with its
+  control). Over loopback the Router always wins the race to the wire,
+  so the order test holds the Router's `session_up` back a second;
+  without the drain the markers then come first, which was checked.
 
 ### Fault catalog
 
@@ -1123,7 +1164,7 @@ and `CLAUDE.md`'s table.
 | --- | --- | --- | --- |
 | 1 | 5 | GTSM, `ttl_security`; built | – |
 | 2 | 6a | TCP MD5, `password`; built | – |
-| 3 | 1 | End-of-RIB sent and received, `end_of_rib` | – |
+| 3 | 1 | End-of-RIB sent and received, `end_of_rib`; built | – |
 | 4 | 2 | Route refresh answered, enhanced refresh, the stale mark, `BGP::Fault::REFRESH` | 1 |
 | 5 | 3 | GR helper, RFC 8538, Hard Reset, `BGP::Fault::GR`, the first behaviours in `bgp4r-sim`, GTSM's among them | 2 |
 | 6 | 7a | RTR codec, `BGP::Fault::RTR` | – |

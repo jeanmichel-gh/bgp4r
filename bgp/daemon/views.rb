@@ -369,6 +369,11 @@ module BGP
           # TCP authentication, present only on a neighbor with one: `md5`
           # for `password`. Never the key. See bgp/daemon/tcp_auth.rb.
           row = row.merge(:auth => 'md5') if peer.password
+          # The families this session's End-of-RIB came for, RFC 4724
+          # section 2, as {afi, safi} in the order they came. Present once
+          # one has, so every other row reads as it always has.
+          eor = peer.recorder.data['end_of_rib_received']
+          row = row.merge(:end_of_rib_received => eor.collect { |f| { :afi => f['afi'], :safi => f['safi'] } }) unless eor.nil? || eor.empty?
           # A CE's VRF, and the counts of each family the session carries,
           # present only on a CE's row or a session with a VPN family, so
           # a unicast speaker's rows read as they always have.

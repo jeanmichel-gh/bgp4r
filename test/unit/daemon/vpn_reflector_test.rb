@@ -162,6 +162,20 @@ class TestBgpDaemonVpnReflector < Test::Unit::TestCase
     assert_equal(['192.168.1.0/24'], @pe2.read.collect { |o| o[2] })
   end
 
+  # drain answers once a refresh has run after it, so what session_up
+  # asked for has been sent: what Speaker#send_end_of_rib waits on
+  # before its markers. With no worker it answers at once.
+  def test_drain_waits_for_the_refresh_session_up_asked_for
+    assert_equal(true, @rr.drain(1), 'no worker, nothing to wait for')
+    receive('10.255.0.1', '192.168.1.0/24', rd: [65000, 1], label: 24000)
+    @rr.start
+    @rr.session_up(@pe2)
+    assert_equal(true, @rr.drain(5))
+    assert_equal(['192.168.1.0/24'], @pe2.read.collect { |o| o[2] })
+    @rr.stop
+    assert_equal(true, @rr.drain(1), 'a stopped worker, nothing to wait for')
+  end
+
   # A CE in a VRF and an external peer get none of it.
   def test_ces_and_external_peers_get_nothing
     @nc.vrf = 'A'
