@@ -831,9 +831,11 @@ module LabHelper
     #           where 8.4.4 only warned. Measured on the owner's VM against
     #           10.5.1 on 2026-11-04. A test that sends IPv6 unicast asks
     #           for it and runs on 8.x only.
+    # password: a TCP MD5 key for the session, RFC 2385, or nil for none.
     def initialize(local: '127.0.0.2', as: 65002, router_id: '10.0.0.2',
                    peer: '127.0.0.1', peer_as: 65001, port: nil, ipv6: false,
-                   network: nil, families: [], vpn_networks: [])
+                   network: nil, families: [], vpn_networks: [], password: nil)
+      @password = password
       @local, @as, @router_id = local, as, router_id
       @peer, @peer_as, @ipv6 = peer, peer_as, ipv6
       @network = network
@@ -880,6 +882,7 @@ module LabHelper
                # A caller may give each case its own session, as the fault
                # matrix does, so keep coming back quickly.
                ' neighbor %s timers connect 2' % @peer]
+      lines << ' neighbor %s password %s' % [@peer, @password] if @password
       lines << ' address-family ipv4 unicast'
       lines << '  network %s' % @network if @network
       lines << ' exit-address-family'

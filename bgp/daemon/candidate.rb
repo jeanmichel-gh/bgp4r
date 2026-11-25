@@ -188,6 +188,8 @@ module BGP
         'ttl_security' => 'the listener\'s minimum TTL is set once, when bgp4rd starts listening, ' \
                           'from every passive peer\'s ttl_security, so one peer\'s change is not ' \
                           'one session\'s (bgp/daemon/gtsm.rb)',
+        'password' => 'the listener holds each passive peer\'s MD5 key, set once, when bgp4rd ' \
+                      'starts listening (bgp/daemon/tcp_auth.rb)',
         'record' => 'the Recorder is built once, in Peer#initialize, and counts ' \
                     'established_count and flaps across sessions, so a bounce deliberately ' \
                     'leaves those alone and replacing it would reset them'

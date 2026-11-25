@@ -146,6 +146,7 @@ module LabGroups
       gen_frr_test
       link_state_frr_test
       mcast_vpn_frr_test
+      md5_frr_test
       rib_router_frr_test
       vpn_frr_test
     ],

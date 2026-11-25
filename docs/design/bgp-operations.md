@@ -742,6 +742,24 @@ The same two Rubies, loopback, IPv4 and IPv6. The script is in
 
 So a Ruby daemon can set both, with `setsockopt` and `pack`, and no gem.
 
+Measured again while building 6a, 2026-11-25, the same kernel, through
+`bgp/daemon/tcp_auth.rb`:
+
+- Which counter grows tells why a session is down. Our key, the peer
+  sends no digest: `TCPMD5NotFound`. The peer sends a digest, we have
+  no key for it: `TCPMD5Unexpected`. Two keys: `TCPMD5Failure`.
+- A listener holds keys per address. A peer without a key connects to a
+  listener that has another peer's.
+- A dual-stack IPv6 listener refuses an IPv4 address for a key
+  (`EINVAL`). Under the IPv4-mapped address, `::ffff:a.b.c.d`, it takes
+  it and checks it.
+- An 80-octet key works; 81 gives `EINVAL`.
+- **A VRF needs no ifindex.** In a network namespace with a VRF device,
+  a listener and a client both bound to it with `SO_BINDTODEVICE`, and
+  keys set with plain `TCP_MD5SIG`: the same key connects, no key or
+  another key does not. This was run as root, since making a VRF needs
+  it. So `TCP_MD5SIG_EXT` is not needed for a CE session.
+
 ### What to build
 
 ```yaml
@@ -759,27 +777,59 @@ So a Ruby daemon can set both, with `setsockopt` and `pack`, and no gem.
 - Pull request 6b, TCP-AO: the `tcp_ao` key, one or more keys, the
   first current. Key rollover (`TCP_AO_INFO`'s current and rnext) is a
   later step, not in 6b.
-- A VRF socket, bound with `SO_BINDTODEVICE`, may need the key's
-  ifindex (`TCP_MD5SIG_EXT` with `TCP_MD5SIG_FLAG_IFINDEX`, or
-  `TCP_AO_KEYF_IFINDEX`). Not measured; 6a measures it on l3vpn-lab's
-  CE session first.
-- The key is never shown: `show.peer` says `auth: md5` or `auth:
-  tcp-ao`, never the key, and the set lines render it as `*`.
+- A VRF socket, bound with `SO_BINDTODEVICE`, needs no ifindex for
+  MD5: measured in 6a, above. TCP-AO's `TCP_AO_KEYF_IFINDEX` is 6b's to
+  measure.
+- The key is never shown in an answer about the session: the peer row
+  says `auth: md5` or `auth: tcp-ao`, never the key, and a refused key's
+  error gives its length, not the key.
+- **`show.configuration` carries the key, as the file does.** This
+  changed while building 6a. Rendering it as `*` would break
+  `config.replace`: a configuration read and sent back would set the
+  key to `*`. ospfd answers its keys in clear for the same reason, and
+  routescope's driver masks them (`Drivers::Ospfd::SECRETS`). The set
+  line `set neighbors ADDRESS password KEY` has the whitespace such a
+  mask wants. So routescope's `Drivers::Bgp4rd` must mask `password`
+  before a lab uses it; it does not yet.
+- A key cannot change in a commit: restart class, since the listener
+  holds the passive peers' keys from when bgp4rd starts. Changing a key
+  live is a later step, with TCP-AO's rollover.
+
+As built, 6a: `bgp/daemon/tcp_auth.rb` (`TcpAuth.check`, `md5sig`,
+`md5`), `password` on `Peer`, keys on each listener for its passive
+peers, the key on `dial_socket` before connect, `auth` on the peer row,
+and the restart reason in `candidate.rb`.
 - **The same code serves the RTR client** (section 7): RFC 8210
   section 9 lists TCP-AO as the SHOULD and MD5 as a MAY for RTR.
 
 ### Tests
 
 - Functional, loopback, no privilege: the measured matrix as tests.
-- Interop: MD5 against FRR 10.7.1's `neighbor X password`, both
-  directions. TCP-AO between two bgp4rd only, since FRR 10.7.1 has none.
+  Built as `test/functional/tcp_auth_test.rb`: the same key comes up;
+  no key, another key, and a digest where we have none are each never
+  heard, each with its counter; a peer without a key shares the
+  listener; an IPv4 peer of a dual-stack listener is keyed; an active
+  peer signs its SYN (and does not without `password`, the control).
+- Interop: MD5 against FRR's `neighbor X password`, both directions.
+  Built as `test/functional/lab/md5_frr_test.rb`, in the `frr` lab
+  group, run against 10.5.1 on ospflab: FRR dials, bgp4rd dials, and
+  two keys stay down. Without FRR's key both directions fail, which was
+  checked. TCP-AO between two bgp4rd only, since FRR 10.7.1 has none.
+- Found while building, not fixed here: on a dual-stack listener
+  (`listen_address: '::'`) an IPv4 neighbor's session never comes up,
+  key or none. The listener matches by `remote_address`, which there is
+  `::ffff:127.0.0.1`, and no neighbor has that address.
 
 ### Behaviours
+
+As with GTSM, these are functional tests until pull request 3 gives
+`bgp4r-sim` its behaviours.
 
 | Name | What the sim does | Expect | Section |
 | --- | --- | --- | --- |
 | `md5_wrong_key` | dials with another key | no session, no reply, `TCPMD5Failure` grows | 2385 2 |
 | `md5_missing` | dials without a key | no session, `TCPMD5NotFound` grows | 2385 2 |
+| `md5_unexpected` | dials with a key toward a neighbor with no `password` | no session, `TCPMD5Unexpected` grows | 2385 2 |
 | `ao_wrong_key` | another TCP-AO key | no session, `TCPAOBad` grows | 5925 7.5 |
 | `ao_md5_mix` | MD5 toward a TCP-AO peer | no session | 5925 8 |
 
@@ -1072,7 +1122,7 @@ and `CLAUDE.md`'s table.
 | Order | # | Pull request | Needs |
 | --- | --- | --- | --- |
 | 1 | 5 | GTSM, `ttl_security`; built | – |
-| 2 | 6a | TCP MD5, `password` | – |
+| 2 | 6a | TCP MD5, `password`; built | – |
 | 3 | 1 | End-of-RIB sent and received, `end_of_rib` | – |
 | 4 | 2 | Route refresh answered, enhanced refresh, the stale mark, `BGP::Fault::REFRESH` | 1 |
 | 5 | 3 | GR helper, RFC 8538, Hard Reset, `BGP::Fault::GR`, the first behaviours in `bgp4r-sim`, GTSM's among them | 2 |
@@ -1151,6 +1201,32 @@ requests 5, 6a and 6b.
 FRR 10.7.1's modules: `bgpd_bmp.so`, `bgpd_rpki.so`,
 `dplane_fpm_nl.so`, `pathd_pcep.so`, `zebra_cumulus_mlag.so`; FRR
 10.2.1 has the same five.
+
+MD5 in a VRF, for 6a. A namespace with a VRF and a dummy device
+holding both addresses, then a listener and a client bound to `blue`
+with `SO_BINDTODEVICE`, keyed by `TcpAuth.md5`, the listener on
+10.9.0.1 for 10.9.0.2:
+
+```sh
+sudo ip netns add md5vrf
+sudo ip -n md5vrf link set lo up
+sudo ip -n md5vrf link add blue type vrf table 10
+sudo ip -n md5vrf link set blue up
+sudo ip -n md5vrf link add d0 type dummy
+sudo ip -n md5vrf link set d0 master blue
+sudo ip -n md5vrf addr add 10.9.0.1/24 dev d0
+sudo ip -n md5vrf addr add 10.9.0.2/24 dev d0
+sudo ip -n md5vrf link set d0 up
+sudo ip netns exec md5vrf ruby -I. md5_vrf.rb
+sudo ip netns del md5vrf
+```
+
+```
+vrf "s3"/"s3": connected
+vrf "s3"/nil: no connection
+vrf "s3"/"xx": no connection
+vrf nil/nil: connected
+```
 
 ## Out of scope
 

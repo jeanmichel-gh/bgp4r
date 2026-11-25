@@ -366,6 +366,9 @@ module BGP
             row = row.merge(:ttl_security => { :hops => peer.ttl_security,
                                                :min_ttl => BGP::Daemon::Gtsm.minimum(peer.ttl_security) })
           end
+          # TCP authentication, present only on a neighbor with one: `md5`
+          # for `password`. Never the key. See bgp/daemon/tcp_auth.rb.
+          row = row.merge(:auth => 'md5') if peer.password
           # A CE's VRF, and the counts of each family the session carries,
           # present only on a CE's row or a session with a VPN family, so
           # a unicast speaker's rows read as they always have.

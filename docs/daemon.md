@@ -261,6 +261,7 @@ neighbors:
     as: 65002
     bfd: true                      # a BFD session beside BGP; docs/bfd.md
     ttl_security: 1                # GTSM, RFC 5082: hops away; see below
+    password: s3cret               # TCP MD5, RFC 2385; see below
 
 originate:
   - prefixes: [10.255.0.0/24]
@@ -372,6 +373,30 @@ one listener (one per VRF), which works like this, and
   OPEN is read, or to none for a peer without `ttl_security`. So a
   1-hop peer whose packets arrive at 254 may complete the handshake, but
   its OPEN is dropped, and the session never reaches Established.
+
+`password: KEY` on a neighbor is TCP MD5, RFC 2385. Every segment of
+its session carries an MD5 digest made with KEY, and the kernel drops
+a segment whose digest is missing or wrong, with no answer to the
+sender. KEY is 1 to 80 octets, the kernel's limit; anything else is
+refused at start. Quote a key of digits with leading zeros in YAML, or
+YAML reads it as a number. The peer must have the same key: FRR's is
+`neighbor X password KEY`. A session with a wrong key or none never
+comes up, and the kernel counts why in `/proc/net/netstat`:
+`TCPMD5NotFound` when our key's peer sent no digest,
+`TCPMD5Unexpected` when a digest came where we have no key, and
+`TCPMD5Failure` when the digest is wrong. It cannot change in a
+commit, since the listener holds the keys from when bgp4rd starts.
+
+An active neighbor's key is set before it dials. The listener holds
+each passive neighbor's key under that neighbor's address, so a
+neighbor without `password` shares it unharmed, and an IPv4 neighbor
+of an IPv6 listener is keyed under its IPv4-mapped address. A CE's
+session in a VRF takes its key the same way.
+
+The key is in `show.configuration`, both forms, as it is in the file,
+so a configuration sent back by `config.replace` keeps it. Masking it
+is the reader's job: the set line is `set neighbors ADDRESS password
+KEY`. No other answer carries it.
 
 `cluster_id` and `default_local_pref` are written under `export` and
 read by the decision process too. The first is the ID a reflector
@@ -1238,6 +1263,9 @@ rows have no such key. docs/bfd.md.
 **A neighbor with `ttl_security` says so**: its row gains
 `ttl_security`, `{"hops": 1, "min_ttl": 255}`. Other rows have no such
 key.
+
+**A neighbor with `password` says so, and not the key**: its row gains
+`auth`, `md5`. Other rows have no such key.
 
 **A CE's row, and a row whose session negotiated a VPN family, say
 more**, for routescope's L3VPN views (routescope
