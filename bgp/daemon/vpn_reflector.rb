@@ -92,6 +92,14 @@ module BGP
         !done.pop(:timeout => timeout).nil?
       end
 
+      # A route refresh for one VPN family, RFC 2918 section 4: forgets what
+      # the peer was sent of that AFI, so the next refresh sends it all
+      # again. `drain` waits for it. bgp/daemon/refresh.rb.
+      def resend(peer, afi)
+        @lock.synchronize { @sent[peer.address]&.delete_if { |_key, out| out.afi == afi } }
+        poke
+      end
+
       # A session came up: it gets everything, on the next refresh.
       def session_up(peer)
         @lock.synchronize { @sent.delete(peer.address) }

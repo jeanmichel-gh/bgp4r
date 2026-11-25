@@ -335,6 +335,18 @@ module BGP
         answer || nil
       end
 
+      # `Router#readvertise`, on the feed's worker, for one address family
+      # of one peer's Adj-RIB-Out: a route refresh's answer. nil with no
+      # Router or no session.
+      def readvertise(address, afi, timeout = PeerFeed::DEFAULT_TIMEOUT)
+        return nil unless router
+        reply = Queue.new
+        feed << [:readvertise, address.to_s, afi, reply]
+        answer = reply.pop(:timeout => timeout)
+        raise answer if answer.is_a?(Exception)
+        answer || nil
+      end
+
       # Put the Loc-RIB in a forwarding table and keep it there. Off until
       # asked for, like router mode, and for the same reason: a table that
       # only decides is the normal use.

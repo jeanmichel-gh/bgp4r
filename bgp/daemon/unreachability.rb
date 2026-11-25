@@ -467,6 +467,12 @@ module BGP
         @lock.synchronize { send_to(peer, @sent.values.collect(&:report), []) }
       end
 
+      # A route refresh for one family, [afi, safi], RFC 2918 section 4:
+      # the reports of that family, again. bgp/daemon/refresh.rb.
+      def resend(peer, family)
+        @lock.synchronize { send_to(peer, @sent.values.collect(&:report).select { |r| r.family == family }, []) }
+      end
+
       def size ; @lock.synchronize { @sent.size } ; end
 
       def reports ; @lock.synchronize { @sent.values.collect(&:report) } ; end

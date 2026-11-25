@@ -170,6 +170,7 @@ module CoverageMatrix
     'attr_set'     => 'attribute 128, which has no NLRI',
     'capabilities' => 'OPEN capabilities, which are per session and not per family',
     'cease'        => 'the Cease bgp4rd sends when it ends a session, which is per session',
+    'route_refresh' => 'route refresh, RFC 2918 and 7313, which is per session and names one family per request',
     'end_of_rib'   => 'End-of-RIB, RFC 4724 section 2, a marker per session and not a family\'s routes',
     'md5'          => 'TCP MD5, RFC 2385, which signs the session\'s segments and not a family',
     'gen'          => 'bgp/gen, a generator; docs/route-generation.md phase 6 reports those',

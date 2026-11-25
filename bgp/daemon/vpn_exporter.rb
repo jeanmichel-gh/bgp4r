@@ -85,6 +85,12 @@ module BGP
         @lock.synchronize { send_to(peer, @sent.values.collect(&:export), []) }
       end
 
+      # A route refresh for one VPN family, RFC 2918 section 4: what this
+      # PE sent of that AFI, again. bgp/daemon/refresh.rb.
+      def resend(peer, afi)
+        @lock.synchronize { send_to(peer, @sent.values.collect(&:export).select { |e| afi(e) == afi }, []) }
+      end
+
       def size ; @lock.synchronize { @sent.size } ; end
 
       # What this PE sent, as show.vpn rows with peer nil. The AS_PATH

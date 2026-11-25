@@ -173,6 +173,20 @@ module BGP
         { :resent => announce.collect(&:prefix), :withdrawn => withdraw.collect(&:prefix) }
       end
 
+      # RFC 2918 section 4's answer for unicast: every prefix of one address
+      # family in the peer's Adj-RIB-Out, sent again through `resend`, so
+      # each goes out as export decides it now. afi is 1 or 2, and a
+      # prefix is IPv6 when it has a colon, which is how the Adj-RIB-Out
+      # keeps the two apart. Answers what `resend` answers.
+      #
+      # Runs on the feed's worker thread through `PeerFeed`'s
+      # `:readvertise`, for `resend`'s reason.
+      def readvertise(address, afi)
+        out = @lock.synchronize { @out.find { |peer, _| peer.address == address.to_s }&.last }
+        prefixes = out ? out.prefixes.select { |p| p.include?(':') == (afi == 2) } : []
+        resend(address, prefixes)
+      end
+
       # Starts advertising to every peer the table is attached to, and to any
       # attached later. Idempotent.
       #

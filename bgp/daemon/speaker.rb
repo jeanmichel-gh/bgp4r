@@ -78,6 +78,7 @@ require 'bgp/daemon/bfd'
 require 'bgp/daemon/gtsm'
 require 'bgp/daemon/tcp_auth'
 require 'bgp/daemon/end_of_rib'
+require 'bgp/daemon/refresh'
 require 'socket'
 require 'thread'
 
@@ -317,7 +318,7 @@ module BGP
               "a neighbor takes #{KEYS.join(', ')}"
       end
 
-      attr_reader :address, :recorder, :config
+      attr_reader :address, :recorder, :config, :route_refresh
 
       # The BGP::Neighbor running the current session, or nil before the
       # first one.
@@ -342,6 +343,8 @@ module BGP
         @speaker, @config = speaker, Peer.check_keys(config)
         @address = config.fetch('address')
         @recorder = Recorder.new(config.fetch('record', 'routes'))
+        # RFC 2918 and RFC 7313's answers and counts: bgp/daemon/refresh.rb.
+        @route_refresh = Refresh.new(self, speaker)
         @neighbor = nil
         @busy = Mutex.new
         # Administratively down, which is `peer.stop` and `session.stop`
@@ -563,9 +566,22 @@ module BGP
         unless n && n.is_established?
           raise ArgumentError, "#{@address}: the session is #{state.to_s.downcase}, not established"
         end
-        msg = BGP::Route_refresh.new(afi, safi, subtype)
-        n.send_message(msg)
-        msg
+        @route_refresh.send_refresh(BGP::Route_refresh.new(afi, safi, subtype))
+      end
+
+      # The `announce` blocks' UPDATEs of one family, [afi, safi], again:
+      # the part of a route refresh's answer that no table holds. A CE has
+      # none, as `run_session` sends it none.
+      def resend_announcements(family)
+        return if vrf
+        n = @neighbor
+        return unless n && n.is_established?
+        local = local_ip
+        @speaker.announcements.each do |a|
+          @speaker.each_update(a, ebgp?, local, n.session_info) do |u|
+            n.send_message(u) if Refresh.family(u) == family
+          end
+        end
       end
 
       # Messages queued for this session's writer and not yet handed to
@@ -754,6 +770,8 @@ module BGP
                               :logger => @speaker.logger)
         Array(@config.fetch('capabilities', ['as4_byte'])).each { |c| add_capability(n, c) }
         n.add_observer @recorder
+        @route_refresh.reset
+        n.add_observer @route_refresh
         n
       end
 
@@ -1061,6 +1079,35 @@ module BGP
         log(:info, "bgp4r: End-of-RIB sent to #{peer.address} for #{families.collect { |f| f.join('/') }.join(', ')}")
       rescue NoSession => e
         log(:info, "bgp4r: End-of-RIB to #{peer.address} not sent: #{e.message}")
+      end
+
+      # RFC 2918 section 4's re-advertisement of one family's Adj-RIB-Out
+      # to one peer, from whichever part of bgp4rd sent it: the `announce`
+      # blocks, the Router for unicast, a CE's exporter in a VRF, the VPN
+      # exporter and reflector, the BGP-LS Producer, and the unreachability
+      # originator. Returns once each has sent, so an EoRR after it comes
+      # after the routes. bgp/daemon/refresh.rb calls it.
+      def resend_family(peer, afi, safi)
+        family = [afi, safi]
+        peer.resend_announcements(family)
+        case family
+        when [1, 1], [2, 1]
+          if peer.vrf
+            @vrf_ce_exporter&.session_up(peer)
+          elsif @rib && @router
+            @rib.readvertise(peer.address, afi)
+          end
+        when [1, 128], [2, 128]
+          @vpn_exporter&.resend(peer, afi)
+          if @vpn_reflector
+            @vpn_reflector.resend(peer, afi)
+            @vpn_reflector.drain(END_OF_RIB_WAIT)
+          end
+        when [IANA::AFI::BGP_LS, IANA::SAFI::BGP_LS]
+          @link_state_producer&.session_up(peer)
+        else
+          @unreach_originator&.resend(peer, family)
+        end
       end
 
       # How long send_end_of_rib waits for a sender, in seconds.

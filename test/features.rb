@@ -312,6 +312,16 @@ module Features
       :lab   => %w[end_of_rib_frr_test],
     },
 
+    'route-refresh-answer' => {
+      :area  => 'session',
+      :about => 'a route refresh answered with the family\'s Adj-RIB-Out, between BoRR and EoRR to an enhanced peer; counted and published',
+      :rfc   => 'RFC 2918 section 4, RFC 7313 section 4',
+      :doc   => 'docs/daemon.md',
+      :unit  => %w[daemon/refresh_test rib/router_test daemon/vpn_reflector_test],
+      :functional => %w[route_refresh_test],
+      :lab   => %w[route_refresh_frr_test],
+    },
+
     'gtsm' => {
       :area  => 'session',
       :about => 'ttl_security on a neighbor: GTSM, sent at TTL 255, dropped below 256 - hops',

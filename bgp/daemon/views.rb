@@ -374,6 +374,16 @@ module BGP
           # one has, so every other row reads as it always has.
           eor = peer.recorder.data['end_of_rib_received']
           row = row.merge(:end_of_rib_received => eor.collect { |f| { :afi => f['afi'], :safi => f['safi'] } }) unless eor.nil? || eor.empty?
+          # Route refresh, RFC 2918 and RFC 7313: the ROUTE-REFRESH messages
+          # this session read and sent, by subtype (`normal`, `borr`,
+          # `eorr`, `other`), and the requests it answered and ignored.
+          # Present once there is one. bgp/daemon/refresh.rb.
+          rr = peer.route_refresh.counts
+          unless rr['received'].empty? && rr['sent'].empty? && rr['ignored'].zero?
+            row = row.merge(:refresh => { :received => rr['received'].transform_keys(&:to_sym),
+                                          :sent => rr['sent'].transform_keys(&:to_sym),
+                                          :answered => rr['answered'], :ignored => rr['ignored'] })
+          end
           # A CE's VRF, and the counts of each family the session carries,
           # present only on a CE's row or a session with a VPN family, so
           # a unicast speaker's rows read as they always have.

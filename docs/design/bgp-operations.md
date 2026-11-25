@@ -356,6 +356,65 @@ than 0, 1 or 2 is ignored and logged.
   `peer.refresh` from bgp4rd toward FRR, with and without capability
   70. FRR's `show bgp neighbor` counts refreshes; bgp4rd's must match.
 
+### Built in three parts
+
+Pull request 2 is built as three, each its own review, since the whole
+touches every family's sender, the RIB and the fault catalog at once:
+
+- **2a, answering**: the answer for every family, BoRR and EoRR around
+  it, the counts on the peer row and the `refresh` events. Built.
+- **2b, receiving BoRR and EoRR**: the stale mark, `refresh_stale_time`,
+  the 7/1 NOTIFICATION for a wrong length, an unknown subtype ignored,
+  `stale` on the route rows. Not started.
+- **2c, the fault catalog**: `BGP::Fault::REFRESH` and `bgp4r-sim`
+  sending its cases. Not started.
+
+### As built (2a)
+
+- `bgp/daemon/refresh.rb`: one `Refresh` per peer, an observer of its
+  session. A normal request is answered on a thread of its own, since
+  the answer waits on the RIB's worker and the observer runs on the
+  session's receive thread; a second request waits for the first
+  answer's EoRR.
+- **What is answered** (`Refresh.refusal`): our OPEN carried capability
+  2 (or the pre-standard 128) or 70, and the family. Anything else is
+  ignored, logged, counted and published.
+- **Who answers** (`Speaker#resend_family`): the `announce` blocks of
+  that family (`Peer#resend_announcements`); for unicast the Router,
+  through a new `[:readvertise]` item on the RIB feed
+  (`Router#readvertise`, `Table#readvertise`, every prefix of that AFI
+  in the peer's Adj-RIB-Out; `Table#refresh` was taken, by the re-run of
+  import and the decision),
+  or a CE's VRF exporter; for VPN `VpnExporter#resend` and
+  `VpnReflector#resend`, then the reflector's `drain`; BGP-LS the
+  Producer's `session_up`; the unreachability families
+  `UnreachOriginator#resend`. Each returns once it has sent, so the
+  EoRR comes after the routes.
+- **Counts**: every ROUTE-REFRESH message both ways by subtype
+  (`normal`, `borr`, `eorr`, `other`), and requests answered and
+  ignored, on the peer row as `refresh`, reset with the session.
+  routescope asked for messages as well as requests, to compare with
+  FRR, which counts messages.
+- **Events**: a new kind, `refresh`, registered by the daemon
+  (`Events.register_kind`), for each message both ways and each answer
+  or refusal. `peer.refresh` goes through the same counter.
+- **Measured against FRR 10.5.1**, 2026-11-25: `clear bgp X soft in` is
+  one request, and FRR advertises 70, so bgp4rd answers with BoRR, the
+  routes and EoRR whatever bgp4rd advertised. `peer.refresh` gets FRR's
+  answer between BoRR and EoRR only when bgp4rd advertised 70. FRR's
+  `messageStats.routeRefreshSent` and `routeRefreshRecv` count every
+  subtype together and agree with bgp4rd's counts both ways.
+- Tests: `test/unit/daemon/refresh_test.rb` (what is answered, 70 from
+  the peer, an UPDATE's family, counts and row), `Router#readvertise` in
+  `router_test.rb`, each exporter's one-family resend in
+  `vpn_reflector_test.rb`, `vpn_exporter_test.rb` and
+  `unreachability_test.rb`, `test/functional/route_refresh_test.rb` (a
+  family's routes and no other, BoRR first and EoRR last, an
+  unadvertised family, no capability, counts that start again with a
+  session, the events), and
+  `test/functional/lab/route_refresh_frr_test.rb` (both ways, with and
+  without 70 on our side, counts agreeing with FRR's).
+
 ### Fault catalog
 
 New entries in a `BGP::Fault::REFRESH` list, each sent by `bgp4r-sim`
@@ -1165,7 +1224,7 @@ and `CLAUDE.md`'s table.
 | 1 | 5 | GTSM, `ttl_security`; built | – |
 | 2 | 6a | TCP MD5, `password`; built | – |
 | 3 | 1 | End-of-RIB sent and received, `end_of_rib`; built | – |
-| 4 | 2 | Route refresh answered, enhanced refresh, the stale mark, `BGP::Fault::REFRESH` | 1 |
+| 4 | 2 | Route refresh answered, enhanced refresh, the stale mark, `BGP::Fault::REFRESH`: in three parts, 2a answering built, 2b receiving, 2c the catalog | 1 |
 | 5 | 3 | GR helper, RFC 8538, Hard Reset, `BGP::Fault::GR`, the first behaviours in `bgp4r-sim`, GTSM's among them | 2 |
 | 6 | 7a | RTR codec, `BGP::Fault::RTR` | – |
 | 7 | 7b | `bgp4r-rtr`, the cache and injector | 7a |
