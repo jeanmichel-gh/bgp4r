@@ -355,6 +355,16 @@ module Features
       :lab   => %w[graceful_restart_frr_test],
     },
 
+    'graceful-restart-faults' => {
+      :area  => 'errors',
+      :about => 'BGP::Fault::GR and the eleven gr_ behaviours, bgp4r-sim restarting as RFC 4724 and 8538 describe, and what bgp4rd and FRR do',
+      :rfc   => 'RFC 4724 section 4.2, RFC 8538 sections 3.2, 4 and 4.1',
+      :doc   => 'docs/protocol-testing.md',
+      :unit  => %w[fault_test sim/injector_test daemon/speaker_test optional_parameters/graceful_restart_test],
+      :functional => %w[gr_fault_matrix_test],
+      :lab   => %w[gr_fault_frr_test],
+    },
+
     'gtsm' => {
       :area  => 'session',
       :about => 'ttl_security on a neighbor: GTSM, sent at TTL 255, dropped below 256 - hops',

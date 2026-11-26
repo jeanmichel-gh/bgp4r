@@ -28,9 +28,13 @@ class Graceful_restart < BGP::OPT_PARM::Capability
   
   def initialize(*args)
     if args.size>1
-      @restart_state, @restart_time = args
+      # Families may follow the two fields, each [afi, safi, flags] with
+      # flags 0 when left out, so a node file can list them:
+      #   capabilities: [{graceful_restart: [8, 120, [1, 1, 128]]}]
+      @restart_state, @restart_time, *families = args
       @tuples = []
       super(OPT_PARM::CAP_GR)
+      families.each { |f| add(*f) }
     elsif args.size==1 and args[0].is_a?(Hash)
       # Its own hash, and the inner one alone. Neither was read: a Hash
       # went to parse, which called slice! on it, so this capability had

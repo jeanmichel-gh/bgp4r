@@ -843,12 +843,16 @@ module LabHelper
     # bgp_lines: more lines for the `router bgp` block, each with its
     #           leading space, such as ' bgp graceful-restart'. Empty by
     #           default.
+    # neighbor_lines: more lines for the same block once every neighbor
+    #           has its remote-as, which a neighbor line needs, such as
+    #           ' neighbor 127.0.0.1 passive'. Empty by default.
     def initialize(local: '127.0.0.2', as: 65002, router_id: '10.0.0.2',
                    peer: '127.0.0.1', peer_as: 65001, port: nil, ipv6: false,
                    network: nil, families: [], vpn_networks: [], password: nil,
-                   more_peers: [], bgp_lines: [])
+                   more_peers: [], bgp_lines: [], neighbor_lines: [])
       @password = password
       @bgp_lines = bgp_lines
+      @neighbor_lines = neighbor_lines
       @more_peers = more_peers
       @local, @as, @router_id = local, as, router_id
       @peer, @peer_as, @ipv6 = peer, peer_as, ipv6
@@ -904,6 +908,7 @@ module LabHelper
         lines << ' neighbor %s update-source %s' % [m[:address], @local]
         lines << ' neighbor %s timers connect 2' % m[:address]
       end
+      lines.concat(@neighbor_lines)
       lines << ' address-family ipv4 unicast'
       lines << '  network %s' % @network if @network
       lines << ' exit-address-family'

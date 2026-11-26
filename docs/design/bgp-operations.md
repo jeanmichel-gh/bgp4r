@@ -698,8 +698,8 @@ bgp4r-sim at once:
   received, a NOTIFICATION and the hold timer under N, consecutive
   restarts under N. Built.
 - **3c, the catalog and behaviours**: `BGP::Fault::GR`, the eleven
-  behaviours in bgp4r-sim, and the matrix against bgp4rd and FRR. Not
-  started.
+  behaviours in bgp4r-sim, and the matrix against bgp4rd and FRR.
+  Built.
 
 ### As built (3a)
 
@@ -789,6 +789,49 @@ bgp4r-sim at once:
   and graceful and a hard `peer.clear`, consecutive restarts and N on
   one side only; and
   `test/functional/lab/graceful_restart_frr_test.rb` (4).
+
+### As built (3c)
+
+- **`BGP::Fault::GR`** in `bgp/fault.rb`: the two Hard Reset cases, in
+  `REFRESH`'s shape, with `:n` where `REFRESH` has `:gr`. Expected is
+  `:flush`. `fault` sends one alone, with no family or prefixes.
+- **The eleven behaviours** join `BGP::Fault::BEHAVIOURS`, each with
+  what the sim's own GR capability must hold: `:gr`, `:n` or `:no_n`.
+  `bgp/sim/graceful_restart.rb` runs them, in a module the Injector
+  includes. The sim's peer lists its GR capability in `capabilities`,
+  families after the two fields (`Graceful_restart.new` takes them as
+  arguments now). The sim drops TCP, or sends the case's NOTIFICATION
+  first; stays down `away` seconds; comes back with R set and each
+  family's F as the case says, the N bit as configured; and sends its
+  routes and End-of-RIB unless the case says not. `drop` names
+  prefixes it does not send again, which is how a purge is seen. A
+  behaviour refuses a peer with no GR capability, or with N or without
+  it against what it needs.
+- **Two additions to the Peer**, both used by the sim only.
+  `next_session` changes `capabilities`, `end_of_rib` and `quiet` for
+  the next session that reaches Established. `redial` makes a second
+  connection while the session is up, and runs it once the peer has
+  closed the old one; the dial loop waits meanwhile.
+- **`gr_consecutive` and `gr_consecutive_n`** come back quiet the first
+  time, sending nothing, and stay up `away`, so what is stale stays
+  stale for the second drop.
+- **The matrix** runs against bgp4rd
+  (`test/functional/gr_fault_matrix_test.rb`, a watcher session beside
+  it) and against FRR 10.5.1
+  (`test/functional/lab/gr_fault_frr_test.rb`, CI's `lab frr`). The
+  table is in `docs/protocol-testing.md`. bgp4rd does what each RFC
+  expects.
+- **FRR 10.5.1, measured 2026-11-26**, bgpd passive and the sim
+  dialling, about twenty runs: it keeps stale routes with F clear or
+  the family missing in most runs; past `stalepath-time` when no
+  End-of-RIB comes; and deletes the first restart's stale routes at a
+  second restart with N exchanged. In about one run in twenty it
+  answers the second connection with Cease 6/7, a collision. Without
+  the sim's End-of-RIB on its first session, bgpd also kept stale
+  routes past the Restart Time, so the FRR test has the sim send it.
+  With it, bgpd still kept them in about one run in ten. Why bgpd
+  varies is not known; the FRR test asserts what held in every run and
+  says which way the rest went.
 
 ### routescope shows
 

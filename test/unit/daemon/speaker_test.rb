@@ -229,6 +229,43 @@ class BGP_Daemon_Speaker_Test < Test::Unit::TestCase
                  'interval is noticed at once instead of being followed by one more dial')
   end
 
+  # next_session: the capabilities and End-of-RIB of the next session
+  # alone, which bgp4r-sim's graceful restart behaviours use. What the
+  # session reads, set as run_session sets it.
+  def test_next_session_changes_what_the_session_reads
+    peer = speaker.peer('10.0.0.2')
+    assert_equal([{}, false, false], [peer.session_changes, peer.quiet?, peer.end_of_rib?])
+    peer.instance_variable_set(:@session, { 'capabilities' => ['route_refresh'], 'end_of_rib' => true, 'quiet' => true })
+    assert_equal([true, true], [peer.quiet?, peer.end_of_rib?])
+    n = peer.send(:new_neighbor)
+    assert_equal([BGP::OPT_PARM::CAP::Route_refresh], n.instance_variable_get(:@opt_parms).collect(&:class),
+                 'the changed list, not the config\'s as4_byte')
+    gr = speaker('neighbors' => [{ 'address' => '10.0.0.2', 'as' => 65_001, 'graceful_restart' => {} }]).peer('10.0.0.2')
+    assert_equal(true, gr.end_of_rib?)
+    gr.instance_variable_set(:@session, { 'end_of_rib' => false })
+    assert_equal(false, gr.end_of_rib?, 'the session says no End-of-RIB, GR or not')
+  end
+
+  # It holds until a session reaches Established: one that fails before
+  # does not use it up.
+  def test_next_session_outlives_a_session_that_never_came_up
+    peer = speaker('local_address' => '127.0.0.1').peer('10.0.0.2')
+    peer.next_session(:quiet => true)
+    assert_equal({ 'quiet' => true }, peer.instance_variable_get(:@next_session), 'keys as Strings')
+    a, b = UNIXSocket.pair
+    b.close
+    peer.send(:run_session, a)
+    assert_equal(true, peer.quiet?, 'the failed session had it')
+    assert_equal({ 'quiet' => true }, peer.instance_variable_get(:@next_session), 'and it is still there')
+    peer.next_session(nil)
+    assert_nil(peer.instance_variable_get(:@next_session))
+  end
+
+  def test_redial_refuses_a_peer_with_no_session
+    e = assert_raise(BGP::Daemon::NoSession) { speaker.peer('10.0.0.2').redial }
+    assert_match(/no established session to 10\.0\.0\.2/, e.message)
+  end
+
   # A ROUTE-REFRESH needs a session to go on, so what is here is the
   # refusal and the message built; what reaches the wire is
   # test/functional/daemon_test.rb's.

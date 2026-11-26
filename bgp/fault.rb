@@ -186,11 +186,34 @@ module BGP
         ->(afi, safi) { [Route_refresh.new(afi, safi, :borr).encode] }, :gr],
     ].freeze
 
+    # RFC 8538's Hard Reset, a Cease with subcode 9 (section 3.1), sent
+    # malformed: [name, what is sent, expected, section, a block that
+    # returns the messages' octets, :n]. Expected is :flush, RFC 8538
+    # section 3.2: a Hard Reset whose inner code cannot be read still
+    # ends the session as RFC 4271 does, routes and all. :n says the
+    # case holds once the N bit is exchanged, as REFRESH's :gr; without
+    # N any Cease flushes. `Fault.gr` gives the octets.
+    GR = [
+      # Section 3.1: the data is the inner code and subcode, "followed by
+      # the data". With none there is nothing to read.
+      [:hard_reset_empty, 'Cease 6/9 with no data', :flush, '8538 3.2',
+        -> { [Notification.new(6, 9).encode] }, :n],
+      # An inner code RFC 4271 does not define.
+      [:hard_reset_unknown_inner, 'Cease 6/9 wrapping 99/99', :flush, '8538 3.2',
+        -> { [Notification.new(6, 9, [99, 99].pack('CC')).encode] }, :n],
+    ].freeze
+
     # What a speaker does over time rather than what one message holds,
     # routescope's protocol-conventions.md part 3: [name, what the sender
-    # does, what the RFC expects of the receiver, RFC section]. bgp4r-sim
-    # runs them (`behaviour`). Graceful restart's join them in pull
-    # request 3.
+    # does, what the RFC expects of the receiver, RFC section], and for
+    # a graceful restart one what the sender's own GR capability must
+    # hold: :n for the N bit, :no_n for none, :gr for either. bgp4r-sim
+    # runs them (`behaviour`).
+    #
+    # The graceful restart ones are RFC 4724 section 4.2 and RFC 8538
+    # from the restarting side. bgp4r-sim drops its own session and comes
+    # back with the Restart State bit (R) set, the families' F bits as
+    # the case says, its routes sent again and End-of-RIB.
     BEHAVIOURS = [
       # RFC 7313 section 4: "An implementation MAY impose a locally
       # configurable upper bound on how long it would retain any stale
@@ -198,6 +221,28 @@ module BGP
       # remove any routes from the peer that are still marked as stale
       # for that <AFI, SAFI> without waiting for an EoRR message."
       [:borr_without_eorr, 'a BoRR, then no EoRR', 'may remove the stale routes at its own bound', '7313 4'],
+      [:gr_restart, 'drops TCP, comes back with R and F set, sends again, End-of-RIB',
+        'keep stale, replace, purge the rest at End-of-RIB', '4724 4.2', :gr],
+      [:gr_restart_no_f, 'the same with F clear',
+        'remove stale routes of that family at once', '4724 4.2', :gr],
+      [:gr_restart_family_missing, 'comes back without a family',
+        "remove that family's stale routes at once", '4724 4.2', :gr],
+      [:gr_never_back, 'drops TCP and stays away',
+        'remove stale routes at the Restart Time', '4724 4.2', :gr],
+      [:gr_no_eor, 'comes back, never sends End-of-RIB',
+        'remove what is stale at the stale timer', '8538 4.1', :gr],
+      [:gr_new_connection, 'opens a second connection, old session still up',
+        'close the old one, no NOTIFICATION, keep the new', '4724 4.2, 5', :gr],
+      [:gr_consecutive, 'restarts twice, no N',
+        'routes stale from the first restart are deleted', '4724 4.2', :no_n],
+      [:gr_consecutive_n, 'restarts twice, N exchanged',
+        'they are kept', '8538 4.1', :n],
+      [:gr_graceful_cease, 'N exchanged, sends Cease 6/6',
+        'Receiving Speaker rules: keep, stale', '8538 4', :n],
+      [:gr_hard_reset, 'N exchanged, sends Cease 6/9 wrapping 6/2',
+        'flush, RFC 4271', '8538 3.2', :n],
+      [:gr_notification_no_n, 'no N, sends Cease 6/6',
+        'flush, RFC 4271', '4724 4', :no_n],
     ].freeze
 
     class << self
@@ -226,6 +271,37 @@ module BGP
 
       def behaviour_names
         BEHAVIOURS.collect(&:first)
+      end
+
+      # BEHAVIOURS as Hashes: name, description, expected, rfc, and
+      # `needs`, nil or what the sender's GR capability must hold.
+      def behaviour_catalog
+        BEHAVIOURS.collect { |name, desc, expected, section, needs|
+          { :name => name, :description => desc, :expected => expected,
+            :rfc => "RFC #{section}", :needs => needs }
+        }
+      end
+
+      # GR as Hashes, in `refresh_catalog`'s shape, with `n` for the N
+      # bit.
+      def gr_catalog
+        GR.collect { |name, desc, expected, section, build, need|
+          { :name => name, :description => desc, :expected => expected,
+            :rfc => "RFC #{section}", :build => build, :n => need == :n }
+        }
+      end
+
+      def gr_names
+        GR.collect(&:first)
+      end
+
+      # One GR case as the octets of each message, in order.
+      #
+      #   Fault.gr(:hard_reset_empty)   # => [21 octets]
+      def gr(name)
+        entry = GR.find { |e| e[0] == name.to_sym }
+        raise ArgumentError, "unknown graceful restart fault #{name.inspect}, see Fault::GR" unless entry
+        entry[4].call
       end
 
       # A whole message whose header Length says delta octets more or

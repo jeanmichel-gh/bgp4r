@@ -172,6 +172,7 @@ module CoverageMatrix
     'fault_matrix' => 'the RFC 7606 matrix, which is per attribute',
     'graceful_restart' => 'graceful restart, RFC 4724, which is per session and keeps a family through a restart',
     'route_refresh_fault' => 'the ROUTE-REFRESH cases of RFC 2918 and 7313, which are per message',
+    'gr_fault' => 'graceful restart behaviours and Hard Reset cases, RFC 4724 and 8538, which are per session',
     'rib_router'   => 'our export side, which is per route and not per family',
     'add_path'     => 'RFC 7911, which cuts across families',
     'attr_set'     => 'attribute 128, which has no NLRI',

@@ -23,6 +23,15 @@ class TestBgpOptionalParametersGracefulCapRestart < Test::Unit::TestCase
     assert_match(/AFI IPv4 \(1\), SAFI Multicast \(2\)/, gr2.to_s)
     assert_match(/Restart Time 120s/, gr2.to_s)
   end
+  # Families after the two fields, as a node file's YAML lists them.
+  def test_families_as_arguments
+    gr = Graceful_restart.new(8, 120, [1, 1, 0x80], [2, 1])
+    assert_equal('020c400a80780001018000020100', gr.to_shex)
+    assert_equal([{ :afi => 1, :safi => 1, :flags => 0x80 }, { :afi => 2, :safi => 1, :flags => 0 }],
+                 gr.to_hash[:capability][:families])
+    assert_equal(8, gr.to_hash[:capability][:restart_state])
+  end
+
   def test_add_afi_safi_with_af_state
     gr = Graceful_restart.new 0, 120
     gr.ipv4_unicast_forwarding_state_preserved

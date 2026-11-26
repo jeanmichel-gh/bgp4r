@@ -27,6 +27,7 @@ require 'bgp/gen'
 require 'bgp/daemon/views'
 require 'bgp/events'
 require 'bgp/sim/sent'
+require 'bgp/sim/graceful_restart'
 require 'bgp/prompt'
 
 module BGP
@@ -75,6 +76,7 @@ module BGP
 
       # #log and #logger; see bgp/logging.rb.
       include BGP::Logging
+      include GracefulRestartBehaviour
 
       # Something the caller can fix: a bad body, an unknown name, a
       # prefix with no history. `BGP::Daemon::NoSession` is the other
@@ -113,7 +115,7 @@ module BGP
         'session.start' => %w[peer],
         'session.flap'  => %w[peer count interval],
         'refresh'       => %w[peer afi safi subtype],
-        'behaviour'     => %w[peer name afi safi]
+        'behaviour'     => %w[peer name afi safi away drop]
       }.freeze
 
       # The keys that go with each of the four selectors that are not an
@@ -350,6 +352,7 @@ module BGP
           :faults            => BGP::Fault.names.collect { |n| n.to_s },
           :refresh_faults    => BGP::Fault.refresh_names.collect { |n| n.to_s },
           :behaviours        => BGP::Fault.behaviour_names.collect { |n| n.to_s },
+          :gr_faults         => BGP::Fault.gr_names.collect { |n| n.to_s },
           :specimens         => BGP::Specimen.names.collect { |n| n.to_s } }
       end
 
@@ -563,9 +566,10 @@ module BGP
         name = block['case'].to_s
         raise Refused, 'fault: case is required' if name.empty?
         return refresh_fault(name, block) if BGP::Fault.refresh_names.include?(name.to_sym)
+        return gr_fault(name, block) if BGP::Fault.gr_names.include?(name.to_sym)
         unless BGP::Fault.names.include?(name.to_sym)
           raise Refused, "fault: unknown case #{name.inspect}; the catalog has " \
-                         "#{(BGP::Fault.names + BGP::Fault.refresh_names).join(', ')}"
+                         "#{(BGP::Fault.names + BGP::Fault.refresh_names + BGP::Fault.gr_names).join(', ')}"
         end
         both = block.keys & %w[afi safi]
         raise Refused, "fault: #{name} is an UPDATE case and takes no #{both.join(' or ')}" unless both.empty?
@@ -698,10 +702,25 @@ module BGP
         result.merge(:case => name, :afi => afi, :safi => safi)
       end
 
+      # One `BGP::Fault::GR` case: a malformed Hard Reset. It takes no
+      # prefixes, next hop or family.
+      def gr_fault(name, block)
+        extra = block.keys & %w[prefixes next_hop afi safi]
+        raise Refused, "fault: #{name} is a Hard Reset case and takes no #{extra.join(' or ')}" unless extra.empty?
+        messages = BGP::Fault.gr(name)
+        result = send_to(targets(block), 'fault') do |peer|
+          messages.each { |m| peer.send_message(m) }
+          @sent.count('fault', 0, messages.size)
+          [0, messages.size]
+        end
+        publish(FAULT, "injected fault #{name}", :case => name)
+        result.merge(:case => name)
+      end
+
       # One `BGP::Fault::BEHAVIOURS` entry, by `name`. `borr_without_eorr`
       # sends a BoRR for `afi` and `safi` (1 and 1 unless given) and
       # nothing after it: the receiver's own bound is what is tested
-      # (RFC 7313 section 4).
+      # (RFC 7313 section 4). The `gr_` ones are GracefulRestartBehaviour's.
       def behaviour(body)
         block = check(body, 'behaviour')
         name = block['name'].to_s
@@ -709,6 +728,9 @@ module BGP
           raise Refused, "behaviour: #{name.empty? ? 'name is required' : "unknown behaviour #{name.inspect}"}; " \
                          "this injector has #{BGP::Fault.behaviour_names.join(', ')}"
         end
+        return gr_behaviour(name, block) if name.start_with?('gr_')
+        extra = block.keys & %w[away drop]
+        raise Refused, "behaviour: #{name} takes no #{extra.join(' or ')}" unless extra.empty?
         afi = integer(block, 'afi', 1)
         safi = integer(block, 'safi', 1)
         msg = BGP::Route_refresh.new(afi, safi, BGP::Route_refresh::BORR)
@@ -1118,6 +1140,8 @@ module BGP
       # must not raise there: a listener that killed the session would
       # take the thing it was restoring with it.
       def resend(peer)
+        # A graceful restart behaviour's quiet session sends nothing.
+        return if peer.quiet?
         groups = @lock.synchronize { @announced.group_by { |_prefix, body| body } }
         blocks = 0
         groups.each do |body, pairs|
