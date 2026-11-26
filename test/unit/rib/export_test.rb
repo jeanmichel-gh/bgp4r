@@ -562,4 +562,17 @@ class TestBgpRibExport < Test::Unit::TestCase
     assert_equal(:no_export, @export.for(r, E1, :next_hop => '10.0.0.1').reason)
     assert(@export.for(r, I1, :next_hop => '10.0.0.1').advertise?)
   end
+
+  # A route's attributes are its UPDATE's, and MP_REACH_NLRI holds every
+  # route of that UPDATE: 115 from bgp4r-sim. The copy leaves it out
+  # rather than encoding it, or each route's export costs them all.
+  def test_the_copy_does_not_encode_the_updates_reachability
+    mp = BGP::Mp_reach.new(:afi => 2, :safi => 1, :nexthop => ['2011:1::1'], :nlris => ['2011:1::/32'])
+    pa = BGP::Path_attribute.new(BGP::Origin.new(0), BGP::As_path.new(65002), mp)
+    r = BGP::Rib::Route.new('2011:1::/32', pa, E1)
+    def mp.encode(*) ; raise 'MP_REACH_NLRI encoded' ; end
+    def mp.encode4(*) ; raise 'MP_REACH_NLRI encoded' ; end
+    res = @export.for(r, I1)
+    assert_equal([BGP::Origin, BGP::As_path, BGP::Local_pref], res.path_attribute.attributes.collect(&:class))
+  end
 end

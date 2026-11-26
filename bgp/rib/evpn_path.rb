@@ -75,8 +75,12 @@ module BGP
         end
       end
 
-      def key ; [*EvpnRoute.key_of(nlri), path_id] ; end
-      def decision_key ; EvpnRoute.key_of(nlri) ; end
+      # Both are read for every route on each table decision and each
+      # reflector refresh, and key_of builds the NLRI's whole hash, so
+      # they are worked out once. Nothing sets nlri after it is built
+      # (PeerAdapter.evpn_operations).
+      def key ; @key ||= [*decision_key, path_id].freeze ; end
+      def decision_key ; @decision_key ||= EvpnRoute.key_of(nlri).freeze ; end
       def rd ; decision_key[0] ; end
       def route_type ; decision_key[1] ; end
       def eth_tag ; decision_key[2] ; end

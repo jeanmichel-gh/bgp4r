@@ -237,4 +237,66 @@ class TestBgpDaemonEvpnReflector < Test::Unit::TestCase
     @rr.refresh
     assert_equal([], @l2.sent)
   end
+
+  # Export calls, as [peer address, MAC or originator], from here on.
+  def count_exports
+    calls = []
+    export = @rr.instance_variable_get(:@export)
+    export.define_singleton_method(:for) do |route, peer, **kw|
+      calls << peer.address
+      super(route, peer, **kw)
+    end
+    calls
+  end
+
+  # A refresh exports only the winners that changed since the last one.
+  # Exporting all of them on every poke cost 0.9 s of CPU a refresh at
+  # 1000 routes (2026-11-26), and a poke comes with each UPDATE.
+  def test_a_refresh_exports_only_what_changed
+    calls = count_exports
+    receive('10.255.0.11', 2, mac: '00:00:00:00:00:02')
+    receive('10.255.0.11', 2, mac: '00:00:00:00:00:03')
+    @rr.refresh
+    assert_equal((%w[10.255.0.11 10.255.0.12 10.255.0.9] * 2).sort, calls.sort, 'each route to each peer, l1 refused')
+    calls.clear
+    @l2.sent.clear
+    @rr.refresh
+    assert_equal([[], []], [calls, @l2.sent], 'nothing changed: nothing exported, nothing sent')
+    receive('10.255.0.11', 2, mac: '00:00:00:00:00:03', seq: 1)
+    @rr.refresh
+    assert_equal(%w[10.255.0.11 10.255.0.12 10.255.0.9], calls.sort, 'the changed route only')
+    assert_equal([[1, false]], @l2.read.collect { |o| o[8] })
+  end
+
+  # A route refused to a peer is not exported to it again, and a new
+  # winner for the key is: l1's own route was refused to l1, and l2's for
+  # the same key, once l1 withdraws, goes to l1.
+  def test_a_refusal_is_kept_until_the_winner_changes
+    calls = count_exports
+    receive('10.255.0.11', 2, rd: ['10.255.0.11', 100])
+    @rr.refresh
+    calls.clear
+    @rr.refresh
+    assert_equal([], calls)
+    receive('10.255.0.12', 2, rd: ['10.255.0.11', 100])
+    @table.apply('10.255.0.11', [[:withdraw, ['10.255.0.11:100', 2, 0, '00:00:00:00:00:02', nil, nil]]])
+    @l1.sent.clear
+    @rr.refresh
+    assert_equal([['10.255.0.11:100', 2, 0, '00:00:00:00:00:02', nil]], @l1.read.collect { |o| o[1] })
+    assert_equal('10.255.0.12', @l1.read.first[2])
+  end
+
+  # A session that comes up again is exported everything again, what was
+  # refused to it before included.
+  def test_a_session_coming_up_is_exported_everything_again
+    calls = count_exports
+    receive('10.255.0.11', 2)
+    @rr.refresh
+    calls.clear
+    @rr.session_up(@l1)
+    @rr.session_up(@l2)
+    @rr.refresh
+    assert_equal(%w[10.255.0.11 10.255.0.12], calls.sort)
+    assert_equal(1, @rr.size('10.255.0.12'))
+  end
 end

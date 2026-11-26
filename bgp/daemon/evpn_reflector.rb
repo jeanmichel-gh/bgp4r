@@ -48,11 +48,18 @@ module BGP
     # VpnReflector's shape: what each peer was sent is kept, and only the
     # difference goes. It runs on a thread of its own, poked by the EVPN
     # table and by each session that comes up.
+    #
+    # A refresh exports only the keys whose winner changed since the last
+    # one: the table keeps the same EvpnRoute while nothing replaces it,
+    # so what a peer was sent, or refused, is kept with the winner it was
+    # built from. Exporting all of them on every poke cost 0.9 s of CPU a
+    # refresh at 1000 routes (measured 2026-11-26), and a poke comes with
+    # each UPDATE received.
     class EvpnReflector
 
       # What one peer was sent for one key: the UPDATE, its encoding to
-      # compare, and the NLRI to withdraw it with.
-      Out = Struct.new(:key, :nlri, :update, :wire)
+      # compare, the NLRI to withdraw it with, and the winner it came from.
+      Out = Struct.new(:key, :nlri, :update, :wire, :source)
 
       def initialize(speaker, evpn_table, export, logger: nil)
         @speaker = speaker
@@ -61,6 +68,7 @@ module BGP
         @logger = logger
         @lock = Mutex.new
         @sent = {} # peer address => { decision key => Out }
+        @refused = {} # peer address => { decision key => the winner Export refused }
         @queue = Queue.new
       end
 
@@ -84,7 +92,7 @@ module BGP
 
       # A session came up: it gets everything, on the next refresh.
       def session_up(peer)
-        @lock.synchronize { @sent.delete(peer.address) }
+        @lock.synchronize { forget(peer.address) }
         poke
       end
 
@@ -95,10 +103,10 @@ module BGP
         @lock.synchronize do
           @speaker.peers.each do |p|
             unless eligible?(p)
-              @sent.delete(p.address)
+              forget(p.address)
               next
             end
-            sync(p, winners, @sent[p.address] ||= {})
+            sync(p, winners, @sent[p.address] ||= {}, @refused[p.address] ||= {})
           end
         end
         self
@@ -109,14 +117,8 @@ module BGP
       def wanted(peer, winners = @table.winners)
         target = rib_peer(peer)
         winners.each_with_object({}) do |w, out|
-          result = @export.for(w.route, target)
-          next unless result.path_attribute
-          nlri = w.nlri.dup
-          nlri.path_id = nil
-          pa = result.path_attribute
-          pa << BGP::Mp_reach.new(:afi => 25, :safi => 70, :nexthop => [w.route.next_hop.to_s], :nlris => [nlri])
-          u = BGP::Update.new(pa)
-          out[w.decision_key] = Out.new(w.decision_key, nlri, u, u.encode)
+          o = out_for(w, target)
+          out[w.decision_key] = o if o
         end
       end
 
@@ -153,11 +155,47 @@ module BGP
                            :router_id => (n && n.rmt_bgp_id) || peer.address, :local_as => @speaker.my_as)
       end
 
-      # Sends peer the difference from sent, and records it. Lock held.
-      def sync(peer, winners, sent)
-        want = wanted(peer, winners)
-        changed = want.values.reject { |o| (s = sent[o.key]) && s.wire == o.wire }
-        gone = sent.keys - want.keys
+      # The UPDATE for winner w to target, a Rib::Peer, or nil when Export
+      # refuses it.
+      def out_for(w, target)
+        result = @export.for(w.route, target)
+        return unless result.path_attribute
+        nlri = w.nlri.dup
+        nlri.path_id = nil
+        pa = result.path_attribute
+        pa << BGP::Mp_reach.new(:afi => 25, :safi => 70, :nexthop => [w.route.next_hop.to_s], :nlris => [nlri])
+        u = BGP::Update.new(pa)
+        Out.new(w.decision_key, nlri, u, u.encode, w)
+      end
+
+      def forget(address)
+        @sent.delete(address)
+        @refused.delete(address)
+      end
+
+      # Sends peer the difference from sent, and records it. A winner
+      # already sent or refused is not exported again. Lock held.
+      def sync(peer, winners, sent, refused)
+        target = nil
+        want = {}    # the keys peer is to have
+        still = {}   # the refusals that hold: their winner still wins
+        changed = []
+        winners.each do |w|
+          k = w.decision_key
+          s = sent[k]
+          if s && s.source.equal?(w)
+            want[k] = true
+          elsif refused[k].equal?(w)
+            still[k] = w
+          elsif (o = out_for(w, target ||= rib_peer(peer))).nil?
+            still[k] = w
+          else
+            want[k] = true
+            s && s.wire == o.wire ? s.source = w : changed << o
+          end
+        end
+        refused.replace(still)
+        gone = sent.keys.reject { |k| want.key?(k) }
         return if changed.empty? && gone.empty?
         gone.each do |key|
           o = sent.delete(key)

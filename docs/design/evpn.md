@@ -574,6 +574,27 @@ What changed from the plan:
   reflector.
 - `show.peers`' `sent` for `evpn` adds what was reflected to a peer to
   what this PE sent of its own.
+- **1000 type 2 routes, fixed after the pull request (2026-11-26).**
+  routescope's `evpn-vxlan-frr`, with bgp4rd as s1, took 71 s to pass
+  bgp4r-sim's 1000 routes on, and reset a leaf's session on its hold
+  timer three times. Three costs grew with the table:
+  - `Export` copied a route's attributes with MP_REACH_NLRI in them,
+    and an EVPN route's attributes are its UPDATE's: 115 routes from
+    bgp4r-sim. One route's export cost 6 ms. The copy now leaves
+    MP_REACH_NLRI out (`Path_attribute#encode`'s `except:`); this helps
+    every family `Export` sends.
+  - The table's decision read every route held for each key an UPDATE
+    touched, and worked out each one's key from its NLRI. It now keeps
+    the routes by key too, and `EvpnRoute` works its keys out once.
+  - Each refresh exported every route to every peer, 0.9 s of CPU at
+    1000 routes, after each UPDATE received. It now exports only the
+    keys whose winner changed, and keeps what each peer was refused.
+
+  Measured on loopback, with two library peers and bgp4rd as the
+  reflector (`test/unit` has the tests that fail without each fix): 116
+  of 1001 routes reached the second leaf in 120 s before, all 1001 in
+  49 s after, with ospflab at load 180 on 6 cores; the reflector's work
+  for the 1000 routes is 1.3 s of CPU.
 
 **Pull request 5.** Three cases in `test/functional/lab/evpn_frr_test.rb`,
 `more_peers` in `LabHelper::Frr`, and the `evpn` row of

@@ -157,8 +157,14 @@ module BGP
       ! has?(arg)
     end
     
-    def encode(as4byte=false)
-      [@attributes.compact.collect { |x| as4byte ? x.encode4 : x.encode }.join + (@tail || '')].pack('a*')
+    # except: attribute classes to leave out. A route's attributes are
+    # the whole UPDATE's, MP_REACH_NLRI with every route in it included,
+    # and a copy of one route's that encodes them all costs as many
+    # routes as the UPDATE held (bgp/rib/export.rb, #attributes).
+    def encode(as4byte=false, except: [])
+      attrs = @attributes.compact
+      attrs = attrs.reject { |x| except.any? { |k| x.is_a?(k) } } unless except.empty?
+      [attrs.collect { |x| as4byte ? x.encode4 : x.encode }.join + (@tail || '')].pack('a*')
     end
 
     # What the peer got wrong: problems found when these attributes were

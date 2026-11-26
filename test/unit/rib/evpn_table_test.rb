@@ -231,4 +231,56 @@ class TestBgpRibEvpnTable < Test::Unit::TestCase
     assert_equal(0, @t.size)
     assert_nil(@t.best(key), 'not kept: decided again')
   end
+
+  # Counts EvpnRoute#decision_key calls on this thread while a block runs.
+  module CountDecisionKeys
+    def decision_key
+      (c = Thread.current[:decision_keys]) and c << 1
+      super
+    end
+  end
+  BGP::Rib::EvpnRoute.prepend(CountDecisionKeys)
+
+  def decision_keys
+    Thread.current[:decision_keys] = []
+    yield
+    Thread.current[:decision_keys].size
+  ensure
+    Thread.current[:decision_keys] = nil
+  end
+
+  # A decision reads the candidates of its own key, not every route held.
+  # It read them all: an UPDATE of one route to a table of 1000 read 1000
+  # NLRIs, and a leaf sent 1000 such UPDATEs by a reflector a million
+  # (2026-11-26).
+  def test_a_decision_reads_its_own_key_only
+    macs = (0...200).collect { |i| format('02:00:00:00:%02x:%02x', i / 256, i % 256) }
+    @t.apply('10.255.0.12', ops('10.255.0.12', macs.collect { |m| type2(['10.255.0.12', 100], m) }))
+    one = ops('10.255.0.13', [type2(['10.255.0.12', 100], H1)])
+    n = decision_keys { @t.apply('10.255.0.13', one) }
+    assert_operator(n, :<, 10, 'read for the key of the route applied only')
+    gone = ops('10.255.0.13', [type2(['10.255.0.12', 100], H1)], withdraw: true)
+    n = decision_keys { @t.apply('10.255.0.13', gone) }
+    assert_operator(n, :<, 10)
+    assert_equal(200, @t.winners.size)
+  end
+
+  # Both peers' routes for one key are its candidates, and the key goes
+  # with the last of them, however each went.
+  def test_a_keys_candidates_follow_each_way_a_route_goes
+    key = ['10.255.0.12:100', 2, 0, H1, nil]
+    @t.apply('10.255.0.1', ops('10.255.0.1', [type2(['10.255.0.12', 100], H1)], local_pref: 200))
+    @t.apply('10.255.0.2', ops('10.255.0.2', [type2(['10.255.0.12', 100], H1)], local_pref: 100))
+    @t.mark_stale('10.255.0.1')
+    @t.purge_stale('10.255.0.1')
+    assert_equal('10.255.0.2', @t.best(key).best.peer.address, 'purge_stale')
+    @t.apply('10.255.0.1', ops('10.255.0.1', [type2(['10.255.0.12', 100], H1)], local_pref: 200))
+    assert_equal('10.255.0.1', @t.best(key).best.peer.address)
+    @t.peer_down('10.255.0.1')
+    assert_equal('10.255.0.2', @t.best(key).best.peer.address, 'peer_down')
+    @t.peer_down('10.255.0.2')
+    assert_nil(@t.best(key))
+    @t.apply('10.255.0.2', ops('10.255.0.2', [type2(['10.255.0.12', 100], H1)]))
+    assert_equal('10.255.0.2', @t.best(key).best.peer.address, 'back after all went')
+  end
 end
