@@ -393,6 +393,7 @@ class TestBgpRibMacvrfs < Test::Unit::TestCase
     assert_equal(1, evpn_events('duplicate').size)
     send_routes(L2, [type2([L2, 100], H2)], withdraw: true)
     @vtep.age(100, H2)
+    m.sync!
     @now += 400
     m.sync!
     m.clear_duplicate(100, H2)

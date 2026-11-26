@@ -412,14 +412,15 @@ module BGP
         @last_remote.each_key do |key|
           v, mac = key
           next unless v == vni
-          if ports.key?(mac) || plan.macs.key?(mac) || @adv.key?(key) || @dup.key?(key)
+          # A MAC this PE advertises is on a port: decide deleted the rest.
+          if ports.key?(mac) || plan.macs.key?(mac) || @dup.key?(key)
             @gone.delete(key)
           else
             @gone[key] ||= now
           end
         end
         @gone.delete_if do |key, at|
-          next false unless key[0] == vni && now - at >= @seq_memory
+          next false unless now - at >= @seq_memory
           @last_remote.delete(key)
           true
         end
