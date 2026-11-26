@@ -360,7 +360,31 @@ module BGP
         @shutdown = false
         @admin = Mutex.new
         @resume = ConditionVariable.new
+        # What the next session alone changes (`next_session`), and what
+        # the current one was given.
+        @next_session = nil
+        @session = {}
+        @redialing = false
       end
+
+      # Changes for the next session only, which bgp4r-sim's graceful
+      # restart behaviours use to come back as a restarting speaker:
+      #
+      #   'capabilities' => the OPEN's list, in place of the config's
+      #   'end_of_rib'   => true or false, in place of end_of_rib?
+      #   'quiet'        => true sends nothing once Established: no
+      #                     announce block and, in bgp4r-sim, no resend
+      #
+      # It holds until a session reaches Established, so a connection
+      # that fails before that does not use it up. nil clears it.
+      def next_session(changes)
+        @next_session = changes && changes.to_h { |k, v| [k.to_s, v] }
+        self
+      end
+
+      # The current session's changes from next_session, {} for none.
+      def session_changes ; @session ; end
+      def quiet? ; @session['quiet'] == true ; end
 
       # This peer's configuration, swapped for `config`, which is one
       # neighbor block of a committed candidate. Everything the session
@@ -413,7 +437,10 @@ module BGP
       # the first table is sent. See bgp/daemon/end_of_rib.rb.
       # `graceful_restart` turns it on too: the GR capability says we send
       # it (RFC 4724 section 4).
-      def end_of_rib? ; @config['end_of_rib'] == true || !@config['graceful_restart'].nil? ; end
+      def end_of_rib?
+        return @session['end_of_rib'] == true if @session.key?('end_of_rib')
+        @config['end_of_rib'] == true || !@config['graceful_restart'].nil?
+      end
 
       # The families a session that just ended keeps, which every table
       # asks as it drops the session (`retain`).
@@ -442,6 +469,12 @@ module BGP
           until @speaker.stopping?
             wait_while_shutdown
             break if @speaker.stopping?
+            # redial's connection runs the next session; dialling as well
+            # would be a third, which the peer takes for a restart too.
+            if @redialing
+              backoff
+              next
+            end
             begin
               if vrf || ttl_security || password
                 sock = dial_socket
@@ -571,6 +604,40 @@ module BGP
         @admin.synchronize { @shutdown = false ; @resume.broadcast }
         run_active if active?
         self
+      end
+
+      # A second connection to the peer while the session is up, which
+      # RFC 4724 section 4.2 tells a peer that helps us to read as a
+      # restart: "the previous TCP session MUST be closed, and the new one
+      # retained". bgp4r-sim's gr_new_connection.
+      #
+      # The new connection is made now, so the peer sees it while the old
+      # session still stands. Its session runs once the old one has
+      # ended, which is the peer's to do. If the peer has not ended it
+      # after `open_timeout`, the new connection is closed instead. The
+      # dial loop waits meanwhile. Returns the thread that runs it.
+      def redial
+        n = @neighbor
+        raise NoSession, "no established session to #{@address}" unless n && n.is_established?
+        sock = dial_socket
+        @redialing = true
+        Thread.new do
+          Thread.current['name'] = "BGP peer #{@address} redial"
+          begin
+            deadline = Time.now + @config.fetch('open_timeout', 30)
+            sleep 0.05 while @busy.locked? && Time.now < deadline
+            if @busy.locked?
+              sock.close
+              @recorder.error!('redial: the old session was not closed by the peer')
+            else
+              run_session(sock)
+            end
+          rescue SystemCallError, IOError => e
+            @recorder.error!("redial: #{e.message}")
+          ensure
+            @redialing = false
+          end
+        end
       end
 
       # RFC 2918 section 3: a ROUTE-REFRESH message asks the peer to
@@ -720,6 +787,8 @@ module BGP
         @busy.synchronize do
           # Each session gets a new Neighbor. close ends the old one's thread.
           @neighbor.close if @neighbor
+          changes = @next_session
+          @session = changes || {}
           n = new_neighbor(sock)
           @neighbor = n
           # Attached before the session starts, so the table sees the first
@@ -750,9 +819,10 @@ module BGP
           end
           n.start(:session => sock, :timeout => @config.fetch('open_timeout', 30))
           if n.is_established?
+            @next_session = nil if changes && @next_session.equal?(changes)
             @recorder.established!
             @graceful_restart.up(n.session_info)
-            announce(n, sock) unless vrf
+            announce(n, sock) unless vrf || quiet?
             @speaker.session_established(self)
             @speaker.send_end_of_rib(self) if end_of_rib?
             n.wait_for_state(:Idle)
@@ -804,7 +874,8 @@ module BGP
                               :remote_addr => @address, :local_addr => local,
                               :events => @speaker.events,
                               :logger => @speaker.logger)
-        Array(@config.fetch('capabilities', ['as4_byte'])).each { |c| add_capability(n, c) }
+        caps = @session.key?('capabilities') ? @session['capabilities'] : @config.fetch('capabilities', ['as4_byte'])
+        Array(caps).each { |c| add_capability(n, c) }
         n.capability(GracefulRestart.capability(@config['graceful_restart'])) unless @config['graceful_restart'].nil?
         n.add_observer @recorder
         @route_refresh.reset

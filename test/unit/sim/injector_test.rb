@@ -36,6 +36,7 @@
 # including in the nested fake, which does not see an include in the
 # class around it.
 require 'test/unit'
+require 'stringio'
 require 'bgp/sim/injector'
 
 class BGP_Sim_Injector_Test < Test::Unit::TestCase
@@ -63,8 +64,17 @@ class BGP_Sim_Injector_Test < Test::Unit::TestCase
     def session_info ; nil ; end
     def local_ip ; '10.0.0.1' ; end
     def shutdown? ; @down ; end
-    def admin_stop ; @down = true ; self ; end
-    def admin_start ; @down = false ; self ; end
+    # What a graceful restart behaviour did, in order.
+    def calls ; @calls ||= [] ; end
+    def admin_stop ; calls << [:down] ; @down = true ; self ; end
+    def admin_start ; calls << [:up] ; @down = false ; @neighbor = Object.new ; self ; end
+    def neighbor ; @neighbor ||= Object.new ; end
+    def quiet? ; false ; end
+    def next_session(h)
+      calls << [:next, h['capabilities'].last.values.first, h['end_of_rib'], h['quiet'] == true]
+      self
+    end
+    def redial ; calls << [:redial] ; @neighbor = Object.new ; Thread.new {} ; end
     def recorder ; @recorder ||= BGP::Daemon::Recorder.new ; end
 
     # Speaker#stop calls it on every peer.
@@ -72,6 +82,7 @@ class BGP_Sim_Injector_Test < Test::Unit::TestCase
 
     def send_message(msg)
       raise BGP::Daemon::NoSession, "no established session to #{@address}" unless established?
+      calls << [:sent, msg.to_shex] if msg.is_a?(BGP::Notification)
       @sent << msg
       msg
     end
@@ -559,15 +570,128 @@ class BGP_Sim_Injector_Test < Test::Unit::TestCase
     r = inj.act('behaviour', 'name' => 'borr_without_eorr', 'afi' => 1, 'safi' => 128)
     assert_equal(['ffffffffffffffffffffffffffffffff00170500010180'], peer.hex)
     assert_equal(['borr_without_eorr', 1, 128], r.values_at(:behaviour, :afi, :safi))
-    e = assert_raise(BGP::Sim::Injector::Refused) { inj.act('behaviour', 'name' => 'gr_restart') }
-    assert_match(/unknown behaviour "gr_restart"; this injector has borr_without_eorr/, e.message)
+    e = assert_raise(BGP::Sim::Injector::Refused) { inj.act('behaviour', 'name' => 'gr_nope') }
+    assert_match(/unknown behaviour "gr_nope"; this injector has borr_without_eorr, gr_restart/, e.message)
     assert_raise(BGP::Sim::Injector::Refused) { inj.act('behaviour', {}) }
+    e = assert_raise(BGP::Sim::Injector::Refused) { inj.act('behaviour', 'name' => 'borr_without_eorr', 'away' => 1) }
+    assert_match(/borr_without_eorr takes no away/, e.message)
   end
 
   def test_the_topology_lists_refresh_faults_and_behaviours
     t = injector.topology
     assert_equal(BGP::Fault.refresh_names.collect(&:to_s), t[:refresh_faults])
-    assert_equal(['borr_without_eorr'], t[:behaviours])
+    assert_equal(BGP::Fault.behaviour_names.collect(&:to_s), t[:behaviours])
+    assert_equal(%w[hard_reset_empty hard_reset_unknown_inner], t[:gr_faults])
+  end
+
+  # ---- graceful restart, docs/design/bgp-operations.md section 3 ------
+
+  def gr_peer(flags = 0)
+    FakePeer.new('10.0.10.2', 65_000, 65_001,
+                 'capabilities' => ['as4_byte', { 'graceful_restart' => [flags, 120, [1, 1, 0], [2, 1, 0x80]] }])
+  end
+
+  # Runs a behaviour on a fake peer and answers what it did.
+  def gr_calls(name, flags = 0, body = {})
+    inj = injector({}, [gr_peer(flags)])
+    r = inj.act('behaviour', { 'name' => name, 'away' => 0 }.merge(body))
+    assert_equal([name, ['10.0.10.2'], true], r.values_at(:behaviour, :peers, :running))
+    deadline = Time.now + 5
+    sleep 0.01 until inj.instance_variable_get(:@threads).none?(&:alive?) || Time.now > deadline
+    peer.calls
+  end
+
+  # What each behaviour does, step by step: the GR capability of the
+  # session it comes back with is [flags, time, families], R is 8, F is
+  # 0x80, and N (4) stays as configured.
+  def test_what_each_gr_behaviour_does
+    both_f = [[1, 1, 0x80], [2, 1, 0x80]]
+    restart = [8, 120, *both_f]
+    assert_equal([[:down], [:next, restart, true, false], [:up]], gr_calls('gr_restart'))
+    assert_equal([[:down], [:next, [8, 120, [1, 1, 0], [2, 1, 0]], true, false], [:up]], gr_calls('gr_restart_no_f'))
+    assert_equal([[:down], [:next, [8, 120, [2, 1, 0x80]], true, false], [:up]], gr_calls('gr_restart_family_missing'))
+    assert_equal([[:down], [:next, [8, 120, [1, 1, 0x80]], true, false], [:up]],
+                 gr_calls('gr_restart_family_missing', 0, 'afi' => 2, 'safi' => 1))
+    assert_equal([[:down]], gr_calls('gr_never_back'))
+    assert_equal([[:down], [:next, restart, false, false], [:up]], gr_calls('gr_no_eor'))
+    assert_equal([[:next, restart, true, false], [:redial]], gr_calls('gr_new_connection'))
+    assert_equal([[:down], [:next, restart, false, true], [:up], [:down], [:next, restart, true, false], [:up]],
+                 gr_calls('gr_consecutive'))
+    n_restart = [12, 120, *both_f]
+    assert_equal([[:down], [:next, n_restart, false, true], [:up], [:down], [:next, n_restart, true, false], [:up]],
+                 gr_calls('gr_consecutive_n', 4))
+    assert_equal([[:sent, 'ffffffffffffffffffffffffffffffff0015030606'], [:down], [:next, n_restart, true, false], [:up]],
+                 gr_calls('gr_graceful_cease', 4))
+    assert_equal([[:sent, 'ffffffffffffffffffffffffffffffff00170306090602'], [:down], [:next, [4, 120, *both_f], true, false], [:up]],
+                 gr_calls('gr_hard_reset', 4))
+    assert_equal([[:sent, 'ffffffffffffffffffffffffffffffff0015030606'], [:down], [:next, [0, 120, *both_f], true, false], [:up]],
+                 gr_calls('gr_notification_no_n'))
+  end
+
+  # A session that does not come back ends the behaviour, logged, with
+  # no `done`.
+  def test_a_gr_behaviour_that_does_not_come_back_says_so
+    m = BGP::Sim::GracefulRestartBehaviour
+    old = m::BACK_WITHIN
+    m.send(:remove_const, :BACK_WITHIN)
+    m.const_set(:BACK_WITHIN, 0.2)
+    log = StringIO.new
+    Log.set_filename(log)
+    inj = injector({}, [gr_peer])
+    done = []
+    inj.speaker.events.on_event { |e| done << e if e.kind == :log }
+    def peer.admin_start ; calls << [:up] ; @down = false ; @established = false ; self ; end
+    inj.act('behaviour', 'name' => 'gr_restart', 'away' => 0)
+    deadline = Time.now + 5
+    sleep 0.01 until inj.instance_variable_get(:@threads).none?(&:alive?) || Time.now > deadline
+    assert_match(/behaviour gr_restart on 10.0.10.2: RuntimeError: gr_restart: 10.0.10.2 did not come back within 0.2s/,
+                 log.string)
+    assert_equal([], done)
+  ensure
+    m.send(:remove_const, :BACK_WITHIN)
+    m.const_set(:BACK_WITHIN, old)
+  end
+
+  # The sim has to list a GR capability, with N or without as the case
+  # needs.
+  def test_a_gr_behaviour_refuses_a_peer_that_cannot_run_it
+    e = assert_raise(BGP::Sim::Injector::Refused) { injector.act('behaviour', 'name' => 'gr_restart') }
+    assert_match(/10.0.10.2 lists no graceful_restart capability/, e.message)
+    e = assert_raise(BGP::Sim::Injector::Refused) { injector({}, [gr_peer]).act('behaviour', 'name' => 'gr_hard_reset') }
+    assert_match(/gr_hard_reset: needs the N bit \(4\)/, e.message)
+    e = assert_raise(BGP::Sim::Injector::Refused) { injector({}, [gr_peer(4)]).act('behaviour', 'name' => 'gr_consecutive') }
+    assert_match(/gr_consecutive: needs no N bit/, e.message)
+    assert_equal([], peer.calls, 'and does nothing')
+  end
+
+  # `drop`: what the sim will not send again.
+  def test_drop_forgets_what_was_announced
+    inj = injector({}, [gr_peer])
+    inj.act('announce', 'prefixes' => %w[10.1.0.0/16 10.2.0.0/16], 'next_hop' => '10.0.0.1')
+    inj.act('behaviour', 'name' => 'gr_never_back', 'drop' => ['10.2.0.0/16'])
+    assert_equal(['10.1.0.0/16'], inj.announced.collect { |r| r[:prefix] })
+  end
+
+  def test_the_gr_capability_read_and_replaced
+    m = BGP::Sim::GracefulRestartBehaviour
+    assert_nil(m.capability('capabilities' => ['as4_byte', 'route_refresh']))
+    assert_equal([4, 90, [[1, 1, 0], [2, 1, 128]]], m.capability('capabilities' => [{ 'gr' => [4, 90, [1, 1], [2, 1, 128]] }]))
+    assert_equal([0, 0, []], m.capability('capabilities' => [{ 'graceful_restart' => nil }]))
+    assert_equal(['as4_byte', { 'graceful_restart' => [8, 90, [1, 1, 128]] }],
+                 m.capabilities({ 'capabilities' => ['as4_byte', { 'gr' => [0, 90] }] }, 8, 90, [[1, 1, 128]]))
+    assert_equal(['as4_byte', { 'graceful_restart' => [8, 90] }], m.capabilities({}, 8, 90, []), 'as4_byte when none were listed')
+  end
+
+  # A GR case is a malformed Hard Reset, and takes no family or prefix.
+  def test_a_gr_fault_sends_its_message
+    inj = injector
+    r = inj.act('fault', 'case' => 'hard_reset_unknown_inner')
+    assert_equal(['ffffffffffffffffffffffffffffffff00170306096363'], peer.hex)
+    assert_equal('hard_reset_unknown_inner', r[:case])
+    e = assert_raise(BGP::Sim::Injector::Refused) { inj.act('fault', 'case' => 'hard_reset_empty', 'afi' => 1) }
+    assert_match(/Hard Reset case and takes no afi/, e.message)
+    e = assert_raise(BGP::Sim::Injector::Refused) { inj.act('fault', 'case' => 'nope') }
+    assert_match(/hard_reset_empty/, e.message, 'the refusal names the GR cases too')
   end
 
   def test_a_route_refresh_defaults_to_ipv4_unicast

@@ -373,9 +373,8 @@ Fault.refresh(:refresh_borr_length, 1, 1).collect { |o| o.unpack1('H*') }
 longer or shorter, with the header's Length and the body in step.
 
 `BGP::Fault::BEHAVIOURS` holds what a sender does over time, not what a
-message holds. It has one entry so far, `borr_without_eorr`: a BoRR and
-then no EoRR. Graceful restart's behaviours join it in pull request 3 of
-`docs/design/bgp-operations.md`.
+message holds. Its route refresh one is `borr_without_eorr`: a BoRR and
+then no EoRR. The graceful restart ones are below.
 
 bgp4r-sim sends a case with `POST /api/fault {"case": NAME, "afi": 1,
 "safi": 1}` and a behaviour with `POST /api/behaviour {"name": NAME}`.
@@ -402,6 +401,79 @@ RFCs:
   which RFC 4271 section 6.1 checks in the header. FRR answers that
   with 1/2. bgp4rd answers RFC 7313 section 5's 7/1, which names
   subtypes 1 and 2 whatever the length.
+
+### Graceful restart cases
+
+`BGP::Fault::GR` holds two malformed Hard Resets, RFC 8538 section 3.1:
+a Cease with subcode 9 whose data should be the inner code and subcode.
+`Fault.gr(name)` gives the octets:
+
+```ruby
+Fault.gr(:hard_reset_unknown_inner).collect { |o| o.unpack1('H*') }
+# ["ffffffffffffffffffffffffffffffff00170306096363"]
+```
+
+Section 3.2 has both end the session as RFC 4271 does, routes and all.
+Each needs the N bit exchanged to mean anything, since without it any
+Cease flushes.
+
+`BGP::Fault::BEHAVIOURS` holds eleven graceful restart behaviours too.
+In each, bgp4r-sim is the speaker that restarts: it drops its own
+session and comes back as the case says (`docs/daemon.md`, the
+`behaviour` action). Each needs a GR capability on the sim's peer, with
+N or without as the case says.
+
+Each went to bgp4rd and to FRR 10.5.1 on a session of its own
+(`test/functional/gr_fault_matrix_test.rb`,
+`test/functional/lab/gr_fault_frr_test.rb`), on 2026-11-26. The sim
+announced two routes and did not send one of them again (`drop`). A
+second peer of the receiver watched what it sent on. "Kept" means the
+route sent again was never withdrawn from that peer, and the dropped
+one went as the case says; "flushed" means both went.
+
+| Name | Sent | RFC expects | bgp4rd | FRR 10.5.1 |
+|---|---|---|---|---|
+| `gr_restart` | drops TCP, back with R and F, End-of-RIB | keep stale, purge the rest at End-of-RIB (4724 4.2) | kept | kept |
+| `gr_restart_no_f` | the same with F clear | remove at once (4724 4.2) | flushed | varies; kept in most runs |
+| `gr_restart_family_missing` | back without the family | remove at once (4724 4.2) | flushed | varies; kept in most runs |
+| `gr_never_back` | drops TCP, stays away | remove at the Restart Time (4724 4.2) | removed at the Restart Time | removed at the Restart Time, in most runs |
+| `gr_no_eor` | back, no End-of-RIB | remove what is stale at the stale timer (8538 4.1) | removed at `stale_time` | kept, stale, past `stalepath-time` |
+| `gr_new_connection` | a second connection, old session up | close the old one, no NOTIFICATION (4724 4.2, 5) | kept | kept |
+| `gr_consecutive` | restarts twice, no N | delete what is stale from the first (4724 4.2) | flushed | flushed |
+| `gr_consecutive_n` | restarts twice, N | keep it (8538 4.1) | kept | flushed |
+| `gr_graceful_cease` | N, Cease 6/6 | keep, stale (8538 4) | kept | kept |
+| `gr_hard_reset` | N, Cease 6/9 wrapping 6/2 | flush (8538 3.2) | flushed | flushed |
+| `gr_notification_no_n` | no N, Cease 6/6 | flush (4724 4) | flushed | flushed |
+| `hard_reset_empty` | N, Cease 6/9 with no data | flush (8538 3.2) | flushed | flushed |
+| `hard_reset_unknown_inner` | N, Cease 6/9 wrapping 99/99 | flush (8538 3.2) | flushed | flushed |
+
+bgp4rd does what each RFC expects. FRR does not in four:
+
+- **F clear, or the family missing.** In most runs bgpd keeps the stale
+  route until it comes again, where section 4.2 removes it at once. In
+  a few it removed it, and in a few it kept the route not sent again
+  after End-of-RIB.
+- **The stale timer.** bgpd logs "graceful restart stalepath timer
+  started" when the session drops, and keeps the route that was not
+  sent again past it.
+- **Consecutive restarts with N.** N was exchanged on both sessions,
+  and bgpd deleted what was stale from the first restart.
+
+`gr_never_back` varies too: in about one run in ten bgpd logged the
+Restart Time as expired and kept the routes, stale.
+
+One more is a choice between two RFCs. In about one run in twenty of
+`gr_new_connection`, bgpd sent a Cease 6/7, Connection Collision
+Resolution (RFC 4271 section 6.8), where RFC 4724 section 4.2 closes
+the old session with none. The routes were kept either way.
+
+FRR was run with `bgp graceful-restart`, bgpd passive toward the sim,
+which dials, and an advertisement interval of 0, in about twenty runs.
+The sim sends End-of-RIB on its first session too. Without it, bgpd
+kept the stale routes past the Restart Time, logged as expired: a GR
+peer's first End-of-RIB matters to bgpd. Why bgpd differs from run to
+run is not known. The FRR test asserts what held in every run, and for
+the rest says which way this run went.
 
 ## Receiving: policies and findings
 

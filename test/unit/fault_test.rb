@@ -329,7 +329,29 @@ class TestFault < Test::Unit::TestCase
   end
 
   def test_the_behaviours
-    assert_equal([:borr_without_eorr], BGP::Fault.behaviour_names)
+    assert_equal(%i[borr_without_eorr gr_restart gr_restart_no_f gr_restart_family_missing gr_never_back
+                    gr_no_eor gr_new_connection gr_consecutive gr_consecutive_n gr_graceful_cease
+                    gr_hard_reset gr_notification_no_n], BGP::Fault.behaviour_names)
     assert_equal('7313 4', BGP::Fault::BEHAVIOURS.first[3])
+    cat = BGP::Fault.behaviour_catalog.to_h { |b| [b[:name], [b[:rfc], b[:needs]]] }
+    assert_equal(['RFC 7313 4', nil], cat[:borr_without_eorr])
+    assert_equal(['RFC 4724 4.2', :gr], cat[:gr_restart])
+    assert_equal(['RFC 4724 4.2', :no_n], cat[:gr_consecutive])
+    assert_equal(['RFC 8538 4.1', :n], cat[:gr_consecutive_n])
+    assert_equal(['RFC 8538 3.2', :n], cat[:gr_hard_reset])
+    assert_equal(['RFC 4724 4', :no_n], cat[:gr_notification_no_n])
+  end
+
+  # RFC 8538 section 3.1: a Hard Reset is Cease subcode 9, its data the
+  # inner code and subcode. These two cannot be read inside.
+  def test_the_gr_catalog
+    assert_equal(%i[hard_reset_empty hard_reset_unknown_inner], BGP::Fault.gr_names)
+    assert_equal(['ffffffffffffffffffffffffffffffff0015030609'], BGP::Fault.gr(:hard_reset_empty).collect { |o| o.unpack1('H*') })
+    assert_equal(['ffffffffffffffffffffffffffffffff00170306096363'],
+                 BGP::Fault.gr('hard_reset_unknown_inner').collect { |o| o.unpack1('H*') })
+    BGP::Fault.gr_catalog.each do |c|
+      assert_equal([:flush, 'RFC 8538 3.2', true], c.values_at(:expected, :rfc, :n), c[:name].to_s)
+    end
+    assert_raise(ArgumentError) { BGP::Fault.gr(:refresh_borr_length) }
   end
 end

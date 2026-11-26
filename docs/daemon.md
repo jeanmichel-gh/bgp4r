@@ -2426,18 +2426,51 @@ Actions, as `action => [path, body keys]`, which is the table
 | `announce` | `/api/announce` | `prefixes` or `generate`, `next_hop`, `as_path`, `as_path_literal`, `med`, `local_pref`, `communities`, `extended_communities`, `large_communities`, `path_id`, `peer`; or one of `spec` (with `churn`), `mp_reach`, `specimen` |
 | `withdraw` | `/api/withdraw` | the same selectors, or `spec` or `mp_unreach` |
 | `attribute` | `/api/attribute` | a prefix set and the attributes to change |
-| `fault` | `/api/fault` | `case` from `BGP::Fault::CATALOG` with `prefixes` and `next_hop`, or from `BGP::Fault::REFRESH` with `afi` and `safi` |
+| `fault` | `/api/fault` | `case` from `BGP::Fault::CATALOG` with `prefixes` and `next_hop`, from `BGP::Fault::REFRESH` with `afi` and `safi`, or from `BGP::Fault::GR` alone |
 | `replay` | `/api/replay` | `hex`, the octets to send unchanged |
 | `notification` | `/api/notification` | `code`, `subcode`, `data` |
 | `session.stop` | `/api/session/stop` | `peer` |
 | `session.start` | `/api/session/start` | `peer` |
 | `session.flap` | `/api/session/flap` | `peer`, `count`, `interval` |
 | `refresh` | `/api/refresh` | `peer`, `afi`, `safi`, `subtype` |
-| `behaviour` | `/api/behaviour` | `peer`, `name` from `BGP::Fault::BEHAVIOURS`, `afi`, `safi` |
+| `behaviour` | `/api/behaviour` | `peer`, `name` from `BGP::Fault::BEHAVIOURS`, `afi`, `safi`; and for a `gr_` one `away` and `drop` |
 
 The first ten are routescope's `Drivers::Sim::ACTIONS`. `behaviour` is
 newer, from `docs/design/bgp-operations.md`, and routescope does not
-send it yet.
+send it yet. `/api/topology` lists the names of each kind: `faults`,
+`refresh_faults`, `gr_faults` and `behaviours`.
+
+**A `gr_` behaviour makes the sim the speaker that restarts** (RFC 4724
+section 4.2, RFC 8538). The sim's peer must list a GR capability of its
+own, its families after the two fields:
+
+```yaml
+neighbors:
+  - address: 10.0.0.1
+    as: 65000
+    connect: true
+    capabilities:
+      - as4_byte
+      - graceful_restart: [4, 120, [1, 1, 128]]   # N, 120 s, IPv4 unicast with F
+```
+
+The sim drops its session with no NOTIFICATION (or sends the one the
+case names first), stays down `away` seconds (1 unless given), and comes
+back with the Restart State bit set and each family's F bit as the case
+says. It sends its routes again and End-of-RIB, unless the case says
+otherwise. `drop` lists prefixes the sim announced (the `announce`
+action) that it does not send again, which End-of-RIB or a timer should
+then purge. A node file's own `announce` blocks always go again. The
+action answers at once and the behaviour runs on a thread; its `log`
+event `behaviour NAME done on PEER` says when it ended. A sim that dials
+comes back at once; a passive one waits for its peer to dial.
+
+The changed capability is for the one session: `Peer#next_session`
+holds `capabilities`, `end_of_rib` and `quiet` (send nothing once
+Established) until a session reaches Established. `Peer#redial` makes
+a second connection while the session is up, for `gr_new_connection`;
+it runs once the peer has closed the old session, or is closed after
+`open_timeout` if the peer keeps the old one.
 
 **The body keys are the node file's own keys.** `prefixes`, `med`,
 `as_path`, `communities`, `next_hop`, `local_pref`, `path_id` are what
