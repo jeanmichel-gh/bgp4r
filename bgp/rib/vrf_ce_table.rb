@@ -62,9 +62,9 @@ module BGP
 
       # Starts reading a CE session into vrf. soo: the neighbor's Site of
       # Origin, "65000:11", or nil. Answers the PeerAdapter to detach.
-      def attach(neighbor, vrf, soo: nil)
+      def attach(neighbor, vrf, soo: nil, retain: nil)
         site(neighbor.remote_addr, soo)
-        PeerAdapter.new(neighbor, Sink.new(self, vrf))
+        PeerAdapter.new(neighbor, Sink.new(self, vrf), retain: retain)
       end
 
       # The Site of Origin of the CE at address, "65000:11", or nil.
@@ -102,10 +102,23 @@ module BGP
 
       # RFC 4271 section 6: that CE's session is gone, and so is what it
       # sent.
-      def peer_down(vrf, address)
+      #
+      # keep: the families to retain, as [afi, safi], when the peer is
+      # one we help through a graceful restart (RFC 4724 section 4.2):
+      # their routes are kept and marked stale, 'restart', and a route
+      # already stale goes, since "To deal with possible consecutive
+      # restarts, a route (from the peer) previously marked as stale MUST
+      # be deleted". Every other family goes, as RFC 4271 section 6 has
+      # it. Empty, the default, is that rule for all of them.
+      def peer_down(vrf, address, keep = [])
         gone = @lock.synchronize do
-          @stale[vrf].delete_if { |k, _| k.first == address }
-          @in[vrf].delete(address)
+          h = @in[vrf][address] || {}
+          marks = @stale[vrf]
+          drop = h.keys.select { |k| marks.key?([address, *k]) || !keep.include?([Table.afi_of(k.first), IANA::SAFI::UNICAST]) }
+          drop.each { |k| h.delete(k) ; marks.delete([address, *k]) }
+          h.each_key { |k| marks[[address, *k]] = 'restart' }
+          @in[vrf].delete(address) if h.empty?
+          !drop.empty?
         end
         changed if gone
         self
@@ -208,6 +221,7 @@ module BGP
           case item
           in [:ops, ops, neighbor] then @table.apply(@vrf, neighbor.remote_addr, ops)
           in [:peer_down, peer] then @table.peer_down(@vrf, peer.address)
+          in [:peer_down, peer, keep] then @table.peer_down(@vrf, peer.address, keep)
           else nil
           end
           self

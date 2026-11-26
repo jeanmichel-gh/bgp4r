@@ -197,6 +197,14 @@ module BGP
       # again.
       def borr(afi, safi)
         return ignore(afi, safi, 'the peer did not advertise Enhanced Route Refresh (70)') unless Refresh.enhanced?(@peer.session_info)
+        # Section 4: "A BGP speaker that has received the Graceful Restart
+        # Capability from its neighbor MUST ignore any BoRRs for an <AFI,
+        # SAFI> from the neighbor before the speaker receives the EoR for
+        # the given <AFI, SAFI> from the neighbor. The BGP speaker SHOULD
+        # log an error of the condition".
+        if GracefulRestart.received(@peer.session_info && @peer.session_info.peer) && !end_of_rib_received?(afi, safi)
+          return ignore(afi, safi, 'a BoRR before the End-of-RIB from a peer that advertised graceful restart (RFC 7313 section 4)', :error)
+        end
         bound = @peer.config['refresh_stale_time'] || STALE_TIME
         @lock.synchronize { @deadlines[[afi, safi]] = @clock.call + bound }
         @speaker.stale_family(@peer, afi, safi, :mark) do |n|
@@ -263,6 +271,10 @@ module BGP
 
       private
 
+      def end_of_rib_received?(afi, safi)
+        Array(@peer.recorder.data['end_of_rib_received']).include?({ 'afi' => afi, 'safi' => safi })
+      end
+
       def purge(afi, safi, why)
         @speaker.stale_family(@peer, afi, safi, :purge) do |n|
           event("#{why} for AFI #{afi} SAFI #{safi}: #{stale_count(n)} still stale removed",
@@ -293,7 +305,7 @@ module BGP
       def ignore(afi, safi, why, level = :info)
         log(level, "bgp4r: #{@peer.address}: ROUTE-REFRESH for AFI #{afi} SAFI #{safi} ignored: #{why}")
         event("ROUTE-REFRESH for AFI #{afi} SAFI #{safi} ignored: #{why}",
-              :ignored => { :afi => afi, :safi => safi }, :reason => why)
+              { :ignored => { :afi => afi, :safi => safi }, :reason => why }, level)
         nil
       end
 
@@ -301,8 +313,8 @@ module BGP
         n.nil? ? 'no table holds this family, nothing' : n.to_s
       end
 
-      def event(message, data)
-        @speaker.events.publish(:kind => KIND, :peer => @peer.address, :message => message, :data => data)
+      def event(message, data, level = :info)
+        @speaker.events.publish(:kind => KIND, :level => level, :peer => @peer.address, :message => message, :data => data)
       end
 
       def count(way, subtype)

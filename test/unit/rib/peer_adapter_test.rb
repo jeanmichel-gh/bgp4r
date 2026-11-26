@@ -441,4 +441,20 @@ class TestBgpRibPeerAdapter < Test::Unit::TestCase
     assert_equal([], BGP::Rib::PeerAdapter.link_state_operations(
       BGP::Update.new(path_attribute, BGP::Nlri.new('10.0.0.0/8'))))
   end
+
+  # Graceful restart: retain answers the families to keep, which ride
+  # with :peer_down, and downed? says it was sent.
+  def test_retain_rides_with_peer_down
+    a = BGP::Rib::PeerAdapter.new(@n, @sink, retain: -> { [[1, 1]] })
+    peer_opened
+    peer = a.peer
+    assert_equal(false, a.downed?)
+    a.state_change(:Idle, :Established)
+    assert_equal([:peer_down, peer, [[1, 1]]], @sink.work.last)
+    assert_equal(true, a.downed?)
+    b = BGP::Rib::PeerAdapter.new(@n, Sink.new, retain: -> { [] })
+    b.peer
+    b.state_change(:Idle, :Established)
+    assert_equal([[:peer_down, peer]], b.sink.work, 'nothing kept is the plain form')
+  end
 end

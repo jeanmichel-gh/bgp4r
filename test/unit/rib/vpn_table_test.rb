@@ -238,4 +238,16 @@ class TestBgpRibVpnTable < Test::Unit::TestCase
     assert_equal(%w[192.168.2.0/30 2001:db8:2::/64], @t.rows.collect { |r| r['prefix'] })
     assert_nil(@t.best('65000:1', '192.168.3.0/30'), 'decided again')
   end
+
+  def test_peer_down_keeps_a_family
+    @t.apply('10.255.0.3', vpn('10.255.0.3', [65000, 1], '192.168.2.0/30', 24001))
+    @t.apply('10.255.0.3', vpn('10.255.0.3', [65000, 1], '192.168.3.0/30', 24001))
+    @t.apply('10.255.0.3', vpn('10.255.0.3', [65000, 1], '2001:db8:2::/64', 24001, afi: 2))
+    @t.mark_stale('10.255.0.3', 1)
+    @t.apply('10.255.0.3', vpn('10.255.0.3', [65000, 1], '192.168.2.0/30', 24001))
+    @t.peer_down('10.255.0.3', [[1, 128]])
+    assert_equal([['192.168.2.0/30', 'restart']], @t.rows.collect { |r| [r['prefix'], r['stale']] })
+    assert_not_nil(@t.best('65000:1', '192.168.2.0/30'))
+    assert_nil(@t.best('65000:1', '192.168.3.0/30'), 'decided again')
+  end
 end

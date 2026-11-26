@@ -1296,4 +1296,22 @@ class TestBgpNeighbor < Test::Unit::TestCase
   ensure
     n.close
   end
+
+  # Why a session ended, for graceful restart (RFC 4724 section 4): the
+  # first cause wins, and a new session clears it.
+  def test_down_cause
+    n = BGP::Neighbor.new(:my_as => 65001, :remote_addr => '10.0.0.2', :id => '1.1.1.1')
+    assert_nil(n.down_cause)
+    n.send(:publish_notification, BGP::Notification.new(6, 2), :receive)
+    n.send(:stop_session, nil, :tcp)
+    assert_equal(:notification, n.down_cause, 'a NOTIFICATION then the reset it leads to')
+    n2 = BGP::Neighbor.new(:my_as => 65001, :remote_addr => '10.0.0.2', :id => '1.1.1.1')
+    n2.send(:dispatch_event, :ev_holdtime_expire, 'test')
+    assert_equal(:hold_time, n2.down_cause, 'the hold timer\'s event')
+    n3 = BGP::Neighbor.new(:my_as => 65001, :remote_addr => '10.0.0.2', :id => '1.1.1.1')
+    n3.send(:stop_session, 99, :tcp)
+    assert_nil(n3.down_cause, 'a reset from a session that has ended says nothing')
+  ensure
+    [n, n2, n3].each { |x| x&.close }
+  end
 end

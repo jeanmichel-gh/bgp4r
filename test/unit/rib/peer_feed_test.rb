@@ -218,4 +218,19 @@ class TestBgpRibPeerFeed < Test::Unit::TestCase
     assert_equal([], @rib.feed.neighbors)
     assert_equal(0, n.count_observers)
   end
+
+  # A detach after the session dropped sends no second :peer_down: it
+  # would delete what the first kept through a graceful restart.
+  def test_detach_after_a_kept_drop_keeps_the_routes
+    n = neighbor
+    @rib.attach(n, retain: -> { [[1, 1]] })
+    deliver(n, update('10.0.0.0/8'))
+    assert(@rib.drain)
+    n.send(:new_state, :Idle, 'test')
+    assert(@rib.drain)
+    @rib.detach(n)
+    assert(@rib.drain)
+    peer = @rib.peers.first
+    assert_equal([1, 'restart'], [@rib.loc_rib.size, @rib.stale(peer, '10.0.0.0/8')])
+  end
 end

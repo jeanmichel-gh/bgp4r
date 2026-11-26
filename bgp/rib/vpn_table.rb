@@ -130,10 +130,21 @@ module BGP
       end
 
       # RFC 4271 section 6: the session is gone, and so is what it sent.
-      def peer_down(peer)
+      # keep: the families to retain, as [afi, safi], when the peer is
+      # one we help through a graceful restart (RFC 4724 section 4.2):
+      # their routes are kept and marked stale, 'restart', and a route
+      # already stale goes, since "To deal with possible consecutive
+      # restarts, a route (from the peer) previously marked as stale MUST
+      # be deleted". Every other family goes, as RFC 4271 section 6 has
+      # it. Empty, the default, is that rule for all of them.
+      def peer_down(peer, keep = [])
         @lock.synchronize do
-          gone = @in.delete(peer)
-          gone&.each_value { |e| decide([e.vpn_route.rd, e.vpn_route.prefix]) }
+          h = @in[peer] || {}
+          gone = h.select { |_, e| e.stale || !keep.include?([Table.afi_of(e.vpn_route.prefix), IANA::SAFI::MPLS_VPN_UNICAST]) }
+          gone.each_key { |k| h.delete(k) }
+          h.each_value { |e| e.stale = 'restart' }
+          @in.delete(peer) if h.empty?
+          gone.each_value { |e| decide([e.vpn_route.rd, e.vpn_route.prefix]) }
         end
         changed
         self
@@ -207,11 +218,13 @@ module BGP
       end
 
       # Starts reading what neighbor receives: one call per session.
-      def attach(neighbor)
+      # retain, when given, answers the families to keep when the session
+      # ends (peer_down's keep).
+      def attach(neighbor, retain: nil)
         feed = Feed.new(self, neighbor)
         neighbor.add_observer(feed)
         neighbor.on_state_change do |now, was|
-          peer_down(neighbor.remote_addr) if was == :Established && now != was
+          peer_down(neighbor.remote_addr, retain ? retain.call : []) if was == :Established && now != was
         end
         feed
       end

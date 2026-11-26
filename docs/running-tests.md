@@ -19,9 +19,9 @@ amounts. Measured 2026-11-03:
 
 | Tier | What it needs | Files | Time | Command |
 |---|---|---:|---|---|
-| unit | Ruby | 191 | 21s | `ruby test/run_unit.rb` |
-| functional | a loopback socket | 28 | 18s | one file at a time, below |
-| lab | gobgpd, FRR, Docker or root | 41 | 10s to 400s per group | `ruby test/run_lab.rb GROUP` |
+| unit | Ruby | 192 | 21s | `ruby test/run_unit.rb` |
+| functional | a loopback socket | 29 | 18s | one file at a time, below |
+| lab | gobgpd, FRR, Docker or root | 42 | 10s to 400s per group | `ruby test/run_lab.rb GROUP` |
 
 **The first two tiers together are under a minute and need nothing
 installed.** That is worth knowing before reaching for a lab test.
@@ -100,6 +100,7 @@ Getting a session up and keeping it.
 | `end-of-rib` | 3 | 1 | 1 | end_of_rib on a neighbor: a marker per negotiated family after the first table; received ones recorded |
 | `route-refresh-answer` | 3 | 1 | 1 | a route refresh answered with the family's Adj-RIB-Out, between BoRR and EoRR to an enhanced peer; counted and published |
 | `route-refresh-stale` | 9 | 1 | 1 | a BoRR marks the peer's routes of a family stale in every table, the EoRR or refresh_stale_time removes what is still stale; 7/1 for a wrong length |
+| `graceful-restart` | 11 | 1 | 1 | graceful_restart on a neighbor: a helper, keeping a restarting peer's routes stale until its End-of-RIB, its Restart Time or stale_time |
 | `gtsm` | 1 | 1 | 0 | ttl_security on a neighbor: GTSM, sent at TTL 255, dropped below 256 - hops |
 | `tcp-md5` | 1 | 1 | 1 | password on a neighbor: TCP MD5, every segment signed, a missing or wrong digest dropped |
 | `fsm` | 3 | 0 | 0 | The finite state machine, the TCP session and the two IO threads |
@@ -433,6 +434,20 @@ bgp/gen: UPDATEs and withdrawals from a spec, and what they meant.
 
 ```
 ruby test/run_feature.rb gen
+```
+
+### `graceful-restart`
+
+graceful_restart on a neighbor: a helper, keeping a restarting peer's routes stale until its End-of-RIB, its Restart Time or stale_time.
+
+- RFC 4724 sections 3 to 5
+- Read first: `docs/daemon.md`
+- 11 unit files, 1 functional
+- lab:
+  - `graceful_restart_frr_test`, needs frr
+
+```
+ruby test/run_feature.rb graceful-restart
 ```
 
 ### `gtsm`
@@ -1033,5 +1048,5 @@ test file has to be tagged before the suite is green again, which is
 the same arrangement `test/unit/lab_groups_test.rb` has with the CI
 matrix.
 
-260 of 260 test files are tagged. The
+263 of 263 test files are tagged. The
 remainder, if any, is what the guard names.

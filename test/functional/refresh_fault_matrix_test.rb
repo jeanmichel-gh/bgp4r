@@ -41,11 +41,10 @@ class TestRefreshFaultMatrix < Test::Unit::TestCase
   # the session with 7/1.
   OUTCOME = { :ignore => :ignored, :may_ignore => :ignored, :notification => :notification }.freeze
 
-  # Where bgp4rd does not do what the RFC expects yet, and why. Measured
-  # 2026-11-26. Graceful restart is pull request 3: until it, bgp4rd
-  # reads a GR capability as an advertisement only, so a BoRR before the
-  # End-of-RIB is a BoRR.
-  KNOWN = { :refresh_borr_before_eor => :marked }.freeze
+  # Where bgp4rd does not do what the RFC expects, and why. None: the
+  # BoRR before the End-of-RIB was one until pull request 3a, which
+  # reads a GR peer's BoRR against its End-of-RIB.
+  KNOWN = {}.freeze
 
   def free_port
     s = TCPServer.new('127.0.0.1', 0)
@@ -125,7 +124,7 @@ class TestRefreshFaultMatrix < Test::Unit::TestCase
     end
     assert_equal({ :refresh_unadvertised_family => :ignored, :refresh_subtype_unknown => :ignored,
                    :refresh_borr_length => :notification, :refresh_eorr_length => :notification,
-                   :refresh_eorr_without_borr => :ignored, :refresh_borr_before_eor => :marked }, got)
+                   :refresh_eorr_without_borr => :ignored, :refresh_borr_before_eor => :ignored }, got)
   end
 
   # RFC 7313 section 4's local bound: a BoRR and no EoRR, and bgp4rd's

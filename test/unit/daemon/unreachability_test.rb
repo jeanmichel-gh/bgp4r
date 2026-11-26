@@ -259,4 +259,15 @@ class TestDaemonUnreachability < Test::Unit::TestCase
     while (e = sub.pop(:timeout => 0)) do got << e.data['event'] end
     assert_equal(['withdrawn'], got)
   end
+
+  def test_peer_down_keeps_a_family
+    t = D::UnreachTable.new
+    t.apply('10.0.0.1', R.operations(update(Unreachability.new('192.0.2.0/24', reporter('10.0.0.1', 65_001, 3))), [V4]))
+    t.apply('10.0.0.1', R.operations(update(Unreachability.new('198.51.100.0/24', reporter('10.0.0.1', 65_001, 3))), [V4]))
+    t.apply('10.0.0.1', R.operations(update(Unreachability.new('2001:db8::/32', reporter('10.0.0.1', 65_001, 3))), [V6]))
+    t.mark_stale('10.0.0.1', V4)
+    t.apply('10.0.0.1', R.operations(update(Unreachability.new('192.0.2.0/24', reporter('10.0.0.1', 65_001, 3))), [V4]))
+    t.peer_down('10.0.0.1', [V4])
+    assert_equal([['192.0.2.0/24', 'restart']], t.rows.collect { |r| [r['prefix'], r['stale']] })
+  end
 end

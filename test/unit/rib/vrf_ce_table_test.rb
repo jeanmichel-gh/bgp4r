@@ -138,4 +138,26 @@ class TestBgpRibVrfCeTable < Test::Unit::TestCase
     @table.peer_down('A', '192.168.1.3')
     assert_equal(0, @table.stale_size('A', '192.168.1.3'), 'a closed session leaves no mark')
   end
+
+  # The CE's sink takes the keep that rides with :peer_down.
+  def test_the_sink_passes_what_is_kept
+    announce('A', '192.168.1.2', '172.16.1.0/24')
+    sink = BGP::Rib::VrfCeTable::Sink.new(@table, 'A')
+    sink << [:peer_down, peer('192.168.1.2'), [[1, 1]]]
+    assert_equal('restart', @table.stale('A', '192.168.1.2', '172.16.1.0/24'))
+    sink << [:peer_down, peer('192.168.1.2')]
+    assert_equal(0, @table.size('A'))
+  end
+
+  def test_peer_down_keeps_a_family
+    announce('A', '192.168.1.2', '172.16.1.0/24')
+    announce('A', '192.168.1.2', '172.16.2.0/24')
+    @table.mark_stale('A', '192.168.1.2', 1)
+    announce('A', '192.168.1.2', '172.16.1.0/24')
+    @table.peer_down('A', '192.168.1.2', [[1, 1]])
+    assert_equal(['172.16.1.0/24'], @table.best('A').collect(&:prefix))
+    assert_equal('restart', @table.stale('A', '192.168.1.2', '172.16.1.0/24'))
+    @table.peer_down('A', '192.168.1.2', [[2, 1]])
+    assert_equal([0, 0], [@table.size('A'), @table.stale_size('A', '192.168.1.2')], 'not kept: gone, mark and all')
+  end
 end
