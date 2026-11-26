@@ -50,6 +50,7 @@ module BGP
         @lock = Mutex.new
         @in = Hash.new { |h, k| h[k] = {} }   # vrf => { ce address => { [prefix, path_id] => Route } }
         @soo = {}                             # ce address => Site of Origin text, or nil
+        @stale = Hash.new { |h, k| h[k] = {} } # vrf => { [ce address, prefix, path_id] => reason }
         @listeners = []
       end
 
@@ -85,10 +86,13 @@ module BGP
             case op
             when :withdraw
               _peer, prefix, path_id = args
-              h.delete([Route.normalize(prefix), path_id])
+              key = [Route.normalize(prefix), path_id]
+              h.delete(key)
+              @stale[vrf].delete([address, *key])
             when :announce
               r = args.first
               h[[r.prefix, r.path_id]] = r
+              @stale[vrf].delete([address, r.prefix, r.path_id])
             end
           end
         end
@@ -99,9 +103,47 @@ module BGP
       # RFC 4271 section 6: that CE's session is gone, and so is what it
       # sent.
       def peer_down(vrf, address)
-        gone = @lock.synchronize { @in[vrf].delete(address) }
+        gone = @lock.synchronize do
+          @stale[vrf].delete_if { |k, _| k.first == address }
+          @in[vrf].delete(address)
+        end
         changed if gone
         self
+      end
+
+      # Marks stale the routes of one AFI the CE at address sent into vrf,
+      # as a BoRR asks (RFC 7313 section 4). Returns how many were marked.
+      def mark_stale(vrf, address, afi, reason = 'refresh')
+        @lock.synchronize do
+          keys = (@in[vrf][address] || {}).keys.select { |prefix, _| Table.afi_of(prefix) == afi }
+          keys.each { |k| @stale[vrf][[address, *k]] = reason }.size
+        end
+      end
+
+      # Removes what is still stale of that AFI from that CE, as an EoRR
+      # asks. Returns how many went.
+      def purge_stale(vrf, address, afi)
+        n = @lock.synchronize do
+          h = @in[vrf][address] || {}
+          keys = @stale[vrf].keys.select { |a, prefix, _| a == address && Table.afi_of(prefix) == afi }
+          keys.each { |k| @stale[vrf].delete(k) ; h.delete(k[1..]) }
+          keys.size
+        end
+        changed if n > 0
+        n
+      end
+
+      # How many routes the CE at address sent into vrf are marked stale.
+      def stale_size(vrf, address)
+        @lock.synchronize { @stale[vrf].count { |(a, _, _), _| a == address } }
+      end
+
+      # The reason a CE's route is stale, or nil. Any path of the prefix.
+      def stale(vrf, address, prefix)
+        @lock.synchronize do
+          prefix = Route.normalize(prefix)
+          @stale[vrf].find { |(a, p, _), _| a == address && p == prefix }&.last
+        end
       end
 
       # The best CE route of each prefix in vrf, as Best, sorted by prefix.

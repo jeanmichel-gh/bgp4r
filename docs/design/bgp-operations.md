@@ -365,7 +365,7 @@ touches every family's sender, the RIB and the fault catalog at once:
   it, the counts on the peer row and the `refresh` events. Built.
 - **2b, receiving BoRR and EoRR**: the stale mark, `refresh_stale_time`,
   the 7/1 NOTIFICATION for a wrong length, an unknown subtype ignored,
-  `stale` on the route rows. Not started.
+  `stale` on the route rows. Built.
 - **2c, the fault catalog**: `BGP::Fault::REFRESH` and `bgp4r-sim`
   sending its cases. Not started.
 
@@ -414,6 +414,60 @@ touches every family's sender, the RIB and the fault catalog at once:
   session, the events), and
   `test/functional/lab/route_refresh_frr_test.rb` (both ways, with and
   without 70 on our side, counts agreeing with FRR's).
+
+### As built (2b)
+
+- **Where the mark lives.** Each table that holds a peer's routes keeps
+  it, since each holds a family RFC 7313 names: the RIB's Adj-RIB-In
+  (`AdjRibIn#mark_stale`, `#purge_stale`, `Table#mark_stale`,
+  `#purge_stale` by AFI, IPv4 and IPv6 told apart by the prefix), the
+  CE table in a VRF, the VPN table by AFI, the EVPN table, the BGP-LS
+  table and the unreachability table by family. L2VPN EVPN is two
+  tables: types 2 and 3 in the EVPN table, type 254 in the
+  unreachability table. The mark is a reason, `refresh` here, so GR's
+  `restart` and `long_lived` use the same one. An announcement replaces
+  the entry and with it the mark; a withdrawal and a closed session
+  take it.
+- **In order with the UPDATEs.** `Refresh#update` runs on the session's
+  receive thread, so a BoRR comes after every UPDATE before it. The
+  tables that apply on that thread are marked at once; the RIB, whose
+  worker runs behind, gets a `[:stale]` item on its feed, in its place
+  among the UPDATEs (`Speaker#stale_family`, beside 2a's
+  `resend_family`). The worker calls back with the count, for the event.
+- **Not for SAFI 2.** The RIB keys a route by its prefix and holds
+  unicast and multicast together, so a BoRR for multicast would mark
+  unicast routes too. A BoRR for a family no table holds is published
+  with nothing marked.
+- **The bound** is `refresh_stale_time`, a live neighbor key, 180 s by
+  default. Each family waiting has a deadline on a monotonic clock; a
+  thread, alive only while one waits, purges what ran out once a second
+  (`Refresh#expire`, which a test calls on its own clock).
+- **The length error** is found in `Message.factory`, since neither
+  message class can hold a wrong-length BoRR: one octet more reads as
+  an ORF message, whose encode writes the subtype as 0, and one less as
+  a Route_refresh with no SAFI. It raises `Malformed_route_refresh`,
+  carrying the octets; `Neighbor` sends 7/1 with them and stops, when
+  the peer advertised 70, and logs and drops it otherwise.
+- **GR's rule is left for GR**: a BoRR before the End-of-RIB is not yet
+  ignored, since bgp4rd negotiates no GR before pull request 3.
+- **Rows.** `stale` on the route rows of `show.rib` (each path),
+  `show.adj_in`, `show.vpn`, `show.vrf`, `show.evpn`, `show.link_state`
+  and `show.unreachability`, absent when fresh. `show.vrf`'s rows are
+  built when the VRFs sync and a mark changes no decision, so the mark
+  is read as the rows are asked for. The peer row's `refresh` gains
+  `stale`, the routes stale now, and `waiting`, the families between
+  BoRR and EoRR.
+- Tests: the mark in each table's unit test, `Refresh` on a manual
+  clock and the dispatch per family in `refresh_test.rb`, the length in
+  `message_test.rb`, the key in `candidate_test.rb`, and
+  `test/functional/refresh_stale_test.rb` through a real bgp4rd: BoRR,
+  half the routes, EoRR; the bound; a peer without 70; an EoRR alone;
+  subtype 3; a long BoRR with and without 70.
+- **Measured against FRR 10.5.1**, 2026-11-25: FRR's answer to
+  `peer.refresh` is a BoRR, every route of the family, and an EoRR.
+  Its routes include ours sent back, AS_PATH "65002 65001", which the
+  Adj-RIB-In keeps; bgp4rd marks all three, all three come again, and
+  the EoRR removes none (`route_refresh_frr_test.rb`).
 
 ### Fault catalog
 
@@ -1224,7 +1278,7 @@ and `CLAUDE.md`'s table.
 | 1 | 5 | GTSM, `ttl_security`; built | – |
 | 2 | 6a | TCP MD5, `password`; built | – |
 | 3 | 1 | End-of-RIB sent and received, `end_of_rib`; built | – |
-| 4 | 2 | Route refresh answered, enhanced refresh, the stale mark, `BGP::Fault::REFRESH`: in three parts, 2a answering built, 2b receiving, 2c the catalog | 1 |
+| 4 | 2 | Route refresh answered, enhanced refresh, the stale mark, `BGP::Fault::REFRESH`: in three parts, 2a answering built, 2b receiving built, 2c the catalog | 1 |
 | 5 | 3 | GR helper, RFC 8538, Hard Reset, `BGP::Fault::GR`, the first behaviours in `bgp4r-sim`, GTSM's among them | 2 |
 | 6 | 7a | RTR codec, `BGP::Fault::RTR` | – |
 | 7 | 7b | `bgp4r-rtr`, the cache and injector | 7a |

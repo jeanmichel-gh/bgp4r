@@ -343,4 +343,16 @@ class BGP_Daemon_LinkStateTable_Test < Test::Unit::TestCase
                              BGP::Link_state::Tlv::Autonomous_system.new(65002))),
                'an AS alone names nothing')
   end
+
+  # RFC 7313 section 4 for BGP-LS: every route from the peer.
+  def test_stale_routes
+    @t.announce('10.2.0.1', node, attr)
+    @t.announce('10.2.0.1', link, attr)
+    assert_equal(2, @t.mark_stale('10.2.0.1'))
+    assert_equal(%w[refresh refresh], @t.rows.collect { |r| r['stale'] })
+    @t.announce('10.2.0.1', node, attr)
+    assert_equal(1, @t.stale_size('10.2.0.1'))
+    assert_equal(1, @t.purge_stale('10.2.0.1'))
+    assert_equal([['node', nil]], @t.rows.collect { |r| [r['type'], r['stale']] })
+  end
 end

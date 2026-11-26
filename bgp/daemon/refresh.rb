@@ -28,8 +28,7 @@ module BGP
     # Answering a route refresh, RFC 2918 section 4, and wrapping the
     # answer in BoRR and EoRR, RFC 7313 section 4. One per peer, watching
     # its session. docs/design/bgp-operations.md, section 2, is the design;
-    # this is its pull request 2a. Receiving BoRR and EoRR, the stale mark,
-    # is 2b.
+    # answering is its pull request 2a, receiving BoRR and EoRR 2b.
     #
     # RFC 2918 section 4: "If a BGP speaker receives from its peer a
     # ROUTE-REFRESH message with the <AFI, SAFI> that the speaker didn't
@@ -52,9 +51,22 @@ module BGP
     # re-advertisement of the entire Adj-RIB-Out to the peer, it MUST send
     # an EoRR message."
     #
+    # And on receipt, the same section: "When a BGP speaker receives a BoRR
+    # message from a peer, it MUST mark all the routes with the given
+    # [...] <AFI, SAFI> [...] from that peer as stale. [...] When a BGP
+    # speaker receives an EoRR message from a peer, it MUST immediately
+    # remove any routes from the peer that are still marked as stale for
+    # that <AFI, SAFI>." It "MAY impose a locally configurable upper bound
+    # on how long it would retain any stale routes": the neighbor's
+    # `refresh_stale_time`. These "are applicable only if a BGP speaker
+    # has received the "Enhanced Route Refresh Capability" from a peer", so
+    # a BoRR or EoRR from a peer whose OPEN lacked 70 is ignored and
+    # logged. The tables keep the mark (Speaker#stale_family).
+    #
     # It counts every ROUTE-REFRESH message both ways by subtype, which is
     # what FRR counts, and the requests it answered and ignored, and
-    # publishes a `refresh` event for each message and each answer.
+    # publishes a `refresh` event for each message, each answer, and each
+    # mark and purge.
     class Refresh
 
       KIND = BGP::Events.register_kind(:refresh)
@@ -62,21 +74,47 @@ module BGP
       # RFC 7313 section 3.2's subtypes by the names a reader sees.
       SUBTYPES = { 0 => 'normal', 1 => 'borr', 2 => 'eorr' }.freeze
 
-      def initialize(peer, speaker)
+      # How long routes stay stale after a BoRR with no EoRR, in seconds,
+      # when the neighbor sets no `refresh_stale_time`: RFC 8538 section
+      # 4.1's "suggested default value [...] is 180 seconds" for its stale
+      # timer, reused (docs/design/bgp-operations.md, answer 6).
+      STALE_TIME = 180
+
+      # Raises ArgumentError unless value is nil or a whole number of
+      # seconds from 1.
+      def self.check(value, address)
+        return if value.nil?
+        return if value.is_a?(Integer) && value >= 1
+        raise ArgumentError, "neighbor #{address}: refresh_stale_time must be a whole number of seconds from 1, not #{value.inspect}"
+      end
+
+      # clock answers seconds, monotonic; a test passes its own.
+      def initialize(peer, speaker, clock: -> { Process.clock_gettime(Process::CLOCK_MONOTONIC) })
         @peer = peer
         @speaker = speaker
+        @clock = clock
         @lock = Mutex.new
         # One answer at a time per peer, so a second request waits for
         # the first EoRR rather than interleaving with it.
         @answering = Mutex.new
+        @watcher = nil
         reset
       end
 
-      # A new session: counts start again, as FRR's do.
+      # A new session: counts start again, as FRR's do. The tables drop a
+      # closed session's routes, stale or not, so no family waits for an
+      # EoRR any more.
       def reset
         @lock.synchronize do
           @counts = { 'received' => Hash.new(0), 'sent' => Hash.new(0), 'answered' => 0, 'ignored' => 0 }
+          @deadlines = {} # [afi, safi] => when what is stale goes without an EoRR
         end
+      end
+
+      # The families marked stale by a BoRR and waiting for their EoRR, as
+      # [afi, safi].
+      def waiting
+        @lock.synchronize { @deadlines.keys }
       end
 
       # The counts, as the peer row carries them.
@@ -95,9 +133,16 @@ module BGP
         when BGP::Route_refresh
           count('received', msg.subtype)
           publish('receive', msg)
-          return unless (msg.subtype || BGP::Route_refresh::NORMAL) == BGP::Route_refresh::NORMAL
           afi, safi = msg.afi, msg.safi
-          Thread.new { answer(afi, safi) }
+          case msg.subtype || BGP::Route_refresh::NORMAL
+          when BGP::Route_refresh::NORMAL then Thread.new { answer(afi, safi) }
+          when BGP::Route_refresh::BORR then borr(afi, safi)
+          when BGP::Route_refresh::EORR then eorr(afi, safi)
+          else
+            # RFC 7313 section 5: "it MUST ignore the received
+            # ROUTE-REFRESH message. It SHOULD log an error".
+            ignore(afi, safi, "subtype #{msg.subtype} is not 0, 1 or 2 (RFC 7313 section 5)", :error)
+          end
         when BGP::Orf_route_refresh
           count('received', BGP::Route_refresh::NORMAL)
           log(:info, "bgp4r: #{@peer.address}: a ROUTE-REFRESH with ORF entries is not answered (RFC 5291 is not in bgp4rd)")
@@ -145,6 +190,43 @@ module BGP
         log(:error, "bgp4r: #{@peer.address}: route refresh: #{e.class}: #{e.message}")
       end
 
+      # A BoRR: the peer's routes of that family are stale until its EoRR,
+      # or until refresh_stale_time runs out. Runs on the session's receive
+      # thread, so the mark lands between the UPDATEs before it and after
+      # it. A second BoRR before the EoRR marks again and starts the time
+      # again.
+      def borr(afi, safi)
+        return ignore(afi, safi, 'the peer did not advertise Enhanced Route Refresh (70)') unless Refresh.enhanced?(@peer.session_info)
+        bound = @peer.config['refresh_stale_time'] || STALE_TIME
+        @lock.synchronize { @deadlines[[afi, safi]] = @clock.call + bound }
+        @speaker.stale_family(@peer, afi, safi, :mark) do |n|
+          event("BoRR for AFI #{afi} SAFI #{safi}: #{stale_count(n)} marked stale, for at most #{bound} s",
+                :stale => { :afi => afi, :safi => safi, :marked => n, :seconds => bound })
+        end
+        watch
+      end
+
+      # An EoRR: what is still stale of that family goes. An EoRR with no
+      # BoRR before it is ignored and logged, as section 4 allows.
+      def eorr(afi, safi)
+        return ignore(afi, safi, 'the peer did not advertise Enhanced Route Refresh (70)') unless Refresh.enhanced?(@peer.session_info)
+        return ignore(afi, safi, 'an EoRR with no BoRR before it (RFC 7313 section 4)') unless @lock.synchronize { @deadlines.delete([afi, safi]) }
+        purge(afi, safi, 'EoRR')
+      end
+
+      # Purges every family whose bound ran out by now. The watcher thread
+      # calls it once a second; a test calls it with its own clock.
+      def expire
+        now = @clock.call
+        due = @lock.synchronize do
+          list = @deadlines.select { |_, at| at <= now }.keys
+          list.each { |f| @deadlines.delete(f) }
+          list
+        end
+        due.each { |afi, safi| purge(afi, safi, 'refresh_stale_time') }
+        due
+      end
+
       # Why a request for afi and safi is not answered, or nil when it is.
       # RFC 2918 section 4: our OPEN had to carry the capability and the
       # family. An OPEN with no Multiprotocol capability carries IPv4
@@ -180,6 +262,48 @@ module BGP
       end
 
       private
+
+      def purge(afi, safi, why)
+        @speaker.stale_family(@peer, afi, safi, :purge) do |n|
+          event("#{why} for AFI #{afi} SAFI #{safi}: #{stale_count(n)} still stale removed",
+                :purged => { :afi => afi, :safi => safi, :removed => n }, :reason => why)
+        end
+      end
+
+      # A thread that purges what ran out, while any family waits.
+      # It ends itself, under the lock, once nothing waits, so a BoRR
+      # after that starts another.
+      def watch
+        @lock.synchronize do
+          return if @watcher
+          @watcher = Thread.new do
+            loop do
+              sleep 1
+              expire
+              done = @lock.synchronize do
+                @watcher = nil if @deadlines.empty?
+                @deadlines.empty?
+              end
+              break if done
+            end
+          end
+        end
+      end
+
+      def ignore(afi, safi, why, level = :info)
+        log(level, "bgp4r: #{@peer.address}: ROUTE-REFRESH for AFI #{afi} SAFI #{safi} ignored: #{why}")
+        event("ROUTE-REFRESH for AFI #{afi} SAFI #{safi} ignored: #{why}",
+              :ignored => { :afi => afi, :safi => safi }, :reason => why)
+        nil
+      end
+
+      def stale_count(n)
+        n.nil? ? 'no table holds this family, nothing' : n.to_s
+      end
+
+      def event(message, data)
+        @speaker.events.publish(:kind => KIND, :peer => @peer.address, :message => message, :data => data)
+      end
 
       def count(way, subtype)
         name = SUBTYPES.fetch(subtype || BGP::Route_refresh::NORMAL, 'other')

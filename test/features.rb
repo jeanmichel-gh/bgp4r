@@ -322,6 +322,17 @@ module Features
       :lab   => %w[route_refresh_frr_test],
     },
 
+    'route-refresh-stale' => {
+      :area  => 'session',
+      :about => 'a BoRR marks the peer\'s routes of a family stale in every table, the EoRR or refresh_stale_time removes what is still stale; 7/1 for a wrong length',
+      :rfc   => 'RFC 7313 sections 4 and 5',
+      :doc   => 'docs/daemon.md',
+      :unit  => %w[daemon/refresh_test rib/adj_rib_in_test rib/table_test rib/vpn_table_test rib/evpn_table_test
+                   rib/vrf_ce_table_test daemon/link_state_table_test daemon/unreachability_test messages/message_test],
+      :functional => %w[refresh_stale_test],
+      :lab   => %w[route_refresh_frr_test],
+    },
+
     'gtsm' => {
       :area  => 'session',
       :about => 'ttl_security on a neighbor: GTSM, sent at TTL 255, dropped below 256 - hops',

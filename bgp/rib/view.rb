@@ -460,6 +460,15 @@ module BGP
         { :prefix => route.prefix }.merge(fields(route))
                                    .merge(:best => !best.nil? && best.peer == route.peer &&
                                                    best.path_id == route.path_id)
+                                   .merge(stale(route))
+      end
+
+      # { :stale => reason } for a route marked stale, 'refresh' after a
+      # BoRR (RFC 7313 section 4), and nothing for a fresh one, so a row
+      # without the key is a fresh route.
+      def stale(route)
+        why = @table.stale(route.peer, route.prefix, route.path_id)
+        why ? { :stale => why } : {}
       end
 
       # The attributes one Adj-RIB-Out entry carries, read off the
@@ -544,7 +553,7 @@ module BGP
         fields(route).merge(:best   => lost_at.nil?,
                             :usable => usable?(lost_at),
                             :lost_at => lost_at,
-                            :reason => reason(lost_at, step))
+                            :reason => reason(lost_at, step)).merge(stale(route))
       end
 
       # Route#as_path answers the word "empty" when there is no AS_PATH,

@@ -329,6 +329,18 @@ class BGP_Daemon_Candidate_Test < Test::Unit::TestCase
                  @candidate.commit('check' => true)[:errors])
   end
 
+  # refresh_stale_time is read at each BoRR, so it is live; one that is
+  # not a whole number of seconds is refused, as it is at start.
+  def test_refresh_stale_time_is_live_and_checked
+    @candidate.load('lines' => ['set neighbors 127.0.0.9 refresh_stale_time 0'])
+    assert_equal(['neighbor 127.0.0.9: refresh_stale_time must be a whole number of seconds from 1, not 0'],
+                 @candidate.commit('check' => true)[:errors])
+    @candidate.load('lines' => ['set neighbors 127.0.0.9 refresh_stale_time 30'])
+    r = @candidate.commit
+    assert_equal([true, []], [r[:ok], r[:warnings]])
+    assert_equal(30, @speaker.peer('127.0.0.9').config['refresh_stale_time'])
+  end
+
   # The listener holds the keys from when bgp4rd starts, so a
   # neighbor's password is restart class with its own reason.
   def test_password_cannot_change_while_running

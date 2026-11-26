@@ -35,6 +35,7 @@ module BGP
         @peer = peer
         @routes = {} # prefix => { path_id => route }
         @size = 0
+        @stale = {}  # [prefix, path_id] => reason, for the routes marked stale
       end
 
       # Stores route. A route already there with the same key is replaced:
@@ -46,6 +47,7 @@ module BGP
         old = paths[route.path_id]
         @size += 1 unless old
         paths[route.path_id] = route
+        @stale.delete([route.prefix, route.path_id])
         old
       end
 
@@ -54,7 +56,9 @@ module BGP
       def withdraw(prefix, path_id=nil)
         prefix = Route.normalize(prefix)
         paths = @routes[prefix] or return nil
-        old = paths.delete(path_id.nil? ? nil : Integer(path_id))
+        path_id = path_id.nil? ? nil : Integer(path_id)
+        old = paths.delete(path_id)
+        @stale.delete([prefix, path_id])
         @routes.delete(prefix) if paths.empty?
         @size -= 1 if old
         old
@@ -64,9 +68,39 @@ module BGP
       def flush
         all = routes
         @routes.clear
+        @stale.clear
         @size = 0
         all
       end
+
+      # Marks stale every route the block chooses, with reason: 'refresh'
+      # after a BoRR (RFC 7313 section 4), 'restart' and 'long_lived' for
+      # Graceful Restart later. A route announced again, or withdrawn, loses
+      # its mark. Returns how many were marked.
+      def mark_stale(reason)
+        n = 0
+        each do |r|
+          next unless yield(r)
+          @stale[[r.prefix, r.path_id]] = reason
+          n += 1
+        end
+        n
+      end
+
+      # Removes every route still marked stale that the block chooses, as
+      # an EoRR asks (RFC 7313 section 4). Returns them.
+      def purge_stale
+        gone = @stale.keys.filter_map { |prefix, path_id| self[prefix, path_id] }.select { |r| yield(r) }
+        gone.each { |r| withdraw(r.prefix, r.path_id) }
+        gone
+      end
+
+      # The reason route is marked stale, or nil when it is fresh.
+      def stale(prefix, path_id=nil)
+        @stale[[Route.normalize(prefix), path_id.nil? ? nil : Integer(path_id)]]
+      end
+
+      def stale_size ; @stale.size ; end
 
       def [](prefix, path_id=nil)
         paths = @routes[Route.normalize(prefix)]

@@ -27,6 +27,30 @@ module ::BGP
   class UnknownBgpMessage < RuntimeError
   end
 
+  # A BoRR or an EoRR whose length is wrong. RFC 7313 section 5: "If the
+  # length, excluding the fixed-size message header, of the received
+  # ROUTE-REFRESH message with Message Subtype 1 and 2 is not 4, then the
+  # BGP speaker MUST send a NOTIFICATION message with the Error Code of
+  # "ROUTE-REFRESH Message Error" and the subcode of "Invalid Message
+  # Length". The Data field of the NOTIFICATION message MUST contain the
+  # complete ROUTE-REFRESH message." octets is that message.
+  #
+  # Raised by Message.factory, since neither class can hold one: a longer
+  # one reads as an ORF message, whose encode writes the subtype octet as
+  # 0, and a shorter one as a Route_refresh with no SAFI, which encode
+  # fills in.
+  class Malformed_route_refresh < RuntimeError
+    attr_reader :octets
+    def initialize(octets)
+      @octets = octets
+      super("ROUTE-REFRESH subtype #{octets.getbyte(21)} of #{octets.size - 19} octets after the header, not 4 (RFC 7313 section 5)")
+    end
+
+    def notification
+      Notification.new(7, 1, @octets)
+    end
+  end
+
   class Message
 
     # RFC 4271 section 4: "The maximum message size is 4096 octets. All
@@ -79,6 +103,11 @@ module ::BGP
       when NOTIFICATION
         Notification.new(s)
       when ROUTE_REFRESH
+        # The Message Subtype is the octet after the AFI, RFC 7313 section
+        # 3.2. A message too short to hold it has no subtype to check.
+        if s.size >= 22 && [1, 2].include?(s.getbyte(21)) && s.size != 23
+          raise Malformed_route_refresh, s
+        end
         if s.size > 23  
           Orf_route_refresh.new(s)
         else

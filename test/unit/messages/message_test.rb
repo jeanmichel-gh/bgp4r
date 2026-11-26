@@ -72,4 +72,21 @@ class Message_Test < Test::Unit::TestCase
     assert_equal 4096, BGP::Message::MAX_SIZE
   end
 
+  # RFC 7313 section 5: a BoRR or EoRR whose length after the header is
+  # not 4 is an error with the whole message as its data, whichever way
+  # it is wrong. A normal request with ORF entries is longer and is not:
+  # route_refresh_test's ORF messages still parse.
+  def test_factory_a_borr_or_eorr_of_the_wrong_length
+    [:borr, :eorr].each do |sub|
+      good = Route_refresh.new(1, 1, sub).encode
+      assert_equal(Route_refresh, Message.factory(good).class)
+      long = good[0, 16] + [24].pack('n') + good[18..] + "\x00"
+      short = good[0, 16] + [22].pack('n') + good[18, 4]
+      [long, short].each do |bad|
+        e = assert_raise(Malformed_route_refresh) { Message.factory(bad) }
+        assert_equal(bad, e.octets)
+        assert_equal([7, 1, bad], e.notification.to_hash.values_at(:code, :subcode, :data))
+      end
+    end
+  end
 end

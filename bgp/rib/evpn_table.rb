@@ -50,7 +50,7 @@ module BGP
     # Adj-RIB-In.
     class EvpnTable
 
-      Entry = Struct.new(:evpn_route, :since)
+      Entry = Struct.new(:evpn_route, :since, :stale)
 
       # local_as, router_id, cluster_id: ours, for the decision process.
       def initialize(local_as:, router_id:, cluster_id: nil)
@@ -114,6 +114,32 @@ module BGP
         end
         changed
         self
+      end
+
+      # Marks stale every route from peer, as a BoRR for L2VPN EVPN asks
+      # (RFC 7313 section 4). Returns how many were marked.
+      def mark_stale(peer, reason = 'refresh')
+        @lock.synchronize { (@in[peer] || {}).each_value { |e| e.stale = reason }.size }
+      end
+
+      # How many routes from peer are marked stale.
+      def stale_size(peer)
+        @lock.synchronize { (@in[peer] || {}).each_value.count(&:stale) }
+      end
+
+      # Removes what is still stale from peer, as an EoRR asks. Returns how
+      # many went.
+      def purge_stale(peer)
+        gone = @lock.synchronize do
+          h = @in[peer] or next []
+          stale = h.select { |_, e| e.stale }
+          stale.each_key { |k| h.delete(k) }
+          @in.delete(peer) if h.empty?
+          stale.each_value.collect { |e| e.evpn_route.decision_key }.uniq.each { |k| decide(k) }
+          stale
+        end
+        changed unless gone.empty?
+        gone.size
       end
 
       # How many routes are held, from one peer or from all.
@@ -197,7 +223,7 @@ module BGP
           'med' => r.med, 'originator_id' => r.originator_id, 'cluster_list' => r.cluster_list,
           'best' => !result.nil? && result.best.equal?(r),
           'reason' => result && result.best.equal?(r) ? result.reason.to_s : (result && result.eliminated[r]).to_s,
-          'since' => e.since.utc.strftime('%Y-%m-%dT%H:%M:%S.%LZ') }
+          'since' => e.since.utc.strftime('%Y-%m-%dT%H:%M:%S.%LZ') }.tap { |h| h['stale'] = e.stale if e.stale }
       end
 
       # RD, type, tag, then the MAC and IP or the originator, nil first.

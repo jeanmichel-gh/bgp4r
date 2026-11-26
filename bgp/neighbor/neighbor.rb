@@ -370,6 +370,9 @@ module BGP
         rescue Malformed_attribute => e
           rcv_malformed(e)
           return
+        rescue Malformed_route_refresh => e
+          rcv_malformed_route_refresh(e)
+          return
         end
         log_info "Recv#{msg.class.to_s.split('::').last}"
         log_debug "Recv #{render(msg)}\n"
@@ -969,6 +972,32 @@ module BGP
     end
     
     def rcv_route_refresh(m)
+    end
+
+    # A BoRR or EoRR of the wrong length. RFC 7313 section 5's NOTIFICATION
+    # "is applicable only when a BGP speaker has received the "Enhanced
+    # Route Refresh Capability" from a peer", so from any other peer it is
+    # logged and dropped, as a subtype that peer cannot have meant.
+    def rcv_malformed_route_refresh(e)
+      peer_open = @session_info && @session_info.peer
+      enhanced = peer_open && Array(peer_open.opt_parms).flat_map { |p|
+        p.respond_to?(:capabilities) ? Array(p.capabilities) : [p]
+      }.any? { |c| c.is_a?(OPT_PARM::CAP::Enhanced_route_refresh) }
+      unless enhanced
+        log_warn "RecvRouteRefresh ignored: #{e.message}; the peer did not advertise Enhanced Route Refresh"
+        return
+      end
+      log_warn "RecvRouteRefresh malformed: #{e.message}"
+      n = e.notification
+      # Written here, as rcv_malformed writes its NOTIFICATION, since stop
+      # drops what the writer still has queued.
+      begin
+        log_info "SendNotification #{n}"
+        @socket.write n.encode
+        publish_notification(n, :send)
+      rescue IOError, SystemCallError
+      end
+      stop
     end
 
     # The :strict policy found a malformed attribute (RFC 7606).

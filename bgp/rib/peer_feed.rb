@@ -238,6 +238,12 @@ module BGP
             work[3] << e
             raise
           end
+        when :stale
+          # A BoRR or an EoRR, in its place among the UPDATEs that came
+          # before and after it on the session. work[4], when given, is
+          # called with what was marked or removed.
+          n = work[3] == :mark ? @table.mark_stale(work[1], work[2]) : @table.purge_stale(work[1], work[2]).size
+          work[4]&.call(n)
         when :fib
           @table.fib_installer&.run_changes(work[1])
         when :sync

@@ -55,7 +55,7 @@ module BGP
     # connection's Adj-RIB-In.
     class VpnTable
 
-      Entry = Struct.new(:vpn_route, :since)
+      Entry = Struct.new(:vpn_route, :since, :stale)
 
       # local_as, router_id, cluster_id: ours, for the decision process.
       def initialize(local_as:, router_id:, cluster_id: nil)
@@ -139,6 +139,43 @@ module BGP
         self
       end
 
+      # Marks stale the routes of one AFI from peer, as a BoRR for
+      # AFI/128 asks (RFC 7313 section 4). An announcement replaces the
+      # Entry, and with it the mark. Returns how many were marked.
+      def mark_stale(peer, afi, reason = 'refresh')
+        @lock.synchronize do
+          entries(peer, afi).each { |e| e.stale = reason }.size
+        end
+      end
+
+      # Removes what is still stale of that AFI from peer, as an EoRR asks.
+      # Returns how many went.
+      def purge_stale(peer, afi)
+        gone = @lock.synchronize do
+          h = @in[peer] or next []
+          stale = entries(peer, afi).select(&:stale)
+          stale.each { |e| h.delete(e.vpn_route.key) }
+          @in.delete(peer) if h.empty?
+          stale.collect { |e| [e.vpn_route.rd, e.vpn_route.prefix] }.uniq.each { |k| decide(k) }
+          stale
+        end
+        changed unless gone.empty?
+        gone.size
+      end
+
+      # How many routes from peer are marked stale.
+      def stale_size(peer)
+        @lock.synchronize { (@in[peer] || {}).each_value.count(&:stale) }
+      end
+
+      # The reason peer's route to [rd, prefix] is stale, or nil. Any path.
+      def stale(peer, rd, prefix)
+        @lock.synchronize do
+          prefix = Route.normalize(prefix)
+          (@in[peer] || {}).each_value.find { |e| e.stale && e.vpn_route.rd == rd && e.vpn_route.prefix == prefix }&.stale
+        end
+      end
+
       # How many routes are held, from one peer or from all.
       def size(peer = nil)
         @lock.synchronize { peer ? (@in[peer] || {}).size : @in.values.sum(&:size) }
@@ -186,6 +223,11 @@ module BGP
 
       private
 
+      # peer's entries of one AFI. Called with the lock held.
+      def entries(peer, afi)
+        (@in[peer] || {}).values.select { |e| Table.afi_of(e.vpn_route.prefix) == afi }
+      end
+
       # Runs the decision process again for one [RD, prefix], over every
       # peer's route to it. Called with the lock held.
       def decide(key)
@@ -219,7 +261,7 @@ module BGP
           'originator_id' => r.originator_id, 'cluster_list' => r.cluster_list,
           'best' => !result.nil? && result.best.equal?(r),
           'reason' => result && result.best.equal?(r) ? result.reason.to_s : (result && result.eliminated[r]).to_s,
-          'since' => e.since.utc.strftime('%Y-%m-%dT%H:%M:%S.%LZ') }
+          'since' => e.since.utc.strftime('%Y-%m-%dT%H:%M:%S.%LZ') }.tap { |h| h['stale'] = e.stale if e.stale }
       end
 
       def prefix_order(prefix)
