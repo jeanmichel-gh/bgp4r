@@ -333,6 +333,16 @@ module Features
       :lab   => %w[route_refresh_frr_test],
     },
 
+    'route-refresh-faults' => {
+      :area  => 'errors',
+      :about => 'BGP::Fault::REFRESH and the borr_without_eorr behaviour, sent by bgp4r-sim, and what bgp4rd and FRR do',
+      :rfc   => 'RFC 2918 section 4, RFC 7313 sections 4 and 5',
+      :doc   => 'docs/protocol-testing.md',
+      :unit  => %w[fault_test sim/injector_test],
+      :functional => %w[refresh_fault_matrix_test],
+      :lab   => %w[route_refresh_fault_frr_test],
+    },
+
     'gtsm' => {
       :area  => 'session',
       :about => 'ttl_security on a neighbor: GTSM, sent at TTL 255, dropped below 256 - hops',
@@ -492,7 +502,7 @@ module Features
 
     'injector' => {
       :area  => 'programs',
-      :about => 'bgp4r-sim: the ten actions, the HTTP API and what it sent',
+      :about => 'bgp4r-sim: the eleven actions, the HTTP API and what it sent',
       :doc   => 'docs/daemon.md',
       :unit  => %w[sim/injector_test sim/http_test sim/server_test
                    sim/sent_test sim/views_test],

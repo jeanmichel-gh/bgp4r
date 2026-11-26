@@ -367,7 +367,7 @@ touches every family's sender, the RIB and the fault catalog at once:
   the 7/1 NOTIFICATION for a wrong length, an unknown subtype ignored,
   `stale` on the route rows. Built.
 - **2c, the fault catalog**: `BGP::Fault::REFRESH` and `bgp4r-sim`
-  sending its cases. Not started.
+  sending its cases. Built.
 
 ### As built (2a)
 
@@ -485,6 +485,40 @@ as a whole message:
 
 One behaviour: `borr_without_eorr`, a BoRR and then silence. The
 receiver may drop the stale routes after its local bound (7313 4).
+
+### As built (2c)
+
+- **`BGP::Fault::REFRESH`** in `bgp/fault.rb`, beside `CATALOG`: each
+  entry is the name, what is sent, what the RFC expects (`:ignore`,
+  `:may_ignore` or `:notification`), the section, and a block taking
+  `afi` and `safi` that returns each message's octets. A list of its
+  own, since its cases are whole messages and `CATALOG`'s are
+  attributes. `refresh_borr_before_eor` carries `:gr`, as two of
+  `CATALOG`'s carry `:ibgp`. `Fault.message_length` makes the two
+  length cases.
+- **`BGP::Fault::BEHAVIOURS`**, the first behaviours list, with
+  `borr_without_eorr`. GR's join it.
+- **bgp4r-sim.** `fault` takes a REFRESH case with `afi` and `safi`,
+  and refuses `prefixes` or `next_hop` for one, and `afi` or `safi` for
+  an UPDATE case. A new action, `behaviour`, at `POST /api/behaviour`,
+  the eleventh; the first ten are routescope's `Drivers::Sim::ACTIONS`,
+  which does not send it yet. `/api/topology` gains `refresh_faults`
+  and `behaviours`.
+- **The matrix** runs as two tests, each case on a session of its own:
+  against bgp4rd (`test/functional/refresh_fault_matrix_test.rb`) and
+  against FRR (`test/functional/lab/route_refresh_fault_frr_test.rb`,
+  CI's `lab frr`). The table is in `docs/protocol-testing.md`.
+- **Measured against FRR 10.5.1**, 2026-11-26. FRR answers subtypes 3
+  and 255 as requests, where RFC 7313 section 5 says ignore. Its 7/1
+  for a long BoRR carries no data. It answers a short EoRR with 1/2, the
+  header check of RFC 4271 section 6.1. On a BoRR with no EoRR it marks
+  the routes stale and starts a timer that `bgp graceful-restart
+  stalepath-time` sets, 360 s by default; when it runs out it keeps the
+  routes, still stale. It ignores a BoRR before the End-of-RIB from a
+  GR peer.
+- **bgp4rd's one gap**: it marks stale on a BoRR before the End-of-RIB
+  from a GR peer, since it reads GR as an advertisement only until
+  pull request 3. The bgp4rd matrix records it as known.
 
 ### routescope shows
 
@@ -1278,7 +1312,7 @@ and `CLAUDE.md`'s table.
 | 1 | 5 | GTSM, `ttl_security`; built | – |
 | 2 | 6a | TCP MD5, `password`; built | – |
 | 3 | 1 | End-of-RIB sent and received, `end_of_rib`; built | – |
-| 4 | 2 | Route refresh answered, enhanced refresh, the stale mark, `BGP::Fault::REFRESH`: in three parts, 2a answering built, 2b receiving built, 2c the catalog | 1 |
+| 4 | 2 | Route refresh answered, enhanced refresh, the stale mark, `BGP::Fault::REFRESH`: in three parts, all built | 1 |
 | 5 | 3 | GR helper, RFC 8538, Hard Reset, `BGP::Fault::GR`, the first behaviours in `bgp4r-sim`, GTSM's among them | 2 |
 | 6 | 7a | RTR codec, `BGP::Fault::RTR` | – |
 | 7 | 7b | `bgp4r-rtr`, the cache and injector | 7a |

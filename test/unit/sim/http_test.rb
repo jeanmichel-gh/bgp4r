@@ -75,8 +75,8 @@ class BGP_Sim_Http_Test < Test::Unit::TestCase
                  BGP::Sim::Http::READS.keys.sort)
   end
 
-  def test_the_ten_actions_are_the_documented_ones
-    assert_equal(%w[/api/announce /api/attribute /api/fault /api/notification
+  def test_the_eleven_actions_are_the_documented_ones
+    assert_equal(%w[/api/announce /api/attribute /api/behaviour /api/fault /api/notification
                     /api/refresh /api/replay /api/session/flap /api/session/start
                     /api/session/stop /api/withdraw],
                  BGP::Sim::Http::ACTIONS.keys.sort)

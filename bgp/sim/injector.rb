@@ -32,7 +32,7 @@ require 'bgp/prompt'
 module BGP
   module Sim
 
-    # `bgp4r-sim`'s ten actions, over the sessions a
+    # `bgp4r-sim`'s eleven actions, over the sessions a
     # `BGP::Daemon::Speaker` holds.
     #
     # docs/daemon.md is the design, from its `bgp4r-sim, the injector`
@@ -106,13 +106,14 @@ module BGP
         'withdraw'      => %w[peer prefixes generate spec mp_unreach path_id],
         'attribute'     => %w[peer prefixes next_hop as_path as_path_literal med
                               local_pref communities extended_communities large_communities path_id origin],
-        'fault'         => %w[peer case prefixes next_hop],
+        'fault'         => %w[peer case prefixes next_hop afi safi],
         'replay'        => %w[peer hex],
         'notification'  => %w[peer code subcode data],
         'session.stop'  => %w[peer],
         'session.start' => %w[peer],
         'session.flap'  => %w[peer count interval],
-        'refresh'       => %w[peer afi safi subtype]
+        'refresh'       => %w[peer afi safi subtype],
+        'behaviour'     => %w[peer name afi safi]
       }.freeze
 
       # The keys that go with each of the four selectors that are not an
@@ -127,8 +128,8 @@ module BGP
       #   the session's rule and not the spec's. **`churn` beside it sends
       #   that spec's churn rather than the spec**, section 8 of the same
       #   document: changes to routes the spec already announced. It is
-      #   on `announce` rather than an eleventh action because the ten
-      #   are routescope's `Drivers::Sim::ACTIONS`, and a churn is
+      #   on `announce` rather than an action of its own because the first
+      #   ten are routescope's `Drivers::Sim::ACTIONS`, and a churn is
       #   announcements and withdrawals of one spec's routes.
       # * **`mp_reach` and `mp_unreach`** take the Hash `Mp_reach.new`
       #   and `Mp_unreach.new` read, so one message in any family the
@@ -318,6 +319,7 @@ module BGP
         when 'session.start' then session_start(body)
         when 'session.flap'  then session_flap(body)
         when 'refresh'       then refresh(body)
+        when 'behaviour'     then behaviour(body)
         else
           raise Refused, "unknown action #{name.to_s.inspect}; this injector does " \
                          "#{ACTIONS.keys.join(', ')}"
@@ -346,6 +348,8 @@ module BGP
           :specs             => @specs.keys,
           :generators        => BGP::Gen::GENERATORS.keys,
           :faults            => BGP::Fault.names.collect { |n| n.to_s },
+          :refresh_faults    => BGP::Fault.refresh_names.collect { |n| n.to_s },
+          :behaviours        => BGP::Fault.behaviour_names.collect { |n| n.to_s },
           :specimens         => BGP::Specimen.names.collect { |n| n.to_s } }
       end
 
@@ -549,14 +553,22 @@ module BGP
       #
       # The UPDATE is `Fault.update`'s, which the matrix uses too, so one
       # catalog name is one set of octets for both programs.
+      #
+      # A `BGP::Fault::REFRESH` case is whole ROUTE-REFRESH messages, sent
+      # as octets for `afi` and `safi` (1 and 1 unless given); it takes no
+      # `prefixes` or `next_hop`, and an UPDATE case takes no `afi` or
+      # `safi`, so neither is dropped in silence.
       def fault(body)
         block = check(body, 'fault')
         name = block['case'].to_s
         raise Refused, 'fault: case is required' if name.empty?
+        return refresh_fault(name, block) if BGP::Fault.refresh_names.include?(name.to_sym)
         unless BGP::Fault.names.include?(name.to_sym)
           raise Refused, "fault: unknown case #{name.inspect}; the catalog has " \
-                         "#{BGP::Fault.names.join(', ')}"
+                         "#{(BGP::Fault.names + BGP::Fault.refresh_names).join(', ')}"
         end
+        both = block.keys & %w[afi safi]
+        raise Refused, "fault: #{name} is an UPDATE case and takes no #{both.join(' or ')}" unless both.empty?
         prefixes = Array(block['prefixes'])
         result = send_to(targets(block), 'fault') { |peer|
           # Our AS toward an external peer and an empty AS_PATH toward an
@@ -668,6 +680,41 @@ module BGP
                       "#{count} time(s) every #{interval}s", :action => 'session.flap')
         { :action => 'session.flap', :peers => peers.collect(&:address),
           :count => count, :interval => interval, :running => true }
+      end
+
+      # One `BGP::Fault::REFRESH` case: its messages, in order, as octets.
+      def refresh_fault(name, block)
+        extra = block.keys & %w[prefixes next_hop]
+        raise Refused, "fault: #{name} is a ROUTE-REFRESH case and takes no #{extra.join(' or ')}" unless extra.empty?
+        afi = integer(block, 'afi', 1)
+        safi = integer(block, 'safi', 1)
+        messages = BGP::Fault.refresh(name, afi, safi)
+        result = send_to(targets(block), 'fault') do |peer|
+          messages.each { |m| peer.send_message(m) }
+          @sent.count('fault', 0, messages.size)
+          [0, messages.size]
+        end
+        publish(FAULT, "injected fault #{name}", :case => name, :afi => afi, :safi => safi)
+        result.merge(:case => name, :afi => afi, :safi => safi)
+      end
+
+      # One `BGP::Fault::BEHAVIOURS` entry, by `name`. `borr_without_eorr`
+      # sends a BoRR for `afi` and `safi` (1 and 1 unless given) and
+      # nothing after it: the receiver's own bound is what is tested
+      # (RFC 7313 section 4).
+      def behaviour(body)
+        block = check(body, 'behaviour')
+        name = block['name'].to_s
+        unless BGP::Fault.behaviour_names.include?(name.to_sym)
+          raise Refused, "behaviour: #{name.empty? ? 'name is required' : "unknown behaviour #{name.inspect}"}; " \
+                         "this injector has #{BGP::Fault.behaviour_names.join(', ')}"
+        end
+        afi = integer(block, 'afi', 1)
+        safi = integer(block, 'safi', 1)
+        msg = BGP::Route_refresh.new(afi, safi, BGP::Route_refresh::BORR)
+        result = send_to(targets(block), 'behaviour') { |peer| send_one(peer, msg, 'behaviour', 0) }
+        publish(FAULT, "behaviour #{name}", :behaviour => name, :afi => afi, :safi => safi)
+        result.merge(:behaviour => name, :afi => afi, :safi => safi)
       end
 
       # A ROUTE-REFRESH, RFC 2918, with the RFC 7313 section 3.2 Message

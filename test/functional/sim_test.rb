@@ -567,7 +567,7 @@ class BGP_Sim_Functional_Test < Test::Unit::TestCase
     index = get('/')
     assert_equal(BGP::VERSION, index['bgp4r'])
     assert_equal(5, index['reads'].size)
-    assert_equal(10, index['actions'].size)
+    assert_equal(11, index['actions'].size)
   end
 
   # **An injector a console can kill by accident is worse than one with

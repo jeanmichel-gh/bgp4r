@@ -28,7 +28,7 @@ module BGP
   module Sim
 
     # `bgp4r-sim`'s control API: HTTP on the loopback, GET for the five
-    # reads and POST for the ten actions.
+    # reads and POST for the eleven actions.
     #
     # docs/daemon.md's `The HTTP API` section is the design and its two
     # tables are READS and ACTIONS below.
@@ -127,7 +127,8 @@ module BGP
         '/api/session/stop'  => 'session.stop',
         '/api/session/start' => 'session.start',
         '/api/session/flap'  => 'session.flap',
-        '/api/refresh'       => 'refresh'
+        '/api/refresh'       => 'refresh',
+        '/api/behaviour'     => 'behaviour'
       }.freeze
 
       # `POST path => the Injector method that answers it` for a POST
