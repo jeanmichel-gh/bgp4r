@@ -689,6 +689,25 @@ module ToHashCatalog
       BGP::Nlri.new([100, '77.0.0.0/17'], '78.0.0.0/8'))
   end
 
+  # ====================================================================
+  # RTR, RFC 8210: each PDU's own new reads its to_hash, keyed by its
+  # name as every hash here is. docs/design/bgp-operations.md 7a.
+  # ====================================================================
+
+  ENTRIES['BGP::Rtr::Serial_notify'] = entry(:ok, nil, nil) { BGP::Rtr::Serial_notify.new(0x1234, 7) }
+  ENTRIES['BGP::Rtr::Serial_query'] = entry(:ok, nil, nil) { BGP::Rtr::Serial_query.new(0x1234, 0xffffffff) }
+  ENTRIES['BGP::Rtr::Reset_query'] = entry(:ok, nil, nil) { BGP::Rtr::Reset_query.new }
+  ENTRIES['BGP::Rtr::Cache_response'] = entry(:ok, nil, nil) { BGP::Rtr::Cache_response.new(0xffff) }
+  ENTRIES['BGP::Rtr::Ipv4_prefix'] = entry(:ok, nil, nil) { BGP::Rtr::Ipv4_prefix.new('192.0.2.0/24', 28, 65_001, false) }
+  ENTRIES['BGP::Rtr::Ipv6_prefix'] = entry(:ok, nil, nil) { BGP::Rtr::Ipv6_prefix.new('2001:db8::/32', 48, 4_200_000_000) }
+  ENTRIES['BGP::Rtr::End_of_data'] = entry(:ok, nil, nil) { BGP::Rtr::End_of_data.new(9, 10, 60, 30, 600) }
+  ENTRIES['BGP::Rtr::Cache_reset'] = entry(:ok, nil, nil) { BGP::Rtr::Cache_reset.new }
+  ENTRIES['BGP::Rtr::Router_key'] = entry(:ok, nil, nil) { BGP::Rtr::Router_key.new("\x11" * 20, 65_001, "\x30\x02\x05\x00", false) }
+  ENTRIES['BGP::Rtr::Error_report'] = entry(:ok, nil, nil) do
+    BGP::Rtr::Error_report.new(5, BGP::Rtr::Unknown.new(99), 'type 99')
+  end
+  ENTRIES['BGP::Rtr::Unknown'] = entry(:ok, nil, nil) { BGP::Rtr::Unknown.new(99, 1, 0xabcd, "\x01\x02") }
+
   ENTRIES['BGP::Route_refresh'] = entry(:ok, nil, nil) do
     BGP::Route_refresh.new(2, 128, :eorr)
   end
@@ -1921,6 +1940,15 @@ module ToHashCatalog
       'is. type and hash_key read self.class::TYPE and HASH_KEY and it ' \
       'defines neither. Reporter, Reason_code, Timestamp and Unknown ' \
       'are measured.',
+    'BGP::Rtr::Pdu' =>
+      'an abstract base: type reads self.class::TYPE, which only its ' \
+      'subclasses define. Every PDU type is measured.',
+    'BGP::Rtr::Serial_pdu' =>
+      'an abstract base for Serial Notify and Serial Query, with no TYPE ' \
+      'of its own. Both are measured.',
+    'BGP::Rtr::Prefix_pdu' =>
+      'an abstract base for the IPv4 and IPv6 Prefix PDUs, with no TYPE ' \
+      'and no address width of its own. Both are measured.',
     'BGP::Tunnel_encap::Int_sub_tlv' =>
       'an abstract base with no sensible instance. Its initialize and ' \
       'to_hash read self.class::TYPE, SIZE, NAME and KEY and it ' \

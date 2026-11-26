@@ -474,6 +474,25 @@ kept the stale routes past the Restart Time, logged as expired: a GR
 peer's first End-of-RIB matters to bgpd. Why bgpd differs from run to
 run is not known. The FRR test asserts what held in every run, and for
 the rest says which way this run went.
+### RTR cases
+
+`BGP::Fault::RTR` holds what an RPKI cache can send that a router must
+refuse, RFC 8210. Each is sent once version 1 is negotiated, and each
+Error Code here is fatal, so the router drops the session too.
+`Fault.rtr(name, session_id)` gives each PDU's octets, in order:
+
+| Name | Sent | Router answers | Section |
+|---|---|---|---|
+| `rtr_unknown_pdu` | PDU type 99 | Error Report 5 | 8210 12 |
+| `rtr_bad_version` | a Cache Response in version 9 | Error Report 4 | 8210 7, 12 |
+| `rtr_unexpected_version` | a Cache Response in version 0, after 1 | Error Report 8 | 8210 7, 12 |
+| `rtr_withdraw_unknown` | an answer withdrawing a VRP never announced | Error Report 6 | 8210 12 |
+| `rtr_duplicate_announce` | an answer announcing one VRP twice | Error Report 7 | 8210 5.6, 12 |
+| `rtr_corrupt_length` | an IPv4 Prefix 4 octets longer than its 20 | Error Report 0 | 8210 5.6, 12 |
+
+`docs/rpki.md` describes the codec. The cache that sends these, and the
+matrix against bgp4rd and FRR, come with the next parts of
+`docs/design/bgp-operations.md` section 7.
 
 ## Receiving: policies and findings
 

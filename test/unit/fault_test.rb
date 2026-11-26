@@ -354,4 +354,32 @@ class TestFault < Test::Unit::TestCase
     end
     assert_raise(ArgumentError) { BGP::Fault.gr(:refresh_borr_length) }
   end
+
+  # RFC 8210 section 12: each RTR case, its octets, and the Error Code a
+  # router answers with. For the four single PDUs, Rtr::Validation finds
+  # that code; the other two need the router's VRP table.
+  def test_the_rtr_catalog
+    assert_equal(%i[rtr_unknown_pdu rtr_bad_version rtr_unexpected_version rtr_withdraw_unknown
+                    rtr_duplicate_announce rtr_corrupt_length], BGP::Fault.rtr_names)
+    hex = ->(n) { BGP::Fault.rtr(n, 0x22).collect { |o| o.unpack1('H*') } }
+    response = '0103002200000008'
+    eod = '01070022000000180000000100000e100000025800001c20'
+    v4 = '0104000000000014%02x181800c00002000000fde7'
+    assert_equal(['0163000000000008'], hex[:rtr_unknown_pdu])
+    assert_equal(['0903002200000008'], hex[:rtr_bad_version])
+    assert_equal(['0003002200000008'], hex[:rtr_unexpected_version])
+    assert_equal([response, v4 % 0, eod], hex[:rtr_withdraw_unknown])
+    assert_equal([response, v4 % 1, v4 % 1, eod], hex[:rtr_duplicate_announce])
+    assert_equal([response, '010400000000001801181800c00002000000fde700000000', eod], hex[:rtr_corrupt_length])
+    cat = BGP::Fault.rtr_catalog.to_h { |c| [c[:name], [c[:expected], c[:rfc]]] }
+    assert_equal({ :rtr_unknown_pdu => [5, 'RFC 8210 12'], :rtr_bad_version => [4, 'RFC 8210 7, 12'],
+                   :rtr_unexpected_version => [8, 'RFC 8210 7, 12'], :rtr_withdraw_unknown => [6, 'RFC 8210 12'],
+                   :rtr_duplicate_announce => [7, 'RFC 8210 5.6, 12'], :rtr_corrupt_length => [0, 'RFC 8210 5.6, 12'] }, cat)
+    found = { :rtr_unknown_pdu => 0, :rtr_bad_version => 0, :rtr_unexpected_version => 0, :rtr_corrupt_length => 1 }
+    found.each do |name, i|
+      octets = BGP::Fault.rtr(name)[i]
+      assert_equal(cat[name].first, BGP::Rtr::Validation.check(octets, :negotiated => 1).first.code, name.to_s)
+    end
+    assert_raise(ArgumentError) { BGP::Fault.rtr(:hard_reset_empty) }
+  end
 end

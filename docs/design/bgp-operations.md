@@ -1311,6 +1311,26 @@ fatal, retry), `rtr_silent` (the cache stops answering: the data is
 used until Expire, then dropped, 8210 6), `rtr_cache_reset` (Cache
 Reset: the router sends a Reset Query, 8210 5.9).
 
+### As built (7a)
+
+- **`BGP::Rtr`** in `bgp/rtr/pdus.rb`: the ten PDUs of section 5 and
+  `Unknown`, each built four ways, in versions 0 and 1. Version 0's End
+  of Data has no intervals (RFC 6810 section 5.7). `Rtr.pdus` takes
+  whole PDUs off a stream. `bgp4r` loads it, so the `to_hash` catalog
+  holds every PDU.
+- **`Rtr::Validation`** in `bgp/rtr/validation.rb`: one PDU's findings
+  as section 12's codes: versions (4, 8), unknown types (5), lengths,
+  Max Length and Error Report lengths (0). Codes 6 and 7 need the
+  router's VRP table, so they are 7c's.
+- **`BGP::Fault::RTR`**: the six cases of the table above, as whole
+  PDUs. The two that need a VRP table are whole answers, a Cache
+  Response to an End of Data. `rtr_corrupt_length` is an IPv4 Prefix
+  with 4 octets more than its 20, the Length in step: a Length that
+  overruns the octets sent would leave a stream reader waiting.
+- **The three behaviours** are the cache's to run, so they come with
+  7b.
+- Documented in `docs/rpki.md`.
+
 ### routescope shows
 
 Each cache's session, serial and VRP count; a Validation column on

@@ -333,6 +333,14 @@ module Features
       :lab   => %w[route_refresh_frr_test],
     },
 
+    'rpki-rtr' => {
+      :area  => 'session',
+      :about => 'the RTR PDUs of RFC 8210 and RFC 6810, their findings, and BGP::Fault::RTR',
+      :rfc   => 'RFC 8210 sections 5, 7 and 12, RFC 6810 section 5.7',
+      :doc   => 'docs/rpki.md',
+      :unit  => %w[rtr/pdus_test rtr/validation_test fault_test to_hash_round_trip_test],
+    },
+
     'route-refresh-faults' => {
       :area  => 'errors',
       :about => 'BGP::Fault::REFRESH and the borr_without_eorr behaviour, sent by bgp4r-sim, and what bgp4rd and FRR do',
