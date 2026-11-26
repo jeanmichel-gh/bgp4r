@@ -57,6 +57,10 @@ module BGP
         @decision = Decision.new(local_as: local_as, router_id: router_id, cluster_id: cluster_id)
         @lock = Mutex.new
         @in = {}      # peer address => { EvpnRoute#key => Entry }
+        # EvpnRoute#decision_key => { [peer address, EvpnRoute#key] => Entry }:
+        # the same entries by key, so decide reads a key's candidates
+        # without going through every route held.
+        @paths = {}
         @best = {}    # EvpnRoute#decision_key => Decision::Result
         @winner = {}  # EvpnRoute#decision_key => the EvpnRoute that won
         @other = Hash.new(0) # peer address => routes of other types announced
@@ -88,12 +92,10 @@ module BGP
           ops.each do |op, arg|
             case op
             when :withdraw
-              h = @in[peer]
-              h&.delete(arg)
-              @in.delete(peer) if h && h.empty?
+              drop(peer, arg)
               touched << arg[0..-2]
             when :announce
-              (@in[peer] ||= {})[arg.key] = Entry.new(arg, at)
+              put(peer, Entry.new(arg, at))
               touched << arg.decision_key
             when :other
               @other[peer] += 1
@@ -120,9 +122,8 @@ module BGP
           h = @in[peer] || {}
           kept = keep.include?(PeerAdapter::EVPN)
           gone = h.select { |_, e| !kept }
-          gone.each_key { |k| h.delete(k) }
+          gone.each_key { |k| drop(peer, k) }
           h.each_value { |e| e.stale = 'restart' }
-          @in.delete(peer) if h.empty?
           gone.each_value.collect { |e| e.evpn_route.decision_key }.uniq.each { |k| decide(k) }
         end
         changed
@@ -146,8 +147,7 @@ module BGP
         gone = @lock.synchronize do
           h = @in[peer] or next []
           stale = h.select { |_, e| e.stale }
-          stale.each_key { |k| h.delete(k) }
-          @in.delete(peer) if h.empty?
+          stale.each_key { |k| drop(peer, k) }
           stale.each_value.collect { |e| e.evpn_route.decision_key }.uniq.each { |k| decide(k) }
           stale
         end
@@ -204,8 +204,28 @@ module BGP
 
       # Runs the decision process again for one key, over every peer's
       # path to it. Called with the lock held.
+      # Holds entry from peer, in both maps. Lock held.
+      def put(peer, entry)
+        v = entry.evpn_route
+        (@in[peer] ||= {})[v.key] = entry
+        (@paths[v.decision_key] ||= {})[[peer, v.key]] = entry
+      end
+
+      # Lets go of what peer sent under key, an EvpnRoute#key, if
+      # anything. Lock held.
+      def drop(peer, key)
+        h = @in[peer] or return
+        e = h.delete(key)
+        @in.delete(peer) if h.empty?
+        return unless e
+        dk = e.evpn_route.decision_key
+        paths = @paths[dk]
+        paths.delete([peer, key])
+        @paths.delete(dk) if paths.empty?
+      end
+
       def decide(key)
-        candidates = @in.values.flat_map { |h| h.values.select { |e| e.evpn_route.decision_key == key } }
+        candidates = (@paths[key] || {}).values
         if candidates.empty?
           @best.delete(key)
           @winner.delete(key)

@@ -916,4 +916,13 @@ class Path_attribute_Test < Test::Unit::TestCase # :nodoc:
     assert_equal(BGP::As4_path, rebuilt[:as4_path].class)
   end
 
+
+  def test_encode_can_leave_classes_out
+    mp = BGP::Mp_reach.new(:afi => 2, :safi => 1, :nexthop => ['2011:1::1'], :nlris => ['2011:1::/32'])
+    pa = BGP::Path_attribute.new(BGP::Origin.new(0), mp, BGP::Local_pref.new(100))
+    want = BGP::Path_attribute.new(BGP::Origin.new(0), BGP::Local_pref.new(100))
+    assert_equal(want.encode(true), pa.encode(true, except: [BGP::Mp_reach]))
+    assert_equal(want.encode, pa.encode(false, except: [BGP::Mp_reach, BGP::Mp_unreach]))
+    assert_equal(pa.encode, pa.encode(false, except: []))
+  end
 end

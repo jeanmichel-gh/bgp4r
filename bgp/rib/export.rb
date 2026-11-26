@@ -239,11 +239,15 @@ module BGP
       # A copy, so the route keeps the attributes it was received with.
       # Path_attribute has no deep copy, and encode then parse is the idiom
       # Table#import already uses for the same reason.
+      #
+      # Reachability belongs to the message, not to this, so it is left
+      # out before the copy. An EVPN or VPN route's attributes are the
+      # UPDATE's, and MP_REACH_NLRI holds every route that came in it: 115
+      # from bgp4r-sim. Copied with it, one route cost 6 ms and a
+      # reflector's refresh of 1000 routes seconds for each peer
+      # (measured 2026-11-26).
       def attributes(route, peer, hop)
-        pa = Path_attribute.new(route.path_attribute.encode(true), true)
-        # Reachability belongs to the message, not to this.
-        pa.delete(Mp_reach)
-        pa.delete(Mp_unreach)
+        pa = Path_attribute.new(route.path_attribute.encode(true, except: [Mp_reach, Mp_unreach]), true)
         peer.ebgp? ? to_external(pa, hop) : to_internal(pa, route, hop)
         pa
       end
