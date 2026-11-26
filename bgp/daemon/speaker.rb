@@ -1689,7 +1689,7 @@ module BGP
       end
 
       # The keys of the evpn: block, docs/design/evpn.md, Configuration.
-      EVPN_KEYS = %w[vtep duplicate vtep_hold].freeze
+      EVPN_KEYS = %w[vtep duplicate vtep_hold seq_memory].freeze
       DUPLICATE_KEYS = %w[moves seconds].freeze
 
       # MAC-VRFs: docs/design/evpn.md, pull request 2. vtep_client is a
@@ -1721,7 +1721,8 @@ module BGP
           table: @evpn, macvrfs: list, vtep: @vtep_client, address: address, logger: @logger, events: @events,
           moves: positive.call(dup['moves'], BGP::Rib::Macvrfs::MOVES, 'duplicate: moves'),
           seconds: positive.call(dup['seconds'], BGP::Rib::Macvrfs::SECONDS, 'duplicate: seconds'),
-          hold: positive.call(evpn['vtep_hold'], BGP::Rib::Macvrfs::HOLD, 'vtep_hold'))
+          hold: positive.call(evpn['vtep_hold'], BGP::Rib::Macvrfs::HOLD, 'vtep_hold'),
+          seq_memory: evpn['seq_memory'].nil? ? nil : positive.call(evpn['seq_memory'], nil, 'seq_memory'))
         @evpn_sync = EvpnSync.new(@macvrfs, logger: @logger)
         @evpn.on_change { @evpn_sync.poke }
         @vtep_events = VtepEvents.new(path, @evpn_sync, logger: @logger) unless vtep_client

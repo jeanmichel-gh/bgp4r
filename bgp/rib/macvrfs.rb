@@ -101,14 +101,15 @@ module BGP
       # Exporting, step 6: evpn: vtep_hold, 30 s by default.
       HOLD = 30
 
-      attr_reader :macvrfs, :address, :moves_limit, :seconds, :hold
+      attr_reader :macvrfs, :address, :moves_limit, :seconds, :hold, :seq_memory
 
       # address: this VTEP's address, local_address.
       def initialize(table:, macvrfs:, vtep:, address:, logger: nil, events: nil, clock: -> { Time.now },
-                     moves: MOVES, seconds: SECONDS, hold: HOLD)
+                     moves: MOVES, seconds: SECONDS, hold: HOLD, seq_memory: nil)
         @table, @macvrfs, @vtep, @address = table, macvrfs, vtep, address
         @logger, @events, @clock = logger, events, clock
         @moves_limit, @seconds, @hold = moves, seconds, hold
+        @seq_memory = seq_memory || seconds
         @lock = Mutex.new
         @plans = {}        # vni => Plan
         @state = {}        # vni => [vtep_state, error]
@@ -121,6 +122,7 @@ module BGP
         @moved = Hash.new { |h, k| h[k] = [] } # [vni, mac] => times it moved
         @dup = {}          # [vni, mac] => Time marked duplicate
         @last_remote = {}  # [vni, mac] => the last remote sequence seen
+        @gone = {}         # [vni, mac] => Time a MAC with a @last_remote was first found gone
         @alerted = {}      # [vni, mac] => true once a sticky MAC's local learn is logged
       end
 
@@ -394,7 +396,34 @@ module BGP
           r.since = was[2]
         end
         @since.delete_if { |(v, mac), _| v == vni && !install.key?(mac) }
+        forget(vni, ports, plan, now)
         @installed[vni] = install
+      end
+
+      # The last remote sequence of a MAC gone from every table (no route,
+      # not learned here, not advertised, not duplicate) is forgotten after
+      # `seq_memory` seconds, so a MAC that comes back is sent as if
+      # advertised "for the first time". RFC 7432 section 15 sets no limit
+      # on "previously received"; without one, a lab could claim a MAC
+      # with a fixed sequence only once per bgp4rd. The default is
+      # `duplicate: seconds`: a MAC gone that long has no move left to
+      # count either.
+      def forget(vni, ports, plan, now)
+        @last_remote.each_key do |key|
+          v, mac = key
+          next unless v == vni
+          # A MAC this PE advertises is on a port: decide deleted the rest.
+          if ports.key?(mac) || plan.macs.key?(mac) || @dup.key?(key)
+            @gone.delete(key)
+          else
+            @gone[key] ||= now
+          end
+        end
+        @gone.delete_if do |key, at|
+          next false unless now - at >= @seq_memory
+          @last_remote.delete(key)
+          true
+        end
       end
 
       # Notes a MAC's place. A change of place is a move; N moves in M

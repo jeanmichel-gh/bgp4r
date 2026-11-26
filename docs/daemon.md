@@ -976,6 +976,7 @@ evpn:
   vtep: /run/vtep4r/vtep4rd.sock     # vtep4rd's socket, the default
   duplicate: { moves: 5, seconds: 180 }   # RFC 7432 section 15.1's N and M
   vtep_hold: 30                      # seconds a lost vtep4rd's routes are kept
+  seq_memory: 180                    # seconds a gone MAC's last sequence is kept; duplicate: seconds by default
 macvrfs:
   - vni: 100
     rd: 10.255.0.12:100              # the default is local_address:vni
@@ -1018,7 +1019,12 @@ Mobility community. A MAC learned here that a remote route holds is
 sent with that route's sequence plus one, wrapping at 2^32. A remote
 route with a higher sequence, or the same sequence from a lower
 address, takes the MAC away: bgp4rd withdraws its route and puts the
-MAC behind the remote VTEP in vtep4rd. A sticky remote MAC learned
+MAC behind the remote VTEP in vtep4rd. A MAC learned here after its
+remote route went is sent with that route's last sequence plus one,
+until the MAC has been gone from every table (no route, not learned
+here, not duplicate) for `seq_memory` seconds; after that it is sent
+as if for the first time, so a lab can claim it again with the same
+sequence. A sticky remote MAC learned
 here stays remote, and an `evpn` event says so. Every change of place
 is an `evpn` event `moved`. `duplicate: moves` changes of place in
 `duplicate: seconds`, the last a local learn, mark the MAC duplicate:
