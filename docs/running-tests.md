@@ -19,7 +19,7 @@ amounts. Measured 2026-11-03:
 
 | Tier | What it needs | Files | Time | Command |
 |---|---|---:|---|---|
-| unit | Ruby | 192 | 21s | `ruby test/run_unit.rb` |
+| unit | Ruby | 194 | 21s | `ruby test/run_unit.rb` |
 | functional | a loopback socket | 30 | 18s | one file at a time, below |
 | lab | gobgpd, FRR, Docker or root | 43 | 10s to 400s per group | `ruby test/run_lab.rb GROUP` |
 
@@ -100,6 +100,7 @@ Getting a session up and keeping it.
 | `end-of-rib` | 3 | 1 | 1 | end_of_rib on a neighbor: a marker per negotiated family after the first table; received ones recorded |
 | `route-refresh-answer` | 3 | 1 | 1 | a route refresh answered with the family's Adj-RIB-Out, between BoRR and EoRR to an enhanced peer; counted and published |
 | `route-refresh-stale` | 9 | 1 | 1 | a BoRR marks the peer's routes of a family stale in every table, the EoRR or refresh_stale_time removes what is still stale; 7/1 for a wrong length |
+| `rpki-rtr` | 4 | 0 | 0 | the RTR PDUs of RFC 8210 and RFC 6810, their findings, and BGP::Fault::RTR |
 | `graceful-restart` | 12 | 1 | 1 | graceful_restart on a neighbor: a helper, keeping a restarting peer's routes stale until its End-of-RIB, its Restart Time or stale_time; RFC 8538's N bit and Hard Reset |
 | `gtsm` | 1 | 1 | 0 | ttl_security on a neighbor: GTSM, sent at TTL 255, dropped below 256 - hops |
 | `tcp-md5` | 1 | 1 | 1 | password on a neighbor: TCP MD5, every segment signed, a missing or wrong digest dropped |
@@ -666,6 +667,18 @@ Generating many prefixes and packing them into UPDATEs.
 ruby test/run_feature.rb routegen
 ```
 
+### `rpki-rtr`
+
+the RTR PDUs of RFC 8210 and RFC 6810, their findings, and BGP::Fault::RTR.
+
+- RFC 8210 sections 5, 7 and 12, RFC 6810 section 5.7
+- Read first: `docs/rpki.md`
+- 4 unit files
+
+```
+ruby test/run_feature.rb rpki-rtr
+```
+
 ### `rt-constrain`
 
 Route Target membership, AFI 1 SAFI 132.
@@ -1063,5 +1076,5 @@ test file has to be tagged before the suite is green again, which is
 the same arrangement `test/unit/lab_groups_test.rb` has with the CI
 matrix.
 
-265 of 265 test files are tagged. The
+267 of 267 test files are tagged. The
 remainder, if any, is what the guard names.

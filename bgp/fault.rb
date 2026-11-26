@@ -23,6 +23,7 @@
 require 'bgp/path_attributes/attributes'
 require 'bgp/path_attributes/validation'
 require 'bgp/messages/route_refresh'
+require 'bgp/rtr'
 
 module BGP
 
@@ -203,6 +204,45 @@ module BGP
         -> { [Notification.new(6, 9, [99, 99].pack('CC')).encode] }, :n],
     ].freeze
 
+    # RTR, RFC 8210: what a cache sends a router that the router has to
+    # refuse. [name, what is sent, the Error Code section 12 has the
+    # router answer with, RFC section, a block taking the session's
+    # Session ID that returns the PDUs' octets]. Every code here is
+    # fatal, so the router drops the session too. A case is sent once
+    # version 1 is negotiated. `Fault.rtr` gives the octets.
+    #
+    # Withdrawing what was never announced, and announcing twice, are
+    # whole exchanges, a Cache Response to an End of Data, so the router
+    # reads them as one answer.
+    RTR = [
+      # Section 12, code 5: "The PDU Type is not known by the receiver".
+      [:rtr_unknown_pdu, 'PDU type 99', 5, '8210 12',
+        ->(_sid) { [Rtr::Unknown.new(99).encode] }],
+      # Section 7: a version "neither 0 nor 1"; section 12, code 4.
+      [:rtr_bad_version, 'a Cache Response in version 9', 4, '8210 7, 12',
+        ->(sid) { [Rtr::Cache_response.new(sid).tap { |p| p.version = 9 }.encode] }],
+      # Section 7: "If either party receives a PDU for a different
+      # Protocol Version once the above negotiation completes, that party
+      # MUST drop the session"; code 8.
+      [:rtr_unexpected_version, 'a Cache Response in version 0, after 1 was negotiated', 8, '8210 7, 12',
+        ->(sid) { [Rtr::Cache_response.new(sid).tap { |p| p.version = 0 }.encode] }],
+      # Section 12, code 6: "Flag=0, but a matching record [...] does not
+      # exist in the receiver's database".
+      [:rtr_withdraw_unknown, 'a withdrawal of a VRP never announced', 6, '8210 12',
+        ->(sid) { Fault.rtr_answer(sid, Rtr::Ipv4_prefix.new('192.0.2.0/24', 24, 64_999, false)) }],
+      # Section 5.6: "Should the router client receive an IPvX PDU with a
+      # {Prefix, Len, Max-Len, ASN} identical to one it already has
+      # active, it SHOULD raise a Duplicate Announcement Received error";
+      # code 7.
+      [:rtr_duplicate_announce, 'the same VRP announced twice', 7, '8210 5.6, 12',
+        ->(sid) { v = Rtr::Ipv4_prefix.new('192.0.2.0/24', 24, 64_999) ; Fault.rtr_answer(sid, v, v) }],
+      # Section 12, code 0: "corrupt in a manner not specified by another
+      # error code". An IPv4 Prefix whose Length says 24, with 4 octets
+      # more than section 5.6's 20.
+      [:rtr_corrupt_length, 'an IPv4 Prefix 4 octets longer than its 20', 0, '8210 5.6, 12',
+        ->(sid) { Fault.rtr_answer(sid, Fault.rtr_length(Rtr::Ipv4_prefix.new('192.0.2.0/24', 24, 64_999).encode, 4)) }],
+    ].freeze
+
     # What a speaker does over time rather than what one message holds,
     # routescope's protocol-conventions.md part 3: [name, what the sender
     # does, what the RFC expects of the receiver, RFC section], and for
@@ -302,6 +342,41 @@ module BGP
         entry = GR.find { |e| e[0] == name.to_sym }
         raise ArgumentError, "unknown graceful restart fault #{name.inspect}, see Fault::GR" unless entry
         entry[4].call
+      end
+
+      # RTR as Hashes: name, description, the Error Code expected, rfc
+      # and build.
+      def rtr_catalog
+        RTR.collect { |name, desc, code, section, build|
+          { :name => name, :description => desc, :expected => code, :rfc => "RFC #{section}", :build => build }
+        }
+      end
+
+      def rtr_names
+        RTR.collect(&:first)
+      end
+
+      # One RTR case as the octets of each PDU, in order, for a session
+      # whose Session ID is session_id.
+      #
+      #   Fault.rtr(:rtr_unknown_pdu)   # => ["\x01c\x00\x00\x00\x00\x00\b"]
+      def rtr(name, session_id = 0)
+        entry = RTR.find { |e| e[0] == name.to_sym }
+        raise ArgumentError, "unknown RTR fault #{name.inspect}, see Fault::RTR" unless entry
+        entry[4].call(session_id)
+      end
+
+      # A Cache Response, the PDUs given (Pdu or octets) and an End of
+      # Data with Serial Number 1: one whole answer.
+      def rtr_answer(session_id, *pdus)
+        [Rtr::Cache_response.new(session_id).encode, *pdus.collect { |p| p.is_a?(Rtr::Pdu) ? p.encode : p },
+         Rtr::End_of_data.new(session_id, 1).encode]
+      end
+
+      # A PDU with delta zero octets more, its Length in step.
+      def rtr_length(octets, delta)
+        body = octets.byteslice(8..) + ("\0".b * delta)
+        octets.byteslice(0, 4) + [8 + body.bytesize].pack('N') + body
       end
 
       # A whole message whose header Length says delta octets more or
