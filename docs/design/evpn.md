@@ -545,6 +545,11 @@ changed from the plan:
 - **A MAC first learned here after its remote route went** is sent with
   the last remote sequence seen plus one, not with no community: section
   15 asks for one "for which it had previously received" a route.
+  That sequence is forgotten once the MAC has been gone from every table
+  for `evpn: seq_memory` seconds, `duplicate: seconds` by default (added
+  after the pull request, 2026-11-26). The RFC sets no limit; without
+  one, a scenario, which has no variables, could claim a MAC with a
+  fixed sequence only once per bgp4rd.
 - **The hold ends at a sync**, so within 10 seconds after `vtep_hold`. It
   applies to a lost connection and an error, not to a VNI vtep4rd says it
   lacks: that one stops sending at once.

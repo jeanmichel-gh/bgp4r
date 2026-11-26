@@ -101,6 +101,13 @@ class TestBgpRibMacvrfs < Test::Unit::TestCase
                           clock: -> { @now })
   end
 
+  # @m replaced by one with other settings; send_routes syncs it.
+  def macvrfs_with(**opts)
+    list = BGP::Rib::Macvrf.list([{ 'vni' => 100 }], address: L1, as: 65000)
+    @m = BGP::Rib::Macvrfs.new(table: @t, macvrfs: list, vtep: @vtep, address: L1, events: @events,
+                               clock: -> { @now }, **opts)
+  end
+
   # What this PE sends: [type, mac, seq] per MAC-VRF 100 route.
   def sent(vni = 100)
     @m.exports.select { |e| e.vni == vni }.collect { |e| [e.route_type, e.mac, e.seq] }
@@ -320,6 +327,95 @@ class TestBgpRibMacvrfs < Test::Unit::TestCase
     @vtep.learn(100, H2, 'eth1')
     @m.sync!
     assert_equal([2, H2, 0], sent.last)
+  end
+
+  # Section 15: a MAC first learned here after its remote route went is
+  # sent one above the sequence "previously received".
+  def test_the_last_remote_sequence_is_remembered
+    send_routes(L2, [type2([L2, 100], H2)], ecs: ecs(seq: 7))
+    @now += 10
+    send_routes(L2, [type2([L2, 100], H2)], withdraw: true)
+    @now += 170
+    @m.sync!
+    @vtep.learn(100, H2, 'eth1')
+    @m.sync!
+    assert_equal([2, H2, 8], sent.last, '170 s gone: remembered')
+  end
+
+  # A MAC gone from every table for seq_memory seconds, the duplicate
+  # window by default, loses its last remote sequence: it comes back as
+  # if advertised for the first time. The time counts from the first
+  # sync that finds it gone.
+  def test_the_last_remote_sequence_is_forgotten
+    assert_equal(180, @m.seq_memory)
+    send_routes(L2, [type2([L2, 100], H2)], ecs: ecs(seq: 7))
+    send_routes(L2, [type2([L2, 100], H2)], withdraw: true)
+    @now += 179
+    @m.sync!
+    @now += 1
+    @m.sync!
+    @vtep.learn(100, H2, 'eth1')
+    @m.sync!
+    assert_equal([2, H2, nil], sent.last, '180 s gone: no MAC Mobility community')
+  end
+
+  # A MAC still somewhere is not gone: learned here, advertised, or
+  # behind a remote VTEP. The time starts again when it goes.
+  def test_a_mac_somewhere_keeps_its_sequence
+    send_routes(L2, [type2([L2, 100], H2)], ecs: ecs(seq: 7))
+    @now += 300
+    @m.sync!
+    send_routes(L2, [type2([L2, 100], H2)], withdraw: true)
+    @now += 100
+    @vtep.learn(100, H2, 'eth1')
+    @m.sync!
+    assert_equal([2, H2, 8], sent.last, 'behind L2 for 300 s, then 100 s gone')
+    @now += 300
+    @m.sync!
+    @vtep.age(100, H2)
+    @m.sync!
+    @now += 100
+    @m.sync!
+    @vtep.learn(100, H2, 'eth1')
+    @m.sync!
+    assert_equal([2, H2, 8], sent.last, 'here for 300 s, then 100 s gone')
+  end
+
+  # A MAC marked duplicate keeps its sequence while marked, however long.
+  def test_a_duplicate_keeps_its_sequence
+    m = macvrfs_with(moves: 2)
+    send_routes(L2, [type2([L2, 100], H2)], ecs: ecs(seq: 7))
+    @vtep.learn(100, H2, 'eth1')
+    m.sync!
+    send_routes(L2, [type2([L2, 100], H2)], ecs: ecs(seq: 9))
+    @vtep.learn(100, H2, 'eth1')
+    m.sync!
+    assert_equal(1, evpn_events('duplicate').size)
+    send_routes(L2, [type2([L2, 100], H2)], withdraw: true)
+    @vtep.age(100, H2)
+    @now += 400
+    m.sync!
+    m.clear_duplicate(100, H2)
+    @now += 10
+    m.sync!
+    @vtep.learn(100, H2, 'eth1')
+    m.sync!
+    assert_equal([2, H2, 10], m.exports.select { |e| e.vni == 100 }.collect { |e| [e.route_type, e.mac, e.seq] }.last,
+                 '400 s marked, 10 s gone')
+  end
+
+  # seq_memory is its own setting.
+  def test_seq_memory
+    m = macvrfs_with(seq_memory: 30)
+    assert_equal(30, m.seq_memory)
+    send_routes(L2, [type2([L2, 100], H2)], ecs: ecs(seq: 7))
+    send_routes(L2, [type2([L2, 100], H2)], withdraw: true)
+    m.sync!
+    @now += 30
+    m.sync!
+    @vtep.learn(100, H2, 'eth1')
+    m.sync!
+    assert_equal([2, H2, nil], m.exports.select { |e| e.vni == 100 }.collect { |e| [e.route_type, e.mac, e.seq] }.last)
   end
 
   # Section 7.7 and 15.2: a sticky MAC cannot move. Learned here, it is

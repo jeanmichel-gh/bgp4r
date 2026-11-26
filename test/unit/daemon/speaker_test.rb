@@ -533,11 +533,15 @@ class BGP_Daemon_Speaker_Test < Test::Unit::TestCase
     assert_equal('/tmp/v.sock', s.vtep_path)
     assert_equal('10.0.0.1:100', speaker('macvrfs' => [{ 'vni' => 100 }]).macvrfs.macvrfs.first.rd)
     e = assert_raise(ArgumentError) { speaker('macvrfs' => [{ 'vni' => 100 }], 'evpn' => { 'duplicates' => 1 }) }
-    assert_equal('evpn: unknown key(s) duplicates: use one of vtep, duplicate, vtep_hold', e.message)
+    assert_equal('evpn: unknown key(s) duplicates: use one of vtep, duplicate, vtep_hold, seq_memory', e.message)
     m = speaker('macvrfs' => [{ 'vni' => 100 }],
                 'evpn' => { 'duplicate' => { 'moves' => 3, 'seconds' => 60 }, 'vtep_hold' => 10 }).macvrfs
-    assert_equal([3, 60, 10], [m.moves_limit, m.seconds, m.hold])
-    assert_equal([5, 180, 30], speaker('macvrfs' => [{ 'vni' => 100 }]).macvrfs.then { |x| [x.moves_limit, x.seconds, x.hold] })
+    assert_equal([3, 60, 10, 60], [m.moves_limit, m.seconds, m.hold, m.seq_memory], 'seq_memory follows seconds')
+    assert_equal([5, 180, 30, 180],
+                 speaker('macvrfs' => [{ 'vni' => 100 }]).macvrfs.then { |x| [x.moves_limit, x.seconds, x.hold, x.seq_memory] })
+    assert_equal(20, speaker('macvrfs' => [{ 'vni' => 100 }], 'evpn' => { 'seq_memory' => 20 }).macvrfs.seq_memory)
+    e = assert_raise(ArgumentError) { speaker('macvrfs' => [{ 'vni' => 100 }], 'evpn' => { 'seq_memory' => 'x' }) }
+    assert_equal('evpn: seq_memory: "x" is not a positive number', e.message)
     e = assert_raise(ArgumentError) { speaker('macvrfs' => [{ 'vni' => 100 }], 'evpn' => { 'vtep_hold' => 0 }) }
     assert_equal('evpn: vtep_hold: 0 is not a positive number', e.message)
     e = assert_raise(ArgumentError) { speaker('macvrfs' => [{ 'vni' => 100 }], 'evpn' => { 'duplicate' => { 'n' => 1 } }) }
