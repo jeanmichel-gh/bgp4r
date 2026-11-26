@@ -22,6 +22,7 @@
 
 require 'bgp/path_attributes/attributes'
 require 'bgp/path_attributes/validation'
+require 'bgp/messages/route_refresh'
 
 module BGP
 
@@ -142,7 +143,100 @@ module BGP
                  h[:ip_prefix_unreachability].delete(:reporters) })) }],
     ].freeze
 
+    # The ROUTE-REFRESH cases of RFC 2918 and RFC 7313,
+    # docs/design/bgp-operations.md section 2. **Whole messages, not
+    # attributes**, so a list of their own: each entry is [name,
+    # description, what the RFC expects of the receiver, RFC section, a
+    # block taking afi and safi that returns the messages' octets], and
+    # :gr after them for a case that holds only once the receiver has
+    # the peer's Graceful Restart capability. Expected is :ignore (the
+    # RFC's "shall ignore" or "MUST ignore"), :may_ignore (the RFC's
+    # "MAY ignore") or :notification (7/1, RFC 7313 section 5).
+    # `Fault.refresh` gives the octets.
+    REFRESH = [
+      # RFC 2918 section 4: a family "that the speaker didn't advertise to
+      # the peer [...] the speaker shall ignore". The family is the
+      # caller's to pick, one the receiver did not advertise; afi and
+      # safi are sent as given.
+      [:refresh_unadvertised_family, 'a refresh for a family the receiver did not advertise', :ignore, '2918 4',
+        ->(afi, safi) { [Route_refresh.new(afi, safi).encode] }],
+      # RFC 7313 section 5: "other than 0, 1, or 2, it MUST ignore the
+      # received ROUTE-REFRESH message. It SHOULD log an error". 3 is the
+      # first unassigned value and 255 the Reserved one.
+      [:refresh_subtype_unknown, 'subtype 3, then 255', :ignore, '7313 5',
+        ->(afi, safi) { [Route_refresh.new(afi, safi, 3).encode, Route_refresh.new(afi, safi, 255).encode] }],
+      # RFC 7313 section 5: a BoRR or EoRR whose length after the header
+      # is not 4 gets NOTIFICATION 7/1, "The Data field [...] MUST
+      # contain the complete ROUTE-REFRESH message". It holds only when
+      # the receiver has the sender's capability 70.
+      [:refresh_borr_length, 'a BoRR one octet long', :notification, '7313 5',
+        ->(afi, safi) { [Fault.message_length(Route_refresh.new(afi, safi, :borr).encode, +1)] }],
+      [:refresh_eorr_length, 'an EoRR one octet short', :notification, '7313 5',
+        ->(afi, safi) { [Fault.message_length(Route_refresh.new(afi, safi, :eorr).encode, -1)] }],
+      # RFC 7313 section 4: "A BGP speaker MAY ignore any EoRR message
+      # received without a prior receipt of an associated BoRR message."
+      [:refresh_eorr_without_borr, 'an EoRR with no BoRR before it', :may_ignore, '7313 4',
+        ->(afi, safi) { [Route_refresh.new(afi, safi, :eorr).encode] }],
+      # RFC 7313 section 4: "A BGP speaker that has received the Graceful
+      # Restart Capability from its neighbor MUST ignore any BoRRs for an
+      # <AFI, SAFI> from the neighbor before the speaker receives the EoR
+      # for the given <AFI, SAFI>". The sender has to have advertised GR
+      # and sent no End-of-RIB yet, which is the caller's to arrange.
+      [:refresh_borr_before_eor, 'a BoRR before the End-of-RIB, GR advertised', :ignore, '7313 4',
+        ->(afi, safi) { [Route_refresh.new(afi, safi, :borr).encode] }, :gr],
+    ].freeze
+
+    # What a speaker does over time rather than what one message holds,
+    # routescope's protocol-conventions.md part 3: [name, what the sender
+    # does, what the RFC expects of the receiver, RFC section]. bgp4r-sim
+    # runs them (`behaviour`). Graceful restart's join them in pull
+    # request 3.
+    BEHAVIOURS = [
+      # RFC 7313 section 4: "An implementation MAY impose a locally
+      # configurable upper bound on how long it would retain any stale
+      # routes. Once the upper bound is reached, the implementation MAY
+      # remove any routes from the peer that are still marked as stale
+      # for that <AFI, SAFI> without waiting for an EoRR message."
+      [:borr_without_eorr, 'a BoRR, then no EoRR', 'may remove the stale routes at its own bound', '7313 4'],
+    ].freeze
+
     class << self
+
+      # REFRESH as Hashes, in `catalog`'s shape, with `gr` where
+      # `catalog` has `ibgp`.
+      def refresh_catalog
+        REFRESH.collect { |name, desc, expected, section, build, need|
+          { :name => name, :description => desc, :expected => expected,
+            :rfc => "RFC #{section}", :build => build, :gr => need == :gr }
+        }
+      end
+
+      def refresh_names
+        REFRESH.collect(&:first)
+      end
+
+      # One REFRESH case as the octets of each message, in order.
+      #
+      #   Fault.refresh(:refresh_borr_length, 1, 1)   # => [24 octets]
+      def refresh(name, afi = 1, safi = 1)
+        entry = REFRESH.find { |e| e[0] == name.to_sym }
+        raise ArgumentError, "unknown refresh fault #{name.inspect}, see Fault::REFRESH" unless entry
+        entry[4].call(afi, safi)
+      end
+
+      def behaviour_names
+        BEHAVIOURS.collect(&:first)
+      end
+
+      # A whole message whose header Length says delta octets more or
+      # fewer, and whose body has them: a zero octet added at the end, or
+      # the last octet taken off. RFC 4271 section 4.1's Length is the
+      # whole message's, header included.
+      def message_length(octets, delta)
+        body = octets.byteslice(19..).b
+        body = delta >= 0 ? body + ("\0".b * delta) : body.byteslice(0, body.bytesize + delta)
+        octets.byteslice(0, 16).b + [19 + body.bytesize].pack('n') + octets.byteslice(18, 1) + body
+      end
 
       # UNREACHABILITY as Hashes, in `catalog`'s shape.
       def unreachability_catalog

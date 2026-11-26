@@ -358,6 +358,54 @@ Tunnel_encap.new(Tunnel_encap::Tunnel.new(:vxlan,
 else in the catalog needs it, because every other fault lives in the
 attribute header or its value.
 
+### ROUTE-REFRESH cases
+
+`BGP::Fault::REFRESH` holds six cases of RFC 2918 and RFC 7313. Each is
+whole messages, not an attribute, so it is a list of its own.
+`Fault.refresh(name, afi, safi)` gives each message's octets, in order:
+
+```ruby
+Fault.refresh(:refresh_borr_length, 1, 1).collect { |o| o.unpack1('H*') }
+# ["ffffffffffffffffffffffffffffffff0018050001010100"]
+```
+
+`Fault.message_length(octets, delta)` makes a message `delta` octets
+longer or shorter, with the header's Length and the body in step.
+
+`BGP::Fault::BEHAVIOURS` holds what a sender does over time, not what a
+message holds. It has one entry so far, `borr_without_eorr`: a BoRR and
+then no EoRR. Graceful restart's behaviours join it in pull request 3 of
+`docs/design/bgp-operations.md`.
+
+bgp4r-sim sends a case with `POST /api/fault {"case": NAME, "afi": 1,
+"safi": 1}` and a behaviour with `POST /api/behaviour {"name": NAME}`.
+Each case went to bgp4rd and to FRR 10.5.1 on a session of its own
+(`test/functional/refresh_fault_matrix_test.rb`,
+`test/functional/lab/route_refresh_fault_frr_test.rb`), on 2026-11-26:
+
+| Name | Sent | RFC expects | bgp4rd | FRR 10.5.1 |
+|---|---|---|---|---|
+| `refresh_unadvertised_family` | a request for a family not advertised | ignore (2918 4) | ignores | ignores |
+| `refresh_subtype_unknown` | subtype 3, then 255 | ignore, log (7313 5) | ignores, logs | answers each as a request |
+| `refresh_borr_length` | a BoRR one octet long | 7/1, data the message (7313 5) | 7/1 with the message | 7/1 with no data |
+| `refresh_eorr_length` | an EoRR one octet short | 7/1 (7313 5) | 7/1 with the message | 1/2, Bad Message Length |
+| `refresh_eorr_without_borr` | an EoRR alone | may ignore (7313 4) | ignores | ignores |
+| `refresh_borr_before_eor` | a BoRR before the End-of-RIB, GR advertised | ignore (7313 4) | marks the routes stale | ignores |
+| `borr_without_eorr` | a BoRR, then no EoRR | may remove at its bound (7313 4) | removes at `refresh_stale_time` | keeps them, stale, after `stalepath-time` |
+
+Two of these are not what the RFC asks, and one is a choice between
+two RFCs:
+
+- **bgp4rd marks stale on a BoRR before the End-of-RIB.** It reads a GR
+  capability as an advertisement only until graceful restart is built
+  (pull request 3).
+- **FRR answers subtypes 3 and 255** as normal requests, and its 7/1
+  carries no data.
+- **The short EoRR**: 22 octets is below the 23 of any ROUTE-REFRESH,
+  which RFC 4271 section 6.1 checks in the header. FRR answers that
+  with 1/2. bgp4rd answers RFC 7313 section 5's 7/1, which names
+  subtypes 1 and 2 whatever the length.
+
 ## Receiving: policies and findings
 
 Parsing checks what it reads, against RFC 7606. The policy says what

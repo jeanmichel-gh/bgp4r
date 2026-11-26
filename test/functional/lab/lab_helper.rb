@@ -1040,6 +1040,18 @@ module LabHelper
       nil
     end
 
+    # Configuration lines, in config mode, in one vtysh call: each line
+    # is its own -c, as vtysh wants. True when vtysh exited 0.
+    #
+    #   frr.configure('router bgp 65002', 'bgp graceful-restart stalepath-time 5')
+    def configure(*lines)
+      args = ['configure terminal', *lines].flat_map { |l| ['-c', l] }
+      _out, status = Open3.capture2e(self.class.vtysh, '--vty_socket', @dir, *args)
+      status.success?
+    rescue SystemCallError
+      false
+    end
+
     # A vty command that answers JSON, parsed, or nil.
     #
     # The JSON is taken from the first brace rather than from the start of

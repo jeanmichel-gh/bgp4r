@@ -1901,7 +1901,7 @@ bgp/sim.rb               requires the rest; not loaded by bgp4r.rb
 bgp/sim/sent.rb          what it has sent: the counters and the feeds,
                          which is BGP::Daemon::Recorder's five keys for
                          the send side
-bgp/sim/injector.rb      the ten actions, over a BGP::Daemon::Speaker's
+bgp/sim/injector.rb      the eleven actions, over a BGP::Daemon::Speaker's
                          sessions
 bgp/sim/views.rb         the five reads; a subclass of
                          bgp/daemon/views.rb, so `status` and `peers`
@@ -2238,13 +2238,18 @@ Actions, as `action => [path, body keys]`, which is the table
 | `announce` | `/api/announce` | `prefixes` or `generate`, `next_hop`, `as_path`, `as_path_literal`, `med`, `local_pref`, `communities`, `extended_communities`, `large_communities`, `path_id`, `peer`; or one of `spec` (with `churn`), `mp_reach`, `specimen` |
 | `withdraw` | `/api/withdraw` | the same selectors, or `spec` or `mp_unreach` |
 | `attribute` | `/api/attribute` | a prefix set and the attributes to change |
-| `fault` | `/api/fault` | `case` from `BGP::Fault::CATALOG`, `prefixes` |
+| `fault` | `/api/fault` | `case` from `BGP::Fault::CATALOG` with `prefixes` and `next_hop`, or from `BGP::Fault::REFRESH` with `afi` and `safi` |
 | `replay` | `/api/replay` | `hex`, the octets to send unchanged |
 | `notification` | `/api/notification` | `code`, `subcode`, `data` |
 | `session.stop` | `/api/session/stop` | `peer` |
 | `session.start` | `/api/session/start` | `peer` |
 | `session.flap` | `/api/session/flap` | `peer`, `count`, `interval` |
 | `refresh` | `/api/refresh` | `peer`, `afi`, `safi`, `subtype` |
+| `behaviour` | `/api/behaviour` | `peer`, `name` from `BGP::Fault::BEHAVIOURS`, `afi`, `safi` |
+
+The first ten are routescope's `Drivers::Sim::ACTIONS`. `behaviour` is
+newer, from `docs/design/bgp-operations.md`, and routescope does not
+send it yet.
 
 **The body keys are the node file's own keys.** `prefixes`, `med`,
 `as_path`, `communities`, `next_hop`, `local_pref`, `path_id` are what

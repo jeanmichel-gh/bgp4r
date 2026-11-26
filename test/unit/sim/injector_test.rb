@@ -20,7 +20,7 @@
 # along with BGP4R.  If not, see <http://www.gnu.org/licenses/>.
 #++
 
-# bgp4r-sim's ten actions, with a fake peer in place of a session.
+# bgp4r-sim's eleven actions, with a fake peer in place of a session.
 #
 #   ruby -I. test/unit/sim/injector_test.rb
 #
@@ -527,6 +527,49 @@ class BGP_Sim_Injector_Test < Test::Unit::TestCase
     assert_equal(1, msg.subtype)
   end
 
+  # A REFRESH case is its messages as octets, for the family asked.
+  def test_a_refresh_fault_sends_its_messages
+    inj = injector
+    r = inj.act('fault', 'case' => 'refresh_subtype_unknown', 'afi' => 2, 'safi' => 1)
+    assert_equal(BGP::Fault.refresh(:refresh_subtype_unknown, 2, 1).collect { |o| o.unpack1('H*') }, peer.hex)
+    assert_equal([2, 'refresh_subtype_unknown', 2, 1], r.values_at(:updates, :case, :afi, :safi))
+    assert_equal(2, inj.sent.summary[:messages_sent])
+  end
+
+  def test_every_refresh_case_can_be_injected
+    BGP::Fault.refresh_names.each do |name|
+      injector.act('fault', 'case' => name.to_s)
+      assert_equal(BGP::Fault.refresh(name).size, peer.sent.size, name.to_s)
+    end
+  end
+
+  # A key the case cannot use is refused rather than dropped.
+  def test_a_fault_refuses_the_other_kinds_keys
+    e = assert_raise(BGP::Sim::Injector::Refused) { injector.act('fault', 'case' => 'refresh_borr_length', 'prefixes' => ['10.0.0.0/8']) }
+    assert_match(/ROUTE-REFRESH case and takes no prefixes/, e.message)
+    e = assert_raise(BGP::Sim::Injector::Refused) { injector.act('fault', 'case' => 'origin_length', 'afi' => 2) }
+    assert_match(/UPDATE case and takes no afi/, e.message)
+    e = assert_raise(BGP::Sim::Injector::Refused) { injector.act('fault', 'case' => 'nope') }
+    assert_match(/refresh_borr_length/, e.message, 'the refusal names both lists')
+  end
+
+  # borr_without_eorr: one BoRR and nothing after it.
+  def test_the_borr_without_eorr_behaviour
+    inj = injector
+    r = inj.act('behaviour', 'name' => 'borr_without_eorr', 'afi' => 1, 'safi' => 128)
+    assert_equal(['ffffffffffffffffffffffffffffffff00170500010180'], peer.hex)
+    assert_equal(['borr_without_eorr', 1, 128], r.values_at(:behaviour, :afi, :safi))
+    e = assert_raise(BGP::Sim::Injector::Refused) { inj.act('behaviour', 'name' => 'gr_restart') }
+    assert_match(/unknown behaviour "gr_restart"; this injector has borr_without_eorr/, e.message)
+    assert_raise(BGP::Sim::Injector::Refused) { inj.act('behaviour', {}) }
+  end
+
+  def test_the_topology_lists_refresh_faults_and_behaviours
+    t = injector.topology
+    assert_equal(BGP::Fault.refresh_names.collect(&:to_s), t[:refresh_faults])
+    assert_equal(['borr_without_eorr'], t[:behaviours])
+  end
+
   def test_a_route_refresh_defaults_to_ipv4_unicast
     injector.act('refresh', {})
     assert_equal('ffffffffffffffffffffffffffffffff00170500010001', peer.hex.first)
@@ -724,10 +767,10 @@ class BGP_Sim_Injector_Test < Test::Unit::TestCase
     assert_raise(BGP::Sim::Injector::Refused) { injector.act('announce', []) }
   end
 
-  # The ten actions of docs/daemon.md's table, and no more.
-  def test_the_action_table_is_the_documented_ten
+  # The eleven actions of docs/daemon.md's table, and no more.
+  def test_the_action_table_is_the_documented_eleven
     assert_equal(%w[announce withdraw attribute fault replay notification
-                    session.stop session.start session.flap refresh],
+                    session.stop session.start session.flap refresh behaviour],
                  BGP::Sim::Injector::ACTIONS.keys)
   end
 

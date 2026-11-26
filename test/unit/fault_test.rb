@@ -287,4 +287,49 @@ class TestFault < Test::Unit::TestCase
     assert_equal [], pa.errors
   end
 
+  # ---- REFRESH, docs/design/bgp-operations.md section 2 ----------------
+
+  # Each case's octets, the length cases with the header's Length and
+  # the body agreeing with each other and not with RFC 7313 section 5.
+  def test_the_refresh_cases_on_the_wire
+    want = {
+      :refresh_unadvertised_family => ['ffffffffffffffffffffffffffffffff00170500020080'],
+      :refresh_subtype_unknown     => ['ffffffffffffffffffffffffffffffff00170500020380',
+                                       'ffffffffffffffffffffffffffffffff0017050002ff80'],
+      :refresh_borr_length         => ['ffffffffffffffffffffffffffffffff0018050002018000'],
+      :refresh_eorr_length         => ['ffffffffffffffffffffffffffffffff001605000202'],
+      :refresh_eorr_without_borr   => ['ffffffffffffffffffffffffffffffff00170500020280'],
+      :refresh_borr_before_eor     => ['ffffffffffffffffffffffffffffffff00170500020180'],
+    }
+    assert_equal(want.keys, BGP::Fault.refresh_names)
+    want.each do |name, hex|
+      assert_equal(hex, BGP::Fault.refresh(name, 2, 128).collect { |o| o.unpack1('H*') }, name.to_s)
+    end
+  end
+
+  # What each case expects of a receiver, and the one that needs GR.
+  def test_the_refresh_catalog_says_what_the_rfc_expects
+    cat = BGP::Fault.refresh_catalog.to_h { |e| [e[:name], [e[:expected], e[:rfc], e[:gr]]] }
+    assert_equal([:notification, 'RFC 7313 5', false], cat[:refresh_borr_length])
+    assert_equal([:may_ignore, 'RFC 7313 4', false], cat[:refresh_eorr_without_borr])
+    assert_equal([:ignore, 'RFC 7313 4', true], cat[:refresh_borr_before_eor])
+    assert_equal([:ignore, 'RFC 2918 4', false], cat[:refresh_unadvertised_family])
+    assert_raise(ArgumentError) { BGP::Fault.refresh(:origin_length) }
+  end
+
+  # A message read back through the factory: the long BoRR is refused
+  # as RFC 7313 section 5 says, and a length off by any amount keeps
+  # the header and the body in step.
+  def test_message_length
+    borr = BGP::Route_refresh.new(1, 1, :borr).encode
+    assert_raise(BGP::Malformed_route_refresh) { BGP::Message.factory(BGP::Fault.message_length(borr, 1)) }
+    assert_equal(borr, BGP::Fault.message_length(borr, 0))
+    three = BGP::Fault.message_length(borr, 3)
+    assert_equal([26, 26], [three.unpack1('@16n'), three.bytesize])
+  end
+
+  def test_the_behaviours
+    assert_equal([:borr_without_eorr], BGP::Fault.behaviour_names)
+    assert_equal('7313 4', BGP::Fault::BEHAVIOURS.first[3])
+  end
 end
