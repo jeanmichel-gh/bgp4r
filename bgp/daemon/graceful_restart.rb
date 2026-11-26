@@ -27,8 +27,18 @@ module BGP
 
     # Graceful restart, the Receiving Speaker of RFC 4724 section 4.2:
     # bgp4rd helps a peer that restarts and never restarts gracefully
-    # itself. docs/design/bgp-operations.md, section 3; this is its pull
-    # request 3a. RFC 8538, the N bit and the Hard Reset, is 3b.
+    # itself. docs/design/bgp-operations.md, section 3; its pull request
+    # 3a, and RFC 8538, the N bit and the Hard Reset, 3b.
+    #
+    # **RFC 8538.** `notification: true` sets our N bit. Once both OPENs
+    # carried it, section 4: on a NOTIFICATION other than a Hard Reset,
+    # sent or received, "it MUST follow the rules for the Receiving
+    # Speaker"; on a hold timer expiry it "MUST follow the rules for the
+    # Receiving Speaker" too; a Hard Reset, Cease subcode 9, ends the
+    # session as RFC 4271 does (section 3.2). Section 4.1 keeps routes
+    # already stale at a consecutive restart: RFC 4724's rule that they
+    # "MUST be deleted" holds only "If the "N" bit has not been exchanged
+    # with the peer".
     #
     # A neighbor's `graceful_restart` turns it on. bgp4rd then advertises
     # the capability with R clear and no families, which RFC 4724
@@ -68,7 +78,24 @@ module BGP
       KIND = BGP::Events.register_kind(:gr)
 
       # The keys of a neighbor's `graceful_restart` block.
-      KEYS = %w[restart_time stale_time].freeze
+      KEYS = %w[restart_time stale_time notification].freeze
+
+      # RFC 8538 section 2: "The second most significant bit [of the
+      # Restart Flags] is defined in this document as the Graceful
+      # Notification ("N") bit". The flags are four bits, R first.
+      N_BIT = 0x4
+
+      # RFC 8538 section 3, the Hard Reset: Cease, subcode 9.
+      CEASE = 6
+      HARD_RESET = 9
+
+      # RFC 8538 section 5.1's advice, by Cease subcode: true for "Hard
+      # Reset", false for "Graceful Cease", nil for "Provide user
+      # control", which is Administrative Reset and goes graceful unless
+      # asked. 10, BFD Down (RFC 9384), is after the table; it says the
+      # forwarding path failed, not that the peer is gone, so graceful.
+      HARD = { 1 => true, 2 => true, 3 => true, 4 => nil, 5 => false, 6 => false,
+               7 => false, 8 => false, 9 => true, 10 => false }.freeze
 
       # How long routes stay stale on a new session with no End-of-RIB,
       # in seconds: RFC 8538 section 4.1's "suggested default value [...]
@@ -77,15 +104,14 @@ module BGP
 
       # Raises ArgumentError unless value is nil, true, or a mapping of
       # KEYS: restart_time 0 to 4095, RFC 4724 section 3's 12 bits;
-      # stale_time a whole number of seconds from 1. `notification`, the
-      # N bit, is RFC 8538, pull request 3b, and is refused by name until
-      # it is built.
+      # stale_time a whole number of seconds from 1; notification true or
+      # false, RFC 8538's N bit.
       def self.check(value, address)
         return if value.nil? || value == true
         where = "neighbor #{address}: graceful_restart"
         raise ArgumentError, "#{where} is true or a mapping of #{KEYS.join(', ')}, not #{value.inspect}" unless value.is_a?(Hash)
-        if value.key?('notification')
-          raise ArgumentError, "#{where}: notification, RFC 8538's N bit, is not built yet (docs/design/bgp-operations.md, section 3)"
+        unless [nil, true, false].include?(value['notification'])
+          raise ArgumentError, "#{where}: notification is true or false, not #{value['notification'].inspect}"
         end
         unknown = value.keys - KEYS
         raise ArgumentError, "#{where}: unknown key(s) #{unknown.join(', ')}: use #{KEYS.join(', ')}" unless unknown.empty?
@@ -99,11 +125,43 @@ module BGP
         end
       end
 
-      # What bgp4rd advertises: R clear, the configured Restart Time (0
-      # unless set), and no families.
+      # What bgp4rd advertises: R clear, N when `notification` is true,
+      # the configured Restart Time (0 unless set), and no families.
       def self.capability(value)
         rt = value.is_a?(Hash) ? value.fetch('restart_time', 0) : 0
-        BGP::OPT_PARM::CAP::Graceful_restart.new(0, rt)
+        BGP::OPT_PARM::CAP::Graceful_restart.new(notification?(value) ? N_BIT : 0, rt)
+      end
+
+      def self.notification?(value)
+        value.is_a?(Hash) && value['notification'] == true
+      end
+
+      # True when both OPENs of a session carried the N bit: RFC 8538
+      # section 4's "has received the "N" bit from its peer", from a
+      # speaker that advertised it.
+      def self.exchanged?(session_info)
+        return false unless session_info
+        [session_info.speaker, session_info.peer].all? do |open|
+          cap = received(open)
+          cap && (cap[:restart_state] & N_BIT) != 0
+        end
+      end
+
+      # The Cease to send for subcode: on a session where the N bit was
+      # exchanged, a Hard Reset carrying it (RFC 8538 section 3.1, "the
+      # Hard Reset encapsulates another NOTIFICATION message in its data
+      # portion") when hard is true, or when hard is nil and section
+      # 5.1's table says so; otherwise the Cease itself. Without N there
+      # is no Hard Reset to send: section 4, "A BGP speaker SHOULD NOT
+      # send a Hard Reset to a peer from which it has not received the
+      # "N" bit".
+      def self.cease(subcode, session_info, hard = nil)
+        hard = HARD[subcode] if hard.nil?
+        if hard && subcode != HARD_RESET && exchanged?(session_info)
+          BGP::Notification.new(CEASE, HARD_RESET, [CEASE, subcode].pack('CC'))
+        else
+          BGP::Notification.new(CEASE, subcode)
+        end
       end
 
       # The last GR capability an OPEN carried, as its to_hash's
@@ -129,6 +187,7 @@ module BGP
         @kept = []          # the families held through the restart, [afi, safi]
         @restart_at = nil   # when the peer's Restart Time runs out
         @waiting = {}       # [afi, safi] => when its stale timer runs out
+        @n = nil            # whether the last session exchanged the N bit
         @watcher = nil
       end
 
@@ -141,28 +200,40 @@ module BGP
 
       # The session went from Established to anything else. Answers the
       # families the tables keep, [afi, safi], which is none unless this
-      # peer is configured, the drop was a TCP failure, and the session's
-      # peer listed families in its GR capability.
+      # peer is configured, the session's peer listed families in its GR
+      # capability, and the drop is one the rules keep for: a TCP
+      # failure, or with the N bit exchanged a NOTIFICATION other than a
+      # Hard Reset or the hold timer.
+      #
+      # Without N, what was stale already goes first, through the tables
+      # as an EoRR's purge does, so the tables then mark only what is
+      # left: RFC 4724 section 4.2's consecutive restart rule.
       def down(session_info, cause)
         return [] unless configured?
         theirs = GracefulRestart.received(session_info && session_info.peer)
         families = theirs ? theirs[:families].collect { |f| [f[:afi], f[:safi]] } : []
-        unless cause == :tcp && !families.empty?
+        n = GracefulRestart.exchanged?(session_info)
+        @lock.synchronize { @n = n }
+        unless !families.empty? && (cause == :tcp || (n && %i[notification hold_time].include?(cause)))
           if theirs && !families.empty?
-            event("session ended by #{cause || 'us'}: routes flushed, as RFC 4724 section 4 asks after a NOTIFICATION",
-                  :flushed => { :cause => (cause || :local).to_s })
+            why = cause == :hard_reset ? 'a Hard Reset, as RFC 8538 section 3.2 asks' :
+                    (n ? 'a stop of our own' : 'a NOTIFICATION, as RFC 4724 section 4 asks, with no N bit exchanged')
+            event("session ended by #{cause || 'us'}: routes flushed after #{why}",
+                  :flushed => { :cause => (cause || :local).to_s, :notification => n })
           end
           clear
           return []
         end
+        families.each { |afi, safi| purge(afi, safi, 'consecutive restart, no N bit', quiet: true) } unless n
         time = theirs[:restart_time]
         @lock.synchronize do
           @kept = families
           @waiting = {}
           @restart_at = @clock.call + time
         end
-        event("helper started: #{families.size} famil#{families.size == 1 ? 'y' : 'ies'} kept stale for the peer's Restart Time, #{time} s",
-              :helper => { :families => families.collect { |a, s| { :afi => a, :safi => s } }, :restart_time => time })
+        event("helper started after #{cause}: #{families.size} famil#{families.size == 1 ? 'y' : 'ies'} kept stale for the peer's Restart Time, #{time} s",
+              :helper => { :families => families.collect { |a, s| { :afi => a, :safi => s } }, :restart_time => time,
+                           :cause => cause.to_s, :notification => n })
         watch
         families
       end
@@ -171,7 +242,9 @@ module BGP
       # in the new OPEN go now; the rest wait for End-of-RIB or the stale
       # timer.
       def up(session_info)
+        n = GracefulRestart.exchanged?(session_info)
         kept = @lock.synchronize do
+          @n = n
           k = @kept
           @restart_at = nil
           k
@@ -222,18 +295,20 @@ module BGP
         @lock.synchronize { @restart_at ? 'restarting' : (@waiting.empty? ? nil : 'helper') }
       end
 
-      # For the peer row: the state, the families held, and the seconds
-      # left on the timer that runs.
+      # For the peer row: the state, the families held, the seconds left
+      # on the timer that runs, and whether the N bit was exchanged on the
+      # last session.
       def row
         now = @clock.call
         @lock.synchronize do
-          if @restart_at
-            { :state => 'restarting', :families => fam_rows(@kept), :seconds_left => [(@restart_at - now).ceil, 0].max }
-          elsif !@waiting.empty?
-            { :state => 'helper', :families => fam_rows(@waiting.keys), :seconds_left => [(@waiting.values.min - now).ceil, 0].max }
-          else
-            { :state => nil, :families => [], :seconds_left => nil }
-          end
+          r = if @restart_at
+                { :state => 'restarting', :families => fam_rows(@kept), :seconds_left => [(@restart_at - now).ceil, 0].max }
+              elsif !@waiting.empty?
+                { :state => 'helper', :families => fam_rows(@waiting.keys), :seconds_left => [(@waiting.values.min - now).ceil, 0].max }
+              else
+                { :state => nil, :families => [], :seconds_left => nil }
+              end
+          r.merge(:notification => @n == true)
         end
       end
 
@@ -245,8 +320,10 @@ module BGP
 
       def fam_rows(list) ; list.collect { |a, s| { :afi => a, :safi => s } } ; end
 
-      def purge(afi, safi, why)
+      # quiet: publish only when something went.
+      def purge(afi, safi, why, quiet: false)
         @speaker.stale_family(@peer, afi, safi, :purge) do |n|
+          next if quiet && n.to_i.zero?
           event("#{why} for AFI #{afi} SAFI #{safi}: #{n.nil? ? 'no table holds this family, nothing' : n} stale removed",
                 :purged => { :afi => afi, :safi => safi, :removed => n }, :reason => why)
         end

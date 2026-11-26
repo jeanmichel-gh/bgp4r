@@ -100,7 +100,7 @@ Getting a session up and keeping it.
 | `end-of-rib` | 3 | 1 | 1 | end_of_rib on a neighbor: a marker per negotiated family after the first table; received ones recorded |
 | `route-refresh-answer` | 3 | 1 | 1 | a route refresh answered with the family's Adj-RIB-Out, between BoRR and EoRR to an enhanced peer; counted and published |
 | `route-refresh-stale` | 9 | 1 | 1 | a BoRR marks the peer's routes of a family stale in every table, the EoRR or refresh_stale_time removes what is still stale; 7/1 for a wrong length |
-| `graceful-restart` | 11 | 1 | 1 | graceful_restart on a neighbor: a helper, keeping a restarting peer's routes stale until its End-of-RIB, its Restart Time or stale_time |
+| `graceful-restart` | 12 | 1 | 1 | graceful_restart on a neighbor: a helper, keeping a restarting peer's routes stale until its End-of-RIB, its Restart Time or stale_time; RFC 8538's N bit and Hard Reset |
 | `gtsm` | 1 | 1 | 0 | ttl_security on a neighbor: GTSM, sent at TTL 255, dropped below 256 - hops |
 | `tcp-md5` | 1 | 1 | 1 | password on a neighbor: TCP MD5, every segment signed, a missing or wrong digest dropped |
 | `fsm` | 3 | 0 | 0 | The finite state machine, the TCP session and the two IO threads |
@@ -438,11 +438,11 @@ ruby test/run_feature.rb gen
 
 ### `graceful-restart`
 
-graceful_restart on a neighbor: a helper, keeping a restarting peer's routes stale until its End-of-RIB, its Restart Time or stale_time.
+graceful_restart on a neighbor: a helper, keeping a restarting peer's routes stale until its End-of-RIB, its Restart Time or stale_time; RFC 8538's N bit and Hard Reset.
 
-- RFC 4724 sections 3 to 5
+- RFC 4724 sections 3 to 5, RFC 8538
 - Read first: `docs/daemon.md`
-- 11 unit files, 1 functional
+- 12 unit files, 1 functional
 - lab:
   - `graceful_restart_frr_test`, needs frr
 

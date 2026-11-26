@@ -25,6 +25,7 @@ require 'socket'
 require 'stringio'
 require 'bgp/daemon/speaker'
 require 'bgp/daemon/views'
+require 'bgp/daemon/control'
 
 # Graceful restart, RFC 4724 section 4.2's Receiving Speaker, through a
 # real Speaker over loopback. A library Neighbor from 127.0.0.2 is the
@@ -80,11 +81,12 @@ class TestGracefulRestart < Test::Unit::TestCase
 
   # A Neighbor from address, with a GR capability listing IPv4 unicast,
   # its F bit as given; nil for none.
-  def dial(address, as, f = true, restart_time: 120)
+  # n_bit: RFC 8538's N in its Restart Flags.
+  def dial(address, as, f = true, restart_time: 120, n_bit: false)
     n = BGP::Neighbor.new(:my_as => as, :remote_addr => '127.0.0.1', :id => address)
     n.capability :as4_byte
     unless f.nil?
-      gr = BGP::OPT_PARM::CAP::Graceful_restart.new(0, restart_time)
+      gr = BGP::OPT_PARM::CAP::Graceful_restart.new(n_bit ? BGP::Daemon::GracefulRestart::N_BIT : 0, restart_time)
       gr.add(1, 1, f ? 0x80 : 0)
       n.capability gr
     end
@@ -119,6 +121,11 @@ class TestGracefulRestart < Test::Unit::TestCase
 
   def up_with_routes(f = true, **opts)
     @peer = dial('127.0.0.2', 65_001, f, **opts)
+    @notified = Queue.new
+    catcher = Object.new
+    q = @notified
+    catcher.define_singleton_method(:update) { |m| q << m if m.is_a?(BGP::Notification) }
+    @peer.add_observer(catcher)
     announce(@peer, ROUTES)
     assert_equal(true, wait_until { adj_in.size == 2 }, 'two routes in')
     assert_equal(true, wait_until { @catcher.announced.size == 2 }, 'and sent on to the watcher')
@@ -293,5 +300,94 @@ class TestGracefulRestart < Test::Unit::TestCase
     @peer = dial('127.0.0.2', 65_001, true)
     ours = BGP::Daemon::GracefulRestart.received(@peer.session_info.peer)
     assert_equal({ :restart_state => 0, :restart_time => 30, :families => [] }, ours)
+  end
+
+  # ---- RFC 8538, pull request 3b ------------------------------------
+
+  N = { 'restart_time' => 0, 'notification' => true }.freeze
+
+  # Section 4: with N exchanged, a NOTIFICATION other than a Hard Reset
+  # keeps the routes, as a restart does.
+  def test_under_n_a_graceful_cease_keeps_the_routes
+    speaker(N)
+    up_with_routes(true, n_bit: true)
+    @peer.send_message(BGP::Notification.new(6, 6))
+    assert_equal(true, wait_until { adj_in == ROUTES.to_h { |p| [p, 'restart'] } }, "kept: #{adj_in}")
+    assert_equal(true, gr_row[:notification])
+    sleep 0.5
+    assert_equal(0, @catcher.withdrawn.size)
+  end
+
+  # Section 3.2: a Hard Reset ends it as RFC 4271 does.
+  def test_under_n_a_hard_reset_flushes
+    speaker(N)
+    up_with_routes(true, n_bit: true)
+    @peer.send_message(BGP::Notification.new(6, 9, "\x06\x02"))
+    assert_equal(true, wait_until { adj_in.empty? }, "flushed: #{adj_in}")
+    assert_equal(true, wait_until { @catcher.withdrawn.size == 2 })
+  end
+
+  # Section 4: "The BGP speaker generating the BGP NOTIFICATION message
+  # MUST also follow the rules for the Receiving Speaker". peer.clear is
+  # Administrative Reset, graceful by section 5.1.
+  def test_under_n_our_peer_clear_keeps_the_routes
+    speaker(N)
+    up_with_routes(true, n_bit: true)
+    r = BGP::Daemon::Control.new(@sp).peer_clear('peer' => '127.0.0.2')
+    assert_equal('cease/administrative_reset', r[:notification])
+    assert_equal(true, wait_until { adj_in == ROUTES.to_h { |p| [p, 'restart'] } }, "kept: #{adj_in}")
+    n = @notified.pop(:timeout => 2)
+    assert_equal([6, 4], n.to_hash.values_at(:code, :subcode))
+  end
+
+  # peer.stop is Administrative Shutdown, hard by section 5.1: a Hard
+  # Reset carrying 6/2, and the routes flushed; peer.clear with hard too.
+  def test_under_n_our_peer_stop_sends_a_hard_reset
+    speaker(N)
+    up_with_routes(true, n_bit: true)
+    r = BGP::Daemon::Control.new(@sp).peer_stop('peer' => '127.0.0.2')
+    assert_equal('cease/hard_reset/administrative_shutdown', r[:notification])
+    n = @notified.pop(:timeout => 2)
+    assert_equal([6, 9, "\x06\x02".b], n.to_hash.values_at(:code, :subcode, :data))
+    assert_equal(true, wait_until { adj_in.empty? }, "flushed: #{adj_in}")
+  end
+
+  # hard: false keeps peer.stop graceful: 6/2 alone, and the routes kept.
+  def test_under_n_a_graceful_peer_stop_keeps_the_routes
+    speaker(N)
+    up_with_routes(true, n_bit: true)
+    r = BGP::Daemon::Control.new(@sp).peer_stop('peer' => '127.0.0.2', 'hard' => false)
+    assert_equal('cease/administrative_shutdown', r[:notification])
+    assert_equal(true, wait_until { adj_in == ROUTES.to_h { |p| [p, 'restart'] } }, "kept: #{adj_in}")
+  end
+
+  def test_under_n_a_hard_peer_clear_flushes
+    speaker(N)
+    up_with_routes(true, n_bit: true)
+    r = BGP::Daemon::Control.new(@sp).peer_clear('peer' => '127.0.0.2', 'hard' => true)
+    assert_equal('cease/hard_reset/administrative_reset', r[:notification])
+    assert_equal(true, wait_until { adj_in.empty? }, "flushed: #{adj_in}")
+  end
+
+  # Section 4.1: with N, routes stale from one restart are kept at the
+  # next.
+  def test_under_n_consecutive_restarts_keep_what_was_stale
+    speaker(N)
+    up_with_routes(true, n_bit: true)
+    @peer.stop
+    assert_equal(true, wait_until { adj_in.values.uniq == ['restart'] })
+    @peer = dial('127.0.0.2', 65_001, true, n_bit: true)
+    @peer.stop
+    sleep 0.5
+    assert_equal(ROUTES.to_h { |p| [p, 'restart'] }, adj_in, 'both kept')
+  end
+
+  # N on our side only is not exchanged: a Cease flushes, as RFC 4724.
+  def test_n_on_one_side_only_is_not_exchanged
+    speaker(N)
+    up_with_routes(true)
+    @peer.send_message(BGP::Notification.new(6, 6))
+    assert_equal(true, wait_until { adj_in.empty? }, "flushed: #{adj_in}")
+    assert_equal(false, gr_row[:notification])
   end
 end

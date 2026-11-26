@@ -224,11 +224,11 @@ class TestBgpRibEvpnTable < Test::Unit::TestCase
     @t.apply('10.255.0.12', ops('10.255.0.12', [type2(['10.255.0.12', 100], H1), type2(['10.255.0.12', 100], H2)]))
     @t.mark_stale('10.255.0.12')
     @t.apply('10.255.0.12', ops('10.255.0.12', [type2(['10.255.0.12', 100], H1)]))
-    key = @t.winners.find { |w| w.mac == H2 }.decision_key
     @t.peer_down('10.255.0.12', [[25, 70]])
-    assert_equal([[H1, 'restart']], @t.rows.collect { |r| [r['mac'], r['stale']] })
-    assert_nil(@t.best(key))
+    assert_equal([[H1, 'restart'], [H2, 'restart']], @t.rows.collect { |r| [r['mac'], r['stale']] })
+    key = @t.winners.find { |w| w.mac == H2 }.decision_key
     @t.peer_down('10.255.0.12', [])
     assert_equal(0, @t.size)
+    assert_nil(@t.best(key), 'not kept: decided again')
   end
 end

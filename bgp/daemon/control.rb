@@ -71,6 +71,10 @@ module BGP
 
       PEER_KEYS = %w[peer].freeze
 
+      # `peer.clear` and `peer.stop`: one peer, and `hard`, RFC 8538's
+      # Hard Reset asked or refused on a session that exchanged the N bit.
+      CEASE_KEYS = %w[peer hard].freeze
+
       # The three sends by hand. `peer` picks one session; with none they
       # go to every session that is up, which is what `bgp4r-sim` does.
       SPECIMEN_KEYS = %w[peer name prefix prefixes next_hop].freeze
@@ -124,14 +128,19 @@ module BGP
       # "decides to administratively reset the peering". `notification`
       # names what was sent, and is null when no session was up to send
       # it on.
+      #
+      # `hard: true`, on a session that exchanged RFC 8538's N bit, sends
+      # it inside a Hard Reset, so the peer flushes rather than keeping
+      # our routes; section 5.1 leaves Administrative Reset to "user
+      # control", and the default is graceful.
       def peer_clear(params = {})
-        peer = peer_of(params, PEER_KEYS)
+        peer = peer_of(params, CEASE_KEYS)
         was = peer.state.to_s
-        sent = peer.cease(Peer::ADMIN_RESET)
+        sent = peer.cease(Peer::ADMIN_RESET, hard: hard(params))
         peer.clear
         { :peer => peer.address, :cleared => true, :was => was.downcase,
           :state => peer.state.to_s.downcase, :shutdown => peer.shutdown?,
-          :notification => sent ? 'cease/administrative_reset' : nil }
+          :notification => notification_name(sent) }
       end
 
       # Administratively down: the session ends and does not come back
@@ -139,14 +148,18 @@ module BGP
       #
       # A session that is up gets a Cease first, Administrative Shutdown,
       # RFC 4486 section 4. `notification` as for `peer.clear`.
+      #
+      # On a session that exchanged RFC 8538's N bit the Cease goes inside
+      # a Hard Reset, section 5.1's advice for Administrative Shutdown,
+      # unless `hard: false`.
       def peer_stop(params = {})
-        peer = peer_of(params, PEER_KEYS)
+        peer = peer_of(params, CEASE_KEYS)
         was = peer.state.to_s
-        sent = peer.cease(Peer::ADMIN_SHUTDOWN)
+        sent = peer.cease(Peer::ADMIN_SHUTDOWN, hard: hard(params))
         peer.admin_stop
         { :peer => peer.address, :was => was.downcase,
           :state => peer.state.to_s.downcase, :shutdown => true,
-          :notification => sent ? 'cease/administrative_shutdown' : nil }
+          :notification => notification_name(sent) }
       end
 
       # Administratively up again. Idempotent.
@@ -425,6 +438,26 @@ module BGP
       # The Peer one of these methods acts on, refused by name when
       # nobody configured it. `Speaker#peer!` does the refusal, so a view
       # and a control method answer the same message.
+      # `hard`: true, false, or absent for nil, which leaves it to RFC
+      # 8538 section 5.1's table.
+      def hard(params)
+        p = (params || {}).to_h { |k, v| [k.to_s, v] }
+        v = p['hard']
+        return v if [nil, true, false].include?(v)
+        raise ArgumentError, "hard: true or false, not #{v.inspect}"
+      end
+
+      # The NOTIFICATION sent, by name: 'cease/administrative_reset', or
+      # 'cease/hard_reset/administrative_shutdown' for one inside a Hard
+      # Reset. nil when none went.
+      def notification_name(n)
+        return nil unless n
+        h = n.to_hash
+        names = { 2 => 'administrative_shutdown', 4 => 'administrative_reset', 9 => 'hard_reset' }
+        inner = h[:subcode] == 9 && h[:data].to_s.bytesize >= 2 ? h[:data].getbyte(1) : nil
+        ['cease', names.fetch(h[:subcode], h[:subcode].to_s), (names.fetch(inner, inner.to_s) if inner)].compact.join('/')
+      end
+
       def peer_of(params, known)
         p = strings(params, known)
         address = p['peer']

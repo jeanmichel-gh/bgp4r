@@ -105,16 +105,17 @@ module BGP
       #
       # keep: the families to retain, as [afi, safi], when the peer is
       # one we help through a graceful restart (RFC 4724 section 4.2):
-      # their routes are kept and marked stale, 'restart', and a route
-      # already stale goes, since "To deal with possible consecutive
-      # restarts, a route (from the peer) previously marked as stale MUST
-      # be deleted". Every other family goes, as RFC 4271 section 6 has
-      # it. Empty, the default, is that rule for all of them.
+      # their routes are kept and marked stale, 'restart', a route stale
+      # already among them. Every other family goes, as RFC 4271 section
+      # 6 has it. Empty, the default, is that rule for all of them.
+      # Deleting what was stale before, RFC 4724's consecutive restart
+      # rule when no N bit was exchanged (RFC 8538 section 4.1), is the
+      # helper's, before this runs (GracefulRestart#down).
       def peer_down(vrf, address, keep = [])
         gone = @lock.synchronize do
           h = @in[vrf][address] || {}
           marks = @stale[vrf]
-          drop = h.keys.select { |k| marks.key?([address, *k]) || !keep.include?([Table.afi_of(k.first), IANA::SAFI::UNICAST]) }
+          drop = h.keys.select { |k| !keep.include?([Table.afi_of(k.first), IANA::SAFI::UNICAST]) }
           drop.each { |k| h.delete(k) ; marks.delete([address, *k]) }
           h.each_key { |k| marks[[address, *k]] = 'restart' }
           @in[vrf].delete(address) if h.empty?

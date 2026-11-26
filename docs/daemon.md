@@ -549,9 +549,10 @@ neighbors:
     graceful_restart:
       restart_time: 0      # what we advertise, 0 to 4095; 0 unless set
       stale_time: 180      # how long routes wait for End-of-RIB, from 1
+      notification: false  # RFC 8538's N bit
 ```
 
-`graceful_restart: true` takes both defaults. bgp4rd advertises the GR
+`graceful_restart: true` takes the defaults. bgp4rd advertises the GR
 capability with R clear and no families, which RFC 4724 section 4
 recommends to a speaker that keeps no forwarding state of its own, and
 it sends End-of-RIB (`end_of_rib` is on). A `restart_time` above 0 makes
@@ -559,8 +560,7 @@ a helping peer keep bgp4rd's routes, and forward to them, while bgp4rd
 is down; a clean stop takes bgp4rd's routes out of the kernel, so that
 drops traffic, and is for testing a peer's helper. Listing a
 `graceful_restart` capability in `capabilities` as well is refused,
-since an OPEN carries one (RFC 4724 section 3). `notification`, RFC
-8538's N bit, is refused until it is built.
+since an OPEN carries one (RFC 4724 section 3).
 
 What bgp4rd does for a peer whose last GR capability listed families:
 
@@ -582,6 +582,31 @@ What bgp4rd does for a peer whose last GR capability listed families:
   4724 sections 4.2 and 5). From any other peer the new connection is
   closed, as before.
 
+**RFC 8538, the N bit.** `notification: true` sets it in what bgp4rd
+advertises. Once the peer's OPEN carried it too, it is exchanged, and
+section 4's rules hold:
+
+- **A NOTIFICATION other than a Hard Reset**, sent or received, keeps
+  the routes, as a TCP failure does: "The BGP speaker generating the
+  BGP NOTIFICATION message MUST also follow the rules for the Receiving
+  Speaker". So does the hold timer. A `peer.clear` keeps the peer's
+  routes on our side too.
+- **A Hard Reset**, Cease subcode 9, sent or received, flushes, as RFC
+  4271 does (section 3.2).
+- **Routes already stale stay** at a consecutive restart (section 4.1).
+  Without N they go, before the rest are marked.
+- **What bgp4rd sends.** A Cease goes inside a Hard Reset, its code and
+  subcode as the Hard Reset's data (section 3.1), as section 5.1
+  advises: `peer.stop`, Administrative Shutdown, is hard; `peer.clear`,
+  Administrative Reset, is graceful unless `hard: true`; a commit's
+  bounce (6/6) and BFD Down (6/10) are graceful. `peer.stop` and
+  `peer.clear` take `hard`, true or false, to choose. Without N, a
+  Cease is sent as before: section 4 says not to send a Hard Reset to a
+  peer that did not send N.
+
+bgp4r sends no NOTIFICATION when its hold timer runs out, though RFC
+4271 asks for one; it ends the session, which under N keeps the routes.
+
 Without the key, a peer that advertises GR gets RFC 4271, as before.
 
 Each step is a `gr` event. A peer with IPv4 unicast restarted, came
@@ -595,7 +620,7 @@ back with F set, sent one of its two routes again and its End-of-RIB;
     "level": "info",
     "kind": "gr",
     "peer": "127.0.0.2",
-    "message": "helper started: 1 family kept stale for the peer's Restart Time, 120 s",
+    "message": "helper started after tcp: 1 family kept stale for the peer's Restart Time, 120 s",
     "data": {
       "helper": {
         "families": [
@@ -604,7 +629,9 @@ back with F set, sent one of its two routes again and its End-of-RIB;
             "safi": 1
           }
         ],
-        "restart_time": 120
+        "restart_time": 120,
+        "cause": "tcp",
+        "notification": false
       }
     }
   },
@@ -646,15 +673,22 @@ back with F set, sent one of its two routes again and its End-of-RIB;
 
 A removal for the Restart Time or `stale_time` has that as its
 `reason`; for a family back without F, `F bit clear` or `family not in
-the new capability`. A session a NOTIFICATION ended publishes
-`{"flushed": {"cause": "notification"}}`.
+the new capability`; for what was stale at a restart with no N,
+`consecutive restart, no N bit`. A session that ends without keeping
+publishes `flushed`, with its `cause` (`notification`, `hard_reset`,
+`hold_time` or `local`) and whether N was exchanged:
+`{"flushed": {"cause": "hard_reset", "notification": true}}`.
 
 Against FRR 10.5.1 with `bgp graceful-restart`, killed and started
 again: FRR advertises Restart Flags 12 (R and N set) and IPv4 unicast
 with F clear, since with no zebra it keeps no forwarding state, so its
 route is kept while it is away and removed when it comes back, then
 sent again. With `bgp graceful-restart preserve-fw-state` F is set, and
-the route waits for FRR's End-of-RIB.
+the route waits for FRR's End-of-RIB. With bgp4rd's N bit, N is
+exchanged: FRR's `clear bgp` sends a Hard Reset carrying 6/4 and its
+`neighbor shutdown` one carrying 6/2, and bgp4rd flushes; bgp4rd's
+`peer.clear` sends 6/4 and keeps FRR's routes until FRR's End-of-RIB,
+and its `peer.stop` sends a Hard Reset carrying 6/2.
 
 Every ROUTE-REFRESH message is counted both ways by subtype, and each
 one, and each answer, is a `refresh` event. Here a peer with capability
@@ -1415,7 +1449,10 @@ Administrative Shutdown, subcode 2. So `peer.clear` sends 6/4 and
 reaches the wire before the socket closes. The answer gains one key,
 `notification`, which is `cease/administrative_reset` or
 `cease/administrative_shutdown`, and null when no session was up to send
-it on. `bgp4r-cli`'s `clear bgp` and `disable bgp` go through these two
+it on. On a session that exchanged RFC 8538's N bit (`graceful_restart`,
+above) the Cease may go inside a Hard Reset, named
+`cease/hard_reset/administrative_shutdown`; `hard`, true or false,
+chooses. `bgp4r-cli`'s `clear bgp` and `disable bgp` go through these two
 methods, and so does `bgp4rd --interact`'s `clear` and `shutdown`. A
 commit's bounce sends Cease 6/6, "Other Configuration Change", which RFC
 4486 section 4 asks for from a speaker that resets a peering "due to a
@@ -1714,14 +1751,16 @@ gains `graceful_restart`. Here the peer is away:
       "safi": 1
     }
   ],
-  "seconds_left": 119
+  "seconds_left": 120,
+  "notification": false
 }
 ```
 
 `state` is `restarting` while the peer is away and its routes are kept,
 with `seconds_left` on its Restart Time; `helper` while a family waits
 for its End-of-RIB, with `seconds_left` on `stale_time`; null otherwise,
-with no families. Other rows have no such key.
+with no families. `notification` is whether the last session exchanged
+RFC 8538's N bit. Other rows have no such key.
 
 **A CE's row, and a row whose session negotiated a VPN family, say
 more**, for routescope's L3VPN views (routescope

@@ -362,7 +362,7 @@ class BGP_Daemon_LinkStateTable_Test < Test::Unit::TestCase
     @t.mark_stale('10.2.0.1')
     @t.announce('10.2.0.1', node, attr)
     @t.peer_down('10.2.0.1', [[16388, 71]])
-    assert_equal([['node', 'restart']], @t.rows.collect { |r| [r['type'], r['stale']] })
+    assert_equal([%w[node restart], %w[link restart]], @t.rows.collect { |r| [r['type'], r['stale']] }.sort_by { |t, _| t == 'node' ? 0 : 1 })
     @t.peer_down('10.2.0.1', [[1, 1]])
     assert_equal(0, @t.size)
   end

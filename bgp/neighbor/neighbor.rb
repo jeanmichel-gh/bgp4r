@@ -546,7 +546,8 @@ module BGP
     # terminates and section 4's "normal BGP procedures MUST be followed
     # when the TCP session terminates due to the sending or receiving of
     # a BGP NOTIFICATION message". :notification once one was sent or
-    # received on the session, else :hold_time for the hold timer, :tcp
+    # received on the session, :hard_reset when it was RFC 8538's Hard
+    # Reset, Cease subcode 9, else :hold_time for the hold timer, :tcp
     # for the connection failing under it, and nil for a stop of our own.
     # The first cause wins: a NOTIFICATION then the reset it leads to is
     # a NOTIFICATION. Cleared when the next session starts.
@@ -980,7 +981,7 @@ module BGP
                :name      => m.to_string }
       octets = h[:data]
       data[:octets] = octets.unpack1('H*') if octets and octets.size > 0
-      @down_cause ||= :notification
+      @down_cause ||= (h[:code] == 6 && h[:subcode] == 9 ? :hard_reset : :notification)
       verb = direction == :send ? 'Send' : 'Recv'
       publish_event(:notification, "#{verb}Notification #{m.to_string}", data, :warn)
     end

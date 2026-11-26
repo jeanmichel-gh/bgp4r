@@ -108,17 +108,18 @@ module BGP
       # RFC 4271 section 6: the session is gone, and so is what it sent.
       # keep: the families to retain, as [afi, safi], when the peer is
       # one we help through a graceful restart (RFC 4724 section 4.2):
-      # their routes are kept and marked stale, 'restart', and a route
-      # already stale goes, since "To deal with possible consecutive
-      # restarts, a route (from the peer) previously marked as stale MUST
-      # be deleted". Every other family goes, as RFC 4271 section 6 has
-      # it. Empty, the default, is that rule for all of them.
+      # their routes are kept and marked stale, 'restart', a route stale
+      # already among them. Every other family goes, as RFC 4271 section
+      # 6 has it. Empty, the default, is that rule for all of them.
+      # Deleting what was stale before, RFC 4724's consecutive restart
+      # rule when no N bit was exchanged (RFC 8538 section 4.1), is the
+      # helper's, before this runs (GracefulRestart#down).
       def peer_down(peer, keep = [])
         @lock.synchronize do
           @other.delete(peer)
           h = @in[peer] || {}
           kept = keep.include?(PeerAdapter::EVPN)
-          gone = h.select { |_, e| e.stale || !kept }
+          gone = h.select { |_, e| !kept }
           gone.each_key { |k| h.delete(k) }
           h.each_value { |e| e.stale = 'restart' }
           @in.delete(peer) if h.empty?

@@ -155,8 +155,8 @@ class TestBgpRibVrfCeTable < Test::Unit::TestCase
     @table.mark_stale('A', '192.168.1.2', 1)
     announce('A', '192.168.1.2', '172.16.1.0/24')
     @table.peer_down('A', '192.168.1.2', [[1, 1]])
-    assert_equal(['172.16.1.0/24'], @table.best('A').collect(&:prefix))
-    assert_equal('restart', @table.stale('A', '192.168.1.2', '172.16.1.0/24'))
+    assert_equal(%w[172.16.1.0/24 172.16.2.0/24], @table.best('A').collect(&:prefix))
+    assert_equal(%w[restart restart], %w[172.16.1.0/24 172.16.2.0/24].collect { |p| @table.stale('A', '192.168.1.2', p) })
     @table.peer_down('A', '192.168.1.2', [[2, 1]])
     assert_equal([0, 0], [@table.size('A'), @table.stale_size('A', '192.168.1.2')], 'not kept: gone, mark and all')
   end

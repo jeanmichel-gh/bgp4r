@@ -696,7 +696,7 @@ bgp4r-sim at once:
   events. Built.
 - **3b, RFC 8538**: `notification`, the N bit, the Hard Reset sent and
   received, a NOTIFICATION and the hold timer under N, consecutive
-  restarts under N. Not started.
+  restarts under N. Built.
 - **3c, the catalog and behaviours**: `BGP::Fault::GR`, the eleven
   behaviours in bgp4r-sim, and the matrix against bgp4rd and FRR. Not
   started.
@@ -715,8 +715,9 @@ bgp4r-sim at once:
   NOTIFICATION in bgp4r today, but RFC 4271 has it send one, so it
   flushes; RFC 8538 changes both under N (3b).
 - **The tables keep the routes.** Every table's `peer_down` takes
-  `keep`, the families to hold: their routes are marked `restart` and
-  those already stale go; every other family flushes. Each table's
+  `keep`, the families to hold: their routes are marked `restart`;
+  every other family flushes. (As 3a was built, routes already stale
+  went here; 3b moved that to the helper, below.) Each table's
   session listener asks the Peer through a `retain` callable, which the
   Peer's own listener, registered first, has set. `PeerAdapter#downed?`
   stops `PeerFeed#detach` sending a second `peer_down`, which would
@@ -748,6 +749,46 @@ bgp4r-sim at once:
   bgp4rd, with a watcher session, and one restart that keeps VPN-IPv4,
   EVPN, BGP-LS and the unreachability SAFI at once; and
   `test/functional/lab/graceful_restart_frr_test.rb` (2).
+
+### As built (3b)
+
+- **`notification: true`** sets the N bit, Restart Flags 4, in what
+  bgp4rd advertises. It is exchanged when the peer's OPEN carried it
+  too (`GracefulRestart.exchanged?`); the peer row's
+  `graceful_restart` gains `notification`, for the last session.
+- **What a drop keeps.** The Neighbor's `down_cause` gains
+  `:hard_reset` for Cease subcode 9, sent or received. With N
+  exchanged, `:notification` and `:hold_time` keep the routes as
+  `:tcp` does; `:hard_reset` flushes.
+- **Consecutive restarts.** The tables now keep a kept family's routes
+  whatever their mark. Without N, the helper purges what was stale
+  first, through `Speaker#stale_family`, as an EoRR's purge goes, so
+  the tables mark only the rest; it publishes that purge only when it
+  removed something. With N, nothing is purged (RFC 8538 section 4.1).
+- **Sending.** `Peer#cease(subcode, hard:)` answers the NOTIFICATION it
+  queued. With N exchanged it wraps the Cease in a Hard Reset, data the
+  code and subcode (section 3.1), when `hard` is true, or when nil and
+  section 5.1's table says hard: 1, 2, 3 and 9; 4 graceful unless asked;
+  5 to 8 and 10, BFD Down, graceful. Without N it sends the Cease.
+  `peer.stop` and `peer.clear` take `hard`, and name what went:
+  `cease/hard_reset/administrative_shutdown`.
+- **The hold timer** sends no NOTIFICATION in bgp4r, though RFC 4271
+  asks for one and RFC 8538 section 4 says the speaker "should
+  generate" it. Under N the routes are kept either way. Not changed
+  here.
+- **Measured against FRR 10.5.1**, 2026-11-26, N on both sides: FRR's
+  `clear bgp` sends a Hard Reset carrying 6/4, and `neighbor shutdown`
+  one carrying 6/2; bgp4rd flushes on both. bgp4rd's `peer.clear`
+  sends 6/4 and keeps FRR's routes until FRR's End-of-RIB; its
+  `peer.stop` sends a Hard Reset carrying 6/2, and FRR drops our route.
+- Tests: `graceful_restart_test.rb` (unit) for the bit, what a drop
+  keeps under N, consecutive restarts and the Cease chosen;
+  `neighbor_test.rb` for `:hard_reset`; `control_test.rb` for `hard`;
+  `test/functional/graceful_restart_test.rb` (19) through a real bgp4rd:
+  a graceful Cease, a Hard Reset, our `peer.clear`, `peer.stop` hard
+  and graceful and a hard `peer.clear`, consecutive restarts and N on
+  one side only; and
+  `test/functional/lab/graceful_restart_frr_test.rb` (4).
 
 ### routescope shows
 
@@ -1380,7 +1421,7 @@ and `CLAUDE.md`'s table.
 | 2 | 6a | TCP MD5, `password`; built | – |
 | 3 | 1 | End-of-RIB sent and received, `end_of_rib`; built | – |
 | 4 | 2 | Route refresh answered, enhanced refresh, the stale mark, `BGP::Fault::REFRESH`: in three parts, all built | 1 |
-| 5 | 3 | GR helper, RFC 8538, Hard Reset, `BGP::Fault::GR`, the first behaviours in `bgp4r-sim`, GTSM's among them: in three parts, 3a the RFC 4724 helper built, 3b RFC 8538, 3c the catalog | 2 |
+| 5 | 3 | GR helper, RFC 8538, Hard Reset, `BGP::Fault::GR`, the first behaviours in `bgp4r-sim`, GTSM's among them: in three parts, 3a the RFC 4724 helper built, 3b RFC 8538 built, 3c the catalog | 2 |
 | 6 | 7a | RTR codec, `BGP::Fault::RTR` | – |
 | 7 | 7b | `bgp4r-rtr`, the cache and injector | 7a |
 | 8 | 7c | Origin validation in bgp4rd, `rpki` | 7b |

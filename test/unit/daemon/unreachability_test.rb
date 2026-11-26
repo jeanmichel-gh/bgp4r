@@ -268,6 +268,6 @@ class TestDaemonUnreachability < Test::Unit::TestCase
     t.mark_stale('10.0.0.1', V4)
     t.apply('10.0.0.1', R.operations(update(Unreachability.new('192.0.2.0/24', reporter('10.0.0.1', 65_001, 3))), [V4]))
     t.peer_down('10.0.0.1', [V4])
-    assert_equal([['192.0.2.0/24', 'restart']], t.rows.collect { |r| [r['prefix'], r['stale']] })
+    assert_equal([['192.0.2.0/24', 'restart'], ['198.51.100.0/24', 'restart']], t.rows.collect { |r| [r['prefix'], r['stale']] }.sort)
   end
 end
