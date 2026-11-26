@@ -390,15 +390,12 @@ Each case went to bgp4rd and to FRR 10.5.1 on a session of its own
 | `refresh_borr_length` | a BoRR one octet long | 7/1, data the message (7313 5) | 7/1 with the message | 7/1 with no data |
 | `refresh_eorr_length` | an EoRR one octet short | 7/1 (7313 5) | 7/1 with the message | 1/2, Bad Message Length |
 | `refresh_eorr_without_borr` | an EoRR alone | may ignore (7313 4) | ignores | ignores |
-| `refresh_borr_before_eor` | a BoRR before the End-of-RIB, GR advertised | ignore (7313 4) | marks the routes stale | ignores |
+| `refresh_borr_before_eor` | a BoRR before the End-of-RIB, GR advertised | ignore (7313 4) | ignores, logs | ignores |
 | `borr_without_eorr` | a BoRR, then no EoRR | may remove at its bound (7313 4) | removes at `refresh_stale_time` | keeps them, stale, after `stalepath-time` |
 
-Two of these are not what the RFC asks, and one is a choice between
-two RFCs:
+One of these is not what the RFC asks, and one is a choice between two
+RFCs:
 
-- **bgp4rd marks stale on a BoRR before the End-of-RIB.** It reads a GR
-  capability as an advertisement only until graceful restart is built
-  (pull request 3).
 - **FRR answers subtypes 3 and 255** as normal requests, and its 7/1
   carries no data.
 - **The short EoRR**: 22 octets is below the 23 of any ROUTE-REFRESH,

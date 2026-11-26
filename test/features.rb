@@ -343,6 +343,18 @@ module Features
       :lab   => %w[route_refresh_fault_frr_test],
     },
 
+    'graceful-restart' => {
+      :area  => 'session',
+      :about => 'graceful_restart on a neighbor: a helper, keeping a restarting peer\'s routes stale until its End-of-RIB, its Restart Time or stale_time',
+      :rfc   => 'RFC 4724 sections 3 to 5',
+      :doc   => 'docs/daemon.md',
+      :unit  => %w[daemon/graceful_restart_test rib/table_test rib/peer_adapter_test rib/peer_feed_test rib/vpn_table_test
+                   rib/evpn_table_test rib/vrf_ce_table_test daemon/link_state_table_test daemon/unreachability_test
+                   neighbor/neighbor_test daemon/refresh_test],
+      :functional => %w[graceful_restart_test],
+      :lab   => %w[graceful_restart_frr_test],
+    },
+
     'gtsm' => {
       :area  => 'session',
       :about => 'ttl_security on a neighbor: GTSM, sent at TTL 255, dropped below 256 - hops',

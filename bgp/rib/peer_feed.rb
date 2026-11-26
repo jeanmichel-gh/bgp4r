@@ -68,11 +68,11 @@ module BGP
       # Feeds table from neighbor. Returns the PeerAdapter, the same one on
       # a second call for the same neighbor. The worker starts on the first
       # attach, so a table nobody attached to costs no thread.
-      def attach(neighbor)
+      def attach(neighbor, retain: nil)
         @lock.synchronize do
           @adapters[neighbor] ||= begin
             start_worker
-            adapter = PeerAdapter.new(neighbor, self)
+            adapter = PeerAdapter.new(neighbor, self, retain: retain)
             # Router mode, if it is on, watches this session too.
             @table.router&.watch(adapter)
             adapter
@@ -88,7 +88,9 @@ module BGP
         return nil unless adapter
         adapter.detach
         peer = adapter.peer
-        self << [:peer_down, peer] if peer
+        # A session that ended has had its :peer_down from state_change,
+        # with what it kept; a second would delete what that kept.
+        self << [:peer_down, peer] if peer && !adapter.downed?
         adapter
       end
 
@@ -212,7 +214,7 @@ module BGP
             end
           end
         when :peer_down
-          @table.peer_down(work[1])
+          @table.peer_down(work[1], work[2] || [])
         when :advertise
           @table.router&.run_changes(work[1])
         when :session_up

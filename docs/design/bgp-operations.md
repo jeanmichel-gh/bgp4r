@@ -516,9 +516,10 @@ receiver may drop the stale routes after its local bound (7313 4).
   stalepath-time` sets, 360 s by default; when it runs out it keeps the
   routes, still stale. It ignores a BoRR before the End-of-RIB from a
   GR peer.
-- **bgp4rd's one gap**: it marks stale on a BoRR before the End-of-RIB
-  from a GR peer, since it reads GR as an advertisement only until
-  pull request 3. The bgp4rd matrix records it as known.
+- **bgp4rd's one gap**, when 2c was built: it marked stale on a BoRR
+  before the End-of-RIB from a GR peer. Pull request 3a closed it: a
+  GR peer's BoRR is ignored, and logged as an error, until that
+  family's End-of-RIB.
 
 ### routescope shows
 
@@ -681,6 +682,72 @@ Fault-catalog entries, one message each, in `BGP::Fault::GR`:
 | --- | --- | --- | --- |
 | `hard_reset_empty` | Cease 6/9 with no data | terminate the session as RFC 4271 | 8538 3.2 |
 | `hard_reset_unknown_inner` | Cease 6/9 wrapping 99/99 | terminate the session as RFC 4271 | 8538 3.2 |
+
+### Built in three parts
+
+Pull request 3 is built as three, as pull request 2 was, since it
+touches every table's session end, the Neighbor, the commit and
+bgp4r-sim at once:
+
+- **3a, the RFC 4724 helper**: `graceful_restart` with `restart_time`
+  and `stale_time`, the capability, routes kept on a TCP failure, the
+  Restart Time, the F bit, End-of-RIB and the stale timer, a second
+  connection, RFC 7313's BoRR before End-of-RIB, the peer row and `gr`
+  events. Built.
+- **3b, RFC 8538**: `notification`, the N bit, the Hard Reset sent and
+  received, a NOTIFICATION and the hold timer under N, consecutive
+  restarts under N. Not started.
+- **3c, the catalog and behaviours**: `BGP::Fault::GR`, the eleven
+  behaviours in bgp4r-sim, and the matrix against bgp4rd and FRR. Not
+  started.
+
+### As built (3a)
+
+- `bgp/daemon/graceful_restart.rb`: one `GracefulRestart` per peer.
+  `down` decides, as the session leaves Established, which families
+  the tables keep; `up` runs when it is back; it watches each UPDATE
+  for an End-of-RIB; `expire` runs the two timers on an injected clock,
+  from a watcher thread alive only while one runs.
+- **Why a session ended** is the Neighbor's new `down_cause`:
+  `:notification` once one was sent or received, `:hold_time`, `:tcp`
+  for the connection failing, nil for our own stop; the first cause
+  wins. Only `:tcp` keeps routes in 3a. The hold timer sends no
+  NOTIFICATION in bgp4r today, but RFC 4271 has it send one, so it
+  flushes; RFC 8538 changes both under N (3b).
+- **The tables keep the routes.** Every table's `peer_down` takes
+  `keep`, the families to hold: their routes are marked `restart` and
+  those already stale go; every other family flushes. Each table's
+  session listener asks the Peer through a `retain` callable, which the
+  Peer's own listener, registered first, has set. `PeerAdapter#downed?`
+  stops `PeerFeed#detach` sending a second `peer_down`, which would
+  have deleted what the first kept.
+- **A CE's session** keeps its routes in its VRF the same way, through
+  the CE table's `peer_down`; that path is tested on the table and its
+  sink, not through a VRF, which needs root.
+- **A second connection** from a peer we help, while the old session
+  is up, stops the old one as a TCP failure, so its routes are kept,
+  and runs the new one.
+- **RFC 7313 section 4's GR rule** is in `Refresh#borr`: from a peer
+  that advertised GR, a BoRR before that family's End-of-RIB is
+  ignored, logged as an error. It closes the gap 2c's matrix recorded.
+- **Rows.** The peer row's `graceful_restart`: `state` (`restarting`,
+  `helper` or null), the families held, and the seconds left on the
+  timer that runs. Routes kept carry `stale: "restart"`.
+- **Measured against FRR 10.5.1**, 2026-11-26, bgpd killed with SIGKILL
+  and started again (`Frr#crash`, `bgp_lines`): bgpd advertises Restart
+  Flags 12, R and N, on its first session too, and IPv4 unicast with F
+  clear, since with no zebra it keeps no forwarding state. bgp4rd keeps
+  the route while it is away, removes it when it is back with F clear,
+  and the route comes again. With `bgp graceful-restart
+  preserve-fw-state`, F is set, and the route waits for bgpd's
+  End-of-RIB, which removes the one bgpd no longer sends.
+- Tests: `test/unit/daemon/graceful_restart_test.rb` on a manual clock;
+  `peer_down`'s keep in each table's test; the adapter, the feed and
+  the Neighbor's cause; `refresh_test.rb` for the BoRR rule;
+  `test/functional/graceful_restart_test.rb` (11) through a real
+  bgp4rd, with a watcher session, and one restart that keeps VPN-IPv4,
+  EVPN, BGP-LS and the unreachability SAFI at once; and
+  `test/functional/lab/graceful_restart_frr_test.rb` (2).
 
 ### routescope shows
 
@@ -1313,7 +1380,7 @@ and `CLAUDE.md`'s table.
 | 2 | 6a | TCP MD5, `password`; built | – |
 | 3 | 1 | End-of-RIB sent and received, `end_of_rib`; built | – |
 | 4 | 2 | Route refresh answered, enhanced refresh, the stale mark, `BGP::Fault::REFRESH`: in three parts, all built | 1 |
-| 5 | 3 | GR helper, RFC 8538, Hard Reset, `BGP::Fault::GR`, the first behaviours in `bgp4r-sim`, GTSM's among them | 2 |
+| 5 | 3 | GR helper, RFC 8538, Hard Reset, `BGP::Fault::GR`, the first behaviours in `bgp4r-sim`, GTSM's among them: in three parts, 3a the RFC 4724 helper built, 3b RFC 8538, 3c the catalog | 2 |
 | 6 | 7a | RTR codec, `BGP::Fault::RTR` | – |
 | 7 | 7b | `bgp4r-rtr`, the cache and injector | 7a |
 | 8 | 7c | Origin validation in bgp4rd, `rpki` | 7b |

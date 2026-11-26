@@ -189,11 +189,26 @@ module BGP
       # that sentence: the speaker advertises "either withdraws for the
       # routes marked as invalid, or the new best routes", which is what
       # Router#run_changes does with them. Returns the Loc-RIB changes.
-      def peer_down(peer)
+      # keep: the families to retain, as [afi, safi], when the peer is
+      # one we help through a graceful restart (RFC 4724 section 4.2):
+      # their routes are kept and marked stale, 'restart', and a route
+      # already stale goes, since "To deal with possible consecutive
+      # restarts, a route (from the peer) previously marked as stale MUST
+      # be deleted". Every other family goes, as RFC 4271 section 6 has
+      # it. Empty, the default, is that rule for all of them.
+      def peer_down(peer, keep = [])
         sync do
           ribin = @adj_in[peer]
           next [] unless ribin
-          removed = ribin.flush
+          kept = ->(r) { keep.include?([Table.afi_of(r.prefix), IANA::SAFI::UNICAST]) }
+          removed = if keep.empty?
+                      ribin.flush
+                    else
+                      gone = ribin.routes.reject { |r| kept.(r) && ribin.stale(r.prefix, r.path_id).nil? }
+                      gone.each { |r| ribin.withdraw(r.prefix, r.path_id) }
+                      ribin.mark_stale('restart') { true }
+                      gone
+                    end
           removed.each { |r| set_imported(r.prefix, peer, r.path_id, nil) }
           removed.map(&:prefix).uniq.flat_map { |prefix| decide(prefix) }
         end
@@ -266,7 +281,7 @@ module BGP
       #   neighbor.start
       #   rib.drain
       #   rib.best('10.0.0.0/8')
-      def attach(neighbor) ; feed.attach(neighbor) ; end
+      def attach(neighbor, retain: nil) ; feed.attach(neighbor, retain: retain) ; end
 
       # Stops feeding from neighbor and removes the routes it sent.
       def detach(neighbor) ; feed.detach(neighbor) ; end

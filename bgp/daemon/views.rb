@@ -388,6 +388,12 @@ module BGP
                                           :stale => @speaker.stale_size(peer),
                                           :waiting => peer.route_refresh.waiting.collect { |a, s| { :afi => a, :safi => s } } })
           end
+          # Graceful restart, RFC 4724's Receiving Speaker, on a peer with
+          # `graceful_restart`: `restarting` while the peer is away and its
+          # routes are kept, `helper` while a family waits for its
+          # End-of-RIB, nil otherwise; the families held; the seconds left
+          # on the Restart Time or the stale timer. bgp/daemon/graceful_restart.rb.
+          row = row.merge(:graceful_restart => peer.graceful_restart.row) if peer.graceful_restart.configured?
           # A CE's VRF, and the counts of each family the session carries,
           # present only on a CE's row or a session with a VPN family, so
           # a unicast speaker's rows read as they always have.

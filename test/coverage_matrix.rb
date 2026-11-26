@@ -170,6 +170,7 @@ module CoverageMatrix
   # silently absent from this report.
   NOT_A_FAMILY = {
     'fault_matrix' => 'the RFC 7606 matrix, which is per attribute',
+    'graceful_restart' => 'graceful restart, RFC 4724, which is per session and keeps a family through a restart',
     'route_refresh_fault' => 'the ROUTE-REFRESH cases of RFC 2918 and 7313, which are per message',
     'rib_router'   => 'our export side, which is per route and not per family',
     'add_path'     => 'RFC 7911, which cuts across families',

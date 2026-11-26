@@ -80,6 +80,7 @@ require 'bgp/daemon/bfd'
 require 'bgp/daemon/gtsm'
 require 'bgp/daemon/tcp_auth'
 require 'bgp/daemon/end_of_rib'
+require 'bgp/daemon/graceful_restart'
 require 'bgp/daemon/refresh'
 require 'socket'
 require 'thread'
@@ -309,7 +310,7 @@ module BGP
       KEYS = %w[address as capabilities connect description hold_time
                 open_timeout port record retry route_reflector_client
                 vrf as_override soo bfd ttl_security password end_of_rib
-                refresh_stale_time].freeze
+                refresh_stale_time graceful_restart].freeze
 
       # Raises ArgumentError naming every key `config` carries that no
       # code reads, and the keys there are.
@@ -321,7 +322,7 @@ module BGP
               "a neighbor takes #{KEYS.join(', ')}"
       end
 
-      attr_reader :address, :recorder, :config, :route_refresh
+      attr_reader :address, :recorder, :config, :route_refresh, :graceful_restart
 
       # The BGP::Neighbor running the current session, or nil before the
       # first one.
@@ -348,6 +349,9 @@ module BGP
         @recorder = Recorder.new(config.fetch('record', 'routes'))
         # RFC 2918 and RFC 7313's answers and counts: bgp/daemon/refresh.rb.
         @route_refresh = Refresh.new(self, speaker)
+        # RFC 4724's Receiving Speaker: bgp/daemon/graceful_restart.rb.
+        @graceful_restart = GracefulRestart.new(self, speaker)
+        @gr_kept = []
         @neighbor = nil
         @busy = Mutex.new
         # Administratively down, which is `peer.stop` and `session.stop`
@@ -407,7 +411,13 @@ module BGP
       def password ; @config['password']&.to_s ; end
       # RFC 4724 section 2: send an End-of-RIB per negotiated family once
       # the first table is sent. See bgp/daemon/end_of_rib.rb.
-      def end_of_rib? ; @config['end_of_rib'] == true ; end
+      # `graceful_restart` turns it on too: the GR capability says we send
+      # it (RFC 4724 section 4).
+      def end_of_rib? ; @config['end_of_rib'] == true || !@config['graceful_restart'].nil? ; end
+
+      # The families a session that just ended keeps, which every table
+      # asks as it drops the session (`retain`).
+      def gr_kept ; @gr_kept ; end
 
       # A CE neighbor (docs/design/l3vpn-pe.md, pull request 7): the VRF
       # its session is bound to, or nil for a neighbor in the global
@@ -495,6 +505,18 @@ module BGP
           return
         end
         if @busy.locked?
+          # RFC 4724 section 4.2: from a peer we help, a new connection
+          # while the session still looks Established means the old one
+          # is gone. "the previous TCP session MUST be closed, and the new
+          # one retained", and "no NOTIFICATION message should be sent".
+          # Closed as a TCP failure, so its routes are kept.
+          old = @neighbor
+          if old && old.is_established? && @graceful_restart.configured? &&
+             !GracefulRestart.families(old.session_info && old.session_info.peer).empty?
+            old.stop_session(nil, :tcp)
+            Thread.new { run_session(sock) }
+            return
+          end
           sock.close # one session per peer; keep the one we have
           return
         end
@@ -701,24 +723,28 @@ module BGP
           # A CE's session (pull request 7) goes into its VRF's CE table
           # and nothing global: not the RIB, BGP-LS or the VPN table, and
           # the speaker's announce blocks are not its business.
+          # Each table asks, as the session drops, which families to keep
+          # through a graceful restart (bgp/daemon/graceful_restart.rb).
+          retain = -> { @gr_kept }
           if vrf
-            ce_feed = @speaker.ce_table.attach(n, vrf, soo: soo)
+            ce_feed = @speaker.ce_table.attach(n, vrf, soo: soo, retain: retain)
           else
-            @speaker.rib&.attach(n)
+            @speaker.rib&.attach(n, retain: retain)
             # BGP-LS goes in a table of its own, outside the RIB. See
             # bgp/daemon/link_state_table.rb.
-            ls_feed = @speaker.link_state.attach(n)
+            ls_feed = @speaker.link_state.attach(n, retain: retain)
             # Unreachability reports too, outside the RIB:
             # bgp/daemon/unreachability.rb.
-            un_feed = @speaker.unreach.attach(n)
+            un_feed = @speaker.unreach.attach(n, retain: retain)
             # VPN-IPv4 too, in a table of its own: bgp/rib/vpn_table.rb.
-            vpn_feed = @speaker.vpn.attach(n)
+            vpn_feed = @speaker.vpn.attach(n, retain: retain)
             # EVPN types 2 and 3 too: bgp/rib/evpn_table.rb.
-            evpn_feed = @speaker.evpn.attach(n)
+            evpn_feed = @speaker.evpn.attach(n, retain: retain)
           end
           n.start(:session => sock, :timeout => @config.fetch('open_timeout', 30))
           if n.is_established?
             @recorder.established!
+            @graceful_restart.up(n.session_info)
             announce(n, sock) unless vrf
             @speaker.session_established(self)
             @speaker.send_end_of_rib(self) if end_of_rib?
@@ -772,9 +798,16 @@ module BGP
                               :events => @speaker.events,
                               :logger => @speaker.logger)
         Array(@config.fetch('capabilities', ['as4_byte'])).each { |c| add_capability(n, c) }
+        n.capability(GracefulRestart.capability(@config['graceful_restart'])) unless @config['graceful_restart'].nil?
         n.add_observer @recorder
         @route_refresh.reset
         n.add_observer @route_refresh
+        n.add_observer @graceful_restart
+        # Before any table's listener, which run_session adds after this:
+        # each asks gr_kept as it drops the session.
+        n.on_state_change do |now, was|
+          @gr_kept = @graceful_restart.down(n.session_info, n.down_cause) if was == :Established && now != was
+        end
         n
       end
 
@@ -945,6 +978,7 @@ module BGP
         check_password
         @peers.each { |p| EndOfRib.check(p.config['end_of_rib'], p.address) }
         @peers.each { |p| Refresh.check(p.config['refresh_stale_time'], p.address) }
+        @peers.each { |p| check_graceful_restart(p.config) }
         @link_state = LinkStateTable.new
         unreach_log = ->(level, msg) { log(level, msg) }
         @unreach = UnreachTable.new(events: @events, logger: unreach_log)
@@ -1322,6 +1356,19 @@ module BGP
           raise ArgumentError, "neighbor #{p.address}: bfd is true or false, got #{v.inspect}"
         end
         @bfd.check(@peers)
+      end
+
+      # Raises ArgumentError when a neighbor's `graceful_restart` does not
+      # read, or when its `capabilities` list a GR capability as well: RFC
+      # 4724 section 3, "A BGP speaker MUST NOT include more than one
+      # instance of the Graceful Restart Capability".
+      def check_graceful_restart(config)
+        GracefulRestart.check(config['graceful_restart'], config['address'])
+        return if config['graceful_restart'].nil?
+        listed = Array(config['capabilities']).any? { |c| %w[graceful_restart gr].include?((c.is_a?(Hash) ? c.keys.first : c).to_s) }
+        return unless listed
+        raise ArgumentError, "neighbor #{config['address']}: graceful_restart and a graceful_restart capability " \
+                             'would advertise it twice (RFC 4724 section 3); keep one'
       end
 
       # Raises ArgumentError when a neighbor's `ttl_security` is not a

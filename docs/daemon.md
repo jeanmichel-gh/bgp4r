@@ -264,6 +264,7 @@ neighbors:
     password: s3cret               # TCP MD5, RFC 2385; see below
     end_of_rib: true               # RFC 4724 section 2; see below
     refresh_stale_time: 180        # RFC 7313 section 4's bound; see below
+    graceful_restart: true         # RFC 4724, a helper only; see below
 
 originate:
   - prefixes: [10.255.0.0/24]
@@ -462,8 +463,10 @@ with NOTIFICATION 7/1, "ROUTE-REFRESH Message Error, Invalid Message
 Length", its data the whole message (RFC 7313 section 5). From a peer
 without capability 70 it is logged and dropped.
 
-Graceful restart's rule, that a BoRR before the End-of-RIB is ignored,
-comes with the GR helper (`docs/design/bgp-operations.md`, section 3).
+From a peer that advertised graceful restart, a BoRR before that
+family's End-of-RIB is ignored and logged as an error, as section 4
+asks ("MUST ignore any BoRRs [...] before the speaker receives the
+EoR").
 
 A mark and a removal are `refresh` events too. The same peer, then its
 EoRR; `time` is left out:
@@ -534,6 +537,124 @@ When `refresh_stale_time` runs out first, `reason` is
 answer between a BoRR and an EoRR when bgp4rd advertised 70: FRR's
 routes, our own two sent back among them, are marked, all sent again,
 and none removed.
+
+**`graceful_restart` on a neighbor makes bgp4rd a helper**, RFC 4724
+section 4.2's Receiving Speaker, for a peer that restarts gracefully.
+bgp4rd never restarts gracefully itself.
+
+```yaml
+neighbors:
+  - address: 10.0.0.2
+    as: 65002
+    graceful_restart:
+      restart_time: 0      # what we advertise, 0 to 4095; 0 unless set
+      stale_time: 180      # how long routes wait for End-of-RIB, from 1
+```
+
+`graceful_restart: true` takes both defaults. bgp4rd advertises the GR
+capability with R clear and no families, which RFC 4724 section 4
+recommends to a speaker that keeps no forwarding state of its own, and
+it sends End-of-RIB (`end_of_rib` is on). A `restart_time` above 0 makes
+a helping peer keep bgp4rd's routes, and forward to them, while bgp4rd
+is down; a clean stop takes bgp4rd's routes out of the kernel, so that
+drops traffic, and is for testing a peer's helper. Listing a
+`graceful_restart` capability in `capabilities` as well is refused,
+since an OPEN carries one (RFC 4724 section 3). `notification`, RFC
+8538's N bit, is refused until it is built.
+
+What bgp4rd does for a peer whose last GR capability listed families:
+
+- **The TCP session fails**, which is how a peer's restart looks: the
+  routes of the families it listed are kept and marked stale,
+  `restart`, and nothing is withdrawn from other peers. A route already
+  stale goes: "To deal with possible consecutive restarts, a route
+  (from the peer) previously marked as stale MUST be deleted". Other
+  families go. A session that ends with a NOTIFICATION, sent or
+  received, or with the hold timer, flushes, as RFC 4724 section 4 asks.
+- **The peer's Restart Time runs out** with no session: the stale
+  routes go.
+- **The session is back.** A family whose F bit is clear, or that the
+  new capability leaves out, or a session with no capability at all,
+  loses its stale routes at once. The others keep them until the peer's
+  End-of-RIB for that family, or `stale_time`.
+- **A second connection while the session is up** closes the old one,
+  with no NOTIFICATION, keeps its routes, and runs the new one (RFC
+  4724 sections 4.2 and 5). From any other peer the new connection is
+  closed, as before.
+
+Without the key, a peer that advertises GR gets RFC 4271, as before.
+
+Each step is a `gr` event. A peer with IPv4 unicast restarted, came
+back with F set, sent one of its two routes again and its End-of-RIB;
+`time` is left out:
+
+```json
+[
+  {
+    "seq": 6,
+    "level": "info",
+    "kind": "gr",
+    "peer": "127.0.0.2",
+    "message": "helper started: 1 family kept stale for the peer's Restart Time, 120 s",
+    "data": {
+      "helper": {
+        "families": [
+          {
+            "afi": 1,
+            "safi": 1
+          }
+        ],
+        "restart_time": 120
+      }
+    }
+  },
+  {
+    "seq": 11,
+    "level": "info",
+    "kind": "gr",
+    "peer": "127.0.0.2",
+    "message": "session back: 1 family waits for End-of-RIB, at most 180 s",
+    "data": {
+      "back": {
+        "waiting": [
+          {
+            "afi": 1,
+            "safi": 1
+          }
+        ],
+        "stale_time": 180
+      }
+    }
+  },
+  {
+    "seq": 13,
+    "level": "info",
+    "kind": "gr",
+    "peer": "127.0.0.2",
+    "message": "End-of-RIB for AFI 1 SAFI 1: 1 stale removed",
+    "data": {
+      "purged": {
+        "afi": 1,
+        "safi": 1,
+        "removed": 1
+      },
+      "reason": "End-of-RIB"
+    }
+  }
+]
+```
+
+A removal for the Restart Time or `stale_time` has that as its
+`reason`; for a family back without F, `F bit clear` or `family not in
+the new capability`. A session a NOTIFICATION ended publishes
+`{"flushed": {"cause": "notification"}}`.
+
+Against FRR 10.5.1 with `bgp graceful-restart`, killed and started
+again: FRR advertises Restart Flags 12 (R and N set) and IPv4 unicast
+with F clear, since with no zebra it keeps no forwarding state, so its
+route is kept while it is away and removed when it comes back, then
+sent again. With `bgp graceful-restart preserve-fw-state` F is set, and
+the route waits for FRR's End-of-RIB.
 
 Every ROUTE-REFRESH message is counted both ways by subtype, and each
 one, and each answer, is a `refresh` event. Here a peer with capability
@@ -1577,8 +1698,30 @@ session starts at zero. Other rows have no such key.
 **A route marked stale says so on its row**: `stale` is `refresh`
 while it waits for its EoRR, on the rows of `show.rib`, `show.adj_in`,
 `show.vpn`, `show.vrf`, `show.evpn`, `show.link_state` and
-`show.unreachability`. A fresh route's row has no such key.
-`restart` and `long_lived` are graceful restart's, later.
+`show.unreachability`. A fresh route's row has no such key. `restart`
+is a route kept through a peer's graceful restart; `long_lived` is
+LLGR's, later.
+
+**A peer with `graceful_restart` says where its restart is**: its row
+gains `graceful_restart`. Here the peer is away:
+
+```json
+{
+  "state": "restarting",
+  "families": [
+    {
+      "afi": 1,
+      "safi": 1
+    }
+  ],
+  "seconds_left": 119
+}
+```
+
+`state` is `restarting` while the peer is away and its routes are kept,
+with `seconds_left` on its Restart Time; `helper` while a family waits
+for its End-of-RIB, with `seconds_left` on `stale_time`; null otherwise,
+with no families. Other rows have no such key.
 
 **A CE's row, and a row whose session negotiated a VPN family, say
 more**, for routescope's L3VPN views (routescope

@@ -341,6 +341,18 @@ class BGP_Daemon_Candidate_Test < Test::Unit::TestCase
     assert_equal(30, @speaker.peer('127.0.0.9').config['refresh_stale_time'])
   end
 
+  # graceful_restart goes in the OPEN, so a bounce applies it; one that
+  # does not read is refused, as at start.
+  def test_graceful_restart_bounces_and_is_checked
+    @candidate.load('lines' => ['set neighbors 127.0.0.9 graceful_restart restart_time 9000'])
+    assert_equal(['neighbor 127.0.0.9: graceful_restart: restart_time is 0 to 4095 seconds (RFC 4724 section 3), not 9000'],
+                 @candidate.commit('check' => true)[:errors])
+    @candidate.discard
+    @candidate.load('lines' => ['set neighbors 127.0.0.9 graceful_restart stale_time 60'])
+    r = @candidate.commit('check' => true)
+    assert(r[:warnings].any? { |w| w =~ /will be bounced to pick up graceful_restart/ }, r.inspect)
+  end
+
   # The listener holds the keys from when bgp4rd starts, so a
   # neighbor's password is restart class with its own reason.
   def test_password_cannot_change_while_running

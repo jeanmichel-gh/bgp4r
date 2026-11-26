@@ -146,6 +146,28 @@ class TestDaemonRefresh < Test::Unit::TestCase
     assert_equal([[1, 1]], r2.expire)
   end
 
+  # Section 4: a GR peer's BoRR before its End-of-RIB for the family is
+  # ignored, and logged as an error; after it, read.
+  def test_a_gr_peers_borr_waits_for_its_end_of_rib
+    gr = BGP::OPT_PARM::CAP::Graceful_restart.new(0, 120)
+    gr.add(1, 1, 0x80)
+    @now = 100
+    @sp = FakeSpeaker.new
+    rec = BGP::Daemon::Recorder.new
+    peer = Struct.new(:address, :session_info, :config, :recorder).new('10.0.0.2', info(open(rr, err), open(err, gr)), {}, rec)
+    r = R.new(peer, @sp, clock: -> { @now })
+    sub = @sp.events.subscribe
+    r.update(BGP::Route_refresh.new(1, 1, :borr))
+    assert_equal([], @sp.calls)
+    e = nil
+    while (x = sub.pop(:timeout => 0)) do e = x end
+    assert_equal([:error, 'a BoRR before the End-of-RIB from a peer that advertised graceful restart (RFC 7313 section 4)'],
+                 [e.level, e.data[:reason]])
+    rec.update(BGP::Update.end_of_rib_marker)
+    r.update(BGP::Route_refresh.new(1, 1, :borr))
+    assert_equal([[1, 1, :mark]], @sp.calls)
+  end
+
   # Section 4: "applicable only if a BGP speaker has received the
   # "Enhanced Route Refresh Capability" from a peer".
   def test_nothing_from_a_peer_without_70

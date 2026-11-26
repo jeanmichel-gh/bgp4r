@@ -215,9 +215,14 @@ module BGP
 
       # neighbor: a BGP::Neighbor.
       # sink: anything answering << with one work item, normally a PeerFeed.
-      def initialize(neighbor, sink)
+      # retain, when given, answers the families to keep when the session
+      # ends, which go with :peer_down (Table#peer_down's keep).
+      def initialize(neighbor, sink, retain: nil)
         @neighbor = neighbor
         @sink = sink
+        @retain = retain
+        @kept = []
+        @downed = false
         @peer = nil
         @lock = Mutex.new
         neighbor.add_observer(self)
@@ -316,8 +321,16 @@ module BGP
           @peer = nil
           p
         end
-        @sink << [:peer_down, gone] if gone
+        return unless gone
+        @kept = @retain ? @retain.call : []
+        @downed = true
+        @sink << (@kept.empty? ? [:peer_down, gone] : [:peer_down, gone, @kept])
       end
+
+      # True once state_change has sent this session's :peer_down. A
+      # second one would find what the first kept, now stale, and delete
+      # it as a consecutive restart.
+      def downed? ; @downed ; end
 
       # Stops feeding: the neighbor no longer reports to this adapter.
       def detach

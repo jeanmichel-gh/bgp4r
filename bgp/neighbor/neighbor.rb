@@ -394,10 +394,10 @@ module BGP
         changed and notify_observers(msg)
       when :ev_conn_reset
         log(:warn, "#{type}")
-        stop_session(session)
+        stop_session(session, :tcp)
       when :ev_holdtime_expire
         log(:warn, "Holdtime expire: #{type}")
-        stop_session(session) and
+        stop_session(session, :hold_time) and
           changed and notify_observers(BGP::Notification.code_to_s(4))
       else
         log(:error, "unexpected event #{ev}")
@@ -423,12 +423,13 @@ module BGP
     # it: a check before taking the lock could pass for the old session
     # while a stop and a start ran, and the stop then land on the new one,
     # which is the same race one step later.
-    def stop_session(session)
+    def stop_session(session, cause = nil)
       sync_lifecycle do
         if session and session != @session_id
           log_info "reset from session #{session} ignored, it has ended; session #{@session_id} is #{@state}"
           return false
         end
+        @down_cause ||= cause
         stop
         true
       end
@@ -540,8 +541,20 @@ module BGP
     # or with :no_blocking once the OPEN was queued. Returns false on any
     # error: the error is logged, kept in last_error, and the session is
     # stopped. With :raise => true the error is raised again after that.
+    # Why the last session ended, for RFC 4724 section 4.2, whose
+    # Receiving Speaker keeps a peer's routes when "the TCP session"
+    # terminates and section 4's "normal BGP procedures MUST be followed
+    # when the TCP session terminates due to the sending or receiving of
+    # a BGP NOTIFICATION message". :notification once one was sent or
+    # received on the session, else :hold_time for the hold timer, :tcp
+    # for the connection failing under it, and nil for a stop of our own.
+    # The first cause wins: a NOTIFICATION then the reset it leads to is
+    # a NOTIFICATION. Cleared when the next session starts.
+    attr_reader :down_cause
+
     def start(arg={})
       @last_error = nil
+      @down_cause = nil
       options = {:port=> 179, :auto_retry=> false, :no_blocking=>false, :waitfor=> :Established, :timeout=> 60, :raise=> false}.merge(arg)
       raise IOError, "#{self.class} is closed" if closed?
       return true if @state == :Established
@@ -967,6 +980,7 @@ module BGP
                :name      => m.to_string }
       octets = h[:data]
       data[:octets] = octets.unpack1('H*') if octets and octets.size > 0
+      @down_cause ||= :notification
       verb = direction == :send ? 'Send' : 'Recv'
       publish_event(:notification, "#{verb}Notification #{m.to_string}", data, :warn)
     end

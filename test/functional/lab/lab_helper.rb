@@ -788,6 +788,10 @@ module LabHelper
     attr_reader :local, :as, :router_id, :peer, :peer_as, :port,
                 :listen_port, :vty_port, :dir
 
+    # The prefix it originates, changed between a crash and the next
+    # `up`, so a restart can come back without a route it had.
+    attr_writer :network
+
     # port:    the port bgp4r listens on, which this router dials.
     # network: a prefix for it to originate, or nil for none.
     #
@@ -836,11 +840,15 @@ module LabHelper
     #           the same way and activated in every family, so routes can
     #           pass through this router from one peer to another. Empty
     #           by default.
+    # bgp_lines: more lines for the `router bgp` block, each with its
+    #           leading space, such as ' bgp graceful-restart'. Empty by
+    #           default.
     def initialize(local: '127.0.0.2', as: 65002, router_id: '10.0.0.2',
                    peer: '127.0.0.1', peer_as: 65001, port: nil, ipv6: false,
                    network: nil, families: [], vpn_networks: [], password: nil,
-                   more_peers: [])
+                   more_peers: [], bgp_lines: [])
       @password = password
+      @bgp_lines = bgp_lines
       @more_peers = more_peers
       @local, @as, @router_id = local, as, router_id
       @peer, @peer_as, @ipv6 = peer, peer_as, ipv6
@@ -869,6 +877,7 @@ module LabHelper
                *vpn_route_maps,
                'router bgp %d' % @as,
                ' bgp router-id %s' % @router_id,
+               *@bgp_lines,
                # A lab, not a network. Without the first, FRR refuses to
                # accept or send anything to an eBGP peer with no policy
                # configured (RFC 8212, which it implements by default).
@@ -1029,6 +1038,18 @@ module LabHelper
     ensure
       @pid = nil
       FileUtils.rm_rf(@dir)
+    end
+
+    # Kills bgpd with SIGKILL, which is a crash: it sends no Cease, and
+    # the kernel closes its connections. Its folder stays, so `up` starts
+    # it again with the same ports: a restart, for graceful restart (RFC
+    # 4724).
+    def crash
+      Process.kill('KILL', @pid)
+      Process.wait(@pid)
+    rescue Errno::ESRCH, Errno::ECHILD
+    ensure
+      @pid = nil
     end
 
     # One vty command, or nil while bgpd is not answering.
