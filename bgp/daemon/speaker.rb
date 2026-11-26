@@ -651,16 +651,23 @@ module BGP
       # subcode "BFD Down"", which IANA numbered 10.
       BFD_DOWN = 10
 
-      # A Cease with that subcode, when the session is up. True when one
-      # was queued. `Neighbor#stop` waits for its writer, so a Cease sent
-      # just before `stop` or `admin_stop` reaches the wire before the
-      # socket closes.
-      def cease(subcode)
-        return false unless established?
-        send_message(BGP::Notification.new(CEASE, subcode))
-        true
+      # A Cease with that subcode, when the session is up. The
+      # NOTIFICATION queued, or nil when none was. `Neighbor#stop` waits
+      # for its writer, so a Cease sent just before `stop` or `admin_stop`
+      # reaches the wire before the socket closes.
+      #
+      # On a session where RFC 8538's N bit was exchanged, it goes inside
+      # a Hard Reset when hard is true, or when hard is nil and section
+      # 5.1's table says so: Administrative Shutdown is hard,
+      # Administrative Reset graceful unless asked, BFD Down and Other
+      # Configuration Change graceful. See GracefulRestart.cease.
+      def cease(subcode, hard: nil)
+        return nil unless established?
+        n = GracefulRestart.cease(subcode, @neighbor && @neighbor.session_info, hard)
+        send_message(n)
+        n
       rescue NoSession
-        false
+        nil
       end
 
       # Sends one message on this peer's session, or raises NoSession.

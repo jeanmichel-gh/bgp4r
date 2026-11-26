@@ -404,7 +404,9 @@ class TestBgpRibTable < Test::Unit::TestCase
   end
 
   # RFC 4724 section 4.2 on the table: the kept family is marked
-  # 'restart' and stays best; the other goes; a route already stale goes.
+  # 'restart', a route already stale too, and stays best; the other goes.
+  # Deleting what was stale is the helper's, before this, and only with
+  # no N bit (RFC 8538 section 4.1).
   def test_peer_down_keeps_a_family
     @rib.announce(route(E1, '10.1.0.0/16'))
     @rib.announce(route(E1, '10.2.0.0/16'))
@@ -412,12 +414,12 @@ class TestBgpRibTable < Test::Unit::TestCase
     @rib.mark_stale('10.0.0.2', 1)
     @rib.announce(route(E1, '10.1.0.0/16', med: 5))
     @rib.peer_down(E1, [[1, 1]])
-    assert_equal({ '10.1.0.0/16' => 'restart' }, @rib.adj_rib_in(E1).prefixes.to_h { |p| [p, @rib.stale(E1, p)] },
-                 '10.2 was stale already; IPv6 not kept')
+    assert_equal({ '10.1.0.0/16' => 'restart', '10.2.0.0/16' => 'restart' },
+                 @rib.adj_rib_in(E1).prefixes.to_h { |p| [p, @rib.stale(E1, p)] }, 'IPv6 not kept')
     assert_equal(E1, @rib.best('10.1.0.0/16').peer)
     assert_nil(@rib.best('2001:db8::/32'))
     @rib.peer_down(E1, [[1, 1]])
-    assert(@rib.adj_rib_in(E1).empty?, 'a second restart deletes what the first kept')
+    assert_equal(2, @rib.adj_rib_in(E1).size, 'a second restart keeps them too')
   end
 
   private

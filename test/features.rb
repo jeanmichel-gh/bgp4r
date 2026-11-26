@@ -345,12 +345,12 @@ module Features
 
     'graceful-restart' => {
       :area  => 'session',
-      :about => 'graceful_restart on a neighbor: a helper, keeping a restarting peer\'s routes stale until its End-of-RIB, its Restart Time or stale_time',
-      :rfc   => 'RFC 4724 sections 3 to 5',
+      :about => 'graceful_restart on a neighbor: a helper, keeping a restarting peer\'s routes stale until its End-of-RIB, its Restart Time or stale_time; RFC 8538\'s N bit and Hard Reset',
+      :rfc   => 'RFC 4724 sections 3 to 5, RFC 8538',
       :doc   => 'docs/daemon.md',
       :unit  => %w[daemon/graceful_restart_test rib/table_test rib/peer_adapter_test rib/peer_feed_test rib/vpn_table_test
                    rib/evpn_table_test rib/vrf_ce_table_test daemon/link_state_table_test daemon/unreachability_test
-                   neighbor/neighbor_test daemon/refresh_test],
+                   neighbor/neighbor_test daemon/refresh_test daemon/control_test],
       :functional => %w[graceful_restart_test],
       :lab   => %w[graceful_restart_frr_test],
     },

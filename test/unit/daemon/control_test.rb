@@ -218,6 +218,27 @@ class BGP_Daemon_Control_Test < Test::Unit::TestCase
   end
 
   # Idempotent, so a console that sends one twice is not an error.
+  # `hard` is true, false or absent; anything else is refused, and an
+  # unknown key still is.
+  def test_hard_is_a_boolean
+    c = control
+    assert_equal(nil, c.peer_clear('peer' => '10.0.0.2', 'hard' => true)[:notification], 'no session, nothing sent')
+    e = assert_raise(ArgumentError) { c.peer_stop('peer' => '10.0.0.2', 'hard' => 'yes') }
+    assert_match(/hard: true or false, not "yes"/, e.message)
+    assert_raise(ArgumentError) { c.peer_stop('peer' => '10.0.0.2', 'hrad' => true) }
+  end
+
+  # What was sent, by name, a Hard Reset with what it carries.
+  def test_the_notification_is_named
+    c = control
+    name = ->(n) { c.send(:notification_name, n) }
+    assert_equal('cease/administrative_reset', name.(BGP::Notification.new(6, 4)))
+    assert_equal('cease/hard_reset/administrative_shutdown', name.(BGP::Notification.new(6, 9, "\x06\x02")))
+    assert_equal('cease/hard_reset', name.(BGP::Notification.new(6, 9)))
+    assert_equal('cease/10', name.(BGP::Notification.new(6, 10)))
+    assert_nil(name.(nil))
+  end
+
   def test_stopping_twice_and_starting_twice_are_not_errors
     c = control
     2.times { assert_equal(true, c.peer_stop('peer' => '10.0.0.2')[:shutdown]) }

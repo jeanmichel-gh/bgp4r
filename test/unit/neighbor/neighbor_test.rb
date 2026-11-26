@@ -1314,4 +1314,13 @@ class TestBgpNeighbor < Test::Unit::TestCase
   ensure
     [n, n2, n3].each { |x| x&.close }
   end
+
+  # RFC 8538's Hard Reset, Cease subcode 9, is a cause of its own.
+  def test_down_cause_hard_reset
+    n = BGP::Neighbor.new(:my_as => 65001, :remote_addr => '10.0.0.2', :id => '1.1.1.1')
+    n.send(:publish_notification, BGP::Notification.new(6, 9, "\x06\x02"), :receive)
+    assert_equal(:hard_reset, n.down_cause)
+  ensure
+    n&.close
+  end
 end
