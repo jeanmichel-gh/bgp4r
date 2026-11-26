@@ -112,8 +112,8 @@ Deciding and advertising routes.
 | `rib` | 7 | 1 | 0 | Adj-RIB-In, the decision process and the Loc-RIB |
 | `vpn-table` | 3 | 1 | 1 | The VPN table: VPN-IPv4 and VPN-IPv6 routes received (SAFI 128), keyed on RD and prefix, best path per key, reflected between PEs |
 | `evpn-table` | 1 | 1 | 0 | The EVPN table: types 2 and 3 received (AFI 25 SAFI 70), keyed on RD and RFC 7432 key fields, best path per key, show.evpn |
-| `macvrfs` | 2 | 1 | 0 | MAC-VRFs: one per VNI, import by Route Target, flood VTEPs from type 3 and remote MACs from type 2 written into vtep4rd, show.macvrfs and show.macvrf |
-| `evpn-export` | 2 | 1 | 0 | EVPN export: type 3 per MAC-VRF and type 2 per local MAC, MAC Mobility sequences, duplicate MACs, the hold on a lost vtep4rd, evpn.clear_duplicate |
+| `macvrfs` | 2 | 1 | 1 | MAC-VRFs: one per VNI, import by Route Target, flood VTEPs from type 3 and remote MACs from type 2 written into vtep4rd, show.macvrfs and show.macvrf |
+| `evpn-export` | 2 | 1 | 1 | EVPN export: type 3 per MAC-VRF and type 2 per local MAC, MAC Mobility sequences, duplicate MACs, the hold on a lost vtep4rd, evpn.clear_duplicate |
 | `evpn-reflector` | 1 | 1 | 0 | EVPN route reflection: types 2 and 3 to clients with ORIGINATOR_ID and CLUSTER_LIST, next hop, labels and PMSI Tunnel kept |
 | `vrfs` | 8 | 0 | 0 | A PE's VRFs: import by Route Target, the mpls and gre transports, VRF routes in the kernel, export with a label per VRF, IPv6 over an IPv4 core, CEs by eBGP |
 | `export` | 5 | 1 | 5 | The export rules, Adj-RIB-Out, UPDATE building and the MRAI timer |
@@ -319,6 +319,8 @@ EVPN export: type 3 per MAC-VRF and type 2 per local MAC, MAC Mobility sequences
 - RFC 7432 sections 7.7, 9.2.1, 11.2, 15, 15.1, 15.2; RFC 8365 section 5.1.3
 - Read first: `docs/design/evpn.md`
 - 2 unit files, 1 functional
+- lab:
+  - `evpn_frr_test`, needs frr
 
 ```
 ruby test/run_feature.rb evpn-export
@@ -484,6 +486,8 @@ MAC-VRFs: one per VNI, import by Route Target, flood VTEPs from type 3 and remot
 - RFC 7432 sections 7.10, 9.2.1, 11.2, 15; RFC 8365 sections 5.1.2, 5.1.3; RFC 1982 section 3.2
 - Read first: `docs/design/evpn.md`
 - 2 unit files, 1 functional
+- lab:
+  - `evpn_frr_test`, needs frr
 
 ```
 ruby test/run_feature.rb macvrfs

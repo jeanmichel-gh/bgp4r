@@ -1049,8 +1049,40 @@ where every other family nests under `routes`, so `Frr#rib` answers `{}`
 for this family however many routes are in it: a wrong answer rather than
 a missing one. `Frr#evpn_rib` and `#evpn_count` exist for that.
 
-**Both tests send only, and that is worth knowing before trusting
-them.** Each asserts a router's reading of what bgp4r put on the wire, so
+**A bgp4rd leaf and FRR 10.5.1, both ways** (`docs/design/evpn.md`, pull
+request 5; three more cases in `evpn_frr_test.rb`, measured on the
+owner's VM on 2026-11-25).
+
+- **FRR reads what a leaf sends.** The UPDATEs are built by bgp4rd's own
+  `EvpnExporter`.
+  - Type 3: FRR shows `pmsi` `{"tunnelType": "Ingress Replication",
+    "label": 10001}`, and its debug line says `pmsi tnltype 6`.
+  - Type 2: FRR shows `vni` `"10001"`, so Label1 is read as the whole
+    24-bit VNI. The VNI is odd and over 4095, so the bottom-of-stack bit
+    and the upper octet both carry part of it.
+  - The communities read `RT:65000:100 ET:8 MM:3`.
+  - The next hop is the leaf's VTEP.
+  - A sequence of 4294967295, then 0, and a withdrawal are each taken as
+    sent.
+- **bgp4rd reads what FRR sends.** FRR passes a leaf's routes on to a
+  second eBGP session. bgp4rd's EVPN table reads FRR's encoding of them:
+  - the RD, the VNI, the PMSI Tunnel and its identifier;
+  - the Route Target, VXLAN and sequence 3;
+  - the leaf's next hop, unchanged by FRR.
+
+  A MAC-VRF then imports both routes and writes `vni.flood.add` and
+  `mac.add` with sequence 3.
+- **FRR does not originate types 2 and 3 in these tests.** It learns its
+  VNIs and MACs from zebra and the kernel, and the tests run bgpd alone.
+  So bgp4rd reads FRR's encoding of a route FRR passed on, not one FRR
+  made. routescope's lab 3, `evpn-vxlan-frr`, is where FRR's own routes
+  meet bgp4rd.
+
+**Both tests send only, but for one case, and that is worth knowing
+before trusting them.** The one case is
+`test_bgp4rd_reads_the_evpn_routes_frr_sends`, above; it was not tried
+against the revert below. Every other case asserts a router's reading
+of what bgp4r put on the wire, so
 reverting `nlri_size` to the pre-wiring prefix arithmetic leaves both
 passing: that method is on the parse path and
 `test/functional/evpn_test.rb` is what covers it. Measured, by trying it.

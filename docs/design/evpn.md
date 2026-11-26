@@ -570,6 +570,24 @@ What changed from the plan:
 - `show.peers`' `sent` for `evpn` adds what was reflected to a peer to
   what this PE sent of its own.
 
+**Pull request 5.** Three cases in `test/functional/lab/evpn_frr_test.rb`,
+`more_peers` in `LabHelper::Frr`, and the `evpn` row of
+`coverage_matrix.rb`, which says `both` for FRR now. What changed from
+the plan:
+
+- **FRR does not originate types 2 and 3 in this test.** bgpd runs
+  alone, with no zebra, and FRR learns its VNIs and MACs from zebra and
+  the kernel's VXLAN. So the routes bgp4rd reads from FRR are a leaf's
+  routes that FRR passed on to a second eBGP session. Their attributes
+  and NLRI are FRR's encoding; their content is the leaf's. FRR's own
+  type 2 and 3 routes meet bgp4rd in lab 3, in routescope.
+- **The read side stops at the MAC-VRFs.** They import both routes and
+  say what they would write into vtep4rd, recorded; no vtep4rd runs.
+- **Measured against FRR 10.5.1 only.** The new cases omit on another
+  major version.
+- FRR's JSON gives the PMSI Tunnel's type and label, not its
+  identifier; its debug line gives the type as 6.
+
 ## Tests
 
 - Unit, one file per class: the table's key (one MAC with two IPs is
