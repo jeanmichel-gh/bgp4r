@@ -1,7 +1,7 @@
 # EVPN in bgp4rd over MPLS
 
-Status: draft, 2026-11-26, for the owner's approval. Its questions are
-at the end.
+Status: approved 2026-11-27. The owner answered its five questions that
+day (at the end); 1 and 2 each carry a rename for later.
 
 This is the second half of P5 in routescope's `docs/protocol-coverage.md`:
 "EVPN in bgp4rd. MAC-VRF and an EVPN RIB, VXLAN first [...], then over
@@ -99,8 +99,9 @@ kernel's VXLAN and bridge, and the kernel cannot end the label (above).
 So FRR is no data plane interop peer here; pull request 0 checks this
 against FRR 10.7.1 rather than assume it. GoBGP has no data plane;
 `test/functional/lab/evpn_gobgp_test.rb` already exchanges EVPN routes
-with it. SR Linux is in routescope's labs; whether its release there
-forwards EVPN over MPLS is question 4.
+with it. SR Linux is in routescope's labs (`ghcr.io/nokia/srlinux:26.3.1`);
+whether that release forwards EVPN over MPLS is not known, and it is
+left out of this work (question 4).
 
 ## Decisions
 
@@ -112,6 +113,10 @@ vtep4rd gains a second edge beside the UDP one. Its bridge domains,
 MAC table, ports, events and API stay. A bridge domain says its
 encapsulation, `vxlan` or `mpls`. The kernel is no option (above). A
 new daemon would copy vtep4rd's bridge.
+
+The owner chose this (2026-11-27, question 1). **To rename later:**
+vtep4r's name says VXLAN, and it will end MPLS too. The rename waits for
+a later stage; it is a deprecation across vtep4r, bgp4r and routescope.
 
 ### 2. The egress reads its labels raw; the kernel never sees a route for them
 
@@ -134,7 +139,12 @@ says so.
 
 One for known unicast (Label1 of each type 2 route), one for BUM (the
 PMSI label of the type 3 route), from a block of bgp4rd's own:
-`evpn: labels: { start: 25000, size: 1000 }`. Per MAC-VRF is the
+`evpn: labels: { start: 25000, size: 1000 }` by default (question 5).
+It is the first free block above isis4rd's SRLB (15000 to 15999), its
+SRGB (16000 to 23999) and L3VPN's labels (24000 to 24999), measured in
+the code on 2026-11-27. isis's fault catalog gives its Nth simulated
+router an SRGB at 16000 + 1000 N, which reaches 25000 from the ninth;
+a lab with that many keeps them apart in its files. Per MAC-VRF is the
 first of section 9.2.1's four, and the fewest labels. A frame under
 the BUM label is flooded to the local ports, as section 12.1 asks; a
 frame under the unicast label is looked up.
@@ -170,7 +180,10 @@ macvrfs:
 
 `vni:` stays the key of a MAC-VRF and of vtep4rd's bridge domain, so
 the API and routescope's views keep one name. Over MPLS it is never on
-the wire (question 2).
+the wire: there it is the local bridge domain's number. The owner chose
+this (2026-11-27, question 2). **To rename later:** the key should
+become a name that fits both encapsulations, such as `evi:` or `bd:`,
+at a later stage, through a deprecation.
 
 bgp4rd refuses at start a label block that overlaps `l3vpn: labels`.
 It cannot see the SRGB, so the lab's files keep them apart.
@@ -207,8 +220,9 @@ duplicates, the hold and the reflector are unchanged.
   ways of `protocol-conventions.md`, with validation and faults: a
   missing bottom of stack, a control word not zero, a label not ours.
 - **Receive.** A raw socket per core device, EtherType 0x8847. The top
-  label is the EVPN label after PHP. With an explicit null on top, it
-  is skipped (question 3).
+  label is the EVPN label after PHP. An explicit null on top, 0 (IPv4)
+  or 2 (IPv6), is skipped, for a core that does not pop the last
+  transport label (question 3). vtep4rd never sends one.
 - **Send.** The stack above, out of the device of the transport.
 - **Resolution.** Each remote PE's transport is read again every second
   and when bgp4rd adds one. How fast a core failure moves traffic is
@@ -224,7 +238,9 @@ the core link down with traffic moving, each run twice with times.
 
 **Interop:** control plane only, GoBGP's EVPN routes with MPLS labels
 both ways (`evpn_gobgp_test.rb`). Data plane interop waits for a
-released router that has it (question 4).
+released router that has it (question 4). Whether SR Linux 26.3.1 does
+is checked after pull request 3, as an item of its own; it becomes a
+lab only if it passes.
 
 ## Pull requests
 
@@ -272,15 +288,21 @@ On `evpn-mpls-ruby`:
 ## Questions for the owner
 
 1. **vtep4rd as the MPLS data plane** (decision 1), rather than a new
-   daemon. Its name says VXLAN.
+   daemon. Its name says VXLAN. *Answered 2026-11-27: vtep4rd. Rename
+   VXLAN out of its name at a later stage.*
 2. **`vni:` as the MAC-VRF's key over MPLS**, though no VNI is on the
    wire, or a new key (`evi:`, `bd:`) with `vni:` kept for VXLAN.
+   *Answered 2026-11-27: keep `vni:`. Rename it at a later stage.*
 3. **Explicit null.** isis4rd's SR uses PHP. Should vtep4rd also take
    label 0 on top, for a core that sends explicit null?
+   *Answered 2026-11-27: yes on receipt, 0 and 2; never sent.*
 4. **SR Linux as a data plane interop peer**, if the release in
    routescope's labs forwards EVPN over MPLS. To be checked before the
-   lab, or left out.
+   lab, or left out. *Answered 2026-11-27: left out of this work.
+   SR Linux 26.3.1 is checked after pull request 3, and becomes a lab
+   only if it passes.*
 5. **The label block's default**, 25000 to 25999, beside L3VPN's 24000.
+   *Answered 2026-11-27: 25000 to 25999.*
 
 ## The measurement's script
 
