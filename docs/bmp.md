@@ -7,9 +7,9 @@ of its own. Nothing goes from the station to the router (RFC 7854
 section 3.2).
 
 This is P8's pull request 8 in `docs/design/bgp-operations.md`, in
-three parts. 8a, the codec, is built and described here. 8b, a station
-in Ruby (`bgp4r-bmp`) with its JSON lines, and 8c, BMP in bgp4rd, are
-not built yet.
+three parts. 8a, the codec, and 8b, a station in Ruby (`bgp4r-bmp`)
+with its JSON lines, are built and described here. 8c, BMP in bgp4rd,
+is not built yet.
 
 ## 1. The messages
 
@@ -103,8 +103,8 @@ pass over.
 
 `BGP::Fault::BMP` holds what a router could send that a station has to
 cope with. `Fault.bmp(name)` gives each message's octets, in order.
-`docs/protocol-testing.md` has the list. The station that runs them
-comes with 8b.
+`docs/protocol-testing.md` has the list, and what `bgp4r-bmp` does with
+each.
 
 ## 4. FRR 10.5.1's bgpd_bmp, read
 
@@ -226,6 +226,374 @@ read further here:
   0, as bgpd first saw the peer.
 - **The post-policy AS_PATH starts with 65002**, bgpd's own AS, and
   the pre-policy Route Monitorings of the two announced routes are
-  withdrawals. bgpd had no `soft-reconfiguration inbound`, which may be
-  why. 8b's interop sets it and measures again.
+  withdrawals. bgpd had no `soft-reconfiguration inbound`. Section 6
+  sets it and measures again: the pre-policy routes come, and both
+  views' AS_PATHs start with 65002.
 - **No Termination** when the target was removed with `no bmp targets`.
+
+## 5. The station, `bgp4r-bmp`
+
+`bgp4r-bmp` listens for monitored routers, or dials one, and reads every
+message. It writes one JSON line for each, and keeps each router's peers
+and their routes for its HTTP API. Nothing goes back to a router
+(section 3.2).
+
+```
+bgp4r-bmp --listen 0.0.0.0:5000 --api 0.0.0.0:8080 > bmp.jsonl
+```
+
+| Option | What |
+|---|---|
+| `--listen HOST:PORT` | where routers dial in; 0.0.0.0:5000 by default. RFC 7854 names no port and IANA has none, so 5000 is our choice |
+| `--connect HOST:PORT` | dial a router that listens (FRR's `bmp listener`), again after each session, 30 s doubling to 720 s between (section 3.2); may repeat |
+| `--no-listen` | dial only |
+| `--api HOST:PORT` | the HTTP API, 127.0.0.1:8080 by default |
+| `--lines FILE` | the JSON lines; standard output by default |
+| `-l FILE` | the log; standard error by default |
+
+It ships with bgp4r, beside `bgp4r-sim` and `bgp4r-rtr`, and so is in
+the `lab-node` image.
+
+**What it does with what comes.** Each message is checked
+(`Bmp::Validation`, section 2) and read with bgp4r's codec, a Route
+Monitoring with its peer's Peer Up (section 1). The findings go in the
+message's line; a finding that is not to be ignored is an event too.
+
+- **A Route Monitoring** goes in its peer's pre-policy view when L is
+  clear, the post-policy view when L is set (RFC 7854 section 5), or the
+  Loc-RIB when the peer type is 3 (RFC 9069). An UPDATE's NLRI and
+  MP_REACH_NLRI add routes, its withdrawn routes and MP_UNREACH_NLRI
+  remove them. A route is known by its AFI, SAFI and NLRI without its
+  labels, since a withdrawal carries a Compatibility field where the
+  label was. An empty UPDATE, or one with only an empty
+  MP_UNREACH_NLRI, is that family's End-of-RIB (RFC 4724 section 2).
+- **A Peer Up or a Peer Down** empties the peer's three views, and sets
+  it up or down.
+- **A Stats Report** keeps the last value of each stat, by type and
+  family.
+- **A message before the Initiation** is read, with a `no_initiation`
+  finding (section 3.3: the router "MUST begin by sending an
+  Initiation message").
+- **A message the codec cannot read** is a line of type `undecoded`,
+  with its octets in `hex` and a `decode` finding. The session goes on.
+- **A Termination** closes the session, as section 4.5 says the station
+  MUST.
+- **A version other than 3, or a Message Length shorter than the header
+  or past 1 MB**, closes the session after a line of type `undecoded`:
+  section 4.1 defines the header for version 3 only, so nothing past it
+  can be framed. The line keeps the first 256 octets.
+- **When a session ends**, for whatever reason, its peers and routes go
+  with it. The router sends them again in the next session's dump
+  (section 3.3).
+
+### The JSON lines
+
+**These lines are a contract.** routescope will read them as a source
+of routes (`docs/design/bgp-operations.md`, answer 8). A change to them
+is additive only: a new key or a new type, never a key renamed,
+removed or given another meaning. `test/unit/bmp/lines_doc_test.rb`
+holds this section to the station's output: every example below is a
+line the station writes for FRR's capture of section 4, and every key
+a line has is in this table.
+
+| Key | What |
+|---|---|
+| `seq` | the line's number, from 1, across every router |
+| `time` | when the station read the message, ISO 8601 in UTC with milliseconds |
+| `router` | the router's session, as its address and port: `192.0.2.1:40000`, `[2001:db8::1]:40000` |
+| `sys_name` | the sysName of the session's Initiation, or `null` before one |
+| `type` | the message's type: `route_monitoring`, `stats_report`, `peer_down`, `peer_up`, `initiation`, `termination`, `route_mirroring`, `unknown`; or `undecoded`; or the station's own `connected` and `closed` |
+| `message` | the message as the codec's `to_hash` gives it, without its outer key; absent for `undecoded`, `connected` and `closed` |
+| `findings` | each finding, `{"name": ..., "detail": ...}`; `[]` for none |
+| `hex` | an `undecoded` message's octets |
+| `reason` | why a `closed` session closed: `end of stream`, `termination`, `version 0`, `Message Length 3`, `station stopped`, or the socket's error |
+
+The session begins:
+
+```json
+{
+  "seq": 1,
+  "time": "2026-11-27T10:00:00.000Z",
+  "router": "192.0.2.1:40000",
+  "sys_name": null,
+  "type": "connected",
+  "findings": []
+}
+```
+
+The Initiation:
+
+```json
+{
+  "seq": 2,
+  "time": "2026-11-27T10:00:00.000Z",
+  "router": "192.0.2.1:40000",
+  "sys_name": "bgp4r-lab-frr",
+  "type": "initiation",
+  "message": {
+    "version": 3,
+    "information": [
+      {
+        "type": 1,
+        "string": "FRRouting 10.5.1"
+      },
+      {
+        "type": 2,
+        "string": "bgp4r-lab-frr"
+      }
+    ]
+  },
+  "findings": []
+}
+```
+
+A Loc-RIB Route Monitoring with the L flag, and its finding:
+
+```json
+{
+  "seq": 6,
+  "time": "2026-11-27T10:00:00.000Z",
+  "router": "192.0.2.1:40000",
+  "sys_name": "bgp4r-lab-frr",
+  "type": "route_monitoring",
+  "message": {
+    "version": 3,
+    "peer": {
+      "peer_type": 3,
+      "flags": 64,
+      "distinguisher": "0000000000000000",
+      "address": "0.0.0.0",
+      "asn": 65002,
+      "bgp_id": "10.0.0.2",
+      "seconds": 1795774908,
+      "microseconds": 960858
+    },
+    "update": {
+      "path_attributes": {
+        "origin": "igp",
+        "as_path": {
+          "sequence": [
+            65002
+          ]
+        },
+        "next_hop": "0.0.0.0",
+        "med": 0
+      },
+      "nlris": [
+        "203.0.113.0/24"
+      ]
+    }
+  },
+  "findings": [
+    {
+      "name": "reserved_flags",
+      "detail": "Peer Flags 0x40 for peer type 3"
+    }
+  ]
+}
+```
+
+A post-policy Route Monitoring of the sim's peer:
+
+```json
+{
+  "seq": 17,
+  "time": "2026-11-27T10:00:00.000Z",
+  "router": "192.0.2.1:40000",
+  "sys_name": "bgp4r-lab-frr",
+  "type": "route_monitoring",
+  "message": {
+    "version": 3,
+    "peer": {
+      "peer_type": 0,
+      "flags": 64,
+      "distinguisher": "0000000000000000",
+      "address": "127.0.0.1",
+      "asn": 65001,
+      "bgp_id": "10.0.0.1",
+      "seconds": 1795774912,
+      "microseconds": 960859
+    },
+    "update": {
+      "path_attributes": {
+        "origin": "igp",
+        "as_path": {
+          "sequence": [
+            65002,
+            65001,
+            65010
+          ]
+        },
+        "next_hop": "192.0.2.9",
+        "med": 10,
+        "communities": [
+          "65001:1"
+        ]
+      },
+      "nlris": [
+        "192.0.2.0/24"
+      ]
+    }
+  },
+  "findings": []
+}
+```
+
+The sim's Peer Down:
+
+```json
+{
+  "seq": 39,
+  "time": "2026-11-27T10:00:00.000Z",
+  "router": "192.0.2.1:40000",
+  "sys_name": "bgp4r-lab-frr",
+  "type": "peer_down",
+  "message": {
+    "version": 3,
+    "peer": {
+      "peer_type": 0,
+      "flags": 0,
+      "distinguisher": "0000000000000000",
+      "address": "127.0.0.1",
+      "asn": 65001,
+      "bgp_id": "10.0.0.1",
+      "seconds": 1795774918,
+      "microseconds": 960859
+    },
+    "reason": 4
+  },
+  "findings": []
+}
+```
+
+The session's end:
+
+```json
+{
+  "seq": 44,
+  "time": "2026-11-27T10:00:00.000Z",
+  "router": "192.0.2.1:40000",
+  "sys_name": "bgp4r-lab-frr",
+  "type": "closed",
+  "findings": [],
+  "reason": "end of stream"
+}
+```
+
+### The HTTP API
+
+`bgp4r-sim`'s server (`docs/daemon.md`), with these paths. Each is a
+GET; a station takes no actions, so a POST is refused.
+
+| Path | What |
+|---|---|
+| `/api/status` | the version, the listening port, how many routers, peers and lines |
+| `/api/routers` | each open session: sysName, sysDescr, when it began, messages, peers, findings by name |
+| `/api/peers` | each peer of each router: who it is, up or down, the last Peer Down's reason, its routes by view, its End-of-RIBs, its stats; `?router=` |
+| `/api/routes` | each route; `?router=` (the session, or its sysName), `?peer=` (an address), `?view=` (`pre_policy`, `post_policy`, `loc_rib`) |
+| `/api/lines` | the last 10,000 JSON lines; `?since=N` for those after line N |
+| `/api/events` | bgp4r's events, kind `bmp`: `connected`, `closed`, `peer_up`, `peer_down`, `end_of_rib`, `findings`; `?since=N` |
+
+`/api/routes?view=loc_rib` after FRR's capture:
+
+```json
+{
+  "routes": [
+    {
+      "router": "192.0.2.1:40000",
+      "sys_name": "bgp4r-lab-frr",
+      "peer": {
+        "peer_type": 3,
+        "distinguisher": "0000000000000000",
+        "address": "0.0.0.0",
+        "asn": 65002,
+        "bgp_id": "10.0.0.2"
+      },
+      "view": "loc_rib",
+      "afi": 1,
+      "safi": 1,
+      "nlri": {
+        "prefix": "203.0.113.0/24"
+      },
+      "next_hop": "0.0.0.0",
+      "path_attributes": {
+        "origin": "igp",
+        "as_path": {
+          "sequence": [
+            65002
+          ]
+        },
+        "next_hop": "0.0.0.0",
+        "med": 0
+      }
+    },
+    {
+      "router": "192.0.2.1:40000",
+      "sys_name": "bgp4r-lab-frr",
+      "peer": {
+        "peer_type": 3,
+        "distinguisher": "0000000000000000",
+        "address": "0.0.0.0",
+        "asn": 65002,
+        "bgp_id": "10.0.0.2"
+      },
+      "view": "loc_rib",
+      "afi": 1,
+      "safi": 1,
+      "nlri": {
+        "prefix": "192.0.2.0/24"
+      },
+      "next_hop": "192.0.2.9",
+      "path_attributes": {
+        "origin": "igp",
+        "as_path": {
+          "sequence": [
+            65002,
+            65001,
+            65010
+          ]
+        },
+        "next_hop": "192.0.2.9",
+        "med": 10,
+        "communities": [
+          "65001:1"
+        ]
+      }
+    }
+  ]
+}
+```
+
+A route's `next_hop` is MP_REACH_NLRI's first next hop, or NEXT_HOP's.
+`path_attributes` leaves out the two MP attributes, whose NLRI are the
+routes themselves.
+
+## 6. FRR 10.5.1 to `bgp4r-bmp`
+
+`test/functional/lab/bmp_frr_test.rb`, in CI's `lab frr`: FRR 10.5.1's
+bgpd dials `bgp4r-bmp` with pre-policy, post-policy and Loc-RIB
+monitoring and `soft-reconfiguration inbound` on its one neighbor. A
+bgp4r-sim peer announces two routes, withdraws one and goes. Measured,
+and asserted there:
+
+- **The three views follow.** The Loc-RIB holds what `show bgp ipv4
+  unicast json` holds, before and after the withdrawal; the pre-policy
+  and post-policy views hold the sim's routes, with its next hop, MED
+  and community.
+- **The AS_PATH starts with 65002** in both views, FRR's own AS, where
+  the sim sent `65001 65010` and FRR's table shows `65001 65010`. RFC
+  7854 section 2 defines the pre-policy view as the Adj-RIB-In, which
+  "contains unprocessed routing information that has been advertised
+  to the local BGP speaker by its peers".
+- **The sim's Peer Down has reason 4**, "The remote system closed the
+  session without a notification message", and the station empties the sim's two views.
+- **No Loc-RIB withdrawal when the sim goes.** FRR's table drops
+  192.0.2.0/24, and three seconds later no Route Monitoring has
+  withdrawn it from the Loc-RIB, so the station still holds it. RFC 9069
+  section 5.4 says Route Monitoring messages "are also used to convey
+  incremental Loc-RIB changes".
+- **No findings** but the two section 4 lists, `reserved_flags` and
+  `unknown_stat`.
+
+bgp4rd's half of the interop, the station's two views of one sim
+compared, comes with 8c.

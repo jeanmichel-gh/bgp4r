@@ -266,7 +266,9 @@ module BGP
     
     def to_hash
       h_afi_safi = {:safi=> @safi, :afi=>@afi}
-      h_nlris = @nlris.size>1 ? @nlris.collect { |n| nlri_to_hash(n) } : nlri_to_hash(@nlris[0])
+      # One NLRI as itself, else a list: an empty one is a family's
+      # End-of-RIB (RFC 4724 section 2), which nlri_to_hash(nil) raised on.
+      h_nlris = @nlris.size == 1 ? nlri_to_hash(@nlris[0]) : @nlris.collect { |n| nlri_to_hash(n) }
       h = if @nexthops.empty?
         h_afi_safi.merge(:nlris=>h_nlris)
       else

@@ -162,7 +162,7 @@ class BGP_Daemon_Server_Test < Test::Unit::TestCase
     src = File.read(File.join(root, 'bgp4r.gemspec'))
     line = src[/^\s*s\.executables\s*=.*$/]
     assert_not_nil(line, 's.executables must still be there')
-    %w[bgp4r bgp4rd bgp4r-cli bgp4r-sim bgp4r-rtr].each do |cmd|
+    %w[bgp4r bgp4rd bgp4r-cli bgp4r-sim bgp4r-rtr bgp4r-bmp].each do |cmd|
       assert_match(/"#{Regexp.escape(cmd)}"/, line)
       path = File.join(root, 'exe', cmd)
       assert_equal(true, File.exist?(path), "exe/#{cmd} must exist")

@@ -1582,6 +1582,30 @@ the matrix records what each station does rather than asserting it.
 - What the capture shows of FRR is in `docs/bmp.md` section 4, for 8b
   to measure.
 
+### As built (8b)
+
+- **`Bmp::Station`** in `bgp/bmp/station.rb`, and `bgp4r-bmp` in
+  `bgp/bmp/server.rb`: it listens (5000 by default) or dials with
+  `--connect`, backing off 30 s to 720 s. Its HTTP API serves
+  `/api/routers`, `/api/peers`, `/api/routes`, `/api/lines` and
+  `/api/events`, and takes no POST.
+- **The JSON lines** are documented in `docs/bmp.md` section 5, and
+  `test/unit/bmp/lines_doc_test.rb` holds the document to the
+  station's output for FRR's capture.
+- **What closes a session**: a Termination (RFC 7854 section 4.5), and a
+  version other than 3 or a Message Length it cannot frame, after a line
+  of type `undecoded`. A message the codec cannot read is a line with
+  its octets and the session goes on. The fault catalog's three cases
+  are run against it (`test/functional/bmp_station_test.rb`).
+- **Interop**: FRR 10.5.1 dials it (`lab frr`,
+  `test/functional/lab/bmp_frr_test.rb`). FRR's AS starts the AS_PATH
+  of its pre-policy and post-policy routes, and no Loc-RIB withdrawal
+  comes when a peer goes, both measured and asserted
+  (`docs/bmp.md` section 6). bgp4rd's half waits for 8c.
+- **A codec fix on the way**: `Mp_unreach#to_hash` raised on an empty
+  MP_UNREACH_NLRI, which is a family's End-of-RIB, so the station could
+  not write its line.
+
 ### routescope shows
 
 The stations bgp4rd sends to and their state. Later, in routescope's
