@@ -1557,6 +1557,8 @@ module BGP
           policy['route_reflector'] = true
           policy['clients'] = reflector_clients
         end
+        # Origin validation's RFC 8097 community (bgp/daemon/rpki.rb).
+        policy['rpki'] = @rpki if @rpki
         unless policy.empty?
           opts[:export] = BGP::Rib::Export.new(:local_as => @my_as, :router_id => @router_id,
                                                **policy.to_h { |k, v| [k.to_sym, v] })

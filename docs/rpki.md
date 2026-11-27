@@ -9,9 +9,9 @@ validation reads them.
 This is P8's pull request 7 in `docs/design/bgp-operations.md`, in
 three parts. 7a, the codec, and 7b, a cache in Ruby (`bgp4r-rtr`), are
 built and described here. 7c, origin validation in bgp4rd, is built in
-parts: 7c1, the RTR client and each route's state, is described in
-section 5. 7c2, `invalid: prefer_less` and `reject` and `mark_ibgp`,
-and 7c3, the fault matrix against bgp4rd and FRR, are not built yet.
+parts: 7c1, the RTR client and each route's state, and 7c2, `invalid:
+prefer_less` and `reject` and `mark_ibgp`, are described in section 5.
+7c3, the fault matrix against bgp4rd and FRR, is not built yet.
 
 ## 1. The PDUs
 
@@ -305,15 +305,15 @@ version is 8, in `Rtr::Validation` and in the catalog.
 rpki:
   caches:
     - { address: 10.0.0.9, port: 323, preference: 1, retry: 600 }
-  invalid: accept
+  invalid: accept      # accept | prefer_less | reject
+  mark_ibgp: false
 ```
 
 A cache entry takes `address`, `port` (323), `preference` (1, lower
 is preferred) and `retry`, the seconds between two connections until
 the cache gives its own Retry Interval (section 6's 600). A lab whose
-cache may start after bgp4rd wants a short one. `invalid: accept` is the
-only value built yet, and the default; `mark_ibgp` is refused until
-7c2 builds it. With `rpki:`, bgp4rd has a RIB.
+cache may start after bgp4rd wants a short one. With `rpki:`, bgp4rd
+has a RIB.
 
 **The client.** One per cache, `Rtr::Client` in `bgp/rtr/client.rb`.
 It sends a Reset Query, or a Serial Query when it has unexpired data
@@ -428,17 +428,75 @@ or `down`. `show.rpki_vrps` lists the VRPs used, `prefix`,
 }
 ```
 
-`show.status` gains `rpki`:
+`show.status` gains `rpki`, here with `invalid: prefer_less` and
+`mark_ibgp: true`:
 
 ```json
 {
   "caches": 1,
   "synced": 1,
-  "vrps_v4": 2,
+  "vrps_v4": 1,
   "vrps_v6": 0,
-  "invalid": "accept"
+  "invalid": "prefer_less",
+  "mark_ibgp": true
 }
 ```
+
+**What the state does**, `invalid`, one setting for the whole daemon,
+for every unicast route, from any peer or originated:
+
+- `accept`, the default: nothing. RFC 6811 section 2 keeps a route in
+  the decision "unless explicitly configured to do so".
+- `prefer_less`: an Invalid route loses to any Valid or NotFound one,
+  at a step of its own, `rpki_invalid`, before LOCAL_PREF. Alone, or
+  against other Invalid routes, it can still be best.
+- `reject`: an Invalid route is not used, `rpki_reject`, as a route
+  with a loop is not. It stays in the Adj-RIB-In, so `show.adj_in`
+  shows it with its `validation`.
+
+A VRP change decides again the prefixes whose routes it moved (RFC
+6811 section 4), so a route `reject` removed comes back when a VRP
+makes it Valid, or when the data expires and every route is NotFound.
+With no cache synchronised yet every route is NotFound, and neither
+setting changes anything.
+
+With `prefer_less`, VRP 192.0.2.0/24 for AS 65001, and two paths to
+it, `show.rib`'s paths (seven keys of each). The internal path's
+LOCAL_PREF of 300 would win without RPKI:
+
+```json
+[
+  {
+    "from": "10.0.0.2",
+    "as_path": "65001",
+    "local_pref": null,
+    "validation": "valid",
+    "best": true,
+    "lost_at": null,
+    "reason": "best path, decided at the rpki_invalid step"
+  },
+  {
+    "from": "10.0.0.4",
+    "as_path": "65009",
+    "local_pref": 300,
+    "validation": "invalid",
+    "best": false,
+    "lost_at": "rpki_invalid",
+    "reason": "RPKI Invalid, where another path is Valid or NotFound"
+  }
+]
+```
+
+**The community**, RFC 8097. With `mark_ibgp: true`, each unicast
+route bgp4rd sends an internal peer carries one origin validation
+state extended community (type 0x43, sub-type 0x00) with its state:
+0 valid, 1 not found, 2 invalid. It replaces any the route came with.
+When a VRP change moves the state of a best route that stays best,
+that prefix goes again to each internal peer. With `rpki:` on, and
+whatever `mark_ibgp` says, the community is dropped from a route an
+external peer sent (section 2's "MUST drop") and is not sent to one
+(its "SHOULD NOT"). bgp4rd does not derive a state from a community it
+receives: with `rpki:` it has its own.
 
 **Events**, of kind `rpki`, `data.event` one of: `connected`, `up`,
 `down` (with the reason), `downgraded`, `synced` (a cache's serial and

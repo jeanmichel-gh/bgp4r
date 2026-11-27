@@ -104,8 +104,21 @@ class TestBgpRibView < Test::Unit::TestCase
   # any option the table needs for the step to be reached. Each pair is
   # built so that every earlier step of Decision::STEPS ties, which is the
   # only way to land on the step under test.
+  # Origin validation as bgp/daemon/rpki.rb answers the decision: a
+  # route AS 65666 originates is Invalid, every other NotFound.
+  Rov = Struct.new(:invalid) do
+    def state(route) ; route.origin_asn(LOCAL_AS) == 65_666 ? :invalid : :not_found ; end
+    def word(route) ; state(route) == :invalid ? 'invalid' : 'notfound' ; end
+  end
+
   LOSSES = {
-    # The ten tie breaks, in Decision::STEPS order.
+    # The eleven tie breaks, in Decision::STEPS order. invalid:
+    # prefer_less comes before LOCAL_PREF, so the Invalid path loses
+    # with the higher one.
+    :rpki_invalid => {
+      :table  => { :validator => Rov.new('prefer_less') },
+      :winner => [:E1, {}],
+      :loser  => [:I1, { :local_pref => 300, :as_path => [65666] }] },
     :local_pref => {
       :winner => [:I1, { :local_pref => 250 }],
       :loser  => [:I2, { :local_pref => 100 }] },
@@ -146,7 +159,7 @@ class TestBgpRibView < Test::Unit::TestCase
     :path_id => {
       :winner => [:I1, { :local_pref => 100, :path_id => 1 }],
       :loser  => [:I1, { :local_pref => 100, :path_id => 2 }] },
-    # The four of Decision::INELIGIBLE, each set aside before any
+    # The five of Decision::INELIGIBLE, each set aside before any
     # comparison, so each loser is paired with a plain winner.
     :next_hop_unreachable => {
       :winner => [:E1, {}],
@@ -159,7 +172,11 @@ class TestBgpRibView < Test::Unit::TestCase
       :loser  => [:I2, { :local_pref => 100, :originator_id => ROUTER_ID }] },
     :cluster_list_loop => {
       :winner => [:E1, {}],
-      :loser  => [:I2, { :local_pref => 100, :cluster_list => [ROUTER_ID] }] }
+      :loser  => [:I2, { :local_pref => 100, :cluster_list => [ROUTER_ID] }] },
+    :rpki_reject => {
+      :table  => { :validator => Rov.new('reject') },
+      :winner => [:E1, {}],
+      :loser  => [:E2, { :as_path => [65003, 65666] }] }
   }.freeze
 
   # E1b is a second peer in E1's own AS, which is what the MED step needs.
@@ -243,7 +260,7 @@ class TestBgpRibView < Test::Unit::TestCase
     expected = BGP::Rib::Decision::STEPS + BGP::Rib::Decision::INELIGIBLE
     assert_equal(expected.sort, LOSSES.keys.sort,
                  'a scenario is missing for a reason the decision process can file')
-    assert_equal(14, expected.size, 'ten tie breaks and four ineligible reasons')
+    assert_equal(16, expected.size, 'eleven tie breaks and five ineligible reasons')
   end
 
   def test_every_reason_the_decision_can_file_has_words
@@ -289,13 +306,13 @@ class TestBgpRibView < Test::Unit::TestCase
     from = doc.index('`lost_at` is one of')
     assert(from, 'the document no longer introduces the list')
     steps, ineligible = doc[from..].scan(/^```\n([a-z_ \n]+)\n```$/).map { |(b)| b.split }
-    assert_equal(10, steps.size, 'the ten tie breaks')
-    assert_equal(4, ineligible.size, 'the four ineligible reasons')
+    assert_equal(11, steps.size, 'the eleven tie breaks')
+    assert_equal(5, ineligible.size, 'the five ineligible reasons')
     assert_equal(BGP::Rib::Decision::STEPS.map(&:to_s), steps,
                  'the document lists the steps in Decision::STEPS order')
     assert_equal(BGP::Rib::Decision::INELIGIBLE.map(&:to_s), ineligible)
-    assert_match(/one of \*\*fifteen\*\* values/, doc, 'and says how many there are')
-    assert_match(/^And `duplicate`, the fifteenth/, doc)
+    assert_match(/one of \*\*seventeen\*\* values/, doc, 'and says how many there are')
+    assert_match(/^And `duplicate`, the seventeenth/, doc)
   end
 
   # The step that decided the prefix is on the prefix, which is

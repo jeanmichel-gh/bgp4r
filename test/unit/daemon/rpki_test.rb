@@ -55,11 +55,13 @@ class TestDaemonRpki < Test::Unit::TestCase
 
   def test_the_key_is_checked
     [nil, [], { 'caches' => [] }, { 'caches' => [{ 'port' => 1 }] }, { 'caches' => CACHES, 'cache' => 1 },
-     { 'caches' => CACHES, 'invalid' => 'reject' }, { 'caches' => CACHES, 'invalid' => 'drop' },
-     { 'caches' => CACHES, 'mark_ibgp' => true }, { 'caches' => [CACHES[0], CACHES[0]] }].each do |bad|
+     { 'caches' => CACHES, 'invalid' => 'drop' }, { 'caches' => CACHES, 'mark_ibgp' => 'yes' },
+     { 'caches' => [CACHES[0], CACHES[0]] }].each do |bad|
       assert_raise(ArgumentError, bad.inspect) { Daemon::Rpki.check(bad) }
     end
     assert_equal('accept', speaker('caches' => CACHES, 'invalid' => 'accept', 'mark_ibgp' => false).rpki.invalid)
+    %w[prefer_less reject].each { |mode| assert_equal(mode, speaker('caches' => CACHES, 'invalid' => mode).rpki.invalid) }
+    assert_equal([true, false], [speaker('caches' => CACHES, 'mark_ibgp' => true).rpki.mark_ibgp?, speaker.rpki.mark_ibgp?])
     assert_raise(ArgumentError) { speaker('caches' => 'x') }
     assert_nil(Daemon::Speaker.new('as' => 1, 'router_id' => '1.1.1.1', 'neighbors' => []).rpki)
   end
@@ -103,7 +105,8 @@ class TestDaemonRpki < Test::Unit::TestCase
     assert_equal({ '192.0.2.0/24' => 'valid', '198.51.100.0/24' => 'invalid', '203.0.113.0/24' => 'notfound' },
                  v.routes[:rows].to_h { |r| [r[:prefix], r[:validation]] })
     assert_equal('invalid', v.rib('prefix' => '198.51.100.0/24')[:rows].first[:paths].first[:validation])
-    assert_equal({ :caches => 2, :synced => 1, :vrps_v4 => 2, :vrps_v6 => 0, :invalid => 'accept' }, v.status[:rpki])
+    assert_equal({ :caches => 2, :synced => 1, :vrps_v4 => 2, :vrps_v6 => 0, :invalid => 'accept', :mark_ibgp => false },
+                 v.status[:rpki])
     assert_equal(['127.0.0.1', 'up', 1, 2], v.rpki[:rows].first.values_at(:address, :state, :serial, :vrps_v4))
     assert_equal(2, v.rpki[:total])
     assert_equal({ :prefix => '192.0.2.0/24', :max_length => 24, :asn => 65_001 }, v.rpki_vrps[:rows].first)
@@ -152,6 +155,64 @@ class TestDaemonRpki < Test::Unit::TestCase
     [Rtr::Cache_response.new(1), Rtr::Ipv4_prefix.new('192.0.2.0/24', 24, 65_003), Rtr::End_of_data.new(1, 3)].each { |p| client.receive(p.encode) }
     ev = sp.events.since(n).select { |e| e.kind == :rpki }.collect { |e| e.data[:event] }
     assert_equal(%w[synced vrps], ev, 'a VRP that covers a route and leaves it Invalid moves none')
+  end
+
+  # RFC 6811 section 4: a VRP change decides the prefixes again, so
+  # prefer_less and reject follow it. LOCAL_PREF would pick 10.0.0.4.
+  def test_a_vrp_change_decides_again
+    { 'prefer_less' => '10.0.0.2', 'reject' => '10.0.0.2' }.each do |mode, after|
+      sp = speaker('caches' => CACHES, 'invalid' => mode)
+      ext = Rib::Peer.new(address: '10.0.0.2', remote_as: 65_001, router_id: '2.2.2.2', local_as: 65_000)
+      int = Rib::Peer.new(address: '10.0.0.4', remote_as: 65_000, router_id: '4.4.4.4', local_as: 65_000)
+      sp.rib.announce(Rib::Route.new('192.0.2.0/24', Path_attribute.new(Origin.new(0), Next_hop.new('10.0.0.2'), As_path.new(65_001)), ext))
+      sp.rib.announce(Rib::Route.new('192.0.2.0/24', Path_attribute.new(Origin.new(0), Next_hop.new('10.0.0.4'), As_path.new(65_009),
+                                                                        Local_pref.new(300)), int))
+      assert_equal('10.0.0.4', sp.rib.best('192.0.2.0/24').peer.address, "#{mode}: no VRPs, all NotFound")
+      client = sp.rpki.clients.first
+      load(client, 1, ['192.0.2.0/24', 24, 65_001])
+      assert_equal(after, sp.rib.best('192.0.2.0/24').peer.address, "#{mode}: 65009 is Invalid")
+      lost = Daemon::Views.new(sp).rib('prefix' => '192.0.2.0/24')[:rows].first[:paths].last
+      assert_equal(mode == 'reject' ? :rpki_reject : :rpki_invalid, lost[:lost_at])
+      client.receive(Rtr::Serial_notify.new(1, 2).encode)
+      [Rtr::Cache_response.new(1), Rtr::Ipv4_prefix.new('192.0.2.0/24', 24, 65_001, false), Rtr::End_of_data.new(1, 2)].each { |p| client.receive(p.encode) }
+      assert_equal('10.0.0.4', sp.rib.best('192.0.2.0/24').peer.address, "#{mode}: the VRP withdrawn, it is back")
+    end
+  end
+
+  # mark_ibgp: a VRP change sends internal peers again the prefixes
+  # whose best route stayed and changed state; the Router sends those
+  # whose best changed. A failure is logged, and the rest still go.
+  def test_mark_ibgp_resends
+    [true, false].each do |mark|
+      logged = []
+      sp = Daemon::Speaker.new('as' => 65_000, 'router_id' => '10.0.0.1', 'log_level' => 'error', 'neighbors' => [],
+                               'rpki' => { 'caches' => CACHES, 'invalid' => 'reject', 'mark_ibgp' => mark })
+      sp.rpki.instance_variable_set(:@logger, ->(level, message) { logged << [level, message] })
+      peers = [['10.0.0.4', 65_000], ['10.0.0.2', 65_001], ['10.0.0.5', 65_000]].collect do |a, as|
+        Rib::Peer.new(address: a, remote_as: as, router_id: a, local_as: 65_000)
+      end
+      sent = []
+      router = Struct.new(:peers).new(peers)
+      sp.rib.define_singleton_method(:router) { router }
+      sp.rib.define_singleton_method(:resend) do |address, prefixes|
+        sent << [address, prefixes]
+        raise Timeout::Error, 'no answer' if address == '10.0.0.4'
+      end
+      announce(sp, '192.0.2.0/24', 65_001)
+      announce(sp, '198.51.100.0/24', 65_001)
+      load(sp.rpki.clients.first, 1, ['192.0.2.0/24', 24, 65_001], ['198.51.100.0/24', 24, 65_009])
+      if mark
+        assert_equal([['10.0.0.4', ['192.0.2.0/24']], ['10.0.0.5', ['192.0.2.0/24']]], sent,
+                     'internal peers only, and not the prefix reject withdrew')
+        assert_equal([[:warn, 'bgp4r: rpki: resend to 10.0.0.4: no answer']], logged)
+      else
+        assert_equal([], sent)
+      end
+    end
+    sp = speaker('caches' => CACHES, 'mark_ibgp' => true)
+    announce(sp, '192.0.2.0/24', 65_001)
+    load(sp.rpki.clients.first, 1, ['192.0.2.0/24', 24, 65_001])
+    assert_equal('valid', sp.rib.validation(sp.rib.best('192.0.2.0/24')), 'no Router: nothing to send')
   end
 
   # The event names ten routes, and counts them all.

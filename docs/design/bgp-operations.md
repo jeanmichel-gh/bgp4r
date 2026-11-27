@@ -1407,6 +1407,37 @@ the fault matrix against bgp4rd and FRR, and the interop test.
   in `show.status`; events of kind `rpki`.
 - `invalid` takes `accept` only, and `mark_ibgp` is refused, until 7c2.
 
+### As built (7c2)
+
+- **`invalid: prefer_less`** is `rpki_invalid`, the first of
+  `Decision::STEPS`, before `local_pref`. A route alone still wins, as
+  an Invalid one does when all are Invalid. LLGR's `llgr_stale` will go
+  before it (section 4).
+- **`invalid: reject`** is `rpki_reject`, the fifth of
+  `Decision::INELIGIBLE`. The route stays in the Adj-RIB-In, with its
+  `validation`, so `show.adj_in` shows it. A prefix whose only route is
+  rejected has no `show.rib` row, as for the other four reasons.
+- **The decision reads the state** from `Decision#validator`, the
+  `Daemon::Rpki` that `Table#validator=` hands it. Nothing is stored.
+- **A VRP change decides again** the prefixes whose routes it moved,
+  `Table#revalidate` (6811 4). The data expiring is a VRP change like
+  any other, so a rejected route comes back.
+- **`mark_ibgp`** (RFC 8097 section 2): toward an internal peer, one
+  community with our state, in place of any the route came with.
+  `Export`'s `rpki:` option does it. When a VRP change moves the state
+  of a best route that stays best, that prefix is sent again to each
+  internal peer, `Table#resend`; a prefix whose best changed is sent by
+  the Router already.
+- **With `rpki:` on, whatever `mark_ibgp` says**, the community is
+  dropped from a route received from an external peer (section 2's
+  "MUST drop", `Table#import`) and is not sent to one (its "SHOULD
+  NOT"). Without `rpki:` bgp4rd passes it as before.
+- **Not built:** deriving a state from a received community (section
+  2's "SHOULD derive", "in the absence of validation state set based on
+  local data"): bgp4rd with `rpki:` always has its own state. Nor the
+  checks on receipt: more than one instance, or a value above 2. Both
+  wait for a router without caches that needs them.
+
 ### routescope shows
 
 Each cache's session, serial and VRP count; a Validation column on

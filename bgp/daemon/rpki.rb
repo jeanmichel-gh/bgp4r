@@ -32,7 +32,8 @@ module BGP
     #
     #   rpki:
     #     caches: [{ address: 10.0.0.9, port: 323, preference: 1 }]
-    #     invalid: accept
+    #     invalid: accept      # accept | prefer_less | reject
+    #     mark_ibgp: false     # RFC 8097's community toward internal peers
     #
     # One Rtr::Client per cache. The VRPs used are those of the most
     # preferred caches that have data: the lowest `preference` among the
@@ -40,6 +41,9 @@ module BGP
     # preference together (RFC 8210 sections 4 and 10). Each IPv4 and
     # IPv6 unicast route has a state, Valid, Invalid or NotFound, read
     # from them whenever it is asked for, so it follows each VRP change.
+    # `invalid` is what the decision does with an Invalid route
+    # (Rib::Decision), and a VRP change decides again the prefixes whose
+    # routes it moved (RFC 6811 section 4).
     #
     # docs/design/bgp-operations.md 7c, docs/rpki.md.
     class Rpki
@@ -50,8 +54,9 @@ module BGP
 
       # RFC 6811 section 2: a route is not excluded "as a side effect of
       # its validation state, unless explicitly configured to do so".
-      # `prefer_less` and `reject` are built in 7c2.
-      INVALID = %w[accept].freeze
+      # prefer_less: an Invalid route loses to any Valid or NotFound one.
+      # reject: an Invalid route is not used.
+      INVALID = %w[accept prefer_less reject].freeze
 
       # How many routes an event names when a VRP change moves them.
       EXAMPLES = 10
@@ -66,11 +71,10 @@ module BGP
         names = caches.collect { |c| [IPAddr.new(c['address'].to_s).to_s, Integer(c.fetch('port', Rtr::PORT))] }
         raise ArgumentError, 'rpki: a cache is listed twice' unless names.uniq.size == names.size
         invalid = config.fetch('invalid', 'accept').to_s
-        unless INVALID.include?(invalid)
-          raise ArgumentError, "rpki: invalid #{invalid.inspect}: this bgp4rd takes #{INVALID.join(', ')}; " \
-                               'prefer_less and reject are not built yet'
+        raise ArgumentError, "rpki: invalid #{invalid.inspect}: use #{INVALID.join(', ')}" unless INVALID.include?(invalid)
+        unless [nil, true, false].include?(config['mark_ibgp'])
+          raise ArgumentError, "rpki: mark_ibgp is true or false, got #{config['mark_ibgp'].inspect}"
         end
-        raise ArgumentError, 'rpki: mark_ibgp is not built yet' if config['mark_ibgp']
         config
       end
 
@@ -82,6 +86,7 @@ module BGP
         Rpki.check(config)
         @speaker = speaker
         @invalid = config.fetch('invalid', 'accept').to_s
+        @mark_ibgp = config['mark_ibgp'] ? true : false
         @logger = arg[:logger]
         @lock = Mutex.new
         @changing = Mutex.new
@@ -92,6 +97,9 @@ module BGP
                      .on_change { changed }
         end
       end
+
+      # True when routes to internal peers carry RFC 8097's community.
+      def mark_ibgp? ; @mark_ibgp ; end
 
       def start ; @clients.each(&:start) ; self ; end
       def stop ; @clients.each(&:stop) ; self ; end
@@ -119,7 +127,7 @@ module BGP
       def summary
         c = vrps.counts
         { :caches => @clients.size, :synced => @clients.count(&:synced?), :vrps_v4 => c[:v4], :vrps_v6 => c[:v6],
-          :invalid => @invalid }
+          :invalid => @invalid, :mark_ibgp => @mark_ibgp }
       end
 
       # A cache's VRPs changed: the set used now may change, and with it
@@ -149,7 +157,9 @@ module BGP
 
       # RFC 6811 section 4: "the implementation MUST re-validate any
       # affected prefixes". The state is read from the VRPs each time,
-      # so this only says which routes moved.
+      # so this says which routes moved, decides their prefixes again,
+      # and, with mark_ibgp, sends internal peers the prefixes whose best
+      # route kept its place and changed its state.
       def moved(old, now, added, removed)
         table = @speaker.rib
         return unless table
@@ -162,6 +172,22 @@ module BGP
         end
         return if moves.empty?
         publish('routes', "#{moves.size} route(s) changed state", :changed => moves.size, :routes => moves.first(EXAMPLES))
+        prefixes = moves.collect { |m| m[:prefix] }.uniq
+        decided = table.revalidate(prefixes).collect(&:prefix)
+        mark(table, prefixes - decided) if @mark_ibgp
+      end
+
+      # The Router sends a prefix whose best route changed. One whose
+      # best route stayed and changed state goes again to each internal
+      # peer, with the community it now carries.
+      def mark(table, prefixes)
+        router = table.router
+        return if router.nil?
+        router.peers.select(&:ibgp?).each do |peer|
+          table.resend(peer.address, prefixes)
+        rescue StandardError => e
+          @logger&.call(:warn, "bgp4r: rpki: resend to #{peer.address}: #{e.message}")
+        end
       end
 
       def publish(what, message, data)
