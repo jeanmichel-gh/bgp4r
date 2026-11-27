@@ -19,9 +19,9 @@ amounts. Measured 2026-11-03:
 
 | Tier | What it needs | Files | Time | Command |
 |---|---|---:|---|---|
-| unit | Ruby | 202 | 21s | `ruby test/run_unit.rb` |
-| functional | a loopback socket | 35 | 18s | one file at a time, below |
-| lab | gobgpd, FRR, Docker or root | 46 | 10s to 400s per group | `ruby test/run_lab.rb GROUP` |
+| unit | Ruby | 204 | 21s | `ruby test/run_unit.rb` |
+| functional | a loopback socket | 36 | 18s | one file at a time, below |
+| lab | gobgpd, FRR, Docker or root | 47 | 10s to 400s per group | `ruby test/run_lab.rb GROUP` |
 
 **The first two tiers together are under a minute and need nothing
 installed.** That is worth knowing before reaching for a lab test.
@@ -103,6 +103,7 @@ Getting a session up and keeping it.
 | `bmp-codec` | 5 | 0 | 0 | the BMP messages of RFC 7854 and RFC 9069, their findings, and BGP::Fault::BMP |
 | `rpki-rtr` | 4 | 0 | 0 | the RTR PDUs of RFC 8210 and RFC 6810, their findings, and BGP::Fault::RTR |
 | `rpki-fault-matrix` | 2 | 2 | 1 | BGP::Fault::RTR and the RTR behaviours against bgp4rd's RTR client and FRR's bgpd, and what each answered |
+| `bmp-daemon` | 3 | 1 | 1 | bmp: in bgp4rd: each peer reported to BMP stations, a Peer Up with both OPENs, the Adj-RIB-In as received, each UPDATE, a Peer Down with its reason, stats and a Termination |
 | `graceful-restart` | 12 | 1 | 1 | graceful_restart on a neighbor: a helper, keeping a restarting peer's routes stale until its End-of-RIB, its Restart Time or stale_time; RFC 8538's N bit and Hard Reset |
 | `gtsm` | 1 | 1 | 0 | ttl_security on a neighbor: GTSM, sent at TTL 255, dropped below 256 - hops |
 | `tcp-md5` | 1 | 1 | 1 | password on a neighbor: TCP MD5, every segment signed, a missing or wrong digest dropped |
@@ -236,6 +237,20 @@ the BMP messages of RFC 7854 and RFC 9069, their findings, and BGP::Fault::BMP.
 
 ```
 ruby test/run_feature.rb bmp-codec
+```
+
+### `bmp-daemon`
+
+bmp: in bgp4rd: each peer reported to BMP stations, a Peer Up with both OPENs, the Adj-RIB-In as received, each UPDATE, a Peer Down with its reason, stats and a Termination.
+
+- RFC 7854 sections 3, 4.3 to 4.10 and 5
+- Read first: `docs/bmp.md`
+- 3 unit files, 1 functional
+- lab:
+  - `bmp_bgp4rd_frr_test`, needs frr
+
+```
+ruby test/run_feature.rb bmp-daemon
 ```
 
 ### `bmp-station`
@@ -1160,5 +1175,5 @@ test file has to be tagged before the suite is green again, which is
 the same arrangement `test/unit/lab_groups_test.rb` has with the CI
 matrix.
 
-283 of 283 test files are tagged. The
+287 of 287 test files are tagged. The
 remainder, if any, is what the guard names.

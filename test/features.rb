@@ -397,6 +397,16 @@ module Features
       :lab   => %w[bmp_frr_test],
     },
 
+    'bmp-daemon' => {
+      :area  => 'session',
+      :about => 'bmp: in bgp4rd: each peer reported to BMP stations, a Peer Up with both OPENs, the Adj-RIB-In as received, each UPDATE, a Peer Down with its reason, stats and a Termination',
+      :rfc   => 'RFC 7854 sections 3, 4.3 to 4.10 and 5',
+      :doc   => 'docs/bmp.md',
+      :unit  => %w[daemon/bmp_test bmp/routes_test bmp/station_test],
+      :functional => %w[bmp_daemon_test],
+      :lab   => %w[bmp_bgp4rd_frr_test],
+    },
+
     'route-refresh-faults' => {
       :area  => 'errors',
       :about => 'BGP::Fault::REFRESH and the borr_without_eorr behaviour, sent by bgp4r-sim, and what bgp4rd and FRR do',

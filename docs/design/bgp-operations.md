@@ -1606,6 +1606,30 @@ the matrix records what each station does rather than asserting it.
   MP_UNREACH_NLRI, which is a family's End-of-RIB, so the station could
   not write its line.
 
+### As built (8c)
+
+- **`Daemon::BmpMonitor`** in `bgp/daemon/bmp.rb`, from `bmp:`: it
+  dials each station, sends the Initiation, then each peer's Peer Up,
+  dump and End-of-RIBs. Each UPDATE follows, and so do Peer Downs,
+  stats 7, 11 and 12, and a Termination on stop. `show.bmp` lists the
+  stations.
+- **Its own copy of each Adj-RIB-In**, as received and outside the RIB,
+  so `bmp:` needs no `rib:`. `bgp/bmp/routes.rb` holds the code it
+  shares with the station: an UPDATE as routes, and a route as an
+  UPDATE of its own for the dump.
+- **The Peer Down reasons come from bgp4r's `notification` events**,
+  sent or received, since an observer sees a received NOTIFICATION
+  only after the session is down. 1, 3 and 4 are measured over
+  loopback; 2 is the fall back when bgp4rd ends a session with no
+  NOTIFICATION.
+- **A station's `retry`** shortens the first backoff, for the tests;
+  30 s to 720 s without it.
+- **Interop**: bgp4rd beside FRR 10.5.1, one sim, one station
+  (`test/functional/lab/bmp_bgp4rd_frr_test.rb`). The two views agree,
+  except FRR's AS at the front of its AS_PATHs.
+- **Not reported**: a VRF's CE sessions, and the post-policy and
+  Loc-RIB views. Each is a small pull request of its own.
+
 ### routescope shows
 
 The stations bgp4rd sends to and their state. Later, in routescope's

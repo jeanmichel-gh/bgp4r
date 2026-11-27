@@ -78,6 +78,7 @@ require 'bgp/daemon/vpn_reflector'
 require 'bgp/daemon/evpn_reflector'
 require 'bgp/daemon/bfd'
 require 'bgp/daemon/rpki'
+require 'bgp/daemon/bmp'
 require 'bgp/daemon/gtsm'
 require 'bgp/daemon/tcp_auth'
 require 'bgp/daemon/end_of_rib'
@@ -817,6 +818,8 @@ module BGP
             vpn_feed = @speaker.vpn.attach(n, retain: retain)
             # EVPN types 2 and 3 too: bgp/rib/evpn_table.rb.
             evpn_feed = @speaker.evpn.attach(n, retain: retain)
+            # BMP watches the session: its UPDATEs, its states.
+            @speaker.bmp&.attach(@address, n)
           end
           n.start(:session => sock, :timeout => @config.fetch('open_timeout', 30))
           if n.is_established?
@@ -1089,10 +1092,15 @@ module BGP
           @rpki = Rpki.new(self, config['rpki'], :logger => @logger, :clock => arg[:rpki_clock])
           @rib.validator = @rpki if @rib
         end
+        # BMP, RFC 7854: the stations bgp4rd reports to (bgp/daemon/bmp.rb).
+        @bmp = BmpMonitor.new(self, config['bmp'], :logger => @logger, :sleep => arg[:bmp_sleep]) if config['bmp']
       end
 
       # Origin validation, or nil without an rpki: key.
       attr_reader :rpki
+
+      # BMP's monitor, or nil without a bmp: key.
+      attr_reader :bmp
 
       def stopping? ; @stopping ; end
 
@@ -1315,11 +1323,15 @@ module BGP
         # asked for now, whatever state BGP is in.
         @bfd.start
         @rpki&.start
+        @bmp&.start
         self
       end
 
       def stop
         @stopping = true
+        # First, so each station gets its Termination before the sessions
+        # end, and not a Peer Down for each.
+        @bmp&.stop
         @rpki&.stop
         @bfd.stop
         @link_state_producer&.stop
