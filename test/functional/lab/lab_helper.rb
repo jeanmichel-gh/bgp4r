@@ -795,6 +795,41 @@ module LabHelper
     attr_reader :local, :as, :router_id, :peer, :peer_as, :port,
                 :listen_port, :vty_port, :dir
 
+    # **Every router not yet down, which the process stops as it exits.**
+    # A bgpd outlives the Ruby that started it, and keeps logging to its
+    # folder in /tmp, which is a tmpfs on the owner's VM. On 2026-11-26 a
+    # probe that skipped `down` left 40, 3.7G of logs, until /tmp was
+    # full. `down` takes a router off; the exit downs the rest.
+    #
+    # The exit hook is set by the first router, not when this file loads:
+    # test-unit runs the tests from an at_exit of its own, and Ruby runs
+    # the hooks last set first, so one set at load would run before the
+    # tests did (measured, Ruby 3.3.8). One set during a test runs after
+    # them. It runs on SIGTERM and SIGINT too, so `timeout` is covered;
+    # SIGKILL is not.
+    @running = []
+
+    class << self
+      attr_reader :running
+
+      def track(router)
+        unless @exit_set
+          @exit_set = true
+          owner = Process.pid
+          # Only in the process that made them: a fork inherits the list
+          # and must not stop its parent's routers.
+          at_exit { stop_running if Process.pid == owner }
+        end
+        @running << router
+      end
+
+      def untrack(router) ; @running.delete(router) ; end
+
+      def stop_running
+        @running.dup.each(&:down)
+      end
+    end
+
     # The prefix it originates, changed between a crash and the next
     # `up`, so a restart can come back without a route it had.
     attr_writer :network
@@ -877,6 +912,7 @@ module LabHelper
       @listen_port = Local.free_port
       @vty_port = Local.free_port
       @dir = Dir.mktmpdir('bgp4r-frr')
+      self.class.track(self)
     end
 
     def config
@@ -1059,6 +1095,7 @@ module LabHelper
     ensure
       @pid = nil
       FileUtils.rm_rf(@dir)
+      self.class.untrack(self)
     end
 
     # Kills bgpd with SIGKILL, which is a crash: it sends no Cease, and

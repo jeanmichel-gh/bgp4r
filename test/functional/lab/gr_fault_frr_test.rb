@@ -195,8 +195,9 @@ class LabGrFaultFrrTest < Test::Unit::TestCase
   def test_probe
     omit('GR_PROBE=1 to measure') unless PROBE
     BGP::Fault.behaviour_catalog.select { |b| b[:needs] }.each do |b|
-      start(n: b[:needs] == :n, restart_time: 3, stale_time: 3)
+      # Before start, so a behaviour left out starts no bgpd.
       next if ENV['GR_ONLY'] && !ENV['GR_ONLY'].split(',').include?(b[:name].to_s)
+      start(n: b[:needs] == :n, restart_time: 3, stale_time: 3)
       @router.configure('debug bgp graceful-restart')
       mark = @router.log.size
       @sim.act('behaviour', 'name' => b[:name].to_s, 'drop' => [DROP], 'away' => 1)

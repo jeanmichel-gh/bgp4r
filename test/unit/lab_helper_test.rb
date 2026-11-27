@@ -369,4 +369,53 @@ class LabHelperTest < Test::Unit::TestCase
     assert(F::RPKI_MODULES.any? { |g| File.fnmatch(g, '/usr/lib/frr/modules/bgpd_rpki.so') })
     assert_equal(F::RPKI_MODULES.any? { |g| !Dir.glob(g).empty? }, F.rpki?)
   end
+
+  # A test that forgets `down` must not leave bgpd running after the
+  # test process exits. On 2026-11-26 gr_fault_frr_test.rb's probe left
+  # 40 of them, each logging to its folder in /tmp until /tmp was full.
+  #
+  # A child process stands in for a test run: it makes a router, gives it
+  # a `sleep` for its bgpd, and exits without `down`. Setting @pid is the
+  # one shortcut, because `up` needs a real bgpd to answer its vty.
+  def test_a_router_left_running_is_stopped_when_the_process_exits
+    child = <<~'RUBY'
+      require './test/functional/lab/lab_helper'
+      r = LabHelper::Frr.new
+      r.instance_variable_set(:@pid, Process.spawn('sleep', '60', out: File::NULL, err: File::NULL))
+      puts [r.instance_variable_get(:@pid), r.dir].join(' ')
+    RUBY
+    out, status = Open3.capture2e(RbConfig.ruby, '-e', child, chdir: LabHelper::ROOT)
+    assert(status.success?, out)
+    pid, dir = out.split
+    pid = Integer(pid)
+    gone = wait_until(5) do
+      Process.kill(0, pid)
+      false
+    rescue Errno::ESRCH
+      true
+    end
+    Process.kill('KILL', pid) unless gone
+    assert(gone, 'the stand-in bgpd outlived the process that started it')
+    assert(!File.exist?(dir), "its folder #{dir} is still there")
+  end
+
+  # Within the process, `down` takes a router off the list the exit
+  # stops, so a router already down is not stopped twice.
+  def test_down_takes_a_router_off_the_exit_list
+    r = F.new
+    assert(F.running.include?(r))
+    r.down
+    assert(!F.running.include?(r))
+  end
+
+  private
+
+  def wait_until(seconds)
+    deadline = Time.now + seconds
+    until (ok = yield)
+      break if Time.now > deadline
+      sleep 0.05
+    end
+    ok
+  end
 end
