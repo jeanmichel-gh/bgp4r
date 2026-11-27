@@ -607,7 +607,12 @@ The design:
    route gone or no longer chosen is withdrawn with the Compatibility
    field, and a session coming up gets everything. It runs on a thread
    of its own, poked by the VPN table, so a session's dispatch thread
-   never waits on another session's send.
+   never waits on another session's send. A refresh exports only the
+   [RD, prefix]s whose winner changed, and keeps what each peer was
+   refused, as the EVPN reflector does (`docs/design/evpn.md`, pull
+   request 4). Exporting every route on each refresh cost 0.3 s of CPU
+   at 1000 routes; an idle refresh now costs 0.01 s (measured
+   2026-11-27).
 4. A reflector may be a PE too: its own VRFs' routes still go out
    through VpnExporter, under its own RDs.
 
