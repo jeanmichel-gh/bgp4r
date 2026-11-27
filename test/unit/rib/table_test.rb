@@ -422,6 +422,60 @@ class TestBgpRibTable < Test::Unit::TestCase
     assert_equal(2, @rib.adj_rib_in(E1).size, 'a second restart keeps them too')
   end
 
+  # Origin validation, as bgp/daemon/rpki.rb answers it, with a state
+  # set by prefix.
+  class Rov
+    attr_accessor :invalid, :states
+    def initialize(invalid) ; @invalid, @states = invalid, {} ; end
+    def state(route) ; @states.fetch(route.prefix, :not_found) ; end
+    def word(route) ; state(route).to_s ; end
+  end
+
+  def marked(peer, value)
+    attrs = [Origin.new(0), Next_hop.new(peer.address), As_path.new(*(peer.ebgp? ? [peer.remote_as] : [])),
+             Extended_communities.new(Origin_validation_state.new(value), Route_target.new(1, 1))]
+    Route.new('10.1.0.0/16', Path_attribute.new(*attrs), peer)
+  end
+
+  # RFC 8097 section 2: from an external peer the community is dropped,
+  # with origin validation on. Without it, and from an internal peer, it
+  # stays.
+  def test_rfc_8097_community_from_an_external_peer_is_dropped
+    @rib.validator = Rov.new('accept')
+    @rib.announce(marked(E1, :valid))
+    ec = @rib.candidates('10.1.0.0/16').first.path_attribute[Extended_communities]
+    assert_equal([Route_target], ec.communities.collect(&:class), 'the other community stays')
+    @rib.announce(marked(I1, :valid))
+    assert(Export.validation_state?(@rib.candidates('10.1.0.0/16').find { |r| r.peer == I1 }.path_attribute))
+    only = Route.new('10.2.0.0/16', Path_attribute.new(Origin.new(0), Next_hop.new('10.0.0.2'), As_path.new(65002),
+                                                         Extended_communities.new(Origin_validation_state.new(:valid))), E1)
+    @rib.announce(only)
+    assert(!@rib.candidates('10.2.0.0/16').first.path_attribute.has?(Extended_communities), 'and the attribute, empty')
+    rt = Route.new('10.3.0.0/16', Path_attribute.new(Origin.new(0), Next_hop.new('10.0.0.2'), As_path.new(65002),
+                                                     Extended_communities.new(Route_target.new(1, 1))), E1)
+    @rib.announce(rt)
+    assert_same(rt, @rib.candidates('10.3.0.0/16').first, 'no copy without the community')
+    plain = BGP::Rib.new(local_as: LOCAL_AS, router_id: '1.1.1.1')
+    plain.announce(marked(E1, :valid))
+    assert(Export.validation_state?(plain.candidates('10.1.0.0/16').first.path_attribute))
+  end
+
+  # RFC 6811 section 4: revalidate decides the prefixes again.
+  def test_revalidate
+    rov = Rov.new('reject')
+    @rib.validator = rov
+    assert_same(rov, @rib.decision.validator)
+    @rib.announce(route(E1))
+    rov.states['10.1.0.0/16'] = :invalid
+    assert(@rib.best('10.1.0.0/16'), 'nothing decided yet')
+    assert_equal([:withdrawn], @rib.revalidate(['10.1.0.0/16', '10.1.0.0/16']).map(&:type))
+    assert_nil(@rib.best('10.1.0.0/16'))
+    assert_equal('invalid', @rib.validation(route(E1)))
+    rov.states.clear
+    assert_equal([:added], @rib.revalidate(['10.1.0.0/16']).map(&:type))
+    assert_equal([], @rib.revalidate(['10.9.0.0/16']))
+  end
+
   private
 
   def model_check(seed, steps)

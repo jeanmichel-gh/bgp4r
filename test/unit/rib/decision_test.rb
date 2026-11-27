@@ -241,6 +241,51 @@ class TestBgpRibDecision < Test::Unit::TestCase
     assert_nil(d.best([route(EBGP_A, cluster_list: ['1.1.1.1'])]).eliminated.values.first)
   end
 
+  # Origin validation as bgp/daemon/rpki.rb answers it: a route AS 65666
+  # originates is Invalid, AS 65777 Valid, any other NotFound.
+  Rov = Struct.new(:invalid) do
+    def state(route)
+      { 65_666 => :invalid, 65_777 => :valid }.fetch(route.origin_asn(LOCAL_AS), :not_found)
+    end
+  end
+
+  # invalid: prefer_less, before LOCAL_PREF: an Invalid route loses to a
+  # Valid or a NotFound one, and wins when all are Invalid.
+  def test_rpki_prefer_less
+    d = decision(validator: Rov.new('prefer_less'))
+    ibgp = peer('10.0.0.1', LOCAL_AS, '0.0.0.1')
+    bad = route(ibgp, local_pref: 300, as_path: [65666])
+    assert_wins(route(EBGP_A), bad, :rpki_invalid, d)
+    assert_wins(route(EBGP_A, as_path: [65002, 65777]), bad, :rpki_invalid, d)
+    assert_wins(bad, route(EBGP_A, as_path: [65002, 65666]), :local_pref, d)
+    assert_same(bad, d.best([bad]).best, 'alone, it is the best')
+    assert_nil(d.ineligible_reason(bad))
+  end
+
+  # invalid: reject: Invalid is not used at all.
+  def test_rpki_reject
+    d = decision(validator: Rov.new('reject'))
+    bad = route(EBGP_A, as_path: [65002, 65666])
+    res = d.best([bad])
+    assert_equal([nil, :no_usable_route, { bad => :rpki_reject }], [res.best, res.reason, res.eliminated])
+    good = route(EBGP_B)
+    assert_equal([good, :only_route], d.best([bad, good]).to_a.first(2))
+    assert_nil(d.ineligible_reason(route(EBGP_A, as_path: [65002, 65777])))
+  end
+
+  # invalid: accept, or no validator: the state changes nothing.
+  def test_rpki_accept_changes_nothing
+    ibgp = peer('10.0.0.1', LOCAL_AS, '0.0.0.1')
+    bad = route(ibgp, local_pref: 300, as_path: [65666])
+    [decision(validator: Rov.new('accept')), decision].each do |d|
+      assert_wins(bad, route(EBGP_A), :local_pref, d)
+      assert_nil(d.ineligible_reason(bad))
+    end
+    d = decision
+    d.validator = Rov.new('reject')
+    assert_equal(:rpki_reject, d.ineligible_reason(bad), 'set after it was built')
+  end
+
   def test_steps_come_in_rfc_order
     # LOCAL_PREF before AS_PATH, AS_PATH before ORIGIN, ORIGIN before MED.
     a2 = peer('10.0.0.9', 65002, '9.9.9.9')

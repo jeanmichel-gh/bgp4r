@@ -38,6 +38,11 @@ module BGP
     # and ties go through the elimination steps of section 9.1.2.2, with the
     # route reflection changes of RFC 4456 section 9.
     #
+    # With a validator (RFC 6811 origin validation, bgp/daemon/rpki.rb),
+    # `invalid: prefer_less` adds a first step and `invalid: reject` a
+    # fifth reason a route may not be used. With none, or with `accept`,
+    # neither does anything.
+    #
     # Each step removes routes from the whole set at once, as the RFC
     # describes, so the result does not depend on the order of the routes.
     #
@@ -51,13 +56,16 @@ module BGP
 
       # The tie breaking steps, in order (RFC 4271 section 9.1.2.2, RFC 4456
       # section 9). :path_id is ours: it orders add-path routes from one peer.
+      # :rpki_invalid is `invalid: prefer_less`, before LOCAL_PREF
+      # (docs/design/bgp-operations.md 7c).
       STEPS = %i[
-        local_pref as_path_length origin med ebgp_over_ibgp igp_cost
+        rpki_invalid local_pref as_path_length origin med ebgp_over_ibgp igp_cost
         router_id cluster_list_length peer_address path_id
       ].freeze
 
-      # Why a route may not take part at all.
-      INELIGIBLE = %i[next_hop_unreachable as_loop originator_id_loop cluster_list_loop].freeze
+      # Why a route may not take part at all. :rpki_reject is an Invalid
+      # route under `invalid: reject`.
+      INELIGIBLE = %i[next_hop_unreachable as_loop originator_id_loop cluster_list_loop rpki_reject].freeze
 
       # best: the winning Route, or nil. reason: the step that left only
       # best, :only_route, or :no_usable_route. eliminated: every other
@@ -66,15 +74,21 @@ module BGP
 
       attr_reader :local_as, :router_id, :cluster_id
 
+      # Origin validation: an object answering `state(route)`, :valid,
+      # :invalid or :not_found, and `invalid`, 'accept', 'prefer_less' or
+      # 'reject'; or nil.
+      attr_accessor :validator
+
       # local_as, router_id: ours.
       # cluster_id: ours as a route reflector; defaults to router_id (RFC 4456 section 7).
       # resolver: next_hop -> IGP cost (an Integer), or nil if unreachable.
       #   The default says every next hop is reachable at cost 0.
       # always_compare_med: compare MED across neighboring ASes too.
       # missing_med_worst: a route without MED gets the highest MED, not 0.
+      # validator: see validator.
       def initialize(local_as:, router_id:, cluster_id: nil, resolver: nil,
                      default_local_pref: DEFAULT_LOCAL_PREF,
-                     always_compare_med: false, missing_med_worst: false)
+                     always_compare_med: false, missing_med_worst: false, validator: nil)
         @local_as = Integer(local_as)
         @router_id = IPAddr.new(router_id.to_s).to_s
         @cluster_id = cluster_id ? IPAddr.new(cluster_id.to_s).to_s : @router_id
@@ -82,6 +96,7 @@ module BGP
         @default_local_pref = Integer(default_local_pref)
         @always_compare_med = always_compare_med
         @missing_med_worst = missing_med_worst
+        @validator = validator
       end
 
       # Why route may not be used, or nil if it may.
@@ -92,6 +107,8 @@ module BGP
         # RFC 4456 section 8: a reflected route that came back to us.
         return :originator_id_loop if route.originator_id == @router_id
         return :cluster_list_loop if route.cluster_list.include?(@cluster_id)
+        # RFC 6811 section 2 allows it when "explicitly configured to do so".
+        return :rpki_reject if rpki_invalid?('reject', route)
         nil
       end
 
@@ -134,10 +151,22 @@ module BGP
 
       private
 
+      # True when the validator is set to mode and route is Invalid.
+      def rpki_invalid?(mode, route)
+        @validator && @validator.invalid == mode && @validator.state(route) == :invalid
+      end
+
       def keep_min(routes)
         values = routes.map { |r| [r, yield(r)] }
         min = values.map(&:last).min
         values.select { |_, v| v == min }.map(&:first)
+      end
+
+      # `invalid: prefer_less`: an Invalid route loses to any route that
+      # is Valid or NotFound. Our own step, before RFC 4271's.
+      def keep_by_rpki_invalid(routes)
+        kept = routes.reject { |r| rpki_invalid?('prefer_less', r) }
+        kept.empty? ? routes : kept
       end
 
       # RFC 4271 section 9.1.2: highest degree of preference.

@@ -107,14 +107,17 @@ module BGP
       # policy: a block taking (route, peer, path_attribute) and returning
       #   the attributes to send, a changed copy, or nil to refuse. It runs
       #   last, after every rule here.
+      # rpki: origin validation (bgp/daemon/rpki.rb), an object answering
+      #   `state(route)` and `mark_ibgp?`; see validation_state.
       def initialize(local_as:, router_id:, default_local_pref: Decision::DEFAULT_LOCAL_PREF,
-                     route_reflector: false, clients: nil, cluster_id: nil, policy: nil)
+                     route_reflector: false, clients: nil, cluster_id: nil, policy: nil, rpki: nil)
         @local_as = Integer(local_as)
         @router_id = IPAddr.new(router_id.to_s).to_s
         @default_local_pref = default_local_pref
         @route_reflector = route_reflector ? true : false
         @cluster_id = IPAddr.new((cluster_id || @router_id).to_s).to_s
         @policy = policy
+        @rpki = rpki
         # A Hash rather than a Set, so this needs no require: Ruby keeps
         # moving standard libraries to bundled gems (see Conventions).
         @clients = nil
@@ -125,6 +128,21 @@ module BGP
       end
 
       def route_reflector? ; @route_reflector ; end
+
+      # True when pa carries RFC 8097's origin validation state community.
+      def self.validation_state?(pa)
+        pa.has?(Extended_communities) && !pa[Extended_communities].find_all(Origin_validation_state).empty?
+      end
+
+      # Takes RFC 8097's community out of pa, and the attribute with it
+      # when nothing else is left in it.
+      def self.drop_validation_state(pa)
+        return pa unless pa.has?(Extended_communities)
+        ec = pa[Extended_communities]
+        ec.communities.reject! { |c| c.is_a?(Origin_validation_state) }
+        pa.delete(Extended_communities) if ec.communities.empty?
+        pa
+      end
 
       # True when peer is one of our route reflection clients.
       #
@@ -249,6 +267,25 @@ module BGP
       def attributes(route, peer, hop)
         pa = Path_attribute.new(route.path_attribute.encode(true, except: [Mp_reach, Mp_unreach]), true)
         peer.ebgp? ? to_external(pa, hop) : to_internal(pa, route, hop)
+        validation_state(pa, route, peer) if @rpki
+        pa
+      end
+
+      # RFC 8097 section 2, with origin validation on. Toward an internal
+      # peer, with mark_ibgp, a speaker "SHOULD attach the origin
+      # validation state extended community", one instance: ours replaces
+      # any the route came with. Toward an external one, "by default, an
+      # implementation SHOULD NOT send the community to EBGP peers".
+      def validation_state(pa, route, peer)
+        return Export.drop_validation_state(pa) if peer.ebgp?
+        return pa unless @rpki.mark_ibgp?
+        Export.drop_validation_state(pa)
+        mark = Origin_validation_state.new(@rpki.state(route))
+        if pa.has?(Extended_communities)
+          pa[Extended_communities].add(mark)
+        else
+          pa << Extended_communities.new(mark)
+        end
         pa
       end
 

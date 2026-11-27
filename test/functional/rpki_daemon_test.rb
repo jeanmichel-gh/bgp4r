@@ -90,7 +90,8 @@ class TestRpkiDaemon < Test::Unit::TestCase
     assert_equal(['up', 1, 9, 1, 2, 0], cache.values_at(:state, :version, :session_id, :serial, :vrps_v4, :vrps_v6))
     assert_equal([{ :prefix => '192.0.2.0/24', :max_length => 24, :asn => 65_001 },
                   { :prefix => '198.51.100.0/22', :max_length => 24, :asn => 65_099 }], views.rpki_vrps[:rows])
-    assert_equal({ :caches => 1, :synced => 1, :vrps_v4 => 2, :vrps_v6 => 0, :invalid => 'accept' }, views.status[:rpki])
+    assert_equal({ :caches => 1, :synced => 1, :vrps_v4 => 2, :vrps_v6 => 0, :invalid => 'accept', :mark_ibgp => false },
+                 views.status[:rpki])
     # A VRP added makes the Invalid one Valid, and one removed makes the
     # Valid one NotFound, through Serial Notify and Serial Query.
     @cache.change(announce: [{ 'prefix' => INVALID, 'asn' => 65_001 }], withdraw: [{ 'prefix' => VALID, 'asn' => 65_001 }])

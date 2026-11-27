@@ -267,13 +267,21 @@ module BGP
       end
 
       # What gives each unicast route its RPKI state, RFC 6811: an object
-      # answering `word(route)`, or nil when origin validation is off
-      # (bgp/daemon/rpki.rb).
-      attr_accessor :validator
+      # answering `word(route)`, and `state(route)` and `invalid` for the
+      # decision, or nil when origin validation is off
+      # (bgp/daemon/rpki.rb). It is the decision's.
+      def validator ; @decision.validator ; end
+      def validator=(v) ; sync { @decision.validator = v } ; end
+
+      # RFC 6811 section 4: decides prefixes again after a VRP change
+      # moved the state of their routes. Returns the Loc-RIB changes.
+      def revalidate(prefixes)
+        sync { prefixes.flat_map { |prefix| decide(prefix) } }
+      end
 
       # The route's state as the views word it, 'valid', 'invalid' or
       # 'notfound', or nil when origin validation is off.
-      def validation(route) ; @validator&.word(route) ; end
+      def validation(route) ; validator&.word(route) ; end
 
       # Every imported route whose prefix the block chooses, copied.
       def imported_routes
@@ -480,11 +488,19 @@ module BGP
       end
 
       # RFC 4271 section 5.1.5: LOCAL_PREF received from an eBGP peer must be
-      # ignored. Then the import block, if any.
+      # ignored. With origin validation on, RFC 8097 section 2: "By
+      # default, implementations MUST drop the origin validation state
+      # extended community if received from an External BGP (EBGP) peer".
+      # Then the import block, if any.
       def import(route)
         if route.peer.ebgp? && route.path_attribute.has?(Local_pref)
           pa = Path_attribute.new(route.path_attribute.encode(true), true)
           pa.delete(Local_pref)
+          route = route.with_path_attribute(pa)
+        end
+        if validator && route.peer.ebgp? && Export.validation_state?(route.path_attribute)
+          pa = Path_attribute.new(route.path_attribute.encode(true), true)
+          Export.drop_validation_state(pa)
           route = route.with_path_attribute(pa)
         end
         @import ? @import.call(route) : route

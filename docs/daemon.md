@@ -308,7 +308,8 @@ mark:                              # added to routes made by hand; see route.ori
 
 rpki:                              # origin validation, RFC 6811; docs/rpki.md
   caches: [{ address: 10.0.0.9, port: 323, preference: 1 }]
-  invalid: accept                  # the only value built yet; the default
+  invalid: accept                  # accept (the default), prefer_less or reject
+  mark_ibgp: false                 # RFC 8097's community toward internal peers
 ```
 
 Notes on it, one key or block each.
@@ -317,9 +318,12 @@ Notes on it, one key or block each.
 `valid`, `invalid` or `notfound`, from the VRPs of RTR caches (RFC
 8210). The state shows on `show.routes`, `show.rib` and `show.adj_in`
 rows as `validation`, and `show.rpki` and `show.rpki_vrps` list the
-caches and the VRPs. Nothing else changes: RFC 6811 section 2 keeps a
-route in the decision "unless explicitly configured" otherwise.
-docs/rpki.md section 5 has it all.
+caches and the VRPs. With `invalid: accept` nothing else changes: RFC
+6811 section 2 keeps a route in the decision "unless explicitly
+configured" otherwise. `prefer_less` makes an Invalid route lose to any
+other, before LOCAL_PREF; `reject` leaves it out of the decision.
+`mark_ibgp` sends each route's state to internal peers in RFC 8097's
+community. docs/rpki.md section 5 has it all.
 
 `fib:` installs each best route with `ip route replace`, **except over a
 route another program holds.** A connected route, a static one or an
@@ -1923,23 +1927,28 @@ document first gave were wrong and are corrected in them, both found in
 * `show.status`'s peer row is mostly a **session** fact, and the split is
   written out above the `show.routes` example.
 
-`lost_at` is one of **fifteen** values the decision process already uses,
+`lost_at` is one of **seventeen** values the decision process already uses,
 measured on 2026-11-01 rather than written from memory, and this said
-fourteen until the fifteenth was measured in #230. Ten tie-break steps,
+fourteen until the fifteenth was measured in #230. Eleven tie-break steps,
 in `Decision::STEPS` order:
 
 ```
-local_pref  as_path_length  origin  med  ebgp_over_ibgp  igp_cost
-router_id  cluster_list_length  peer_address  path_id
+rpki_invalid  local_pref  as_path_length  origin  med  ebgp_over_ibgp
+igp_cost  router_id  cluster_list_length  peer_address  path_id
 ```
 
-Four that drop a path before any comparison, `Decision::INELIGIBLE`:
+Five that drop a path before any comparison, `Decision::INELIGIBLE`:
 
 ```
 next_hop_unreachable  as_loop  originator_id_loop  cluster_list_loop
+rpki_reject
 ```
 
-And `duplicate`, the fifteenth, which `Decision#best` files when only
+`rpki_invalid` and `rpki_reject` are origin validation's, `rpki:` with
+`invalid: prefer_less` and `invalid: reject` (docs/rpki.md); without
+them neither is filed.
+
+And `duplicate`, the seventeenth, which `Decision#best` files when only
 identical routes are left after every step. **No Table can produce it**,
 because an imported route is keyed by its peer and its Path Identifier
 and a `Peer` is its address, so two candidates always differ at

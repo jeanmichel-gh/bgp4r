@@ -92,9 +92,9 @@ module BGP
       # Why a path is not the best one, in words for a person, one entry
       # per value Decision::Result#eliminated can carry.
       #
-      # The ten tie breaks of Decision::STEPS, the four reasons of
+      # The eleven steps of Decision::STEPS, the five reasons of
       # Decision::INELIGIBLE, and :duplicate. **docs/daemon.md said
-      # fourteen and the fifteenth is :duplicate**, which Decision#best
+      # fourteen and the fifteenth was :duplicate**, which Decision#best
       # files when only identical routes are left. It cannot be reached
       # through a Table, because an imported route is keyed by its peer
       # and Path Identifier and a Peer is its address, so two candidates
@@ -105,6 +105,7 @@ module BGP
       # they name the attribute rather than the step so a reader who does
       # not know bgp4r's symbols can still read them.
       LOST_WORDS = {
+        :rpki_invalid        => 'RPKI Invalid, where another path is Valid or NotFound',
         :local_pref          => 'lower LOCAL_PREF',
         :as_path_length      => 'longer AS_PATH',
         :origin              => 'higher ORIGIN',
@@ -119,6 +120,7 @@ module BGP
         :as_loop             => 'our own AS is in the AS_PATH',
         :originator_id_loop  => 'the ORIGINATOR_ID is our own router ID',
         :cluster_list_loop   => 'our cluster ID is in the CLUSTER_LIST',
+        :rpki_reject         => 'RPKI Invalid, and Invalid routes are not used',
         :duplicate           => 'the same path arrived more than once'
       }.freeze
 

@@ -575,4 +575,37 @@ class TestBgpRibExport < Test::Unit::TestCase
     res = @export.for(r, I1)
     assert_equal([BGP::Origin, BGP::As_path, BGP::Local_pref], res.path_attribute.attributes.collect(&:class))
   end
+
+  # Origin validation, as bgp/daemon/rpki.rb answers Export.
+  Rov = Struct.new(:mark_ibgp?, :value) do
+    def state(_route) ; value ; end
+  end
+
+  def ov(pa) ; pa.has?(BGP::Extended_communities) ? pa[BGP::Extended_communities].find_all(BGP::Origin_validation_state).collect(&:validation_state) : [] ; end
+
+  # RFC 8097 section 2: with mark_ibgp, one community toward an internal
+  # peer, ours in place of any the route came with; never toward an
+  # external one; untouched without origin validation.
+  def test_rfc_8097_community
+    attrs = [BGP::Origin.new(0), BGP::Next_hop.new('10.0.0.4'), BGP::As_path.new,
+             BGP::Extended_communities.new(BGP::Origin_validation_state.new(:valid), BGP::Origin_validation_state.new(:not_found),
+                                           BGP::Route_target.new(1, 1))]
+    came = route(I1, '10.1.0.0/16', attrs)
+    plain = route(E1)
+    mark = BGP::Rib::Export.new(:local_as => LOCAL_AS, :router_id => OURS, :route_reflector => true,
+                                :rpki => Rov.new(true, :invalid))
+    pa = mark.for(came, I2).path_attribute
+    assert_equal([:invalid], ov(pa))
+    assert_equal(2, pa[BGP::Extended_communities].communities.size, 'the Route Target stays')
+    assert_equal([:invalid], ov(mark.for(plain, I1).path_attribute), 'added to a route with none')
+    assert_equal([[], []], [ov(mark.for(came, E2, :next_hop => '10.0.0.1').path_attribute),
+                            ov(mark.for(plain, E2, :next_hop => '10.0.0.1').path_attribute)])
+    assert_equal([:valid, :not_found], ov(came.path_attribute), 'the route itself is untouched')
+    keep = BGP::Rib::Export.new(:local_as => LOCAL_AS, :router_id => OURS, :route_reflector => true,
+                                :rpki => Rov.new(false, :invalid))
+    assert_equal([:valid, :not_found], ov(keep.for(came, I2).path_attribute), 'without mark_ibgp it passes')
+    assert_equal([], ov(keep.for(came, E2, :next_hop => '10.0.0.1').path_attribute))
+    none = BGP::Rib::Export.new(:local_as => LOCAL_AS, :router_id => OURS)
+    assert_equal([:valid, :not_found], ov(none.for(came, E2, :next_hop => '10.0.0.1').path_attribute))
+  end
 end

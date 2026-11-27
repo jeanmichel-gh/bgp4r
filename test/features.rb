@@ -350,6 +350,15 @@ module Features
       :functional => %w[rpki_daemon_test],
     },
 
+    'rpki-policy' => {
+      :area  => 'routing',
+      :about => "rpki:'s invalid: prefer_less and reject in the decision, a VRP change decided again, and mark_ibgp's origin validation state community",
+      :rfc   => 'RFC 6811 sections 2 and 4, RFC 8097 section 2',
+      :doc   => 'docs/rpki.md',
+      :unit  => %w[rib/decision_test rib/table_test rib/export_test rib/view_test daemon/rpki_test],
+      :functional => %w[rpki_policy_test],
+    },
+
     'rpki-cache' => {
       :area  => 'programs',
       :about => 'bgp4r-rtr, an RTR cache: VRPs from a YAML file, Serial Notify on a change, and the RTR faults and behaviours from its HTTP API',
