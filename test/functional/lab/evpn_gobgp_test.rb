@@ -22,6 +22,7 @@
 
 require 'test/unit'
 require 'bgp4r'
+require 'bgp/daemon'
 require 'test/functional/lab/lab_helper'
 
 # bgp4r sends an EVPN route, AFI 25 SAFI 70, and GoBGP says what it made
@@ -79,10 +80,13 @@ class EvpnGobgpTest < Test::Unit::TestCase
 
   # A bgp4r speaker listening on its own port, advertising AFI 25 SAFI 70
   # (RFC 4760), with a gobgpd configured for l2vpn-evpn dialling it.
-  def session
+  # table: an EVPN table to read what GoBGP sends, attached before the
+  # session comes up.
+  def session(table: nil)
     server = TCPServer.new('127.0.0.1', 0)
     n = BGP::Neighbor.new(4, OUR_AS, 180, '0.0.0.1', '127.0.0.2', '127.0.0.1')
     n.add_cap BGP::OPT_PARM::CAP::Mbgp.new(25, 70)
+    table&.attach(n)
     thread = Thread.new do
       begin
         while (s = server.accept)
@@ -358,6 +362,132 @@ class EvpnGobgpTest < Test::Unit::TestCase
     sleep 2
     assert(n.is_established?, "the session is still up\n#{router.log}")
     assert_equal({}, router.rib_family(G::EVPN), 'and GoBGP held nothing')
+  end
+
+
+  # ---- EVPN over MPLS: docs/design/evpn-mpls.md, pull request 2 ----
+  #
+  # Control plane only, both ways. **What bgp4r sends is built by
+  # bgp4rd's own exporter** for an MPLS MAC-VRF: Label1 and the PMSI
+  # Tunnel's label in the field's high 20 bits, and no Encapsulation
+  # community (decision 6). **What GoBGP sends is read by bgp4rd's own
+  # path**, the EVPN table and then an MPLS MAC-VRF, which says what it
+  # would write into vtep4rd.
+  #
+  # **GoBGP reads and writes the MPLS Label field as 24 bits whole**,
+  # measured on 2026-11-27 with GoBGP 3.23.0 and 4.10.0 alike. Our label
+  # 25000 comes back as 400001, which is 25000 shifted left by 4 with the
+  # bottom of stack bit. And the client's `label 25010` puts 25010 in the
+  # field as it is, `encap mpls` or not, so bgp4r reads label 1563 from
+  # it. So GoBGP is given the field's value, as an MPLS PE would write it.
+
+  # The MPLS PE GoBGP stands for: its RD, its labels as GoBGP is given
+  # them, and the PMSI Tunnel identifier it names.
+  MPLS_RT = '65000:300'.freeze
+  MPLS_VNI = 300
+  PE = '10.0.0.2'.freeze
+  PE_RD = "#{PE}:300".freeze
+  PE_HOST = '02:00:00:00:02:02'.freeze
+  PE_UNICAST = 26_000
+  PE_BUM = 26_001
+  # This PE: bgp4rd's MAC-VRF 300 and its two labels.
+  OUR_RD = '10.0.0.1:300'.freeze
+  OUR_HOST = '02:00:00:00:01:01'.freeze
+  OUR_UNICAST = 25_000
+  OUR_BUM = 25_001
+
+  MplsSession = Struct.new(:address) do
+    def ebgp? ; true ; end
+    def local_ip ; '10.0.0.1' ; end
+  end
+  MplsSpeaker = Struct.new(:peers, :my_as, :local_address, :router_id)
+
+  # The MPLS Label field as RFC 7432 section 7 and BGP::Label write it:
+  # the label in the high 20 bits, and bottom of stack when asked.
+  def field(label, bos)
+    label << 4 | (bos ? 1 : 0)
+  end
+
+  # GoBGP reads the routes a bgp4rd MPLS PE sends: Label1 in the high
+  # 20 bits with bottom of stack set, the PMSI Tunnel's label (RFC 7432
+  # section 11.2) the same without it, and no Encapsulation community,
+  # the Route Target alone (RFC 8365 section 5.1.3).
+  def test_gobgp_reads_what_a_bgp4rd_mpls_pe_sends
+    n, router = session
+    x = BGP::Rib::Macvrfs::Export
+    exporter = BGP::Daemon::EvpnExporter.new(MplsSpeaker.new([], OUR_AS, '10.0.0.1', '10.0.0.1'))
+    exporter.updates(MplsSession.new('127.0.0.2'),
+                     [x.new(MPLS_VNI, OUR_RD, 3, nil, nil, [MPLS_RT], 'mpls', OUR_BUM),
+                      x.new(MPLS_VNI, OUR_RD, 2, OUR_HOST, nil, [MPLS_RT], 'mpls', OUR_UNICAST)], []).each do |u|
+      n.send_update(u)
+    end
+    rib = nil
+    assert(wait_for { (rib = router.rib_family(G::EVPN)) && rib.size == 2 },
+           "GoBGP to hold both routes\n#{router.log}")
+    # By route type, since GoBGP 4 spells the RIB's keys otherwise.
+    best = rib.values.collect { |paths| paths.find { |p| p['best'] } || paths.first }
+                .to_h { |p| [p['nlri']['type'], p] }
+
+    mac = best.fetch(2)
+    assert_equal(OUR_HOST, nlri(mac)['mac'])
+    assert_equal([field(OUR_UNICAST, true)], nlri(mac)['labels'], 'Label1, read as the whole field')
+    imet = best.fetch(3)
+    pmsi = imet['attrs'].find { |a| a['type'] == 22 }
+    assert_equal({ 'tunnel-type' => 6, 'label' => field(OUR_BUM, false), 'tunnel-id' => '10.0.0.1' },
+                 pmsi.slice('tunnel-type', 'label', 'tunnel-id'), 'ingress replication, RFC 6514 section 5')
+    [mac, imet].each do |path|
+      ecs = path['attrs'].find { |a| a['type'] == 16 }['value']
+      assert_equal([{ 'type' => 0, 'subtype' => 2, 'value' => MPLS_RT }], ecs, 'the Route Target and no Encapsulation')
+    end
+  end
+
+  # bgp4rd takes the routes GoBGP sends as an MPLS PE: its type 2 with
+  # Encapsulation MPLS (tunnel type 10, RFC 8365 section 11), its type 3
+  # with none. The EVPN table reads each label in the high 20 bits, and
+  # an MPLS MAC-VRF would write the flood PE and the MAC into vtep4rd
+  # with GoBGP's labels, after its own.
+  def test_bgp4rd_takes_the_mpls_routes_gobgp_sends
+    table = BGP::Rib::EvpnTable.new(local_as: OUR_AS, router_id: '0.0.0.1')
+    _n, router = session(table: table)
+    [%W[macadv #{PE_HOST} 0.0.0.0 etag 0 label #{field(PE_UNICAST, true)} rd #{PE_RD} rt #{MPLS_RT} encap mpls],
+     %W[multicast #{PE} etag 0 rd #{PE_RD} rt #{MPLS_RT} pmsi ingress-repl #{field(PE_BUM, false)} #{PE}]].each do |args|
+      out, status = router.client_run('global', 'rib', '-a', 'evpn', 'add', *args)
+      assert(status.success?, "gobgp #{args.first}: #{out}")
+    end
+    assert(wait_for { table.size == 2 }, "bgp4r to hold both routes from GoBGP, held #{table.size}\n#{router.log}")
+    rows = table.rows.collect { |r| r.values_at('route_type', 'rd', 'mac', 'label', 'encap', 'pmsi', 'next_hop') }
+    assert_equal([[2, PE_RD, PE_HOST, PE_UNICAST, 'MPLS', nil, '127.0.0.2'],
+                  [3, PE_RD, nil, PE_BUM, nil, { 'type' => 'ingress_replication', 'id' => PE }, '127.0.0.2']], rows)
+
+    vtep = MplsRecorder.new
+    list = BGP::Rib::Macvrf.list([{ 'vni' => MPLS_VNI, 'encapsulation' => 'mpls', 'import' => [MPLS_RT] }],
+                                 address: '10.0.0.1', as: OUR_AS)
+    BGP::Rib::Macvrf.assign_labels(list, { 'start' => OUR_UNICAST, 'size' => 100 })
+    macvrfs = BGP::Rib::Macvrfs.new(table: table, vtep: vtep, address: '10.0.0.1', macvrfs: list)
+    macvrfs.sync!
+    assert_equal([nil, nil], table.rows.collect { |r| r['invalid'] }, 'no reason refuses either')
+    assert_equal([['vni.labels', { 'vni' => MPLS_VNI, 'unicast' => OUR_UNICAST, 'bum' => OUR_BUM }],
+                  ['vni.flood.add', { 'vni' => MPLS_VNI, 'vtep' => PE, 'label' => PE_BUM }],
+                  ['mac.add', { 'vni' => MPLS_VNI, 'mac' => PE_HOST, 'vtep' => '127.0.0.2', 'seq' => 0, 'label' => PE_UNICAST }]],
+                 vtep.orders)
+  end
+
+  # vtep4rd as an MPLS MAC-VRF sees it (vtep4r docs/mpls.md): VNI 300 in
+  # evpn mode as mpls, no labels yet, no MACs, and every order recorded.
+  class MplsRecorder
+    attr_reader :orders
+
+    def initialize ; @orders = [] ; end
+
+    def call(method, params)
+      case method
+      when 'show.vnis'
+        [{ 'vni' => MPLS_VNI, 'mode' => 'evpn', 'encap' => 'mpls', 'labels' => nil,
+           'flood_labels' => {}, 'remote_vteps' => [] }]
+      when 'show.macs' then []
+      else @orders << [method, params] ; {}
+      end
+    end
   end
 
 end

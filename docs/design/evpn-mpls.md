@@ -330,7 +330,7 @@ On `evpn-mpls-ruby`:
   no data plane peer, and an FRR VXLAN leaf must not share a Route
   Target with an MPLS MAC-VRF. Decision 6 makes no difference to FRR.
 
-**Pull request 1, bgp4r** (this pull request):
+**Pull request 1, bgp4r** (#410):
 
 - `encapsulation: mpls` on a MAC-VRF; `evpn: labels:` gives two labels
   each, unicast then BUM, in the order of the list, as `l3vpn: labels`
@@ -351,6 +351,18 @@ On `evpn-mpls-ruby`:
 - `show.macvrfs` gives `encapsulation`, `labels` and `flood_labels`;
   `show.macvrf` a remote MAC's `label`; `show.evpn` each route's
   `label`.
+
+**Pull request 2, bgp4r** (this pull request): two cases in
+`evpn_gobgp_test.rb`, against GoBGP 3.23.0 and 4.10.0 alike.
+
+- GoBGP reads an MPLS PE's routes from bgp4rd's exporter: Label1 and
+  the PMSI label in the high 20 bits, and the Route Target alone.
+- bgp4rd reads GoBGP's type 2 with Encapsulation MPLS and its type 3
+  with none, and an MPLS MAC-VRF writes their labels into vtep4rd.
+- **GoBGP's MPLS Label is the whole 24-bit field, both ways.** Its
+  client's `label 25010` writes 25010 as it is, `encap mpls` or not, so
+  bgp4r reads label 1563. The tests give GoBGP the field's value.
+- `coverage_matrix.rb`: GoBGP's EVPN verdict is `:both`.
 
 ## The measurement's script
 
