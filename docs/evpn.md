@@ -973,7 +973,7 @@ not take the list above for the whole of the RFCs:
 ## 9. Interoperability
 
 Measured on 2026-10-30 against **GoBGP 3.23.0** and **FRR 8.4.4**, and
-asserted by `test/functional/lab/evpn_gobgp_test.rb` (11 cases, about 70
+asserted by `test/functional/lab/evpn_gobgp_test.rb` (13 cases, about 95
 seconds) and `evpn_frr_test.rb` (9 cases, about a minute). Both run on
 loopback with no Docker. Nothing here is written down that a test does
 not assert, which is the rule the hand-measured conformance table earned
@@ -1078,9 +1078,34 @@ owner's VM on 2026-11-25).
   made. routescope's lab 3, `evpn-vxlan-frr`, is where FRR's own routes
   meet bgp4rd.
 
-**Both tests send only, but for one case, and that is worth knowing
-before trusting them.** The one case is
-`test_bgp4rd_reads_the_evpn_routes_frr_sends`, above; it was not tried
+**A bgp4rd MPLS PE and GoBGP, both ways** (`docs/design/evpn-mpls.md`,
+pull request 2; two more cases in `evpn_gobgp_test.rb`, measured on
+2026-11-27 against GoBGP 3.23.0 and 4.10.0, the same answers).
+
+- **GoBGP reads what an MPLS PE sends.** The UPDATEs are built by
+  bgp4rd's own `EvpnExporter` for an MPLS MAC-VRF.
+  - Type 2: Label1 reads `[400001]`, our label 25000 in the high 20
+    bits with the bottom of stack bit.
+  - Type 3: the PMSI Tunnel reads tunnel type 6 and label 400016, our
+    25001 in the high 20 bits.
+  - The extended communities are the Route Target alone: no
+    Encapsulation community (decision 6 of the spec).
+- **bgp4rd reads what GoBGP sends as an MPLS PE.** GoBGP originates a
+  type 2 with Encapsulation MPLS (tunnel type 10) and a type 3 with
+  none. bgp4rd's EVPN table reads labels 26000 and 26001, and an MPLS
+  MAC-VRF takes both. It writes `vni.labels` with its own labels, then
+  `vni.flood.add` with label 26001 and `mac.add` with label 26000.
+- **GoBGP's MPLS Label is the whole 24-bit field, both ways.** Its
+  client's `label 25010` writes 25010 in the field as it is, with
+  `encap mpls` or without, and bgp4r reads label 1563 from it. So the
+  tests give GoBGP the field's value, 26000 shifted left by 4 with the
+  bottom of stack bit. A PE that took GoBGP's `label` for an MPLS label
+  would push the wrong one.
+
+**Both tests send only, but for two cases, and that is worth knowing
+before trusting them.** The two are
+`test_bgp4rd_reads_the_evpn_routes_frr_sends`, above, and the MPLS case
+`test_bgp4rd_takes_the_mpls_routes_gobgp_sends`; neither was tried
 against the revert below. Every other case asserts a router's reading
 of what bgp4r put on the wire, so
 reverting `nlri_size` to the pre-wiring prefix arithmetic leaves both

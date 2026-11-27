@@ -115,8 +115,11 @@ module CoverageMatrix
     # PMSI Tunnel, MAC Mobility, ET:8) and sends a leaf's routes on to a
     # second session, which bgp4rd's EVPN table and MAC-VRFs read back:
     # FRR's own encoding of them (docs/design/evpn.md, pull request 5).
-    # It does not originate types 2 and 3 without zebra.
-    'evpn'         => { :gobgp => :send,    :frr => :both,
+    # It does not originate types 2 and 3 without zebra. GoBGP reads an
+    # MPLS PE's UPDATEs from the same exporter and originates types 2 and
+    # 3 with MPLS labels, which the EVPN table and an MPLS MAC-VRF read
+    # back (docs/design/evpn-mpls.md, pull request 2).
+    'evpn'         => { :gobgp => :both,    :frr => :both,
                         :doc => 'docs/evpn.md' },
     'bgp-ls'       => { :gobgp => :both,    :frr => :absence,
                         :doc => 'docs/bgp-ls.md' },
