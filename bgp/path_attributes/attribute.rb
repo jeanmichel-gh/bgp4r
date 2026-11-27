@@ -75,8 +75,12 @@ module BGP
     OPTIONAL_TRANSITIVE      = OPTIONAL | TRANSITIVE
     OPTIONAL_NON_TRANSITIVE  = OPTIONAL
     
+    # Two octets when the length needs them, or when the attribute was
+    # read with them: RFC 4271 section 4.3 lets a speaker set Extended
+    # Length on any attribute, and FRR does on AS_PATH. Cleared, an
+    # attribute read off the wire did not encode back to its octets.
     def len_fmt(len)
-      if len>255
+      if len>255 || (defined?(@wire_extended) && @wire_extended)
         @flags |= EXTENDED_LENGTH
         @_len_fmt='n'
       else
@@ -123,6 +127,7 @@ module BGP
     def _parse_(s,vf=nil)
       value, arr = '', []
       flags = s.unpack('C')[0]
+      @wire_extended = flags & 0x10 > 0
       if flags & 0x10>0
         arr = s.unpack("CCn")
         len = arr[2]

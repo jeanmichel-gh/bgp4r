@@ -284,4 +284,16 @@ class Attr_override_Test < Test::Unit::TestCase
     assert_equal('c0080600010001' + '00ff', com.to_shex)
   end
 
+
+  # RFC 4271 section 4.3: Extended Length on a short attribute. Read off
+  # the wire, an attribute keeps the two-octet length it came with, as
+  # FRR 10.5.1 sends AS_PATH, so it encodes back to the same octets.
+  # Built, it has the one octet its length needs.
+  def test_extended_length_read_is_kept
+    path = BGP::As_path.new(['5002 0006 0201 0000fdea'.delete(' ')].pack('H*').is_packed, true)
+    assert_equal('5002000602010000fdea', path.encode(true).unpack1('H*'))
+    assert_equal('4002060201' + '0000fdea', BGP::As_path.new(65_002).encode(true).unpack1('H*'))
+    assert_equal('900400040000000a', BGP::Multi_exit_disc.new(['9004 0004 0000000a'.delete(' ')].pack('H*').is_packed).to_shex)
+    assert_equal('8004040000000a', BGP::Multi_exit_disc.new(['8004 04 0000000a'.delete(' ')].pack('H*').is_packed).to_shex)
+  end
 end

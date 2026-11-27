@@ -708,6 +708,39 @@ module ToHashCatalog
   end
   ENTRIES['BGP::Rtr::Unknown'] = entry(:ok, nil, nil) { BGP::Rtr::Unknown.new(99, 1, 0xabcd, "\x01\x02") }
 
+  # BMP, RFC 7854 and RFC 9069 (bgp/bmp/messages.rb). Each message from
+  # its hash; a Stat only through its message's reader, Stat.from.
+  BMP_PEER = BGP::Bmp::Per_peer.new('2001:db8::2', 65_002, '192.0.2.2', 1, BGP::Bmp::FLAG_V | BGP::Bmp::FLAG_L,
+                                    '0000fdea00000001', 1_700_000_000, 5)
+  BMP_OPEN = BGP::Open.new(4, 65_001, 180, '192.0.2.1', BGP::OPT_PARM::CAP::As4.new(65_001))
+  ENTRIES['BGP::Bmp::Per_peer'] = entry(:ok, nil, nil) { BMP_PEER }
+  ENTRIES['BGP::Bmp::Initiation'] = entry(:ok, nil, nil) do
+    BGP::Bmp::Initiation.new({ :type => 0, :string => 'a' }, { :type => 1, :string => 'r' }, { :type => 2, :string => 'n' },
+                             { :type => 9, :hex => 'ab' })
+  end
+  ENTRIES['BGP::Bmp::Termination'] = entry(:ok, nil, nil) do
+    BGP::Bmp::Termination.new({ :type => 1, :code => 3 }, { :type => 0, :string => 'x' })
+  end
+  ENTRIES['BGP::Bmp::Route_monitoring'] = entry(:ok, nil, nil) do
+    pa = BGP::Path_attribute.new(BGP::Origin.new(0), BGP::As_path.new(65_002), BGP::Next_hop.new('192.0.2.2'))
+    BGP::Bmp::Route_monitoring.new(BMP_PEER, BGP::Update.new(pa, BGP::Nlri.new('10.0.0.0/8'), BGP::Withdrawn.new('10.1.0.0/16')))
+  end
+  ENTRIES['BGP::Bmp::Stats_report'] = entry(:ok, nil, nil) do
+    BGP::Bmp::Stats_report.new(BMP_PEER, [0, 1], [8, 2**40], [10, 3, 2, 128], { :type => 65_531, :hex => '0102' })
+  end
+  ENTRIES['BGP::Bmp::Stats_report::Stat'] = entry(:elsewhere, 'its own new is the Struct\'s, which takes fields',
+                                                  :keep, ->(h) { BGP::Bmp::Stats_report::Stat.from(h).encode }) do
+    BGP::Bmp::Stats_report::Stat.new(9, 7, 2, 1)
+  end
+  ENTRIES['BGP::Bmp::Peer_down'] = entry(:ok, nil, nil) { BGP::Bmp::Peer_down.new(BMP_PEER, 3, BGP::Notification.new(6, 2, 'x')) }
+  ENTRIES['BGP::Bmp::Peer_up'] = entry(:ok, nil, nil) do
+    BGP::Bmp::Peer_up.new(BMP_PEER, '2001:db8::1', 179, 50_000, BMP_OPEN, BMP_OPEN, { :type => 3, :string => 'global' })
+  end
+  ENTRIES['BGP::Bmp::Route_mirroring'] = entry(:ok, nil, nil) do
+    BGP::Bmp::Route_mirroring.new(BMP_PEER, { :type => 1, :code => 0 }, BGP::Keepalive.new)
+  end
+  ENTRIES['BGP::Bmp::Unknown'] = entry(:ok, nil, nil) { BGP::Bmp::Unknown.new(99, "\x01\x02".b) }
+
   ENTRIES['BGP::Route_refresh'] = entry(:ok, nil, nil) do
     BGP::Route_refresh.new(2, 128, :eorr)
   end
@@ -1940,6 +1973,12 @@ module ToHashCatalog
       'is. type and hash_key read self.class::TYPE and HASH_KEY and it ' \
       'defines neither. Reporter, Reason_code, Timestamp and Unknown ' \
       'are measured.',
+    'BGP::Bmp::Message' =>
+      'an abstract base: type reads self.class::TYPE, which only its ' \
+      'subclasses define. Every message type is measured.',
+    'BGP::Bmp::Peer_message' =>
+      'an abstract base for the five messages with a per-peer header, ' \
+      'with no TYPE of its own. All five are measured.',
     'BGP::Rtr::Pdu' =>
       'an abstract base: type reads self.class::TYPE, which only its ' \
       'subclasses define. Every PDU type is measured.',

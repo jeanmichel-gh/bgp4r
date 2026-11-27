@@ -333,6 +333,14 @@ module Features
       :lab   => %w[route_refresh_frr_test],
     },
 
+    'bmp-codec' => {
+      :area  => 'session',
+      :about => 'the BMP messages of RFC 7854 and RFC 9069, their findings, and BGP::Fault::BMP',
+      :rfc   => 'RFC 7854 sections 4 and 5, RFC 9069 sections 4 and 5',
+      :doc   => 'docs/bmp.md',
+      :unit  => %w[bmp/messages_test bmp/validation_test fault_test to_hash_round_trip_test path_attributes/attribute_test],
+    },
+
     'rpki-rtr' => {
       :area  => 'session',
       :about => 'the RTR PDUs of RFC 8210 and RFC 6810, their findings, and BGP::Fault::RTR',
