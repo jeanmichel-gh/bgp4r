@@ -250,7 +250,7 @@ module BGP
         # types under one set of attributes.
         seq, sticky = v.mobility if v.route_type == 2
         { 'key' => v.decision_key, 'rd' => v.rd, 'route_type' => v.route_type, 'eth_tag' => v.eth_tag,
-          'mac' => v.mac, 'ip' => v.ip, 'originator' => v.originator, 'esi' => v.esi, 'vni' => v.vni,
+          'mac' => v.mac, 'ip' => v.ip, 'originator' => v.originator, 'esi' => v.esi, 'vni' => v.vni, 'label' => v.label,
           'path_id' => v.path_id, 'peer' => peer, 'next_hop' => r.next_hop,
           'route_targets' => v.route_targets, 'encap' => v.encap, 'seq' => seq, 'sticky' => sticky,
           'pmsi' => (v.pmsi_row if v.route_type == 3), 'as_path' => r.as_path, 'origin' => r.origin, 'local_pref' => r.local_pref,

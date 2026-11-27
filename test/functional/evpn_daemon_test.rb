@@ -56,10 +56,15 @@ class BGP_Evpn_Daemon_Functional_Test < Test::Unit::TestCase
   # lines, show.vnis and show.macs answered from its tables, and every
   # other request recorded and applied. One VNI, 100, in evpn mode.
   class FakeVtep
-    attr_reader :orders, :flood, :macs
+    attr_reader :orders, :flood, :macs, :labels, :flood_labels
 
-    def initialize(path)
+    # encap: nil answers as a vtep4rd from before EVPN over MPLS; 'mpls'
+    # as vtep4r's docs/mpls.md, with its labels and flood_labels.
+    def initialize(path, encap: nil)
       @path = path
+      @encap = encap
+      @labels = nil
+      @flood_labels = {}
       @orders = Queue.new
       @flood = []
       @macs = {}
@@ -108,15 +113,24 @@ class BGP_Evpn_Daemon_Functional_Test < Test::Unit::TestCase
     def answer(method, p)
       @lock.synchronize do
         case method
-        when 'show.vnis' then [{ 'vni' => 100, 'mode' => 'evpn', 'remote_vteps' => @flood.dup }]
+        when 'show.vnis'
+          row = { 'vni' => 100, 'mode' => 'evpn', 'remote_vteps' => @flood.dup }
+          row.merge!('encap' => @encap, 'labels' => @labels, 'flood_labels' => @flood_labels.dup) if @encap
+          [row]
         when 'show.macs' then @macs.values.collect(&:dup)
         else
           @orders << [method, p]
           case method
-          when 'vni.flood.add' then @flood |= [p['vtep']]
-          when 'vni.flood.del' then @flood -= [p['vtep']]
+          when 'vni.flood.add'
+            @flood |= [p['vtep']]
+            @flood_labels[p['vtep']] = p['label'] if p['label']
+          when 'vni.flood.del'
+            @flood -= [p['vtep']]
+            @flood_labels.delete(p['vtep'])
+          when 'vni.labels' then @labels = { 'unicast' => p['unicast'], 'bum' => p['bum'] }
           when 'mac.add'
             @macs[p['mac']] = { 'mac' => p['mac'], 'type' => 'remote', 'vtep' => p['vtep'], 'origin' => 'api', 'seq' => p['seq'] }
+            @macs[p['mac']]['label'] = p['label'] if p['label']
           when 'mac.del' then @macs.delete(p['mac'])
           end
           {}
@@ -424,5 +438,44 @@ class BGP_Evpn_Daemon_Functional_Test < Test::Unit::TestCase
   ensure
     @l2&.close
     l2_listener&.close
+  end
+
+  # EVPN over MPLS (docs/design/evpn-mpls.md, pull request 1): MAC-VRF 100
+  # over MPLS with labels from 25000, a vtep4rd with VNI 100 as mpls, and
+  # a peer sending as an MPLS PE would, 10.0.9.2 with labels 26000 and
+  # 26001 and no Encapsulation community.
+  def test_an_mpls_macvrf_drives_vtep4rd_with_labels_and_sends_its_own
+    @vtep = FakeVtep.new(vtep_socket, encap: 'mpls')
+    daemon(%w[as4_byte mbgp_l2vpn_evpn],
+           'macvrfs' => [{ 'vni' => 100, 'encapsulation' => 'mpls' }],
+           'evpn' => { 'vtep' => vtep_socket, 'labels' => { 'start' => 25_000, 'size' => 100 } })
+    peer(watch: true)
+    base = { 'family' => 'evpn', 'count' => 1, 'rd' => '10.0.9.2:100', 'route_target' => '65000:100', 'attributes' => {} }
+    send_spec(base.merge('route_type' => 3, 'start' => '10.0.9.2', 'pmsi_label' => 26_001))
+    send_spec(base.merge('route_type' => 2, 'start' => '02:00:00:99:00:00', 'label' => 26_000))
+    wait_for('the labels, the flood VTEP and the MAC') { @vtep.flood_labels == { '10.0.9.2' => 26_001 } && @vtep.macs.size == 1 }
+    assert_equal({ 'unicast' => 25_000, 'bum' => 25_001 }, @vtep.labels)
+    assert_equal({ 'mac' => '02:00:00:99:00:00', 'type' => 'remote', 'vtep' => '10.0.9.2', 'origin' => 'api', 'seq' => 0,
+                   'label' => 26_000 }, @vtep.macs['02:00:00:99:00:00'])
+    row = call('show.macvrfs')['rows'].first
+    assert_equal(['ok', 'mpls', { 'unicast' => 25_000, 'bum' => 25_001 }, { '10.0.9.2' => 26_001 }],
+                 row.values_at('vtep_state', 'encapsulation', 'labels', 'flood_labels'))
+    received = rows('route_type' => 2).find { |r| r['peer'] }
+    assert_equal([26_000, nil, true], received.values_at('label', 'encap', 'valid'))
+
+    # A local MAC: bgp4rd sends it with our unicast label, its type 3 with
+    # our BUM label, and no Encapsulation community on either.
+    @vtep.learn('02:00:00:00:01:01', 'eth2')
+    wait_for('our type 2 route') do
+      @routes = []
+      @routes << @got.pop until @got.empty?
+      @sent ||= []
+      @sent.concat(@routes)
+      @sent.any? { |u| u.path_attribute.has?(BGP::Mp_reach) && u.path_attribute[BGP::Mp_reach].nlris.any? { |n| n.route.is_a?(BGP::Evpn::Mac_ip_advertisement) } }
+    end
+    peer_rib = BGP::Rib::Peer.new(:address => '127.0.0.1', :remote_as => 65_000, :router_id => '10.255.0.12', :local_as => 65_000)
+    ours = @sent.flat_map { |u| BGP::Rib::PeerAdapter.evpn_operations(BGP::Update.new(u.encode), peer_rib) }
+                .select { |op, _| op == :announce }.collect(&:last)
+    assert_equal([[2, 25_000, nil], [3, 25_001, nil]], ours.collect { |r| [r.route_type, r.label, r.encap] }.uniq.sort)
   end
 end

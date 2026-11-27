@@ -39,6 +39,12 @@ module BGP
     #   and a MAC Mobility community when the MAC has a sequence (section
     #   15).
     #
+    # **Over MPLS** (docs/design/evpn-mpls.md, "Exporting"): Label1 is the
+    # MAC-VRF's unicast label and the PMSI label its BUM label, each in
+    # the field's high 20 bits, and no Encapsulation community is sent
+    # (decision 6, RFC 8365 section 5.1.3: without one "either MPLS
+    # encapsulation or a statically configured encapsulation is assumed").
+    #
     # The next hop is local_address. EVPN routes go to every established
     # session whose two OPENs carried AFI 25 / SAFI 70 (Exporting, step 4).
     #
@@ -97,8 +103,9 @@ module BGP
             e = s.export
             { 'rd' => e.rd, 'route_type' => e.route_type, 'eth_tag' => 0, 'mac' => e.mac, 'ip' => nil,
               'originator' => nh, 'esi' => (e.route_type == 2 ? '00:00:00:00:00:00:00:00:00:00' : nil),
-              'vni' => e.vni, 'path_id' => nil, 'peer' => nil, 'next_hop' => nh,
-              'route_targets' => e.route_targets, 'encap' => 'VXLAN', 'seq' => e.seq,
+              'vni' => (mpls?(e) ? nil : e.vni), 'label' => (e.label if mpls?(e)),
+              'path_id' => nil, 'peer' => nil, 'next_hop' => nh,
+              'route_targets' => e.route_targets, 'encap' => (mpls?(e) ? nil : 'VXLAN'), 'seq' => e.seq,
               'sticky' => (e.route_type == 2 ? false : nil),
               'pmsi' => (e.route_type == 3 ? { 'type' => 'ingress_replication', 'id' => nh } : nil),
               'as_path' => '', 'origin' => 0, 'local_pref' => 100, 'med' => nil, 'originator_id' => nil,
@@ -118,7 +125,7 @@ module BGP
           list << BGP::Update.new(BGP::Path_attribute.new(mp))
         end
         nh = next_hop(peer)
-        announced.group_by { |e| [e.vni, e.route_type, e.seq] }.each_value do |es|
+        announced.group_by { |e| [e.vni, e.route_type, e.seq, e.encapsulation] }.each_value do |es|
           es.each_slice(PER_UPDATE) do |c|
             list << BGP::Update.new(path_attribute(peer, nh, c))
           end
@@ -127,6 +134,10 @@ module BGP
       end
 
       private
+
+      def mpls?(e)
+        e.encapsulation == 'mpls'
+      end
 
       def ok?(peer)
         peer.established? && BGP::Rib::EvpnTable.negotiated?(peer.session_info)
@@ -150,8 +161,11 @@ module BGP
         if e.route_type == 3
           { :inclusive_multicast => { :rd => rd(e.rd), :ethernet_tag_id => 0, :ip => originator } }
         else
+          # Over MPLS, the label in the high 20 bits and the bottom of stack
+          # bit set, as BGP::Label writes a label by default.
+          l1 = mpls?(e) ? { :label => e.label } : label1(e.vni)
           { :mac_ip_advertisement => { :rd => rd(e.rd), :ethernet_tag_id => 0, :mac => e.mac,
-                                       :label1 => label1(e.vni) } }
+                                       :label1 => l1 } }
         end
       end
 
@@ -163,12 +177,12 @@ module BGP
         attrs << BGP::Local_pref.new(100) unless peer.ebgp?
         attrs << BGP::Mp_reach.new(:afi => 25, :safi => 70, :nexthop => [nh], :nlris => exports.collect { |x| nlri(x) })
         ecs = e.route_targets.collect { |t| BGP::Route_target.new(*rd(t)) }
-        ecs << BGP::Encapsulation.new(:vxlan)
+        ecs << BGP::Encapsulation.new(:vxlan) unless mpls?(e)
         ecs << BGP::Mac_mobility.new(sequence: e.seq) if e.route_type == 2 && e.seq
         attrs << BGP::Extended_communities.new(*ecs)
         if e.route_type == 3
-          attrs << BGP::Pmsi_tunnel.new(:tunnel_type => :ingress_replication, :identifier => originator,
-                                        :label_bits => e.vni)
+          label = mpls?(e) ? { :label => e.label } : { :label_bits => e.vni }
+          attrs << BGP::Pmsi_tunnel.new(:tunnel_type => :ingress_replication, :identifier => originator, **label)
         end
         BGP::Path_attribute.new(*attrs)
       end

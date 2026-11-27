@@ -33,6 +33,14 @@ module BGP
     #       rd: 10.255.0.12:100      # the default is local_address:vni
     #       import: [65000:100]      # the default is as:vni
     #       export: [65000:100]      # the default is as:vni
+    #       encapsulation: mpls      # vxlan, the default, or mpls
+    #
+    # **Over MPLS** (docs/design/evpn-mpls.md) the VNI stays the MAC-VRF's
+    # key and vtep4rd's bridge domain's number, and is never on the wire.
+    # Such a MAC-VRF has two labels of this PE's, from `evpn: labels:`:
+    # unicast, Label1 of its type 2 routes, and BUM, its type 3 route's
+    # PMSI label (decision 4, RFC 7432 section 9.2.1's per MAC-VRF
+    # allocation).
     #
     # RFC 8365 section 5.1.2, option 1, "A Single Broadcast Domain per
     # EVI": "a BGP Route Distinguisher (RD) and Route Target (RT) are
@@ -40,7 +48,7 @@ module BGP
     # 1 RD, the PE's address and a number. The Route Targets default to
     # AS:VNI, which is what FRR's leaves sent in routescope's lab 3 with
     # `advertise-all-vni` alone.
-    Macvrf = Struct.new(:vni, :rd, :import, :export) do
+    Macvrf = Struct.new(:vni, :rd, :import, :export, :encapsulation, :labels) do
       # The MAC-VRFs of a configuration's `macvrfs:` list, each checked.
       # address is the RD's default administrator, as the AS the RTs'.
       def self.list(config, address:, as:)
@@ -73,7 +81,47 @@ module BGP
           raise ArgumentError, "macvrf #{vni}: #{key} is empty" if list.empty?
           list.collect { |rt| Vrf.distinguisher(rt, "macvrf #{vni}: #{key}") }
         }
-        new(vni, rd, rts.call('import'), rts.call('export'))
+        encap = (c['encapsulation'] || 'vxlan').to_s
+        unless Macvrf::ENCAPSULATIONS.include?(encap)
+          raise ArgumentError, "macvrf #{vni}: encapsulation is #{Macvrf::ENCAPSULATIONS.join(' or ')}, not #{encap.inspect}"
+        end
+        new(vni, rd, rts.call('import'), rts.call('export'), encap)
+      end
+
+      # The MPLS MAC-VRFs' labels from the `evpn: labels:` block,
+      # { 'start' =>, 'size' => }: two each, unicast then BUM, in the
+      # order of the list, as l3vpn: labels gives a VRF its label. Set on
+      # each MAC-VRF; answers the list. The block may not overlap l3vpn's,
+      # +l3vpn+, the same block or nil. bgp4rd cannot see the SRGB, so a
+      # lab keeps the two apart in its files.
+      def self.assign_labels(list, block, l3vpn = nil)
+        mpls = list.select(&:mpls?)
+        return list if mpls.empty?
+        unless block.is_a?(Hash) && block['start'] && block['size']
+          raise ArgumentError, "evpn: labels: { start:, size: } is required: macvrf #{mpls.first.vni} is mpls"
+        end
+        start, size = Integer(block['start']), Integer(block['size'])
+        last = start + size - 1
+        # RFC 3032 section 2.1 gives 0 to 3 a meaning and reserves 4 to 15.
+        unless start >= 16 && last <= 0xfffff
+          raise ArgumentError, "evpn: labels: #{start} to #{last} is not 16 to 1048575 (RFC 3032)"
+        end
+        if 2 * mpls.size > size
+          raise ArgumentError, "evpn: labels: #{size} label(s) for #{mpls.size} mpls MAC-VRFs, which take two each"
+        end
+        if l3vpn.is_a?(Hash) && l3vpn['start'] && l3vpn['size']
+          ls = Integer(l3vpn['start'])
+          ll = ls + Integer(l3vpn['size']) - 1
+          if start <= ll && ls <= last
+            raise ArgumentError, "evpn: labels: #{start} to #{last} overlaps l3vpn: labels: #{ls} to #{ll}"
+          end
+        end
+        mpls.each_with_index { |m, i| m.labels = { 'unicast' => start + 2 * i, 'bum' => start + 2 * i + 1 }.freeze }
+        list
+      end
+
+      def mpls?
+        encapsulation == 'mpls'
       end
 
       # RFC 7432 section 7.10 and RFC 4364 section 4.3.1: a route is
@@ -84,7 +132,8 @@ module BGP
     end
 
     # The keys a MAC-VRF's entry may have; any other is refused, by name.
-    Macvrf::KEYS = %w[vni rd import export].freeze
+    Macvrf::KEYS = %w[vni rd import export encapsulation].freeze
+    Macvrf::ENCAPSULATIONS = %w[vxlan mpls].freeze
 
   end
 end

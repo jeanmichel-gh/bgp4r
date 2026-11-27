@@ -47,6 +47,13 @@ module BGP
     # * `own`: a route whose next hop, or type 3 tunnel, is this VTEP:
     #   ours, sent back by a reflector.
     #
+    # **Over MPLS** (docs/design/evpn-mpls.md, "Receiving"): a route with
+    # no Encapsulation community, or one naming MPLS, is taken, and one
+    # naming VXLAN is `encapsulation`. There is no VNI to match: Label1
+    # and the PMSI label are the remote PE's labels, read as 20 bits, and
+    # one that is absent or reserved (0 to 15, RFC 3032 section 2.1) is
+    # `label`, since vtep4rd could not push it.
+    #
     # **Type 3** gives a flood VTEP, the PMSI Tunnel Identifier, which RFC
     # 7432 section 11.2 sets "to a routable address of the PE". **Type 2**
     # gives a MAC behind its next hop, "the IPv4 or IPv6 address of the
@@ -78,11 +85,13 @@ module BGP
 
       # A MAC behind a VTEP: a remote route, or this PE's own for a
       # comparison. route is the EvpnRoute, nil for ours.
-      Remote = Struct.new(:mac, :vtep, :seq, :sticky, :route, :since)
+      Remote = Struct.new(:mac, :vtep, :seq, :sticky, :route, :since, :label)
 
       # A route this PE sends (Exporting, steps 1 and 2). type 3 has no
       # mac; seq is nil for a type 2 route with no MAC Mobility community.
-      Export = Struct.new(:vni, :rd, :route_type, :mac, :seq, :route_targets) do
+      # Over MPLS, encapsulation is 'mpls' and label the MAC-VRF's unicast
+      # label for type 2, its BUM label for type 3.
+      Export = Struct.new(:vni, :rd, :route_type, :mac, :seq, :route_targets, :encapsulation, :label) do
         def key ; [rd, route_type, mac] ; end
       end
 
@@ -90,7 +99,8 @@ module BGP
       # since when.
       Adv = Struct.new(:seq, :since)
 
-      Plan = Struct.new(:flood, :macs, :reasons)
+      # flood_labels: over MPLS, each flood VTEP's BUM label.
+      Plan = Struct.new(:flood, :macs, :reasons, :flood_labels)
 
       KIND = BGP::Events.register_kind(:evpn)
 
@@ -167,8 +177,11 @@ module BGP
         @lock.synchronize do
           @macvrfs.flat_map do |m|
             next [] unless exporting?(m.vni)
-            [Export.new(m.vni, m.rd, 3, nil, nil, m.export)] +
-              @adv.select { |(v, _), _| v == m.vni }.collect { |(_, mac), a| Export.new(m.vni, m.rd, 2, mac, a.seq, m.export) }
+            labels = m.labels || {}
+            [Export.new(m.vni, m.rd, 3, nil, nil, m.export, m.encapsulation, labels['bum'])] +
+              @adv.select { |(v, _), _| v == m.vni }.collect do |(_, mac), a|
+                Export.new(m.vni, m.rd, 2, mac, a.seq, m.export, m.encapsulation, labels['unicast'])
+              end
           end
         end
       end
@@ -188,11 +201,14 @@ module BGP
           @macvrfs.collect do |m|
             st, err = @state.fetch(m.vni, ['unknown', nil])
             seen = @seen.fetch(m.vni, {})
-            { 'vni' => m.vni, 'rd' => m.rd, 'import' => m.import, 'export' => m.export,
-              'vtep_state' => st, 'error' => err, 'flood' => seen.fetch('flood', []),
-              'macs_local' => seen.fetch('local', []).size,
-              'macs_remote' => @installed.fetch(m.vni, {}).size,
-              'duplicates' => @dup.count { |(v, _), _| v == m.vni } }
+            row = { 'vni' => m.vni, 'rd' => m.rd, 'import' => m.import, 'export' => m.export,
+                    'vtep_state' => st, 'error' => err, 'flood' => seen.fetch('flood', []),
+                    'macs_local' => seen.fetch('local', []).size,
+                    'macs_remote' => @installed.fetch(m.vni, {}).size,
+                    'duplicates' => @dup.count { |(v, _), _| v == m.vni },
+                    'encapsulation' => m.encapsulation }
+            next row unless m.mpls?
+            row.merge('labels' => m.labels, 'flood_labels' => seen.fetch('flood_labels', {}))
           end
         end
       end
@@ -205,8 +221,9 @@ module BGP
           return nil unless @macvrfs.any? { |m| m.vni == vni }
           now = @clock.call
           rows = @installed.fetch(vni, {}).values.collect do |r|
-            mac_row(vni, r.mac, 'remote', now, 'vtep' => r.vtep, 'seq' => r.seq, 'sticky' => r.sticky,
-                                                'since' => stamp(r.since))
+            extra = { 'vtep' => r.vtep, 'seq' => r.seq, 'sticky' => r.sticky, 'since' => stamp(r.since) }
+            extra['label'] = r.label if r.label
+            mac_row(vni, r.mac, 'remote', now, extra)
           end
           @seen.fetch(vni, {}).fetch('local', []).each do |r|
             mac = r['mac'].to_s.downcase
@@ -259,29 +276,39 @@ module BGP
       end
 
       def plan(m, winners, now)
-        flood, macs, reasons = [], {}, {}
+        flood, macs, reasons, labels = [], {}, {}, {}
         winners.each do |v|
           next unless [2, 3].include?(v.route_type) && m.imports?(v.route_targets)
           reason = invalid(v, m)
           reasons[v.decision_key] = reason
           next if reason
           if v.route_type == 3
-            flood << v.pmsi_row['id']
+            id = v.pmsi_row['id']
+            flood << id
+            labels[id] = v.label if m.mpls?
           else
             seq, sticky = v.mobility || [0, false]
-            r = Remote.new(v.mac, v.route.next_hop.to_s, seq, sticky, v, nil)
+            r = Remote.new(v.mac, v.route.next_hop.to_s, seq, sticky, v, nil, (v.label if m.mpls?))
             macs[v.mac] = r if macs[v.mac].nil? || Macvrfs.prefer?(r, macs[v.mac])
           end
         end
-        @plans[m.vni] = Plan.new(flood.uniq.sort, macs, reasons)
+        @plans[m.vni] = Plan.new(flood.uniq.sort, macs, reasons, labels)
       end
 
       def invalid(v, m)
-        return 'encapsulation' unless v.encap == 'VXLAN'
-        # Type 3's VNI is the PMSI Tunnel's label, so the tunnel first.
+        if m.mpls?
+          return 'encapsulation' unless v.encap.nil? || v.encap == 'MPLS'
+        else
+          return 'encapsulation' unless v.encap == 'VXLAN'
+        end
+        # Type 3's VNI or label is the PMSI Tunnel's, so the tunnel first.
         p = v.pmsi_row if v.route_type == 3
         return 'pmsi' if v.route_type == 3 && !(p && p['type'] == 'ingress_replication')
-        return 'vni' unless v.vni == m.vni
+        if m.mpls?
+          return 'label' unless v.label && v.label >= 16
+        else
+          return 'vni' unless v.vni == m.vni
+        end
         return 'esi' if v.route_type == 2 && !v.esi.to_s.match?(/\A[0:]*\z/)
         return 'own' if (v.route_type == 3 ? p['id'] : v.route.next_hop.to_s) == @address
         nil
@@ -297,15 +324,18 @@ module BGP
           return absent(m, plan, now, 'missing', 'vtep4rd has no such VNI')
         elsif row['mode'].to_s != 'evpn'
           return absent(m, plan, now, 'mode', "vtep4rd has it in #{row['mode']} mode, not evpn")
+        elsif (row['encap'] || 'vxlan').to_s != m.encapsulation
+          # A vtep4rd before EVPN over MPLS answers no encap: VXLAN.
+          return absent(m, plan, now, 'encap', "vtep4rd has it as #{row['encap'] || 'vxlan'}, not #{m.encapsulation}")
         end
         begin
           macs = @vtep.call('show.macs', 'vni' => m.vni)
           local = macs.select { |r| r['type'].to_s == 'local' }
           api = macs.select { |r| r['origin'].to_s == 'api' }.to_h { |r| [r['mac'].to_s.downcase, r] }
           install = decide(m, plan, local, now)
-          push(m, plan, Array(row['remote_vteps']).collect(&:to_s), api, install)
+          push(m, plan, row, api, install)
           @held[m.vni] = [now, local]
-          @seen[m.vni] = { 'flood' => plan.flood, 'local' => local }
+          @seen[m.vni] = { 'flood' => plan.flood, 'local' => local, 'flood_labels' => plan.flood_labels }
           @state[m.vni] = ['ok', nil]
         rescue StandardError => e
           lost(m, plan, now, 'error', "vtep4rd: #{e.message}")
@@ -450,15 +480,31 @@ module BGP
                 'type' => 'duplicate', 'vni' => vni, 'mac' => mac, 'moves' => times.size)
       end
 
-      # Sends vtep4rd the difference for one VNI: the flood list, then the
-      # MACs. A duplicate MAC is left as it is.
-      def push(m, plan, have, api, install)
-        (plan.flood - have).each { |v| order('vni.flood.add', 'vni' => m.vni, 'vtep' => v) }
+      # Sends vtep4rd the difference for one VNI: over MPLS our two labels
+      # first, then the flood list, then the MACs. Over MPLS a flood VTEP
+      # or a MAC whose label changed is sent again. A duplicate MAC is left
+      # as it is.
+      def push(m, plan, row, api, install)
+        have = Array(row['remote_vteps']).collect(&:to_s)
+        if m.mpls? && row['labels'].to_h.transform_keys(&:to_s) != m.labels
+          order('vni.labels', 'vni' => m.vni, 'unicast' => m.labels['unicast'], 'bum' => m.labels['bum'])
+        end
+        if m.mpls?
+          had = row['flood_labels'].to_h.transform_keys(&:to_s)
+          plan.flood.each do |v|
+            next if had[v] == plan.flood_labels[v]
+            order('vni.flood.add', 'vni' => m.vni, 'vtep' => v, 'label' => plan.flood_labels[v])
+          end
+        else
+          (plan.flood - have).each { |v| order('vni.flood.add', 'vni' => m.vni, 'vtep' => v) }
+        end
         (have - plan.flood).each { |v| order('vni.flood.del', 'vni' => m.vni, 'vtep' => v) }
         install.each_value do |r|
           a = api[r.mac]
-          next if a && a['vtep'].to_s == r.vtep && a['seq'].to_i == r.seq
-          order('mac.add', 'vni' => m.vni, 'mac' => r.mac, 'vtep' => r.vtep, 'seq' => r.seq)
+          next if a && a['vtep'].to_s == r.vtep && a['seq'].to_i == r.seq && a['label'] == r.label
+          params = { 'vni' => m.vni, 'mac' => r.mac, 'vtep' => r.vtep, 'seq' => r.seq }
+          params['label'] = r.label if r.label
+          order('mac.add', params)
         end
         (api.keys - install.keys).each do |mac|
           next if @dup.key?([m.vni, mac])
