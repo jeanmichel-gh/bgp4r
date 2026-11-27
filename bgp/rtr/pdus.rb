@@ -76,16 +76,26 @@ module BGP
     # how a stream reader uses it. A Length below 8 cannot be stepped
     # over, so the rest is returned as one Unknown with what it holds.
     def self.pdus(buffer)
+      list, rest = slices(buffer)
+      [list.collect { |o| o.unpack1('@4N') < HEADER ? Unknown.new(o) : Pdu.factory(o) }, rest]
+    end
+
+    # The same as pdus, each PDU as its own octets, as they came. **This
+    # is what a reader validates**: a PDU parsed and encoded again has
+    # the Length its type should have, so a Length that is wrong, the
+    # octets past the fields included, would never be seen
+    # (Fault::RTR's rtr_corrupt_length).
+    def self.slices(buffer)
       buffer = buffer.b
       list = []
       while buffer.bytesize >= HEADER
         length = buffer.unpack1('@4N')
         if length < HEADER
-          list << Unknown.new(buffer)
+          list << buffer
           return [list, ''.b]
         end
         break if buffer.bytesize < length
-        list << Pdu.factory(buffer.byteslice(0, length))
+        list << buffer.byteslice(0, length)
         buffer = buffer.byteslice(length..)
       end
       [list, buffer]

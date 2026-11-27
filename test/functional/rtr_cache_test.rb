@@ -104,6 +104,16 @@ class TestRtrCacheServer < Test::Unit::TestCase
     assert_equal(1, JSON.parse(Net::HTTP.get(URI("#{@server.http.url}/api/routers")))['routers'].size)
   end
 
+  # Section 12: a Reset Query with a Length past its 8 octets is
+  # Corrupt Data, read off the socket as it came.
+  def test_a_long_query_is_corrupt_data
+    connect
+    @router.write(BGP::Fault.rtr_length(Reset_query.new.encode, 4))
+    got = read_until(Error_report)
+    assert_equal([[Error_report], 0], [got.collect(&:class), got.last.code])
+    assert_nil(read_until(Error_report, 2), 'and the session closed')
+  end
+
   # A file that no longer reads keeps the table, and says so.
   def test_a_broken_file_keeps_the_table
     File.write(@file, "vrps:\n  - { prefix: nonsense, asn: 1 }\n")

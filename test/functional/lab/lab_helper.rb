@@ -765,6 +765,13 @@ module LabHelper
 
     def self.available? ; !version.nil? ; end
 
+    # Where a package puts bgpd's RPKI module: Ubuntu's frr-rpki-rtrlib
+    # under the multiarch folder, FRR's own build under /usr/lib/frr.
+    RPKI_MODULES = %w[/usr/lib/*/frr/modules/bgpd_rpki.so /usr/lib/frr/modules/bgpd_rpki.so].freeze
+
+    # True when bgpd can load `-M rpki`.
+    def self.rpki? ; RPKI_MODULES.any? { |g| !Dir.glob(g).empty? } ; end
+
     # The major version, because the answers are not the same on every
     # one: that is the lesson GOBGP_3 records in fault_matrix_scenario.rb.
     def self.major
@@ -846,10 +853,17 @@ module LabHelper
     # neighbor_lines: more lines for the same block once every neighbor
     #           has its remote-as, which a neighbor line needs, such as
     #           ' neighbor 127.0.0.1 passive'. Empty by default.
+    # modules:  bgpd modules to load, each a `-M`, such as 'rpki'. Ubuntu
+    #           packages that one apart, in frr-rpki-rtrlib. Empty by
+    #           default.
+    # lines:    more lines at the end of the config, outside `router
+    #           bgp`, such as an `rpki` block. Empty by default.
     def initialize(local: '127.0.0.2', as: 65002, router_id: '10.0.0.2',
                    peer: '127.0.0.1', peer_as: 65001, port: nil, ipv6: false,
                    network: nil, families: [], vpn_networks: [], password: nil,
-                   more_peers: [], bgp_lines: [], neighbor_lines: [])
+                   more_peers: [], bgp_lines: [], neighbor_lines: [], modules: [], lines: [])
+      @modules = modules
+      @lines = lines
       @password = password
       @bgp_lines = bgp_lines
       @neighbor_lines = neighbor_lines
@@ -930,6 +944,7 @@ module LabHelper
         end
         lines << ' exit-address-family'
       end
+      lines.concat(@lines)
       lines.join("\n") + "\n"
     end
 
@@ -1021,7 +1036,8 @@ module LabHelper
        '--vty_socket', @dir,
        '-z', File.join(@dir, 'zserv.api'),
        '-S',             # see the class comment
-       '--no_kernel']
+       '--no_kernel',
+       *@modules.flat_map { |m| ['-M', m] }]
     end
 
     # True once the child is gone, reaping it. Gobgpd's, for the same reason.

@@ -266,6 +266,9 @@ jobs:
       # to 26.04 between 6 and 9 November 2026: 24.04 installs 8.4.4,
       # 26.04 installs 10.5.1. The FRR tests take 8 to 10.
       #
+      # frr-rpki-rtrlib is bgpd's RPKI module, `-M rpki`, which the two
+      # RPKI tests load. Ubuntu packages it apart from frr.
+      #
       # FRR 10's package carries an AppArmor profile for
       # /usr/lib/frr/bgpd that refuses the pid file in the test's own
       # folder, so bgpd exits before any test runs. A copy outside
@@ -277,7 +280,7 @@ jobs:
         if: matrix.frr
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends frr
+          sudo apt-get install -y --no-install-recommends frr frr-rpki-rtrlib
           mkdir -p "$RUNNER_TEMP/frr"
           cp /usr/lib/frr/bgpd "$(command -v vtysh)" "$RUNNER_TEMP/frr/"
           echo "FRR_BGPD=$RUNNER_TEMP/frr/bgpd" >> "$GITHUB_ENV"

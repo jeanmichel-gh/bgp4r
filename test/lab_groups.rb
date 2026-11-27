@@ -153,6 +153,8 @@ module LabGroups
       graceful_restart_frr_test
       gr_fault_frr_test
       rib_router_frr_test
+      rpki_frr_test
+      rtr_fault_frr_test
       vpn_frr_test
     ],
 

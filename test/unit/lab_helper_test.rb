@@ -349,4 +349,24 @@ class LabHelperTest < Test::Unit::TestCase
   ensure
     FileUtils.rm_rf(r.dir) if r
   end
+
+  # modules: a -M each; lines: at the end of the config, after `router
+  # bgp`'s families. Neither by default. The RPKI tests use both.
+  def test_bgpd_modules_and_lines
+    plain = F.new
+    r = F.new(:modules => %w[rpki snmp], :lines => ['rpki', ' rpki cache tcp 127.0.0.1 3323 preference 1', 'exit'])
+    assert_equal(['--no_kernel', '-M', 'rpki', '-M', 'snmp'], r.command('c').last(5))
+    assert_equal('--no_kernel', plain.command('c').last)
+    assert(r.config.end_with?(" exit-address-family\nrpki\n rpki cache tcp 127.0.0.1 3323 preference 1\nexit\n"), r.config)
+    assert(plain.config.end_with?(" exit-address-family\n"))
+  ensure
+    [plain, r].compact.each { |x| FileUtils.rm_rf(x.dir) }
+  end
+
+  # The RPKI module, where Ubuntu and FRR's own build put it.
+  def test_rpki_module
+    assert(F::RPKI_MODULES.any? { |g| File.fnmatch(g, '/usr/lib/aarch64-linux-gnu/frr/modules/bgpd_rpki.so') })
+    assert(F::RPKI_MODULES.any? { |g| File.fnmatch(g, '/usr/lib/frr/modules/bgpd_rpki.so') })
+    assert_equal(F::RPKI_MODULES.any? { |g| !Dir.glob(g).empty? }, F.rpki?)
+  end
 end

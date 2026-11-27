@@ -533,9 +533,9 @@ module BGP
             out.each { |o| session.write(o) }
             return
           end
-          pdus, buffer = Rtr.pdus(buffer)
-          pdus.each do |pdu|
-            out, close = receive(session, pdu.encode)
+          pdus, buffer = Rtr.slices(buffer)
+          pdus.each do |octets|
+            out, close = receive(session, octets)
             out.each { |o| session.write(o) }
             return if close
           end

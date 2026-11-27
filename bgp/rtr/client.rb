@@ -433,9 +433,9 @@ module BGP
             out.each { |o| sock.write(o) }
             return closed('a PDU too long')
           end
-          pdus, buffer = Rtr.pdus(buffer)
-          pdus.each do |pdu|
-            out, close = receive(pdu.encode)
+          pdus, buffer = Rtr.slices(buffer)
+          pdus.each do |octets|
+            out, close = receive(octets)
             out.each { |o| sock.write(o) }
             return closed(@last_error) if close
           end

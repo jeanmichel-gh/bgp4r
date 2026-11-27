@@ -130,6 +130,18 @@ class TestRtrPdus < Test::Unit::TestCase
     assert_equal([[Unknown], ''], [list.collect(&:class), rest], 'a Length below 8 cannot be stepped over')
   end
 
+  # The same, each PDU as it came: a Length past the fields stays in
+  # the octets, for the reader to find (Validation, code 0).
+  def test_slices_keep_the_octets
+    long = hex('01 02 0000 0000000c 00000000')
+    a = Serial_notify.new(1, 2).encode
+    list, rest = BGP::Rtr.slices(long + a + a.byteslice(0, 3))
+    assert_equal([[long, a], a.byteslice(0, 3)], [list, rest])
+    assert_equal(8, BGP::Rtr.pdus(long).first.first.encode.bytesize, 'parsed and encoded again, the octets go')
+    short = hex('01 02 0000 00000004 ffff')
+    assert_equal([[short], ''], BGP::Rtr.slices(short))
+  end
+
   def test_readers
     v = Ipv4_prefix.new('192.0.2.0/24', 28, 65_001)
     assert_equal([true, ['192.0.2.0', 24, 28, 65_001]], [v.announce?, v.key])

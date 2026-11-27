@@ -500,9 +500,33 @@ Error Code here is fatal, so the router drops the session too.
 | `rtr_silent` | answers no query | uses the data until Expire, then drops it | 6 |
 | `rtr_cache_reset` | answers the next Serial Query with Cache Reset | sends a Reset Query | 8.3 |
 
-`docs/rpki.md` describes the codec and the cache, and what FRR 10.7.1
-answered to each case. The matrix against bgp4rd comes with 7c,
-`docs/design/bgp-operations.md` section 7.
+Each case went to bgp4rd's RTR client and to FRR 10.5.1's bgpd with
+`-M rpki`, each on a cache and a router of its own
+(`test/functional/rtr_fault_matrix_test.rb`,
+`test/functional/lab/rtr_fault_frr_test.rb`, CI's `lab frr`),
+measured on 2026-11-27. Each fault dropped the session, and both kept
+the table they had:
+
+| Name | RFC expects | bgp4rd | FRR 10.5.1 |
+|---|---|---|---|
+| `rtr_unknown_pdu` | Error Report 5 | 5, back at the Retry Interval | 0, "length value in PDU is too small", back |
+| `rtr_bad_version` | Error Report 8 | 8, back | 8, back |
+| `rtr_unexpected_version` | Error Report 8 | 8, back | 8, back |
+| `rtr_withdraw_unknown` | Error Report 6 | 6, back | 6, not back in 25 s |
+| `rtr_duplicate_announce` | Error Report 7 | 7, back | 7, not back in 25 s |
+| `rtr_corrupt_length` | Error Report 0 | 0, back | 0, back |
+| `rtr_no_data` | keep the session, query again | kept, asked again at the Retry Interval | the same |
+| `rtr_silent` | use the data until Expire, then drop it | kept, gone at Expire (manual clock) | kept; Expire, 600 s at least, not waited for |
+| `rtr_cache_reset` | a Reset Query | a Reset Query | a Reset Query |
+
+**bgp4rd's one gap, closed here**: it took `rtr_corrupt_length`'s
+prefix as a VRP. Its read loop, and `bgp4r-rtr`'s, parsed each PDU and
+encoded it again before the check, so the Length came out right and
+the four octets past it were gone. Both now check the octets as they
+came (`Rtr.slices`). FRR 10.7.1 answered the same six codes by hand
+(`docs/rpki.md` section 4), and stayed down after
+`rtr_withdraw_unknown` for four minutes. Why FRR stays down after 6 and
+7 is not known.
 
 ## Receiving: policies and findings
 
