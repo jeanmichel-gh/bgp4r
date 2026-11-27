@@ -35,12 +35,12 @@ class TestBgpRibMacvrf < Test::Unit::TestCase
   # Route Targets AS:VNI both ways, as FRR's leaves sent in lab 3.
   def test_the_defaults
     m = list([{ 'vni' => 100 }]).first
-    assert_equal([100, '10.255.0.12:100', ['65000:100'], ['65000:100']], m.to_a)
+    assert_equal([100, '10.255.0.12:100', ['65000:100'], ['65000:100'], 'vxlan', nil], m.to_a)
   end
 
   def test_given_values
     m = list([{ 'vni' => 100, 'rd' => '10.255.0.12:7', 'import' => ['65000:100', '65000:1'], 'export' => '65000:9' }]).first
-    assert_equal([100, '10.255.0.12:7', ['65000:100', '65000:1'], ['65000:9']], m.to_a)
+    assert_equal([100, '10.255.0.12:7', ['65000:100', '65000:1'], ['65000:9'], 'vxlan', nil], m.to_a)
   end
 
   def test_none
@@ -70,5 +70,54 @@ class TestBgpRibMacvrf < Test::Unit::TestCase
     assert_true(m.imports?(['65000:2', '65000:1']))
     assert_false(m.imports?(['65000:2']))
     assert_false(m.imports?([]))
+  end
+
+  # EVPN over MPLS (docs/design/evpn-mpls.md).
+
+  def test_the_encapsulation
+    assert_equal(%w[vxlan mpls], list([{ 'vni' => 1 }, { 'vni' => 2, 'encapsulation' => 'mpls' }]).collect(&:encapsulation))
+    e = assert_raise(ArgumentError) { list([{ 'vni' => 1, 'encapsulation' => 'gre' }]) }
+    assert_equal('macvrf 1: encapsulation is vxlan or mpls, not "gre"', e.message)
+  end
+
+  # Two labels each, unicast then BUM, in the order of the list; a VXLAN
+  # MAC-VRF takes none.
+  def test_the_labels_from_the_block
+    l = list([{ 'vni' => 1, 'encapsulation' => 'mpls' }, { 'vni' => 2 }, { 'vni' => 3, 'encapsulation' => 'mpls' }])
+    BGP::Rib::Macvrf.assign_labels(l, { 'start' => 25_000, 'size' => 4 })
+    assert_equal([{ 'unicast' => 25_000, 'bum' => 25_001 }, nil, { 'unicast' => 25_002, 'bum' => 25_003 }], l.collect(&:labels))
+  end
+
+  # Removed, the others move down the block: the labels are fixed for a
+  # run, since macvrfs: needs a restart (bgp/daemon/candidate.rb).
+  def test_a_macvrf_removed
+    l = list([{ 'vni' => 3, 'encapsulation' => 'mpls' }])
+    BGP::Rib::Macvrf.assign_labels(l, { 'start' => 25_000, 'size' => 4 })
+    assert_equal({ 'unicast' => 25_000, 'bum' => 25_001 }, l.first.labels)
+  end
+
+  def test_the_block_is_checked
+    one = -> { list([{ 'vni' => 1, 'encapsulation' => 'mpls' }]) }
+    {
+      nil => 'evpn: labels: { start:, size: } is required: macvrf 1 is mpls',
+      { 'start' => 10, 'size' => 4 } => 'evpn: labels: 10 to 13 is not 16 to 1048575 (RFC 3032)',
+      { 'start' => 0xffffe, 'size' => 4 } => 'evpn: labels: 1048574 to 1048577 is not 16 to 1048575 (RFC 3032)',
+      { 'start' => 25_000, 'size' => 1 } => 'evpn: labels: 1 label(s) for 1 mpls MAC-VRFs, which take two each'
+    }.each do |block, message|
+      e = assert_raise(ArgumentError, block.inspect) { BGP::Rib::Macvrf.assign_labels(one.call, block) }
+      assert_equal(message, e.message)
+    end
+    assert_equal([], BGP::Rib::Macvrf.assign_labels(list([{ 'vni' => 1 }]), nil).collect(&:labels).compact,
+                 'no block needed with no mpls MAC-VRF')
+  end
+
+  def test_the_block_may_not_overlap_l3vpns
+    e = assert_raise(ArgumentError) do
+      BGP::Rib::Macvrf.assign_labels(list([{ 'vni' => 1, 'encapsulation' => 'mpls' }]), { 'start' => 24_999, 'size' => 10 },
+                                     { 'start' => 24_000, 'size' => 1000 })
+    end
+    assert_equal('evpn: labels: 24999 to 25008 overlaps l3vpn: labels: 24000 to 24999', e.message)
+    BGP::Rib::Macvrf.assign_labels(list([{ 'vni' => 1, 'encapsulation' => 'mpls' }]), { 'start' => 25_000, 'size' => 10 },
+                                   { 'start' => 24_000, 'size' => 1000 })
   end
 end

@@ -132,4 +132,40 @@ class TestBgpDaemonEvpnExporter < Test::Unit::TestCase
                   [2, H1, 2, 'local', nil]],
                  @x.rows.collect { |r| r.values_at('route_type', 'mac', 'seq', 'reason', 'pmsi') })
   end
+
+  # EVPN over MPLS (docs/design/evpn-mpls.md, "Exporting"): our BUM label
+  # in the PMSI Tunnel and the unicast label in Label1, each the field's
+  # high 20 bits, and no Encapsulation community (decision 6).
+  def mpls3 ; Export.new(300, '10.255.0.12:300', 3, nil, nil, ['65000:300'], 'mpls', 25_001) ; end
+  def mpls2 ; Export.new(300, '10.255.0.12:300', 2, H1, nil, ['65000:300'], 'mpls', 25_000) ; end
+
+  def test_over_mpls_the_routes_carry_our_labels_and_no_encapsulation
+    @x.refresh([mpls3, mpls2])
+    r3, r2 = @rr.announced.sort_by(&:route_type).reverse
+    assert_equal([3, 25_001, nil, { 'type' => 'ingress_replication', 'id' => '10.255.0.12' }],
+                 [r3.route_type, r3.label, r3.encap, r3.pmsi_row])
+    assert_equal([2, 25_000, nil], [r2.route_type, r2.label, r2.encap])
+    # Label1: 25000 in the high 20 bits, the bottom of stack bit set, as
+    # bgp4r-sim's MPLS routes are and FRR 10.7.1 read them.
+    assert_equal('061a81', r2.nlri.route.label1.encode.unpack1('H*'))
+    assert_equal(25_001 << 4, r3.pmsi.label_bits)
+  end
+
+  def test_over_mpls_show_evpn_rows_give_the_label
+    @x.refresh([mpls2])
+    row = @x.rows.first
+    assert_equal([nil, 25_000, nil], row.values_at('vni', 'label', 'encap'))
+  end
+
+  # One VXLAN and one MPLS MAC-VRF: never in one UPDATE, since the
+  # Encapsulation community applies to every NLRI beside it.
+  def test_vxlan_and_mpls_routes_go_in_separate_updates
+    @x.refresh([type2, mpls2])
+    assert_equal(2, @rr.sent.size)
+    peer = BGP::Rib::Peer.new(:address => '10.255.0.1', :remote_as => 65000, :router_id => '10.255.0.1', :local_as => 65000)
+    per_update = @rr.sent.collect do |u|
+      BGP::Rib::PeerAdapter.evpn_operations(BGP::Update.new(u.encode), peer).collect { |_, r| [r.vni == 100, r.encap] }
+    end
+    assert_equal([[[false, nil]], [[true, 'VXLAN']]], per_update.sort_by(&:to_s))
+  end
 end

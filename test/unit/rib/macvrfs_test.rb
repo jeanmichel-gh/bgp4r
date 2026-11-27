@@ -43,8 +43,13 @@ class TestBgpRibMacvrfs < Test::Unit::TestCase
     attr_reader :orders
     attr_accessor :down
 
+    # vnis: VNI => its mode, or [mode, encap] for vtep4r's EVPN over MPLS
+    # (vtep4r docs/mpls.md): show.vnis then gives encap, labels and
+    # flood_labels, and the orders take labels.
     def initialize(vnis)
-      @vnis = vnis.to_h { |v, mode| [v, { 'mode' => mode, 'flood' => [], 'macs' => {} }] }
+      @vnis = vnis.to_h do |v, (mode, encap)|
+        [v, { 'mode' => mode, 'encap' => encap, 'flood' => [], 'flood_labels' => {}, 'macs' => {}, 'labels' => nil }]
+      end
       @orders = []
     end
 
@@ -57,9 +62,10 @@ class TestBgpRibMacvrfs < Test::Unit::TestCase
                                   'origin' => 'learned', 'seq' => 0, 'moves' => 0 }
     end
 
-    def api_mac(vni, mac, vtep, seq = 0)
+    def api_mac(vni, mac, vtep, seq = 0, label = nil)
       @vnis[vni]['macs'][mac] = { 'mac' => mac, 'type' => 'remote', 'port' => nil, 'vtep' => vtep,
                                   'origin' => 'api', 'seq' => seq, 'moves' => 0 }
+      @vnis[vni]['macs'][mac]['label'] = label if label
     end
 
     def restart
@@ -71,15 +77,25 @@ class TestBgpRibMacvrfs < Test::Unit::TestCase
       vni = params['vni']
       case method
       when 'show.vnis'
-        @vnis.collect { |n, v| { 'vni' => n, 'mode' => v['mode'], 'remote_vteps' => v['flood'].dup } }
+        @vnis.collect do |n, v|
+          row = { 'vni' => n, 'mode' => v['mode'], 'remote_vteps' => v['flood'].dup }
+          next row unless v['encap']
+          row.merge('encap' => v['encap'])
+             .merge(v['encap'] == 'mpls' ? { 'labels' => v['labels'], 'flood_labels' => v['flood_labels'].dup } : {})
+        end
       when 'show.macs'
         @vnis[vni]['macs'].values.collect(&:dup)
       else
         @orders << [method, params]
         case method
-        when 'vni.flood.add' then @vnis[vni]['flood'] |= [params['vtep']]
-        when 'vni.flood.del' then @vnis[vni]['flood'] -= [params['vtep']]
-        when 'mac.add' then api_mac(vni, params['mac'], params['vtep'], params['seq'])
+        when 'vni.flood.add'
+          @vnis[vni]['flood'] |= [params['vtep']]
+          @vnis[vni]['flood_labels'][params['vtep']] = params['label'] if params['label']
+        when 'vni.flood.del'
+          @vnis[vni]['flood'] -= [params['vtep']]
+          @vnis[vni]['flood_labels'].delete(params['vtep'])
+        when 'vni.labels' then @vnis[vni]['labels'] = { 'unicast' => params['unicast'], 'bum' => params['bum'] }
+        when 'mac.add' then api_mac(vni, params['mac'], params['vtep'], params['seq'], params['label'])
         when 'mac.del' then @vnis[vni]['macs'].delete(params['mac'])
         end
         {}
@@ -539,10 +555,99 @@ class TestBgpRibMacvrfs < Test::Unit::TestCase
     send_routes(L2, [type2([L2, 100], H2)], ecs: ecs(seq: 3))
     assert_equal({ 'vni' => 100, 'rd' => "#{L1}:100", 'import' => ['65000:100'], 'export' => ['65000:100'],
                    'vtep_state' => 'ok', 'error' => nil, 'flood' => [L2], 'macs_local' => 0, 'macs_remote' => 1,
-                   'duplicates' => 0 }, @m.rows.first)
+                   'duplicates' => 0, 'encapsulation' => 'vxlan' }, @m.rows.first)
     r = @m.mac_rows(100).first
     assert_equal([H2, 'remote', L2, 3, false, 0, false], r.values_at('mac', 'place', 'vtep', 'seq', 'sticky', 'moves', 'duplicate'))
     assert_match(/\A\d{4}-\d\d-\d\dT/, r['since'])
     assert_nil(@m.mac_rows(999))
+  end
+
+  # EVPN over MPLS (docs/design/evpn-mpls.md). MAC-VRF 300 is mpls, with
+  # this PE's labels 25000 (unicast) and 25001 (BUM); L2 gave 26000 and
+  # 26001. vtep4rd has VNI 300 as mpls.
+
+  def mpls_setup(vtep_encap: 'mpls')
+    @vtep = FakeVtep.new(300 => ['evpn', vtep_encap])
+    list = BGP::Rib::Macvrf.list([{ 'vni' => 300, 'encapsulation' => 'mpls', 'import' => ['65000:300'],
+                                    'export' => ['65000:300'] }], address: L1, as: 65000)
+    BGP::Rib::Macvrf.assign_labels(list, { 'start' => 25_000, 'size' => 100 })
+    @m = BGP::Rib::Macvrfs.new(table: @t, macvrfs: list, vtep: @vtep, address: L1, events: @events, clock: -> { @now })
+  end
+
+  def mpls_type2(rd, mac, label)
+    { :mac_ip_advertisement => { :rd => rd, :ethernet_tag_id => 0, :mac => mac, :label1 => { :label => label } } }
+  end
+
+  def mpls_ir(id, label)
+    BGP::Pmsi_tunnel.new(:tunnel_type => :ingress_replication, :identifier => id, :label => label)
+  end
+
+  def test_over_mpls_our_labels_go_to_vtep4rd_first
+    mpls_setup
+    @m.sync!
+    assert_equal([['vni.labels', { 'vni' => 300, 'unicast' => 25_000, 'bum' => 25_001 }]], @vtep.orders)
+    @m.sync!
+    assert_equal(1, @vtep.orders.size, 'not sent again while vtep4rd has them')
+  end
+
+  # Receiving over MPLS: no Encapsulation community, the remote PE's
+  # labels taken as 20 bits.
+  def test_over_mpls_a_remote_pes_labels_go_to_vtep4rd
+    mpls_setup
+    send_routes(L2, [type3([L2, 300], L2)], pmsi: mpls_ir(L2, 26_001), ecs: ecs(rt: 300, encap: nil))
+    send_routes(L2, [mpls_type2([L2, 300], H2, 26_000)], ecs: ecs(rt: 300, encap: nil))
+    assert_include(@vtep.orders, ['vni.flood.add', { 'vni' => 300, 'vtep' => L2, 'label' => 26_001 }])
+    assert_include(@vtep.orders, ['mac.add', { 'vni' => 300, 'mac' => H2, 'vtep' => L2, 'seq' => 0, 'label' => 26_000 }])
+    n = @vtep.orders.size
+    @m.sync!
+    assert_equal(n, @vtep.orders.size, 'nothing again while nothing changed')
+    assert_equal([{ 'mac' => H2, 'label' => 26_000 }], @m.mac_rows(300).collect { |r| r.slice('mac', 'label') })
+    row = @m.rows.first
+    assert_equal(['mpls', { 'unicast' => 25_000, 'bum' => 25_001 }, { L2 => 26_001 }],
+                 row.values_at('encapsulation', 'labels', 'flood_labels'))
+  end
+
+  # A remote PE that gives a new label is sent again.
+  def test_over_mpls_a_new_remote_label_is_sent_again
+    mpls_setup
+    send_routes(L2, [type3([L2, 300], L2)], pmsi: mpls_ir(L2, 26_001), ecs: ecs(rt: 300, encap: nil))
+    send_routes(L2, [type3([L2, 300], L2)], pmsi: mpls_ir(L2, 26_011), ecs: ecs(rt: 300, encap: nil))
+    assert_equal(['vni.flood.add', { 'vni' => 300, 'vtep' => L2, 'label' => 26_011 }], @vtep.orders.last)
+  end
+
+  # An MPLS route may say MPLS (tunnel type 10, RFC 8365 section 11); one
+  # that says VXLAN is not for an MPLS MAC-VRF, nor a reserved label.
+  def test_over_mpls_what_is_refused
+    mpls_setup
+    send_routes(L2, [mpls_type2([L2, 300], H2, 26_000)], ecs: ecs(rt: 300, encap: 10))
+    assert_nil(evpn_row(2, "#{L2}:300", H2)['invalid'])
+    send_routes(L3, [mpls_type2([L3, 300], H1, 26_000)], ecs: ecs(rt: 300, encap: :vxlan))
+    assert_equal('encapsulation', evpn_row(2, "#{L3}:300", H1)['invalid'])
+    send_routes(L3, [mpls_type2([L3, 301], '02:00:00:00:01:09', 3)], ecs: ecs(rt: 300, encap: nil))
+    assert_equal('label', evpn_row(2, "#{L3}:301", '02:00:00:00:01:09')['invalid'])
+  end
+
+  # A VXLAN MAC-VRF still refuses a route with no Encapsulation community.
+  def test_a_vxlan_macvrf_refuses_a_route_with_no_encapsulation
+    send_routes(L2, [type2([L2, 100], H2)], ecs: ecs(encap: nil))
+    assert_equal('encapsulation', evpn_row(2, "#{L2}:100", H2)['invalid'])
+  end
+
+  # vtep4rd with the VNI as vxlan, or a vtep4rd from before EVPN over
+  # MPLS, which gives no encap: the MAC-VRF is not served.
+  def test_over_mpls_a_vtep4rd_with_the_vni_as_vxlan_is_refused
+    mpls_setup(vtep_encap: nil)
+    @m.sync!
+    assert_equal([], @vtep.orders)
+    assert_equal(['encap', 'vtep4rd has it as vxlan, not mpls'], @m.rows.first.values_at('vtep_state', 'error'))
+  end
+
+  # Exporting over MPLS: the labels, and no Encapsulation community.
+  def test_over_mpls_exports_carry_our_labels
+    mpls_setup
+    @vtep.learn(300, H1, 'eth3')
+    @m.sync!
+    assert_equal([[3, nil, 'mpls', 25_001], [2, H1, 'mpls', 25_000]],
+                 @m.exports.collect { |e| [e.route_type, e.mac, e.encapsulation, e.label] })
   end
 end

@@ -1030,6 +1030,41 @@ hop, to every session that negotiated L2VPN EVPN. `show.evpn` lists
 them with `peer` null and `reason` `local`, and `show.peers` counts
 them as `sent`.
 
+**MAC-VRFs over MPLS** (`docs/design/evpn-mpls.md`, pull request 1).
+A MAC-VRF with `encapsulation: mpls` carries its frames over the MPLS
+core through vtep4rd's MPLS edge (vtep4r `docs/mpls.md`, since vtep4r
+#18), which pushes the transport labels the IGP put on the route to each
+remote PE:
+
+```yaml
+evpn:
+  labels: { start: 25000, size: 1000 }   # this PE's labels; may not overlap l3vpn: labels
+macvrfs:
+  - vni: 300                             # vtep4rd's bridge domain, which must be encap mpls
+    encapsulation: mpls                  # vxlan, the default, or mpls
+```
+
+- **Two labels each**, unicast then BUM, from `evpn: labels:` in the
+  order of the list: the first MPLS MAC-VRF takes 25000 and 25001. They
+  are fixed for a run, since `macvrfs:` needs a restart. bgp4rd gives
+  them to vtep4rd with `vni.labels` and advertises them: unicast in
+  Label1 of its type 2 routes, BUM as its type 3 route's PMSI label,
+  each in the field's high 20 bits, with no Encapsulation community.
+  bgp4rd cannot see the SRGB: a lab keeps the two blocks apart.
+- **Receiving.** A route with no Encapsulation community, or one naming
+  MPLS (tunnel type 10), is taken; one naming VXLAN is `invalid`
+  `encapsulation`. Label1 and the PMSI label are the remote PE's labels,
+  read as 20 bits; one absent or reserved (below 16) is `invalid`
+  `label`. `mac.add` and `vni.flood.add` carry the remote label, and a
+  new label is sent again.
+- **vtep4rd** must have the VNI in `evpn` mode as `encap: mpls`; a VNI
+  it has as VXLAN, or a vtep4rd from before EVPN over MPLS, is
+  `vtep_state` `encap` in `show.macvrfs`.
+- **FRR is no MPLS data plane peer.** FRR 10.7.1 imports EVPN routes
+  from an MPLS PE into its VXLAN VNIs, with or without an Encapsulation
+  community naming MPLS, and sends them VXLAN (vtep4r `docs/mpls.md`).
+  An FRR VXLAN leaf must not share a Route Target with an MPLS MAC-VRF.
+
 **MAC Mobility** (RFC 7432 section 15). Each MAC has one place: a port
 here, or one remote VTEP. A MAC first learned here is sent with no MAC
 Mobility community. A MAC learned here that a remote route holds is
@@ -1277,9 +1312,9 @@ below.
 | `show.unreachability` | Unreachability reports, SAFI 81 and EVPN route type 254: those this speaker makes, and those received per peer, with their reporters | built |
 | `show.vpn` | the VPN-IPv4 and VPN-IPv6 routes received (AFI 1 and 2 / SAFI 128), one row each: RD, prefix, peer, next hop, labels, Route Targets, Site of Origin (`soo`), `originator_id` and `cluster_list`, best; and those this PE sends, with peer null, reason `local` and their `vrf` | built |
 | `show.vpn_labels` | each exporting VRF's label: label, VRF, the action, installed or why not | built |
-| `show.evpn` | the EVPN routes received, types 2 and 3 (AFI 25 / SAFI 70), one row per path: RD, type, key fields, originator, VNI, next hop, Route Targets, encapsulation, MAC Mobility, PMSI Tunnel, best; `route_type`, `rd` and `mac` narrow it. With MAC-VRFs, `imported` (their VNIs), `valid` and `invalid` (why not installed). docs/design/evpn.md, pull requests 1 and 2 | built |
-| `show.macvrfs` | the MAC-VRFs: VNI, RD, Route Targets, vtep4rd's state for the VNI, the flood VTEPs, the local and remote MAC counts. docs/design/evpn.md, pull request 2 | built |
-| `show.macvrf` | one MAC-VRF's MACs, `vni` required: the remote ones from type 2 routes, with their VTEP and sequence, and the local ones vtep4rd learned on its ports | built |
+| `show.evpn` | the EVPN routes received, types 2 and 3 (AFI 25 / SAFI 70), one row per path: RD, type, key fields, originator, VNI, `label` (the field's high 20 bits, the label over MPLS), next hop, Route Targets, encapsulation, MAC Mobility, PMSI Tunnel, best; `route_type`, `rd` and `mac` narrow it. With MAC-VRFs, `imported` (their VNIs), `valid` and `invalid` (why not installed). docs/design/evpn.md, pull requests 1 and 2 | built |
+| `show.macvrfs` | the MAC-VRFs: VNI, RD, Route Targets, vtep4rd's state for the VNI, the flood VTEPs, the local and remote MAC counts, `encapsulation`; over MPLS also `labels` (ours) and `flood_labels` (each flood VTEP's BUM label). docs/design/evpn.md, pull request 2; docs/design/evpn-mpls.md, pull request 1 | built |
+| `show.macvrf` | one MAC-VRF's MACs, `vni` required: the remote ones from type 2 routes, with their VTEP and sequence (and over MPLS their `label`), and the local ones vtep4rd learned on its ports | built |
 | `show.vrfs` | the VRFs: name, table, RD, Route Targets, the device's state, routes imported and installed | built |
 | `show.vrf` | each VRF's imported routes: what is pushed, where it goes, installed or why not; `vrf` picks one | built |
 | `show.rpki` | the RTR caches of `rpki:`, one row each: address, port, preference, state, Session ID, serial, VRP counts, the three intervals (docs/rpki.md) | built |

@@ -570,7 +570,7 @@ class BGP_Daemon_Speaker_Test < Test::Unit::TestCase
     assert_equal('/tmp/v.sock', s.vtep_path)
     assert_equal('10.0.0.1:100', speaker('macvrfs' => [{ 'vni' => 100 }]).macvrfs.macvrfs.first.rd)
     e = assert_raise(ArgumentError) { speaker('macvrfs' => [{ 'vni' => 100 }], 'evpn' => { 'duplicates' => 1 }) }
-    assert_equal('evpn: unknown key(s) duplicates: use one of vtep, duplicate, vtep_hold, seq_memory', e.message)
+    assert_equal('evpn: unknown key(s) duplicates: use one of vtep, duplicate, vtep_hold, seq_memory, labels', e.message)
     m = speaker('macvrfs' => [{ 'vni' => 100 }],
                 'evpn' => { 'duplicate' => { 'moves' => 3, 'seconds' => 60 }, 'vtep_hold' => 10 }).macvrfs
     assert_equal([3, 60, 10, 60], [m.moves_limit, m.seconds, m.hold, m.seq_memory], 'seq_memory follows seconds')

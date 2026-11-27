@@ -115,6 +115,17 @@ module BGP
         end
       end
 
+      # The MPLS label, over MPLS: Label1's 20 bits for type 2, the PMSI
+      # Tunnel's for type 3 (RFC 7432 sections 7.2 and 11.1). The same
+      # field vni reads whole.
+      def label
+        if route_type == 2
+          nlri.route.label1.label
+        else
+          pmsi&.label
+        end
+      end
+
       def pmsi
         pa = route.path_attribute
         pa.has?(BGP::Pmsi_tunnel) ? pa[BGP::Pmsi_tunnel] : nil

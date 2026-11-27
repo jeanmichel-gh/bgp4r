@@ -304,6 +304,54 @@ On `evpn-mpls-ruby`:
 5. **The label block's default**, 25000 to 25999, beside L3VPN's 24000.
    *Answered 2026-11-27: 25000 to 25999.*
 
+## As built
+
+**Pull request 0, vtep4r** (#16 to #18, 2026-11-27), in three:
+
+- 0a, the codec (vtep4r #16): `VXLAN::Mpls::Label`, `ControlWord`,
+  `Packet`, `Validation` and a fault catalog. RFC 4182 section 2 was
+  read for question 3: an explicit null on top is popped and the label
+  beneath it rises.
+- 0b, MPLS bridge domains (vtep4r #17): `encap: mpls`, always `evpn`
+  mode, since a packet over MPLS does not say which PE sent it; two
+  labels each; `vni.labels`, `show.labels`, and `label` on `mac.add`
+  and `vni.flood.add`.
+- 0c, the edge (vtep4r #18): `core:` devices read for EtherType 0x8847,
+  each remote PE resolved every second, `show.transport`. The
+  measurements above are tests in five namespaces (`test/lab/mpls_test.rb`,
+  in vtep4r's CI): the frame on P's link is pe2's node SID, the EVPN
+  label, a zero control word and the frame; a MAC starting 46 crosses
+  intact; an explicit null from P is taken; a new transport label is
+  used 0.17 to 0.42 s after the route changes.
+- **The check of FRR**, as asked: FRR 10.7.1 imports routes from an
+  MPLS PE into its VXLAN VNI and programs VXLAN entries toward that PE,
+  with no Encapsulation community (RFC 8365 section 5.1.3 lets it
+  assume its configured one) and with one naming MPLS alike. So FRR is
+  no data plane peer, and an FRR VXLAN leaf must not share a Route
+  Target with an MPLS MAC-VRF. Decision 6 makes no difference to FRR.
+
+**Pull request 1, bgp4r** (this pull request):
+
+- `encapsulation: mpls` on a MAC-VRF; `evpn: labels:` gives two labels
+  each, unicast then BUM, in the order of the list, as `l3vpn: labels`
+  gives a VRF its label. A block that overlaps `l3vpn: labels` is
+  refused at start. `macvrfs:` needs a restart, so the labels are fixed
+  for a run.
+- Receiving: as designed, plus one reason, `label`, for a Label1 or
+  PMSI label that is absent or reserved (below 16), which vtep4rd could
+  not push. A route naming MPLS (tunnel type 10) is taken as one with
+  no community.
+- vtep4rd is sent our labels (`vni.labels`) before its flood list and
+  MACs, and a flood VTEP or MAC whose label changed is sent again. A
+  VNI vtep4rd has as VXLAN is `vtep_state` `encap`.
+- Exporting: Label1 and the PMSI label in the field's high 20 bits,
+  Label1 with its bottom of stack bit set, as `BGP::Label` writes it and
+  bgp4r-sim's MPLS routes are; no Encapsulation community. A VXLAN and
+  an MPLS MAC-VRF's routes never share an UPDATE.
+- `show.macvrfs` gives `encapsulation`, `labels` and `flood_labels`;
+  `show.macvrf` a remote MAC's `label`; `show.evpn` each route's
+  `label`.
+
 ## The measurement's script
 
 Run as root. `send.py`, beside it, sends one raw frame:

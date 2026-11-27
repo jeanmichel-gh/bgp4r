@@ -1072,7 +1072,7 @@ module BGP
                                         cluster_id: decision_options[:cluster_id])
         build_l3vpn(config['vrfs'], config['l3vpn'])
         build_vpn_reflector
-        build_evpn(config['macvrfs'], config['evpn'], arg[:vtep_client])
+        build_evpn(config['macvrfs'], config['evpn'], arg[:vtep_client], (config['l3vpn'] || {})['labels'])
         if config['link_state']
           @link_state_producer = LinkStateProducer.new(self, config['link_state'], :logger => @logger)
           on_established { |p| @link_state_producer.session_up(p) }
@@ -1774,12 +1774,14 @@ module BGP
       end
 
       # The keys of the evpn: block, docs/design/evpn.md, Configuration.
-      EVPN_KEYS = %w[vtep duplicate vtep_hold seq_memory].freeze
+      EVPN_KEYS = %w[vtep duplicate vtep_hold seq_memory labels].freeze
       DUPLICATE_KEYS = %w[moves seconds].freeze
 
       # MAC-VRFs: docs/design/evpn.md, pull request 2. vtep_client is a
       # test's stand-in for vtep4rd's socket.
-      def build_evpn(macvrfs, evpn, vtep_client)
+      # l3vpn_labels: the l3vpn: labels block, which evpn: labels may not
+      # overlap (docs/design/evpn-mpls.md).
+      def build_evpn(macvrfs, evpn, vtep_client, l3vpn_labels = nil)
         evpn ||= {}
         raise ArgumentError, 'evpn: is a mapping' unless evpn.is_a?(Hash)
         unknown = evpn.keys - EVPN_KEYS
@@ -1789,6 +1791,7 @@ module BGP
         address = @local_address || @router_id
         list = BGP::Rib::Macvrf.list(macvrfs, address: address, as: @my_as)
         return if list.empty?
+        BGP::Rib::Macvrf.assign_labels(list, evpn['labels'], l3vpn_labels)
         dup = evpn['duplicate'] || {}
         raise ArgumentError, 'evpn: duplicate: is a mapping' unless dup.is_a?(Hash)
         unknown = dup.keys - DUPLICATE_KEYS
