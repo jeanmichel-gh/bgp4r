@@ -1438,6 +1438,29 @@ the fault matrix against bgp4rd and FRR, and the interop test.
   checks on receipt: more than one instance, or a value above 2. Both
   wait for a router without caches that needs them.
 
+
+### As built (7c3)
+
+- **The matrix**: each RTR fault and behaviour against bgp4rd
+  (`test/functional/rtr_fault_matrix_test.rb`) and against FRR 10.5.1,
+  CI's (`test/functional/lab/rtr_fault_frr_test.rb`, `lab frr`), each
+  on a cache and a router of its own. The table is in
+  `docs/protocol-testing.md`. bgp4rd answers what the catalog expects.
+  FRR 10.5.1 answers as 10.7.1 did by hand: 0 for `rtr_unknown_pdu`,
+  and it stays down after 6 and 7.
+- **bgp4rd's one gap**: it took `rtr_corrupt_length`'s prefix as a VRP.
+  The read loops of `Rtr::Client` and `Rtr::Cache` parsed each PDU and
+  encoded it again before checking it, so the extra octets were gone.
+  Both check the octets as they came, `Rtr.slices`.
+- **`rtr_silent`'s Expire** is bgp4rd's matrix's, on a manual clock:
+  RFC 8210 section 6 sets 600 s as the least, and FRR's test does not
+  wait for it.
+- **The interop test** (`test/functional/lab/rpki_frr_test.rb`) runs on
+  FRR 10.5.1, not 10.7.1 as Tests above says: 10.5.1 is what CI's `lab
+  frr` installs, and it has the RPKI module. bgp4rd and FRR agree on
+  seven routes, before and after a VRP change.
+- **CI installs `frr-rpki-rtrlib`**, bgpd's `-M rpki`, beside `frr`.
+
 ### routescope shows
 
 Each cache's session, serial and VRP count; a Validation column on

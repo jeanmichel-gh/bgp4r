@@ -11,7 +11,8 @@ three parts. 7a, the codec, and 7b, a cache in Ruby (`bgp4r-rtr`), are
 built and described here. 7c, origin validation in bgp4rd, is built in
 parts: 7c1, the RTR client and each route's state, and 7c2, `invalid:
 prefer_less` and `reject` and `mark_ibgp`, are described in section 5.
-7c3, the fault matrix against bgp4rd and FRR, is not built yet.
+7c3, the fault matrix against bgp4rd and FRR and the interop test, is
+section 6.
 
 ## 1. The PDUs
 
@@ -117,7 +118,7 @@ code: all but 2, No Data Available.
 `BGP::Fault::RTR` holds what a cache can send that a router must
 refuse. `Fault.rtr(name, session_id)` gives the octets of each PDU, in
 order. `docs/protocol-testing.md` has the list. `bgp4r-rtr` sends them
-(section 4). The matrix against bgp4rd comes with 7c.
+(section 4). What bgp4rd and FRR answer to each is section 6.
 
 ## 4. The cache, `bgp4r-rtr`
 
@@ -519,3 +520,39 @@ prefix, the peer, and the state it was and is:
   ]
 }
 ```
+
+## 6. Against FRR, and the matrix
+
+**The interop test**, `test/functional/lab/rpki_frr_test.rb`, CI's
+`lab frr`: one `Rtr::Cache` serves bgp4rd and FRR 10.5.1 the same
+VRPs, one bgp4r-sim sends both the same seven routes, and the two must
+give each route the same state. The routes are the cases of RFC 6811
+section 2: Matched, Covered by a VRP for another AS, within and longer
+than a Max Length, a VRP for AS 0, not Covered, and shorter than the
+VRP. Then a VRP change, which both follow. FRR's state is
+`rpkiValidationState` in `show bgp ipv4 unicast PREFIX json`, `valid`,
+`invalid` or `not found`. They agreed on every route, measured on
+2026-11-27.
+
+bgpd needs `-M rpki`, which Ubuntu packages apart from FRR, in
+`frr-rpki-rtrlib`. Its config is a block of its own:
+
+```
+rpki
+ rpki retry_interval 5
+ rpki cache tcp 127.0.0.1 PORT preference 1
+exit
+```
+
+**The fault matrix**, each case of `BGP::Fault::RTR` and of the three
+behaviours against bgp4rd (`test/functional/rtr_fault_matrix_test.rb`)
+and against FRR 10.5.1 (`test/functional/lab/rtr_fault_frr_test.rb`).
+The table is in `docs/protocol-testing.md`. bgp4rd answers what RFC
+8210 expects. FRR answers `rtr_unknown_pdu` with code 0 where section
+12 has 5, as 10.7.1 did, and after codes 6 and 7 it does not come back
+by itself.
+
+The matrix found one gap in bgp4rd, closed with it: bgp4rd's client and
+`bgp4r-rtr` took a PDU longer than its type's Length, since each read
+loop parsed the PDU and encoded it again before checking it. They now
+check the octets as they came, `Rtr.slices`.

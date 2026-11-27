@@ -348,6 +348,17 @@ module Features
       :doc   => 'docs/rpki.md',
       :unit  => %w[rtr/client_test rtr/vrps_test daemon/rpki_test rtr/validation_test fault_test daemon/cli_doc_test],
       :functional => %w[rpki_daemon_test],
+      :lab   => %w[rpki_frr_test],
+    },
+
+    'rpki-fault-matrix' => {
+      :area  => 'session',
+      :about => "BGP::Fault::RTR and the RTR behaviours against bgp4rd's RTR client and FRR's bgpd, and what each answered",
+      :rfc   => 'RFC 8210 sections 6, 8 and 12',
+      :doc   => 'docs/protocol-testing.md',
+      :unit  => %w[rtr/pdus_test fault_test],
+      :functional => %w[rtr_fault_matrix_test rtr_cache_test],
+      :lab   => %w[rtr_fault_frr_test],
     },
 
     'rpki-policy' => {

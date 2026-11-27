@@ -20,8 +20,8 @@ amounts. Measured 2026-11-03:
 | Tier | What it needs | Files | Time | Command |
 |---|---|---:|---|---|
 | unit | Ruby | 198 | 21s | `ruby test/run_unit.rb` |
-| functional | a loopback socket | 33 | 18s | one file at a time, below |
-| lab | gobgpd, FRR, Docker or root | 43 | 10s to 400s per group | `ruby test/run_lab.rb GROUP` |
+| functional | a loopback socket | 34 | 18s | one file at a time, below |
+| lab | gobgpd, FRR, Docker or root | 45 | 10s to 400s per group | `ruby test/run_lab.rb GROUP` |
 
 **The first two tiers together are under a minute and need nothing
 installed.** That is worth knowing before reaching for a lab test.
@@ -101,6 +101,7 @@ Getting a session up and keeping it.
 | `route-refresh-answer` | 3 | 1 | 1 | a route refresh answered with the family's Adj-RIB-Out, between BoRR and EoRR to an enhanced peer; counted and published |
 | `route-refresh-stale` | 9 | 1 | 1 | a BoRR marks the peer's routes of a family stale in every table, the EoRR or refresh_stale_time removes what is still stale; 7/1 for a wrong length |
 | `rpki-rtr` | 4 | 0 | 0 | the RTR PDUs of RFC 8210 and RFC 6810, their findings, and BGP::Fault::RTR |
+| `rpki-fault-matrix` | 2 | 2 | 1 | BGP::Fault::RTR and the RTR behaviours against bgp4rd's RTR client and FRR's bgpd, and what each answered |
 | `graceful-restart` | 12 | 1 | 1 | graceful_restart on a neighbor: a helper, keeping a restarting peer's routes stale until its End-of-RIB, its Restart Time or stale_time; RFC 8538's N bit and Hard Reset |
 | `gtsm` | 1 | 1 | 0 | ttl_security on a neighbor: GTSM, sent at TTL 255, dropped below 256 - hops |
 | `tcp-md5` | 1 | 1 | 1 | password on a neighbor: TCP MD5, every segment signed, a missing or wrong digest dropped |
@@ -112,7 +113,7 @@ Deciding and advertising routes.
 
 | Feature | unit | func | lab | What |
 |---|---:|---:|---:|---|
-| `rpki-origin-validation` | 6 | 1 | 0 | bgp4rd's rpki: key: an RTR client per cache, the VRPs of the preferred caches, and each unicast route's state, Valid, Invalid or NotFound |
+| `rpki-origin-validation` | 6 | 1 | 1 | bgp4rd's rpki: key: an RTR client per cache, the VRPs of the preferred caches, and each unicast route's state, Valid, Invalid or NotFound |
 | `rpki-policy` | 5 | 1 | 0 | rpki:'s invalid: prefer_less and reject in the decision, a VRP change decided again, and mark_ibgp's origin validation state community |
 | `rib` | 7 | 1 | 0 | Adj-RIB-In, the decision process and the Loc-RIB |
 | `vpn-table` | 3 | 1 | 1 | The VPN table: VPN-IPv4 and VPN-IPv6 routes received (SAFI 128), keyed on RD and prefix, best path per key, reflected between PEs |
@@ -682,6 +683,20 @@ bgp4r-rtr, an RTR cache: VRPs from a YAML file, Serial Notify on a change, and t
 ruby test/run_feature.rb rpki-cache
 ```
 
+### `rpki-fault-matrix`
+
+BGP::Fault::RTR and the RTR behaviours against bgp4rd's RTR client and FRR's bgpd, and what each answered.
+
+- RFC 8210 sections 6, 8 and 12
+- Read first: `docs/protocol-testing.md`
+- 2 unit files, 2 functional
+- lab:
+  - `rtr_fault_frr_test`, needs frr
+
+```
+ruby test/run_feature.rb rpki-fault-matrix
+```
+
 ### `rpki-origin-validation`
 
 bgp4rd's rpki: key: an RTR client per cache, the VRPs of the preferred caches, and each unicast route's state, Valid, Invalid or NotFound.
@@ -689,6 +704,8 @@ bgp4rd's rpki: key: an RTR client per cache, the VRPs of the preferred caches, a
 - RFC 6811 sections 2 and 4, RFC 8210 sections 5 to 8, 10 and 12
 - Read first: `docs/rpki.md`
 - 6 unit files, 1 functional
+- lab:
+  - `rpki_frr_test`, needs frr
 
 ```
 ruby test/run_feature.rb rpki-origin-validation
@@ -1115,5 +1132,5 @@ test file has to be tagged before the suite is green again, which is
 the same arrangement `test/unit/lab_groups_test.rb` has with the CI
 matrix.
 
-274 of 274 test files are tagged. The
+277 of 277 test files are tagged. The
 remainder, if any, is what the guard names.
