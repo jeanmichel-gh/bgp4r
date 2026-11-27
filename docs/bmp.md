@@ -7,9 +7,8 @@ of its own. Nothing goes from the station to the router (RFC 7854
 section 3.2).
 
 This is P8's pull request 8 in `docs/design/bgp-operations.md`, in
-three parts. 8a, the codec, and 8b, a station in Ruby (`bgp4r-bmp`)
-with its JSON lines, are built and described here. 8c, BMP in bgp4rd,
-is not built yet.
+three parts, all built and described here: 8a, the codec; 8b, a station
+in Ruby (`bgp4r-bmp`) with its JSON lines; and 8c, BMP in bgp4rd.
 
 ## 1. The messages
 
@@ -595,5 +594,98 @@ and asserted there:
 - **No findings** but the two section 4 lists, `reserved_flags` and
   `unknown_stat`.
 
-bgp4rd's half of the interop, the station's two views of one sim
-compared, comes with 8c.
+bgp4rd's half of the interop is section 7.
+
+## 7. BMP in bgp4rd
+
+With a `bmp:` key, bgp4rd is a monitored router: it dials each station
+and reports each peer of its global table to it.
+
+```yaml
+bmp:
+  stations: [{ address: 10.0.0.9, port: 5000 }]   # bgp4rd dials each
+  monitor: [pre_policy]            # the only one so far
+  stats_interval: 60               # seconds between Stats Reports
+  sys_name: r1                     # the Initiation's sysName; the host name by default
+  sys_descr: lab r1                # its sysDescr; "bgp4r VERSION" by default
+```
+
+A station may also have a `retry`, the first wait in seconds after a
+failed dial or a session that ended, doubling to 720 s. It is 30 s
+without one, as RFC 7854 section 3.2 suggests. A bad key stops bgp4rd
+at start, as any bad key does.
+
+**What a station gets** (section 3.3):
+
+1. An Initiation with sysDescr and sysName.
+2. For each Established peer, a Peer Up with both OPENs, bgp4rd's and
+   the peer's, and the session's addresses and ports. Then that peer's
+   Adj-RIB-In, one Route Monitoring per route, and an End-of-RIB for
+   each family the session negotiated.
+3. Each UPDATE the peer sends afterwards, as a Route Monitoring.
+4. A Peer Down when a session ends, with its reason (section 4.9).
+5. Every `stats_interval` seconds, a Stats Report for each peer with
+   three stats: the routes kept (type 7), and the UPDATEs and prefixes
+   treated as withdraw (types 11 and 12, RFC 7606).
+6. A Termination, reason 0, "Session administratively closed", when
+   bgp4rd stops.
+
+A station that connects late gets the same start, so the dump is the
+routes as they are then. Everything is queued in one order under one
+lock, so an UPDATE that arrives during a dump comes after it.
+Whatever a station sends back is read and dropped (section 3.2).
+
+**The Adj-RIB-In is pre-policy, as received.** bgp4rd keeps its own
+copy of each peer's routes, outside the RIB, so `bmp:` needs no `rib:`.
+An UPDATE that RFC 7606 treats as withdraw withdraws its routes from
+that copy. The per-peer header has the L flag clear, V for an IPv6
+peer, and A when the session's AS_PATH is two octets wide. Post-policy,
+the Loc-RIB (RFC 9069) and Route Mirroring come later. So do a VRF's CE
+sessions, which are not reported.
+
+**The Peer Down reasons**. 1, 3 and 4 are measured over loopback in
+`test/functional/bmp_daemon_test.rb`, and 2 is tested on its own in
+`test/unit/daemon/bmp_test.rb`:
+
+| What ended the session | Reason | Data |
+|---|---|---|
+| a NOTIFICATION bgp4rd sent, `peer.clear`'s Cease among them | 1 | that NOTIFICATION |
+| a NOTIFICATION the peer sent | 3 | that NOTIFICATION |
+| the connection, with no NOTIFICATION | 4 | none |
+| bgp4rd, with no NOTIFICATION | 2 | FSM event 10, HoldTimer_Expires, or 2, ManualStop |
+
+Whichever NOTIFICATION came first is used, as `Neighbor#down_cause`
+does. Both kinds reach the monitor as bgp4r's `notification` events,
+which come before the session goes down.
+
+**`show.bmp`** lists the stations: where, `up` or `connecting`, the
+sessions so far, the messages sent, since when, and the last error.
+Each station up and down, and each peer reported up and down, is a
+`bmp` event.
+
+```json
+{
+  "rows": [
+    {
+      "station": "127.0.0.1:41841",
+      "state": "up",
+      "sessions": 1,
+      "messages": 4,
+      "connected_at": "2026-11-27T21:47:19Z",
+      "last_error": null
+    }
+  ],
+  "total": 1,
+  "offset": 0,
+  "limit": 500,
+  "next_offset": null
+}
+```
+
+**Beside FRR.** In `test/functional/lab/bmp_bgp4rd_frr_test.rb` (CI's
+`lab frr`), bgp4rd and FRR 10.5.1 peer with one bgp4r-sim and report
+to one `bgp4r-bmp`. The station's two pre-policy views of the sim hold
+the same routes, with the same next hop, MED and community, after the
+announcement and after a withdrawal. Both views empty with a Peer Down,
+reason 4, when the sim goes. The AS_PATH differs. bgp4rd sends it as
+received, `65001 65010`, and FRR puts its own AS first (section 6).

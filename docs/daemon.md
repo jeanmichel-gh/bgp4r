@@ -310,6 +310,12 @@ rpki:                              # origin validation, RFC 6811; docs/rpki.md
   caches: [{ address: 10.0.0.9, port: 323, preference: 1 }]
   invalid: accept                  # accept (the default), prefer_less or reject
   mark_ibgp: false                 # RFC 8097's community toward internal peers
+
+bmp:                               # BMP, RFC 7854; docs/bmp.md
+  stations: [{ address: 10.0.0.9, port: 5000 }]   # bgp4rd dials each
+  monitor: [pre_policy]            # the only one so far
+  stats_interval: 60               # seconds between Stats Reports
+  sys_name: r1                     # the Initiation's sysName; the host name by default
 ```
 
 Notes on it, one key or block each.
@@ -324,6 +330,12 @@ configured" otherwise. `prefer_less` makes an Invalid route lose to any
 other, before LOCAL_PREF; `reject` leaves it out of the decision.
 `mark_ibgp` sends each route's state to internal peers in RFC 8097's
 community. docs/rpki.md section 5 has it all.
+
+`bmp:` reports each peer of the global table to BMP stations (RFC
+7854): a Peer Up with both OPENs, the routes as received, each UPDATE
+after, a Peer Down with its reason, stats, and a Termination when
+bgp4rd stops. bgp4rd dials each station, backing off 30 s to 720 s,
+and `show.bmp` lists them. docs/bmp.md section 7 has it all.
 
 `fib:` installs each best route with `ip route replace`, **except over a
 route another program holds.** A connected route, a static one or an
@@ -1319,6 +1331,7 @@ below.
 | `show.vrf` | each VRF's imported routes: what is pushed, where it goes, installed or why not; `vrf` picks one | built |
 | `show.rpki` | the RTR caches of `rpki:`, one row each: address, port, preference, state, Session ID, serial, VRP counts, the three intervals (docs/rpki.md) | built |
 | `show.rpki_vrps` | the VRPs origin validation uses now | built |
+| `show.bmp` | the BMP stations of `bmp:`, one row each: where, up or connecting, sessions, messages sent, since when (docs/bmp.md) | built |
 | `show.log` | the last N lines | built |
 | `events.subscribe`, `events.unsubscribe` | a stream, one event per line | built |
 | `peer.clear`, `peer.stop`, `peer.start` | one session | built |

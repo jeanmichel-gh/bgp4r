@@ -114,6 +114,13 @@ module BGP
         rows_page(@speaker.rpki ? @speaker.rpki.vrp_rows : [], params)
       end
 
+      # The BMP stations bgp4rd reports to, one row each: where, its
+      # state, how many sessions and messages, since when, the last
+      # error. Empty without a bmp: key (bgp/daemon/bmp.rb).
+      def bmp(params = {})
+        rows_page(@speaker.bmp ? @speaker.bmp.rows : [], params)
+      end
+
       # RFC 6811 section 2: a route not validated "SHOULD" be NotFound.
       # The VPN, VRF and EVPN rows say NotFound and that nobody looked,
       # so a reader can tell it from "no VRP covers it". Nothing without

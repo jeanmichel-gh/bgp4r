@@ -174,6 +174,7 @@ one. `prefix` reads one prefix instead of a page.
 | `show.vpn_labels` | each exporting VRF's label, one row each: `label`, `vrf`, `action`, `installed`, `error` | `offset`, `limit` |
 | `show.rpki` | the RTR caches, one row each: `address`, `port`, `mode`, `preference`, `state`, `version`, `session_id`, `serial`, `vrps_v4`, `vrps_v6`, `refresh`, `retry`, `expire`, `since`, `last_error`; empty without `rpki:` | `offset`, `limit` |
 | `show.rpki_vrps` | the VRPs origin validation uses now: `prefix`, `max_length`, `asn` | `offset`, `limit` |
+| `show.bmp` | the BMP stations, one row each: `station`, `state` (`up` or `connecting`), `sessions`, `messages`, `connected_at`, `last_error`; empty without `bmp:` | `offset`, `limit` |
 | `show.log` | the daemon's last log lines, oldest first | `count`, default 100 |
 | `show.text` | what `-c 'show bgp'` prints, as one JSON string | `style`, `prefix` |
 | `show.configuration` | the configuration as set lines | `candidate`, `format` |

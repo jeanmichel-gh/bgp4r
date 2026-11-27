@@ -25,6 +25,7 @@ require 'json'
 require 'bgp/version'
 require 'bgp4r'
 require 'bgp/bmp'
+require 'bgp/bmp/routes'
 require 'bgp/events'
 
 module BGP
@@ -431,54 +432,16 @@ module BGP
         table = p.routes[Station.view(msg.peer)]
         u = msg.update
         pa = u.path_attribute
-        if (family = Station.end_of_rib(u))
+        if (family = Routes.end_of_rib(u))
           p.eor << family unless p.eor.include?(family)
           event(router, 'end_of_rib', "peer #{msg.peer.address} End-of-RIB #{family.join('/')}", p, :afi => family[0], :safi => family[1])
         end
-        Station.withdrawn(u).each { |afi, safi, n| table.delete(Station.route_key(afi, safi, n)) }
+        Routes.withdrawn(u).each { |afi, safi, n| table.delete(Routes.key(afi, safi, n)) }
         attrs = pa ? pa.to_hash.reject { |k, _| %i[mp_reach mp_unreach].include?(k) } : {}
-        Station.announced(u).each do |afi, safi, n, next_hop|
-          table[Station.route_key(afi, safi, n)] =
+        Routes.announced(u).each do |afi, safi, n, next_hop|
+          table[Routes.key(afi, safi, n)] =
             { :afi => afi, :safi => safi, :nlri => n.to_hash, :next_hop => next_hop || attrs[:next_hop], :path_attributes => attrs }
         end
-      end
-
-      # A route without its labels: a withdrawal carries a Compatibility
-      # field where the label was (RFC 8277 section 2.4, as
-      # bgp/nlris/labeled.rb reads it), and withdraws the route all the
-      # same.
-      def self.route_key(afi, safi, nlri) ; [afi, safi, nlri.to_hash.reject { |k, _| %i[label labels compatibility].include?(k) }] ; end
-
-      def self.nlris(field) ; field ? field.nlris : [] ; end
-
-      def self.mp(update, klass)
-        pa = update.path_attribute
-        pa && pa.has?(klass) ? pa[klass] : nil
-      end
-
-      def self.withdrawn(u)
-        list = nlris(u.withdrawn).collect { |n| [1, 1, n] }
-        un = mp(u, Mp_unreach)
-        list += Array(un.nlris).collect { |n| [un.afi, un.safi, n] } if un
-        list
-      end
-
-      def self.announced(u)
-        list = nlris(u.nlri).collect { |n| [1, 1, n, nil] }
-        re = mp(u, Mp_reach)
-        list += Array(re.nlris).collect { |n| [re.afi, re.safi, n, Array(re.nexthops).first&.to_s] } if re
-        list
-      end
-
-      # RFC 4724 section 2: an UPDATE with nothing in it is IPv4
-      # unicast's End-of-RIB, and one with only an empty MP_UNREACH_NLRI
-      # is that family's.
-      def self.end_of_rib(u)
-        pa = u.path_attribute
-        attrs = pa ? pa.to_hash : {}
-        return [1, 1] if attrs.empty? && nlris(u.nlri).empty? && nlris(u.withdrawn).empty?
-        un = mp(u, Mp_unreach)
-        return [un.afi, un.safi] if un && attrs.keys == [:mp_unreach] && Array(un.nlris).empty? && nlris(u.nlri).empty?
       end
 
       # Under @lock: one JSON line, written and kept.
