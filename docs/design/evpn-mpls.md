@@ -1,7 +1,8 @@
 # EVPN in bgp4rd over MPLS
 
 Status: draft, 2026-11-26, for the owner's approval. Its questions are
-at the end.
+at the end. The owner answered questions 1 and 2 on 2026-11-27, each
+with a rename for later; 3 to 5 are open.
 
 This is the second half of P5 in routescope's `docs/protocol-coverage.md`:
 "EVPN in bgp4rd. MAC-VRF and an EVPN RIB, VXLAN first [...], then over
@@ -113,6 +114,10 @@ MAC table, ports, events and API stay. A bridge domain says its
 encapsulation, `vxlan` or `mpls`. The kernel is no option (above). A
 new daemon would copy vtep4rd's bridge.
 
+The owner chose this (2026-11-27, question 1). **To rename later:**
+vtep4r's name says VXLAN, and it will end MPLS too. The rename waits for
+a later stage; it is a deprecation across vtep4r, bgp4r and routescope.
+
 ### 2. The egress reads its labels raw; the kernel never sees a route for them
 
 vtep4rd reads frames of EtherType 0x8847 on the core devices, keeps
@@ -170,7 +175,10 @@ macvrfs:
 
 `vni:` stays the key of a MAC-VRF and of vtep4rd's bridge domain, so
 the API and routescope's views keep one name. Over MPLS it is never on
-the wire (question 2).
+the wire: there it is the local bridge domain's number. The owner chose
+this (2026-11-27, question 2). **To rename later:** the key should
+become a name that fits both encapsulations, such as `evi:` or `bd:`,
+at a later stage, through a deprecation.
 
 bgp4rd refuses at start a label block that overlaps `l3vpn: labels`.
 It cannot see the SRGB, so the lab's files keep them apart.
@@ -272,9 +280,11 @@ On `evpn-mpls-ruby`:
 ## Questions for the owner
 
 1. **vtep4rd as the MPLS data plane** (decision 1), rather than a new
-   daemon. Its name says VXLAN.
+   daemon. Its name says VXLAN. *Answered 2026-11-27: vtep4rd. Rename
+   VXLAN out of its name at a later stage.*
 2. **`vni:` as the MAC-VRF's key over MPLS**, though no VNI is on the
    wire, or a new key (`evi:`, `bd:`) with `vni:` kept for VXLAN.
+   *Answered 2026-11-27: keep `vni:`. Rename it at a later stage.*
 3. **Explicit null.** isis4rd's SR uses PHP. Should vtep4rd also take
    label 0 on top, for a core that sends explicit null?
 4. **SR Linux as a data plane interop peer**, if the release in
