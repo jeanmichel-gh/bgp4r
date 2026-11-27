@@ -93,6 +93,34 @@ module BGP
           :summary   => ((base && base[:summary]) || {}).merge(
                           :peers       => rows.size,
                           :established => rows.count { |r| r[:state] == 'established' }) }.merge(evpn_status)
+                                                                                   .merge(rpki_status)
+      end
+
+      # With an rpki: key only: the caches, how many are synchronised, and
+      # the VRPs used (bgp/daemon/rpki.rb).
+      def rpki_status
+        @speaker.rpki ? { :rpki => @speaker.rpki.summary } : {}
+      end
+
+      # The RTR caches, one row each: address, port, preference, state,
+      # Session ID, serial, the VRPs of each family, the three intervals,
+      # and since when the state holds. Empty without an rpki: key.
+      def rpki(params = {})
+        rows_page(@speaker.rpki ? @speaker.rpki.cache_rows : [], params)
+      end
+
+      # The VRPs origin validation uses now, one page of them.
+      def rpki_vrps(params = {})
+        rows_page(@speaker.rpki ? @speaker.rpki.vrp_rows : [], params)
+      end
+
+      # RFC 6811 section 2: a route not validated "SHOULD" be NotFound.
+      # The VPN, VRF and EVPN rows say NotFound and that nobody looked,
+      # so a reader can tell it from "no VRP covers it". Nothing without
+      # an rpki: key.
+      def not_validated(rows)
+        return rows unless @speaker.rpki
+        rows.collect { |r| r.merge('validation' => 'notfound', 'validated' => false) }
       end
 
       # With MAC-VRFs only: vtep4rd's socket and what stops a MAC-VRF, a
@@ -215,7 +243,7 @@ module BGP
       # Outside the RIB, so outside its lock: see bgp/rib/vpn_table.rb for
       # the row. docs/design/l3vpn-pe.md, pull request 1.
       def vpn(params = {})
-        rows_page(@speaker.vpn_rows, params)
+        rows_page(not_validated(@speaker.vpn_rows), params)
       end
 
       # The EVPN routes received, types 2 and 3 (AFI 25 / SAFI 70), one
@@ -224,7 +252,7 @@ module BGP
       # docs/design/evpn.md, pull request 1.
       def evpn(params = {})
         p = (params || {}).to_h { |k, v| [k.to_s, v] }
-        rows = @speaker.evpn_rows
+        rows = not_validated(@speaker.evpn_rows)
         rows = rows.select { |r| r['route_type'] == Integer(p['route_type']) } if p['route_type']
         rows = rows.select { |r| r['rd'] == p['rd'].to_s } if p['rd']
         rows = rows.select { |r| r['mac'] == p['mac'].to_s.downcase } if p['mac']
@@ -270,7 +298,7 @@ module BGP
       # prefix, RD, next hop, VPN labels, transport and its labels, gateway
       # and device, installed, and why not. `vrf` picks one VRF.
       def vrf(params = {})
-        rows_page(@speaker.vrf_route_rows(params['vrf'] || params[:vrf]), params)
+        rows_page(not_validated(@speaker.vrf_route_rows(params['vrf'] || params[:vrf])), params)
       end
 
       # The label of each VRF that sends its routes, and whether the

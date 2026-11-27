@@ -266,6 +266,20 @@ module BGP
         end
       end
 
+      # What gives each unicast route its RPKI state, RFC 6811: an object
+      # answering `word(route)`, or nil when origin validation is off
+      # (bgp/daemon/rpki.rb).
+      attr_accessor :validator
+
+      # The route's state as the views word it, 'valid', 'invalid' or
+      # 'notfound', or nil when origin validation is off.
+      def validation(route) ; @validator&.word(route) ; end
+
+      # Every imported route whose prefix the block chooses, copied.
+      def imported_routes
+        sync { @imported.select { |prefix, _| yield(prefix) }.flat_map { |_, by_peer| by_peer.values } }
+      end
+
       # The imported routes to prefix that the decision chooses from.
       def candidates(prefix)
         sync { (@imported[Route.normalize(prefix)] || {}).values }

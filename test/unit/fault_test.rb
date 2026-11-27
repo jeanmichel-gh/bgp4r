@@ -381,7 +381,7 @@ class TestFault < Test::Unit::TestCase
     assert_equal([response, v4 % 1, v4 % 1, eod], hex[:rtr_duplicate_announce])
     assert_equal([response, '010400000000001801181800c00002000000fde700000000', eod], hex[:rtr_corrupt_length])
     cat = BGP::Fault.rtr_catalog.to_h { |c| [c[:name], [c[:expected], c[:rfc]]] }
-    assert_equal({ :rtr_unknown_pdu => [5, 'RFC 8210 12'], :rtr_bad_version => [4, 'RFC 8210 7, 12'],
+    assert_equal({ :rtr_unknown_pdu => [5, 'RFC 8210 12'], :rtr_bad_version => [8, 'RFC 8210 7, 12'],
                    :rtr_unexpected_version => [8, 'RFC 8210 7, 12'], :rtr_withdraw_unknown => [6, 'RFC 8210 12'],
                    :rtr_duplicate_announce => [7, 'RFC 8210 5.6, 12'], :rtr_corrupt_length => [0, 'RFC 8210 5.6, 12'] }, cat)
     found = { :rtr_unknown_pdu => 0, :rtr_bad_version => 0, :rtr_unexpected_version => 0, :rtr_corrupt_length => 1 }

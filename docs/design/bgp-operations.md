@@ -1300,7 +1300,7 @@ port, rpki-rtr (323)", and SHOULD use TCP-AO when they can.
 | Name | What is sent | RFC expects of the router | Section |
 | --- | --- | --- | --- |
 | `rtr_unknown_pdu` | PDU type 99 | Error Report 5, drop the session | 8210 12 |
-| `rtr_bad_version` | version 9 | Error Report 4, drop | 8210 12 |
+| `rtr_bad_version` | version 9 | Error Report 8, drop (4 until 7c; see As built (7c1)) | 8210 7, 12 |
 | `rtr_unexpected_version` | version 0 after 1 was negotiated | Error Report 8, drop | 8210 12 |
 | `rtr_withdraw_unknown` | a withdrawal of a prefix never announced | Error Report 6, drop | 8210 12 |
 | `rtr_duplicate_announce` | the same prefix announced twice | Error Report 7, drop | 8210 12 |
@@ -1367,6 +1367,45 @@ Reset: the router sends a Reset Query, 8210 5.9).
   `rtr_withdraw_unknown` FRR did not reconnect in four minutes.
 - An interop test in CI waits for 7c, whose matrix runs bgp4rd and FRR
   against the cache.
+
+### As built (7c1)
+
+7c is built in three parts, as 2, 3 and 7 were: 7c1 the client and the
+states, 7c2 `invalid: prefer_less` and `reject` and `mark_ibgp`, 7c3
+the fault matrix against bgp4rd and FRR, and the interop test.
+
+- **`Rtr::Client`** in `bgp/rtr/client.rb`: the router's side of
+  section 8, versions 1 and 0, on a manual clock like `Rtr::Cache`. An
+  answer becomes the data at its End of Data, whole. The data stays
+  while the cache is down and goes at Expire (6).
+- **A cache entry's `retry`**, not in the spec: the seconds between
+  connections until the cache gives its own Retry Interval. Section 6's
+  600 s before a first answer is long for a lab whose cache starts
+  late; FRR waits the same (routescope's `bgp-operations-views.md`).
+- **Corrupt Data in answer to a Serial Query flushes the data.** A
+  cache that restarted has another Session ID and answers so; section
+  5.1 says the router "MUST flush all data learned from that cache".
+  Without the flush the client asked from the old serial for ever.
+- **After negotiation, any other version is code 8**, version 9
+  included, in `Rtr::Validation`, and `rtr_bad_version` expects 8, not
+  7a's 4. Section 7 answers "a PDU for a different Protocol Version once
+  the above negotiation completes" with 8, and FRR 10.7.1 answered 8.
+- **Which VRPs**: the caches synchronised and not expired at the lowest
+  `preference`, together (sections 4 and 10). Each client stays
+  connected, so a less preferred cache's data is ready when the
+  preferred ones go.
+- **The state is read, not stored.** `Table#validator` answers each
+  route's state from the VRPs when a view asks, so it is right after
+  every change with nothing to recompute. 7c2's decision steps read the
+  same, and decide again the prefixes a VRP change covers (6811 4).
+- **Validated**: IPv4 and IPv6 unicast in the main table, received and
+  originated. A CE's routes in a VRF are not, with VPN, EVPN and the
+  rest: their rows say `notfound` and `validated: false`.
+- **Shown** as routescope's `bgp-operations-views.md` names it:
+  `validation` on route rows; `show.rpki`, its `rpki_caches` columns
+  and `version`, `session_id` and `last_error`; `show.rpki_vrps`; `rpki`
+  in `show.status`; events of kind `rpki`.
+- `invalid` takes `accept` only, and `mark_ibgp` is refused, until 7c2.
 
 ### routescope shows
 

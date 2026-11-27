@@ -205,6 +205,19 @@ module BGP
         seg.as.first
       end
 
+      # The Route Origin ASN of RFC 6811 section 2: "the rightmost AS in
+      # the final segment of the AS_PATH attribute in the Route if that
+      # segment is of type AS_SEQUENCE", local_as "if that segment is of
+      # type AS_CONFED_SEQUENCE or AS_CONFED_SET or if the AS_PATH is
+      # empty", and nil, the RFC's "NONE", for any other final segment.
+      def origin_asn(local_as)
+        last = as_path_segments.last
+        return Integer(local_as) if last.nil? ||
+                                    [As_path::CONFED_SEQUENCE, As_path::CONFED_SET].include?(last.seg_type)
+        return nil unless last.seg_type == As_path::SEQUENCE
+        last.as.last
+      end
+
       # The BGP Identifier used in tie breaking: ORIGINATOR_ID when present
       # (RFC 4456 section 9), else the peer's router ID (RFC 4271 9.1.2.2 f).
       def router_id ; originator_id || @peer.router_id ; end

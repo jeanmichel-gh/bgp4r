@@ -341,6 +341,15 @@ module Features
       :unit  => %w[rtr/pdus_test rtr/validation_test fault_test to_hash_round_trip_test],
     },
 
+    'rpki-origin-validation' => {
+      :area  => 'routing',
+      :about => "bgp4rd's rpki: key: an RTR client per cache, the VRPs of the preferred caches, and each unicast route's state, Valid, Invalid or NotFound",
+      :rfc   => 'RFC 6811 sections 2 and 4, RFC 8210 sections 5 to 8, 10 and 12',
+      :doc   => 'docs/rpki.md',
+      :unit  => %w[rtr/client_test rtr/vrps_test daemon/rpki_test rtr/validation_test fault_test daemon/cli_doc_test],
+      :functional => %w[rpki_daemon_test],
+    },
+
     'rpki-cache' => {
       :area  => 'programs',
       :about => 'bgp4r-rtr, an RTR cache: VRPs from a YAML file, Serial Notify on a change, and the RTR faults and behaviours from its HTTP API',
