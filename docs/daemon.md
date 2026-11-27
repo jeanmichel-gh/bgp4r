@@ -305,9 +305,21 @@ unreachability:                    # prefixes this bgp4rd reports unreachable; s
 
 mark:                              # added to routes made by hand; see route.originate
   large_communities: ['65000:1:1']
+
+rpki:                              # origin validation, RFC 6811; docs/rpki.md
+  caches: [{ address: 10.0.0.9, port: 323, preference: 1 }]
+  invalid: accept                  # the only value built yet; the default
 ```
 
 Notes on it, one key or block each.
+
+`rpki:` gives each IPv4 and IPv6 unicast route a validation state,
+`valid`, `invalid` or `notfound`, from the VRPs of RTR caches (RFC
+8210). The state shows on `show.routes`, `show.rib` and `show.adj_in`
+rows as `validation`, and `show.rpki` and `show.rpki_vrps` list the
+caches and the VRPs. Nothing else changes: RFC 6811 section 2 keeps a
+route in the decision "unless explicitly configured" otherwise.
+docs/rpki.md section 5 has it all.
 
 `fib:` installs each best route with `ip route replace`, **except over a
 route another program holds.** A connected route, a static one or an
@@ -1266,6 +1278,8 @@ below.
 | `show.macvrf` | one MAC-VRF's MACs, `vni` required: the remote ones from type 2 routes, with their VTEP and sequence, and the local ones vtep4rd learned on its ports | built |
 | `show.vrfs` | the VRFs: name, table, RD, Route Targets, the device's state, routes imported and installed | built |
 | `show.vrf` | each VRF's imported routes: what is pushed, where it goes, installed or why not; `vrf` picks one | built |
+| `show.rpki` | the RTR caches of `rpki:`, one row each: address, port, preference, state, Session ID, serial, VRP counts, the three intervals (docs/rpki.md) | built |
+| `show.rpki_vrps` | the VRPs origin validation uses now | built |
 | `show.log` | the last N lines | built |
 | `events.subscribe`, `events.unsubscribe` | a stream, one event per line | built |
 | `peer.clear`, `peer.stop`, `peer.start` | one session | built |

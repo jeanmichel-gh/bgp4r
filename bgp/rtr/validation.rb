@@ -59,13 +59,14 @@ module BGP
         return [finding(0, "#{octets.bytesize} octets, shorter than the 8 of a header")] if octets.bytesize < HEADER
         version, type, _f16, length = octets.unpack('CCnN')
         found = []
-        # Section 7: "neither 0 nor 1", then a version other than the one
-        # agreed.
-        unless VERSIONS.include?(version)
-          return [finding(4, "version #{version}, where 0 and 1 are known")]
-        end
+        # Section 7: once a version is agreed, "a PDU for a different
+        # Protocol Version" is code 8, whatever it is; before, one
+        # "neither 0 nor 1" is code 4.
         if negotiated && version != negotiated
           return [finding(8, "version #{version} after #{negotiated} was negotiated")]
+        end
+        unless VERSIONS.include?(version)
+          return [finding(4, "version #{version}, where 0 and 1 are known")]
         end
         return [finding(5, "PDU type #{type}")] unless Pdu::TYPES.key?(type)
         found << finding(0, "Length #{length}, the PDU is #{octets.bytesize} octets") if length != octets.bytesize

@@ -484,7 +484,7 @@ Error Code here is fatal, so the router drops the session too.
 | Name | Sent | Router answers | Section |
 |---|---|---|---|
 | `rtr_unknown_pdu` | PDU type 99 | Error Report 5 | 8210 12 |
-| `rtr_bad_version` | a Cache Response in version 9 | Error Report 4 | 8210 7, 12 |
+| `rtr_bad_version` | a Cache Response in version 9, after 1 | Error Report 8 | 8210 7, 12 |
 | `rtr_unexpected_version` | a Cache Response in version 0, after 1 | Error Report 8 | 8210 7, 12 |
 | `rtr_withdraw_unknown` | an answer withdrawing a VRP never announced | Error Report 6 | 8210 12 |
 | `rtr_duplicate_announce` | an answer announcing one VRP twice | Error Report 7 | 8210 5.6, 12 |

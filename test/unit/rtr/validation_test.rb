@@ -51,6 +51,8 @@ class TestRtrValidation < Test::Unit::TestCase
     p.version = 0
     assert_equal([8], codes(p.encode, :negotiated => 1))
     assert_equal([], codes(p.encode), 'before negotiation, 0 is fine')
+    p.version = 9
+    assert_equal([8], codes(p.encode, :negotiated => 1), 'after negotiation, any other version is 8')
   end
 
   def test_an_unknown_type

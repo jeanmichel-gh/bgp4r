@@ -218,8 +218,11 @@ module BGP
       # Section 12, code 5: "The PDU Type is not known by the receiver".
       [:rtr_unknown_pdu, 'PDU type 99', 5, '8210 12',
         ->(_sid) { [Rtr::Unknown.new(99).encode] }],
-      # Section 7: a version "neither 0 nor 1"; section 12, code 4.
-      [:rtr_bad_version, 'a Cache Response in version 9', 4, '8210 7, 12',
+      # Section 7: a version "neither 0 nor 1". Sent after version 1 is
+      # agreed, so it is also "a PDU for a different Protocol Version once
+      # the above negotiation completes", which section 7 has answered
+      # with code 8. FRR 10.7.1 answers 8 (docs/rpki.md).
+      [:rtr_bad_version, 'a Cache Response in version 9', 8, '8210 7, 12',
         ->(sid) { [Rtr::Cache_response.new(sid).tap { |p| p.version = 9 }.encode] }],
       # Section 7: "If either party receives a PDU for a different
       # Protocol Version once the above negotiation completes, that party

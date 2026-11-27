@@ -499,6 +499,11 @@ bgp/daemon/              `bgp4rd` the daemon and `bgp4r-cli` its client;
                          is that commit of that one key.
                          `test/helpers/fake_isisd.rb` is the isisd its
                          tests talk to
+                         rpki.rb `rpki:`, origin validation (RFC 6811):
+                         an Rtr::Client per cache, the VRPs of the
+                         preferred caches, each unicast route's state
+                         through Table#validator, show.rpki and
+                         show.rpki_vrps, and `rpki` events. docs/rpki.md
                          bfd.rb `bfd: true` on a neighbor: a BFD session
                          asked of bfdd4r through bfd4r's `BFD::Client`
                          (client name `bgp4rd`), one hop only, read from
@@ -519,7 +524,9 @@ bgp/rtr/                 RTR, RFC 8210: pdus.rb and validation.rb, the
                          codec and its findings (require 'bgp/rtr', which
                          bgp4r.rb does); cache.rb, an RTR cache, and
                          server.rb, `bgp4r-rtr`, which require bgp/sim's
-                         HTTP server. docs/rpki.md
+                         HTTP server; client.rb, the router's side, and
+                         vrps.rb, a VRP set and RFC 6811's lookup, which
+                         bgp4rd's rpki: uses. docs/rpki.md
 bgp/sim/                 `bgp4r-sim` the route injector, and `bgp4r
                          routegen`; require 'bgp/sim', which bgp4r.rb
                          does not, the same arrangement bgp/daemon.rb and
@@ -2176,7 +2183,7 @@ that moves a phase.
 | EVPN in bgp4rd, VXLAN first (routescope's P5) | Spec approved 2026-11-25, `docs/design/evpn.md`, with its six questions answered. Pull request 0 is vtep4r #15. Pull request 1, the EVPN table (`bgp/rib/evpn_table.rb`, `show.evpn`), is built. Pull request 2, MAC-VRFs and import into vtep4rd (`bgp/rib/macvrfs.rb`, `show.macvrfs`), is built. Pull request 3, export, MAC Mobility and duplicates (`bgp/daemon/evpn_exporter.rb`, `evpn.clear_duplicate`), is built. Pull request 4, the reflector (`bgp/daemon/evpn_reflector.rb`), is built. Pull request 5, a bgp4rd leaf and FRR reading each other's types 2 and 3 (`test/functional/lab/evpn_frr_test.rb`), is built. `evpn: seq_memory`, a gone MAC's sequence forgotten, is #397. routescope's lab 2, `evpn-ruby`, is routescope #344 | bgp4rd in routescope's lab 3, `evpn-vxlan-frr` |
 | EVPN in bgp4rd over MPLS (the rest of routescope's P5) | Spec drafted 2026-11-26, `docs/design/evpn-mpls.md`, waiting for the owner's five answers | Everything, after approval: vtep4r's MPLS edge first |
 | Unreachability Information (SAFI 81, EVPN route type 254) | Spec approved 2026-11-22, `docs/design/unreachability.md`; Built, pull requests 1 to 4: the codecs, bgp4rd, route generation; `docs/unreachability.md` | Pull request 5, the lab against FRR, waits for an FRR release with SAFI 81 (the owner's decision, 2026-11-22), then propagation in a spec of its own |
-| BGP operations (routescope's P8) | Spec approved 2026-11-25, `docs/design/bgp-operations.md` (#383), with its eight questions answered. The first three in its build order are built: GTSM (`ttl_security`, `bgp/daemon/gtsm.rb`), TCP MD5 (`password`, `bgp/daemon/tcp_auth.rb`) and End-of-RIB (`end_of_rib`, `bgp/daemon/end_of_rib.rb`); route refresh is built in three parts: 2a, answering it (`bgp/daemon/refresh.rb`), 2b, BoRR and EoRR received and the stale mark in every table, and 2c, `BGP::Fault::REFRESH`, the first behaviour and bgp4r-sim's `behaviour` action. GR is built in three parts: 3a, the RFC 4724 helper (`graceful_restart`, `bgp/daemon/graceful_restart.rb`), 3b, RFC 8538's N bit and Hard Reset, and 3c, `BGP::Fault::GR` and the eleven `gr_` behaviours in bgp4r-sim (`bgp/sim/graceful_restart.rb`); RPKI's 7a, the RTR codec (`bgp/rtr/`, `docs/rpki.md`), and 7b, `bgp4r-rtr`, the cache with the RTR faults and behaviours (`bgp/rtr/cache.rb`), are built | In build order: RPKI 7c (origin validation), BMP (codec, `bgp4r-bmp`, bgp4rd), the LLGR helper; TCP-AO any time after MD5; the three labs |
+| BGP operations (routescope's P8) | Spec approved 2026-11-25, `docs/design/bgp-operations.md` (#383), with its eight questions answered. The first three in its build order are built: GTSM (`ttl_security`, `bgp/daemon/gtsm.rb`), TCP MD5 (`password`, `bgp/daemon/tcp_auth.rb`) and End-of-RIB (`end_of_rib`, `bgp/daemon/end_of_rib.rb`); route refresh is built in three parts: 2a, answering it (`bgp/daemon/refresh.rb`), 2b, BoRR and EoRR received and the stale mark in every table, and 2c, `BGP::Fault::REFRESH`, the first behaviour and bgp4r-sim's `behaviour` action. GR is built in three parts: 3a, the RFC 4724 helper (`graceful_restart`, `bgp/daemon/graceful_restart.rb`), 3b, RFC 8538's N bit and Hard Reset, and 3c, `BGP::Fault::GR` and the eleven `gr_` behaviours in bgp4r-sim (`bgp/sim/graceful_restart.rb`); RPKI's 7a, the RTR codec (`bgp/rtr/`, `docs/rpki.md`), 7b, `bgp4r-rtr`, the cache with the RTR faults and behaviours (`bgp/rtr/cache.rb`), and 7c1, `rpki:` in bgp4rd, the RTR client and each unicast route's state (`bgp/daemon/rpki.rb`), are built | In build order: RPKI 7c2 (`invalid: prefer_less` and `reject`, `mark_ibgp`) and 7c3 (the fault matrix against bgp4rd and FRR), BMP (codec, `bgp4r-bmp`, bgp4rd), the LLGR helper; TCP-AO any time after MD5; the three labs |
 
 **Left, outside the tables above:**
 

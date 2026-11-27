@@ -172,6 +172,8 @@ one. `prefix` reads one prefix instead of a page.
 | `show.macvrfs` | the MAC-VRFs, one row each: `vni`, `rd`, `import`, `export`, `vtep_state` (`ok`, `missing`, `mode`, `down`, `error`), `error`, `flood`, `macs_local`, `macs_remote`, `duplicates` | `offset`, `limit` |
 | `show.macvrf` | one MAC-VRF's MACs: `mac`, `place` (`remote` from a type 2 route, `local` from vtep4rd's port), `vtep`, `port`, `seq`, `sticky`, `moves`, `duplicate`, `since` | `vni`, `offset`, `limit` |
 | `show.vpn_labels` | each exporting VRF's label, one row each: `label`, `vrf`, `action`, `installed`, `error` | `offset`, `limit` |
+| `show.rpki` | the RTR caches, one row each: `address`, `port`, `mode`, `preference`, `state`, `version`, `session_id`, `serial`, `vrps_v4`, `vrps_v6`, `refresh`, `retry`, `expire`, `since`, `last_error`; empty without `rpki:` | `offset`, `limit` |
+| `show.rpki_vrps` | the VRPs origin validation uses now: `prefix`, `max_length`, `asn` | `offset`, `limit` |
 | `show.log` | the daemon's last log lines, oldest first | `count`, default 100 |
 | `show.text` | what `-c 'show bgp'` prints, as one JSON string | `style`, `prefix` |
 | `show.configuration` | the configuration as set lines | `candidate`, `format` |

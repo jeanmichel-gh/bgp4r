@@ -131,6 +131,8 @@ module BGP
         'show.vrfs' => ->(a, p) { a.views.vrfs(p) },
         'show.vrf' => ->(a, p) { a.views.vrf(p) },
         'show.vpn_labels' => ->(a, p) { a.views.vpn_labels(p) },
+        'show.rpki'       => ->(a, p) { a.views.rpki(p) },
+        'show.rpki_vrps'  => ->(a, p) { a.views.rpki_vrps(p) },
         'show.log'        => ->(a, p) { a.views.log(p) },
         'show.text'       => ->(a, p) { a.views.text(p) },
         'peer.clear'      => ->(a, p) { a.control.peer_clear(p) },

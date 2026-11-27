@@ -77,6 +77,7 @@ require 'bgp/daemon/vrf_ce_exporter'
 require 'bgp/daemon/vpn_reflector'
 require 'bgp/daemon/evpn_reflector'
 require 'bgp/daemon/bfd'
+require 'bgp/daemon/rpki'
 require 'bgp/daemon/gtsm'
 require 'bgp/daemon/tcp_auth'
 require 'bgp/daemon/end_of_rib'
@@ -1082,7 +1083,16 @@ module BGP
         # run, because it starts no thread until something attaches to it.
         @rib = BGP::Rib::Table.new(:local_as => @my_as, :router_id => @router_id,
                                    :logger => @logger, **decision_options) if rib?
+        # Origin validation, RFC 6811, from RTR caches (bgp/daemon/rpki.rb).
+        # Checked here, so a bad rpki: stops bgp4rd at start.
+        if config['rpki']
+          @rpki = Rpki.new(self, config['rpki'], :logger => @logger, :clock => arg[:rpki_clock])
+          @rib.validator = @rpki if @rib
+        end
       end
+
+      # Origin validation, or nil without an rpki: key.
+      attr_reader :rpki
 
       def stopping? ; @stopping ; end
 
@@ -1278,7 +1288,7 @@ module BGP
       # a speaker watching its peers rather than routing between them; the
       # other three keys each need one, so each implies it.
       def rib?
-        @config.fetch('rib', false) || !@originate.empty? || advertise? || !@fib.nil?
+        @config.fetch('rib', false) || !@originate.empty? || advertise? || !@fib.nil? || !@config['rpki'].nil?
       end
 
       # The tables, the listening socket and the sessions, and nothing
@@ -1304,11 +1314,13 @@ module BGP
         # BFD comes up beside BGP and not after it: the sessions are
         # asked for now, whatever state BGP is in.
         @bfd.start
+        @rpki&.start
         self
       end
 
       def stop
         @stopping = true
+        @rpki&.stop
         @bfd.stop
         @link_state_producer&.stop
         @server.close if @server

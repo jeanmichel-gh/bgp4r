@@ -158,9 +158,11 @@ module BGP
         @table.synchronize do
           each_prefix(prefix).map do |p|
             result = @table.result(p)
-            { :prefix => p }.merge(fields(@table.best(p)))
+            best = @table.best(p)
+            { :prefix => p }.merge(fields(best))
                             .merge(:paths => @table.candidates(p).size, :best => true,
                                    :decided_by => result && result.reason)
+                            .merge(validation(best))
           end
         end
       end
@@ -460,7 +462,14 @@ module BGP
         { :prefix => route.prefix }.merge(fields(route))
                                    .merge(:best => !best.nil? && best.peer == route.peer &&
                                                    best.path_id == route.path_id)
-                                   .merge(stale(route))
+                                   .merge(stale(route)).merge(validation(route))
+      end
+
+      # { :validation => 'valid' } and the rest when origin validation is
+      # on (RFC 6811), and nothing when it is off.
+      def validation(route)
+        word = @table.validation(route)
+        word ? { :validation => word } : {}
       end
 
       # { :stale => reason } for a route marked stale, 'refresh' after a
@@ -553,7 +562,7 @@ module BGP
         fields(route).merge(:best   => lost_at.nil?,
                             :usable => usable?(lost_at),
                             :lost_at => lost_at,
-                            :reason => reason(lost_at, step)).merge(stale(route))
+                            :reason => reason(lost_at, step)).merge(stale(route)).merge(validation(route))
       end
 
       # Route#as_path answers the word "empty" when there is no AS_PATH,

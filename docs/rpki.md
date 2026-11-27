@@ -8,8 +8,10 @@ validation reads them.
 
 This is P8's pull request 7 in `docs/design/bgp-operations.md`, in
 three parts. 7a, the codec, and 7b, a cache in Ruby (`bgp4r-rtr`), are
-built and described here. 7c, origin validation in bgp4rd, is not
-built yet.
+built and described here. 7c, origin validation in bgp4rd, is built in
+parts: 7c1, the RTR client and each route's state, is described in
+section 5. 7c2, `invalid: prefer_less` and `reject` and `mark_ibgp`,
+and 7c3, the fault matrix against bgp4rd and FRR, are not built yet.
 
 ## 1. The PDUs
 
@@ -97,8 +99,8 @@ Rtr::Validation.check(Rtr::Ipv4_prefix.new('10.0.0.0/24', 16, 1).encode).collect
 
 | Finding | Code | Section |
 |---|---|---|
-| a version neither 0 nor 1 | 4, Unsupported Protocol Version | 7 |
-| a version other than the one negotiated | 8, Unexpected Protocol Version | 7 |
+| before negotiation, a version neither 0 nor 1 | 4, Unsupported Protocol Version | 7 |
+| after negotiation, any other version, 9 included | 8, Unexpected Protocol Version | 7 |
 | a PDU Type not known | 5, Unsupported PDU Type | 12 |
 | a Router Key in version 0 | 5 | 1.2 |
 | a Length other than the PDU's, or other than its type's | 0, Corrupt Data | 5 |
@@ -279,7 +281,7 @@ Each fault, as the answer to a Serial Query, and its answer:
 | Fault | RFC 8210 expects | FRR answered |
 |---|---|---|
 | `rtr_unknown_pdu` | Error Report 5 | Error Report 0, "length value in PDU is too small" |
-| `rtr_bad_version` | Error Report 4 | Error Report 8 |
+| `rtr_bad_version` | Error Report 8 (4 until 7c) | Error Report 8 |
 | `rtr_unexpected_version` | Error Report 8 | Error Report 8 |
 | `rtr_withdraw_unknown` | Error Report 6 | Error Report 6 |
 | `rtr_duplicate_announce` | Error Report 7 | Error Report 7 |
@@ -291,7 +293,171 @@ Retry of 5 s it came back within 4 s after the first three. After
 `rpki reset` brought it back. Why is not known.
 
 `rtr_bad_version` is sent after version 1 was agreed. Section 7 has a
-version "neither 0 nor 1" answered "during this negotiation", and a
-different version after it answered with code 8, so FRR's 8 is one
-reading. Section 12's code 4, "The Protocol Version is not known by the
-receiver", is the other. Which one bgp4rd answers is 7c's to decide.
+version "neither 0 nor 1" answered "during this negotiation", and "a
+PDU for a different Protocol Version once the above negotiation
+completes" answered with code 8. 7b's catalog expected 4; FRR answered
+8. 7c reads section 7 as FRR does: after negotiation, any other
+version is 8, in `Rtr::Validation` and in the catalog.
+
+## 5. Origin validation in bgp4rd
+
+```yaml
+rpki:
+  caches:
+    - { address: 10.0.0.9, port: 323, preference: 1, retry: 600 }
+  invalid: accept
+```
+
+A cache entry takes `address`, `port` (323), `preference` (1, lower
+is preferred) and `retry`, the seconds between two connections until
+the cache gives its own Retry Interval (section 6's 600). A lab whose
+cache may start after bgp4rd wants a short one. `invalid: accept` is the
+only value built yet, and the default; `mark_ibgp` is refused until
+7c2 builds it. With `rpki:`, bgp4rd has a RIB.
+
+**The client.** One per cache, `Rtr::Client` in `bgp/rtr/client.rb`.
+It sends a Reset Query, or a Serial Query when it has unexpired data
+and a Session ID (8.1). An answer becomes the data only at its End of
+Data, whole. It asks again at the Refresh Interval and after a Serial
+Notify (8.2), sends a Reset Query after a Cache Reset (8.3), and keeps
+the session on No Data Available, asking again at the Retry Interval
+(8.4). Its data stays while it is down, and goes at the Expire
+Interval (6). It speaks version 1, and takes a version 0 answer or a
+version 0 Error Report 4 as a downgrade (7).
+
+It refuses what section 12 names, with an Error Report: codes 0, 5 and
+8 from `Rtr::Validation`, 6 for a withdrawal of a VRP it lacks, 7 for
+one announced twice, and 0 for a prefix or an End of Data outside an
+answer. Each ends the session and keeps the data until Expire. A
+Session ID that differs, or Corrupt Data in answer to a Serial Query,
+which is how a cache that restarted answers, flushes the data (5.1),
+so the next connection sends a Reset Query.
+
+**Which VRPs.** Those of the most preferred caches that have data: the
+lowest `preference` among the caches synchronised and not expired, all
+caches at that preference together (sections 4 and 10).
+
+**Each route's state**, RFC 6811 section 2: NotFound when no VRP
+Covers the prefix, Valid when one Matches it, else Invalid. The origin
+AS is the rightmost AS of the final AS_SEQUENCE; our own AS for an
+empty AS_PATH or a final confederation segment; none, which no VRP
+Matches, for a final AS_SET. A VRP for AS 0 Matches nothing. Only IPv4
+and IPv6 unicast routes are validated, received or originated. The
+state is read from the VRPs each time it is asked for, so it follows
+every change (6811 section 4).
+
+**What shows.** `validation` on the rows of `show.routes`, `show.rib`
+and `show.adj_in`. `show.vpn`, `show.vrf` and `show.evpn` rows say
+`validation: notfound` and `validated: false`, as RFC 6811 section 2
+has it for routes not validated. Without `rpki:` none of these keys is
+there. With three routes from AS 65001 and the VRPs of `bgp4r-rtr`
+below, `show.routes` (three keys of each row):
+
+```json
+[
+  {
+    "prefix": "192.0.2.0/24",
+    "as_path": "65001",
+    "validation": "valid"
+  },
+  {
+    "prefix": "198.51.100.0/24",
+    "as_path": "65001",
+    "validation": "invalid"
+  },
+  {
+    "prefix": "203.0.113.0/24",
+    "as_path": "65001",
+    "validation": "notfound"
+  }
+]
+```
+
+`show.rpki`, the caches:
+
+```json
+{
+  "rows": [
+    {
+      "address": "127.0.0.1",
+      "port": 3323,
+      "mode": "tcp",
+      "preference": 1,
+      "state": "up",
+      "version": 1,
+      "session_id": 4660,
+      "serial": 1,
+      "vrps_v4": 2,
+      "vrps_v6": 0,
+      "refresh": 30,
+      "retry": 5,
+      "expire": 600,
+      "since": "2026-11-27T06:27:55Z",
+      "last_error": null
+    }
+  ],
+  "total": 1,
+  "offset": 0,
+  "limit": 500,
+  "next_offset": null
+}
+```
+
+`state` is `idle`, `connected` (the query sent), `up` (an answer came)
+or `down`. `show.rpki_vrps` lists the VRPs used, `prefix`,
+`max_length` and `asn`, a page at a time:
+
+```json
+{
+  "rows": [
+    {
+      "prefix": "192.0.2.0/24",
+      "max_length": 24,
+      "asn": 65001
+    },
+    {
+      "prefix": "198.51.100.0/22",
+      "max_length": 24,
+      "asn": 65099
+    }
+  ],
+  "total": 2,
+  "offset": 0,
+  "limit": 500,
+  "next_offset": null
+}
+```
+
+`show.status` gains `rpki`:
+
+```json
+{
+  "caches": 1,
+  "synced": 1,
+  "vrps_v4": 2,
+  "vrps_v6": 0,
+  "invalid": "accept"
+}
+```
+
+**Events**, of kind `rpki`, `data.event` one of: `connected`, `up`,
+`down` (with the reason), `downgraded`, `synced` (a cache's serial and
+counts), `expired` (a cache's data went), `error_sent`,
+`error_received`, `vrps` (the VRPs used changed), and `routes`: how
+many routes a VRP change moved, and the first ten, each with its
+prefix, the peer, and the state it was and is:
+
+```json
+{
+  "event": "routes",
+  "changed": 1,
+  "routes": [
+    {
+      "prefix": "192.0.2.0/24",
+      "from": "10.0.0.2",
+      "was": "notfound",
+      "now": "invalid"
+    }
+  ]
+}
+```
