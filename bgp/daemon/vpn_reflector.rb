@@ -48,11 +48,17 @@ module BGP
     # difference goes, a withdrawal carrying RFC 8277's Compatibility
     # field. It runs on a thread of its own, poked by the VPN table, so a
     # session's dispatch thread never waits on another session's send.
+    #
+    # A refresh exports only the [RD, prefix]s whose winner changed since
+    # the last one, as EvpnReflector does: the table keeps the same
+    # VpnRoute while nothing replaces it, so what a peer was sent, or
+    # refused, is kept with the winner it was built from.
     class VpnReflector
 
       # What one peer was sent for one [RD, prefix]: its encoded attributes
-      # and NLRI, to compare, and the AFI to withdraw it with.
-      Out = Struct.new(:key, :afi, :update, :wire)
+      # and NLRI, to compare, the AFI to withdraw it with, and the winner
+      # it came from.
+      Out = Struct.new(:key, :afi, :update, :wire, :source)
 
       def initialize(speaker, vpn_table, export, logger: nil)
         @speaker = speaker
@@ -61,6 +67,7 @@ module BGP
         @logger = logger
         @lock = Mutex.new
         @sent = {} # peer address => { [rd, prefix] => Out }
+        @refused = {} # peer address => { [rd, prefix] => the VpnRoute Export refused }
         @queue = Queue.new
       end
 
@@ -102,7 +109,7 @@ module BGP
 
       # A session came up: it gets everything, on the next refresh.
       def session_up(peer)
-        @lock.synchronize { @sent.delete(peer.address) }
+        @lock.synchronize { forget(peer.address) }
         poke
       end
 
@@ -113,10 +120,10 @@ module BGP
         @lock.synchronize do
           @speaker.peers.each do |p|
             unless eligible?(p)
-              @sent.delete(p.address)
+              forget(p.address)
               next
             end
-            sync(p, winners, @sent[p.address] ||= {})
+            sync(p, winners, @sent[p.address] ||= {}, @refused[p.address] ||= {})
           end
         end
         self
@@ -128,15 +135,9 @@ module BGP
         families = BGP::Rib::VpnTable.families(peer.session_info).collect(&:first)
         target = rib_peer(peer)
         winners.each_with_object({}) do |w, out|
-          afi = w.prefix.include?(':') ? 2 : 1
-          next unless families.include?(afi)
-          result = @export.for(w.route, target)
-          next unless result.path_attribute
-          pa = result.path_attribute
-          pa << BGP::Mp_reach.new(:afi => afi, :safi => 128, :nexthop => [w.route.next_hop.to_s],
-                                  :nlris => [{ :prefix => w.prefix, :rd => rd(w.rd), :label => w.labels }])
-          u = BGP::Update.new(pa)
-          out[[w.rd, w.prefix]] = Out.new([w.rd, w.prefix], afi, u, u.encode)
+          next unless families.include?(afi_of(w))
+          o = out_for(w, target)
+          out[o.key] = o if o
         end
       end
 
@@ -182,11 +183,53 @@ module BGP
                            :router_id => (n && n.rmt_bgp_id) || peer.address, :local_as => @speaker.my_as)
       end
 
-      # Sends peer the difference from sent, and records it. Lock held.
-      def sync(peer, winners, sent)
-        want = wanted(peer, winners)
-        changed = want.values.reject { |o| (s = sent[o.key]) && s.wire == o.wire }
-        gone = sent.keys - want.keys
+      def afi_of(w)
+        w.prefix.include?(':') ? 2 : 1
+      end
+
+      # The UPDATE for winner w to target, a Rib::Peer, or nil when Export
+      # refuses it.
+      def out_for(w, target)
+        result = @export.for(w.route, target)
+        return unless result.path_attribute
+        afi = afi_of(w)
+        pa = result.path_attribute
+        pa << BGP::Mp_reach.new(:afi => afi, :safi => 128, :nexthop => [w.route.next_hop.to_s],
+                                :nlris => [{ :prefix => w.prefix, :rd => rd(w.rd), :label => w.labels }])
+        u = BGP::Update.new(pa)
+        Out.new([w.rd, w.prefix], afi, u, u.encode, w)
+      end
+
+      def forget(address)
+        @sent.delete(address)
+        @refused.delete(address)
+      end
+
+      # Sends peer the difference from sent, and records it. A winner
+      # already sent or refused is not exported again. Lock held.
+      def sync(peer, winners, sent, refused)
+        families = BGP::Rib::VpnTable.families(peer.session_info).collect(&:first)
+        target = nil
+        want = {}    # the keys peer is to have
+        still = {}   # the refusals that hold: their winner still wins
+        changed = []
+        winners.each do |w|
+          next unless families.include?(afi_of(w))
+          k = [w.rd, w.prefix]
+          s = sent[k]
+          if s && s.source.equal?(w)
+            want[k] = true
+          elsif refused[k].equal?(w)
+            still[k] = w
+          elsif (o = out_for(w, target ||= rib_peer(peer))).nil?
+            still[k] = w
+          else
+            want[k] = true
+            s && s.wire == o.wire ? s.source = w : changed << o
+          end
+        end
+        refused.replace(still)
+        gone = sent.keys.reject { |k| want.key?(k) }
         return if changed.empty? && gone.empty?
         gone.each do |key|
           o = sent.delete(key)
