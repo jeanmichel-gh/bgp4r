@@ -183,6 +183,7 @@ module CoverageMatrix
     'md5'          => 'TCP MD5, RFC 2385, which signs the session\'s segments and not a family',
     'rpki'         => 'origin validation, RFC 6811, a state on IPv4 unicast routes from an RTR cache and not a family',
     'rtr_fault'    => 'the RTR faults and behaviours, RFC 8210, on the router\'s session with its cache and not a BGP family',
+    'bmp'          => 'BMP, RFC 7854, a router reporting to a station, and not a BGP family',
     'gen'          => 'bgp/gen, a generator; docs/route-generation.md phase 6 reports those',
   }.freeze
 

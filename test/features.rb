@@ -387,6 +387,16 @@ module Features
       :functional => %w[rtr_cache_test],
     },
 
+    'bmp-station' => {
+      :area  => 'programs',
+      :about => 'bgp4r-bmp, a BMP station: a JSON line per message, and each router\'s peers and their pre-policy, post-policy and Loc-RIB routes from its HTTP API',
+      :rfc   => 'RFC 7854 sections 3, 4.5 and 5, RFC 9069 section 5.4',
+      :doc   => 'docs/bmp.md',
+      :unit  => %w[bmp/station_test bmp/lines_doc_test path_attributes/mp_unreach_test],
+      :functional => %w[bmp_station_test],
+      :lab   => %w[bmp_frr_test],
+    },
+
     'route-refresh-faults' => {
       :area  => 'errors',
       :about => 'BGP::Fault::REFRESH and the borr_without_eorr behaviour, sent by bgp4r-sim, and what bgp4rd and FRR do',

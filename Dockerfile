@@ -81,6 +81,7 @@ CMD ["ruby", "test/run_unit.rb"]
 #     exe/bgp4rd -f /etc/bgp4r/bgp4rd.yml
 #   docker run --rm -v $PWD/rtr.yml:/lab/rtr.yml bgp4r-speaker \
 #     exe/bgp4r-rtr /lab/rtr.yml
+#   docker run --rm bgp4r-speaker exe/bgp4r-bmp --api 0.0.0.0:8080
 #
 # **No stage of its own for either**, deliberately: a stage whose only
 # difference is a default command is a stage that can go stale, and
@@ -125,7 +126,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends iproute2 iputil
 # A shell in the node types the commands by name, and the client finds
 # the daemon's socket with no -s: `bgp4r-cli -c 'show bgp'`, or `cli`
 # for short. docs/bgp4r-cli.md is the guide to that shell.
-RUN for c in bgp4r bgp4rd bgp4r-cli bgp4r-sim bgp4r-rtr; do ln -s /app/exe/$c /usr/local/bin/$c; done \
+RUN for c in bgp4r bgp4rd bgp4r-cli bgp4r-sim bgp4r-rtr bgp4r-bmp; do ln -s /app/exe/$c /usr/local/bin/$c; done \
  && ln -s /app/exe/bgp4r-cli /usr/local/bin/cli
 ENV BGP4R_SOCKET=/run/bgp4r/bgp4rd.sock
 

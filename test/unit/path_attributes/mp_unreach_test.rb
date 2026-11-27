@@ -200,6 +200,15 @@ class Mp_unreach_Test < Test::Unit::TestCase
                  back.to_hash)
   end
 
+  # An MP_UNREACH_NLRI with no NLRI is that family's End-of-RIB (RFC
+  # 4724 section 2). Its hash raised, so a BMP station could not write
+  # the line of an IPv6 End-of-RIB.
+  def test_an_empty_one_hashes
+    mp = Attr.factory(Mp_unreach.new(:afi => 2, :safi => 1).encode.is_packed)
+    assert_equal({ :mp_unreach => { :safi => 1, :afi => 2, :nlris => [] } }, mp.to_hash)
+    assert_equal(mp.to_shex, Mp_unreach.new(mp.to_hash[:mp_unreach]).to_shex)
+  end
+
   # And MP_REACH must not get the same treatment, because an announcement
   # really does carry a label there. The two attributes are read by the
   # same code and told apart only by this, so a test holds them apart:

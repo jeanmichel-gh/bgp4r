@@ -18,7 +18,7 @@ Gem::Specification.new do |s|
   # `bgp4r sim` so that a container command reads plainly. `bgp4r-rtr`
   # is an RPKI cache, docs/rpki.md.
   s.bindir = "exe"
-  s.executables = ["bgp4r", "bgp4rd", "bgp4r-cli", "bgp4r-sim", "bgp4r-rtr"]
+  s.executables = ["bgp4r", "bgp4rd", "bgp4r-cli", "bgp4r-sim", "bgp4r-rtr", "bgp4r-bmp"]
   # 3.2, the owner's floor for every router that takes bfd4r (2026-11-21):
   # bfdd4r's loop needs Queue#pop(timeout:), new in 3.2. CI tests 3.3 up.
   s.required_ruby_version = Gem::Requirement.new(">= 3.2")

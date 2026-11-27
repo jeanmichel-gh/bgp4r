@@ -534,16 +534,16 @@ came (`Rtr.slices`). FRR 10.7.1 answered the same six codes by hand
 station has to cope with, RFC 7854. `Fault.bmp(name)` gives each
 message's octets, in order. Only the first has a rule for the station;
 the other two are MUSTs on the router, so a matrix records what each
-station does:
+station does. `bgp4r-bmp`'s column is
+`test/functional/bmp_station_test.rb`:
 
-| Name | Sent | The station, RFC 7854 | Section |
-|---|---|---|---|
-| `bmp_unknown_type` | an Initiation, then message type 99 | ignore it, keep the session | 4.1 |
-| `bmp_version_0` | an Initiation in version 0 | recorded | 4.1 |
-| `bmp_no_initiation` | a Peer Up, with no Initiation first | recorded | 3.3, 4.3 |
+| Name | Sent | The station, RFC 7854 | Section | `bgp4r-bmp` |
+|---|---|---|---|---|
+| `bmp_unknown_type` | an Initiation, then message type 99 | ignore it, keep the session | 4.1 | an `unknown` line, the session kept |
+| `bmp_version_0` | an Initiation in version 0 | recorded | 4.1 | an `undecoded` line with `version`, then closes: nothing is framed past it |
+| `bmp_no_initiation` | a Peer Up, with no Initiation first | recorded | 3.3, 4.3 | reads the Peer Up, with a `no_initiation` finding |
 
-`docs/bmp.md` describes the codec. The station that runs these, and
-its matrix, come with 8b, `docs/design/bgp-operations.md` section 8.
+`docs/bmp.md` describes the codec and the station.
 
 ## Receiving: policies and findings
 

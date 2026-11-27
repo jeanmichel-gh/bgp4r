@@ -19,9 +19,9 @@ amounts. Measured 2026-11-03:
 
 | Tier | What it needs | Files | Time | Command |
 |---|---|---:|---|---|
-| unit | Ruby | 200 | 21s | `ruby test/run_unit.rb` |
-| functional | a loopback socket | 34 | 18s | one file at a time, below |
-| lab | gobgpd, FRR, Docker or root | 45 | 10s to 400s per group | `ruby test/run_lab.rb GROUP` |
+| unit | Ruby | 202 | 21s | `ruby test/run_unit.rb` |
+| functional | a loopback socket | 35 | 18s | one file at a time, below |
+| lab | gobgpd, FRR, Docker or root | 46 | 10s to 400s per group | `ruby test/run_lab.rb GROUP` |
 
 **The first two tiers together are under a minute and need nothing
 installed.** That is worth knowing before reaching for a lab test.
@@ -145,6 +145,7 @@ The five executables.
 | Feature | unit | func | lab | What |
 |---|---:|---:|---:|---|
 | `rpki-cache` | 4 | 1 | 0 | bgp4r-rtr, an RTR cache: VRPs from a YAML file, Serial Notify on a change, and the RTR faults and behaviours from its HTTP API |
+| `bmp-station` | 3 | 1 | 1 | bgp4r-bmp, a BMP station: a JSON line per message, and each router's peers and their pre-policy, post-policy and Loc-RIB routes from its HTTP API |
 | `daemon` | 15 | 2 | 2 | bgp4rd and bgp4r-cli: the control socket, the views and the configuration |
 | `injector` | 5 | 1 | 0 | bgp4r-sim: the eleven actions, the HTTP API and what it sent |
 | `routegen` | 2 | 1 | 3 | Generating many prefixes and packing them into UPDATEs |
@@ -235,6 +236,20 @@ the BMP messages of RFC 7854 and RFC 9069, their findings, and BGP::Fault::BMP.
 
 ```
 ruby test/run_feature.rb bmp-codec
+```
+
+### `bmp-station`
+
+bgp4r-bmp, a BMP station: a JSON line per message, and each router's peers and their pre-policy, post-policy and Loc-RIB routes from its HTTP API.
+
+- RFC 7854 sections 3, 4.5 and 5, RFC 9069 section 5.4
+- Read first: `docs/bmp.md`
+- 3 unit files, 1 functional
+- lab:
+  - `bmp_frr_test`, needs frr
+
+```
+ruby test/run_feature.rb bmp-station
 ```
 
 ### `capture`
@@ -1145,5 +1160,5 @@ test file has to be tagged before the suite is green again, which is
 the same arrangement `test/unit/lab_groups_test.rb` has with the CI
 matrix.
 
-279 of 279 test files are tagged. The
+283 of 283 test files are tagged. The
 remainder, if any, is what the guard names.
