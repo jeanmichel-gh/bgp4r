@@ -370,42 +370,48 @@ class LabHelperTest < Test::Unit::TestCase
     assert_equal(F::RPKI_MODULES.any? { |g| !Dir.glob(g).empty? }, F.rpki?)
   end
 
-  # A test that forgets `down` must not leave bgpd running after the
-  # test process exits. On 2026-11-26 gr_fault_frr_test.rb's probe left
-  # 40 of them, each logging to its folder in /tmp until /tmp was full.
+  # A test that forgets `down` must not leave its router running after
+  # the test process exits. On 2026-11-26 gr_fault_frr_test.rb's probe
+  # left 40 bgpd, each logging to its folder in /tmp until /tmp was full.
+  # The same holds for gobgpd, and for a folder whose router never came
+  # up: this suite left six empty bgp4r-gobgpd folders each run.
   #
   # A child process stands in for a test run: it makes a router, gives it
-  # a `sleep` for its bgpd, and exits without `down`. Setting @pid is the
-  # one shortcut, because `up` needs a real bgpd to answer its vty.
-  def test_a_router_left_running_is_stopped_when_the_process_exits
-    child = <<~'RUBY'
-      require './test/functional/lab/lab_helper'
-      r = LabHelper::Frr.new
-      r.instance_variable_set(:@pid, Process.spawn('sleep', '60', out: File::NULL, err: File::NULL))
-      puts [r.instance_variable_get(:@pid), r.dir].join(' ')
-    RUBY
-    out, status = Open3.capture2e(RbConfig.ruby, '-e', child, chdir: LabHelper::ROOT)
-    assert(status.success?, out)
-    pid, dir = out.split
-    pid = Integer(pid)
-    gone = wait_until(5) do
-      Process.kill(0, pid)
-      false
-    rescue Errno::ESRCH
-      true
+  # a `sleep` for its daemon, and exits without `down`. Setting @pid is
+  # the one shortcut, because `up` needs a real daemon to answer.
+  %w[Frr Gobgpd].each do |kind|
+    define_method("test_a_#{kind.downcase}_left_running_is_stopped_when_the_process_exits") do
+      child = <<~RUBY
+        require './test/functional/lab/lab_helper'
+        r = LabHelper::#{kind}.new
+        r.instance_variable_set(:@pid, Process.spawn('sleep', '60', out: File::NULL, err: File::NULL))
+        puts [r.instance_variable_get(:@pid), r.instance_variable_get(:@dir)].join(' ')
+      RUBY
+      out, status = Open3.capture2e(RbConfig.ruby, '-e', child, chdir: LabHelper::ROOT)
+      assert(status.success?, out)
+      pid, dir = out.split
+      pid = Integer(pid)
+      gone = wait_until(5) do
+        Process.kill(0, pid)
+        false
+      rescue Errno::ESRCH
+        true
+      end
+      Process.kill('KILL', pid) unless gone
+      FileUtils.rm_rf(dir) if File.exist?(dir)
+      assert(gone, "the stand-in #{kind} daemon outlived the process that started it")
+      assert(!File.exist?(dir), "its folder #{dir} was still there")
     end
-    Process.kill('KILL', pid) unless gone
-    assert(gone, 'the stand-in bgpd outlived the process that started it')
-    assert(!File.exist?(dir), "its folder #{dir} is still there")
-  end
 
-  # Within the process, `down` takes a router off the list the exit
-  # stops, so a router already down is not stopped twice.
-  def test_down_takes_a_router_off_the_exit_list
-    r = F.new
-    assert(F.running.include?(r))
-    r.down
-    assert(!F.running.include?(r))
+    # Within the process, `down` takes a router off the list the exit
+    # stops, so a router already down is not stopped twice.
+    define_method("test_#{kind.downcase}_down_takes_a_router_off_the_exit_list") do
+      klass = LabHelper.const_get(kind)
+      r = klass.new
+      assert(klass.running.include?(r))
+      r.down
+      assert(!klass.running.include?(r))
+    end
   end
 
   private
