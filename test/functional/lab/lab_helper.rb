@@ -197,7 +197,45 @@ module LabHelper
   # moves that too.
   #
   # GOBGPD and GOBGP name the binaries when they are not on PATH.
+  # **Every router not yet down, which the process stops as it exits.**
+  # Frr and Gobgpd extend it. A daemon outlives the Ruby that started it,
+  # and bgpd keeps logging to its folder in /tmp, which is a tmpfs on the
+  # owner's VM. On 2026-11-26 a probe that skipped `down` left 40 bgpd,
+  # 3.7G of logs, until /tmp was full. A router made and never started
+  # leaves its empty folder, as this suite's unit tests did six times a
+  # run. `initialize` puts a router on the list, `down` takes it off, and
+  # the exit downs the rest.
+  #
+  # The exit hook is set by the first router, not when this file loads:
+  # test-unit runs the tests from an at_exit of its own, and Ruby runs
+  # the hooks last set first, so one set at load would run before the
+  # tests did (measured, Ruby 3.3.8). One set during a test runs after
+  # them. It runs on SIGTERM and SIGINT too, so `timeout` is covered;
+  # SIGKILL is not.
+  module StopAtExit
+    def running ; @running ||= [] ; end
+
+    def track(router)
+      unless @exit_set
+        @exit_set = true
+        owner = Process.pid
+        # Only in the process that made them: a fork inherits the list
+        # and must not stop its parent's routers.
+        at_exit { stop_running if Process.pid == owner }
+      end
+      running << router
+    end
+
+    def untrack(router) ; running.delete(router) ; end
+
+    def stop_running
+      running.dup.each(&:down)
+    end
+  end
+
   class Gobgpd
+    extend StopAtExit
+
     def self.bin ; ENV['GOBGPD'] || 'gobgpd' ; end
     def self.client ; ENV['GOBGP'] || 'gobgp' ; end
 
@@ -347,6 +385,7 @@ module LabHelper
       @port = port || Local.free_port
       pick_ports
       @dir = Dir.mktmpdir('bgp4r-gobgpd')
+      self.class.track(self)
     end
 
     # The two ports this daemon binds, both on its own address. @port is
@@ -529,6 +568,7 @@ module LabHelper
     ensure
       @pid = nil
       FileUtils.rm_rf(@dir)
+      self.class.untrack(self)
     end
 
     # Runs the client against this daemon and answers [output, status].
@@ -795,6 +835,8 @@ module LabHelper
     attr_reader :local, :as, :router_id, :peer, :peer_as, :port,
                 :listen_port, :vty_port, :dir
 
+    extend StopAtExit
+
     # The prefix it originates, changed between a crash and the next
     # `up`, so a restart can come back without a route it had.
     attr_writer :network
@@ -877,6 +919,7 @@ module LabHelper
       @listen_port = Local.free_port
       @vty_port = Local.free_port
       @dir = Dir.mktmpdir('bgp4r-frr')
+      self.class.track(self)
     end
 
     def config
@@ -1059,6 +1102,7 @@ module LabHelper
     ensure
       @pid = nil
       FileUtils.rm_rf(@dir)
+      self.class.untrack(self)
     end
 
     # Kills bgpd with SIGKILL, which is a crash: it sends no Cease, and
