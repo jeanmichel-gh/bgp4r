@@ -528,6 +528,23 @@ came (`Rtr.slices`). FRR 10.7.1 answered the same six codes by hand
 `rtr_withdraw_unknown` for four minutes. Why FRR stays down after 6 and
 7 is not known.
 
+### BMP cases
+
+`BGP::Fault::BMP` holds what a monitored router could send that a BMP
+station has to cope with, RFC 7854. `Fault.bmp(name)` gives each
+message's octets, in order. Only the first has a rule for the station;
+the other two are MUSTs on the router, so a matrix records what each
+station does:
+
+| Name | Sent | The station, RFC 7854 | Section |
+|---|---|---|---|
+| `bmp_unknown_type` | an Initiation, then message type 99 | ignore it, keep the session | 4.1 |
+| `bmp_version_0` | an Initiation in version 0 | recorded | 4.1 |
+| `bmp_no_initiation` | a Peer Up, with no Initiation first | recorded | 3.3, 4.3 |
+
+`docs/bmp.md` describes the codec. The station that runs these, and
+its matrix, come with 8b, `docs/design/bgp-operations.md` section 8.
+
 ## Receiving: policies and findings
 
 Parsing checks what it reads, against RFC 7606. The policy says what

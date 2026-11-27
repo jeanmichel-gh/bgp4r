@@ -325,8 +325,13 @@ class Update_Test < Test::Unit::TestCase
     "
     assert_equal(BGP::Update, upd.class)
     assert upd.path_attribute.has_a_mp_reach_attr?
-    assert_equal s2.split.join, upd.to_shex
-    assert_equal s2.split.join, ext_update(upd.to_shex).to_shex
+    # The MP_REACH_NLRI came with Extended Length set on 36 octets
+    # (0x90). Parsed, it keeps it, so the UPDATE encodes back to the
+    # octets it came in (RFC 4271 section 4.3 lets a speaker set it on
+    # any length). Built from its hash, it has a one-octet length, s2.
+    assert_equal s.split.join, upd.to_shex
+    assert_equal s.split.join, ext_update(upd.to_shex).to_shex
+    assert_equal s2.split.join, Update.new(upd.to_hash).to_shex
     h = {
       :path_attributes=>{
         :as_path=>{}, 
@@ -387,8 +392,13 @@ class Update_Test < Test::Unit::TestCase
       }
     }
     assert_equal(h, upd.to_hash)
+    # Parsed, the MP_UNREACH_NLRI keeps its Extended Length bit (0x90);
+    # built from the hash it has none (0x80) and one octet less.
     upd2 = Update.new upd.to_hash
-    assert_equal(upd2.to_shex, upd.to_shex)
+    assert_equal('ffffffffffffffffffffffffffffffff' '0031' '02' '0000' '001a' '900f0016' '000180000000017080000100000001000000010a0101',
+                 upd.to_shex)
+    assert_equal('ffffffffffffffffffffffffffffffff' '0030' '02' '0000' '0019' '800f16' '000180000000017080000100000001000000010a0101',
+                 upd2.to_shex)
   end
   
   def test_to_hash

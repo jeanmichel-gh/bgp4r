@@ -367,6 +367,29 @@ class TestFault < Test::Unit::TestCase
     assert_equal([], BGP::Fault.rtr_behaviour_names & BGP::Fault.behaviour_names, "bgp4r-sim's are its own")
   end
 
+  # RFC 7854: what a station meets. Each case's messages are what
+  # Bmp::Validation names, and the first two start with a whole
+  # Initiation.
+  def test_the_bmp_catalog
+    assert_equal(%i[bmp_unknown_type bmp_version_0 bmp_no_initiation], BGP::Fault.bmp_names)
+    found = ->(n) { BGP::Fault.bmp(n).collect { |o| BGP::Bmp::Validation.check(o).collect(&:name) } }
+    assert_equal([[], [:unknown_type]], found[:bmp_unknown_type])
+    assert_equal([[:version]], found[:bmp_version_0])
+    assert_equal([[]], found[:bmp_no_initiation])
+    first = ->(n) { BGP::Bmp::Message.factory(BGP::Fault.bmp(n).first) }
+    assert_equal([BGP::Bmp::Initiation, 'bgp4r', 'bgp4r-fault'],
+                 [first[:bmp_unknown_type].class, first[:bmp_unknown_type].sys_descr, first[:bmp_unknown_type].sys_name])
+    assert_equal([0, BGP::Bmp::Initiation], [BGP::Fault.bmp(:bmp_version_0).first.getbyte(0), first[:bmp_version_0].class])
+    up = first[:bmp_no_initiation]
+    assert_equal([BGP::Bmp::Peer_up, '192.0.2.2', 65_002, 65_001], [up.class, up.peer.address, up.peer.asn, up.sent_open.local_as])
+    assert_equal([99, ''.b], [BGP::Bmp::Message.factory(BGP::Fault.bmp(:bmp_unknown_type).last).type,
+                              BGP::Bmp::Message.factory(BGP::Fault.bmp(:bmp_unknown_type).last).body.delete("\0")])
+    cat = BGP::Fault.bmp_catalog.to_h { |c| [c[:name], [c[:expected], c[:rfc]]] }
+    assert_equal({ :bmp_unknown_type => [:ignore, 'RFC 7854 4.1'], :bmp_version_0 => [:record, 'RFC 7854 4.1'],
+                   :bmp_no_initiation => [:record, 'RFC 7854 3.3, 4.3'] }, cat)
+    assert_raise(ArgumentError) { BGP::Fault.bmp(:nope) }
+  end
+
   def test_the_rtr_catalog
     assert_equal(%i[rtr_unknown_pdu rtr_bad_version rtr_unexpected_version rtr_withdraw_unknown
                     rtr_duplicate_announce rtr_corrupt_length], BGP::Fault.rtr_names)

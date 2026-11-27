@@ -1555,6 +1555,33 @@ Peer Down's five reasons. RFC 9069 adds the Loc-RIB as peer type 3.
 The last two are "MUST" on the router, not rules for the station, so
 the matrix records what each station does rather than asserting it.
 
+### As built (8a)
+
+- **`BGP::Bmp`** in `bgp/bmp/messages.rb`: the common and per-peer
+  headers, the seven messages and `Unknown`, each built four ways. The
+  Loc-RIB peer type and its F flag, Peer Up's VRF/Table Name TLV and
+  Peer Down's reason 6 are RFC 9069's. Peer Down has the per-peer
+  header (RFC 7854 erratum 4830). `bgp4r` loads it.
+- **The BGP messages inside are bgp4r's**: an `Update` read with the
+  session its Peer Up gives (`Peer_up#session_info`), or the A flag's
+  AS width when none is given; `Open` and `Notification`. A Route
+  Mirroring keeps its BGP message as octets and parses it on demand.
+- **`Bmp::Validation`**: findings by name, not codes, since BMP has
+  none and the station answers nothing.
+- **`BGP::Fault::BMP`**: the three cases of the table above, as
+  messages' octets.
+- **The capture** is FRR 10.5.1, Ubuntu's package, the version CI's
+  `lab frr` installs, not 10.7.1 as Tests above says; `bgpd_bmp` is in
+  the `frr` package itself. 42 messages, each written back byte for
+  byte.
+- **Extended Length kept** (the owner's decision, 2026-11-27): FRR sets
+  it on a short AS_PATH, and bgp4r cleared it on encoding. An
+  attribute read off the wire now keeps it, in `Attr#len_fmt`; one
+  built does not set it. Two `update_test` cases pinned the clearing
+  and now expect the octets as received.
+- What the capture shows of FRR is in `docs/bmp.md` section 4, for 8b
+  to measure.
+
 ### routescope shows
 
 The stations bgp4rd sends to and their state. Later, in routescope's

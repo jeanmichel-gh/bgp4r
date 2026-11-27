@@ -19,7 +19,7 @@ amounts. Measured 2026-11-03:
 
 | Tier | What it needs | Files | Time | Command |
 |---|---|---:|---|---|
-| unit | Ruby | 198 | 21s | `ruby test/run_unit.rb` |
+| unit | Ruby | 200 | 21s | `ruby test/run_unit.rb` |
 | functional | a loopback socket | 34 | 18s | one file at a time, below |
 | lab | gobgpd, FRR, Docker or root | 45 | 10s to 400s per group | `ruby test/run_lab.rb GROUP` |
 
@@ -100,6 +100,7 @@ Getting a session up and keeping it.
 | `end-of-rib` | 3 | 1 | 1 | end_of_rib on a neighbor: a marker per negotiated family after the first table; received ones recorded |
 | `route-refresh-answer` | 3 | 1 | 1 | a route refresh answered with the family's Adj-RIB-Out, between BoRR and EoRR to an enhanced peer; counted and published |
 | `route-refresh-stale` | 9 | 1 | 1 | a BoRR marks the peer's routes of a family stale in every table, the EoRR or refresh_stale_time removes what is still stale; 7/1 for a wrong length |
+| `bmp-codec` | 5 | 0 | 0 | the BMP messages of RFC 7854 and RFC 9069, their findings, and BGP::Fault::BMP |
 | `rpki-rtr` | 4 | 0 | 0 | the RTR PDUs of RFC 8210 and RFC 6810, their findings, and BGP::Fault::RTR |
 | `rpki-fault-matrix` | 2 | 2 | 1 | BGP::Fault::RTR and the RTR behaviours against bgp4rd's RTR client and FRR's bgpd, and what each answered |
 | `graceful-restart` | 12 | 1 | 1 | graceful_restart on a neighbor: a helper, keeping a restarting peer's routes stale until its End-of-RIB, its Restart Time or stale_time; RFC 8538's N bit and Hard Reset |
@@ -222,6 +223,18 @@ BGP-LS, AFI 16388 SAFI 71 and 72, the NLRI and every attribute TLV.
 
 ```
 ruby test/run_feature.rb bgp-ls
+```
+
+### `bmp-codec`
+
+the BMP messages of RFC 7854 and RFC 9069, their findings, and BGP::Fault::BMP.
+
+- RFC 7854 sections 4 and 5, RFC 9069 sections 4 and 5
+- Read first: `docs/bmp.md`
+- 5 unit files
+
+```
+ruby test/run_feature.rb bmp-codec
 ```
 
 ### `capture`
@@ -1132,5 +1145,5 @@ test file has to be tagged before the suite is green again, which is
 the same arrangement `test/unit/lab_groups_test.rb` has with the CI
 matrix.
 
-277 of 277 test files are tagged. The
+279 of 279 test files are tagged. The
 remainder, if any, is what the guard names.

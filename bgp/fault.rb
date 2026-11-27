@@ -24,6 +24,7 @@ require 'bgp/path_attributes/attributes'
 require 'bgp/path_attributes/validation'
 require 'bgp/messages/route_refresh'
 require 'bgp/rtr'
+require 'bgp/bmp'
 
 module BGP
 
@@ -306,6 +307,27 @@ module BGP
         'send a Reset Query', '8210 5.9, 8.3'],
     ].freeze
 
+    # BMP, RFC 7854: what a router could send a station that the station
+    # has to cope with. [name, what is sent, what is expected of the
+    # station (:ignore it and keep the session, or :record what it
+    # does), RFC section, a block returning the messages' octets, in
+    # order]. Only bmp_unknown_type has a rule for the station; the other
+    # two are MUSTs on the router, so a matrix records what each station
+    # does. `Fault.bmp` gives the octets.
+    BMP = [
+      # Section 4.1: "A BMP implementation MUST ignore unrecognized
+      # message types upon receipt."
+      [:bmp_unknown_type, 'message type 99, after the Initiation', :ignore, '7854 4.1',
+        -> { [Fault.bmp_initiation, Bmp::Unknown.new(99, "\0\0\0\0".b).encode] }],
+      # Section 4.1: "Version 0 is reserved and MUST NOT be sent."
+      [:bmp_version_0, 'an Initiation in version 0', :record, '7854 4.1',
+        -> { [Fault.bmp_initiation.dup.tap { |o| o.setbyte(0, 0) }] }],
+      # Section 4.3: "An initiation message MUST be sent as the first
+      # message after the TCP session comes up."
+      [:bmp_no_initiation, 'a Peer Up before any Initiation', :record, '7854 3.3, 4.3',
+        -> { [Fault.bmp_peer_up] }],
+    ].freeze
+
     class << self
 
       # REFRESH as Hashes, in `catalog`'s shape, with `gr` where
@@ -396,6 +418,38 @@ module BGP
         entry = RTR.find { |e| e[0] == name.to_sym }
         raise ArgumentError, "unknown RTR fault #{name.inspect}, see Fault::RTR" unless entry
         entry[4].call(session_id)
+      end
+
+      # BMP as Hashes: name, description, expected, rfc and build.
+      def bmp_catalog
+        BMP.collect { |name, desc, expected, section, build|
+          { :name => name, :description => desc, :expected => expected, :rfc => "RFC #{section}", :build => build }
+        }
+      end
+
+      def bmp_names
+        BMP.collect(&:first)
+      end
+
+      # One BMP case as the octets of each message, in order.
+      #
+      #   Fault.bmp(:bmp_unknown_type)   # => [Initiation, type 99]
+      def bmp(name)
+        entry = BMP.find { |e| e[0] == name.to_sym }
+        raise ArgumentError, "unknown BMP fault #{name.inspect}, see Fault::BMP" unless entry
+        entry[4].call
+      end
+
+      # An Initiation with the sysDescr and sysName section 4.3 asks for.
+      def bmp_initiation
+        Bmp::Initiation.new({ :type => 1, :string => "bgp4r" }, { :type => 2, :string => 'bgp4r-fault' }).encode
+      end
+
+      # A Peer Up for 192.0.2.2, AS 65002, with two plain OPENs.
+      def bmp_peer_up
+        open = ->(as, id) { Open.new(4, as, 180, id, OPT_PARM::CAP::As4.new(as)) }
+        Bmp::Peer_up.new(Bmp::Per_peer.new('192.0.2.2', 65_002, '192.0.2.2'), '192.0.2.1', 179, 50_000,
+                         open.(65_001, '192.0.2.1'), open.(65_002, '192.0.2.2')).encode
       end
 
       # A Cache Response, the PDUs given (Pdu or octets) and an End of
