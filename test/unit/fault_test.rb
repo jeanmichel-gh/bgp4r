@@ -358,6 +358,15 @@ class TestFault < Test::Unit::TestCase
   # RFC 8210 section 12: each RTR case, its octets, and the Error Code a
   # router answers with. For the four single PDUs, Rtr::Validation finds
   # that code; the other two need the router's VRP table.
+  # The RTR cache's behaviours, docs/design/bgp-operations.md 7b.
+  def test_the_rtr_behaviours
+    assert_equal(%i[rtr_no_data rtr_silent rtr_cache_reset], BGP::Fault.rtr_behaviour_names)
+    assert_equal({ :name => :rtr_silent, :description => 'reads queries and answers none',
+                   :expected => 'use the data until the Expire Interval, then drop it', :rfc => 'RFC 8210 6' },
+                 BGP::Fault.rtr_behaviour_catalog[1])
+    assert_equal([], BGP::Fault.rtr_behaviour_names & BGP::Fault.behaviour_names, "bgp4r-sim's are its own")
+  end
+
   def test_the_rtr_catalog
     assert_equal(%i[rtr_unknown_pdu rtr_bad_version rtr_unexpected_version rtr_withdraw_unknown
                     rtr_duplicate_announce rtr_corrupt_length], BGP::Fault.rtr_names)

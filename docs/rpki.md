@@ -7,8 +7,8 @@ a prefix, a maximum length and an origin AS. RFC 6811's origin
 validation reads them.
 
 This is P8's pull request 7 in `docs/design/bgp-operations.md`, in
-three parts. 7a, the codec, is built and described here. 7b, a cache
-in Ruby (`bgp4r-rtr`), and 7c, origin validation in bgp4rd, are not
+three parts. 7a, the codec, and 7b, a cache in Ruby (`bgp4r-rtr`), are
+built and described here. 7c, origin validation in bgp4rd, is not
 built yet.
 
 ## 1. The PDUs
@@ -114,5 +114,184 @@ code: all but 2, No Data Available.
 
 `BGP::Fault::RTR` holds what a cache can send that a router must
 refuse. `Fault.rtr(name, session_id)` gives the octets of each PDU, in
-order. `docs/protocol-testing.md` has the list. The cache that sends
-them, and the matrix against bgp4rd and FRR, come with 7b and 7c.
+order. `docs/protocol-testing.md` has the list. `bgp4r-rtr` sends them
+(section 4). The matrix against bgp4rd comes with 7c.
+
+## 4. The cache, `bgp4r-rtr`
+
+`bgp4r-rtr` is an RTR cache. It serves the VRPs of a YAML file to the
+routers that connect, in version 1 or version 0, and serves them again
+with a new serial when the file changes. It is the cache of our labs,
+and FRR's `bgpd_rpki` talks to it.
+
+```sh
+bgp4r-rtr /lab/rtr.yml
+bgp4r-rtr /lab/rtr.yml --listen 0.0.0.0:3323 --api 0.0.0.0:8080
+```
+
+### The node file
+
+```yaml
+listen: 0.0.0.0:323       # where routers connect; the default
+api: 127.0.0.1:8080       # the HTTP API; the default
+session_id: 4660          # the default is the time, as section 5.1 suggests
+refresh: 3600             # the End of Data's intervals, section 6's defaults
+retry: 600
+expire: 7200
+notify_every: 60          # seconds between two Serial Notify, at least
+history: 100              # serials kept to answer a Serial Query from
+watch: 1                  # seconds between two looks at the file
+vrps:
+  - { prefix: 192.0.2.0/24, asn: 65001 }               # max_length: the prefix length
+  - { prefix: 198.51.100.0/22, max_length: 24, asn: 65002 }
+  - { prefix: 2001:db8::/32, max_length: 48, asn: 65003 }
+```
+
+Every key may be left out. A key not listed here is refused, and so is
+a VRP whose Max Length is below its Prefix Length or above the
+address's bits. Timers outside section 6's ranges are allowed, since a
+lab may want a short Expire, and the log says so. So does a
+`notify_every` under 60: section 8.2 says the cache "MUST rate-limit
+Serial Notifies to no more frequently than one per minute".
+
+When the file changes, its `vrps` become the table; the other keys are
+read only at the start. A file that no longer reads, or holds a VRP
+that is refused, keeps the table as it was, and the log says why.
+
+### What it answers
+
+| A router sends | The cache answers | Section |
+|---|---|---|
+| Reset Query | Cache Response, every VRP announced, End of Data | 5.4, 8.1 |
+| Serial Query, a serial it keeps | Cache Response, the changes since, End of Data | 5.3, 8.2 |
+| Serial Query, a serial it does not keep | Cache Reset | 5.3, 8.3 |
+| Serial Query, another Session ID | Error Report 0, and it closes | 5.1 |
+| a query in version 0 | the same, in version 0 | 7 |
+| a version neither 0 nor 1 | Error Report 4, in version 1, and it closes | 7 |
+| another version after one was agreed | Error Report 8, and it closes | 7 |
+| any other PDU type | Error Report 3, or 5 for a type not known, and it closes | 7, 12 |
+| an Error Report | nothing; it closes if the code is fatal or the report is wrong | 5.11 |
+
+The changes since a serial are the smallest set (section 5.3): a VRP
+added and then removed between the two is not sent, and withdrawals
+come before announcements. Version 0 sessions get a Session ID of their
+own, the next one, since section 5.1 says caches "SHOULD NOT use the
+same Session ID across multiple protocol versions".
+
+When the table changes, a Serial Notify goes to every router that has
+agreed a version (section 7: not before), at most one each
+`notify_every`. A notify that waits is sent when the time is up.
+
+### The HTTP API
+
+It is `bgp4r-sim`'s server (`bgp/sim/http.rb`) with these paths. A
+POST needs `X-BGP4R: routescope`; a refusal is a 4xx with
+`{"error": ...}`.
+
+| Path | What it does |
+|---|---|
+| `GET /api/status` | Session IDs, serial, VRP count, routers, timers, the behaviour running |
+| `GET /api/vrps` | the table |
+| `GET /api/routers` | each router: address, version, the serial it was last sent, its last query |
+| `GET /api/events?since=N` | what happened, as `BGP::Events` |
+| `POST /api/vrps` | `{"vrps": [...]}` replaces the table; `{"announce": [...], "withdraw": [...]}` changes it |
+| `POST /api/fault` | `{"name": ..., "router": "address:port"}`: one `BGP::Fault::RTR` case |
+| `POST /api/behaviour` | `{"name": ..., "away": seconds}`: one behaviour |
+
+A VRP from the API is lost when the file changes, since the file's
+VRPs then become the table.
+
+With the file's VRPs, `--listen 127.0.0.1:13340`, and one router
+connected after its Reset Query,
+`GET /api/status` and `GET /api/routers` answer:
+
+```json
+{
+  "bgp4r": "0.0.19",
+  "session_id": 4660,
+  "session_id_v0": 4661,
+  "serial": 1,
+  "vrps": 3,
+  "routers": 1,
+  "refresh": 3600,
+  "retry": 600,
+  "expire": 7200,
+  "notify_every": 60.0,
+  "behaviour": null,
+  "listen": 13340
+}
+```
+
+```json
+{
+  "routers": [
+    {
+      "router": "127.0.0.1:52830",
+      "version": 1,
+      "connected_at": "2026-11-27T05:30:11Z",
+      "serial": 1,
+      "last_query": "reset",
+      "reset_next": false,
+      "fault": null
+    }
+  ]
+}
+```
+
+`serial` is the serial the router was last sent. `reset_next` and
+`fault` are what waits for its next query.
+
+### Faults and behaviours
+
+A fault is the answer to the router's next query, to every router that
+agreed version 1, or to the one named. A Serial Notify goes out at once
+to bring that query on. A router reads what comes while it has no
+query open as it likes: FRR 10.7.1 dropped all six unread when they
+were sent so.
+
+| Behaviour | What the cache does | What RFC 8210 expects of the router |
+|---|---|---|
+| `rtr_no_data` | answers every query with Error Report 2, No Data Available | keep the session, query again (8.4) |
+| `rtr_silent` | reads queries, answers none, sends no Serial Notify | use the data until Expire, then drop it (6) |
+| `rtr_cache_reset` | answers each router's next Serial Query with Cache Reset, after a Serial Notify | send a Reset Query (8.3) |
+
+`rtr_no_data` and `rtr_silent` run `away` seconds, 60 when not given.
+A new one replaces the one running, and `away: 0` ends it.
+`rtr_cache_reset` lasts until each router has had its Cache Reset.
+`BGP::Fault::RTR_BEHAVIOURS` is the list.
+
+### FRR 10.7.1 as the router
+
+Measured on 2026-11-27, `quay.io/frrouting/frr:10.7.1` with `bgpd -M
+rpki` and `rpki cache tcp 127.0.0.1 PORT preference 1`, against
+`bgp4r-rtr` on the same host:
+
+- It agreed version 1 and loaded the table: `show rpki prefix-table`
+  listed the three VRPs of the file above.
+- A change from the API reached it: a Serial Notify, its Serial Query,
+  one withdrawal and one announcement.
+- `rtr_cache_reset`: a Serial Query, the Cache Reset, then a Reset
+  Query, as section 8.3 has it.
+- `rtr_no_data`: it kept its table and the session.
+
+Each fault, as the answer to a Serial Query, and its answer:
+
+| Fault | RFC 8210 expects | FRR answered |
+|---|---|---|
+| `rtr_unknown_pdu` | Error Report 5 | Error Report 0, "length value in PDU is too small" |
+| `rtr_bad_version` | Error Report 4 | Error Report 8 |
+| `rtr_unexpected_version` | Error Report 8 | Error Report 8 |
+| `rtr_withdraw_unknown` | Error Report 6 | Error Report 6 |
+| `rtr_duplicate_announce` | Error Report 7 | Error Report 7 |
+| `rtr_corrupt_length` | Error Report 0 | Error Report 0 |
+
+FRR dropped the session each time, and kept the table it had. With a
+Retry of 5 s it came back within 4 s after the first three. After
+`rtr_withdraw_unknown` it had not come back after four minutes, and
+`rpki reset` brought it back. Why is not known.
+
+`rtr_bad_version` is sent after version 1 was agreed. Section 7 has a
+version "neither 0 nor 1" answered "during this negotiation", and a
+different version after it answered with code 8, so FRR's 8 is one
+reading. Section 12's code 4, "The Protocol Version is not known by the
+receiver", is the other. Which one bgp4rd answers is 7c's to decide.

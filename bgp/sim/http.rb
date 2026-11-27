@@ -90,6 +90,10 @@ module BGP
     # rescue, the accept loop is untouched by anything one client does,
     # and `handle` answers data rather than writing a socket so a test
     # can drive it without one.
+    #
+    # **`bgp4r-rtr` serves its own paths with it**, `Rtr::Http`, a
+    # subclass with its own READS, ACTIONS and DRY_RUNS, which is why the
+    # paths are read as `self.class::READS`.
     class Http
 
       MAX_HEAD = 8 << 10      # octets of request line and headers
@@ -244,12 +248,13 @@ module BGP
       def dispatch(method, path, headers, body)
         route, query = path.to_s.split('?', 2)
         return index if route == '/' || route == '/api'
-        if READS.key?(route)
+        reads = self.class::READS
+        if reads.key?(route)
           return [405, { :error => "#{route} is a GET" }] unless method == 'GET'
-          return [200, @views.send(READS[route], params(query))]
+          return [200, @views.send(reads[route], params(query))]
         end
-        action = ACTIONS[route]
-        dry = DRY_RUNS[route]
+        action = self.class::ACTIONS[route]
+        dry = self.class::DRY_RUNS[route]
         return not_found(route) unless action || dry
         return [405, { :error => "#{route} is a POST" }] unless method == 'POST'
         return [403, { :error => "a POST needs #{HEADER.upcase}: #{HEADER_VALUE}" }] unless
@@ -265,9 +270,9 @@ module BGP
       # makes a typo self correcting.
       def index
         [200, { :bgp4r => BGP::VERSION, :api => VERSION,
-                :reads => READS.keys.sort,
-                :actions => ACTIONS.sort.to_h,
-                :dry_runs => DRY_RUNS.keys.sort,
+                :reads => self.class::READS.keys.sort,
+                :actions => self.class::ACTIONS.sort.to_h,
+                :dry_runs => self.class::DRY_RUNS.keys.sort,
                 :post_header => "#{HEADER.upcase}: #{HEADER_VALUE}" }]
       end
 
@@ -275,7 +280,7 @@ module BGP
 
       def not_found(route)
         [404, { :error => "no such path #{route}; this injector answers " \
-                          "#{(READS.keys + ACTIONS.keys + DRY_RUNS.keys).sort.join(', ')}" }]
+                          "#{(self.class::READS.keys + self.class::ACTIONS.keys + self.class::DRY_RUNS.keys).sort.join(', ')}" }]
       end
 
       def parse_body(body)

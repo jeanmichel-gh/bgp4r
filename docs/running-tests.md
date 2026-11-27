@@ -19,8 +19,8 @@ amounts. Measured 2026-11-03:
 
 | Tier | What it needs | Files | Time | Command |
 |---|---|---:|---|---|
-| unit | Ruby | 194 | 21s | `ruby test/run_unit.rb` |
-| functional | a loopback socket | 30 | 18s | one file at a time, below |
+| unit | Ruby | 195 | 21s | `ruby test/run_unit.rb` |
+| functional | a loopback socket | 31 | 18s | one file at a time, below |
 | lab | gobgpd, FRR, Docker or root | 43 | 10s to 400s per group | `ruby test/run_lab.rb GROUP` |
 
 **The first two tiers together are under a minute and need nothing
@@ -136,10 +136,11 @@ What a receiver makes of something wrong.
 
 ### programs
 
-The four executables.
+The five executables.
 
 | Feature | unit | func | lab | What |
 |---|---:|---:|---:|---|
+| `rpki-cache` | 4 | 1 | 0 | bgp4r-rtr, an RTR cache: VRPs from a YAML file, Serial Notify on a change, and the RTR faults and behaviours from its HTTP API |
 | `daemon` | 15 | 2 | 2 | bgp4rd and bgp4r-cli: the control socket, the views and the configuration |
 | `injector` | 5 | 1 | 0 | bgp4r-sim: the eleven actions, the HTTP API and what it sent |
 | `routegen` | 2 | 1 | 3 | Generating many prefixes and packing them into UPDATEs |
@@ -667,6 +668,18 @@ Generating many prefixes and packing them into UPDATEs.
 ruby test/run_feature.rb routegen
 ```
 
+### `rpki-cache`
+
+bgp4r-rtr, an RTR cache: VRPs from a YAML file, Serial Notify on a change, and the RTR faults and behaviours from its HTTP API.
+
+- RFC 8210 sections 5 to 8 and 12
+- Read first: `docs/rpki.md`
+- 4 unit files, 1 functional
+
+```
+ruby test/run_feature.rb rpki-cache
+```
+
 ### `rpki-rtr`
 
 the RTR PDUs of RFC 8210 and RFC 6810, their findings, and BGP::Fault::RTR.
@@ -939,7 +952,7 @@ curl 127.0.0.1:8080/api/events?since=42
 
 ## Environment variables
 
-The library and the four executables read none of these. Every one
+The library and the five executables read none of these. Every one
 is read by a test, a lab harness or a node file, so none of them
 changes what goes on the wire.
 
@@ -1076,5 +1089,5 @@ test file has to be tagged before the suite is green again, which is
 the same arrangement `test/unit/lab_groups_test.rb` has with the CI
 matrix.
 
-267 of 267 test files are tagged. The
+269 of 269 test files are tagged. The
 remainder, if any, is what the guard names.

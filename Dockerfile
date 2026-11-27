@@ -79,6 +79,8 @@ CMD ["ruby", "test/run_unit.rb"]
 #     exe/bgp4r-sim /lab/sim.yml --api 0.0.0.0:8080
 #   docker run --rm -v $PWD/bgp4rd.yml:/etc/bgp4r/bgp4rd.yml bgp4r-speaker \
 #     exe/bgp4rd -f /etc/bgp4r/bgp4rd.yml
+#   docker run --rm -v $PWD/rtr.yml:/lab/rtr.yml bgp4r-speaker \
+#     exe/bgp4r-rtr /lab/rtr.yml
 #
 # **No stage of its own for either**, deliberately: a stage whose only
 # difference is a default command is a stage that can go stale, and
@@ -86,7 +88,7 @@ CMD ["ruby", "test/run_unit.rb"]
 # API is reached with `docker exec`, which needs no published port, and
 # that is the recorded reason it binds the loopback.
 FROM base AS speaker
-EXPOSE 179
+EXPOSE 179 323
 ENTRYPOINT ["ruby", "-I/app"]
 
 # The containerlab node image: the speaker stage plus iproute2, as root.
@@ -123,7 +125,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends iproute2 iputil
 # A shell in the node types the commands by name, and the client finds
 # the daemon's socket with no -s: `bgp4r-cli -c 'show bgp'`, or `cli`
 # for short. docs/bgp4r-cli.md is the guide to that shell.
-RUN for c in bgp4r bgp4rd bgp4r-cli bgp4r-sim; do ln -s /app/exe/$c /usr/local/bin/$c; done \
+RUN for c in bgp4r bgp4rd bgp4r-cli bgp4r-sim bgp4r-rtr; do ln -s /app/exe/$c /usr/local/bin/$c; done \
  && ln -s /app/exe/bgp4r-cli /usr/local/bin/cli
 ENV BGP4R_SOCKET=/run/bgp4r/bgp4rd.sock
 
