@@ -77,7 +77,7 @@ module Features
     'session'    => 'Getting a session up and keeping it',
     'routing'    => 'Deciding and advertising routes',
     'errors'     => 'What a receiver makes of something wrong',
-    'programs'   => 'The four executables',
+    'programs'   => 'The five executables',
     'contracts'  => 'Guards over the library and the suite, not over BGP',
   }.freeze
 
@@ -339,6 +339,15 @@ module Features
       :rfc   => 'RFC 8210 sections 5, 7 and 12, RFC 6810 section 5.7',
       :doc   => 'docs/rpki.md',
       :unit  => %w[rtr/pdus_test rtr/validation_test fault_test to_hash_round_trip_test],
+    },
+
+    'rpki-cache' => {
+      :area  => 'programs',
+      :about => 'bgp4r-rtr, an RTR cache: VRPs from a YAML file, Serial Notify on a change, and the RTR faults and behaviours from its HTTP API',
+      :rfc   => 'RFC 8210 sections 5 to 8 and 12',
+      :doc   => 'docs/rpki.md',
+      :unit  => %w[rtr/cache_test fault_test sim/http_test daemon/server_test],
+      :functional => %w[rtr_cache_test],
     },
 
     'route-refresh-faults' => {

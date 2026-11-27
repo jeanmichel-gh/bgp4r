@@ -285,6 +285,24 @@ module BGP
         'flush, RFC 4271', '4724 4', :no_n],
     ].freeze
 
+    # What an RTR cache does over time, in BEHAVIOURS' shape: [name, what
+    # the cache does, what RFC 8210 expects of the router, section].
+    # bgp4r-rtr runs them (`behaviour`), docs/rpki.md.
+    RTR_BEHAVIOURS = [
+      # Section 8.4: "If no other caches are available, the router MUST
+      # issue periodic Reset Queries until it gets a new usable load".
+      [:rtr_no_data, 'answers every query with Error Report 2, No Data Available',
+        'keep the session, query again at the Retry Interval', '8210 8.4, 12'],
+      # Section 6: "The router MUST NOT retain the data past the time
+      # indicated by" the Expire Interval.
+      [:rtr_silent, 'reads queries and answers none',
+        'use the data until the Expire Interval, then drop it', '8210 6'],
+      # Section 8.3: "If there are no more-preferred caches, it MUST issue
+      # a Reset Query".
+      [:rtr_cache_reset, "answers each router's next Serial Query with Cache Reset",
+        'send a Reset Query', '8210 5.9, 8.3'],
+    ].freeze
+
     class << self
 
       # REFRESH as Hashes, in `catalog`'s shape, with `gr` where
@@ -354,6 +372,17 @@ module BGP
 
       def rtr_names
         RTR.collect(&:first)
+      end
+
+      # RTR_BEHAVIOURS as Hashes: name, description, expected and rfc.
+      def rtr_behaviour_catalog
+        RTR_BEHAVIOURS.collect { |name, desc, expected, section|
+          { :name => name, :description => desc, :expected => expected, :rfc => "RFC #{section}" }
+        }
+      end
+
+      def rtr_behaviour_names
+        RTR_BEHAVIOURS.collect(&:first)
       end
 
       # One RTR case as the octets of each PDU, in order, for a session

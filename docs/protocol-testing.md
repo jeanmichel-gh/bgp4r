@@ -490,8 +490,18 @@ Error Code here is fatal, so the router drops the session too.
 | `rtr_duplicate_announce` | an answer announcing one VRP twice | Error Report 7 | 8210 5.6, 12 |
 | `rtr_corrupt_length` | an IPv4 Prefix 4 octets longer than its 20 | Error Report 0 | 8210 5.6, 12 |
 
-`docs/rpki.md` describes the codec. The cache that sends these, and the
-matrix against bgp4rd and FRR, come with the next parts of
+`bgp4r-rtr` sends each as the answer to a router's next query
+(`POST /api/fault`), and runs three behaviours (`POST /api/behaviour`,
+`BGP::Fault::RTR_BEHAVIOURS`):
+
+| Name | The cache | The router, RFC 8210 | Section |
+|---|---|---|---|
+| `rtr_no_data` | answers every query with Error Report 2 | keeps the session, queries again | 8.4 |
+| `rtr_silent` | answers no query | uses the data until Expire, then drops it | 6 |
+| `rtr_cache_reset` | answers the next Serial Query with Cache Reset | sends a Reset Query | 8.3 |
+
+`docs/rpki.md` describes the codec and the cache, and what FRR 10.7.1
+answered to each case. The matrix against bgp4rd comes with 7c,
 `docs/design/bgp-operations.md` section 7.
 
 ## Receiving: policies and findings

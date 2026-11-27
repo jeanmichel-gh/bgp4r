@@ -90,7 +90,8 @@ Four commands, matching ospfv2's `ospfv2`, `ospfd` and `ospf-cli`.
 | `bgp4r` | the umbrella: `sim`, `routegen`, `capture`, `lab new`, `version`, and `console` from docs/console.md | built, all six |
 | `bgp4r-sim` | an alias for `bgp4r sim`, so a container command reads plainly | built |
 
-The gemspec declares all four. A subcommand or a method that does not
+The gemspec declares all four, and a fifth, `bgp4r-rtr`, an RPKI cache
+(docs/rpki.md). A subcommand or a method that does not
 exist is named in the usage, or in the refusal, as not yet implemented,
 so a person asking for one gets the list rather than a backtrace.
 **Nothing is left**, so the umbrella's usage names no missing

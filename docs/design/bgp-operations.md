@@ -1331,6 +1331,43 @@ Reset: the router sends a Reset Query, 8210 5.9).
   7b.
 - Documented in `docs/rpki.md`.
 
+### As built (7b)
+
+- **`BGP::Rtr::Cache`** in `bgp/rtr/cache.rb`: the VRP table, its
+  serials and the last 100 of them, and the answers of section 8 to
+  each query, in version 1 or 0. A version 0 session gets the next
+  Session ID, since section 5.1 says caches "SHOULD NOT" share one
+  across versions. `receive` takes one PDU and returns what to send, and
+  `tick` runs what waits on the clock, so the unit tests need no
+  socket and no sleep.
+- **`bgp4r-rtr`** in `bgp/rtr/server.rb` and `exe/`: the node file,
+  read again when it changes, and the HTTP API. The API is
+  `Sim::Http` with paths of its own; `Sim::Http` now reads its paths
+  as `self.class::READS` so a subclass can. It adds `POST /api/vrps`,
+  to change the table without writing the file. It is in the gemspec
+  and linked in the image.
+- **Serial Notify** is held to one a minute (section 8.2's MUST), set by
+  `notify_every`; a lab may set less, and the log says it breaks the
+  MUST. A notify sent to no router does not count, and the table at the
+  start is no change.
+- **A fault is the answer to the router's next query**, with a Serial
+  Notify to bring the query on. Sent with no query open, FRR 10.7.1
+  dropped all six unread. The spec's table said "sent by `bgp4r-rtr`
+  to a router" and left when open.
+- **The behaviours** are `BGP::Fault::RTR_BEHAVIOURS`, a list apart from
+  `BEHAVIOURS`, which is bgp4r-sim's. `rtr_no_data` and `rtr_silent` run
+  `away` seconds, 60 by default; `rtr_cache_reset` lasts until each
+  router has had its Cache Reset.
+- **FRR 10.7.1 measured** (`docs/rpki.md` section 4): it follows the
+  table, a change and a Cache Reset as RFC 8210 has them. It answered
+  four faults as the catalog expects; `rtr_unknown_pdu` with code 0 not
+  5, and `rtr_bad_version` with 8, not 4. Section 7 supports 8 for a
+  version that is wrong after negotiation, so 7c decides which bgp4rd
+  answers, and whether the catalog's expectation becomes either. After
+  `rtr_withdraw_unknown` FRR did not reconnect in four minutes.
+- An interop test in CI waits for 7c, whose matrix runs bgp4rd and FRR
+  against the cache.
+
 ### routescope shows
 
 Each cache's session, serial and VRP count; a Validation column on

@@ -310,7 +310,7 @@ module FeaturesDoc
     <<~MD
       ## Environment variables
 
-      The library and the four executables read none of these. Every one
+      The library and the five executables read none of these. Every one
       is read by a test, a lab harness or a node file, so none of them
       changes what goes on the wire.
 

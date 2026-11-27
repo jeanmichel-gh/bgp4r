@@ -15,9 +15,10 @@ Gem::Specification.new do |s|
   # umbrella, with `capture`, `sim`, `routegen` and `version`; `bgp4rd`,
   # the daemon, with the read side of its control API; `bgp4r-cli`, its
   # client; and `bgp4r-sim`, the route injector, which is an alias for
-  # `bgp4r sim` so that a container command reads plainly.
+  # `bgp4r sim` so that a container command reads plainly. `bgp4r-rtr`
+  # is an RPKI cache, docs/rpki.md.
   s.bindir = "exe"
-  s.executables = ["bgp4r", "bgp4rd", "bgp4r-cli", "bgp4r-sim"]
+  s.executables = ["bgp4r", "bgp4rd", "bgp4r-cli", "bgp4r-sim", "bgp4r-rtr"]
   # 3.2, the owner's floor for every router that takes bfd4r (2026-11-21):
   # bfdd4r's loop needs Queue#pop(timeout:), new in 3.2. CI tests 3.3 up.
   s.required_ruby_version = Gem::Requirement.new(">= 3.2")
