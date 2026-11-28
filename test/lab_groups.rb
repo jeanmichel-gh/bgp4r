@@ -151,6 +151,7 @@ module LabGroups
       route_refresh_frr_test
       route_refresh_fault_frr_test
       graceful_restart_frr_test
+      llgr_frr_test
       gr_fault_frr_test
       rib_router_frr_test
       rpki_frr_test

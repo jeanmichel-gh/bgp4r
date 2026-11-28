@@ -244,7 +244,11 @@ module BGP
           # A BoRR or an EoRR, in its place among the UPDATEs that came
           # before and after it on the session. work[4], when given, is
           # called with what was marked or removed.
-          n = work[3] == :mark ? @table.mark_stale(work[1], work[2]) : @table.purge_stale(work[1], work[2]).size
+          n = case work[3]
+              when :mark then @table.mark_stale(work[1], work[2])
+              when :llgr then @table.llgr_stale(work[1], work[2])
+              else @table.purge_stale(work[1], work[2]).size
+              end
           work[4]&.call(n)
         when :fib
           @table.fib_installer&.run_changes(work[1])

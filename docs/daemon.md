@@ -266,6 +266,7 @@ neighbors:
     end_of_rib: true               # RFC 4724 section 2; see below
     refresh_stale_time: 180        # RFC 7313 section 4's bound; see below
     graceful_restart: true         # RFC 4724, a helper only; see below
+    long_lived_graceful_restart: {} # RFC 9494, a helper only; see below
 
 originate:
   - prefixes: [10.255.0.0/24]
@@ -637,6 +638,45 @@ bgp4r sends no NOTIFICATION when its hold timer runs out, though RFC
 4271 asks for one; it ends the session, which under N keeps the routes.
 
 Without the key, a peer that advertises GR gets RFC 4271, as before.
+
+**`long_lived_graceful_restart` adds RFC 9494's long-lived period**, as
+a helper only, for IPv4 and IPv6 unicast in the global table. It needs
+`graceful_restart` (section 4.1), and is refused on a VRF's CE.
+
+```yaml
+neighbors:
+  - address: 10.0.0.2
+    as: 65002
+    graceful_restart: {}
+    long_lived_graceful_restart:
+      families: [ipv4_unicast, ipv6_unicast]   # the default
+      max_stale_time: 86400                     # caps the peer's LLST; none unless set
+```
+
+bgp4rd advertises the LLGR capability with each family at a Long-Lived
+Stale Time of 0 and F clear: it keeps nothing across its own restart.
+For a peer that sent the capability with GR (section 4.5: LLGR without
+GR is ignored):
+
+- **When the peer's Restart Time ends**, a family it listed with a
+  non-zero LLST is not purged: "the LLGR period is said to have begun"
+  (section 4.2). Its stale routes carry LLGR_STALE, marked `long_lived`;
+  a route with NO_LLGR goes. A family the GR capability did not list
+  has a Restart Time of 0, so its period begins at once.
+- **They are least preferred**: the decision's first step, `llgr_stale`,
+  puts them after any route that is not (section 4.4). A route that
+  arrives with LLGR_STALE from such a peer is least preferred too.
+- **They are not sent to a peer that did not send the capability**,
+  internal or external (section 4.3); it sees them withdrawn. A peer
+  that did gets them with LLGR_STALE kept. Section 4.6's NO_EXPORT and
+  LOCAL_PREF 0 toward internal peers are not built.
+- **They go** when the LLST ends, or at the family's End-of-RIB on the
+  new session, the LLST timer running until then; or at once when the
+  new session's LLGR capability leaves the family out or has F clear,
+  or there is none.
+- **A second restart in the period** keeps them, with their timer
+  (section 4.2: "MUST NOT be deleted before the timer for the
+  Long-Lived Stale Time expires").
 
 Each step is a `gr` event. A peer with IPv4 unicast restarted, came
 back with F set, sent one of its two routes again and its End-of-RIB;
@@ -1653,7 +1693,7 @@ hoping:
 | Effect | Keys | What a commit does |
 |---|---|---|
 | live | `log_level`, `originate`, `mark`, `link_state unreachable`, `unreachability`, a neighbor's `description` | applies it, and nothing on the wire stops |
-| bounce | a neighbor's `as`, `hold_time`, `capabilities`, `connect`, `port`, `retry` | ends that session and lets it come back |
+| bounce | a neighbor's `as`, `hold_time`, `capabilities`, `connect`, `port`, `retry`, `end_of_rib`, `graceful_restart`, `long_lived_graceful_restart` | ends that session and lets it come back |
 | bounce all | `announce` | ends every session and lets them come back |
 | restart | everything else | **refuses the commit**, naming the key |
 
@@ -1809,8 +1849,9 @@ session starts at zero. Other rows have no such key.
 while it waits for its EoRR, on the rows of `show.rib`, `show.adj_in`,
 `show.vpn`, `show.vrf`, `show.evpn`, `show.link_state` and
 `show.unreachability`. A fresh route's row has no such key. `restart`
-is a route kept through a peer's graceful restart; `long_lived` is
-LLGR's, later.
+is a route kept through a peer's graceful restart; `long_lived` a route
+in its LLGR period (RFC 9494). A route that carries LLGR_STALE, received
+or attached, has `llgr_stale: true` too.
 
 **A peer with `graceful_restart` says where its restart is**: its row
 gains `graceful_restart`. Here the peer is away:
@@ -1825,15 +1866,19 @@ gains `graceful_restart`. Here the peer is away:
     }
   ],
   "seconds_left": 120,
-  "notification": false
+  "notification": false,
+  "long_lived": []
 }
 ```
 
 `state` is `restarting` while the peer is away and its routes are kept,
-with `seconds_left` on its Restart Time; `helper` while a family waits
-for its End-of-RIB, with `seconds_left` on `stale_time`; null otherwise,
-with no families. `notification` is whether the last session exchanged
-RFC 8538's N bit. Other rows have no such key.
+with `seconds_left` on its Restart Time; `long_lived` while a family
+is in its LLGR period, with `seconds_left` on the soonest LLST;
+`helper` while a family waits for its End-of-RIB, with `seconds_left`
+on `stale_time`; null otherwise, with no families. `notification` is
+whether the last session exchanged RFC 8538's N bit. `long_lived` lists
+each family in its LLGR period and the seconds its LLST has left, `[]`
+when none. Other rows have no such key.
 
 **A CE's row, and a row whose session negotiated a VPN family, say
 more**, for routescope's L3VPN views (routescope
@@ -1975,14 +2020,15 @@ document first gave were wrong and are corrected in them, both found in
 * `show.status`'s peer row is mostly a **session** fact, and the split is
   written out above the `show.routes` example.
 
-`lost_at` is one of **seventeen** values the decision process already uses,
+`lost_at` is one of **eighteen** values the decision process already uses,
 measured on 2026-11-01 rather than written from memory, and this said
-fourteen until the fifteenth was measured in #230. Eleven tie-break steps,
+fourteen until the fifteenth was measured in #230. Twelve tie-break steps,
 in `Decision::STEPS` order:
 
 ```
-rpki_invalid  local_pref  as_path_length  origin  med  ebgp_over_ibgp
-igp_cost  router_id  cluster_list_length  peer_address  path_id
+llgr_stale  rpki_invalid  local_pref  as_path_length  origin  med
+ebgp_over_ibgp  igp_cost  router_id  cluster_list_length  peer_address
+path_id
 ```
 
 Five that drop a path before any comparison, `Decision::INELIGIBLE`:
@@ -1994,9 +2040,11 @@ rpki_reject
 
 `rpki_invalid` and `rpki_reject` are origin validation's, `rpki:` with
 `invalid: prefer_less` and `invalid: reject` (docs/rpki.md); without
-them neither is filed.
+them neither is filed. `llgr_stale` is long-lived graceful restart's,
+`long_lived_graceful_restart` (RFC 9494 section 4.4): a path carrying
+LLGR_STALE from a peer bgp4rd helps loses to any that does not.
 
-And `duplicate`, the seventeenth, which `Decision#best` files when only
+And `duplicate`, the eighteenth, which `Decision#best` files when only
 identical routes are left after every step. **No Table can produce it**,
 because an imported route is keyed by its peer and its Path Identifier
 and a `Peer` is its address, so two candidates always differ at

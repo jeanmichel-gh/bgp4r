@@ -82,11 +82,13 @@ module BGP
       #   routes to other IBGP speakers".
       # :non_client_to_non_client is a reflector obeying RFC 4456 section 6,
       #   which reflects a non-client's route to clients only. See clients?.
+      # :llgr_stale is RFC 9494 section 4.3: a least preferred route to a
+      #   peer that did not send the LLGR capability. See llgr.
       # :policy is the caller's block returning nil.
       # :next_hop_is_the_peers_address is RFC 4271 section 5.1.3: "A route
       #   originated by a BGP speaker SHALL NOT be advertised to a peer
       #   using an address of that peer as NEXT_HOP."
-      REFUSALS = %i[back_to_sender no_advertise no_export no_export_sub_confed
+      REFUSALS = %i[back_to_sender llgr_stale no_advertise no_export no_export_sub_confed
                     ibgp_to_ibgp non_client_to_non_client
                     next_hop_is_the_peers_address policy].freeze
 
@@ -109,8 +111,12 @@ module BGP
       #   last, after every rule here.
       # rpki: origin validation (bgp/daemon/rpki.rb), an object answering
       #   `state(route)` and `mark_ibgp?`; see validation_state.
+      # llgr: long-lived graceful restart (bgp/daemon/graceful_restart.rb),
+      #   an object answering `stale?(route)`, true for a least preferred
+      #   route, and `capable?(address)`, true when that peer's session
+      #   carried the LLGR capability with GR (RFC 9494 sections 4.3, 4.5).
       def initialize(local_as:, router_id:, default_local_pref: Decision::DEFAULT_LOCAL_PREF,
-                     route_reflector: false, clients: nil, cluster_id: nil, policy: nil, rpki: nil)
+                     route_reflector: false, clients: nil, cluster_id: nil, policy: nil, rpki: nil, llgr: nil)
         @local_as = Integer(local_as)
         @router_id = IPAddr.new(router_id.to_s).to_s
         @default_local_pref = default_local_pref
@@ -118,6 +124,7 @@ module BGP
         @cluster_id = IPAddr.new((cluster_id || @router_id).to_s).to_s
         @policy = policy
         @rpki = rpki
+        @llgr = llgr
         # A Hash rather than a Set, so this needs no require: Ruby keeps
         # moving standard libraries to bundled gems (see Conventions).
         @clients = nil
@@ -218,6 +225,12 @@ module BGP
         unless route.local?
           return :back_to_sender if route.peer == peer
         end
+        # RFC 9494 section 4.3: a least preferred route "SHOULD NOT be
+        # advertised to any neighbor from which the Long-Lived Graceful
+        # Restart Capability has not been received". Section 4.6's
+        # exception, NO_EXPORT and LOCAL_PREF 0 toward internal peers, is
+        # not built (docs/design/bgp-operations.md, answer 5).
+        return :llgr_stale if @llgr && @llgr.stale?(route) && !@llgr.capable?(address_of(peer))
         if route.path_attribute.has?(Communities)
           c = route.path_attribute[Communities]
           # RFC 1997: NO_ADVERTISE routes "MUST NOT be advertised to other

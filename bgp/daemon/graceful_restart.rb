@@ -73,6 +73,18 @@ module BGP
     #
     # The timers run on an injected clock; a watcher thread, alive only
     # while one runs, checks them once a second (`expire`).
+    #
+    # **Long-lived graceful restart, RFC 9494**, the helper side, with a
+    # neighbor's `long_lived_graceful_restart` (docs/design/bgp-operations.md
+    # section 4, pull request 4a). For a family the peer listed with a
+    # Long-Lived Stale Time, its routes are not deleted when the Restart
+    # Time ends: "the LLGR period is said to have begun" (section 4.2).
+    # They carry LLGR_STALE, a route with NO_LLGR goes, and they are least
+    # preferred (Rib::Decision's llgr_stale) and not sent to a peer that
+    # did not send the capability (Rib::Export). They go when the LLST
+    # ends, or at the family's End-of-RIB on the new session, or at once
+    # when that session's capability does not keep them. IPv4 and IPv6
+    # unicast in the global table, for now.
     class GracefulRestart
 
       KIND = BGP::Events.register_kind(:gr)
@@ -96,6 +108,16 @@ module BGP
       # forwarding path failed, not that the peer is gone, so graceful.
       HARD = { 1 => true, 2 => true, 3 => true, 4 => nil, 5 => false, 6 => false,
                7 => false, 8 => false, 9 => true, 10 => false }.freeze
+
+      # The keys of a neighbor's `long_lived_graceful_restart` block.
+      LLGR_KEYS = %w[families max_stale_time].freeze
+
+      # The families the LLGR period is built for, by name.
+      LLGR_FAMILIES = { 'ipv4_unicast' => [1, 1], 'ipv6_unicast' => [2, 1] }.freeze
+
+      # RFC 9494 section 3.1: the F bit, and the 24-bit LLST.
+      F_BIT = BGP::OPT_PARM::CAP::Long_lived_graceful_restart::F_BIT
+      MAX_LLST = BGP::OPT_PARM::CAP::Long_lived_graceful_restart::MAX_LLST
 
       # How long routes stay stale on a new session with no End-of-RIB,
       # in seconds: RFC 8538 section 4.1's "suggested default value [...]
@@ -123,6 +145,83 @@ module BGP
         unless st.nil? || (st.is_a?(Integer) && st >= 1)
           raise ArgumentError, "#{where}: stale_time is a whole number of seconds from 1, not #{st.inspect}"
         end
+      end
+
+      # Raises ArgumentError unless value is nil, true, or a mapping of
+      # LLGR_KEYS: families named in LLGR_FAMILIES, max_stale_time 0 to
+      # 2^24 - 1. RFC 9494 section 4.1: "If the LLGR Capability is
+      # advertised, the Graceful Restart capability MUST also be
+      # advertised", so it needs graceful_restart.
+      def self.check_llgr(value, gr, address)
+        return if value.nil?
+        where = "neighbor #{address}: long_lived_graceful_restart"
+        raise ArgumentError, "#{where} needs graceful_restart too (RFC 9494 section 4.1)" if gr.nil?
+        return if value == true
+        raise ArgumentError, "#{where} is true or a mapping of #{LLGR_KEYS.join(', ')}, not #{value.inspect}" unless value.is_a?(Hash)
+        unknown = value.keys - LLGR_KEYS
+        raise ArgumentError, "#{where}: unknown key(s) #{unknown.join(', ')}: use #{LLGR_KEYS.join(', ')}" unless unknown.empty?
+        fams = value.fetch('families', LLGR_FAMILIES.keys)
+        bad = Array(fams).collect(&:to_s) - LLGR_FAMILIES.keys
+        unless fams.is_a?(Array) && !fams.empty? && bad.empty?
+          raise ArgumentError, "#{where}: families are #{LLGR_FAMILIES.keys.join(' and ')}, not #{(bad.empty? ? fams : bad).inspect}"
+        end
+        m = value['max_stale_time']
+        unless m.nil? || (m.is_a?(Integer) && (0..MAX_LLST).include?(m))
+          raise ArgumentError, "#{where}: max_stale_time is 0 to #{MAX_LLST} seconds (RFC 9494 section 3.1), not #{m.inspect}"
+        end
+      end
+
+      # The families of a `long_lived_graceful_restart` value, [afi, safi].
+      def self.llgr_families(value)
+        names = value.is_a?(Hash) ? value.fetch('families', LLGR_FAMILIES.keys) : LLGR_FAMILIES.keys
+        Array(names).collect { |n| LLGR_FAMILIES.fetch(n.to_s) }
+      end
+
+      # What bgp4rd advertises: each family with a Long-Lived Stale Time of
+      # 0 and F clear. bgp4rd keeps no state across its own restart, so a
+      # peer must not keep its routes; section 4.2, with both times 0,
+      # "only those of the base BGP specification" apply.
+      def self.llgr_capability(value)
+        cap = BGP::OPT_PARM::CAP::Long_lived_graceful_restart.new
+        llgr_families(value).each { |afi, safi| cap.add(afi, safi, 0, 0) }
+        cap
+      end
+
+      # { [afi, safi] => [flags, llst] } from the last LLGR capability an
+      # OPEN carried, or nil. nil too without a GR capability: section
+      # 4.5, it "MUST be ignored".
+      def self.received_llgr(open)
+        return nil unless open && received(open)
+        cap = Refresh.capabilities(open).select { |c| c.is_a?(BGP::OPT_PARM::CAP::Long_lived_graceful_restart) }.last
+        cap && cap.tuples.to_h { |afi, safi, flags, llst| [[afi, safi], [flags, llst]] }
+      end
+
+      # What the decision and export ask, for the speaker: which routes
+      # are least preferred, and which peers sent the capability.
+      class Policy
+        def initialize(speaker) ; @speaker = speaker ; end
+
+        # RFC 9494 section 4.3: a route with LLGR_STALE from a neighbor
+        # we advertised the capability to.
+        def stale?(route)
+          !route.local? && BGP::Rib::Llgr.stale?(route.path_attribute) && helping?(route.peer.address)
+        end
+
+        def helping?(address)
+          p = peer(address)
+          !p.nil? && !p.config['long_lived_graceful_restart'].nil?
+        end
+
+        # True when the peer's session carried the LLGR capability, with
+        # GR (section 4.5).
+        def capable?(address)
+          info = peer(address)&.neighbor&.session_info
+          !GracefulRestart.received_llgr(info && info.peer).nil?
+        end
+
+        private
+
+        def peer(address) ; @speaker.peers.find { |p| p.address == address.to_s } ; end
       end
 
       # What bgp4rd advertises: R clear, N when `notification` is true,
@@ -184,14 +283,24 @@ module BGP
       def initialize(peer, speaker, clock: -> { Process.clock_gettime(Process::CLOCK_MONOTONIC) })
         @peer, @speaker, @clock = peer, speaker, clock
         @lock = Mutex.new
-        @kept = []          # the families held through the restart, [afi, safi]
-        @restart_at = nil   # when the peer's Restart Time runs out
+        @restart_at = {}    # [afi, safi] => when its Restart Time runs out, while the peer is away
         @waiting = {}       # [afi, safi] => when its stale timer runs out
+        # @llst, set by down: [afi, safi] => its Long-Lived Stale Time, from the last session
+        @llgr_until = {}    # [afi, safi] => when its LLGR period ends
+        @syncing = []       # LLGR families waiting for their End-of-RIB
         @n = nil            # whether the last session exchanged the N bit
         @watcher = nil
       end
 
       def configured? ; !@peer.config['graceful_restart'].nil? ; end
+
+      def llgr_configured? ; configured? && !@peer.config['long_lived_graceful_restart'].nil? && !@peer.vrf ; end
+
+      # Section 4.2: the received LLST "MAY be reduced by local configuration".
+      def max_stale_time
+        v = @peer.config['long_lived_graceful_restart']
+        v.is_a?(Hash) ? v['max_stale_time'] : nil
+      end
 
       def stale_time
         v = @peer.config['graceful_restart']
@@ -211,7 +320,10 @@ module BGP
       def down(session_info, cause)
         return [] unless configured?
         theirs = GracefulRestart.received(session_info && session_info.peer)
-        families = theirs ? theirs[:families].collect { |f| [f[:afi], f[:safi]] } : []
+        gr_fams = theirs ? theirs[:families].collect { |f| [f[:afi], f[:safi]] } : []
+        llst = llsts(session_info)
+        in_llgr = @lock.synchronize { @llgr_until.keys }
+        families = gr_fams | llst.keys | in_llgr
         n = GracefulRestart.exchanged?(session_info)
         @lock.synchronize { @n = n }
         unless !families.empty? && (cause == :tcp || (n && %i[notification hold_time].include?(cause)))
@@ -224,16 +336,24 @@ module BGP
           clear
           return []
         end
-        families.each { |afi, safi| purge(afi, safi, 'consecutive restart, no N bit', quiet: true) } unless n
-        time = theirs[:restart_time]
+        # RFC 9494 section 4.2: "in the case of consecutive restarts, the
+        # previously marked stale routes MUST NOT be deleted before the
+        # timer for the Long-Lived Stale Time expires".
+        (families - in_llgr).each { |afi, safi| purge(afi, safi, 'consecutive restart, no N bit', quiet: true) } unless n
+        time = theirs ? theirs[:restart_time] : 0
+        now = @clock.call
         @lock.synchronize do
-          @kept = families
+          # Section 4.2: a family the GR capability does not list has a
+          # Restart Time of zero; one already in its LLGR period keeps
+          # its timer.
+          @restart_at = (families - in_llgr).to_h { |f| [f, now + (gr_fams.include?(f) ? time : 0)] }
+          @llst = llst
           @waiting = {}
-          @restart_at = @clock.call + time
         end
         event("helper started after #{cause}: #{families.size} famil#{families.size == 1 ? 'y' : 'ies'} kept stale for the peer's Restart Time, #{time} s",
               :helper => { :families => families.collect { |a, s| { :afi => a, :safi => s } }, :restart_time => time,
-                           :cause => cause.to_s, :notification => n })
+                           :cause => cause.to_s, :notification => n,
+                           :long_lived => llst.collect { |(a, s), t| { :afi => a, :safi => s, :llst => t } } })
         watch
         families
       end
@@ -243,19 +363,17 @@ module BGP
       # timer.
       def up(session_info)
         n = GracefulRestart.exchanged?(session_info)
-        kept = @lock.synchronize do
+        kept, long = @lock.synchronize do
           @n = n
-          k = @kept
-          @restart_at = nil
-          k
+          k = @restart_at.keys
+          @restart_at = {}
+          [k, @llgr_until.keys]
         end
+        back_llgr(session_info, long) unless long.empty?
         return if kept.empty?
         fams = GracefulRestart.families(session_info && session_info.peer)
         now_gone, wait = kept.partition { |f| !fams[f] }
-        @lock.synchronize do
-          @kept = []
-          wait.each { |f| @waiting[f] = @clock.call + stale_time }
-        end
+        @lock.synchronize { wait.each { |f| @waiting[f] = @clock.call + stale_time } }
         now_gone.each { |afi, safi| purge(afi, safi, fams.key?([afi, safi]) ? 'F bit clear' : 'family not in the new capability') }
         event("session back: #{wait.size} famil#{wait.size == 1 ? 'y waits' : 'ies wait'} for End-of-RIB, at most #{stale_time} s",
               :back => { :waiting => wait.collect { |a, s| { :afi => a, :safi => s } }, :stale_time => stale_time }) unless wait.empty?
@@ -267,7 +385,13 @@ module BGP
       def update(msg)
         return unless msg.is_a?(BGP::Update)
         fam = msg.end_of_rib or return
-        purge(*fam, 'End-of-RIB') if @lock.synchronize { @waiting.delete(fam) }
+        waited = @lock.synchronize do
+          # Section 4.2: the LLST timer "is neither stopped nor updated
+          # until the EoR marker is received".
+          long = @syncing.delete(fam) && @llgr_until.delete(fam)
+          @waiting.delete(fam) || long
+        end
+        purge(*fam, 'End-of-RIB') if waited
       end
 
       # Purges what ran out by now: every kept family once the Restart
@@ -277,45 +401,111 @@ module BGP
         now = @clock.call
         due = @lock.synchronize do
           list = []
-          if @restart_at && @restart_at <= now
-            list += @kept.collect { |f| [*f, 'Restart Time'] }
-            @kept = []
-            @restart_at = nil
+          @restart_at.select { |_, at| at <= now }.each_key do |f|
+            @restart_at.delete(f)
+            # Section 4.2: "Once the Restart Time period ends [...] the
+            # LLGR period is said to have begun".
+            if @llst[f].to_i.positive?
+              @llgr_until[f] = now + @llst[f]
+              list << [*f, :llgr]
+            else
+              list << [*f, 'Restart Time']
+            end
+          end
+          @llgr_until.select { |_, at| at <= now }.each_key do |f|
+            @llgr_until.delete(f)
+            list << [*f, 'Long-Lived Stale Time']
           end
           @waiting.select { |_, at| at <= now }.each_key { |f| @waiting.delete(f) ; list << [*f, 'stale_time'] }
           list
         end
-        due.each { |afi, safi, why| purge(afi, safi, why) }
+        due.each { |afi, safi, why| why == :llgr ? long_lived(afi, safi) : purge(afi, safi, why) }
         due
       end
 
-      # nil when nothing is held; 'restarting' while the peer is away;
-      # 'helper' while a family waits for its End-of-RIB.
+      # nil when nothing is held; 'restarting' while the peer is away in
+      # its Restart Time; 'long_lived' while a family is in its LLGR
+      # period; 'helper' while a family waits for its End-of-RIB.
       def state
-        @lock.synchronize { @restart_at ? 'restarting' : (@waiting.empty? ? nil : 'helper') }
+        @lock.synchronize do
+          if !@restart_at.empty? then 'restarting'
+          elsif !@llgr_until.empty? then 'long_lived'
+          elsif !@waiting.empty? then 'helper'
+          end
+        end
       end
 
       # For the peer row: the state, the families held, the seconds left
-      # on the timer that runs, and whether the N bit was exchanged on the
-      # last session.
+      # on the timer that runs, whether the N bit was exchanged on the
+      # last session, and each family in its LLGR period with the seconds
+      # its LLST has left.
       def row
         now = @clock.call
+        left = ->(at) { [(at - now).ceil, 0].max }
         @lock.synchronize do
-          r = if @restart_at
-                { :state => 'restarting', :families => fam_rows(@kept), :seconds_left => [(@restart_at - now).ceil, 0].max }
+          r = if !@restart_at.empty?
+                { :state => 'restarting', :families => fam_rows(@restart_at.keys), :seconds_left => left.(@restart_at.values.min) }
+              elsif !@llgr_until.empty?
+                { :state => 'long_lived', :families => fam_rows(@llgr_until.keys), :seconds_left => left.(@llgr_until.values.min) }
               elsif !@waiting.empty?
-                { :state => 'helper', :families => fam_rows(@waiting.keys), :seconds_left => [(@waiting.values.min - now).ceil, 0].max }
+                { :state => 'helper', :families => fam_rows(@waiting.keys), :seconds_left => left.(@waiting.values.min) }
               else
                 { :state => nil, :families => [], :seconds_left => nil }
               end
-          r.merge(:notification => @n == true)
+          r.merge(:notification => @n == true,
+                  :long_lived => @llgr_until.collect { |(a, s), at| { :afi => a, :safi => s, :seconds_left => left.(at) } })
         end
       end
 
       private
 
       def clear
-        @lock.synchronize { @kept = [] ; @waiting = {} ; @restart_at = nil }
+        @lock.synchronize { @restart_at = {} ; @waiting = {} ; @llst = {} ; @llgr_until = {} ; @syncing = [] }
+      end
+
+      # { [afi, safi] => seconds } for each family that gets an LLGR
+      # period: listed by the peer with a non-zero LLST (section 4.2),
+      # reduced to max_stale_time, and one we advertised.
+      def llsts(session_info)
+        return {} unless llgr_configured?
+        got = GracefulRestart.received_llgr(session_info && session_info.peer) or return {}
+        ours = GracefulRestart.llgr_families(@peer.config['long_lived_graceful_restart'])
+        cap = max_stale_time
+        got.each_with_object({}) do |(f, (_, t)), h|
+          t = [t, cap].min if cap
+          h[f] = t if t.positive? && ours.include?(f)
+        end
+      end
+
+      # The LLGR period begins for one family.
+      def long_lived(afi, safi)
+        t = @lock.synchronize { @llst[[afi, safi]] }
+        @speaker.stale_family(@peer, afi, safi, :llgr) do |n|
+          marked, gone = Array(n)
+          event("LLGR period for AFI #{afi} SAFI #{safi}: #{marked.to_i} route(s) LLGR_STALE, #{gone.to_i} with NO_LLGR removed, " \
+                "for the Long-Lived Stale Time, #{t} s",
+                :long_lived => { :afi => afi, :safi => safi, :marked => marked.to_i, :removed => gone.to_i, :llst => t })
+        end
+      end
+
+      # The session is back with families in their LLGR period. Section
+      # 4.2: the routes go at once when the new LLGR capability does not
+      # list the family with F set, or is not there; the rest wait for
+      # their End-of-RIB, the LLST still running.
+      def back_llgr(session_info, families)
+        got = llgr_configured? ? GracefulRestart.received_llgr(session_info && session_info.peer) : nil
+        gone, wait = families.partition { |f| !(got && got[f] && (got[f][0] & F_BIT) != 0) }
+        @lock.synchronize do
+          gone.each { |f| @llgr_until.delete(f) }
+          @syncing |= wait
+        end
+        gone.each do |afi, safi|
+          why = got.nil? ? 'no LLGR capability on the new session' : (got.key?([afi, safi]) ? 'LLGR F bit clear' : 'family not in the new LLGR capability')
+          purge(afi, safi, why)
+        end
+        return if wait.empty?
+        event("session back: #{wait.size} long-lived famil#{wait.size == 1 ? 'y waits' : 'ies wait'} for End-of-RIB, the LLST running",
+              :back => { :long_lived => wait.collect { |a, s| { :afi => a, :safi => s } } })
       end
 
       def fam_rows(list) ; list.collect { |a, s| { :afi => a, :safi => s } } ; end
@@ -338,7 +528,7 @@ module BGP
               sleep 1
               expire
               done = @lock.synchronize do
-                idle = @restart_at.nil? && @waiting.empty?
+                idle = @restart_at.empty? && @waiting.empty? && @llgr_until.empty?
                 @watcher = nil if idle
                 idle
               end

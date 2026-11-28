@@ -95,6 +95,12 @@ module BGP
         gone
       end
 
+      # Every route marked stale, with its reason.
+      def stale_routes ; @stale.filter_map { |(prefix, path_id), why| (r = self[prefix, path_id]) && [r, why] } ; end
+
+      # Marks one route stored here, with reason.
+      def mark(route, reason) ; @stale[[route.prefix, route.path_id]] = reason if self[route.prefix, route.path_id] ; end
+
       # The reason route is marked stale, or nil when it is fresh.
       def stale(prefix, path_id=nil)
         @stale[[Route.normalize(prefix), path_id.nil? ? nil : Integer(path_id)]]
