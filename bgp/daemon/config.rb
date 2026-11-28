@@ -70,11 +70,13 @@ module BGP
     # the key name. That matches `set ... key hunter2` and does **not**
     # match YAML's `key: hunter2`, because the colon is where the `\s+`
     # has to be. So a driver copying that regexp would leak a YAML
-    # secret. **The first secret is a neighbor's `password`**, the TCP MD5
-    # key (bgp/daemon/tcp_auth.rb). Both renderings carry it as the file
-    # does, as ospfd's do, so `config.replace` can send a configuration
-    # back whole; the set line `set neighbors 10.0.10.1 password KEY` has
-    # the whitespace a driver's mask wants. Masking is the driver's.
+    # secret. **The secrets are a neighbor's `password`**, the TCP MD5
+    # key, **and its `tcp_ao` keys' `key`** (bgp/daemon/tcp_auth.rb).
+    # Both renderings carry them as the file does, as ospfd's do, so
+    # `config.replace` can send a configuration back whole; the set lines
+    # `set neighbors 10.0.10.1 password KEY` and `set neighbors 10.0.10.1
+    # tcp_ao keys 0 key KEY` have the whitespace a driver's mask wants.
+    # Masking is the driver's.
     #
     # ## The grammar
     #
@@ -164,7 +166,10 @@ module BGP
 
       # A list whose elements are objects with nothing to key them by, so
       # the key is the ordinal. See the grammar above for what that costs.
-      ORDINAL_LISTS = %w[announce originate unreachability].freeze
+      # A neighbor's `tcp_ao` `keys` is one too, and there the order is
+      # the meaning: the first key is the one a session signs with
+      # (bgp/daemon/tcp_auth.rb).
+      ORDINAL_LISTS = %w[announce originate unreachability keys].freeze
 
       # A list whose elements are a name and its arguments.
       ARGUMENT_LISTS = %w[capabilities].freeze
@@ -429,8 +434,10 @@ module BGP
         set_under(element, path[2..], raw, index, path, seen)
       end
 
-      # Under an ordinal list: `originate 0 ...`.
-      def self.set_ordinal(tree, name, path, raw, index, seen)
+      # Under an ordinal list: `originate 0 ...`, or one inside a mapping,
+      # `neighbors 10.0.10.1 tcp_ao keys 0 ...`. `full` is the whole path
+      # the line named, which is what `seen` is keyed by.
+      def self.set_ordinal(tree, name, path, raw, index, seen, full = path)
         list = (tree[name] ||= [])
         raise Error, "line #{index + 1}: #{name} is a list" unless list.is_a?(Array)
         i = path[1]
@@ -441,7 +448,7 @@ module BGP
         # with empty blocks and every ordinal keeps meaning what its line
         # said.
         (list.size..i).each { |n| list[n] = {} }
-        set_under(list[i], path[2..], raw, index, path, seen)
+        set_under(list[i], path[2..], raw, index, full, seen)
       end
 
       # The rest of a path inside one mapping. `full` is the whole path
@@ -475,6 +482,13 @@ module BGP
                   when 2 then { args.first.to_s => args[1] }
                   else { args.first.to_s => args[1..] }
                   end
+          return element
+        end
+        # An ordinal list inside a mapping, such as a neighbor's `tcp_ao`
+        # `keys`. Without this its elements read back as a mapping keyed
+        # "0", "1", and a key list would not survive `config.replace`.
+        if ORDINAL_LISTS.include?(name) && path.size > 2
+          set_ordinal(element, name, path, raw, index, seen, full)
           return element
         end
         if path.size == 1
@@ -551,7 +565,14 @@ module BGP
         holder = locate(tree, path[0..-2])
         case holder
         when Hash  then delete_key(holder, path.last)
-        when Array then delete_element(holder, path.last)
+        # An element of an ordinal list inside a mapping is taken by its
+        # ordinal: `delete neighbors 10.0.10.1 tcp_ao keys 1`.
+        when Array
+          if ORDINAL_LISTS.include?(path[-2]) && path.last.match?(/\A\d+\z/)
+            holder.delete_at(path.last.to_i)
+          else
+            delete_element(holder, path.last)
+          end
         end
         tree
       end

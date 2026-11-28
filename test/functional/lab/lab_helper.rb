@@ -374,9 +374,18 @@ module LabHelper
     #           whether they do. nil by default, and the config a caller
     #           without it gets is byte for byte what it always was,
     #           which test/unit/lab_helper_test.rb pins.
+    # tcp_ao:   TCP-AO on the first neighbor, RFC 5925, as {send_id:,
+    #           keys: [[send_id, recv_id, key, algorithm], ...]}, where
+    #           algorithm is GoBGP's name, hmac-sha-1-96 or
+    #           aes-128-cmac-96; or nil for none. GoBGP 4 reads it as a
+    #           keychain and a neighbor's reference to it (measured on
+    #           v4.10.0, 2026-11-28); 3.23.0 has no TCP-AO.
+    # passive:  true for a router that only listens, so bgp4r dials it on
+    #           #listen_port.
     def initialize(local: '127.0.0.2', as: 65002, router_id: '10.0.0.2',
                    peer: '127.0.0.1', peer_as: 65001, port: nil, ipv6: true,
-                   add_path: nil, families: [], peer2: nil)
+                   add_path: nil, families: [], peer2: nil, tcp_ao: nil, passive: false)
+      @tcp_ao, @passive = tcp_ao, passive
       @local, @as, @router_id = local, as, router_id
       @peer, @peer_as, @ipv6 = peer, peer_as, ipv6
       @add_path = add_path
@@ -409,7 +418,7 @@ module LabHelper
           port = #{@listen_port}
 
       TOML
-      out = global + neighbor_block(@peer, @peer_as, @port)
+      out = global + keychain + neighbor_block(@peer, @peer_as, @port)
       # A second neighbor, when one was asked for, so the daemon carries
       # a route between two bgp4r speakers. Appended whole after the
       # first one's sub-tables, which is where TOML puts the next
@@ -464,15 +473,41 @@ module LabHelper
       # it send us several. A sub-table after the afi-safis array attaches
       # to this [[neighbors]] element, which is what TOML says and what
       # GoBGP reads.
+      # A passive router only listens: in the transport table already
+      # there, since TOML takes a table once.
+      if @passive && address == @peer
+        block = block.sub(/^(\s*)remote-port = .*\n/) { |l| l + "#{$1}passive-mode = true\n" }
+      end
       add_paths = ''
       if @add_path
         add_paths = "  [neighbors.add-paths.config]\n" \
                     "    receive = #{@add_path.fetch(:receive, true)}\n" \
                     "    send-max = #{@add_path.fetch(:send_max, 8)}\n"
       end
-      block + afi_safis + add_paths
+      block + afi_safis + add_paths + tcp_ao_block(address)
     end
     private :neighbor_block
+
+    # The keychain @tcp_ao names, before the neighbors that use it, or ''.
+    # GoBGP takes a master key in base64.
+    def keychain
+      return '' unless @tcp_ao
+      keys = @tcp_ao[:keys].collect { |snd, rcv, key, alg|
+        "  [[keychains.keys]]\n" \
+        "    [keychains.keys.config]\n" \
+        "      key-id = #{snd}\n" \
+        "      receive-id = #{rcv}\n" \
+        "      secret-key = \"#{[key].pack('m0')}\"\n" \
+        "      crypto-algorithm = \"#{alg || 'hmac-sha-1-96'}\"\n"
+      }.join
+      "[[keychains]]\n  [keychains.config]\n    name = \"bgp4r\"\n" + keys + "\n"
+    end
+
+    # The first neighbor's TCP-AO reference, or ''.
+    def tcp_ao_block(address)
+      return '' unless @tcp_ao && address == @peer
+      "  [neighbors.tcp-ao.config]\n    keychain = \"bgp4r\"\n    send-id = #{@tcp_ao[:send_id]}\n"
+    end
 
     # Did the daemon die because something already held a port it tried
     # to bind? Its own words, and it says them for the gRPC port and for

@@ -402,8 +402,10 @@ module BGP
                                                :min_ttl => BGP::Daemon::Gtsm.minimum(peer.ttl_security) })
           end
           # TCP authentication, present only on a neighbor with one: `md5`
-          # for `password`. Never the key. See bgp/daemon/tcp_auth.rb.
+          # for `password`, `tcp-ao` for `tcp_ao`. Never a key. See
+          # bgp/daemon/tcp_auth.rb.
           row = row.merge(:auth => 'md5') if peer.password
+          row = row.merge(:auth => 'tcp-ao') if peer.config['tcp_ao']
           # The families this session's End-of-RIB came for, RFC 4724
           # section 2, as {afi, safi} in the order they came. Present once
           # one has, so every other row reads as it always has.

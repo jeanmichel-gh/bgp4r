@@ -1156,7 +1156,8 @@ The same two Rubies, loopback, IPv4 and IPv6. The script is in
   dialling socket before `connect`.
 - `struct tcp_ao_add` is 288 octets. With `set_current` and `set_rnext`
   both set on both sockets, `setsockopt` gave `EINVAL`. With both clear
-  it worked. Which of the two sockets refused is not yet measured.
+  it worked. Measured while building 6b: the listening socket refuses
+  either flag; a socket before `listen` or `connect` takes both.
 - Results, MD5 and TCP-AO alike: both keys equal, the session carries
   data; a key on the listener only, or two different keys, the connect
   times out; no keys, it connects. A TCP-AO listener and an MD5 client
@@ -1208,8 +1209,7 @@ Measured again while building 6a, 2026-11-25, the same kernel, through
   first current. Key rollover (`TCP_AO_INFO`'s current and rnext) is a
   later step, not in 6b.
 - A VRF socket, bound with `SO_BINDTODEVICE`, needs no ifindex for
-  MD5: measured in 6a, above. TCP-AO's `TCP_AO_KEYF_IFINDEX` is 6b's to
-  measure.
+  MD5: measured in 6a, above. Nor for TCP-AO: measured in 6b, below.
 - The key is never shown in an answer about the session: the peer row
   says `auth: md5` or `auth: tcp-ao`, never the key, and a refused key's
   error gives its length, not the key.
@@ -1232,6 +1232,55 @@ and the restart reason in `candidate.rb`.
 - **The same code serves the RTR client** (section 7): RFC 8210
   section 9 lists TCP-AO as the SHOULD and MD5 as a MAY for RTR.
 
+Measured while building 6b, 2026-11-28, the same kernel, as uid 1000
+unless said:
+
+- A dialling socket with two keys signs with the last one added. With
+  `set_current` and `set_rnext` on the first, it starts on the first;
+  with `set_current` alone the SYN goes out and the handshake does not
+  finish. So the first key gets both.
+- A listener holding two keys for a peer answers with the one the
+  peer's KeyID names.
+- Two keys for one peer that share a SendID, or a RecvID, are refused
+  (`EEXIST`). The same IDs for two peers are taken.
+- One listener holds MD5 keys for some peers and TCP-AO keys for
+  others. One socket refuses a TCP-AO key for a peer it holds an MD5
+  key for (`EKEYREJECTED`).
+- A dual-stack IPv6 listener takes an IPv4 peer's key under
+  `::ffff:a.b.c.d` with prefix 32. With prefix 96 or 128, or an IPv4
+  sockaddr, it refuses it (`EINVAL`).
+- `hmac(sha1)`, `cmac(aes128)` and `hmac(sha256)` work; an unknown name
+  is `ENOENT`. A MAC length of 0 to 16 is taken by both of RFC 5926's
+  algorithms, 17 and over is `EMSGSIZE`; two lengths that differ stay
+  down with `TCPAOBad`.
+- The counters: another key, `TCPAOBad`; no TCP-AO from a peer with
+  keys, `TCPAORequired`; a KeyID that names no key of ours,
+  `TCPAOKeyNotFound`; an MD5 digest toward TCP-AO keys,
+  `TCPMD5Unexpected`; TCP-AO toward an MD5 key, `TCPAOKeyNotFound`.
+- A signed SYN toward a listener with no key for its peer is dropped,
+  `TCPAOKeyNotFound`. RFC 5925 section 7.5 step 1.a.i would remove
+  TCP-AO and take it; Linux does not.
+- As root, in a network namespace with two VRF devices: a listener and
+  a client bound to them with `SO_BINDTODEVICE` take keys with no
+  ifindex. The same key connects, another key or none does not, and a
+  key with `TCP_AO_KEYF_IFINDEX` and the VRF's ifindex connects too.
+- `getsockopt(TCP_AO_INFO)` from Ruby is `E2BIG`: `BasicSocket#getsockopt`
+  passes a buffer larger than the 48-octet struct, and the kernel wants
+  it exact. So the peer row does not show the current key.
+- GoBGP 4.10.0 has TCP-AO, as a keychain in its config file and a
+  neighbor's reference to it with its send-id. GoBGP 3.23.0 has none.
+
+As built, 6b: `TcpAuth.check_ao`, `ao_keys`, `ao_add` and `ao`; `tcp_ao`
+on `Peer`, every key on each listener for its passive peers, the keys
+on `dial_socket` before connect with the first current; `auth: tcp-ao`
+on the peer row; the restart reason. `algorithm` takes the kernel's
+names, `hmac(sha1)` (the default) and `cmac(aes128)`, RFC 5926's two;
+`mac_length` 1 to 16, 12 by default. `keys` is an ordinal list in set
+lines, `set neighbors ADDRESS tcp_ao keys 0 key KEY`, which
+`bgp/daemon/config.rb` now reads back as a list inside a mapping.
+routescope's `Drivers::Bgp4rd` masks `password`; it must mask `tcp_ao`'s
+`key` too before a lab uses it.
+
 ### Tests
 
 - Functional, loopback, no privilege: the measured matrix as tests.
@@ -1244,7 +1293,17 @@ and the restart reason in `candidate.rb`.
   Built as `test/functional/lab/md5_frr_test.rb`, in the `frr` lab
   group, run against 10.5.1 on ospflab: FRR dials, bgp4rd dials, and
   two keys stay down. Without FRR's key both directions fail, which was
-  checked. TCP-AO between two bgp4rd only, since FRR 10.7.1 has none.
+  checked. FRR 10.7.1 has no TCP-AO.
+- TCP-AO, built in 6b: the same file gains the matrix above, each case
+  with its counter, `ao_wrong_key` and `ao_md5_mix` of the behaviours
+  below among them; and a peer on its second key, three peers of MD5,
+  TCP-AO and none on one listener, a dual-stack listener, and an active
+  peer that starts on its first key.
+- TCP-AO interop against GoBGP 4.10.0, both directions:
+  `test/functional/lab/tcp_ao_gobgp_test.rb`, in the `gobgp4` lab
+  group. GoBGP dials, bgp4rd dials, AES-128-CMAC-96 both ways, either
+  side starting on its second of two keys, and another key staying
+  down.
 - Found while building, not fixed here: on a dual-stack listener
   (`listen_address: '::'`) an IPv4 neighbor's session never comes up,
   key or none. The listener matches by `remote_address`, which there is
@@ -1788,7 +1847,7 @@ and `CLAUDE.md`'s table.
 | 10 | 8b | `bgp4r-bmp`, the station, `docs/bmp.md` | 8a |
 | 11 | 8c | BMP in bgp4rd, `bmp`, pre-policy | 1, 8b |
 | 12 | 4 | LLGR helper, the `llgr_stale` decision step: in three parts, 4a the RIB's, 4b the other tables' and 4c the behaviours and catalog built | 3 |
-| any | 6b | TCP-AO, `tcp_ao` | 6a |
+| any | 6b | TCP-AO, `tcp_ao`; built | 6a |
 | with each | 9 | The labs (below), each with its feature's last pull request | each feature's |
 
 The order is the order of merging. Pull requests with no "Needs" in

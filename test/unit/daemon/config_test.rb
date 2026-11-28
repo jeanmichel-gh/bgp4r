@@ -77,6 +77,23 @@ class BGP_Daemon_Config_Test < Test::Unit::TestCase
     assert_equal(lines, C.to_set(C.from_set(lines)))
   end
 
+  # An ordinal list inside a mapping, a neighbor's TCP-AO keys, reads
+  # back as a list. The lines alone would not show it: a mapping keyed
+  # "0" and "1" renders the same lines, and TcpAuth.check_ao refuses it.
+  # A key taken away is one `delete` of its element.
+  def test_an_ordinal_list_inside_a_mapping_reads_back_as_a_list
+    two = { 'as' => 65_000,
+            'neighbors' => [{ 'address' => '10.0.10.1', 'as' => 65_010,
+                              'tcp_ao' => { 'keys' => [{ 'send_id' => 1, 'recv_id' => 1, 'key' => 'a' },
+                                                       { 'send_id' => 2, 'recv_id' => 2, 'key' => 'b' }] } }] }
+    one = Marshal.load(Marshal.dump(two))
+    one['neighbors'][0]['tcp_ao']['keys'].pop
+    assert_equal(two, C.from_set(C.to_set(two)))
+    assert_equal(['delete neighbors 10.0.10.1 tcp_ao keys 1'], C.compare(two, one))
+    assert_equal(one, C.apply(two, C.compare(two, one)))
+    assert_equal(two, C.apply(one, C.compare(one, two)))
+  end
+
   def test_nothing_changed_compares_as_nothing
     assert_equal([], C.compare(config, C.from_set(C.to_set(config))))
     assert_equal([], C.changed_paths(config, config))
