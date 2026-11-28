@@ -987,6 +987,34 @@ EVPN, BGP-LS and unreachability tables, each with its own decision;
   stale-time 20` lists VPN-IPv4 with F set; bgp4rd keeps its VPN route
   long-lived through a crash, and bgpd's VPN End-of-RIB ends the period.
 
+### As built (4c)
+
+- **The three behaviours** join `BGP::Fault::BEHAVIOURS` with `needs`
+  `:llgr`: the sim lists an LLGR capability beside its GR one. They run
+  in `bgp/sim/graceful_restart.rb` with the `gr_` ones. Coming back,
+  the sim sets F in each LLGR family as well as R and the GR F bits.
+  `llgr_no_llgr_route` takes `prefixes`, routes the sim announced, and
+  announces them again with NO_LLGR before it drops the session.
+- **`BGP::Fault::LLGR`** holds the two OPEN cases. Each is the GR flag
+  kept or not and the LLGR tuples, from the sim's own; `fault` brings
+  the session up again with that OPEN after a Hard Reset, or a Cease
+  6/2 without N, so the receiver starts clean. Expected is `:ignore`.
+  The OPEN is for one session; what the receiver made of it shows at
+  the next drop.
+- **The sim's LLGR capability** is one tuple or a list:
+  `Long_lived_graceful_restart.new` takes one Array per tuple.
+- **The matrix** runs against bgp4rd
+  (`test/functional/llgr_fault_matrix_test.rb`) and FRR 10.5.1
+  (`test/functional/lab/llgr_fault_frr_test.rb`, CI's `lab frr`); the
+  table is in `docs/protocol-testing.md`. bgp4rd does what RFC 9494
+  expects.
+- **FRR 10.5.1, measured 2026-11-28**: bgpd helps only with `bgp
+  long-lived-graceful-restart stale-time`; without it the routes go at
+  the Restart Time. With it, it does what each case expects but one: it
+  sends an LLGR_STALE route on to an external neighbor that sent no
+  LLGR, with LLGR_STALE and nothing else, where section 4.3 says it
+  SHOULD NOT.
+
 ### routescope shows
 
 The LLGR period on the peer row, the LLST left per family, and an
@@ -1759,7 +1787,7 @@ and `CLAUDE.md`'s table.
 | 9 | 8a | BMP codec | – |
 | 10 | 8b | `bgp4r-bmp`, the station, `docs/bmp.md` | 8a |
 | 11 | 8c | BMP in bgp4rd, `bmp`, pre-policy | 1, 8b |
-| 12 | 4 | LLGR helper, the `llgr_stale` decision step: in three parts, 4a the RIB's and 4b the other tables' built | 3 |
+| 12 | 4 | LLGR helper, the `llgr_stale` decision step: in three parts, 4a the RIB's, 4b the other tables' and 4c the behaviours and catalog built | 3 |
 | any | 6b | TCP-AO, `tcp_ao` | 6a |
 | with each | 9 | The labs (below), each with its feature's last pull request | each feature's |
 

@@ -42,6 +42,7 @@ module BGP::OPT_PARM::CAP
   #   CAP::Long_lived_graceful_restart.new
   #   CAP::Long_lived_graceful_restart.new(1, 1, 0x80, 3600)
   #   CAP::Long_lived_graceful_restart.new(:ipv4, :unicast, :preserved, 3600)
+  #   CAP::Long_lived_graceful_restart.new([1, 1, 0x80, 60], [2, 1, 0x80, 60])
   #   CAP::Long_lived_graceful_restart.new(wire_bytes)
   #   CAP::Long_lived_graceful_restart.new(cap.to_hash)
   #
@@ -79,6 +80,10 @@ module BGP::OPT_PARM::CAP
           add(f[:afi], f[:safi], f[:flags].to_i, f[:llst].to_i)
         end
         @tail = [c[:tail].to_s].pack('H*') if c[:tail]
+      elsif !args.empty? and args.all? { |a| a.is_a?(Array) }
+        # One tuple per Array, so a node file can list several.
+        super(BGP::OPT_PARM::CAP_LLGR)
+        args.each { |a| add(*a) }
       else
         super(BGP::OPT_PARM::CAP_LLGR)
         add(*args) unless args.empty?

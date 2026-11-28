@@ -115,7 +115,7 @@ module BGP
         'session.start' => %w[peer],
         'session.flap'  => %w[peer count interval],
         'refresh'       => %w[peer afi safi subtype],
-        'behaviour'     => %w[peer name afi safi away drop]
+        'behaviour'     => %w[peer name afi safi away drop prefixes]
       }.freeze
 
       # The keys that go with each of the four selectors that are not an
@@ -353,6 +353,7 @@ module BGP
           :refresh_faults    => BGP::Fault.refresh_names.collect { |n| n.to_s },
           :behaviours        => BGP::Fault.behaviour_names.collect { |n| n.to_s },
           :gr_faults         => BGP::Fault.gr_names.collect { |n| n.to_s },
+          :llgr_faults       => BGP::Fault.llgr_names.collect { |n| n.to_s },
           :specimens         => BGP::Specimen.names.collect { |n| n.to_s } }
       end
 
@@ -567,9 +568,10 @@ module BGP
         raise Refused, 'fault: case is required' if name.empty?
         return refresh_fault(name, block) if BGP::Fault.refresh_names.include?(name.to_sym)
         return gr_fault(name, block) if BGP::Fault.gr_names.include?(name.to_sym)
+        return llgr_fault(name, block) if BGP::Fault.llgr_names.include?(name.to_sym)
         unless BGP::Fault.names.include?(name.to_sym)
           raise Refused, "fault: unknown case #{name.inspect}; the catalog has " \
-                         "#{(BGP::Fault.names + BGP::Fault.refresh_names + BGP::Fault.gr_names).join(', ')}"
+                         "#{(BGP::Fault.names + BGP::Fault.refresh_names + BGP::Fault.gr_names + BGP::Fault.llgr_names).join(', ')}"
         end
         both = block.keys & %w[afi safi]
         raise Refused, "fault: #{name} is an UPDATE case and takes no #{both.join(' or ')}" unless both.empty?
@@ -720,7 +722,8 @@ module BGP
       # One `BGP::Fault::BEHAVIOURS` entry, by `name`. `borr_without_eorr`
       # sends a BoRR for `afi` and `safi` (1 and 1 unless given) and
       # nothing after it: the receiver's own bound is what is tested
-      # (RFC 7313 section 4). The `gr_` ones are GracefulRestartBehaviour's.
+      # (RFC 7313 section 4). The `gr_` and `llgr_` ones are
+      # GracefulRestartBehaviour's.
       def behaviour(body)
         block = check(body, 'behaviour')
         name = block['name'].to_s
@@ -728,8 +731,8 @@ module BGP
           raise Refused, "behaviour: #{name.empty? ? 'name is required' : "unknown behaviour #{name.inspect}"}; " \
                          "this injector has #{BGP::Fault.behaviour_names.join(', ')}"
         end
-        return gr_behaviour(name, block) if name.start_with?('gr_')
-        extra = block.keys & %w[away drop]
+        return gr_behaviour(name, block) if name.start_with?('gr_', 'llgr_')
+        extra = block.keys & %w[away drop prefixes]
         raise Refused, "behaviour: #{name} takes no #{extra.join(' or ')}" unless extra.empty?
         afi = integer(block, 'afi', 1)
         safi = integer(block, 'safi', 1)

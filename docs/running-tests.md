@@ -20,8 +20,8 @@ amounts. Measured 2026-11-03:
 | Tier | What it needs | Files | Time | Command |
 |---|---|---:|---|---|
 | unit | Ruby | 206 | 21s | `ruby test/run_unit.rb` |
-| functional | a loopback socket | 37 | 18s | one file at a time, below |
-| lab | gobgpd, FRR, Docker or root | 48 | 10s to 400s per group | `ruby test/run_lab.rb GROUP` |
+| functional | a loopback socket | 38 | 18s | one file at a time, below |
+| lab | gobgpd, FRR, Docker or root | 49 | 10s to 400s per group | `ruby test/run_lab.rb GROUP` |
 
 **The first two tiers together are under a minute and need nothing
 installed.** That is worth knowing before reaching for a lab test.
@@ -137,6 +137,7 @@ What a receiver makes of something wrong.
 |---|---:|---:|---:|---|
 | `route-refresh-faults` | 2 | 1 | 1 | BGP::Fault::REFRESH and the borr_without_eorr behaviour, sent by bgp4r-sim, and what bgp4rd and FRR do |
 | `graceful-restart-faults` | 4 | 1 | 1 | BGP::Fault::GR and the eleven gr_ behaviours, bgp4r-sim restarting as RFC 4724 and 8538 describe, and what bgp4rd and FRR do |
+| `llgr-faults` | 3 | 1 | 1 | BGP::Fault::LLGR and the three llgr_ behaviours, bgp4r-sim restarting as RFC 9494 describes, and what bgp4rd and FRR do |
 | `validation` | 1 | 0 | 3 | Receive-side error handling, and the matrix of what three routers do |
 | `fault` | 2 | 0 | 0 | Building the UPDATEs no RFC allows, and the catalog of them |
 
@@ -560,6 +561,20 @@ long_lived_graceful_restart: the LLGR period after a peer restarts, LLGR_STALE a
 
 ```
 ruby test/run_feature.rb llgr
+```
+
+### `llgr-faults`
+
+BGP::Fault::LLGR and the three llgr_ behaviours, bgp4r-sim restarting as RFC 9494 describes, and what bgp4rd and FRR do.
+
+- RFC 9494 sections 3.1, 4.2 to 4.5
+- Read first: `docs/protocol-testing.md`
+- 3 unit files, 1 functional
+- lab:
+  - `llgr_fault_frr_test`, needs frr
+
+```
+ruby test/run_feature.rb llgr-faults
 ```
 
 ### `logging`
@@ -1190,5 +1205,5 @@ test file has to be tagged before the suite is green again, which is
 the same arrangement `test/unit/lab_groups_test.rb` has with the CI
 matrix.
 
-291 of 291 test files are tagged. The
+293 of 293 test files are tagged. The
 remainder, if any, is what the guard names.

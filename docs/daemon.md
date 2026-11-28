@@ -2555,19 +2555,19 @@ Actions, as `action => [path, body keys]`, which is the table
 | `announce` | `/api/announce` | `prefixes` or `generate`, `next_hop`, `as_path`, `as_path_literal`, `med`, `local_pref`, `communities`, `extended_communities`, `large_communities`, `path_id`, `peer`; or one of `spec` (with `churn`), `mp_reach`, `specimen` |
 | `withdraw` | `/api/withdraw` | the same selectors, or `spec` or `mp_unreach` |
 | `attribute` | `/api/attribute` | a prefix set and the attributes to change |
-| `fault` | `/api/fault` | `case` from `BGP::Fault::CATALOG` with `prefixes` and `next_hop`, from `BGP::Fault::REFRESH` with `afi` and `safi`, or from `BGP::Fault::GR` alone |
+| `fault` | `/api/fault` | `case` from `BGP::Fault::CATALOG` with `prefixes` and `next_hop`, from `BGP::Fault::REFRESH` with `afi` and `safi`, or from `BGP::Fault::GR` or `BGP::Fault::LLGR` alone |
 | `replay` | `/api/replay` | `hex`, the octets to send unchanged |
 | `notification` | `/api/notification` | `code`, `subcode`, `data` |
 | `session.stop` | `/api/session/stop` | `peer` |
 | `session.start` | `/api/session/start` | `peer` |
 | `session.flap` | `/api/session/flap` | `peer`, `count`, `interval` |
 | `refresh` | `/api/refresh` | `peer`, `afi`, `safi`, `subtype` |
-| `behaviour` | `/api/behaviour` | `peer`, `name` from `BGP::Fault::BEHAVIOURS`, `afi`, `safi`; and for a `gr_` one `away` and `drop` |
+| `behaviour` | `/api/behaviour` | `peer`, `name` from `BGP::Fault::BEHAVIOURS`, `afi`, `safi`; for a `gr_` or `llgr_` one `away` and `drop`; and for `llgr_no_llgr_route` `prefixes` |
 
 The first ten are routescope's `Drivers::Sim::ACTIONS`. `behaviour` is
 newer, from `docs/design/bgp-operations.md`, and routescope does not
 send it yet. `/api/topology` lists the names of each kind: `faults`,
-`refresh_faults`, `gr_faults` and `behaviours`.
+`refresh_faults`, `gr_faults`, `llgr_faults` and `behaviours`.
 
 **A `gr_` behaviour makes the sim the speaker that restarts** (RFC 4724
 section 4.2, RFC 8538). The sim's peer must list a GR capability of its
@@ -2600,6 +2600,37 @@ Established) until a session reaches Established. `Peer#redial` makes
 a second connection while the session is up, for `gr_new_connection`;
 it runs once the peer has closed the old session, or is closed after
 `open_timeout` if the peer keeps the old one.
+
+**An `llgr_` behaviour is a restart a long-lived helper sees** (RFC
+9494). The sim's peer lists an LLGR capability beside its GR one, one
+tuple or a list of them, each `[afi, safi, flags, llst]`:
+
+```yaml
+    capabilities:
+      - as4_byte
+      - graceful_restart: [0, 2, [1, 1, 128]]   # a Restart Time of 2 s
+      - llgr: [1, 1, 128, 60]                   # IPv4 unicast, F, an LLST of 60 s
+```
+
+`llgr_long_restart` drops the session and comes back after `away`
+seconds, which the caller sets past the receiver's Restart Time and
+before the end of the LLST. `llgr_never_back` drops it and stays away.
+`llgr_no_llgr_route` first announces `prefixes` again with NO_LLGR
+beside the communities they had, then restarts as `llgr_long_restart`
+does; the prefixes must be ones the sim announced. Coming back, the sim
+sets R in its GR capability and F in each GR and LLGR family, since
+section 4.2 has a helper drop what it kept for a family whose F is
+clear.
+
+**A `BGP::Fault::LLGR` case brings the session up again with an odd
+OPEN**, for that one session: `llgr_without_gr` lists the LLGR
+capability with no GR one (section 4.5), and `llgr_reserved_flags` sets
+the seven reserved bits in each LLGR family's flags (section 3.1). The
+sim first sends a NOTIFICATION that has the receiver flush and not help:
+a Hard Reset when it lists N, a Cease 6/2 when not. Its routes go again
+on the new session. The `log` event `fault NAME done on PEER` says when
+the session is back. What the receiver does with the capability shows
+at the next drop, `session.stop`.
 
 **The body keys are the node file's own keys.** `prefixes`, `med`,
 `as_path`, `communities`, `next_hop`, `local_pref`, `path_id` are what

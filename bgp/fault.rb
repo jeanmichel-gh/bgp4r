@@ -251,7 +251,8 @@ module BGP
     # routescope's protocol-conventions.md part 3: [name, what the sender
     # does, what the RFC expects of the receiver, RFC section], and for
     # a graceful restart one what the sender's own GR capability must
-    # hold: :n for the N bit, :no_n for none, :gr for either. bgp4r-sim
+    # hold: :n for the N bit, :no_n for none, :gr for either, :llgr for
+    # an LLGR capability as well. bgp4r-sim
     # runs them (`behaviour`).
     #
     # The graceful restart ones are RFC 4724 section 4.2 and RFC 8538
@@ -287,6 +288,34 @@ module BGP
         'flush, RFC 4271', '8538 3.2', :n],
       [:gr_notification_no_n, 'no N, sends Cease 6/6',
         'flush, RFC 4271', '4724 4', :no_n],
+      # RFC 9494 from the restarting side. :llgr says the sender lists an
+      # LLGR capability as well as a GR one. `away` is the caller's, so
+      # that it falls past the receiver's Restart Time, and before or
+      # past the Long-Lived Stale Time, as the case says.
+      [:llgr_long_restart, 'away past the Restart Time, back before the Long-Lived Stale Time',
+        'LLGR_STALE attached, least preferred, back to normal at End-of-RIB', '9494 4.2 to 4.4', :llgr],
+      [:llgr_never_back, 'away past the Restart Time and the Long-Lived Stale Time',
+        'routes deleted at the Long-Lived Stale Time', '9494 4.2', :llgr],
+      [:llgr_no_llgr_route, 'one route carried NO_LLGR',
+        'removed when the LLGR period begins', '9494 4.2', :llgr],
+    ].freeze
+
+    # RFC 9494's OPEN cases: [name, what is sent, expected, section, a
+    # block taking the sender's LLGR tuples, [[afi, safi, flags, llst],
+    # ...], that returns [whether the OPEN keeps its GR capability, the
+    # LLGR tuples it lists]]. bgp4r-sim brings its session up again
+    # with that OPEN (`fault`). Expected is :ignore: the receiver
+    # ignores the LLGR capability (section 4.5) or the reserved bits
+    # (section 3.1). `Fault.llgr` gives the pair.
+    LLGR = [
+      # Section 4.5: "the LLGR Capability MUST be ignored" when the GR
+      # Capability is not advertised too.
+      [:llgr_without_gr, 'an OPEN with LLGR and no GR', :ignore, '9494 4.5',
+        ->(tuples) { [false, tuples] }],
+      # Section 3.1: the bits after F are reserved, "MUST be set to zero
+      # by the sender and ignored by the receiver".
+      [:llgr_reserved_flags, 'LLGR flags with the seven reserved bits set', :ignore, '9494 3.1',
+        ->(tuples) { [true, tuples.collect { |a, s, f, l| [a, s, f | 0x7f, l] }] }],
     ].freeze
 
     # What an RTR cache does over time, in BEHAVIOURS' shape: [name, what
@@ -357,7 +386,8 @@ module BGP
       end
 
       # BEHAVIOURS as Hashes: name, description, expected, rfc, and
-      # `needs`, nil or what the sender's GR capability must hold.
+      # `needs`, nil or what the sender's GR capability must hold, or
+      # :llgr for an LLGR capability beside it.
       def behaviour_catalog
         BEHAVIOURS.collect { |name, desc, expected, section, needs|
           { :name => name, :description => desc, :expected => expected,
@@ -385,6 +415,27 @@ module BGP
         entry = GR.find { |e| e[0] == name.to_sym }
         raise ArgumentError, "unknown graceful restart fault #{name.inspect}, see Fault::GR" unless entry
         entry[4].call
+      end
+
+      # LLGR as Hashes, in `gr_catalog`'s shape, without `n`.
+      def llgr_catalog
+        LLGR.collect { |name, desc, expected, section, build|
+          { :name => name, :description => desc, :expected => expected,
+            :rfc => "RFC #{section}", :build => build }
+        }
+      end
+
+      def llgr_names
+        LLGR.collect(&:first)
+      end
+
+      # One LLGR case: [keep the GR capability, the LLGR tuples].
+      #
+      #   Fault.llgr(:llgr_reserved_flags, [[1, 1, 0x80, 60]])   # => [true, [[1, 1, 255, 60]]]
+      def llgr(name, tuples)
+        entry = LLGR.find { |e| e[0] == name.to_sym }
+        raise ArgumentError, "unknown long-lived graceful restart fault #{name.inspect}, see Fault::LLGR" unless entry
+        entry[4].call(tuples)
       end
 
       # RTR as Hashes: name, description, the Error Code expected, rfc
