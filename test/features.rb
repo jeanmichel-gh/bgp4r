@@ -407,6 +407,16 @@ module Features
       :lab   => %w[bmp_bgp4rd_frr_test],
     },
 
+    'llgr' => {
+      :area  => 'session',
+      :about => 'long_lived_graceful_restart: the LLGR period after a peer restarts, LLGR_STALE and NO_LLGR, the llgr_stale step and the export rule, for IPv4 and IPv6 unicast',
+      :rfc   => 'RFC 9494 sections 3 and 4',
+      :doc   => 'docs/daemon.md',
+      :unit  => %w[daemon/llgr_test rib/llgr_test rib/view_test daemon/graceful_restart_test],
+      :functional => %w[llgr_test],
+      :lab   => %w[llgr_frr_test],
+    },
+
     'route-refresh-faults' => {
       :area  => 'errors',
       :about => 'BGP::Fault::REFRESH and the borr_without_eorr behaviour, sent by bgp4r-sim, and what bgp4rd and FRR do',

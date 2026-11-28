@@ -57,9 +57,11 @@ module BGP
       # The tie breaking steps, in order (RFC 4271 section 9.1.2.2, RFC 4456
       # section 9). :path_id is ours: it orders add-path routes from one peer.
       # :rpki_invalid is `invalid: prefer_less`, before LOCAL_PREF
-      # (docs/design/bgp-operations.md 7c).
+      # (docs/design/bgp-operations.md 7c). :llgr_stale is first: RFC 9494
+      # section 4.4, "A least preferred route MUST be treated as less
+      # preferred than any other route that is not also least preferred".
       STEPS = %i[
-        rpki_invalid local_pref as_path_length origin med ebgp_over_ibgp igp_cost
+        llgr_stale rpki_invalid local_pref as_path_length origin med ebgp_over_ibgp igp_cost
         router_id cluster_list_length peer_address path_id
       ].freeze
 
@@ -79,6 +81,10 @@ module BGP
       # 'reject'; or nil.
       attr_accessor :validator
 
+      # Long-lived graceful restart: a ->(route) true for a route that is
+      # least preferred (RFC 9494 section 4.3), or nil.
+      attr_accessor :llgr
+
       # local_as, router_id: ours.
       # cluster_id: ours as a route reflector; defaults to router_id (RFC 4456 section 7).
       # resolver: next_hop -> IGP cost (an Integer), or nil if unreachable.
@@ -86,9 +92,10 @@ module BGP
       # always_compare_med: compare MED across neighboring ASes too.
       # missing_med_worst: a route without MED gets the highest MED, not 0.
       # validator: see validator.
+      # llgr: see llgr.
       def initialize(local_as:, router_id:, cluster_id: nil, resolver: nil,
                      default_local_pref: DEFAULT_LOCAL_PREF,
-                     always_compare_med: false, missing_med_worst: false, validator: nil)
+                     always_compare_med: false, missing_med_worst: false, validator: nil, llgr: nil)
         @local_as = Integer(local_as)
         @router_id = IPAddr.new(router_id.to_s).to_s
         @cluster_id = cluster_id ? IPAddr.new(cluster_id.to_s).to_s : @router_id
@@ -97,6 +104,7 @@ module BGP
         @always_compare_med = always_compare_med
         @missing_med_worst = missing_med_worst
         @validator = validator
+        @llgr = llgr
       end
 
       # Why route may not be used, or nil if it may.
@@ -160,6 +168,14 @@ module BGP
         values = routes.map { |r| [r, yield(r)] }
         min = values.map(&:last).min
         values.select { |_, v| v == min }.map(&:first)
+      end
+
+      # RFC 9494 section 4.4: a least preferred route loses to any that
+      # is not; between two, "normal tiebreaking applies".
+      def keep_by_llgr_stale(routes)
+        return routes unless @llgr
+        kept = routes.reject { |r| @llgr.call(r) }
+        kept.empty? ? routes : kept
       end
 
       # `invalid: prefer_less`: an Invalid route loses to any route that

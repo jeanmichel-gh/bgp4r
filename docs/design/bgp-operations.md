@@ -924,6 +924,45 @@ one is ignored. Section 4.6 is an optional partial deployment
 | `llgr_without_gr` | catalog: OPEN with LLGR and no GR | ignore the LLGR capability | 9494 4.5 |
 | `llgr_reserved_flags` | catalog: LLGR flags with reserved bits set | ignore them | 9494 3.1 |
 
+### Built in parts
+
+As GR was. 4a, the helper for IPv4 and IPv6 unicast in the RIB, with
+the decision step and the export rule; 4b, the same period in the VPN,
+EVPN, BGP-LS and unreachability tables, each with its own decision;
+4c, the behaviours and the catalog above in `bgp4r-sim`.
+
+### As built (4a)
+
+- **`long_lived_graceful_restart`** on a neighbor, refused without
+  `graceful_restart` (4.1) and on a VRF's CE. `families` are
+  `ipv4_unicast` and `ipv6_unicast` for now, both by default;
+  `max_stale_time` caps the peer's LLST.
+- **The helper** is `GracefulRestart`, `bgp/daemon/graceful_restart.rb`.
+  Its Restart Time is now one per family, so a family the GR
+  capability does not list starts its LLGR period at once (4.2). When
+  the Restart Time ends, a family with an LLST starts its period
+  instead of being purged; `Speaker#stale_family`'s new `:llgr` asks
+  the RIB to attach LLGR_STALE and drop NO_LLGR (`Table#llgr_stale`),
+  and decides those prefixes again. The LLST timer runs to the
+  family's End-of-RIB. A second restart keeps the routes and the
+  timer.
+- **`Decision`'s first step is `llgr_stale`**, from a predicate the
+  speaker gives the table: a route with LLGR_STALE from a peer we
+  advertised the capability to (4.3).
+- **`Export` refuses such a route, `:llgr_stale`, to a peer whose
+  session did not carry LLGR with GR**, so it is withdrawn there.
+- **The names are routescope's** (`docs/design/bgp-operations-views.md`
+  there): the stale reason `long_lived`, `llgr_stale: true` on a route
+  row, and the peer row's `state: long_lived` with a `long_lived` list
+  of families and seconds left.
+- **Measured against FRR 10.5.1** (`test/functional/lab/llgr_frr_test.rb`):
+  bgpd advertises LLGR by default, IPv4 unicast with F set and an LLST
+  of 0, even with no LLGR line and with `no bgp graceful-restart`, so
+  it gets LLGR_STALE routes. With `bgp long-lived-graceful-restart
+  stale-time 20`, bgpd lists IPv4 unicast with F set where its GR
+  capability has F clear: bgp4rd keeps its route through a crash,
+  LLGR_STALE once the Restart Time ends, and waits for its End-of-RIB.
+
 ### routescope shows
 
 The LLGR period on the peer row, the LLST left per family, and an
@@ -1696,7 +1735,7 @@ and `CLAUDE.md`'s table.
 | 9 | 8a | BMP codec | – |
 | 10 | 8b | `bgp4r-bmp`, the station, `docs/bmp.md` | 8a |
 | 11 | 8c | BMP in bgp4rd, `bmp`, pre-policy | 1, 8b |
-| 12 | 4 | LLGR helper, the `llgr_stale` decision step | 3 |
+| 12 | 4 | LLGR helper, the `llgr_stale` decision step: in three parts, 4a the RIB's built | 3 |
 | any | 6b | TCP-AO, `tcp_ao` | 6a |
 | with each | 9 | The labs (below), each with its feature's last pull request | each feature's |
 

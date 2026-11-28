@@ -80,7 +80,7 @@ class TestBgpRibView < Test::Unit::TestCase
   # One route. next_hop: nil leaves NEXT_HOP out altogether, which is what
   # makes a route ineligible for want of a next hop.
   def route(p, prefix = P, origin: 0, med: nil, local_pref: nil, as_path: nil,
-            next_hop: :peer, originator_id: nil, cluster_list: nil, path_id: nil)
+            next_hop: :peer, originator_id: nil, cluster_list: nil, path_id: nil, communities: nil)
     attrs = [BGP::Origin.new(origin)]
     nh = next_hop == :peer ? p.address : next_hop
     attrs << BGP::Next_hop.new(nh) if nh
@@ -90,6 +90,7 @@ class TestBgpRibView < Test::Unit::TestCase
     attrs << BGP::Local_pref.new(local_pref) if local_pref
     attrs << BGP::Originator_id.new(originator_id) if originator_id
     attrs << BGP::Cluster_list.new(*cluster_list) if cluster_list
+    attrs << BGP::Communities.new(*communities) if communities
     BGP::Rib::Route.new(prefix, BGP::Path_attribute.new(*attrs), p, :path_id => path_id)
   end
 
@@ -112,9 +113,15 @@ class TestBgpRibView < Test::Unit::TestCase
   end
 
   LOSSES = {
-    # The eleven tie breaks, in Decision::STEPS order. invalid:
-    # prefer_less comes before LOCAL_PREF, so the Invalid path loses
-    # with the higher one.
+    # The twelve tie breaks, in Decision::STEPS order. A path with
+    # LLGR_STALE from a peer we help is least preferred (RFC 9494 section
+    # 4.4), so it loses with the higher LOCAL_PREF. invalid: prefer_less
+    # comes before LOCAL_PREF, so the Invalid path loses with the higher
+    # one.
+    :llgr_stale => {
+      :table  => { :llgr => ->(r) { BGP::Rib::Llgr.stale?(r.path_attribute) } },
+      :winner => [:E1, {}],
+      :loser  => [:I1, { :local_pref => 300, :communities => [:llgr_stale] }] },
     :rpki_invalid => {
       :table  => { :validator => Rov.new('prefer_less') },
       :winner => [:E1, {}],
@@ -260,7 +267,7 @@ class TestBgpRibView < Test::Unit::TestCase
     expected = BGP::Rib::Decision::STEPS + BGP::Rib::Decision::INELIGIBLE
     assert_equal(expected.sort, LOSSES.keys.sort,
                  'a scenario is missing for a reason the decision process can file')
-    assert_equal(16, expected.size, 'eleven tie breaks and five ineligible reasons')
+    assert_equal(17, expected.size, 'twelve tie breaks and five ineligible reasons')
   end
 
   def test_every_reason_the_decision_can_file_has_words
@@ -306,13 +313,13 @@ class TestBgpRibView < Test::Unit::TestCase
     from = doc.index('`lost_at` is one of')
     assert(from, 'the document no longer introduces the list')
     steps, ineligible = doc[from..].scan(/^```\n([a-z_ \n]+)\n```$/).map { |(b)| b.split }
-    assert_equal(11, steps.size, 'the eleven tie breaks')
+    assert_equal(12, steps.size, 'the twelve tie breaks')
     assert_equal(5, ineligible.size, 'the five ineligible reasons')
     assert_equal(BGP::Rib::Decision::STEPS.map(&:to_s), steps,
                  'the document lists the steps in Decision::STEPS order')
     assert_equal(BGP::Rib::Decision::INELIGIBLE.map(&:to_s), ineligible)
-    assert_match(/one of \*\*seventeen\*\* values/, doc, 'and says how many there are')
-    assert_match(/^And `duplicate`, the seventeenth/, doc)
+    assert_match(/one of \*\*eighteen\*\* values/, doc, 'and says how many there are')
+    assert_match(/^And `duplicate`, the eighteenth/, doc)
   end
 
   # The step that decided the prefix is on the prefix, which is

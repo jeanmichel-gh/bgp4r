@@ -92,7 +92,7 @@ class TestDaemonGracefulRestart < Test::Unit::TestCase
     @now += 29
     assert_equal([], h.expire)
     assert_equal({ :state => 'restarting', :families => [{ :afi => 1, :safi => 1 }], :seconds_left => 1,
-                   :notification => false }, h.row)
+                   :notification => false, :long_lived => [] }, h.row)
     @now += 1
     assert_equal([[1, 1, 'Restart Time']], h.expire)
     assert_equal([[1, 1]], @sp.purged)
@@ -108,7 +108,7 @@ class TestDaemonGracefulRestart < Test::Unit::TestCase
     h.up(info(open(gr(120, [1, 1, true], [2, 1, false]))))
     assert_equal([[2, 1], [1, 128]], @sp.purged, 'F clear, then missing')
     assert_equal({ :state => 'helper', :families => [{ :afi => 1, :safi => 1 }], :seconds_left => 200,
-                   :notification => false }, h.row)
+                   :notification => false, :long_lived => [] }, h.row)
     @now += 150
     assert_equal([], h.expire, 'past the Restart Time: it stopped once the session was back')
     h2 = helper('stale_time' => 60)
@@ -165,7 +165,7 @@ class TestDaemonGracefulRestart < Test::Unit::TestCase
     while (e = sub.pop(:timeout => 0)) do got << e.data end
     assert_equal([{ :purged => { :afi => 1, :safi => 1, :removed => 2 }, :reason => 'consecutive restart, no N bit' },
                   { :helper => { :families => [{ :afi => 1, :safi => 1 }], :restart_time => 120, :cause => 'tcp',
-                                 :notification => false } },
+                                 :notification => false, :long_lived => [] } },
                   { :back => { :waiting => [{ :afi => 1, :safi => 1 }], :stale_time => 180 } },
                   { :purged => { :afi => 1, :safi => 1, :removed => 2 }, :reason => 'End-of-RIB' }], got)
     h2 = helper
@@ -233,7 +233,7 @@ class TestDaemonGracefulRestart < Test::Unit::TestCase
     assert_equal([], helper('notification' => true).down(both_n, :hard_reset))
     assert_equal([], helper('notification' => true).down(both_n, nil), 'a stop of our own that sent nothing')
     assert_equal({ :state => 'restarting', :families => [{ :afi => 1, :safi => 1 }], :seconds_left => 120,
-                   :notification => true }, h.row)
+                   :notification => true, :long_lived => [] }, h.row)
   end
 
   # Section 4.1: with N, what was stale stays; without, it goes first.

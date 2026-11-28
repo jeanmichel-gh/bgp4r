@@ -413,7 +413,9 @@ class BGP_Daemon_Speaker_Test < Test::Unit::TestCase
                'open_timeout' => 5, 'port' => 179, 'record' => 'routes', 'retry' => 2,
                'route_reflector_client' => false, 'vrf' => 'A', 'as_override' => true, 'soo' => '65000:11',
                'bfd' => false, 'ttl_security' => 1, 'password' => 's3cret', 'end_of_rib' => true,
-               'refresh_stale_time' => 180, 'graceful_restart' => { 'stale_time' => 60 } }
+               'refresh_stale_time' => 180, 'graceful_restart' => { 'stale_time' => 60 },
+               # nil: a VRF's CE refuses it, graceful_restart_test.rb.
+               'long_lived_graceful_restart' => nil }
     assert_equal(BGP::Daemon::Peer::KEYS.sort, config.keys.sort, 'the case covers every key')
     assert_nothing_raised do
       speaker('neighbors' => [config], 'vrfs' => [{ 'name' => 'A', 'table' => 100, 'import' => ['65000:100'] }])

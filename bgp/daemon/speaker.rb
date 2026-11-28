@@ -312,7 +312,7 @@ module BGP
       KEYS = %w[address as capabilities connect description hold_time
                 open_timeout port record retry route_reflector_client
                 vrf as_override soo bfd ttl_security password end_of_rib
-                refresh_stale_time graceful_restart].freeze
+                refresh_stale_time graceful_restart long_lived_graceful_restart].freeze
 
       # Raises ArgumentError naming every key `config` carries that no
       # code reads, and the keys there are.
@@ -881,6 +881,8 @@ module BGP
         caps = @session.key?('capabilities') ? @session['capabilities'] : @config.fetch('capabilities', ['as4_byte'])
         Array(caps).each { |c| add_capability(n, c) }
         n.capability(GracefulRestart.capability(@config['graceful_restart'])) unless @config['graceful_restart'].nil?
+        # RFC 9494: each family with LLST 0 and F clear (bgp/daemon/graceful_restart.rb).
+        n.capability(GracefulRestart.llgr_capability(@config['long_lived_graceful_restart'])) unless @config['long_lived_graceful_restart'].nil?
         n.add_observer @recorder
         @route_refresh.reset
         n.add_observer @route_refresh
@@ -1086,6 +1088,12 @@ module BGP
         # run, because it starts no thread until something attaches to it.
         @rib = BGP::Rib::Table.new(:local_as => @my_as, :router_id => @router_id,
                                    :logger => @logger, **decision_options) if rib?
+        # Long-lived graceful restart's least preferred routes, for the
+        # decision and export (bgp/daemon/graceful_restart.rb, RFC 9494).
+        if @peers.any? { |p| p.config['long_lived_graceful_restart'] }
+          @llgr = GracefulRestart::Policy.new(self)
+          @rib.llgr = ->(route) { @llgr.stale?(route) } if @rib
+        end
         # Origin validation, RFC 6811, from RTR caches (bgp/daemon/rpki.rb).
         # Checked here, so a bad rpki: stops bgp4rd at start.
         if config['rpki']
@@ -1263,7 +1271,15 @@ module BGP
       # its place among the UPDATEs before and after it, so done may be
       # called later, on that thread. A family no table holds calls done
       # with nil.
+      # :llgr, RFC 9494's LLGR period, is the RIB's: GracefulRestart asks
+      # it for IPv4 and IPv6 unicast in the global table only. done gets
+      # [marked, removed], or nil with no RIB.
       def stale_family(peer, afi, safi, action, &done)
+        if action == :llgr
+          return done&.call(nil) unless @rib
+          @rib.feed << [:stale, peer.address, afi, :llgr, done]
+          return
+        end
         mark = action == :mark
         address = peer.address
         n = case [afi, safi]
@@ -1466,6 +1482,10 @@ module BGP
       # instance of the Graceful Restart Capability".
       def check_graceful_restart(config)
         GracefulRestart.check(config['graceful_restart'], config['address'])
+        GracefulRestart.check_llgr(config['long_lived_graceful_restart'], config['graceful_restart'], config['address'])
+        if config['long_lived_graceful_restart'] && config['vrf']
+          raise ArgumentError, "neighbor #{config['address']}: long_lived_graceful_restart is for the global table, not a VRF's CE, for now"
+        end
         return if config['graceful_restart'].nil?
         listed = Array(config['capabilities']).any? { |c| %w[graceful_restart gr].include?((c.is_a?(Hash) ? c.keys.first : c).to_s) }
         return unless listed
@@ -1571,6 +1591,8 @@ module BGP
         end
         # Origin validation's RFC 8097 community (bgp/daemon/rpki.rb).
         policy['rpki'] = @rpki if @rpki
+        # RFC 9494 section 4.3's export rule.
+        policy['llgr'] = @llgr if @llgr
         unless policy.empty?
           opts[:export] = BGP::Rib::Export.new(:local_as => @my_as, :router_id => @router_id,
                                                **policy.to_h { |k, v| [k.to_sym, v] })

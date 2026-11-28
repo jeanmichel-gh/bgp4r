@@ -22,6 +22,7 @@
 
 require 'bgp/logging'
 require 'bgp/rib/adj_rib_in'
+require 'bgp/rib/llgr'
 require 'bgp/rib/loc_rib'
 require 'bgp/rib/peer_feed'
 require 'bgp/rib/router'
@@ -207,7 +208,9 @@ module BGP
                     else
                       gone = ribin.routes.reject { |r| kept.(r) }
                       gone.each { |r| ribin.withdraw(r.prefix, r.path_id) }
-                      ribin.mark_stale('restart') { true }
+                      # A route in its LLGR period keeps that mark at a
+                      # second restart (RFC 9494 section 4.2).
+                      ribin.mark_stale('restart') { |r| ribin.stale(r.prefix, r.path_id) != Llgr::MARK }
                       gone
                     end
           removed.each { |r| set_imported(r.prefix, peer, r.path_id, nil) }
@@ -238,6 +241,40 @@ module BGP
           gone
         end
       end
+
+      # RFC 9494 section 4.2, the LLGR period begins for one family of the
+      # peer at address: each route of it still stale "MUST attach the
+      # LLGR_STALE community", and one carrying NO_LLGR "MUST NOT be
+      # retained". The prefixes are decided again, since such a route is
+      # least preferred now (section 4.4), and the Router sends what
+      # changed. Answers [routes marked, routes removed].
+      def llgr_stale(address, afi)
+        sync do
+          marked, gone = [], []
+          ribins_of(address).each do |ribin|
+            ribin.stale_routes.each do |r, _|
+              next unless Table.afi_of(r.prefix) == afi
+              if Llgr.no_llgr?(r.path_attribute)
+                ribin.withdraw(r.prefix, r.path_id)
+                set_imported(r.prefix, r.peer, r.path_id, nil)
+                gone << r
+              else
+                n = r.with_path_attribute(Llgr.attach(r.path_attribute))
+                ribin.announce(n)
+                ribin.mark(n, Llgr::MARK)
+                set_imported(n.prefix, n.peer, n.path_id, import(n))
+                marked << n
+              end
+            end
+          end
+          (marked + gone).map(&:prefix).uniq.each { |prefix| decide(prefix) }
+          [marked.size, gone.size]
+        end
+      end
+
+      # Long-lived graceful restart's least preferred routes (RFC 9494
+      # section 4.3): a ->(route) the decision asks, or nil.
+      def llgr=(v) ; sync { @decision.llgr = v } ; end
 
       # How many routes from the peer at address are marked stale.
       def stale_size(address)

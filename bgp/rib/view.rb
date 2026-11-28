@@ -105,6 +105,7 @@ module BGP
       # they name the attribute rather than the step so a reader who does
       # not know bgp4r's symbols can still read them.
       LOST_WORDS = {
+        :llgr_stale          => 'LLGR_STALE, where another path is not (RFC 9494 section 4.4)',
         :rpki_invalid        => 'RPKI Invalid, where another path is Valid or NotFound',
         :local_pref          => 'lower LOCAL_PREF',
         :as_path_length      => 'longer AS_PATH',
@@ -477,9 +478,14 @@ module BGP
       # { :stale => reason } for a route marked stale, 'refresh' after a
       # BoRR (RFC 7313 section 4), and nothing for a fresh one, so a row
       # without the key is a fresh route.
+      #
+      # With it, { :llgr_stale => true } for a route that carries
+      # LLGR_STALE, received or attached (RFC 9494 section 3.2).
       def stale(route)
         why = @table.stale(route.peer, route.prefix, route.path_id)
-        why ? { :stale => why } : {}
+        h = why ? { :stale => why } : {}
+        h[:llgr_stale] = true if Llgr.stale?(route.path_attribute)
+        h
       end
 
       # The attributes one Adj-RIB-Out entry carries, read off the
