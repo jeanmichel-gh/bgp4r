@@ -123,7 +123,8 @@ module BGP
           kept = keep.include?(PeerAdapter::EVPN)
           gone = h.select { |_, e| !kept }
           gone.each_key { |k| drop(peer, k) }
-          h.each_value { |e| e.stale = 'restart' }
+          # A route in its LLGR period keeps that mark (RFC 9494 section 4.2).
+          h.each_value { |e| e.stale = 'restart' unless e.stale == Llgr::MARK }
           gone.each_value.collect { |e| e.evpn_route.decision_key }.uniq.each { |k| decide(k) }
         end
         changed
@@ -135,6 +136,28 @@ module BGP
       def mark_stale(peer, reason = 'refresh')
         @lock.synchronize { (@in[peer] || {}).each_value { |e| e.stale = reason }.size }
       end
+
+      # RFC 9494 section 4.2, the LLGR period begins for peer's EVPN
+      # routes: VpnTable#llgr_stale's rules. Answers [marked, removed].
+      def llgr_stale(peer)
+        n = @lock.synchronize do
+          h = @in[peer] or next [0, 0]
+          marked, gone = h.values.select(&:stale).partition { |x| !Llgr.no_llgr?(x.evpn_route.route.path_attribute) }
+          gone.each { |x| drop(peer, x.evpn_route.key) }
+          marked.each do |x|
+            v = x.evpn_route
+            x.evpn_route = EvpnRoute.new(v.nlri, v.route.with_path_attribute(Llgr.attach(v.route.path_attribute)))
+            x.stale = Llgr::MARK
+          end
+          (marked + gone).collect { |x| x.evpn_route.decision_key }.uniq.each { |k| decide(k) }
+          [marked.size, gone.size]
+        end
+        changed unless n == [0, 0]
+        n
+      end
+
+      # As VpnTable#llgr=.
+      def llgr=(v) ; @lock.synchronize { @decision.llgr = v } ; end
 
       # How many routes from peer are marked stale.
       def stale_size(peer)
@@ -257,7 +280,10 @@ module BGP
           'med' => r.med, 'originator_id' => r.originator_id, 'cluster_list' => r.cluster_list,
           'best' => !result.nil? && result.best.equal?(r),
           'reason' => result && result.best.equal?(r) ? result.reason.to_s : (result && result.eliminated[r]).to_s,
-          'since' => e.since.utc.strftime('%Y-%m-%dT%H:%M:%S.%LZ') }.tap { |h| h['stale'] = e.stale if e.stale }
+          'since' => e.since.utc.strftime('%Y-%m-%dT%H:%M:%S.%LZ') }.tap do |h|
+          h['stale'] = e.stale if e.stale
+          h['llgr_stale'] = true if Llgr.stale?(r.path_attribute)
+        end
       end
 
       # RD, type, tag, then the MAC and IP or the originator, nil first.

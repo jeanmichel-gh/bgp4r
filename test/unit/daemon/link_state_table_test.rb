@@ -366,4 +366,27 @@ class BGP_Daemon_LinkStateTable_Test < Test::Unit::TestCase
     @t.peer_down('10.2.0.1', [[1, 1]])
     assert_equal(0, @t.size)
   end
+  # RFC 9494 section 4.2 for BGP-LS: nothing here decides, so the LLGR
+  # period marks and removes; the communities come from the UPDATE.
+  def test_the_llgr_period
+    with = ->(nlris, *comm) do
+      BGP::Update.new(BGP::Path_attribute.new(BGP::Origin.new(0), BGP::As_path.new(65_002),
+                                              BGP::Mp_reach.new(:afi => 16_388, :safi => 71, :nexthop => ['10.2.0.1'], :nlris => nlris),
+                                              *comm))
+    end
+    @t.apply('10.2.0.1', BGP::Rib::PeerAdapter.link_state_operations(with.([node])))
+    @t.apply('10.2.0.1', BGP::Rib::PeerAdapter.link_state_operations(with.([link], BGP::Communities.new(:no_llgr))))
+    @t.apply('10.2.0.2', BGP::Rib::PeerAdapter.link_state_operations(with.([prefix], BGP::Communities.new(:llgr_stale))))
+    assert_equal({ '10.2.0.1' => [nil, nil], '10.2.0.2' => [true] },
+                 @t.rows.group_by { |r| r['peer'] }.transform_values { |rs| rs.collect { |r| r['llgr_stale'] } }, 'received with LLGR_STALE')
+    @t.peer_down('10.2.0.1', [BGP::Rib::PeerAdapter::LINK_STATE])
+    assert_equal([1, 1], @t.llgr_stale('10.2.0.1'))
+    rows = @t.rows.select { |r| r['peer'] == '10.2.0.1' }
+    assert_equal([['long_lived', true]], rows.collect { |r| r.values_at('stale', 'llgr_stale') })
+    assert_equal([nil, true], @t.rows.find { |r| r['peer'] == '10.2.0.2' }.values_at('stale', 'llgr_stale'), 'received with it')
+    @t.peer_down('10.2.0.1', [BGP::Rib::PeerAdapter::LINK_STATE])
+    assert_equal(['long_lived'], @t.rows.select { |r| r['peer'] == '10.2.0.1' }.collect { |r| r['stale'] })
+    assert_equal([0, 0], @t.llgr_stale('10.2.0.9'))
+  end
+
 end

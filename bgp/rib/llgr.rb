@@ -51,6 +51,10 @@ module BGP
         copy
       end
 
+      # What a table that keeps no attributes keeps of a route's two
+      # communities: { :no_llgr => ..., :llgr_stale => ... }.
+      def flags(pa) ; { :no_llgr => no_llgr?(pa), :llgr_stale => stale?(pa) } ; end
+
       def communities(pa) ; pa && pa.has?(Communities) ? pa[Communities] : nil ; end
     end
   end

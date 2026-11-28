@@ -640,7 +640,7 @@ bgp4r sends no NOTIFICATION when its hold timer runs out, though RFC
 Without the key, a peer that advertises GR gets RFC 4271, as before.
 
 **`long_lived_graceful_restart` adds RFC 9494's long-lived period**, as
-a helper only, for IPv4 and IPv6 unicast in the global table. It needs
+a helper only, for the global table's families. It needs
 `graceful_restart` (section 4.1), and is refused on a VRF's CE.
 
 ```yaml
@@ -653,6 +653,12 @@ neighbors:
       max_stale_time: 86400                     # caps the peer's LLST; none unless set
 ```
 
+`families` may also name `vpnv4_unicast`, `vpnv6_unicast`, `l2vpn_evpn`,
+`bgp_ls`, `ipv4_unreachability` and `ipv6_unreachability`, each in the
+table that holds it. A family gets the period only when the session
+carried it: section 4.2 speaks of the families "supported by the
+session".
+
 bgp4rd advertises the LLGR capability with each family at a Long-Lived
 Stale Time of 0 and F clear: it keeps nothing across its own restart.
 For a peer that sent the capability with GR (section 4.5: LLGR without
@@ -664,16 +670,19 @@ GR is ignored):
   a route with NO_LLGR goes. A family the GR capability did not list
   has a Restart Time of 0, so its period begins at once.
 - **They are least preferred**: the decision's first step, `llgr_stale`,
-  puts them after any route that is not (section 4.4). A route that
-  arrives with LLGR_STALE from such a peer is least preferred too.
+  puts them after any route that is not (section 4.4), in the RIB, the
+  VPN table and the EVPN table. A route that arrives with LLGR_STALE
+  from such a peer is least preferred too. The BGP-LS and
+  unreachability tables decide nothing, so there it is a mark.
 - **They are not sent to a peer that did not send the capability**,
-  internal or external (section 4.3); it sees them withdrawn. A peer
+  internal or external (section 4.3), by the Router and by the VPN and
+  EVPN reflectors; it sees them withdrawn. A peer
   that did gets them with LLGR_STALE kept. Section 4.6's NO_EXPORT and
   LOCAL_PREF 0 toward internal peers are not built.
 - **They go** when the LLST ends, or at the family's End-of-RIB on the
   new session, the LLST timer running until then; or at once when the
   new session's LLGR capability leaves the family out or has F clear,
-  or there is none.
+  or there is none, or the new session does not carry the family.
 - **A second restart in the period** keeps them, with their timer
   (section 4.2: "MUST NOT be deleted before the timer for the
   Long-Lived Stale Time expires").

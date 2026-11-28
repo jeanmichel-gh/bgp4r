@@ -22,6 +22,7 @@
 
 require 'bgp4r'
 require 'bgp/rib/route'
+require 'bgp/rib/llgr'
 require 'bgp/rib/vpn_route'
 require 'bgp/rib/decision'
 require 'bgp/rib/peer_adapter'
@@ -143,7 +144,8 @@ module BGP
           h = @in[peer] || {}
           gone = h.select { |_, e| !keep.include?([Table.afi_of(e.vpn_route.prefix), IANA::SAFI::MPLS_VPN_UNICAST]) }
           gone.each_key { |k| h.delete(k) }
-          h.each_value { |e| e.stale = 'restart' }
+          # A route in its LLGR period keeps that mark (RFC 9494 section 4.2).
+          h.each_value { |e| e.stale = 'restart' unless e.stale == Llgr::MARK }
           @in.delete(peer) if h.empty?
           gone.each_value { |e| decide([e.vpn_route.rd, e.vpn_route.prefix]) }
         end
@@ -174,6 +176,31 @@ module BGP
         changed unless gone.empty?
         gone.size
       end
+
+      # RFC 9494 section 4.2, the LLGR period begins for one AFI from
+      # peer: each route still stale carries LLGR_STALE from now on, and
+      # one with NO_LLGR goes. The keys are decided again, since such a
+      # route is least preferred (section 4.4). Answers [marked, removed].
+      def llgr_stale(peer, afi)
+        n = @lock.synchronize do
+          h = @in[peer] or next [0, 0]
+          marked, gone = entries(peer, afi).select(&:stale).partition { |e| !Llgr.no_llgr?(e.vpn_route.route.path_attribute) }
+          gone.each { |e| h.delete(e.vpn_route.key) }
+          marked.each do |e|
+            v = e.vpn_route
+            e.vpn_route = VpnRoute.new(v.rd, v.labels, v.route.with_path_attribute(Llgr.attach(v.route.path_attribute)))
+            e.stale = Llgr::MARK
+          end
+          (marked + gone).collect { |e| [e.vpn_route.rd, e.vpn_route.prefix] }.uniq.each { |k| decide(k) }
+          [marked.size, gone.size]
+        end
+        changed unless n == [0, 0]
+        n
+      end
+
+      # Long-lived graceful restart's least preferred routes: a ->(route)
+      # the decision asks (RFC 9494 section 4.3), or nil.
+      def llgr=(v) ; @lock.synchronize { @decision.llgr = v } ; end
 
       # How many routes from peer are marked stale.
       def stale_size(peer)
@@ -275,7 +302,10 @@ module BGP
           'originator_id' => r.originator_id, 'cluster_list' => r.cluster_list,
           'best' => !result.nil? && result.best.equal?(r),
           'reason' => result && result.best.equal?(r) ? result.reason.to_s : (result && result.eliminated[r]).to_s,
-          'since' => e.since.utc.strftime('%Y-%m-%dT%H:%M:%S.%LZ') }.tap { |h| h['stale'] = e.stale if e.stale }
+          'since' => e.since.utc.strftime('%Y-%m-%dT%H:%M:%S.%LZ') }.tap do |h|
+          h['stale'] = e.stale if e.stale
+          h['llgr_stale'] = true if Llgr.stale?(r.path_attribute)
+        end
       end
 
       def prefix_order(prefix)

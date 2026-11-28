@@ -21,6 +21,7 @@
 #++
 
 require 'bgp/rib/route'
+require 'bgp/rib/llgr'
 require 'bgp/rib/vpn_route'
 require 'bgp/rib/evpn_path'
 
@@ -82,14 +83,15 @@ module BGP
       #   [[:withdraw, link_state], [:announce, link_state, attribute]]
       #
       # attribute is the UPDATE's BGP-LS Attribute (RFC 9552 section
-      # 5.3), or nil when it carried none. Any other family gives nothing.
+      # 5.3), or nil when it carried none; then Llgr.flags of the UPDATE. Any other family gives nothing.
       def self.link_state_operations(update)
         pa = update.path_attribute
         return [] unless pa
         ops = []
         each_link_state(pa, BGP::Mp_unreach) { |ls| ops << [:withdraw, ls] }
         attr = pa.has?(BGP::Link_state_attribute) ? pa[BGP::Link_state_attribute] : nil
-        each_link_state(pa, BGP::Mp_reach) { |ls| ops << [:announce, ls, attr] }
+        flags = Llgr.flags(pa)
+        each_link_state(pa, BGP::Mp_reach) { |ls| ops << [:announce, ls, attr, flags] }
         ops
       end
 

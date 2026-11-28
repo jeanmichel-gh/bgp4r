@@ -409,10 +409,10 @@ module Features
 
     'llgr' => {
       :area  => 'session',
-      :about => 'long_lived_graceful_restart: the LLGR period after a peer restarts, LLGR_STALE and NO_LLGR, the llgr_stale step and the export rule, for IPv4 and IPv6 unicast',
+      :about => 'long_lived_graceful_restart: the LLGR period after a peer restarts, LLGR_STALE and NO_LLGR, the llgr_stale step and the export rule, in the RIB and the VPN, EVPN, BGP-LS and unreachability tables',
       :rfc   => 'RFC 9494 sections 3 and 4',
       :doc   => 'docs/daemon.md',
-      :unit  => %w[daemon/llgr_test rib/llgr_test rib/view_test daemon/graceful_restart_test],
+      :unit  => %w[daemon/llgr_test rib/llgr_test rib/view_test daemon/graceful_restart_test rib/vpn_table_test rib/evpn_table_test daemon/link_state_table_test daemon/unreachability_test],
       :functional => %w[llgr_test],
       :lab   => %w[llgr_frr_test],
     },

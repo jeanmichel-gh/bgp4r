@@ -283,4 +283,27 @@ class TestBgpRibEvpnTable < Test::Unit::TestCase
     @t.apply('10.255.0.2', ops('10.255.0.2', [type2(['10.255.0.12', 100], H1)]))
     assert_equal('10.255.0.2', @t.best(key).best.peer.address, 'back after all went')
   end
+  # RFC 9494 section 4.2 for EVPN: VpnTable's rules.
+  def test_the_llgr_period
+    @t.llgr = ->(r) { BGP::Rib::Llgr.stale?(r.path_attribute) }
+    @t.apply('10.255.0.12', ops('10.255.0.12', [type2(['10.255.0.12', 100], H1)], local_pref: 200))
+    @t.apply('10.255.0.12', ops('10.255.0.12', [type2(['10.255.0.12', 100], H2)], attrs: [BGP::Communities.new(:no_llgr)]))
+    @t.apply('10.255.0.13', ops('10.255.0.13', [type2(['10.255.0.12', 100], H1)], local_pref: 100))
+    assert_equal('10.255.0.12', @t.rows.find { |r| r['best'] && r['mac'] == H1 }['peer'])
+    @t.peer_down('10.255.0.12', [BGP::Rib::PeerAdapter::EVPN])
+    changes = 0
+    @t.on_change { changes += 1 }
+    assert_equal([1, 1], @t.llgr_stale('10.255.0.12'))
+    assert_equal(1, changes, 'the listeners hear of it')
+    @t.llgr_stale('10.255.0.99')
+    assert_equal(1, changes, 'and not of nothing')
+    assert_equal('10.255.0.13', @t.rows.find { |r| r['best'] && r['mac'] == H1 }['peer'])
+    row = @t.rows.find { |r| r['peer'] == '10.255.0.12' }
+    assert_equal(['long_lived', true, 'llgr_stale'], row.values_at('stale', 'llgr_stale', 'reason'))
+    assert_nil(@t.rows.find { |r| r['mac'] == H2 }, 'NO_LLGR: removed')
+    @t.peer_down('10.255.0.12', [BGP::Rib::PeerAdapter::EVPN])
+    assert_equal(['long_lived'], @t.rows.select { |r| r['peer'] == '10.255.0.12' }.collect { |r| r['stale'] })
+    assert_equal([0, 0], @t.llgr_stale('10.255.0.99'))
+  end
+
 end

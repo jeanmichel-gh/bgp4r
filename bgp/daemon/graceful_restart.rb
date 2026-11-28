@@ -83,8 +83,9 @@ module BGP
     # preferred (Rib::Decision's llgr_stale) and not sent to a peer that
     # did not send the capability (Rib::Export). They go when the LLST
     # ends, or at the family's End-of-RIB on the new session, or at once
-    # when that session's capability does not keep them. IPv4 and IPv6
-    # unicast in the global table, for now.
+    # when that session's capability does not keep them. The global
+    # table's families: unicast in the RIB (4a), and the VPN, EVPN, BGP-LS
+    # and unreachability tables (4b).
     class GracefulRestart
 
       KIND = BGP::Events.register_kind(:gr)
@@ -113,7 +114,12 @@ module BGP
       LLGR_KEYS = %w[families max_stale_time].freeze
 
       # The families the LLGR period is built for, by name.
-      LLGR_FAMILIES = { 'ipv4_unicast' => [1, 1], 'ipv6_unicast' => [2, 1] }.freeze
+      # IPv4 and IPv6 unicast are the default.
+      LLGR_FAMILIES = { 'ipv4_unicast' => [1, 1], 'ipv6_unicast' => [2, 1],
+                        'vpnv4_unicast' => [1, 128], 'vpnv6_unicast' => [2, 128],
+                        'l2vpn_evpn' => [25, 70], 'bgp_ls' => [16_388, 71],
+                        'ipv4_unreachability' => [1, 81], 'ipv6_unreachability' => [2, 81] }.freeze
+      LLGR_DEFAULT = %w[ipv4_unicast ipv6_unicast].freeze
 
       # RFC 9494 section 3.1: the F bit, and the 24-bit LLST.
       F_BIT = BGP::OPT_PARM::CAP::Long_lived_graceful_restart::F_BIT
@@ -160,10 +166,10 @@ module BGP
         raise ArgumentError, "#{where} is true or a mapping of #{LLGR_KEYS.join(', ')}, not #{value.inspect}" unless value.is_a?(Hash)
         unknown = value.keys - LLGR_KEYS
         raise ArgumentError, "#{where}: unknown key(s) #{unknown.join(', ')}: use #{LLGR_KEYS.join(', ')}" unless unknown.empty?
-        fams = value.fetch('families', LLGR_FAMILIES.keys)
+        fams = value.fetch('families', LLGR_DEFAULT)
         bad = Array(fams).collect(&:to_s) - LLGR_FAMILIES.keys
         unless fams.is_a?(Array) && !fams.empty? && bad.empty?
-          raise ArgumentError, "#{where}: families are #{LLGR_FAMILIES.keys.join(' and ')}, not #{(bad.empty? ? fams : bad).inspect}"
+          raise ArgumentError, "#{where}: families are of #{LLGR_FAMILIES.keys.join(', ')}, not #{(bad.empty? ? fams : bad).inspect}"
         end
         m = value['max_stale_time']
         unless m.nil? || (m.is_a?(Integer) && (0..MAX_LLST).include?(m))
@@ -173,7 +179,7 @@ module BGP
 
       # The families of a `long_lived_graceful_restart` value, [afi, safi].
       def self.llgr_families(value)
-        names = value.is_a?(Hash) ? value.fetch('families', LLGR_FAMILIES.keys) : LLGR_FAMILIES.keys
+        names = value.is_a?(Hash) ? value.fetch('families', LLGR_DEFAULT) : LLGR_DEFAULT
         Array(names).collect { |n| LLGR_FAMILIES.fetch(n.to_s) }
       end
 
@@ -465,15 +471,19 @@ module BGP
 
       # { [afi, safi] => seconds } for each family that gets an LLGR
       # period: listed by the peer with a non-zero LLST (section 4.2),
-      # reduced to max_stale_time, and one we advertised.
+      # reduced to max_stale_time, one we advertised, and one the session
+      # negotiated: section 4.2 speaks of "all AFIs/SAFIs supported by
+      # the session", and a family it did not carry has no End-of-RIB to
+      # end the period.
       def llsts(session_info)
         return {} unless llgr_configured?
         got = GracefulRestart.received_llgr(session_info && session_info.peer) or return {}
         ours = GracefulRestart.llgr_families(@peer.config['long_lived_graceful_restart'])
         cap = max_stale_time
+        negotiated = EndOfRib.families(session_info)
         got.each_with_object({}) do |(f, (_, t)), h|
           t = [t, cap].min if cap
-          h[f] = t if t.positive? && ours.include?(f)
+          h[f] = t if t.positive? && ours.include?(f) && negotiated.include?(f)
         end
       end
 
@@ -494,13 +504,18 @@ module BGP
       # their End-of-RIB, the LLST still running.
       def back_llgr(session_info, families)
         got = llgr_configured? ? GracefulRestart.received_llgr(session_info && session_info.peer) : nil
-        gone, wait = families.partition { |f| !(got && got[f] && (got[f][0] & F_BIT) != 0) }
+        negotiated = EndOfRib.families(session_info)
+        gone, wait = families.partition { |f| !(got && got[f] && (got[f][0] & F_BIT) != 0 && negotiated.include?(f)) }
         @lock.synchronize do
           gone.each { |f| @llgr_until.delete(f) }
           @syncing |= wait
         end
         gone.each do |afi, safi|
-          why = got.nil? ? 'no LLGR capability on the new session' : (got.key?([afi, safi]) ? 'LLGR F bit clear' : 'family not in the new LLGR capability')
+          why = if got.nil? then 'no LLGR capability on the new session'
+                elsif !got.key?([afi, safi]) then 'family not in the new LLGR capability'
+                elsif (got[[afi, safi]][0] & F_BIT).zero? then 'LLGR F bit clear'
+                else 'family not negotiated on the new session'
+                end
           purge(afi, safi, why)
         end
         return if wait.empty?
