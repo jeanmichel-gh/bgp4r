@@ -191,7 +191,13 @@ module BGP
         @specs = config['specs'] || {}
         @sent = Sent.new
         @announced = {}
+        # Which session each announced prefix went out on, per peer: the
+        # address and the Neighbor that was the session then. See resend.
+        @sent_on = {}
         @lock = Mutex.new
+        # Held around a command's send and what it records, and around a
+        # resend, so the two never interleave. See resend.
+        @order = Mutex.new
         @threads = []
         # What was announced on command goes again when a session comes
         # back. See resend.
@@ -463,8 +469,15 @@ module BGP
         return feed(block, peers, action, async) if block['generate']
         prefixes = Array(block['prefixes'])
         raise Refused, "#{action}: prefixes is empty" if prefixes.empty?
-        result = send_to(peers, action) { |peer| send_block(peer, block, action) }
-        remember(prefixes, block)
+        result = @order.synchronize do
+          sessions = {}
+          r = send_to(peers, action) { |peer|
+            sessions[peer.address] = peer.neighbor
+            send_block(peer, block, action)
+          }
+          remember(prefixes, block, sessions)
+          r
+        end
         publish(ROUTE, "#{PAST[action]} #{prefixes.size} prefix(es) to " \
                        "#{peers.collect(&:address).join(', ')}",
                 :prefixes => prefixes, :action => action)
@@ -488,8 +501,11 @@ module BGP
         prefixes = Array(block['prefixes'])
         raise Refused, 'withdraw: prefixes is empty' if prefixes.empty?
         msg = BGP::Update.new(withdrawn_for(prefixes, block['path_id']))
-        result = send_to(peers, 'withdraw') { |peer| send_one(peer, msg, 'withdraw', prefixes.size) }
-        forget(prefixes)
+        result = @order.synchronize do
+          r = send_to(peers, 'withdraw') { |peer| send_one(peer, msg, 'withdraw', prefixes.size) }
+          forget(prefixes)
+          r
+        end
         publish(ROUTE, "#{PAST['withdraw']} #{prefixes.size} prefix(es) from " \
                        "#{peers.collect(&:address).join(', ')}",
                 :prefixes => prefixes, :action => 'withdraw')
@@ -1092,12 +1108,26 @@ module BGP
 
       # ---- what was announced -----------------------------------------
 
-      def remember(prefixes, body)
-        @lock.synchronize { prefixes.each { |p| @announced[p.to_s] = body } }
+      # `sessions` is each peer's address and the Neighbor the body went
+      # out on. A new body replaces the old one's record: a session that
+      # had the old body has not had this one.
+      def remember(prefixes, body, sessions = {})
+        @lock.synchronize do
+          prefixes.each do |p|
+            @announced[p.to_s] = body
+            @sent_on[p.to_s] = sessions.dup
+          end
+        end
       end
 
       def forget(prefixes)
-        @lock.synchronize { prefixes.each { |p| @announced.delete(p.to_s) } }
+        @lock.synchronize { prefixes.each { |p| drop(p.to_s) } }
+      end
+
+      # Called with @lock held.
+      def drop(prefix)
+        @announced.delete(prefix)
+        @sent_on.delete(prefix)
       end
 
       # A withdrawn generated range, forgotten by regenerating it, which
@@ -1105,7 +1135,7 @@ module BGP
       def forget_range(block)
         g = generate_options(block)
         gen = BGP::RouteGenerator.new(g['start'], g['count'], g['per_update'])
-        @lock.synchronize { gen.each_prefix { |p| @announced.delete(p) } }
+        @lock.synchronize { gen.each_prefix { |p| drop(p) } }
       end
 
       # A withdrawn spec, forgotten by walking what it meant to send.
@@ -1119,7 +1149,7 @@ module BGP
       def forget_expected(gen)
         return unless gen.family == 'unicast'
         return if @lock.synchronize { @announced.empty? }
-        gen.expected.each { |r| @lock.synchronize { @announced.delete(r['prefix']) } }
+        gen.expected.each { |r| @lock.synchronize { drop(r['prefix']) } }
       end
 
       # What was announced on command, again, because the peer that has
@@ -1136,26 +1166,51 @@ module BGP
       # rebuilding one would be the Adj-RIB-Out the generator exists to
       # avoid. A scenario that wants a feed back asks for it again.
       #
+      # **A prefix already sent on this session is not sent again.** The
+      # session is Established, and so open to commands, before this
+      # runs: `Peer#run_session` sends the config's announce blocks
+      # first. A command that lands in that gap goes out on the new
+      # session, and without this check it went out a second time here.
+      # That is how `test_sim_interact_takes_typed_lines_while_the_api_serves`
+      # failed once on CI, with 10.6.0.0/24 twice. A session is its
+      # Neighbor: `run_session` makes a new one for each.
+      #
+      # **@order keeps a command and a resend apart.** Without it a
+      # resend could read what was announced, a withdrawal go out and
+      # be forgotten, and the resend then put the route back on the peer.
+      #
       # It runs on the session's own thread, as `Peer#announce` does, and
       # must not raise there: a listener that killed the session would
       # take the thing it was restoring with it.
       def resend(peer)
         # A graceful restart behaviour's quiet session sends nothing.
         return if peer.quiet?
-        groups = @lock.synchronize { @announced.group_by { |_prefix, body| body } }
-        blocks = 0
-        groups.each do |body, pairs|
-          # An announcement a `peer` key aimed at one session stays aimed
-          # at it.
-          next if body['peer'] && body['peer'].to_s != peer.address
-          send_block(peer, body.merge('prefixes' => pairs.collect(&:first)), 'announce')
-          blocks += 1
-        end
+        blocks = @order.synchronize { resend_blocks(peer) }
         return if blocks.zero?
         publish(ROUTE, "re-announced #{blocks} block(s) to #{peer.address}",
                 :peer => peer.address, :action => 'resend')
       rescue StandardError => e
         log(:warn, "bgp4r-sim: re-announcing to #{peer.address}: #{e.class}: #{e.message}")
+      end
+
+      # What resend sends, with @order held. Answers the count of blocks.
+      def resend_blocks(peer)
+        session = peer.neighbor
+        groups = @lock.synchronize {
+          @announced.reject { |prefix, _body| @sent_on[prefix]&.fetch(peer.address, nil).equal?(session) }
+                    .group_by { |_prefix, body| body }
+        }
+        blocks = 0
+        groups.each do |body, pairs|
+          # An announcement a `peer` key aimed at one session stays aimed
+          # at it.
+          next if body['peer'] && body['peer'].to_s != peer.address
+          prefixes = pairs.collect(&:first)
+          send_block(peer, body.merge('prefixes' => prefixes), 'announce')
+          @lock.synchronize { prefixes.each { |p| (@sent_on[p] ||= {})[peer.address] = session } }
+          blocks += 1
+        end
+        blocks
       end
 
       # ---- the body ----------------------------------------------------
