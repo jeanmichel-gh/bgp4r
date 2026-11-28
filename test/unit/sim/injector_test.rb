@@ -69,6 +69,8 @@ class BGP_Sim_Injector_Test < Test::Unit::TestCase
     def admin_stop ; calls << [:down] ; @down = true ; self ; end
     def admin_start ; calls << [:up] ; @down = false ; @neighbor = Object.new ; self ; end
     def neighbor ; @neighbor ||= Object.new ; end
+    # A new session, which on a real Peer is a new Neighbor.
+    def reconnect ; @neighbor = Object.new ; self ; end
     def quiet? ; false ; end
     def next_session(h)
       calls << [:next, h['capabilities'].last.values.first, h['end_of_rib'], h['quiet'] == true]
@@ -928,7 +930,7 @@ class BGP_Sim_Injector_Test < Test::Unit::TestCase
     inj = injector
     inj.act('announce', 'prefixes' => ['10.1.0.0/24'], 'med' => 100)
     peer.sent.clear
-    inj.speaker.session_established(peer)
+    inj.speaker.session_established(peer.reconnect)
     assert_equal(1, peer.updates.size)
     assert_equal(['10.1.0.0/24'], peer.updates.first.nlri.to_ary)
     assert_equal(100, peer.updates.first.path_attribute[:multi_exit_disc].to_i)
@@ -939,7 +941,7 @@ class BGP_Sim_Injector_Test < Test::Unit::TestCase
            FakePeer.new('10.0.11.2', 65_000, 65_001)]
     inj = injector({}, two)
     inj.act('announce', 'prefixes' => ['10.1.0.0/24'], 'peer' => '10.0.11.2')
-    two.each { |p| p.sent.clear }
+    two.each { |p| p.sent.clear ; p.reconnect }
     inj.speaker.session_established(two[0])
     assert_equal(0, two[0].sent.size, 'it was never for this peer')
     inj.speaker.session_established(two[1])
@@ -951,8 +953,48 @@ class BGP_Sim_Injector_Test < Test::Unit::TestCase
     inj.act('announce', 'prefixes' => ['10.1.0.0/24'])
     inj.act('withdraw', 'prefixes' => ['10.1.0.0/24'])
     peer.sent.clear
-    inj.speaker.session_established(peer)
+    inj.speaker.session_established(peer.reconnect)
     assert_equal(0, peer.sent.size)
+  end
+
+  # **A command that lands between Established and the resend goes out
+  # once.** Peer#run_session opens the session to commands before it
+  # runs the on_established blocks, so a typed `announce` can go out on
+  # the new session first. The resend sent it again:
+  # test/functional/console_test.rb's sim test saw 10.6.0.0/24 twice on
+  # CI. Here the fake's session is the one the announce went out on.
+  def test_a_prefix_sent_on_this_session_is_not_sent_again_by_its_resend
+    inj = injector
+    inj.act('announce', 'prefixes' => ['10.1.0.0/24'], 'med' => 3)
+    inj.speaker.session_established(peer)
+    assert_equal([['10.1.0.0/24']], peer.updates.collect { |u| u.nlri.to_ary })
+  end
+
+  # The same, with something older to restore: the older prefix goes
+  # again, the one this session already had does not.
+  def test_a_resend_sends_only_what_this_session_has_not_had
+    inj = injector
+    inj.act('announce', 'prefixes' => ['10.1.0.0/24'])
+    peer.reconnect
+    peer.sent.clear
+    inj.act('announce', 'prefixes' => ['10.2.0.0/24'])
+    inj.speaker.session_established(peer)
+    assert_equal([['10.2.0.0/24'], ['10.1.0.0/24']], peer.updates.collect { |u| u.nlri.to_ary })
+    peer.sent.clear
+    inj.speaker.session_established(peer)
+    assert_equal(0, peer.sent.size, 'a second resend on the same session sends nothing')
+  end
+
+  # A changed attribute is a new body, and a session that had the old
+  # one has not had it.
+  def test_a_changed_attribute_goes_again_on_a_new_session
+    inj = injector
+    inj.act('announce', 'prefixes' => ['10.1.0.0/24'], 'med' => 1)
+    inj.act('attribute', 'prefixes' => ['10.1.0.0/24'], 'med' => 2)
+    peer.sent.clear
+    inj.speaker.session_established(peer.reconnect)
+    assert_equal(1, peer.updates.size)
+    assert_equal(2, peer.updates.first.path_attribute[:multi_exit_disc].to_i)
   end
 
   # A listener must not be able to kill the session it is listening to,
@@ -962,7 +1004,7 @@ class BGP_Sim_Injector_Test < Test::Unit::TestCase
     inj = injector
     inj.act('announce', 'prefixes' => ['10.1.0.0/24'])
     peer.established = false
-    assert_nothing_raised { inj.speaker.session_established(peer) }
+    assert_nothing_raised { inj.speaker.session_established(peer.reconnect) }
   end
 
 

@@ -503,6 +503,33 @@ class BGP_Sim_Functional_Test < Test::Unit::TestCase
     assert_equal(100, u.path_attribute[:multi_exit_disc].to_i)
   end
 
+  # **A command in the gap between Established and the resend goes out
+  # once.** `Peer#run_session` sends the config's announce blocks, which
+  # it reads through `Speaker#announcements`, after the session is
+  # Established and before the resend. So an announce made from inside
+  # that read is one a typed line or a POST could make there by chance.
+  # Before the fix the resend sent it a second time, which is how
+  # test/functional/console_test.rb's sim test failed once on CI.
+  def test_an_announce_as_the_session_comes_back_goes_out_once
+    post('/api/announce', 'prefixes' => ['10.1.0.0/24'])
+    assert_not_nil(@catcher.shift)
+    assert_equal(200, post('/api/session/stop', {}).first)
+    assert(wait { !@s.is_established? }, 'the session did not go down')
+
+    injector, once = @injector, []
+    @injector.speaker.define_singleton_method(:announcements) do
+      injector.act('announce', 'prefixes' => ['10.2.0.0/24']) if once.empty? && once << true
+      super()
+    end
+    @catcher.clear
+    assert_equal(200, post('/api/session/start', {}).first)
+    assert(wait { @s.is_established? }, 'the session did not come back')
+    assert(wait { @catcher.size >= 2 }, 'the two UPDATEs did not arrive')
+    sleep 0.3 # long enough for a third to follow
+    got = @catcher.to_a.collect { |u| u.nlri.to_ary }
+    assert_equal([['10.1.0.0/24'], ['10.2.0.0/24']], got.sort)
+  end
+
   def test_a_notification_crosses_with_a_code_no_rfc_defines
     code, answer = post('/api/notification', 'code' => 199, 'subcode' => 254,
                                              'data' => 'deadbeef')
