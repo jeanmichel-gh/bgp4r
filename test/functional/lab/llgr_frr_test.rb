@@ -116,6 +116,38 @@ class LabLlgrFrrTest < Test::Unit::TestCase
     end
   end
 
+  # 4b: VPN-IPv4. bgpd lists it in its LLGR capability with F set beside
+  # IPv4 unicast, which this session does not carry; its VPN route is
+  # kept long-lived through a crash, and bgpd's VPN End-of-RIB ends the
+  # period.
+  def test_frr_restarts_with_vpn_ipv4
+    @router = F.new(:local => FRR, :as => 65_000, :router_id => '10.0.0.2', :peer => LOCAL, :peer_as => 65_000,
+                    :port => LabHelper::Local.free_port, :families => [F::VPN], :bgp_lines => LLGR,
+                    :vpn_networks => [{ :prefix => '10.9.0.0/16', :rd => '65000:9', :label => 3001, :rt => '65000:300' }])
+    config = BGP::Daemon::Server.with_defaults(
+      'as' => 65_000, 'router_id' => '10.0.0.1', 'listen_address' => LOCAL, 'port' => @router.port,
+      'state_file' => File.join(@dir, 'state.json'),
+      'neighbors' => [{ 'address' => FRR, 'as' => 65_000, 'capabilities' => %w[as4_byte mbgp_ipv4_mpls_vpn_unicast],
+                        'graceful_restart' => true,
+                        'long_lived_graceful_restart' => { 'families' => %w[ipv4_unicast vpnv4_unicast] } }])
+    @server = BGP::Daemon::Server.new(StringIO.new, @err)
+    sock = File.join(@dir, 'bgp4rd.sock')
+    assert_not_nil(@server.build(config, :socket => sock), "bgp4rd did not start: #{@err.string}")
+    @client = BGP::Daemon::Client.new(sock)
+    vpn = -> { @client.call('show.vpn')['rows'].collect { |r| [r['prefix'], r['stale'], r['llgr_stale']] } }
+    @router.up
+    wait_for('FRR\'s VPN route', timeout: 60) { peer['state'] == 'established' && vpn.() == [['10.9.0.0/16', nil, nil]] }
+    assert_equal({ [1, 1] => [FRR_LLGR_F, 20], [1, 128] => [FRR_LLGR_F, 20] }, BGP::Daemon::GracefulRestart.received_llgr(frr_open))
+    @router.crash
+    wait_for('the LLGR period') { vpn.() == [['10.9.0.0/16', 'long_lived', true]] }
+    assert_equal([{ 'afi' => 1, 'safi' => 128 }], peer['graceful_restart']['long_lived'].collect { |f| f.slice('afi', 'safi') },
+                 'not IPv4 unicast, which the session does not carry')
+    @router.up
+    wait_for('bgpd back, its route fresh, the period over', timeout: 30) do
+      peer['state'] == 'established' && vpn.() == [['10.9.0.0/16', nil, nil]] && peer['graceful_restart']['state'].nil?
+    end
+  end
+
   private
 
   def start(lines, sim: false)

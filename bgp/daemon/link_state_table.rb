@@ -44,7 +44,9 @@ module BGP
     # so the two sides of a session answer the same row for one route.
     class LinkStateTable
 
-      Entry = Struct.new(:nlri, :attribute, :since, :stale)
+      # no_llgr and llgr_stale: what the UPDATE carried, RFC 9494's two
+      # communities, as Rib::Llgr.flags gives them.
+      Entry = Struct.new(:nlri, :attribute, :since, :stale, :no_llgr, :llgr_stale)
 
       # The `type` of a row, and the order rows sort in.
       TYPES = %w[node link prefix].freeze
@@ -357,10 +359,12 @@ module BGP
       # ops is what `PeerAdapter.link_state_operations` answers.
       def apply(peer, ops, at = Time.now)
         @lock.synchronize do
-          ops.each do |op, ls, attr|
+          ops.each do |op, ls, attr, flags|
             case op
             when :withdraw then delete(peer, ls)
-            when :announce then (@routes[peer] ||= {})[ls.encode] = Entry.new(ls, attr, at)
+            when :announce
+              f = flags || {}
+              (@routes[peer] ||= {})[ls.encode] = Entry.new(ls, attr, at, nil, f[:no_llgr], f[:llgr_stale])
             end
           end
         end
@@ -383,10 +387,25 @@ module BGP
           h = @routes[peer] || {}
           kept = keep.include?(BGP::Rib::PeerAdapter::LINK_STATE)
           h.delete_if { |_, e| !kept }
-          h.each_value { |e| e.stale = 'restart' }
+          # A route in its LLGR period keeps that mark (RFC 9494 section 4.2).
+          h.each_value { |e| e.stale = 'restart' unless e.stale == BGP::Rib::Llgr::MARK }
           @routes.delete(peer) if h.empty?
         end
         self
+      end
+
+      # RFC 9494 section 4.2, the LLGR period begins for peer's BGP-LS
+      # routes: each still stale carries LLGR_STALE, one with NO_LLGR
+      # goes. Nothing here decides or sends them on. Answers [marked,
+      # removed].
+      def llgr_stale(peer)
+        @lock.synchronize do
+          h = @routes[peer] or next [0, 0]
+          marked, gone = h.select { |_, e| e.stale }.partition { |_, e| !e.no_llgr }
+          gone.each { |k, _| h.delete(k) }
+          marked.each { |_, e| e.stale, e.llgr_stale = BGP::Rib::Llgr::MARK, true }
+          [marked.size, gone.size]
+        end
       end
 
       # Marks stale every route from peer, as a BoRR for BGP-LS asks (RFC
@@ -429,7 +448,8 @@ module BGP
         end
         LinkStateTable.sort(list.collect do |peer, e|
           row = LinkStateTable.row(e.nlri, e.attribute, peer, e.since)
-          e.stale ? row.merge('stale' => e.stale) : row
+          row = row.merge('stale' => e.stale) if e.stale
+          e.llgr_stale ? row.merge('llgr_stale' => true) : row
         end)
       end
 

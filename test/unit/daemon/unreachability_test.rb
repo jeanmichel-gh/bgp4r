@@ -270,4 +270,22 @@ class TestDaemonUnreachability < Test::Unit::TestCase
     t.peer_down('10.0.0.1', [V4])
     assert_equal([['192.0.2.0/24', 'restart'], ['198.51.100.0/24', 'restart']], t.rows.collect { |r| [r['prefix'], r['stale']] }.sort)
   end
+  # RFC 9494 section 4.2 for the unreachability SAFI: LinkStateTable's
+  # rules, a report removed published as withdrawn.
+  def test_the_llgr_period
+    t = D::UnreachTable.new(events: (ev = BGP::Events.new))
+    t.apply('10.0.0.1', R.operations(update(Unreachability.new('192.0.2.0/24', reporter('10.0.0.1', 65_001))), [V4]))
+    t.apply('10.0.0.1', R.operations(update(Unreachability.new('198.51.100.0/24', reporter('10.0.0.1', 65_001)),
+                                            Communities.new(:no_llgr)), [V4]))
+    t.peer_down('10.0.0.1', [V4])
+    assert_equal([0, 0], t.llgr_stale('10.0.0.1', V6))
+    assert_equal([1, 1], t.llgr_stale('10.0.0.1', V4))
+    assert_equal([['192.0.2.0/24', 'long_lived', true]], t.rows.collect { |r| r.values_at('prefix', 'stale', 'llgr_stale') })
+    gone = ev.since(0).select { |e| e.data['event'] == 'withdrawn' }
+    assert_equal(['198.51.100.0/24'], gone.collect { |e| e.data['prefix'] })
+    t.peer_down('10.0.0.1', [V4])
+    assert_equal(['long_lived'], t.rows.collect { |r| r['stale'] })
+    assert_equal([0, 0], t.llgr_stale('10.0.0.9', V4))
+  end
+
 end

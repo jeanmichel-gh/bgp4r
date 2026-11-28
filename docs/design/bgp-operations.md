@@ -963,6 +963,30 @@ EVPN, BGP-LS and unreachability tables, each with its own decision;
   capability has F clear: bgp4rd keeps its route through a crash,
   LLGR_STALE once the Restart Time ends, and waits for its End-of-RIB.
 
+### As built (4b)
+
+- **The other tables.** `VpnTable`, `EvpnTable`, `LinkStateTable` and
+  `UnreachTable` each gain `llgr_stale`, which marks the stale routes
+  `long_lived` and removes NO_LLGR ones, and keep that mark at a second
+  restart. The VPN and EVPN tables attach LLGR_STALE to the route and
+  decide again, with the `llgr_stale` step. The BGP-LS and
+  unreachability tables keep no attributes, so each entry keeps the two
+  communities' presence from its UPDATE (`Rib::Llgr.flags`); they decide
+  nothing and send nothing on.
+- **The VPN and EVPN reflectors' Export** takes the policy too, so a
+  long-lived route is withdrawn from a client that did not send LLGR.
+- **`families`** gains `vpnv4_unicast`, `vpnv6_unicast`, `l2vpn_evpn`,
+  `bgp_ls`, `ipv4_unreachability` and `ipv6_unreachability`; IPv4 and
+  IPv6 unicast stay the default.
+- **Only families the session carried get the period** (section 4.2,
+  "supported by the session"), and one the new session does not carry
+  ends at once. Measured: FRR 10.5.1 lists IPv4 unicast in its LLGR
+  capability on a VPN-only session, and the period waited, to the LLST,
+  for an End-of-RIB that could not come.
+- **Measured against FRR 10.5.1**: bgpd with `bgp long-lived-graceful-restart
+  stale-time 20` lists VPN-IPv4 with F set; bgp4rd keeps its VPN route
+  long-lived through a crash, and bgpd's VPN End-of-RIB ends the period.
+
 ### routescope shows
 
 The LLGR period on the peer row, the LLST left per family, and an
@@ -1735,7 +1759,7 @@ and `CLAUDE.md`'s table.
 | 9 | 8a | BMP codec | – |
 | 10 | 8b | `bgp4r-bmp`, the station, `docs/bmp.md` | 8a |
 | 11 | 8c | BMP in bgp4rd, `bmp`, pre-policy | 1, 8b |
-| 12 | 4 | LLGR helper, the `llgr_stale` decision step: in three parts, 4a the RIB's built | 3 |
+| 12 | 4 | LLGR helper, the `llgr_stale` decision step: in three parts, 4a the RIB's and 4b the other tables' built | 3 |
 | any | 6b | TCP-AO, `tcp_ao` | 6a |
 | with each | 9 | The labs (below), each with its feature's last pull request | each feature's |
 

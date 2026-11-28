@@ -104,7 +104,7 @@ Getting a session up and keeping it.
 | `rpki-rtr` | 4 | 0 | 0 | the RTR PDUs of RFC 8210 and RFC 6810, their findings, and BGP::Fault::RTR |
 | `rpki-fault-matrix` | 2 | 2 | 1 | BGP::Fault::RTR and the RTR behaviours against bgp4rd's RTR client and FRR's bgpd, and what each answered |
 | `bmp-daemon` | 3 | 1 | 1 | bmp: in bgp4rd: each peer reported to BMP stations, a Peer Up with both OPENs, the Adj-RIB-In as received, each UPDATE, a Peer Down with its reason, stats and a Termination |
-| `llgr` | 4 | 1 | 1 | long_lived_graceful_restart: the LLGR period after a peer restarts, LLGR_STALE and NO_LLGR, the llgr_stale step and the export rule, for IPv4 and IPv6 unicast |
+| `llgr` | 8 | 1 | 1 | long_lived_graceful_restart: the LLGR period after a peer restarts, LLGR_STALE and NO_LLGR, the llgr_stale step and the export rule, in the RIB and the VPN, EVPN, BGP-LS and unreachability tables |
 | `graceful-restart` | 12 | 1 | 1 | graceful_restart on a neighbor: a helper, keeping a restarting peer's routes stale until its End-of-RIB, its Restart Time or stale_time; RFC 8538's N bit and Hard Reset |
 | `gtsm` | 1 | 1 | 0 | ttl_security on a neighbor: GTSM, sent at TTL 255, dropped below 256 - hops |
 | `tcp-md5` | 1 | 1 | 1 | password on a neighbor: TCP MD5, every segment signed, a missing or wrong digest dropped |
@@ -550,11 +550,11 @@ ruby test/run_feature.rb labelled
 
 ### `llgr`
 
-long_lived_graceful_restart: the LLGR period after a peer restarts, LLGR_STALE and NO_LLGR, the llgr_stale step and the export rule, for IPv4 and IPv6 unicast.
+long_lived_graceful_restart: the LLGR period after a peer restarts, LLGR_STALE and NO_LLGR, the llgr_stale step and the export rule, in the RIB and the VPN, EVPN, BGP-LS and unreachability tables.
 
 - RFC 9494 sections 3 and 4
 - Read first: `docs/daemon.md`
-- 4 unit files, 1 functional
+- 8 unit files, 1 functional
 - lab:
   - `llgr_frr_test`, needs frr
 

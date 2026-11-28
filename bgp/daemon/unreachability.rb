@@ -21,6 +21,7 @@
 #++
 
 require 'bgp4r'
+require 'bgp/rib/llgr'
 
 module BGP
   module Daemon
@@ -262,7 +263,7 @@ module BGP
           if action == :treat_as_withdraw
             ops << [:withdraw, key(afi, n)]
           else
-            ops << [:announce, key(afi, n), fields(afi, n, pa)]
+            ops << [:announce, key(afi, n), fields(afi, n, pa), BGP::Rib::Llgr.flags(pa)]
           end
         end
         ops
@@ -320,7 +321,9 @@ module BGP
     # marks nothing stale for any family yet.
     class UnreachTable
 
-      Entry = Struct.new(:fields, :since, :stale)
+      # no_llgr and llgr_stale: RFC 9494's two communities, as
+      # Rib::Llgr.flags gives them.
+      Entry = Struct.new(:fields, :since, :stale, :no_llgr, :llgr_stale)
 
       def initialize(events: nil, logger: nil)
         @lock = Mutex.new
@@ -345,13 +348,14 @@ module BGP
       def apply(peer, ops, at = Time.now)
         changed = []
         @lock.synchronize do
-          ops.each do |op, key, fields|
+          ops.each do |op, key, fields, flags|
             case op
             when :withdraw
               e = delete(peer, key)
               changed << [:withdrawn, e.fields] if e
             when :announce
-              (@routes[peer] ||= {})[key] = Entry.new(fields, at)
+              f = flags || {}
+              (@routes[peer] ||= {})[key] = Entry.new(fields, at, nil, f[:no_llgr], f[:llgr_stale])
               changed << [:received, fields]
             end
           end
@@ -372,7 +376,8 @@ module BGP
         @lock.synchronize do
           h = @routes[peer] || {}
           h.delete_if { |k, e| !keep.include?(k.first) }
-          h.each_value { |e| e.stale = 'restart' }
+          # A report in its LLGR period keeps that mark (RFC 9494 section 4.2).
+          h.each_value { |e| e.stale = 'restart' unless e.stale == BGP::Rib::Llgr::MARK }
           @routes.delete(peer) if h.empty?
         end
         self
@@ -389,6 +394,20 @@ module BGP
         @lock.synchronize do
           (@routes[peer] || {}).select { |k, _| k.first == family }.each_value { |e| e.stale = reason }.size
         end
+      end
+
+      # RFC 9494 section 4.2, the LLGR period begins for one family from
+      # peer: LinkStateTable#llgr_stale's rules, each report removed
+      # published as withdrawn. Answers [marked, removed].
+      def llgr_stale(peer, family)
+        marked, gone = @lock.synchronize do
+          h = @routes[peer] or next [0, []]
+          m, g = h.select { |k, e| k.first == family && e.stale }.partition { |_, e| !e.no_llgr }
+          m.each { |_, e| e.stale, e.llgr_stale = BGP::Rib::Llgr::MARK, true }
+          [m.size, g.collect { |k, _| delete(peer, k) }]
+        end
+        gone.each { |e| publish(peer, :withdrawn, e.fields) }
+        [marked, gone.size]
       end
 
       # How many reports from peer are marked stale.
@@ -413,7 +432,8 @@ module BGP
           @routes.flat_map do |peer, h|
             h.values.collect do |e|
               row = { 'peer' => peer }.merge(e.fields).merge('since' => Recorder.iso(e.since))
-              e.stale ? row.merge('stale' => e.stale) : row
+              row = row.merge('stale' => e.stale) if e.stale
+              e.llgr_stale ? row.merge('llgr_stale' => true) : row
             end
           end
         end

@@ -1075,6 +1075,15 @@ module BGP
                                       cluster_id: decision_options[:cluster_id])
         @evpn = BGP::Rib::EvpnTable.new(local_as: @my_as, router_id: @router_id,
                                         cluster_id: decision_options[:cluster_id])
+        # Long-lived graceful restart's least preferred routes, for the
+        # decisions and the exports (bgp/daemon/graceful_restart.rb, RFC
+        # 9494). Before the reflectors, whose Export asks it.
+        if @peers.any? { |p| p.config['long_lived_graceful_restart'] }
+          @llgr = GracefulRestart::Policy.new(self)
+          least = ->(route) { @llgr.stale?(route) }
+          @vpn.llgr = least
+          @evpn.llgr = least
+        end
         build_l3vpn(config['vrfs'], config['l3vpn'])
         build_vpn_reflector
         build_evpn(config['macvrfs'], config['evpn'], arg[:vtep_client], (config['l3vpn'] || {})['labels'])
@@ -1088,12 +1097,7 @@ module BGP
         # run, because it starts no thread until something attaches to it.
         @rib = BGP::Rib::Table.new(:local_as => @my_as, :router_id => @router_id,
                                    :logger => @logger, **decision_options) if rib?
-        # Long-lived graceful restart's least preferred routes, for the
-        # decision and export (bgp/daemon/graceful_restart.rb, RFC 9494).
-        if @peers.any? { |p| p.config['long_lived_graceful_restart'] }
-          @llgr = GracefulRestart::Policy.new(self)
-          @rib.llgr = ->(route) { @llgr.stale?(route) } if @rib
-        end
+        @rib.llgr = ->(route) { @llgr.stale?(route) } if @rib && @llgr
         # Origin validation, RFC 6811, from RTR caches (bgp/daemon/rpki.rb).
         # Checked here, so a bad rpki: stops bgp4rd at start.
         if config['rpki']
@@ -1271,15 +1275,11 @@ module BGP
       # its place among the UPDATEs before and after it, so done may be
       # called later, on that thread. A family no table holds calls done
       # with nil.
-      # :llgr, RFC 9494's LLGR period, is the RIB's: GracefulRestart asks
-      # it for IPv4 and IPv6 unicast in the global table only. done gets
-      # [marked, removed], or nil with no RIB.
+      # :llgr is RFC 9494's LLGR period, in the same tables:
+      # GracefulRestart asks it for the global table's families only. done
+      # gets [marked, removed], or nil for a family no table holds.
       def stale_family(peer, afi, safi, action, &done)
-        if action == :llgr
-          return done&.call(nil) unless @rib
-          @rib.feed << [:stale, peer.address, afi, :llgr, done]
-          return
-        end
+        return llgr_family(peer, afi, safi, done) if action == :llgr
         mark = action == :mark
         address = peer.address
         n = case [afi, safi]
@@ -1303,6 +1303,24 @@ module BGP
               if Unreach::FAMILIES.include?([afi, safi])
                 mark ? @unreach.mark_stale(address, [afi, safi]) : @unreach.purge_stale(address, [afi, safi])
               end
+            end
+        done&.call(n)
+      end
+
+      def llgr_family(peer, afi, safi, done)
+        address = peer.address
+        n = case [afi, safi]
+            when [1, 1], [2, 1]
+              return done&.call(nil) unless @rib
+              @rib.feed << [:stale, address, afi, :llgr, done]
+              return
+            when [1, 128], [2, 128] then @vpn.llgr_stale(address, afi)
+            when BGP::Rib::PeerAdapter::EVPN
+              # Types 2 and 3 in the EVPN table, type 254 in the
+              # unreachability table, as stale_family.
+              @evpn.llgr_stale(address).zip(@unreach.llgr_stale(address, [afi, safi])).collect(&:sum)
+            when [IANA::AFI::BGP_LS, IANA::SAFI::BGP_LS] then @link_state.llgr_stale(address)
+            else Unreach::FAMILIES.include?([afi, safi]) ? @unreach.llgr_stale(address, [afi, safi]) : nil
             end
         done&.call(n)
       end
@@ -1796,7 +1814,7 @@ module BGP
         return unless !reflector_clients.empty? || e['route_reflector'] == true
         clients = reflector_clients.empty? ? e['clients'] : reflector_clients
         export = BGP::Rib::Export.new(:local_as => @my_as, :router_id => @router_id, :route_reflector => true,
-                                      :clients => clients, :cluster_id => e['cluster_id'])
+                                      :clients => clients, :cluster_id => e['cluster_id'], :llgr => @llgr)
         @vpn_reflector = VpnReflector.new(self, @vpn, export, logger: @logger)
         @vpn.on_change { @vpn_reflector.poke }
         on_established { |p| @vpn_reflector.session_up(p) }

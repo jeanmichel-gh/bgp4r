@@ -59,6 +59,10 @@ class TestDaemonLlgr < Test::Unit::TestCase
 
   def info(theirs) ; BGP::Neighbor::Capabilities.new(open, theirs) ; end
 
+  # Both OPENs with IPv4 and IPv6 unicast, the second with caps too.
+  def mp ; [CAP::Mbgp.new(1, 1), CAP::Mbgp.new(2, 1)] ; end
+  def info_mp(*caps) ; BGP::Neighbor::Capabilities.new(open(*mp), open(*mp, *caps)) ; end
+
   def helper(llgr = {}, gr = { 'restart_time' => 0 }, vrf = nil)
     @now = 1000
     @sp = FakeSpeaker.new
@@ -81,7 +85,8 @@ class TestDaemonLlgr < Test::Unit::TestCase
     refused({}, nil, /needs graceful_restart too \(RFC 9494 section 4\.1\)/)
     refused([], {}, /is true or a mapping of families, max_stale_time/)
     refused({ 'stale' => 1 }, {}, /unknown key\(s\) stale/)
-    refused({ 'families' => %w[vpnv4_unicast] }, {}, /families are ipv4_unicast and ipv6_unicast, not \["vpnv4_unicast"\]/)
+    refused({ 'families' => %w[ipv4_multicast] }, {}, /families are of ipv4_unicast, ipv6_unicast, vpnv4_unicast, vpnv6_unicast, l2vpn_evpn, bgp_ls, ipv4_unreachability, ipv6_unreachability, not \["ipv4_multicast"\]/)
+    assert_nil(GR.check_llgr({ 'families' => GR::LLGR_FAMILIES.keys }, {}, '10.0.0.2'))
     refused({ 'families' => [] }, {}, /families are/)
     refused({ 'families' => 'ipv4_unicast' }, {}, /families are/)
     refused({ 'max_stale_time' => 1 << 24 }, {}, /max_stale_time is 0 to 16777215 seconds/)
@@ -135,8 +140,25 @@ class TestDaemonLlgr < Test::Unit::TestCase
     h.down(info(open(gr(0, [1, 1, true]), llgr([1, 1, true, 60]))), :tcp)
     assert_equal([[1, 1, :llgr]], h.expire)
     h = helper
-    assert_equal([[2, 1]], h.down(info(open(gr(120), llgr([2, 1, true, 60]))), :tcp))
+    assert_equal([[2, 1]], h.down(info_mp(gr(120), llgr([2, 1, true, 60])), :tcp))
     assert_equal([[2, 1, :llgr]], h.expire, 'listed in LLGR alone')
+  end
+
+  # Section 4.2's "AFIs/SAFIs supported by the session": a family the
+  # LLGR capability lists and the session did not carry gets no period,
+  # and one the new session does not carry goes when it is back.
+  def test_a_family_the_session_did_not_carry
+    h = helper
+    assert_equal([], h.down(info(open(gr(120), llgr([2, 1, true, 60]))), :tcp), 'IPv6 not negotiated')
+    h = helper
+    h.down(info_mp(gr(0, [2, 1, true]), llgr([2, 1, true, 100])), :tcp)
+    h.expire
+    @sp.done.clear
+    sub = @sp.events.subscribe
+    h.up(info(open(gr(0, [2, 1, true]), llgr([2, 1, true, 100]))))
+    assert_equal([[:purge, 2, 1]], @sp.done)
+    assert_equal('family not negotiated on the new session', sub.pop(:timeout => 0).data[:reason])
+    assert_nil(h.state)
   end
 
   # "if the Long-Lived Stale Time is zero and the Restart Time is

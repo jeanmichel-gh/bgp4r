@@ -250,4 +250,31 @@ class TestBgpRibVpnTable < Test::Unit::TestCase
     assert_not_nil(@t.best('65000:1', '192.168.2.0/30'))
     assert_nil(@t.best('65000:1', '2001:db8:2::/64'), 'VPN-IPv6 not kept: decided again')
   end
+  # RFC 9494 section 4.2, the LLGR period for VPN-IPv4: the stale route
+  # carries LLGR_STALE and is least preferred (section 4.4), one with
+  # NO_LLGR goes, and the mark lasts a second restart.
+  def test_the_llgr_period
+    @t.llgr = ->(r) { BGP::Rib::Llgr.stale?(r.path_attribute) }
+    vpn4 = [1, 128]
+    @t.apply('10.255.0.3', vpn('10.255.0.3', [65000, 1], '192.168.2.0/30', 24001, local_pref: 200))
+    @t.apply('10.255.0.3', vpn('10.255.0.3', [65000, 1], '192.168.9.0/30', 24009, attrs: [BGP::Communities.new(:no_llgr)]))
+    @t.apply('10.255.0.4', vpn('10.255.0.4', [65000, 1], '192.168.2.0/30', 24002, local_pref: 100))
+    assert_equal('10.255.0.3', @t.rows.find { |r| r['best'] }['peer'])
+    changes = 0
+    @t.on_change { changes += 1 }
+    @t.peer_down('10.255.0.3', [vpn4])
+    assert_equal([0, 0], @t.llgr_stale('10.255.0.3', 2), 'no IPv6 route')
+    assert_equal([1, 1], @t.llgr_stale('10.255.0.3', 1))
+    assert_equal(2, changes, 'the peer down, then the LLGR period')
+    best = @t.rows.find { |r| r['best'] && r['prefix'] == '192.168.2.0/30' }
+    assert_equal(['10.255.0.4', 'llgr_stale'], [best['peer'], @t.rows.find { |r| r['peer'] == '10.255.0.3' }['reason']])
+    row = @t.rows.find { |r| r['peer'] == '10.255.0.3' }
+    assert_equal(['long_lived', true], row.values_at('stale', 'llgr_stale'))
+    assert_nil(@t.best([65000, 1].join(':'), '192.168.9.0/30'), 'NO_LLGR: removed')
+    assert_false(@t.rows.find { |r| r['peer'] == '10.255.0.4' }.key?('llgr_stale'))
+    @t.peer_down('10.255.0.3', [vpn4])
+    assert_equal('long_lived', @t.stale('10.255.0.3', '65000:1', '192.168.2.0/30'))
+    assert_equal([0, 0], @t.llgr_stale('10.255.0.9', 1))
+  end
+
 end
