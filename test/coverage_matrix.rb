@@ -189,6 +189,7 @@ module CoverageMatrix
     'bmp'          => 'BMP, RFC 7854, a router reporting to a station, and not a BGP family',
     'bmp_bgp4rd'   => 'BMP from bgp4rd beside FRR, RFC 7854, two routers reporting one peer to a station, and not a BGP family',
     'llgr'         => 'long-lived graceful restart, RFC 9494, a helper\'s period after a peer restarts, which is per session and not a family\'s routes',
+    'llgr_fault'   => 'long-lived graceful restart behaviours and OPEN cases, RFC 9494, which are per session',
     'gen'          => 'bgp/gen, a generator; docs/route-generation.md phase 6 reports those',
   }.freeze
 

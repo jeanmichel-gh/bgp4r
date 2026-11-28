@@ -331,7 +331,8 @@ class TestFault < Test::Unit::TestCase
   def test_the_behaviours
     assert_equal(%i[borr_without_eorr gr_restart gr_restart_no_f gr_restart_family_missing gr_never_back
                     gr_no_eor gr_new_connection gr_consecutive gr_consecutive_n gr_graceful_cease
-                    gr_hard_reset gr_notification_no_n], BGP::Fault.behaviour_names)
+                    gr_hard_reset gr_notification_no_n llgr_long_restart llgr_never_back
+                    llgr_no_llgr_route], BGP::Fault.behaviour_names)
     assert_equal('7313 4', BGP::Fault::BEHAVIOURS.first[3])
     cat = BGP::Fault.behaviour_catalog.to_h { |b| [b[:name], [b[:rfc], b[:needs]]] }
     assert_equal(['RFC 7313 4', nil], cat[:borr_without_eorr])
@@ -340,6 +341,21 @@ class TestFault < Test::Unit::TestCase
     assert_equal(['RFC 8538 4.1', :n], cat[:gr_consecutive_n])
     assert_equal(['RFC 8538 3.2', :n], cat[:gr_hard_reset])
     assert_equal(['RFC 4724 4', :no_n], cat[:gr_notification_no_n])
+    assert_equal(['RFC 9494 4.2 to 4.4', :llgr], cat[:llgr_long_restart])
+    assert_equal(['RFC 9494 4.2', :llgr], cat[:llgr_never_back])
+    assert_equal(['RFC 9494 4.2', :llgr], cat[:llgr_no_llgr_route])
+  end
+
+  # RFC 9494's OPEN cases: section 4.5, LLGR without GR; section 3.1,
+  # the seven reserved flag bits set.
+  def test_the_llgr_catalog
+    assert_equal(%i[llgr_without_gr llgr_reserved_flags], BGP::Fault.llgr_names)
+    tuples = [[1, 1, 0x80, 60], [2, 1, 0, 90]]
+    assert_equal([false, tuples], BGP::Fault.llgr(:llgr_without_gr, tuples))
+    assert_equal([true, [[1, 1, 0xff, 60], [2, 1, 0x7f, 90]]], BGP::Fault.llgr('llgr_reserved_flags', tuples))
+    assert_equal([['RFC 9494 4.5', :ignore], ['RFC 9494 3.1', :ignore]],
+                 BGP::Fault.llgr_catalog.collect { |c| c.values_at(:rfc, :expected) })
+    assert_raise(ArgumentError) { BGP::Fault.llgr(:hard_reset_empty, tuples) }
   end
 
   # RFC 8538 section 3.1: a Hard Reset is Cease subcode 9, its data the

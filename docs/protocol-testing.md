@@ -474,6 +474,42 @@ kept the stale routes past the Restart Time, logged as expired: a GR
 peer's first End-of-RIB matters to bgpd. Why bgpd differs from run to
 run is not known. The FRR test asserts what held in every run, and for
 the rest says which way this run went.
+
+### Long-lived graceful restart cases
+
+`BGP::Fault::BEHAVIOURS` holds three LLGR behaviours, RFC 9494 from the
+restarting side, and `BGP::Fault::LLGR` two OPEN cases. Each needs a GR
+and an LLGR capability on the sim's peer (`docs/daemon.md`). The sim
+had a Restart Time of 1 s toward bgp4rd and 2 s toward FRR, and an
+LLST of 3 s and 4 s. It announced two routes. A second peer of the
+receiver, external and with no LLGR, watched what it sent on.
+
+Each went to bgp4rd and to FRR 10.5.1
+(`test/functional/llgr_fault_matrix_test.rb`,
+`test/functional/lab/llgr_fault_frr_test.rb`), on 2026-11-28, each
+run four times.
+
+| Name | Sent | RFC expects | bgp4rd | FRR 10.5.1 |
+|---|---|---|---|---|
+| `llgr_long_restart` | away past the Restart Time, back before the LLST | LLGR_STALE, least preferred, normal at End-of-RIB (9494 4.2 to 4.4) | as expected; withdrawn from the watcher | as expected; sent on to the watcher with LLGR_STALE |
+| `llgr_never_back` | away past both | deleted at the LLST (9494 4.2) | deleted at the LLST | deleted at the LLST |
+| `llgr_no_llgr_route` | one route with NO_LLGR | removed when the period begins (9494 4.2) | removed | removed |
+| `llgr_without_gr` | an OPEN with LLGR and no GR | ignore the LLGR capability (9494 4.5) | ignored: flushed at the drop | ignored: flushed at the drop |
+| `llgr_reserved_flags` | the reserved LLGR flag bits set | ignore them (9494 3.1) | ignored: the period runs | ignored: the period runs |
+
+bgp4rd does what RFC 9494 expects. FRR does not in one: section 4.3 says
+an LLGR_STALE route "SHOULD NOT be advertised to any neighbor from which
+the Long-Lived Graceful Restart Capability has not been received", and
+so withdrawn from it. bgpd announced both routes again to the watcher,
+with LLGR_STALE and no NO_EXPORT; section 4.6's exception is for
+internal neighbors only, with NO_EXPORT and a LOCAL_PREF of 0.
+
+FRR was run with `bgp graceful-restart` and `bgp long-lived-graceful-restart
+stale-time 20`. Without the second line bgpd shows
+`configuredLlgrStaleTime` 0 and deletes the routes at the Restart Time,
+with no LLGR period. With it, the period was the sim's LLST, the
+smaller of the two.
+
 ### RTR cases
 
 `BGP::Fault::RTR` holds what an RPKI cache can send that a router must

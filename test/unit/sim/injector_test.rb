@@ -70,7 +70,10 @@ class BGP_Sim_Injector_Test < Test::Unit::TestCase
     def admin_start ; calls << [:up] ; @down = false ; @neighbor = Object.new ; self ; end
     def neighbor ; @neighbor ||= Object.new ; end
     def quiet? ; false ; end
+    # The whole list the last next_session was given.
+    attr_reader :next_capabilities
     def next_session(h)
+      @next_capabilities = h['capabilities']
       calls << [:next, h['capabilities'].last.values.first, h['end_of_rib'], h['quiet'] == true]
       self
     end
@@ -692,6 +695,148 @@ class BGP_Sim_Injector_Test < Test::Unit::TestCase
     assert_match(/Hard Reset case and takes no afi/, e.message)
     e = assert_raise(BGP::Sim::Injector::Refused) { inj.act('fault', 'case' => 'nope') }
     assert_match(/hard_reset_empty/, e.message, 'the refusal names the GR cases too')
+  end
+
+  # ---- long-lived graceful restart, 4c -----------------------------
+
+  LLGR_TUPLES = [[1, 1, 0, 60], [2, 1, 0x80, 90]].freeze
+
+  def llgr_peer(flags = 0)
+    FakePeer.new('10.0.10.2', 65_000, 65_001,
+                 'capabilities' => ['as4_byte', { 'graceful_restart' => [flags, 120, [1, 1, 0x80]] },
+                                    { 'llgr' => LLGR_TUPLES }])
+  end
+
+  def run_on(inj, action, body)
+    r = inj.act(action, body)
+    deadline = Time.now + 5
+    sleep 0.01 until inj.instance_variable_get(:@threads).none?(&:alive?) || Time.now > deadline
+    r
+  end
+
+  # RFC 9494 section 4.2: back with R and F set in GR, and F set in each
+  # LLGR family, or the helper drops what it kept.
+  def test_what_each_llgr_behaviour_does
+    back = [[1, 1, 0x80, 60], [2, 1, 0x80, 90]]
+    %w[llgr_long_restart llgr_never_back].each do |name|
+      inj = injector({}, [llgr_peer])
+      r = run_on(inj, 'behaviour', 'name' => name, 'away' => 0)
+      assert_equal([name, true], r.values_at(:behaviour, :running))
+      want = name == 'llgr_never_back' ? [[:down]] : [[:down], [:next, back, true, false], [:up]]
+      assert_equal(want, peer.calls, name)
+    end
+    inj = injector({}, [llgr_peer])
+    run_on(inj, 'behaviour', 'name' => 'llgr_long_restart', 'away' => 0)
+    assert_equal(['as4_byte', { 'graceful_restart' => [8, 120, [1, 1, 0x80]] }, { 'long_lived_graceful_restart' => back }],
+                 peer.next_capabilities)
+  end
+
+  # Section 3.3: the routes go again with NO_LLGR beside what they
+  # carried, before the drop.
+  def test_llgr_no_llgr_route_marks_the_routes_then_restarts
+    inj = injector({}, [llgr_peer])
+    inj.act('announce', 'prefixes' => %w[10.1.0.0/16 10.2.0.0/16], 'next_hop' => '10.0.0.1', 'communities' => ['65000:1'])
+    r = run_on(inj, 'behaviour', 'name' => 'llgr_no_llgr_route', 'prefixes' => ['10.2.0.0/16'], 'away' => 0)
+    assert_equal(['10.2.0.0/16'], r[:prefixes])
+    u = peer.updates.last
+    assert_equal(['10.2.0.0/16'], u.nlri.to_ary.collect(&:to_s))
+    assert_equal('65000:1 65535:7', u.path_attribute[BGP::Communities].communities)
+    assert_equal(%i[down next up], peer.calls.collect(&:first))
+  end
+
+  def test_an_llgr_behaviour_refuses_what_it_cannot_run
+    e = assert_raise(BGP::Sim::Injector::Refused) { injector({}, [gr_peer]).act('behaviour', 'name' => 'llgr_long_restart') }
+    assert_match(/10.0.10.2 lists no long_lived_graceful_restart capability; .*\{llgr: \[1, 1, 128, 60\]\}/, e.message)
+    e = assert_raise(BGP::Sim::Injector::Refused) { injector({}, [llgr_peer]).act('behaviour', 'name' => 'llgr_no_llgr_route') }
+    assert_match(/prefixes names the routes to mark NO_LLGR/, e.message)
+    e = assert_raise(BGP::Sim::Injector::Refused) do
+      injector({}, [llgr_peer]).act('behaviour', 'name' => 'llgr_long_restart', 'prefixes' => ['10.1.0.0/16'])
+    end
+    assert_match(/llgr_long_restart takes no prefixes/, e.message)
+    e = assert_raise(BGP::Sim::Injector::Refused) do
+      injector({}, [llgr_peer]).act('behaviour', 'name' => 'llgr_no_llgr_route', 'prefixes' => ['10.9.0.0/16'])
+    end
+    assert_match(/10.9.0.0\/16 was not announced from here/, e.message)
+    e = assert_raise(BGP::Sim::Injector::Refused) { injector.act('behaviour', 'name' => 'borr_without_eorr', 'prefixes' => ['10.1.0.0/16']) }
+    assert_match(/borr_without_eorr takes no prefixes/, e.message)
+    assert_equal([], peer.calls, 'and does nothing')
+  end
+
+  # The OPEN cases: the session again, with the case's OPEN, after a
+  # NOTIFICATION that has the receiver flush: Cease 6/2, or a Hard Reset
+  # when the sim lists N.
+  def test_an_llgr_fault_brings_the_session_up_with_its_open
+    inj = injector({}, [llgr_peer])
+    r = run_on(inj, 'fault', 'case' => 'llgr_without_gr')
+    assert_equal(['llgr_without_gr', true], r.values_at(:case, :running))
+    assert_equal([[:next, LLGR_TUPLES, nil, false], [:sent, 'ffffffffffffffffffffffffffffffff0015030602'], [:down], [:up]],
+                 peer.calls)
+    assert_equal(['as4_byte', { 'long_lived_graceful_restart' => LLGR_TUPLES }], peer.next_capabilities, 'no GR')
+    inj = injector({}, [llgr_peer(4)])
+    run_on(inj, 'fault', 'case' => 'llgr_reserved_flags')
+    assert_equal('ffffffffffffffffffffffffffffffff00170306090602', peer.calls[1][1], 'a Hard Reset under N')
+    assert_equal(['as4_byte', { 'graceful_restart' => [4, 120, [1, 1, 0x80]] },
+                  { 'long_lived_graceful_restart' => [[1, 1, 0x7f, 60], [2, 1, 0xff, 90]] }], peer.next_capabilities)
+  end
+
+  def test_an_llgr_fault_refuses_what_it_cannot_run
+    e = assert_raise(BGP::Sim::Injector::Refused) { injector({}, [gr_peer]).act('fault', 'case' => 'llgr_without_gr') }
+    assert_match(/lists no long_lived_graceful_restart capability; .* such as \{llgr: \[1, 1, 128, 60\]\}\z/, e.message)
+    e = assert_raise(BGP::Sim::Injector::Refused) { injector.act('fault', 'case' => 'llgr_without_gr') }
+    assert_match(/lists no graceful_restart capability; .* such as \{graceful_restart: \[0, 120, \[1, 1, 128\]\]\}\z/, e.message)
+    e = assert_raise(BGP::Sim::Injector::Refused) { injector({}, [llgr_peer]).act('fault', 'case' => 'llgr_reserved_flags', 'afi' => 1) }
+    assert_match(/OPEN case and takes no afi/, e.message)
+    e = assert_raise(BGP::Sim::Injector::Refused) { injector.act('fault', 'case' => 'nope') }
+    assert_match(/llgr_without_gr, llgr_reserved_flags/, e.message, 'the refusal names the LLGR cases too')
+    assert_equal([], peer.calls)
+  end
+
+  # The fault says so on the event stream, and its log line once the
+  # session is back. One that does not come back is logged, with no
+  # `done`.
+  def test_an_llgr_fault_publishes_and_says_when_it_is_done
+    inj = injector({}, [llgr_peer])
+    seen = []
+    inj.speaker.events.on_event { |e| seen << [e.kind, e.message] }
+    run_on(inj, 'fault', 'case' => 'llgr_reserved_flags')
+    assert_includes(seen, [BGP::Sim::Injector::FAULT, 'injected fault llgr_reserved_flags'])
+    assert_includes(seen, [:log, 'fault llgr_reserved_flags done on 10.0.10.2'])
+    m = BGP::Sim::GracefulRestartBehaviour
+    old = m::BACK_WITHIN
+    m.send(:remove_const, :BACK_WITHIN)
+    m.const_set(:BACK_WITHIN, 0.2)
+    log = StringIO.new
+    Log.set_filename(log)
+    inj = injector({}, [llgr_peer])
+    seen = []
+    inj.speaker.events.on_event { |e| seen << e.message if e.kind == :log }
+    def peer.admin_start ; calls << [:up] ; @down = false ; @established = false ; self ; end
+    run_on(inj, 'fault', 'case' => 'llgr_without_gr')
+    assert_match(/fault llgr_without_gr on 10.0.10.2: RuntimeError: llgr_without_gr: 10.0.10.2 did not come back within 0.2s/,
+                 log.string)
+    assert_equal([], seen.grep(/done on/))
+  ensure
+    if old
+      m.send(:remove_const, :BACK_WITHIN)
+      m.const_set(:BACK_WITHIN, old)
+    end
+  end
+
+  def test_the_llgr_capability_read_and_replaced
+    m = BGP::Sim::GracefulRestartBehaviour
+    assert_nil(m.llgr('capabilities' => ['as4_byte', { 'gr' => [0, 90] }]))
+    assert_equal([[1, 1, 128, 60]], m.llgr('capabilities' => [{ 'llgr' => [1, 1, 128, 60] }]))
+    assert_equal([[1, 1, 0, 0]], m.llgr('capabilities' => [{ 'long_lived_graceful_restart' => [1, 1] }]))
+    assert_equal(LLGR_TUPLES, m.llgr('capabilities' => [{ 'llgr' => LLGR_TUPLES }]))
+    config = { 'capabilities' => ['as4_byte', { 'gr' => [0, 90] }, { 'llgr' => [1, 1, 0, 60] }] }
+    assert_equal(['as4_byte', { 'llgr' => [1, 1, 0, 60] }, { 'graceful_restart' => [8, 90] }],
+                 m.capabilities(config, 8, 90, []), 'without llgr: the config\'s LLGR stays')
+    assert_equal(['as4_byte', { 'long_lived_graceful_restart' => [[1, 1, 128, 60]] }],
+                 m.capabilities(config, nil, 90, [], llgr: [[1, 1, 128, 60]]), 'nil flags: no GR')
+  end
+
+  def test_the_topology_lists_the_llgr_faults
+    assert_equal(%w[llgr_without_gr llgr_reserved_flags], injector.topology[:llgr_faults])
   end
 
   def test_a_route_refresh_defaults_to_ipv4_unicast

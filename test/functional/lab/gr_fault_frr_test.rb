@@ -194,7 +194,7 @@ class LabGrFaultFrrTest < Test::Unit::TestCase
   # Prints what FRR did with each behaviour, to measure the table.
   def test_probe
     omit('GR_PROBE=1 to measure') unless PROBE
-    BGP::Fault.behaviour_catalog.select { |b| b[:needs] }.each do |b|
+    BGP::Fault.behaviour_catalog.select { |b| b[:name].to_s.start_with?('gr_') }.each do |b|
       # Before start, so a behaviour left out starts no bgpd.
       next if ENV['GR_ONLY'] && !ENV['GR_ONLY'].split(',').include?(b[:name].to_s)
       start(n: b[:needs] == :n, restart_time: 3, stale_time: 3)

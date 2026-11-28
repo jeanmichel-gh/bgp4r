@@ -64,6 +64,9 @@ class Long_lived_graceful_restart_cap_Test < Test::Unit::TestCase
     [from_wire, from_hash].each { |cap| assert_equal hex, cap.to_shex }
     # The inner hash alone, as Graceful_restart takes it.
     assert_equal hex, LLGR.new(from_fields.to_hash[:capability]).to_shex
+    # One Array per tuple, as a node file lists several.
+    assert_equal hex, LLGR.new([1, 1, 0x80, 3600], [2, 1, 0, 300]).to_shex
+    assert_equal LLGR.new(1, 1, 0x80, 3600).to_shex, LLGR.new([1, 1, 0x80, 3600]).to_shex
   end
 
   # The LLST is 24 bits wide. A value that fills it writes all three

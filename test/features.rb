@@ -449,6 +449,16 @@ module Features
       :lab   => %w[gr_fault_frr_test],
     },
 
+    'llgr-faults' => {
+      :area  => 'errors',
+      :about => 'BGP::Fault::LLGR and the three llgr_ behaviours, bgp4r-sim restarting as RFC 9494 describes, and what bgp4rd and FRR do',
+      :rfc   => 'RFC 9494 sections 3.1, 4.2 to 4.5',
+      :doc   => 'docs/protocol-testing.md',
+      :unit  => %w[fault_test sim/injector_test optional_parameters/long_lived_graceful_restart_test],
+      :functional => %w[llgr_fault_matrix_test],
+      :lab   => %w[llgr_fault_frr_test],
+    },
+
     'gtsm' => {
       :area  => 'session',
       :about => 'ttl_security on a neighbor: GTSM, sent at TTL 255, dropped below 256 - hops',
