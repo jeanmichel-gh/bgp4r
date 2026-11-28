@@ -21,7 +21,7 @@ amounts. Measured 2026-11-03:
 |---|---|---:|---|---|
 | unit | Ruby | 206 | 21s | `ruby test/run_unit.rb` |
 | functional | a loopback socket | 38 | 18s | one file at a time, below |
-| lab | gobgpd, FRR, Docker or root | 49 | 10s to 400s per group | `ruby test/run_lab.rb GROUP` |
+| lab | gobgpd, FRR, Docker or root | 50 | 10s to 400s per group | `ruby test/run_lab.rb GROUP` |
 
 **The first two tiers together are under a minute and need nothing
 installed.** That is worth knowing before reaching for a lab test.
@@ -108,6 +108,7 @@ Getting a session up and keeping it.
 | `graceful-restart` | 12 | 1 | 1 | graceful_restart on a neighbor: a helper, keeping a restarting peer's routes stale until its End-of-RIB, its Restart Time or stale_time; RFC 8538's N bit and Hard Reset |
 | `gtsm` | 1 | 1 | 0 | ttl_security on a neighbor: GTSM, sent at TTL 255, dropped below 256 - hops |
 | `tcp-md5` | 1 | 1 | 1 | password on a neighbor: TCP MD5, every segment signed, a missing or wrong digest dropped |
+| `tcp-ao` | 1 | 1 | 1 | tcp_ao on a neighbor: TCP-AO keys, every segment signed, the first key the one a session starts on |
 | `fsm` | 3 | 0 | 0 | The finite state machine, the TCP session and the two IO threads |
 
 ### routing
@@ -860,6 +861,20 @@ lab/speaker.rb and the five topologies under lab/topologies.
 ruby test/run_feature.rb speaker
 ```
 
+### `tcp-ao`
+
+tcp_ao on a neighbor: TCP-AO keys, every segment signed, the first key the one a session starts on.
+
+- RFC 5925 section 3.1
+- Read first: `docs/daemon.md`
+- 1 unit file, 1 functional
+- lab:
+  - `tcp_ao_gobgp_test`, needs gobgpd 4
+
+```
+ruby test/run_feature.rb tcp-ao
+```
+
 ### `tcp-md5`
 
 password on a neighbor: TCP MD5, every segment signed, a missing or wrong digest dropped.
@@ -1205,5 +1220,5 @@ test file has to be tagged before the suite is green again, which is
 the same arrangement `test/unit/lab_groups_test.rb` has with the CI
 matrix.
 
-293 of 293 test files are tagged. The
+294 of 294 test files are tagged. The
 remainder, if any, is what the guard names.

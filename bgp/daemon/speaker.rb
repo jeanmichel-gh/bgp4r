@@ -311,7 +311,7 @@ module BGP
       # to the code, so a key read here and not listed fails the suite.
       KEYS = %w[address as capabilities connect description hold_time
                 open_timeout port record retry route_reflector_client
-                vrf as_override soo bfd ttl_security password end_of_rib
+                vrf as_override soo bfd ttl_security password tcp_ao end_of_rib
                 refresh_stale_time graceful_restart long_lived_graceful_restart].freeze
 
       # Raises ArgumentError naming every key `config` carries that no
@@ -435,6 +435,10 @@ module BGP
       # with, or nil for none. See bgp/daemon/tcp_auth.rb.
       # Speaker#check_password refuses a key that is not 1 to 80 octets.
       def password ; @config['password']&.to_s ; end
+      # TCP-AO, RFC 5925: this neighbor's keys, the first the one a
+      # session starts on, or nil for none. See bgp/daemon/tcp_auth.rb.
+      # Speaker#check_password refuses a `tcp_ao` that does not read.
+      def tcp_ao ; @config['tcp_ao'] && TcpAuth.ao_keys(@config['tcp_ao']) ; end
       # RFC 4724 section 2: send an End-of-RIB per negotiated family once
       # the first table is sent. See bgp/daemon/end_of_rib.rb.
       # `graceful_restart` turns it on too: the GR capability says we send
@@ -478,7 +482,7 @@ module BGP
               next
             end
             begin
-              if vrf || ttl_security || password
+              if vrf || ttl_security || password || tcp_ao
                 sock = dial_socket
               else
                 sock = Socket.tcp(@address, @config.fetch('port', 179),
@@ -503,8 +507,9 @@ module BGP
       # TTL 255, or a peer with a minimum of 255 drops it. Outside a VRF
       # it binds `local_address`, as `Socket.tcp` does.
       #
-      # An MD5 session (`password`): its SYN carries the digest already,
-      # so the key is set before `connect` too.
+      # An MD5 session (`password`) or a TCP-AO one (`tcp_ao`): its SYN
+      # carries the digest already, so the keys are set before `connect`
+      # too.
       def dial_socket
         port = @config.fetch('port', 179)
         family = @address.include?(':') ? :INET6 : :INET
@@ -516,6 +521,7 @@ module BGP
         end
         Gtsm.secure(s, Gtsm.minimum(ttl_security)) if ttl_security
         TcpAuth.md5(s, @address, password) if password
+        TcpAuth.ao(s, @address, tcp_ao, dial: true) if tcp_ao
         addr = Socket.sockaddr_in(port, @address)
         if s.connect_nonblock(addr, exception: false) == :wait_writable
           raise Errno::ETIMEDOUT, "connect to #{@address}#{" in VRF #{vrf}" if vrf}" unless s.wait_writable(5)
@@ -1519,9 +1525,13 @@ module BGP
       end
 
       # Raises ArgumentError when a neighbor's `password` is not a key of
-      # 1 to 80 octets, the kernel's limit. See TcpAuth.check.
+      # 1 to 80 octets, the kernel's limit, or its `tcp_ao` does not read
+      # or comes with a `password`. See TcpAuth.check and check_ao.
       def check_password
-        @peers.each { |p| TcpAuth.check(p.config['password'], p.address) }
+        @peers.each do |p|
+          TcpAuth.check(p.config['password'], p.address)
+          TcpAuth.check_ao(p.config['tcp_ao'], p.address, p.config['password'])
+        end
       end
 
       # The passive peers the listener for `vrf` (nil the global one)
@@ -2041,6 +2051,10 @@ module BGP
         # address, and a connection accepted from that address has it from
         # the SYN on. A peer without `password` is not affected.
         passive_peers(vrf).select(&:password).each { |p| TcpAuth.md5(server, p.address, p.password) }
+        # TCP-AO the same way, with every key of each peer. A listener
+        # takes no current key (EINVAL, measured): it answers with the key
+        # the peer's KeyID names.
+        passive_peers(vrf).select(&:tcp_ao).each { |p| TcpAuth.ao(server, p.address, p.tcp_ao) }
         Thread.new do
           loop do
             sock = server.accept

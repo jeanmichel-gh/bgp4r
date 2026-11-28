@@ -191,6 +191,8 @@ module BGP
                           'one session\'s (bgp/daemon/gtsm.rb)',
         'password' => 'the listener holds each passive peer\'s MD5 key, set once, when bgp4rd ' \
                       'starts listening (bgp/daemon/tcp_auth.rb)',
+        'tcp_ao' => 'the listener holds each passive peer\'s TCP-AO keys, set once, when bgp4rd ' \
+                    'starts listening (bgp/daemon/tcp_auth.rb)',
         'record' => 'the Recorder is built once, in Peer#initialize, and counts ' \
                     'established_count and flaps across sessions, so a bounce deliberately ' \
                     'leaves those alone and replacing it would reset them'

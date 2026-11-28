@@ -183,6 +183,26 @@ class LabHelperTest < Test::Unit::TestCase
            'the first neighbor block is still byte for byte the old one')
   end
 
+  # TCP-AO, for tcp_ao_gobgp_test: a keychain before the neighbors, its
+  # master keys in base64, and the first neighbor's reference to it; a
+  # second neighbor has none. passive-mode goes in the transport table
+  # already there, since TOML takes a table once.
+  def test_tcp_ao_and_passive_go_where_gobgp_reads_them
+    cfg = fixed_config(:ipv6 => false, :passive => true,
+                       :tcp_ao => { :send_id => 2, :keys => [[1, 1, 'one', nil], [2, 2, 'two', 'aes-128-cmac-96']] },
+                       :peer2 => { :address => '127.0.0.3', :as => 65003, :port => 9999 })
+    assert_operator(cfg.index('[[keychains]]'), :<, cfg.index('[[neighbors]]'))
+    assert_equal(2, cfg.scan("  [[keychains.keys]]\n    [keychains.keys.config]\n").size, 'a table per key')
+    assert_match(/key-id = 1\n\s*receive-id = 1\n\s*secret-key = "b25l"\n\s*crypto-algorithm = "hmac-sha-1-96"/, cfg)
+    assert_match(/key-id = 2\n\s*receive-id = 2\n\s*secret-key = "dHdv"\n\s*crypto-algorithm = "aes-128-cmac-96"/, cfg)
+    assert_equal(1, cfg.scan('[neighbors.tcp-ao.config]').size)
+    assert_match(/\[neighbors.tcp-ao.config\]\n\s*keychain = "bgp4r"\n\s*send-id = 2\n/, cfg)
+    assert_match(/remote-port = 1111\n\s*passive-mode = true\n/, cfg)
+    assert_equal(1, cfg.scan('passive-mode').size)
+    assert_operator(cfg.index('[neighbors.tcp-ao.config]'), :<, cfg.index('127.0.0.3'), 'the first neighbor')
+    assert_equal(2, cfg.scan('[neighbors.transport.config]').size, 'one transport table per neighbor')
+  end
+
   def test_the_families_spelled_alike_on_both_sides
     [G::FS_IPV4, G::FS_IPV6, G::RTC, 'ipv4-unicast'].each do |name|
       assert_equal(name, G.client_family(name),

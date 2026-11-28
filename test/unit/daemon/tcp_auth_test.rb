@@ -98,4 +98,105 @@ class TestDaemonTcpAuth < Test::Unit::TestCase
     assert_equal(false, rows['10.0.0.3'].key?(:auth))
     assert_no_match(/s3cret/, rows.inspect)
   end
+
+  # ---- TCP-AO ----
+
+  def ao(*keys)
+    { 'keys' => keys.map.with_index { |k, i| { 'send_id' => i, 'recv_id' => i, 'key' => "k#{i}" }.merge(k) } }
+  end
+
+  def ao_speaker(tcp_ao, extra = {})
+    speaker([{ 'address' => '10.0.0.2', 'as' => 65_001, 'tcp_ao' => tcp_ao }.merge(extra)])
+  end
+
+  def test_linux_tcp_ao_add_key_is_38
+    assert_equal(38, A::TCP_AO_ADD_KEY)
+  end
+
+  # struct tcp_ao_add, /usr/include/linux/tcp.h: a 128-octet
+  # sockaddr_storage, a 64-octet algorithm name, ifindex, the two flag
+  # bits, padding, prefix, SendID, RecvID, MAC length, key flags, key
+  # length and an 80-octet key: 288 octets.
+  def test_the_ao_struct_is_laid_out_as_linux_reads_it
+    key = { :send_id => 3, :recv_id => 4, :key => 'abc', :algorithm => 'cmac(aes128)', :mac_length => 12 }
+    s = A.ao_add('10.0.0.2', key, 32)
+    assert_equal(288, s.bytesize)
+    assert_equal(Socket.sockaddr_in(0, '10.0.0.2'), s[0, 16])
+    assert_equal("\0" * 112, s[16, 112])
+    assert_equal('cmac(aes128)'.ljust(64, "\0"), s[128, 64])
+    assert_equal([0, 0, 0, 32, 3, 4, 12, 0, 3], s[192, 16].unpack('lLSCCCCCC'))
+    assert_equal('abc' + "\0" * 77, s[208, 80])
+    assert_equal(0b11, A.ao_add('10.0.0.2', key, 32, current: true)[196, 4].unpack1('L'))
+  end
+
+  # The kernel's choices, measured: a dialling socket's first key is
+  # current and RNext, or it signs with the last; a listening socket
+  # refuses either flag. An IPv4 peer of an IPv6 socket is mapped, with
+  # prefix 32, the only prefix the kernel takes for it.
+  def test_ao_sets_each_key_with_the_flags_and_prefix_the_kernel_wants
+    keys = A.ao_keys(ao({}, {}))
+    [[:INET, '10.0.0.2', true, '10.0.0.2', 32, [3, 0]],
+     [:INET, '10.0.0.2', false, '10.0.0.2', 32, [0, 0]],
+     [:INET6, '10.0.0.2', true, '::ffff:10.0.0.2', 32, [3, 0]],
+     [:INET6, '2001:db8::2', false, '2001:db8::2', 128, [0, 0]]].each do |family, peer, dial, address, prefix, bits|
+      sock = Socket.new(family, :STREAM)
+      got = []
+      sock.define_singleton_method(:setsockopt) { |*a| got << a }
+      A.ao(sock, peer, keys, dial: dial)
+      assert_equal([[Socket::IPPROTO_TCP, 38]] * 2, got.map { |a| a[0, 2] })
+      assert_equal(Socket.sockaddr_in(0, address), got[0][2][0, Socket.sockaddr_in(0, address).bytesize], peer)
+      assert_equal([prefix] * 2, got.map { |a| a[2][202].ord }, peer)
+      assert_equal(bits, got.map { |a| a[2][196, 4].unpack1('L') }, "#{family} #{peer} dial #{dial}")
+    ensure
+      sock&.close
+    end
+  end
+
+  # RFC 5926: HMAC-SHA-1-96 is the default, and 96 bits is 12 octets.
+  def test_ao_keys_fill_in_the_defaults_in_order
+    keys = A.ao_keys(ao({ 'key' => 1234 }, { 'algorithm' => 'cmac(aes128)', 'mac_length' => 16 }))
+    assert_equal([{ :send_id => 0, :recv_id => 0, :key => '1234', :algorithm => 'hmac(sha1)', :mac_length => 12 },
+                  { :send_id => 1, :recv_id => 1, :key => 'k1', :algorithm => 'cmac(aes128)', :mac_length => 16 }],
+                 keys)
+  end
+
+  def test_tcp_ao_that_reads_is_taken
+    [ao({}), ao({ 'send_id' => 255, 'recv_id' => 0, 'key' => 'k' * 80 }, {}),
+     ao({ 'algorithm' => 'cmac(aes128)', 'mac_length' => 1 }), ao({ 'mac_length' => 16 })].each do |v|
+      assert_nothing_raised(v.inspect) { ao_speaker(v) }
+    end
+    assert_equal('k0', ao_speaker(ao({})).peer('10.0.0.2').tcp_ao.first[:key])
+  end
+
+  # Each refusal names the neighbor and never carries a key.
+  def test_tcp_ao_that_does_not_read_is_refused_without_showing_a_key
+    [[ao({}), { 'password' => 'kkkk' }, /password and tcp_ao together; RFC 5925 section 8/],
+     [{ 'kees' => [] }, {}, /tcp_ao is \{keys: \[...\]\}, got kees/],
+     [[1], {}, /tcp_ao is \{keys: \[...\]\}, got Array/],
+     [{ 'keys' => [] }, {}, /keys is a list of one key or more/],
+     [{ 'keys' => ['kkkk'] }, {}, /key 0 is a mapping of send_id, recv_id, key, algorithm, mac_length, got String/],
+     [ao({ 'sendid' => 1 }), {}, /key 0: unknown key\(s\) sendid/],
+     [ao({ 'send_id' => 256 }), {}, /key 0: send_id is 0 to 255, got 256/],
+     [ao({ 'recv_id' => nil }), {}, /key 0: recv_id is 0 to 255, got nil/],
+     [ao({ 'key' => '' }), {}, /key 0: key is 1 to 80 octets, got 0 octets/],
+     [ao({ 'key' => 'k' * 81 }), {}, /key 0: key is 1 to 80 octets, got 81 octets/],
+     [ao({ 'key' => true }), {}, /key 0: key is 1 to 80 octets, got TrueClass/],
+     [ao({ 'algorithm' => 'hmac(sha256)' }), {}, /algorithm is hmac\(sha1\) or cmac\(aes128\), got "hmac\(sha256\)"/],
+     [ao({ 'mac_length' => 0 }), {}, /mac_length is 1 to 16 octets, got 0/],
+     [ao({ 'mac_length' => 17 }), {}, /mac_length is 1 to 16 octets, got 17/],
+     [ao({}, { 'send_id' => 0 }), {}, /two keys have send_id 0; RFC 5925 section 3.1/],
+     [ao({}, { 'recv_id' => 0 }), {}, /two keys have recv_id 0; RFC 5925 section 3.1/]].each do |v, extra, why|
+      e = assert_raise(ArgumentError, v.inspect) { ao_speaker(v, extra) }
+      assert_match(/\Aneighbor 10.0.0.2: /, e.message)
+      assert_match(why, e.message)
+      assert_no_match(/kkk/, e.message)
+    end
+  end
+
+  def test_show_peers_says_tcp_ao_and_not_the_key
+    sp = speaker([{ 'address' => '10.0.0.2', 'as' => 65_001, 'tcp_ao' => ao({ 'key' => 's3cret' }) }])
+    row = BGP::Daemon::Views.new(sp).peers.first
+    assert_equal('tcp-ao', row[:auth])
+    assert_no_match(/s3cret/, row.inspect)
+  end
 end

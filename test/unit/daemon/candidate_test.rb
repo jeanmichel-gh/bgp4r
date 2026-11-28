@@ -373,6 +373,21 @@ class BGP_Daemon_Candidate_Test < Test::Unit::TestCase
     assert_equal(text, @candidate.configuration('format' => 'set', 'candidate' => true))
   end
 
+  # TCP-AO keys are held by the listener from start too, and round-trip
+  # through set lines as a list, its first key first.
+  def test_tcp_ao_cannot_change_while_running_and_round_trips
+    lines = ['set neighbors 127.0.0.9 tcp_ao keys 0 send_id 1', 'set neighbors 127.0.0.9 tcp_ao keys 0 recv_id 1',
+             'set neighbors 127.0.0.9 tcp_ao keys 0 key s3cret']
+    @candidate.load('lines' => lines)
+    errors = @candidate.commit('check' => true)[:errors]
+    assert(errors.any? { |e| e =~ /tcp_ao keys 0 key cannot change while bgp4rd runs: the listener holds each passive peer's TCP-AO keys/ },
+           errors.inspect)
+    text = @candidate.configuration('format' => 'set', 'candidate' => true)
+    assert_match(/^set neighbors 127\.0\.0\.9 tcp_ao keys 0 key s3cret$/, text)
+    @candidate.replace('lines' => text.lines)
+    assert_equal(text, @candidate.configuration('format' => 'set', 'candidate' => true))
+  end
+
   def test_a_log_level_no_logger_takes_is_refused
     @candidate.load('lines' => ['set log_level shouting'])
     assert_match(/log_level: log level "shouting"/,

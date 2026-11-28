@@ -263,6 +263,8 @@ neighbors:
     bfd: true                      # a BFD session beside BGP; docs/bfd.md
     ttl_security: 1                # GTSM, RFC 5082: hops away; see below
     password: s3cret               # TCP MD5, RFC 2385; see below
+    # or, instead of password, TCP-AO, RFC 5925; see below
+    # tcp_ao: {keys: [{send_id: 1, recv_id: 1, key: s3cret}]}
     end_of_rib: true               # RFC 4724 section 2; see below
     refresh_stale_time: 180        # RFC 7313 section 4's bound; see below
     graceful_restart: true         # RFC 4724, a helper only; see below
@@ -430,6 +432,47 @@ The key is in `show.configuration`, both forms, as it is in the file,
 so a configuration sent back by `config.replace` keeps it. Masking it
 is the reader's job: the set line is `set neighbors ADDRESS password
 KEY`. No other answer carries it.
+
+`tcp_ao` on a neighbor is TCP-AO, RFC 5925, which obsoletes MD5. Each
+key is a Master Key Tuple (section 3.1):
+
+```yaml
+tcp_ao:
+  keys:
+    - { send_id: 1, recv_id: 1, key: s3cret }
+    - { send_id: 2, recv_id: 2, key: next, algorithm: cmac(aes128), mac_length: 12 }
+```
+
+- `send_id` goes out as the KeyID of our segments, and `recv_id` is
+  matched against the peer's KeyID. Each is 0 to 255, and no two keys
+  of a neighbor share either (section 3.1, "The IDs of MKTs MUST NOT
+  overlap"). So the peer's key has our `recv_id` as its SendID.
+- `key` is 1 to 80 octets, as for `password`.
+- `algorithm` is RFC 5926's HMAC-SHA-1-96, `hmac(sha1)`, the default,
+  or AES-128-CMAC-96, `cmac(aes128)`: the kernel's names. GoBGP calls
+  them `hmac-sha-1-96` and `aes-128-cmac-96`.
+- `mac_length` is 12 octets, 96 bits, by default. The kernel takes 1 to
+  16; both ends must agree.
+- An active neighbor starts on the first key. The listener holds every
+  key of each passive neighbor and answers with the one the peer's
+  KeyID names. Key rollover, changing the current key with the session
+  up, is not built.
+- `password` and `tcp_ao` together are refused (section 8, "MUST NOT use
+  both").
+
+A session whose keys do not match never comes up, and the kernel counts
+why: `TCPAOBad` for another key, `TCPAORequired` when the peer sends no
+TCP-AO, `TCPAOKeyNotFound` when its KeyID names no key of ours, and
+`TCPMD5Unexpected` when it sends an MD5 digest. Linux drops a signed
+SYN from a neighbor with no keys too (`TCPAOKeyNotFound`), where
+section 7.5 step 1.a.i would take it. FRR 10.7.1 has no TCP-AO; GoBGP
+4.10.0 does, and `test/functional/lab/tcp_ao_gobgp_test.rb` runs
+against it.
+
+`tcp_ao` cannot change in a commit, as for `password`. The keys are in
+`show.configuration` as they are in the file, with set lines such as
+`set neighbors ADDRESS tcp_ao keys 0 key KEY`; masking them is the
+reader's job.
 
 `end_of_rib: true` on a neighbor sends the End-of-RIB marker of RFC
 4724 section 2 once its session's first table has gone: one per family
@@ -1683,9 +1726,12 @@ fact: `Drivers::Ospfd::SECRETS` is
 `/\b(key|simple-password)(\s+)(...)/`, which wants whitespace after the
 key name, so it matches `set ... key hunter2` and does **not** match
 YAML's `key: hunter2`, where the colon is where the `\s+` has to be. A
-driver copying that regexp would leak a YAML secret. **It leaks nothing
-today**, measured rather than assumed: no key of this configuration is a
-secret, so nothing is masked in either rendering.
+driver copying that regexp would leak a YAML secret. Two keys are
+secrets: a neighbor's `password` and its `tcp_ao` keys' `key`. Both
+renderings carry them as the file does, so `config.replace` keeps them,
+and their set lines, `set neighbors ADDRESS password KEY` and `set
+neighbors ADDRESS tcp_ao keys 0 key KEY`, have the whitespace a mask
+wants. Masking is the reader's.
 
 The grammar, with the four kinds of list a YAML file needs a key for,
 and the two empty tokens, is in `bgp/daemon/config.rb`'s own header.
@@ -1818,8 +1864,8 @@ rows have no such key. docs/bfd.md.
 `ttl_security`, `{"hops": 1, "min_ttl": 255}`. Other rows have no such
 key.
 
-**A neighbor with `password` says so, and not the key**: its row gains
-`auth`, `md5`. Other rows have no such key.
+**A neighbor with `password` or `tcp_ao` says so, and not the key**:
+its row gains `auth`, `md5` or `tcp-ao`. Other rows have no such key.
 
 **A session whose End-of-RIB has come says for which families**: its
 row gains `end_of_rib_received`, `[{"afi": 1, "safi": 1}]`, in the

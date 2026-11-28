@@ -116,6 +116,7 @@ module LabGroups
     # its show.link_state). 39s, measured on 2026-11-22.
     'gobgp4' => %w[
       link_state_sr_gobgp_test
+      tcp_ao_gobgp_test
     ],
 
     # What GoBGP makes of our export side and of RFC 7911. A new
